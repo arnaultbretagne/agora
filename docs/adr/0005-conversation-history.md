@@ -16,7 +16,9 @@ first-class object, not the file (≠ the "vault + git" angle of the old tools).
 
 1. **Hostage to the PVC** — no connection to the runtime's PVC ⇒ **no history at all**.
 2. **Hostage to the format** — JSONL is **Claude-Code-specific** ⇒ it breaks **runtime-agnosticism**
-   (codex doesn't write this format; ADR 0001/0002).
+   (codex doesn't write this format; `agent-runtime` ADR 0002). *(Claude Code's own docs confirm the
+   risk: the JSONL entry format is internal and **changes between releases** — scripts parsing it can
+   break. All the more reason not to build product history on it.)*
 
 It **conflated two different things**: the *conversation* (what the human reads) and the agent's
 *resume context*. And above all: **we don't yet know precisely how the upstream behaves** (what the
@@ -65,8 +67,9 @@ if needed:
   **tool-use / thinking**, or just the final text? → determines whether "the hub observes" is enough
   for a **faithful** history.
 - **Completeness** — does the hub see **100%** of user-facing turns, or can claude emit off-channel?
-- **`--resume` for real** — does it need the **exact JSONL / at the same path**? can a **fresh pod**
-  resume a session whose JSONL is on the PVC? does it replay cleanly?
+- **`--resume` for real** — does it need the **exact JSONL / at the same path** or the **same cwd**
+  (resume lookup is **directory-scoped** — confirmed upstream)? can a **fresh pod** resume a session
+  whose JSONL is on the PVC? does it replay cleanly?
 - **Hub down** — does the channel **buffer** the `reply()`s and **redeliver on reconnect**, or does it
   drop them? → history completeness across disconnects.
 - **Re-seed** — feeding a fresh runtime the **neutral** history (the "PVC lost" resilience): viable /
@@ -76,7 +79,8 @@ if needed:
 
 - **Two states** (`live` / `dormant`) presented in a single gesture (the claude.ai list).
 - **The hub owns a conversation store** (neutral history) → **patches ADR 0004**: the hub's state is
-  no longer "thin".
+  no longer "thin". *(Where it lives — the website pod's DB / volume — is an implementation choice to
+  settle while building; it is **not** the runtime PVC.)*
 - **Identity mapping** to maintain: product conversation ⟷ **native resume session** (`--resume` id)
   ⟷ the pipe's `chat_id` when it's `live`.
 - **The native side (JSONL) stays behind the runtime boundary**: isolated, **never exposed** to the

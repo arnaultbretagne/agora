@@ -34,7 +34,7 @@ Three roles, and above all each one's **projection**:
 1. **The site (`website`) — the hub.** Its view is **`(conversation, pipe)`**. It aggregates N
    conversations and **routes** messages to each one's pipe. It **does not carry** runtimes: to
    *start / stop* a conversation it **drives the supervisor** (lifecycle); at **creation** it picks
-   *which agent* (claude, codex tomorrow) — the **only** moment a "type" surfaces, and it's a
+   *which agent* (claude, codex tomorrow) — the **only** moment a "kind" surfaces, and it's a
    **conversation attribute**, not process management. The rest of the time: conversation ⟷ pipe.
 2. **The runtimes — opaque, owned by the supervisor.** `claude` processes behind the pipes, in
    `agent-runtime`. **Invisible to the hub** except as "what's at the end of the pipe": their PIDs,
@@ -96,7 +96,7 @@ Two planes: a **data plane** (the pipes, over WS, linking a conversation to its 
      creation);
   2. the **channels** (WS) — convey the messages.
   All the rest of the product lives **on top** of these two contracts, without piercing them.
-- The **only** place the runtime "type" surfaces on the product side = **the choice of agent at the
+- The **only** place the runtime "kind" surfaces on the product side = **the choice of agent at the
   creation** of a conversation (claude / codex), carried as a **conversation attribute** — never as
   process management.
 - Since the channel is co-located with the runtime **but is product**, it is delivered as a **plugin**

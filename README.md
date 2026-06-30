@@ -2,8 +2,9 @@
 
 > The agora: the public square where you talk to your agents.
 
-The platform **product**: a **site** that drives remote Claude **runtimes**
-through **pipes** — Claude Code's native `channels`.
+The platform **product**: a **site** that pilots remote Claude **runtimes**
+through **pipes** (Claude Code's native `channels`) — though from the site's point of view there are
+only **conversations and their pipes**, not runtimes (ADR 0001).
 
 ```
 ┌─ pod agent-runtime (infra) ───────────────┐     ┌─ pod website (agora) ────┐

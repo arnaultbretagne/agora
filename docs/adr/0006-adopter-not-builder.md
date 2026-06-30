@@ -6,8 +6,8 @@ Proposed — 2026-06-30
 
 ## Context
 
-We're building a product (hub + channel) on top of Claude Code. Hygiene question: **are we reinventing
-something that already exists?** Many tools orbit CLI agents — before building, we **scout**. The
+We're building a product (hub + channel) on top of Claude Code. Due-diligence question: **are we
+reinventing something that already exists?** Many tools orbit CLI agents — before building, we **scout**. The
 opposite risk: adopting a heavy framework that **locks us in** (and drags us back toward the API/SDK =
 Damocles, `agent-runtime` ADR 0005).
 
@@ -41,10 +41,10 @@ Each is useful; none **replaces** the product under our constraints:
   scraping). ⇒ ruled out **by** the primitive.
 - **OpenCode / Pi** — other CLI harnesses. Interesting, but **not the Claude subscription** (the hard
   point, `agent-runtime` ADR 0005). Off-target as long as the constraint is "stay on the Claude
-  subscription". *(Keeping watch: if multi-harness one day, they come in as `kinds` behind the
+  subscription". *(Worth tracking: if multi-harness one day, they come in as `kinds` behind the
   supervisor.)*
 - **Codex App-Server / CloudCLI** — the "app server" angle from other ecosystems. Same verdict: not
-  the Claude subscription, not our topology. Useful as **keeping watch** on the pattern (an app-server
+  the Claude subscription, not our topology. Useful to **keep an eye on** the pattern (an app-server
   in front of an agent), not as a foundation.
 
 **Why "build-thin-own":**
@@ -52,17 +52,18 @@ Each is useful; none **replaces** the product under our constraints:
 - **No tool combines all our constraints**: (Claude OAuth subscription) × (single-user, Terms) ×
   (k8s + homegrown OIDC) × (multi-conversation `(conv, pipe)`). Each drops **at least one**.
 - **The primitive does the heavy lifting.** With `channels` + JSONL, the product that's left is
-  **thin**: a router/aggregator + a stdio↔WS bridge. Building it ourselves costs **less** than bending
-  a third-party framework to our constraints — and **adds no** dependency that could drag us back
-  toward the API/SDK.
+  **minimal in scope** (no agent-framework): a router/aggregator + a stdio↔WS bridge. *("Thin" here =
+  minimal logic, **not** stateless — the hub does own conversation history, ADR 0004 / 0005.)* Building
+  it ourselves costs **less** than bending a third-party framework to our constraints — and **adds no**
+  dependency that could drag us back toward the API/SDK.
 - **Adopt the primitive, not the framework** = inherit Anthropic's work *where it's safe* (the native
   push), without inheriting an execution model that **betrays** the subscription constraint.
 
 ## Consequences
 
-- **Accepted watch-debt**: `channels` (preview) and the JSONL format move → we follow Claude Code
-  closely (and that's *already* the `agent-runtime` image's lifecycle). Happy / OpenCode / Codex =
-  passive watch.
+- **Accepted monitoring burden**: `channels` (preview) and the JSONL format move → we follow Claude
+  Code closely (and that's *already* the `agent-runtime` image's lifecycle). Happy / OpenCode / Codex =
+  passive monitoring.
 - **fakechat stays the testbed**: any doubt about the primitive is settled by **looking at / forking
   fakechat** before speculating.
 - **Invariant**: no agent framework in agora's dependencies. A PR that introduces one must first

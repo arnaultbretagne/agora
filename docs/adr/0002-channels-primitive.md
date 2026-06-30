@@ -26,7 +26,7 @@ A channel, concretely:
   `mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })` → claude
   receives it **in the live session** as `<channel source="…" chat_id="…">…</channel>`;
 - **outbound** (claude → site): the channel exposes an **MCP tool `reply(chat_id, text)`** that claude
-  calls;
+  calls *(the name `reply` is the convention/example — it's configurable)*;
 - **permission-relay** (optional): capability `claude/channel/permission` → the channel can **relay**
   permission requests to the site.
 
@@ -45,10 +45,10 @@ A channel, concretely:
   channel server must be **spawned by claude itself**, over **stdio**. **Remote MCP (HTTP/SSE) does
   not apply**: it *serves tools on demand*, it does **not push** events into the loop. ⇒ **the channel
   is co-located with the runtime** — a structuring consequence (ADR 0001 / 0003).
-- **Permission-relay = a clean alternative to skip-perms.** In the boundary-pod (`agent-runtime`
-  ADR 0003) we *can* skip permissions. But the primitive offers better: **relay** the request to the
-  site → the human decides from the hub. We keep the option open (skip *inside* is fine; relay *if* we
-  want the control).
+- **Permission-relay = the opt-in alternative to skip-perms.** In the boundary-pod (`agent-runtime`
+  ADR 0003) **skip-permissions is the default**. The primitive offers better when wanted: **relay** the
+  request to the site → the human decides from the hub. The mode is ultimately a **per-conversation
+  parameter from the hub** (`agent-runtime` ADR 0003) — skip by default, relay opt-in.
 
 ## Consequences
 
@@ -63,5 +63,10 @@ A channel, concretely:
   Mitigation: it's **isolated in a single artefact** (the channel). We **accept** the preview — it's
   the bet aligned with the subscription constraint (the "stable" alternative transports are precisely
   the ones we forbid ourselves).
+- **Protocol shape is documented; content semantics are not.** The wire shape above (notification
+  method, `reply`, capabilities) is documented — but *what the channel carries* (turn granularity,
+  streaming, whether tool-use/thinking appears) and *how the channel is enabled* for claude (a
+  `--channels` flag vs PVC plugin config) are **spike items** (`agora` ADR 0005, `agent-runtime`
+  ADR 0004).
 - **fakechat** (Anthropic) is the **proof** that this design holds (channel + web UI) and our
   **reference** (ADR 0006).
