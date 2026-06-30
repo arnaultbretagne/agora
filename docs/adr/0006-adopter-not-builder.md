@@ -1,4 +1,4 @@
-# ADR 0006 — Adopter, pas builder : le paysage et la décision
+# ADR 0006 — Adopt, don't build: the landscape and the decision
 
 ## Status
 
@@ -6,65 +6,67 @@ Proposed — 2026-06-30
 
 ## Context
 
-On construit un produit (hub + channel) au-dessus de Claude Code. Question d'hygiène : **est-ce qu'on
-réinvente un truc qui existe ?** Beaucoup d'outils gravitent autour des agents CLI — avant de bâtir, on
-**scoute**. Risque inverse : adopter un framework lourd qui nous **enferme** (et nous ramène vers
-l'API/SDK = Damoclès, `agent-runtime` ADR 0005).
+We're building a product (hub + channel) on top of Claude Code. Hygiene question: **are we reinventing
+something that already exists?** Many tools orbit CLI agents — before building, we **scout**. The
+opposite risk: adopting a heavy framework that **locks us in** (and drags us back toward the API/SDK =
+Damocles, `agent-runtime` ADR 0005).
 
 ## Decision
 
-**Adopter la *primitive* (channels), construire *thin* le produit (hub + channel) — ne pas adopter de
-framework d'agent.**
+**Adopt the *primitive* (channels), build the product *thin* (hub + channel) — don't adopt an agent
+framework.**
 
-- On **adopte** ce qui est **natif et abonnement-safe** : la primitive `channels`, le format JSONL, le
-  mécanisme plugin (ADR 0002 / 0005).
-- On **construit nous-mêmes, mince**, le hub et le channel — parce que c'est **notre** topologie
-  `(site → runtimes → pipes)` et **nos** contraintes (abonnement, single-user, k8s, OIDC), qu'aucun
-  outil ne sert *telles quelles*.
-- On **n'adopte pas** de framework d'orchestration d'agents (qui présument l'API/SDK ou un autre modèle
-  d'exécution).
-- **fakechat** = la **référence** (preuve qu'un channel + web UI tient), **pas** une dépendance.
+- We **adopt** what is **native and subscription-safe**: the `channels` primitive, the JSONL format,
+  the plugin mechanism (ADR 0002 / 0005).
+- We **build the hub and the channel ourselves, thin** — because it's **our** topology
+  `(site → runtimes → pipes)` and **our** constraints (subscription, single-user, k8s, OIDC), which no
+  tool serves *as-is*.
+- We **do not adopt** an agent-orchestration framework (which presume the API/SDK or another execution
+  model).
+- **fakechat** = the **reference** (proof that a channel + web UI holds), **not** a dependency.
 
-## Rationale — le paysage scouté
+## Rationale — the scouted landscape
 
-Chacun est utile ; aucun ne **remplace** le produit sous nos contraintes :
+Each is useful; none **replaces** the product under our constraints:
 
-- **fakechat** (Anthropic, `external_plugins/`) — channel + web UI dans **un** process (couple
-  channel + site, `127.0.0.1`). **Parfait comme preuve et amorce MVP** ; pas un produit
-  multi-conversation / multi-client / k8s. ⇒ on s'en **inspire**, on **dé-couple** (ADR 0001 / 0003).
-- **Happy** (happy.engineering) — mobile/desktop pour Claude Code, chiffré e2e, multi-session. Très
-  proche de l'intention « piloter Claude à distance » — mais **service tiers**, sa propre
-  infra / compte ; nous on veut **notre** plateforme k8s, single-user, derrière **notre** OIDC.
-  ⇒ confirme le besoin, ne le **sert** pas chez nous.
-- **agentapi** (Coder) — **HTTP au-dessus du TUI** par **parsing du terminal**. C'est l'approche
-  « scrape le PTY » qu'on **évite** : fragile — et surtout `channels` la rend **inutile** (push natif >
-  scraping). ⇒ écarté **par** la primitive.
-- **OpenCode / Pi** — autres harnais CLI. Intéressants, mais **pas l'abonnement Claude** (le point dur,
-  `agent-runtime` ADR 0005). Hors-cible tant que la contrainte est « rester sur le forfait Claude ».
-  *(Veille : si un jour multi-harnais, ils rentrent comme `kinds` derrière le superviseur.)*
-- **Codex App-Server / CloudCLI** — l'angle « serveur d'app » d'autres écosystèmes. Même verdict : pas
-  l'abonnement Claude, pas notre topologie. Utile comme **veille** sur le pattern (un app-server devant
-  un agent), pas comme socle.
+- **fakechat** (Anthropic, `external_plugins/`) — channel + web UI in **one** process (couples
+  channel + site, `127.0.0.1`). **Perfect as proof and MVP seed**; not a multi-conversation /
+  multi-client / k8s product. ⇒ we take **inspiration**, we **decouple** (ADR 0001 / 0003).
+- **Happy** (happy.engineering) — mobile/desktop for Claude Code, e2e-encrypted, multi-session. Very
+  close to the "drive Claude remotely" intent — but a **third-party service**, its own infra /
+  account; we want **our** k8s platform, single-user, behind **our** OIDC. ⇒ confirms the need,
+  doesn't **serve** it for us.
+- **agentapi** (Coder) — **HTTP on top of the TUI** by **terminal parsing**. It's the "scrape the PTY"
+  approach we **avoid**: fragile — and above all `channels` makes it **pointless** (native push >
+  scraping). ⇒ ruled out **by** the primitive.
+- **OpenCode / Pi** — other CLI harnesses. Interesting, but **not the Claude subscription** (the hard
+  point, `agent-runtime` ADR 0005). Off-target as long as the constraint is "stay on the Claude
+  subscription". *(Keeping watch: if multi-harness one day, they come in as `kinds` behind the
+  supervisor.)*
+- **Codex App-Server / CloudCLI** — the "app server" angle from other ecosystems. Same verdict: not
+  the Claude subscription, not our topology. Useful as **keeping watch** on the pattern (an app-server
+  in front of an agent), not as a foundation.
 
-**Pourquoi « build-thin-own » :**
+**Why "build-thin-own":**
 
-- **Aucun outil ne cumule nos contraintes** : (abonnement Claude OAuth) × (single-user, Terms) ×
-  (k8s + OIDC maison) × (multi-conversation `(conv, pipe)`). Chacun lâche **au moins une**.
-- **La primitive fait le gros œuvre.** Avec `channels` + JSONL, le produit qui reste est **mince** : un
-  routeur/agrégateur + un pont stdio↔WS. Le construire nous-mêmes coûte **moins** que plier un framework
-  tiers à nos contraintes — et **n'ajoute aucune** dépendance qui pourrait nous ramener vers l'API/SDK.
-- **Adopter la primitive, pas le framework** = hériter du travail d'Anthropic *là où il est sûr* (le
-  push natif), sans hériter d'un modèle d'exécution qui **trahit** la contrainte abonnement.
+- **No tool combines all our constraints**: (Claude OAuth subscription) × (single-user, Terms) ×
+  (k8s + homegrown OIDC) × (multi-conversation `(conv, pipe)`). Each drops **at least one**.
+- **The primitive does the heavy lifting.** With `channels` + JSONL, the product that's left is
+  **thin**: a router/aggregator + a stdio↔WS bridge. Building it ourselves costs **less** than bending
+  a third-party framework to our constraints — and **adds no** dependency that could drag us back
+  toward the API/SDK.
+- **Adopt the primitive, not the framework** = inherit Anthropic's work *where it's safe* (the native
+  push), without inheriting an execution model that **betrays** the subscription constraint.
 
 ## Consequences
 
-- **Dette de veille assumée** : `channels` (preview) et le format JSONL bougent → on suit Claude Code
-  de près (et c'est *déjà* le cycle de vie de l'image `agent-runtime`). Happy / OpenCode / Codex =
-  veille passive.
-- **fakechat reste le banc d'essai** : tout doute sur la primitive se tranche en **regardant / forkant
-  fakechat** avant de spéculer.
-- **Invariant** : pas de framework d'agent dans les dépendances d'agora. Une PR qui en introduit un doit
-  d'abord **tuer la contrainte abonnement** (donc : refusée par défaut).
-- Si la contrainte « abonnement Claude » **tombait** un jour (improbable), la décision *adopter-vs-
-  builder* serait à **rouvrir** (OpenCode / multi-harnais deviendraient pertinents). Noté pour ne pas
-  l'oublier.
+- **Accepted watch-debt**: `channels` (preview) and the JSONL format move → we follow Claude Code
+  closely (and that's *already* the `agent-runtime` image's lifecycle). Happy / OpenCode / Codex =
+  passive watch.
+- **fakechat stays the testbed**: any doubt about the primitive is settled by **looking at / forking
+  fakechat** before speculating.
+- **Invariant**: no agent framework in agora's dependencies. A PR that introduces one must first
+  **kill the subscription constraint** (so: rejected by default).
+- If the "Claude subscription" constraint were to **fall** one day (unlikely), the *adopt-vs-build*
+  decision would need **reopening** (OpenCode / multi-harness would become relevant). Noted so we
+  don't forget.

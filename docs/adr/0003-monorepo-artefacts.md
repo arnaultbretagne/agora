@@ -6,57 +6,56 @@ Proposed — 2026-06-30
 
 ## Context
 
-`agora` porte trois choses (ADR 0001) : le **site**, le **channel**, et le **protocole** qui les
-relie. Elles ont des **lieux d'exécution** et des **formats de livraison** différents : le site = une
-**image** dans son pod ; le channel = un **plugin** spawné dans le pod runtime ; le protocole = du
-code **partagé** par les deux.
+`agora` carries three things (ADR 0001): the **site**, the **channel**, and the **protocol** that
+links them. They have different **execution sites** and **delivery formats**: the site = an **image**
+in its pod; the channel = a **plugin** spawned in the runtime pod; the protocol = code **shared** by
+both.
 
-Un repo par artefact, ou un monorepo ?
+One repo per artefact, or a monorepo?
 
 ## Decision
 
-**Un monorepo `agora`, trois artefacts :**
+**A monorepo `agora`, three artefacts:**
 
-| Dossier | Build → | Lieu d'exécution |
+| Folder | Build → | Execution site |
 |---|---|---|
-| `website/` | **image** | son propre pod |
-| `channel/` | **plugin Claude Code** | sur le PVC du runtime, spawné par claude |
-| `shared/` | *(dépendance interne)* | compilé dans les deux |
+| `website/` | **image** | its own pod |
+| `channel/` | **Claude Code plugin** | on the runtime's PVC, spawned by claude |
+| `shared/` | *(internal dependency)* | compiled into both |
 
-- `shared/` = **le protocole WS** (types / messages), **consommé par website et channel**.
-- **claude ne récupère que `channel/`** (le plugin) ; il ne voit **jamais** `website/`.
+- `shared/` = **the WS protocol** (types / messages), **consumed by website and channel**.
+- **claude pulls only `channel/`** (the plugin); it **never** sees `website/`.
 
 ## Rationale
 
-- **Le protocole est l'arête commune → un monorepo le garde cohérent.** Le channel et le site se
-  parlent en WS (ADR 0002). Leur contrat (`shared/`) doit évoluer **d'un seul tenant** : un changement
-  de message touche **les deux bouts dans le même commit**, le même PR, le même CI. Deux repos =
-  versionner un protocole **entre soi et soi** = douleur gratuite.
-- **Mais des artefacts séparés, parce que les lieux d'exécution diffèrent.** Le channel **n'est pas**
-  dans l'image du site, et inversement. **Co-localisé-au-runtime ≠ baké-dans-l'image-runtime** : le
-  plugin vit sur le **PVC**, livré/installé à part (exactement comme fakechat = plugin Anthropic sur le
-  PVC). Le monorepo **n'efface pas** la frontière de déploiement ; il l'**outille** (un build par
-  cible).
-- **claude ne tire que le channel.** Le runtime n'a **aucune raison** de connaître le site : il spawn
-  un plugin (le channel) qui, lui, sait parler au site. ⇒ surface minimale côté runtime, et le site
-  reste **remplaçable** sans toucher au runtime.
-- **Pourquoi pas trois repos.** Le coût (versionner `shared/` à la main, 3 CI, 3 PR pour un seul
-  changement de protocole) **dépasse** le bénéfice — une indépendance dont on n'a pas besoin : les
-  trois bougent **ensemble**. Si un artefact prend un jour une vraie vie propre (release propre), on
-  l'**essaime** — pas avant.
+- **The protocol is the shared edge → a monorepo keeps it coherent.** The channel and the site talk
+  over WS (ADR 0002). Their contract (`shared/`) must evolve **in one piece**: a message change
+  touches **both ends in the same commit**, the same PR, the same CI. Two repos = versioning a
+  protocol **between yourself and yourself** = gratuitous pain.
+- **But separate artefacts, because the execution sites differ.** The channel **is not** in the site's
+  image, and vice versa. **Co-located-with-the-runtime ≠ baked-into-the-runtime-image**: the plugin
+  lives on the **PVC**, delivered/installed separately (exactly like fakechat = Anthropic plugin on
+  the PVC). The monorepo **doesn't erase** the deployment boundary; it **tools** it (one build per
+  target).
+- **claude pulls only the channel.** The runtime has **no reason** to know the site: it spawns a
+  plugin (the channel) which, in turn, knows how to talk to the site. ⇒ minimal surface on the runtime
+  side, and the site stays **replaceable** without touching the runtime.
+- **Why not three repos.** The cost (versioning `shared/` by hand, 3 CIs, 3 PRs for a single protocol
+  change) **outweighs** the benefit — an independence we don't need: all three move **together**. If
+  an artefact one day takes on a real life of its own (its own release), we **spin it off** — not
+  before.
 
 ## Consequences
 
-- Layout : `agora/{website,channel,shared}/` + `docs/adr/`. `shared/` est une **dépendance interne**,
-  pas un package publié.
-- **Deux pipelines de build** depuis un repo : `website/` → image (registry) ; `channel/` → plugin
-  (artefact installable sur le PVC). `shared/` n'a **pas** de build propre — il est compilé dans
-  chacun.
-- **Versionnement du protocole = interne au repo** : channel et website **d'un même commit** sont
-  garantis compatibles. Le cas « channel d'une version / site d'une autre » existe **à l'exécution**
-  (runtime long-vivant vs site redéployé) → c'est un sujet de **compat du protocole**, traité en
-  écrivant `shared/`, **pas** un sujet de repo.
-- Le **plugin** suit le format plugin Claude Code (manifest, `mcpServers`, …) — détail calé en le
-  construisant.
-- **L'installation du plugin sur le PVC** est un geste de déploiement (qui le pose, quand) à câbler
-  côté `infra-k8s`. Ici on acte juste : **livré comme plugin, pas baké dans l'image**.
+- Layout: `agora/{website,channel,shared}/` + `docs/adr/`. `shared/` is an **internal dependency**,
+  not a published package.
+- **Two build pipelines** from one repo: `website/` → image (registry); `channel/` → plugin (artefact
+  installable onto the PVC). `shared/` has **no** build of its own — it's compiled into each.
+- **Protocol versioning = internal to the repo**: channel and website **from the same commit** are
+  guaranteed compatible. The "channel of one version / site of another" case exists **at runtime**
+  (long-lived runtime vs redeployed site) → that's a **protocol-compat** topic, handled when writing
+  `shared/`, **not** a repo topic.
+- The **plugin** follows the Claude Code plugin format (manifest, `mcpServers`, …) — a detail settled
+  while building it.
+- **Installing the plugin onto the PVC** is a deployment gesture (who places it, when) to wire up on
+  the `infra-k8s` side. Here we just record: **delivered as a plugin, not baked into the image**.

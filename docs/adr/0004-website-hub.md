@@ -6,54 +6,54 @@ Proposed — 2026-06-30
 
 ## Context
 
-Le site, c'est le hub (ADR 0001) ; sa vue = `(conversation, pipe)`. Il faut dire **ce qu'il fait**
-concrètement — sans empiéter sur le *qu'est-ce qu'une conversation / un history* (ADR 0005). Plusieurs
-entrées sont possibles (navigateur d'abord ; iOS, Discord… plus tard).
+The site is the hub (ADR 0001); its view = `(conversation, pipe)`. We need to say **what it does**
+concretely — without encroaching on the *what-is-a-conversation / a-history* (ADR 0005). Several entry
+points are possible (browser first; iOS, Discord… later).
 
 ## Decision
 
-**Le website est le hub : il agrège les conversations, actionne le superviseur, et route les messages
-entre les clients et les pipes.** Quatre fonctions, pas plus :
+**The website is the hub: it aggregates conversations, drives the supervisor, and routes messages
+between clients and pipes.** Four functions, no more:
 
-1. **Agrégation multi-conversation.** Une vue de toutes les conversations (à pipe vivant **ou non**),
-   façon claude.ai. C'est *le* point d'entrée humain.
-2. **Lifecycle (plan contrôle).** Ouvrir / fermer une conversation = actionner l'**API superviseur**
-   (et choisir le *kind* à la création). Le hub **ne gère pas** le process (ADR 0001).
-3. **Routing (plan données).** Faire transiter les messages **client ⟷ pipe** : du client vers le bon
-   channel (`chat_id`, ADR 0002), et le `reply` du channel vers le bon client. Le hub **ne génère
-   pas** de contenu d'agent — il **relaie** (le contenu naît dans claude, via le channel).
-4. **Multi-clients / multi-flux.** Le hub est **la façade** ; les clients (navigateur, demain
-   iOS/Discord) s'y branchent. Un client n'a **jamais** de lien direct au runtime — **toujours** via
-   le hub.
+1. **Multi-conversation aggregation.** A view of all conversations (with a live pipe **or not**),
+   claude.ai-style. It's *the* human entry point.
+2. **Lifecycle (control plane).** Open / close a conversation = drive the **supervisor API** (and pick
+   the *kind* at creation). The hub **does not manage** the process (ADR 0001).
+3. **Routing (data plane).** Move messages **client ⟷ pipe**: from the client to the right channel
+   (`chat_id`, ADR 0002), and the channel's `reply` to the right client. The hub **does not generate**
+   agent content — it **relays** (the content originates in claude, via the channel).
+4. **Multi-client / multi-stream.** The hub is **the façade**; clients (browser, tomorrow iOS/Discord)
+   plug into it. A client **never** has a direct link to the runtime — **always** via the hub.
 
 ## Rationale
 
-- **Le hub est un routeur + un agrégateur, pas un cerveau.** Toute l'intelligence est dans les
-  runtimes (claude). Le hub **multiplexe** : N conversations, M clients, le bon message au bon pipe.
-  Le garder « bête » = le garder **remplaçable** et **runtime-agnostic** (cohérent avec ADR 0001).
-- **Pourquoi le hub porte le lifecycle (et pas un client).** L'API superviseur est interne (pod-à-pod,
-  derrière la frontière sécu de `agent-runtime` ADR 0003). L'exposer aux clients = **percer** la
-  frontière. Le hub est **le seul** point qui parle au superviseur ; les clients parlent au **hub**.
-  Une seule porte.
-- **Pourquoi multi-clients dès le design (même si navigateur d'abord).** Le `(conversation, pipe)` ne
-  présume **rien** du client. Tant que le hub reste la façade WS, ajouter iOS/Discord = un adaptateur
-  de **présentation**, pas une refonte. On ne *construit* pas tout ça maintenant — on s'interdit juste
-  de le **rendre impossible**.
-- **Le hub est derrière l'OIDC gate.** L'accès humain passe par oauth2-proxy (`infra-k8s` ADR 0021) →
-  le hub suppose un utilisateur **déjà authentifié**, et reste **single-user** (Terms, `agent-runtime`
-  ADR 0005) : pas de multi-tenant.
+- **The hub is a router + an aggregator, not a brain.** All the intelligence is in the runtimes
+  (claude). The hub **multiplexes**: N conversations, M clients, the right message to the right pipe.
+  Keeping it "dumb" = keeping it **replaceable** and **runtime-agnostic** (consistent with ADR 0001).
+- **Why the hub carries the lifecycle (and not a client).** The supervisor API is internal
+  (pod-to-pod, behind `agent-runtime` ADR 0003's security boundary). Exposing it to clients =
+  **piercing** the boundary. The hub is **the only** point that talks to the supervisor; clients talk
+  to the **hub**. A single door.
+- **Why multi-client from the design stage (even if browser first).** The `(conversation, pipe)`
+  presumes **nothing** about the client. As long as the hub stays the WS façade, adding iOS/Discord =
+  a **presentation** adapter, not a rework. We don't *build* all that now — we just forbid ourselves
+  from **making it impossible**.
+- **The hub is behind the OIDC gate.** Human access goes through oauth2-proxy (`infra-k8s` ADR 0021) →
+  the hub assumes an **already-authenticated** user, and stays **single-user** (Terms, `agent-runtime`
+  ADR 0005): no multi-tenant.
 
 ## Consequences
 
-- Le website expose **deux surfaces** : vers les **clients** (WS + UI — la façade) ; vers l'**infra**
-  (API superviseur + WS des channels). C'est le **point de jonction** des deux contrats de l'ADR 0001.
-- **Le routing a besoin d'une clé** : le `chat_id` du channel ⟷ l'identité de conversation côté hub.
-  Cette correspondance est l'**état runtime** du hub (qui-est-branché-où).
-- **Le hub est state-ful** — deux états : (a) le **live**, la table des conversations à pipe vivant
-  (qui-est-branché-où) ; (b) l'**history** de la conversation, qu'il **possède** en **format neutre**
-  (ADR 0005 — pour ne dépendre ni d'un format de harnais, ni du PVC d'un runtime). Ce n'est donc
-  **pas** « mince », mais ça reste **sans logique d'agent** (point suivant).
-- **Aucune logique d'agent dans le hub** : ni prompt, ni outils, ni mémoire. Si on est tenté d'en
-  mettre, c'est que ça appartient au **runtime** ou au **channel**.
-- Détails (techno du serveur, forme de l'UI, protocole WS précis) = implémentation + `shared/`
-  (ADR 0003), pas ici.
+- The website exposes **two surfaces**: toward **clients** (WS + UI — the façade); toward the
+  **infra** (supervisor API + the channels' WS). It's the **junction point** of ADR 0001's two
+  contracts.
+- **Routing needs a key**: the channel's `chat_id` ⟷ the conversation identity on the hub side. This
+  mapping is the hub's **runtime state** (who's-plugged-where).
+- **The hub is state-ful** — two states: (a) the **live** one, the table of conversations with a live
+  pipe (who's-plugged-where); (b) the conversation's **history**, which it **owns** in a **neutral
+  format** (ADR 0005 — so as to depend neither on a harness format nor on a runtime's PVC). So it's
+  **not** "thin", but it stays **free of agent logic** (next point).
+- **No agent logic in the hub**: no prompt, no tools, no memory. If we're tempted to add some, it
+  belongs to the **runtime** or the **channel**.
+- Details (server tech, UI shape, exact WS protocol) = implementation + `shared/` (ADR 0003), not
+  here.

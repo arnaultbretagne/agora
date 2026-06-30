@@ -1,4 +1,4 @@
-# ADR 0002 — La primitive `channels` comme pipe
+# ADR 0002 — The `channels` primitive as the pipe
 
 ## Status
 
@@ -6,62 +6,62 @@ Proposed — 2026-06-30
 
 ## Context
 
-Le pipe entre une conversation et le hub (ADR 0001), il faut le construire sur *quelque chose*.
-Tentation : inventer notre transport — un WS maison qui « parle » au TUI, du scraping de stdout, ou
-piloter `claude -p` / l'Agent SDK par messages.
+The pipe between a conversation and the hub (ADR 0001) has to be built on *something*. Temptation:
+invent our own transport — a homegrown WS that "talks" to the TUI, stdout scraping, or driving
+`claude -p` / the Agent SDK by messages.
 
-Mais il y a une **contrainte dure** (`agent-runtime` ADR 0005) : rester sur l'**abonnement OAuth**,
-le **TUI interactif** — **pas** l'API, **pas** `-p` / SDK (épée de Damoclès). Et Claude Code expose
-**justement** une primitive native faite pour ça : `channels` (research preview, ≥ v2.1.80).
+But there's a **hard constraint** (`agent-runtime` ADR 0005): stay on the **OAuth subscription**, the
+**interactive TUI** — **not** the API, **not** `-p` / SDK (sword of Damocles). And Claude Code exposes
+**exactly** a native primitive made for this: `channels` (research preview, ≥ v2.1.80).
 
 ## Decision
 
-**Le pipe = la primitive `channels` native de Claude Code. On ne réinvente rien.**
+**The pipe = Claude Code's native `channels` primitive. We reinvent nothing.**
 
-Un channel, concrètement :
+A channel, concretely:
 
-- un **serveur MCP en stdio** que `claude` **spawn lui-même** (déclaré en config, capability
-  `experimental: { 'claude/channel': {} }`) ;
-- **inbound** (site → claude) : le channel **pousse** un événement via
+- an **MCP server over stdio** that `claude` **spawns itself** (declared in config, capability
+  `experimental: { 'claude/channel': {} }`);
+- **inbound** (site → claude): the channel **pushes** an event via
   `mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })` → claude
-  le reçoit **dans la session vivante** sous la forme `<channel source="…" chat_id="…">…</channel>` ;
-- **outbound** (claude → site) : le channel expose un **outil MCP `reply(chat_id, text)`** que claude
-  appelle ;
-- **permission-relay** (optionnel) : capability `claude/channel/permission` → le channel peut
-  **relayer** les demandes de permission au site.
+  receives it **in the live session** as `<channel source="…" chat_id="…">…</channel>`;
+- **outbound** (claude → site): the channel exposes an **MCP tool `reply(chat_id, text)`** that claude
+  calls;
+- **permission-relay** (optional): capability `claude/channel/permission` → the channel can **relay**
+  permission requests to the site.
 
 ## Rationale
 
-- **Abonnement-safe par construction.** Le channel **pousse dans le TUI interactif** qui tourne sur
-  l'abonnement. On ne touche **jamais** à l'API ni à `-p`/SDK. C'est *le* mécanisme qui rend le
-  produit compatible avec `agent-runtime` ADR 0005. Réinventer un transport = re-tomber vers `-p`/SDK
-  = Damoclès.
-- **Push-into-live-session.** Un channel n'est pas un RPC requête/réponse : il **injecte des
-  événements dans une session qui tourne**. C'est exactement « parler à un agent vivant » — et ça
-  explique la contrainte stdio (ci-dessous).
-- **Natif = zéro glue fragile.** Pas de scraping de TUI, pas de PTY-parsing, pas d'heuristique « est-ce
-  que claude a fini ». Le harnais fait le travail ; on consomme un **contrat documenté**.
-- **Pourquoi stdio (et pas remote MCP / HTTP-SSE).** La primitive pousse *dans la session vivante* → le
-  serveur de channel doit être **spawné par claude lui-même**, en **stdio**. Le **remote MCP (HTTP/SSE)
-  ne s'applique pas** : il *sert des outils à la demande*, il ne **pousse pas** d'événements dans la
-  boucle. ⇒ **le channel est co-localisé au runtime** — conséquence structurante (ADR 0001 / 0003).
-- **Permission-relay = alternative propre au skip-perms.** Dans le pod-frontière (`agent-runtime`
-  ADR 0003) on *peut* skip les permissions. Mais la primitive offre mieux : **relayer** la demande au
-  site → l'humain tranche depuis le hub. On garde l'option ouverte (skip *dedans* OK ; relais *si* on
-  veut la main).
+- **Subscription-safe by construction.** The channel **pushes into the interactive TUI** running on
+  the subscription. We **never** touch the API or `-p`/SDK. It's *the* mechanism that makes the
+  product compatible with `agent-runtime` ADR 0005. Reinventing a transport = falling back to `-p`/SDK
+  = Damocles.
+- **Push-into-live-session.** A channel is not a request/response RPC: it **injects events into a
+  running session**. That's exactly "talking to a live agent" — and it explains the stdio constraint
+  (below).
+- **Native = zero fragile glue.** No TUI scraping, no PTY-parsing, no "has claude finished?"
+  heuristic. The harness does the work; we consume a **documented contract**.
+- **Why stdio (and not remote MCP / HTTP-SSE).** The primitive pushes *into the live session* → the
+  channel server must be **spawned by claude itself**, over **stdio**. **Remote MCP (HTTP/SSE) does
+  not apply**: it *serves tools on demand*, it does **not push** events into the loop. ⇒ **the channel
+  is co-located with the runtime** — a structuring consequence (ADR 0001 / 0003).
+- **Permission-relay = a clean alternative to skip-perms.** In the boundary-pod (`agent-runtime`
+  ADR 0003) we *can* skip permissions. But the primitive offers better: **relay** the request to the
+  site → the human decides from the hub. We keep the option open (skip *inside* is fine; relay *if* we
+  want the control).
 
 ## Consequences
 
-- **Le channel n'est pas un service distant qu'on héberge** : c'est un **process spawné par claude**,
-  en stdio, **dans le pod runtime**. Son *code* est produit (agora) ; son *lieu d'exécution* est le
-  runtime → livré en **plugin** (ADR 0003), **pas** baké dans l'image.
-- **Le channel a deux faces** : MCP-stdio côté claude (notifications inbound + `reply` outbound) et
-  **WS** côté hub (le vrai « pipe » réseau). **C'est lui qui fait le pont stdio ⟷ WS.**
-- Le **`chat_id`** de la primitive = la **clé de routing** d'une conversation, dont le hub se sert
-  (ADR 0004).
-- **Dépendance à une research preview.** `channels` est en preview (≥ v2.1.80) : la surface peut
-  bouger. Mitigation : c'est **isolé dans un seul artefact** (le channel). On **assume** la preview —
-  c'est le pari aligné avec la contrainte abonnement (les transports « stables » alternatifs sont
-  justement ceux qu'on s'interdit).
-- **fakechat** (Anthropic) est la **preuve** que ce design tient (channel + web UI) et notre
-  **référence** (ADR 0006).
+- **The channel is not a remote service we host**: it's a **process spawned by claude**, over stdio,
+  **in the runtime pod**. Its *code* is product (agora); its *execution site* is the runtime →
+  delivered as a **plugin** (ADR 0003), **not** baked into the image.
+- **The channel has two faces**: MCP-stdio on the claude side (inbound notifications + `reply`
+  outbound) and **WS** on the hub side (the real network "pipe"). **It is the one that bridges
+  stdio ⟷ WS.**
+- The primitive's **`chat_id`** = a conversation's **routing key**, which the hub uses (ADR 0004).
+- **Dependency on a research preview.** `channels` is in preview (≥ v2.1.80): the surface may shift.
+  Mitigation: it's **isolated in a single artefact** (the channel). We **accept** the preview — it's
+  the bet aligned with the subscription constraint (the "stable" alternative transports are precisely
+  the ones we forbid ourselves).
+- **fakechat** (Anthropic) is the **proof** that this design holds (channel + web UI) and our
+  **reference** (ADR 0006).
