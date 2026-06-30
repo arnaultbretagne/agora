@@ -49,8 +49,10 @@ entre les clients et les pipes.** Quatre fonctions, pas plus :
   (API superviseur + WS des channels). C'est le **point de jonction** des deux contrats de l'ADR 0001.
 - **Le routing a besoin d'une clé** : le `chat_id` du channel ⟷ l'identité de conversation côté hub.
   Cette correspondance est l'**état runtime** du hub (qui-est-branché-où).
-- **Le hub est state-ful, mais l'état est mince** : la table des conversations **vivantes** + leur
-  pipe. L'**historique**, lui, ne vit **pas** là (ADR 0005) — distinction volontaire.
+- **Le hub est state-ful** — deux états : (a) le **live**, la table des conversations à pipe vivant
+  (qui-est-branché-où) ; (b) l'**history** de la conversation, qu'il **possède** en **format neutre**
+  (ADR 0005 — pour ne dépendre ni d'un format de harnais, ni du PVC d'un runtime). Ce n'est donc
+  **pas** « mince », mais ça reste **sans logique d'agent** (point suivant).
 - **Aucune logique d'agent dans le hub** : ni prompt, ni outils, ni mémoire. Si on est tenté d'en
   mettre, c'est que ça appartient au **runtime** ou au **channel**.
 - Détails (techno du serveur, forme de l'UI, protocole WS précis) = implémentation + `shared/`

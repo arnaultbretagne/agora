@@ -1,68 +1,91 @@
-# ADR 0005 — Découplage conversation / history
+# ADR 0005 — Conversation 1ʳᵉ classe : history produit (hub, neutre) vs resume runtime (natif)
 
 ## Status
 
-Proposed — 2026-06-30
+Proposed — 2026-06-30. **Mécanisme à valider par un spike** (cf. § *À valider*). On fixe le
+**principe** ; on ne grave **pas** les détails d'un amont qu'on n'a pas encore éprouvé.
 
 ## Context
 
-Le hub agrège des **conversations** (ADR 0004) ; sa vue runtime = `(conversation, pipe)`. Mais une
-conversation **survit** à son pipe : claude tient un **historique** sur disque, et on veut une UX
-« claude.ai » (rouvrir, reprendre, lire le passé) — **y compris quand aucun runtime ne tourne**.
+Le hub agrège des **conversations** (ADR 0004) ; une conversation **survit** à son pipe (UX
+« claude.ai » : rouvrir, lire le passé, reprendre — **même quand aucun runtime ne tourne**). La
+**conversation** est l'objet de 1ʳᵉ classe, pas le fichier (≠ l'angle « vault + git » des vieux
+outils).
 
-Tentation héritée des vieux outils : modéliser ça comme un **vault de fichiers + git** (l'angle
-« notes »). Mauvais axe — la **conversation** est l'objet de première classe, pas le fichier.
+**Première intention — écartée.** « history = un read-model des JSONL `~/.claude/projects` ». Deux
+défauts **rédhibitoires** :
 
-Fait technique : Claude Code **persiste déjà** chaque session en **JSONL** sous
-`~/.claude/projects/…` (sur le PVC), et sait **reprendre** une session (`--resume`).
+1. **Otage du PVC** — pas de connexion au PVC du runtime ⇒ **plus d'history du tout**.
+2. **Otage du format** — le JSONL est **spécifique Claude Code** ⇒ casse le **runtime-agnostic**
+   (codex n'écrit pas ce format ; ADR 0001/0002).
+
+Elle **confondait deux choses différentes** : la *conversation* (ce que l'humain lit) et le *contexte
+de reprise* de l'agent. Et surtout : **on ne sait pas encore précisément comment l'amont se
+comporte** (ce que le channel charrie, comment `--resume` réagit, le buffering aux coupures…). Donc
+on pose une **direction**, pas un mécanisme figé.
 
 ## Decision
 
-**Découpler la conversation (axe de 1ʳᵉ classe) de son history (un read-model dérivé des JSONL).**
+**La conversation est de 1ʳᵉ classe. On sépare deux préoccupations — par propriétaire et par
+format :**
 
-- **La conversation est l'entité produit.** Identité **stable**, indépendante du fait qu'un runtime
-  tourne *là, maintenant*. État : **`live`** (pipe branché) ou **`dormante`** (pas de runtime, mais un
-  history).
-- **L'history est un read-model**, **dérivé** des **JSONL de `~/.claude/projects`** (sur le PVC) :
-  **source de vérité = le harnais**, pas une base qu'on tiendrait en double. Le hub **lit** ces JSONL
-  pour afficher le passé d'une conversation dormante.
-- **Reprendre = re-spawn + `--resume`.** Rouvrir une conversation dormante : le hub demande au
-  superviseur un runtime **branché sur la session existante** (resume du bon JSONL) → un **nouveau
-  pipe, même conversation**.
-- **« Continue sans moi ».** L'history étant sur le PVC et la reprise explicite, l'humain peut
-  **fermer** le hub : le runtime peut continuer (travail en cours) ou être tué et **repris plus tard**.
-  La conversation **n'est pas** prisonnière d'une connexion vivante.
+1. **History (produit) — possédée par le hub, en format neutre.** La conversation (tours
+   user↔agent) est **persistée par le hub au fil de l'eau, à partir de ce qu'il observe sur le
+   pipe** (protocole `shared/`, ADR 0003). **Neutre** (donc multi-harnais), **chez le hub** (donc
+   indépendante du PVC). C'est ce que **tout client affiche**.
+2. **Resume (runtime) — possédé par le superviseur/runtime, en format natif.** Reprendre l'agent =
+   son **mécanisme natif** (`--resume` sur le JSONL pour claude), **derrière la frontière runtime**.
+   **Harness-spécifique par nature**, et c'est OK : ça ne **traverse jamais** vers le produit.
+
+États de conversation : **`live`** (pipe ⟷ runtime) / **`dormante`** (history du hub, pas de runtime).
+
+> **Principe directeur — ce qu'on tient pour ferme :** *l'history produit ne doit dépendre ni du
+> format d'un harnais, ni de la disponibilité d'un PVC de runtime.* Le **comment** ci-dessus est
+> l'**hypothèse de travail**, à éprouver (§ *À valider*) — pas un dogme.
 
 ## Rationale
 
-- **La conversation, pas le fichier, est l'axe.** Un humain pense « ma conversation avec l'agent », pas
-  « le `.jsonl` ». Modéliser en *notes + git* (vault) optimise le mauvais objet (le document) et rate
-  l'UX attendue (un fil qu'on reprend). claude.ai a raison : l'unité, c'est **le fil**.
-- **Pourquoi un read-model dérivé (pas une 2ᵉ source).** Le harnais **possède déjà** la vérité (JSONL,
-  format resume-able). Tenir une base parallèle = **divergence** garantie (le jour où claude écrit un
-  tour qu'on n'a pas capté). On **dérive** → on ne peut pas désynchroniser. Le hub ne *stocke* pas
-  l'history, il le **projette**.
-- **Pourquoi `--resume` plutôt que « garder le runtime vivant ».** Garder N runtimes vivants « au cas
-  où » = coûteux (RAM, creds — `agent-runtime` ADR 0006) et inutile : le JSONL **est** la conversation.
-  Tuer / relancer-resume rend les conversations **bon marché** et **disposables** (cohérent avec la
-  philosophie pod-frontière). Le `(conversation, pipe)` redevient simplement : **pas de pipe ≠ pas de
-  conversation**.
-- **Le découplage achète le multi-clients ET le offline.** Si l'history est un read-model du PVC,
-  n'importe quel client (et le hub lui-même) peut afficher une conversation dormante **sans runtime**.
-  C'est ce qui rend « ferme l'onglet, reviens demain » trivial.
+- **Le hub voit déjà la conversation passer.** C'est la définition même du channel (`reply()` =
+  comment l'agent parle à l'humain ; le message user transite par le hub aussi). Il la **persiste au
+  fil de l'eau** — il n'a **jamais eu besoin** du JSONL pour l'history.
+- **Deux données, pas une copie.** hub-history (conversation neutre) ≠ JSONL (contexte de travail
+  natif). Comme ce ne sont **pas** des copies, **pas de divergence** — et ça **corrige** le faux
+  principe « derive / don't duplicate » de la 1ʳᵉ intention (qui prétendait éviter une duplication
+  qui n'existe pas).
+- **Neutre ⇒ multi-harnais ; hub-owned ⇒ disponible.** Les deux défauts de la 1ʳᵉ intention tombent.
+  Bonus résilience : PVC/JSONL perdu ⇒ on **garde la conversation**, et on peut **re-seed** un
+  runtime frais avec (à éprouver, voir plus bas).
+- **Resume natif plutôt que « garder le runtime vivant ».** Garder N runtimes vivants « au cas où » =
+  coûteux (RAM, creds — `agent-runtime` ADR 0006) ; le mécanisme natif de reprise suffit. Les
+  conversations restent **bon marché** et **disposables** : *pas de pipe ≠ pas de conversation*.
+
+## À valider (spike) — avant de graver le mécanisme
+
+On **teste sur l'amont réel** (fakechat + claude) ces inconnues, et on **ajuste** la Decision si
+besoin :
+
+- **Ce que le channel charrie vraiment** — `reply()` donne-t-il des **tours nets** ? du
+  streaming / des partiels ? les **tool-use / thinking**, ou juste le texte final ? → détermine si
+  « le hub observe » suffit à une history **fidèle**.
+- **Complétude** — le hub voit-il **100 %** des tours user-facing, ou claude peut-il émettre
+  hors-channel ?
+- **`--resume` en vrai** — a-t-il besoin du **JSONL exact / au même chemin** ? un **pod frais**
+  peut-il reprendre une session dont le JSONL est sur le PVC ? rejoue-t-il proprement ?
+- **Hub down** — le channel **bufferise**-t-il les `reply()` et **redélivre au reconnect**, ou ça
+  tombe ? → complétude de l'history aux coupures.
+- **Re-seed** — nourrir un runtime frais avec l'history **neutre** (la résilience « PVC perdu ») :
+  viable / acceptable ?
 
 ## Consequences
 
-- **Deux états de conversation** : `live` (pipe ⟷ runtime) et `dormante` (history seul). Le hub
-  présente les **deux** d'un même geste (la liste claude.ai).
-- **Le hub lit le PVC** (les JSONL `~/.claude/projects`) en **read-model**. *Comment* (montage partagé
-  ? une API de lecture exposée par le superviseur ?) = à trancher en construisant ; l'ADR fixe le
-  **principe** (dérivé, pas dupliqué), pas la plomberie.
-- **Mapping d'identité** à tenir : « conversation produit » ⟷ « session JSONL / id de `--resume` » ⟷
-  `chat_id` du pipe quand elle est live. C'est l'**ossature** de l'historique + reprise.
-- **Format JSONL = dépendance au harnais** (comme `channels`, ADR 0002). Il bouge avec Claude Code → le
-  parsing du read-model est **isolé** dans un module, pas éparpillé.
-- **Limite assumée** : le read-model **affiche / reprend** ; il ne **réécrit pas** l'history (la vérité
-  reste au harnais). Éditer / forker / brancher une conversation = hors scope (évolution éventuelle).
-- Pose les bases de l'UX « claude.ai-like » (liste, reprise, lecture offline) que le hub (ADR 0004)
-  rend.
+- **Deux états** (`live` / `dormante`) présentés d'un même geste (la liste claude.ai).
+- **Le hub possède un store de conversations** (history neutre) → **patche ADR 0004** : l'état du
+  hub n'est plus « mince ».
+- **Mapping d'identité** à tenir : conversation produit ⟷ **session native de resume** (id
+  `--resume`) ⟷ `chat_id` du pipe quand elle est `live`.
+- **Le natif (JSONL) reste derrière la frontière runtime** : isolé, **jamais exposé** au produit.
+  Un changement de format Claude n'impacte que le **resume**, pas l'**history**.
+- **Hors-scope** : éditer / forker une conversation ; **importer** une session claude créée hors
+  agora (parseur JSONL ponctuel, harness-spécifique).
+- **Statut provisoire assumé** : la Decision tient le **principe** ; le **mécanisme** se confirme /
+  s'ajuste après le spike — même posture que « adopter une preview » (ADR 0002 / 0006).
