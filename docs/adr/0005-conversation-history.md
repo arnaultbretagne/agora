@@ -1,9 +1,9 @@
-# ADR 0005 — Conversation as first-class: product history (hub, neutral) vs runtime resume (native)
+# ADR 0005 — Conversation as first-class: the hub owns the history (sole source of truth); resume = re-seed
 
 ## Status
 
-Proposed — 2026-06-30. **Mechanism to validate via a spike** (cf. § *To validate*). We fix the
-**principle**; we do **not** carve in the details of an upstream we haven't tried yet.
+Accepted — **spike-confirmed** 2026-06-30 (see `/srv/spike/FINDINGS.md`). Supersedes the earlier
+"resume = native `--resume`" mechanism, which the spike disproved for channel conversations.
 
 ## Context
 
@@ -11,81 +11,79 @@ The hub aggregates **conversations** (ADR 0004); a conversation **survives** its
 UX: reopen, read the past, resume — **even when no runtime is running**). The **conversation** is the
 first-class object, not the file (≠ the "vault + git" angle of the old tools).
 
-**First intent — discarded.** "history = a read-model of the JSONL in `~/.claude/projects`". Two
-**deal-breaking** flaws:
+**First intent — discarded.** "history = a read-model of the JSONL in `~/.claude/projects`". Flaws:
+**hostage to the PVC** (no PVC ⇒ no history) and **hostage to the format** (JSONL is Claude-Code-specific
+⇒ breaks runtime-agnosticism; and its format **changes between releases** — Claude Code's own docs warn
+scripts parsing it can break).
 
-1. **Hostage to the PVC** — no connection to the runtime's PVC ⇒ **no history at all**.
-2. **Hostage to the format** — JSONL is **Claude-Code-specific** ⇒ it breaks **runtime-agnosticism**
-   (codex doesn't write this format; `agent-runtime` ADR 0002). *(Claude Code's own docs confirm the
-   risk: the JSONL entry format is internal and **changes between releases** — scripts parsing it can
-   break. All the more reason not to build product history on it.)*
+**The spike (2026-06-30) then closed the question** — the native transcript is **not a reliable record
+of a channel conversation at all**:
 
-It **conflated two different things**: the *conversation* (what the human reads) and the agent's
-*resume context*. And above all: **we don't yet know precisely how the upstream behaves** (what the
-channel carries, how `--resume` reacts, buffering across disconnects…). So we set a **direction**, not
-a frozen mechanism.
+- inbound `<channel>` events are **not written** to the JSONL (GitHub #55896); only claude's `reply`
+  calls are, *if* a transcript exists;
+- our **interactive `--dangerously-load-development-channels` sessions wrote no transcript whatsoever** (a
+  typed turn + a channel turn, clean exit → nothing under `~/.claude/projects/`);
+- channels are **real-time only** ("events arrive only while the session is open"); there is **no
+  documented support** for resuming a channel-driven session.
 
 ## Decision
 
-**The conversation is first-class. We separate two concerns — by owner and by format:**
+**The conversation is first-class. The hub owns its history as the SOLE source of truth; resuming a
+dormant conversation re-seeds a fresh runtime from that history.**
 
-1. **History (product) — owned by the hub, in a neutral format.** The conversation (user↔agent turns)
-   is **persisted by the hub as it streams in, from what it observes on the pipe** (`shared/`
-   protocol, ADR 0003). **Neutral** (so multi-harness), **at the hub** (so independent of the PVC).
-   It's what **every client displays**.
-2. **Resume (runtime) — owned by the supervisor/runtime, in a native format.** Resuming the agent =
-   its **native mechanism** (`--resume` on the JSONL for claude), **behind the runtime boundary**.
-   **Harness-specific by nature**, and that's OK: it **never crosses over** to the product.
+1. **History — owned by the hub, in a neutral format, sole source of truth.** Every message passes
+   through the hub: it **sends** each inbound (user → channel → claude) and **receives** each outbound
+   (the `reply`, which the spike proved arrives as **one clean final turn**). The hub **persists both
+   sides as it streams** (`shared/` protocol, ADR 0003). Neutral (multi-harness), hub-owned (PVC- and
+   harness-independent). This is what **every client displays** — and the **only** record.
+2. **Resume = re-seed, NOT `--resume`.** The native transcript / `--resume` is **redundant and
+   incomplete** for channel conversations (above) → the product **never reads the JSONL and never relies
+   on `--resume`**. To reopen a `dormant` conversation, the hub asks the supervisor for a **fresh
+   runtime** and **seeds it with the conversation's history** (replays the prior turns as context).
 
 Conversation states: **`live`** (pipe ⟷ runtime) / **`dormant`** (hub history, no runtime).
 
-> **Guiding principle — what we hold firm:** *product history must depend neither on a harness's
-> format, nor on the availability of a runtime PVC.* The **how** above is the **working hypothesis**,
-> to be tested (§ *To validate*) — not a dogma.
+> **Guiding principle:** *product history must depend neither on a harness's format, nor on a runtime
+> PVC, nor on the native transcript.* The hub — which sees every message in both directions — is the
+> natural and complete record.
 
 ## Rationale
 
-- **The hub already sees the conversation go by.** It's the very definition of the channel (`reply()`
-  = how the agent talks to the human; the user message also transits through the hub). It **persists
-  it as it streams in** — it **never needed** the JSONL for the history.
-- **Two data sets, not a copy.** hub-history (neutral conversation) ≠ JSONL (native working context).
-  Since these are **not** copies, **no divergence** — and it **corrects** the false "derive / don't
-  duplicate" principle of the first intent (which claimed to avoid a duplication that doesn't exist).
-- **Neutral ⇒ multi-harness; hub-owned ⇒ available.** Both flaws of the first intent fall away.
-  Resilience bonus: PVC/JSONL lost ⇒ we **keep the conversation**, and we can **re-seed** a fresh
-  runtime with it (to be tested, see below).
-- **Native resume rather than "keeping the runtime alive".** Keeping N runtimes alive "just in case" =
-  costly (RAM, creds — `agent-runtime` ADR 0006); the native resume mechanism is enough. Conversations
-  stay **cheap** and **disposable**: *no pipe ≠ no conversation*.
+- **The hub is the complete record by construction.** It originates every inbound and receives every
+  outbound, so it needs neither the JSONL nor claude's transcript to know the full conversation. (Spike:
+  `reply()` = one clean final turn, no streaming; the channel never carries internal reasoning/tool-use,
+  so the neutral history is exactly the user-facing thread.)
+- **The native transcript is the wrong foundation — proven, not assumed.** It drops inbound channel
+  events and, in practice, wasn't even written for our channel sessions. Building history or resume on it
+  would be building on sand. *(This also makes the earlier "JSONL format is version-fragile" worry moot:
+  we never touch it.)*
+- **Re-seed beats `--resume` AND "keep the runtime alive".** Keeping N runtimes alive "just in case" is
+  costly (RAM, creds — `agent-runtime` ADR 0006) and unnecessary; and `--resume` doesn't work for channel
+  convs. Re-seeding from the hub's history makes conversations **cheap** and **disposable**: *no pipe ≠ no
+  conversation*, and reopening is just "spawn + replay context".
 
-## To validate (spike) — before carving the mechanism
+## Spike results (2026-06-30) — what was confirmed
 
-We **test these unknowns against the real upstream** (fakechat + claude), and **adjust** the Decision
-if needed:
-
-- **What the channel really carries** — does `reply()` give **clean turns**? streaming / partials? the
-  **tool-use / thinking**, or just the final text? → determines whether "the hub observes" is enough
-  for a **faithful** history.
-- **Completeness** — does the hub see **100%** of user-facing turns, or can claude emit off-channel?
-- **`--resume` for real** — does it need the **exact JSONL / at the same path** or the **same cwd**
-  (resume lookup is **directory-scoped** — confirmed upstream)? can a **fresh pod** resume a session
-  whose JSONL is on the PVC? does it replay cleanly?
-- **Hub down** — does the channel **buffer** the `reply()`s and **redeliver on reconnect**, or does it
-  drop them? → history completeness across disconnects.
-- **Re-seed** — feeding a fresh runtime the **neutral** history (the "PVC lost" resilience): viable /
-  acceptable?
+- **What the channel carries**: `reply()` = **one clean final turn**, no streaming/partials, no internal
+  transcript → the hub-observed history is faithful and already neutral. ✅
+- **Native persistence/resume**: inbound channel events **not** in the transcript; interactive
+  dev-channel sessions wrote **no** transcript; **no resume** for channel convs → **`--resume` dropped**,
+  re-seed adopted. ✅
+- **Enablement** (D2): channel = a `--channels` / `--dangerously-load-development-channels` flag **+** an
+  MCP server (plugin or `.mcp.json`) declaring `claude/channel` **+** `--allowedTools` for the reply tool.
+- **Build-time** (not upstream unknowns): the **re-seed** mechanics (how many prior turns, what format)
+  and **hub-down buffering** are the channel/website's job.
 
 ## Consequences
 
 - **Two states** (`live` / `dormant`) presented in a single gesture (the claude.ai list).
-- **The hub owns a conversation store** (neutral history) → **patches ADR 0004**: the hub's state is
-  no longer "thin". *(Where it lives — the website pod's DB / volume — is an implementation choice to
-  settle while building; it is **not** the runtime PVC.)*
-- **Identity mapping** to maintain: product conversation ⟷ **native resume session** (`--resume` id)
-  ⟷ the pipe's `chat_id` when it's `live`.
-- **The native side (JSONL) stays behind the runtime boundary**: isolated, **never exposed** to the
-  product. A Claude format change affects only the **resume**, not the **history**.
-- **Out of scope**: editing / forking a conversation; **importing** a claude session created outside
-  agora (one-off JSONL parser, harness-specific).
-- **Provisional status, owned**: the Decision holds the **principle**; the **mechanism** is confirmed /
-  adjusted after the spike — same posture as "adopting a preview" (ADR 0002 / 0006).
+- **The hub owns a conversation store** (neutral history, sole source of truth) → **patches ADR 0004**:
+  the hub's state is not "thin". *(Where it lives — the website pod's DB / volume — settled while
+  building; **not** the runtime PVC.)*
+- **Identity mapping**: product conversation ⟷ the pipe's `chat_id` while `live`. *(No native-session /
+  `--resume` id to track — the product doesn't use it.)*
+- **The native JSONL/transcript is unused by the product** — never read, never resumed from. `claude`
+  writes whatever it writes; the product ignores it.
+- **Resume is a product mechanism** (re-seed from history), not a runtime/harness feature → it works
+  identically for any runtime kind (claude, codex…).
+- **Out of scope**: editing / forking a conversation; importing a claude session created outside agora.

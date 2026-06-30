@@ -63,10 +63,10 @@ A channel, concretely:
   Mitigation: it's **isolated in a single artefact** (the channel). We **accept** the preview — it's
   the bet aligned with the subscription constraint (the "stable" alternative transports are precisely
   the ones we forbid ourselves).
-- **Protocol shape is documented; content semantics are not.** The wire shape above (notification
-  method, `reply`, capabilities) is documented — but *what the channel carries* (turn granularity,
-  streaming, whether tool-use/thinking appears) and *how the channel is enabled* for claude (a
-  `--channels` flag vs PVC plugin config) are **spike items** (`agora` ADR 0005, `agent-runtime`
-  ADR 0004).
+- **Protocol shape documented; content semantics + enablement spike-confirmed (2026-06-30).** The wire
+  shape (notification method, `reply`, capabilities) is documented; the spike confirmed `reply()`
+  delivers **one clean final turn** (no streaming, no internal transcript). **Enablement**: a
+  `--channels` / `--dangerously-load-development-channels` flag **+** this MCP server (plugin or
+  `.mcp.json`) **+** `--allowedTools` for the reply tool (`/srv/spike/FINDINGS.md`).
 - **fakechat** (Anthropic) is the **proof** that this design holds (channel + web UI) and our
   **reference** (ADR 0006).
