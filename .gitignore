@@ -1,0 +1,12 @@
+node_modules/
+package-lock.json
+
+# POC scratch: local run harness, data, logs, screenshots (not product)
+.poc/
+
+# hub runtime state (neutral conversation store) — never committed
+website/data/
+
+# NOTE: channel/protocol.js IS committed on purpose — the plugin install copies
+# channel/ out of the repo, so it must be self-contained (`../shared` would dangle).
+# `npm run sync-shared` regenerates it from shared/protocol.js; keep them identical.

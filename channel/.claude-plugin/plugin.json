@@ -1,0 +1,17 @@
+{
+  "name": "agora",
+  "description": "agora channel \u2014 the pipe between a claude runtime and the agora hub (stdio MCP \u27f7 WS bridge).",
+  "version": "0.1.2",
+  "keywords": [
+    "agora",
+    "channel",
+    "mcp",
+    "bridge"
+  ],
+  "channels": [
+    {
+      "server": "agora",
+      "displayName": "Agora"
+    }
+  ]
+}

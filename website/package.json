@@ -1,0 +1,14 @@
+{
+  "name": "agora-website",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "agora website — the hub: conversations, pipes, supervisor control plane, UI",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

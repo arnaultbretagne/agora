@@ -1,0 +1,12 @@
+{
+  "name": "agora",
+  "owner": { "name": "agora" },
+  "plugins": [
+    {
+      "name": "agora",
+      "source": "./channel",
+      "description": "agora channel — the pipe between a claude runtime and the agora hub.",
+      "category": "productivity"
+    }
+  ]
+}

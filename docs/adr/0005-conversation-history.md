@@ -87,3 +87,16 @@ Conversation states: **`live`** (pipe ⟷ runtime) / **`dormant`** (hub history,
 - **Resume is a product mechanism** (re-seed from history), not a runtime/harness feature → it works
   identically for any runtime kind (claude, codex…).
 - **Out of scope**: editing / forking a conversation; importing a claude session created outside agora.
+
+## Build validation (2026-07-01) — the re-seed works on real Claude Max
+
+POC (`/srv/agora`) proved the decision end-to-end: a conversation goes `live` (hub pushes the turn,
+claude `reply`s), `close` kills the runtime → `dormant`, and reopening spawns a **fresh** runtime that
+the hub **seeds with a flattened, role-tagged replay of its own history** — claude then answered a
+question that depended on a turn from *before* the restart (recalled a keyword from the seeded history).
+No `--resume`, no JSONL read. Two build-time mechanics were settled here (both **channel/website**, not
+ADR-level): the seed format = one plain-text push `[conversation resumed] <history>…</history> + new
+turn`; and the **first push to a fresh runtime can be dropped** (startup race) → the channel gates
+delivery on claude-readiness and **re-delivers the un-`reply`d push** until acked (`/srv/spike/FINDINGS.md`
+§5b). A `live` runtime that survives a **hub** restart is **re-claimed** (persisted pipe lease), *not*
+re-seeded — re-seed is only for a genuinely fresh runtime.

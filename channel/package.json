@@ -1,0 +1,14 @@
+{
+  "name": "agora-channel",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "agora channel plugin — stdio MCP (claude side) ⟷ WS (hub side) bridge",
+  "scripts": {
+    "sync-shared": "node ../scripts/sync-shared.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

@@ -57,8 +57,12 @@ One repo per artefact, or a monorepo?
   `shared/`, **not** a repo topic.
 - The **plugin** follows the Claude Code plugin format — a `plugin.json` manifest (metadata) **plus a
   `.mcp.json`** that declares the channel's MCP server (two separate files, not one) — details settled
-  while building it. *(Spike-confirmed: claude loads the channel via **both** — the plugin/`.mcp.json`
-  provides the MCP server, and a `--channels plugin:<name>@<marketplace>` flag (dev:
-  `--dangerously-load-development-channels server:<name>`) activates it per session.)*
+  while building it. *(Build-confirmed 2026-07-01: claude loads the channel via **both** — the
+  plugin/`.mcp.json` provides the MCP server, and a `--channels plugin:<name>@<marketplace>` flag
+  activates it per session. **Two enablement details, learned building it** — `/srv/spike/FINDINGS.md`
+  §5: (1) `plugin.json` must carry a top-level `channels: [{ server: "<mcpServer>" }]`, else the server
+  loads but the channel is skipped; (2) a **managed-settings allowlist** — `channelsEnabled` +
+  `allowedChannelPlugins` — must approve the plugin for a subscription session. Both fold into the image
+  / PVC provisioning, `infra-k8s` side.)*
 - **Installing the plugin onto the PVC** is a deployment gesture (who places it, when) to wire up on
   the `infra-k8s` side. Here we just record: **delivered as a plugin, not baked into the image**.
