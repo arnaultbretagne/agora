@@ -314,41 +314,40 @@ button { font-family: var(--font-sans); }
   overflow-x: hidden;
 }
 .messages-inner {
-  max-width: 768px;
+  max-width: 768px;              /* THE text width — same as the composer */
   margin: 0 auto;
   width: 100%;
-  padding: 28px 24px 8px;
+  /* generous bottom padding so the last turn clears the floating composer */
+  padding: 28px 24px 140px;
 }
+
+/* A row is one turn. user = a right-aligned bubble (me speaking); assistant =
+   bare text on the conversation background. No names, no avatars either side —
+   a bubble already means "me", its absence means "the agent" (messaging-app style). */
 .msg-row {
   display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   animation: agoraFade 160ms ease;
 }
-.msg-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 9999px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--app-hairline);
-  font-weight: 600;
-  font-size: 11px;
-  background: var(--app-card);
-  color: var(--app-ink);
+.msg-row.user { justify-content: flex-end; }
+.msg-row.assistant { justify-content: flex-start; }
+
+.msg-row.user .msg-text {
+  max-width: 78%;
+  background: var(--app-userbub);
+  color: var(--app-usertext);
+  padding: 10px 15px;
+  border-radius: 18px;
 }
-.msg-row.user .msg-avatar { background: var(--app-strong); }
-.msg-body { flex: 1; min-width: 0; }
-.msg-role { font-weight: 500; font-size: 13px; color: var(--app-muted); margin-bottom: 4px; }
+.msg-row.assistant .msg-text { max-width: 100%; }
+
 .msg-text {
   font-size: 15.5px;
   line-height: 1.6;
   color: var(--app-body);
   overflow-wrap: break-word;
 }
+.msg-row.user .msg-text p { white-space: pre-wrap; margin: 0; }
 .msg-text > :first-child { margin-top: 0; }
 .msg-text > :last-child { margin-bottom: 0; }
 .msg-text p { margin: 10px 0; white-space: pre-wrap; }
@@ -388,7 +387,7 @@ button { font-family: var(--font-sans); }
   color: var(--app-muted);
 }
 
-.typing-row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 24px; }
+.msg-row.typing .typing-dots { padding: 6px 0; }
 .typing-dots { display: inline-flex; align-items: center; padding: 12px 0; }
 .typing-dots span {
   display: inline-block;
@@ -440,16 +439,22 @@ button { font-family: var(--font-sans); }
 
 /* ---------------- composer ---------------- */
 
+/* No band: the composer floats as an overlay over the chat. A short fade to the
+   canvas at the very bottom keeps text legible as it scrolls under the box. */
 .composer-wrap {
-  flex: none;
-  padding: 10px 20px 18px;
-  background: var(--app-panel);
-  border-top: 1px solid var(--app-hairline);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 20px 18px;
+  background: linear-gradient(to top, var(--app-canvas) 42%, transparent);
+  pointer-events: none;          /* the fade doesn't eat clicks; the box re-enables them */
 }
 .composer {
   max-width: 768px;
   margin: 0 auto;
   width: 100%;
+  pointer-events: auto;
   border: 1px solid var(--app-hairline);
   border-radius: 16px;
   background: var(--app-canvas);
@@ -457,8 +462,10 @@ button { font-family: var(--font-sans); }
   display: flex;
   flex-direction: column;
   gap: 9px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);   /* lifts the overlay off the chat */
 }
-.composer:focus-within { box-shadow: 0 0 0 3px var(--focus-ring); }
+/* focus: a subtle neutral emphasis — never the coral ring */
+.composer:focus-within { border-color: var(--app-muted); }
 .composer textarea {
   width: 100%;
   border: none;
@@ -597,8 +604,8 @@ button { font-family: var(--font-sans); }
   .sidebar-inner { min-width: 0; }
   .topbar { padding: 10px 12px; }
   .topbar-right .chip.harness, .topbar-right .chip.model, .topbar-right .chip.agent { display: none; }
-  .messages-inner { padding: 16px 16px 8px; }
-  .composer-wrap { padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .messages-inner { padding: 16px 16px 128px; }
+  .composer-wrap { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
   .empty { padding: 24px 22px; }
   .empty h1 { font-size: 27px; }
 }
