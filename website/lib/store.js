@@ -117,6 +117,26 @@ export class ConversationStore {
     this.#write(conv)
   }
 
+  /**
+   * Mark the conversation as errored. Unlike the runtime state (live/starting/
+   * dormant, derived from the pipe and never persisted), an error is an OUTCOME
+   * that must survive a hub restart and stay visible until the user retries.
+   */
+  setError(id, reason) {
+    const conv = this.#must(id)
+    conv.error = { reason, ts: new Date().toISOString() }
+    this.#write(conv)
+  }
+
+  /** Clear the error flag (on a new attempt or a healthy reply). Returns true if one was set. */
+  clearError(id) {
+    const conv = this.convs.get(id)
+    if (!conv || !conv.error) return false
+    delete conv.error
+    this.#write(conv)
+    return true
+  }
+
   delete(id) {
     if (!this.convs.delete(id)) return false
     try {

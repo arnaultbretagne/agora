@@ -23,7 +23,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { appendFileSync } from 'node:fs'
 import WebSocket from 'ws'
-import { PROTOCOL_VERSION, helloMsg, replyMsg, parseHubFrame } from './protocol.js'
+import { PROTOCOL_VERSION, helloMsg, replyMsg, readyMsg, unresponsiveMsg, parseHubFrame } from './protocol.js'
 
 const HUB_URL = process.env.CHANNEL_HUB_URL
 const CONVERSATION_ID = process.env.CHANNEL_CONVERSATION_ID
@@ -65,6 +65,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
   if (!claudeReady) {
     claudeReady = true
     log('claude_ready')
+    sendToHub(readyMsg()) // tell the hub the agent loop is up → conversation `starting` → `live`
     deliverInbound()
   }
   return {
@@ -167,6 +168,7 @@ function scheduleAck() {
     if (!pendingAck) return
     if (pendingAck.tries >= ACK_MAX_TRIES) {
       log('ack_giveup', { id: pendingAck.push.id, tries: pendingAck.tries })
+      sendToHub(unresponsiveMsg({ messageId: pendingAck.push.id, tries: pendingAck.tries }))
       clearAck()
       return
     }

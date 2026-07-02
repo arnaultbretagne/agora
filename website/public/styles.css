@@ -173,18 +173,20 @@ button { font-family: var(--font-sans); }
 }
 .conv-item:hover { background: var(--app-hover); }
 .conv-item.active { background: var(--app-card); }
-.conv-item .conv-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--app-strong);
-  color: var(--app-ink);
+/* one small elegant status dot per conversation (replaces the kind icon):
+   grey = en veille, green = live (pulsing while starting), red = error */
+.conv-item .conv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
   flex: none;
-  position: relative;
+  margin: 0 3px;
+  background: var(--app-muted);
+  transition: background 200ms ease;
 }
+.conv-item.state-live .conv-dot { background: var(--accent-teal); }
+.conv-item.state-starting .conv-dot { background: var(--accent-teal); animation: agoraPulse 1.2s infinite; }
+.conv-item.state-error .conv-dot { background: var(--accent-red); }
 .conv-item .conv-title {
   flex: 1;
   min-width: 0;
@@ -209,18 +211,6 @@ button { font-family: var(--font-sans); }
 .conv-item .conv-star:hover { opacity: 1 !important; }
 .conv-item .conv-star.pinned { color: var(--app-ink); opacity: .9; }
 
-.state-dot {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 8px;
-  height: 8px;
-  border-radius: 9999px;
-  border: 2px solid var(--app-sidebar);
-  display: none;
-}
-.conv-item.state-live .state-dot { display: block; background: var(--accent-teal); }
-.conv-item.state-starting .state-dot { display: block; background: var(--accent-amber); animation: agoraPulse 1.2s infinite; }
 
 .sidebar-footer {
   border-top: 1px solid var(--app-hairline);
@@ -307,7 +297,8 @@ button { font-family: var(--font-sans); }
 }
 .chip .dot { width: 7px; height: 7px; border-radius: 9999px; background: var(--app-muted); }
 .chip.live .dot { background: var(--accent-teal); }
-.chip.starting .dot { background: var(--accent-amber); animation: agoraPulse 1.2s infinite; }
+.chip.starting .dot { background: var(--accent-teal); animation: agoraPulse 1.2s infinite; }
+.chip.error .dot { background: var(--accent-red); }
 
 /* ---------------- messages ---------------- */
 

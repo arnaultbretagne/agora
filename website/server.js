@@ -191,6 +191,8 @@ function acceptChannel(ws) {
       return
     }
     if (msg.type === 'reply') hub.onChannelReply(conversationId, msg)
+    if (msg.type === 'ready') hub.onChannelReady(conversationId)
+    if (msg.type === 'unresponsive') hub.onChannelUnresponsive(conversationId, msg)
     if (msg.type === 'err') console.error(`[website] channel ${conversationId} error: ${msg.message}`)
   })
 }

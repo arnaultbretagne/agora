@@ -92,7 +92,12 @@ export class Hub {
    * ------------------------------------------------------------ */
 
   stateOf(convId) {
-    if (this.pipes.has(convId)) return 'live'
+    // error is a persisted OUTCOME → it wins over the live/derived states until cleared
+    if (this.store.get(convId)?.error) return 'error'
+    const pipe = this.pipes.get(convId)
+    // a connected pipe is `live` only once the channel signalled readiness (agent loop up,
+    // seed digested); before that it's still `starting` (socket up ≠ agent ready)
+    if (pipe) return pipe.ready ? 'live' : 'starting'
     if (this.pending.has(convId)) return 'starting'
     return 'dormant'
   }
@@ -163,6 +168,7 @@ export class Hub {
     if (!conv) throw new Error(`unknown conversation: ${convId}`)
 
     const message = this.store.addMessage(convId, { role: 'user', text })
+    this.store.clearError(convId) // a new user message is a fresh attempt → drop any prior error
     this.broadcast(messageEvent(convId, message))
     this.#broadcastConv(convId) // title/updatedAt moved
 
@@ -191,6 +197,7 @@ export class Hub {
     const token = randomUUID()
     const attempt = this.store.bumpSpawn(conv.id)
     const sessionId = `${conv.id}-r${attempt}`
+    this.store.clearError(conv.id) // a spawn attempt clears the prior error
     this.pending.set(conv.id, { token, sessionId, queue: [...queuedIds], fresh: true, since: Date.now() })
     this.#broadcastConv(conv.id) // → starting
     try {
@@ -203,9 +210,11 @@ export class Hub {
       this.store.setPipe(conv.id, { token, sessionId })
       this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}`)
     } catch (err) {
+      // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
       this.pending.delete(conv.id)
-      this.#broadcastConv(conv.id) // → dormant
-      throw new Error(`runtime spawn failed: ${err.message}`)
+      this.store.setError(conv.id, `spawn_failed: ${err.message}`)
+      this.#broadcastConv(conv.id) // → error
+      this.log(`runtime spawn failed for ${conv.id}: ${err.message}`)
     }
   }
 
@@ -238,11 +247,12 @@ export class Hub {
     }
     const sessionId = pending?.sessionId ?? previous?.sessionId ?? conv.pipe?.sessionId
     const fresh = pending?.fresh ?? false
-    this.pipes.set(conversationId, { ws, sessionId, token: expected })
+    // socket connected but the agent loop isn't proven up yet → `starting` until a `ready` frame
+    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: false })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
-    this.log(`channel live for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
-    this.#broadcastConv(conversationId) // → live
+    this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
+    this.#broadcastConv(conversationId) // → starting (awaiting ready)
 
     ws.on('close', () => {
       if (this.pipes.get(conversationId)?.ws === ws) {
@@ -311,9 +321,32 @@ export class Hub {
     const conv = this.store.get(conversationId)
     if (!conv) return
     const message = this.store.addMessage(conversationId, { role: 'assistant', text, replyTo })
+    // a real reply proves the agent is healthy → ready, and clears any error
+    const pipe = this.pipes.get(conversationId)
+    if (pipe) pipe.ready = true
+    this.store.clearError(conversationId)
     this.#setTyping(conversationId, false)
     this.broadcast(messageEvent(conversationId, message))
     this.#broadcastConv(conversationId)
+  }
+
+  /** The channel signals claude's agent loop is up → the pipe is truly ready (`live`, not `starting`). */
+  onChannelReady(conversationId) {
+    const pipe = this.pipes.get(conversationId)
+    if (!pipe || pipe.ready) return
+    pipe.ready = true
+    this.store.clearError(conversationId) // becoming ready clears a prior error
+    this.#broadcastConv(conversationId) // → live
+    this.log(`channel ready for ${conversationId}`)
+  }
+
+  /** The channel gave up re-delivering an unanswered push → the agent is stuck. Mark `error`. */
+  onChannelUnresponsive(conversationId, { messageId } = {}) {
+    if (!this.store.get(conversationId)) return
+    this.store.setError(conversationId, 'unresponsive')
+    this.#setTyping(conversationId, false)
+    this.#broadcastConv(conversationId) // → error
+    this.log(`channel unresponsive for ${conversationId} (push ${messageId ?? '?'})`)
   }
 
   /* ------------------------------------------------------------ *

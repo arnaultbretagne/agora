@@ -37,6 +37,18 @@ export function replyMsg({ text, replyTo, ts }) {
   return { type: 'reply', text, replyTo, ts: ts ?? new Date().toISOString() }
 }
 
+/** channel → hub: claude's agent loop is up (it enumerated our tools) — the pipe is truly READY,
+ *  not merely socket-connected. Promotes the conversation `starting` → `live`. */
+export function readyMsg() {
+  return { type: 'ready', v: PROTOCOL_VERSION }
+}
+
+/** channel → hub: an inbound push went unanswered after all retries — the agent is stuck
+ *  (crashed loop, logged out, hung). Marks the conversation `error`. */
+export function unresponsiveMsg({ messageId, tries }) {
+  return { type: 'unresponsive', messageId, tries }
+}
+
 /** either direction: terminal error (the receiver may close the socket). */
 export function errMsg(code, message) {
   return { type: 'err', code, message }
@@ -75,6 +87,8 @@ const CHANNEL_TO_HUB = {
   hello: (m) => typeof m.conversationId === 'string' && m.conversationId.length > 0
     && typeof m.token === 'string' && m.v === PROTOCOL_VERSION,
   reply: (m) => typeof m.text === 'string',
+  ready: () => true,
+  unresponsive: (m) => typeof m.messageId === 'string',
   err: (m) => typeof m.message === 'string',
 }
 
