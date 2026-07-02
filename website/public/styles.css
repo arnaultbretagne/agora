@@ -2,7 +2,9 @@
    Push sidebar on desktop / full-height drawer on mobile). */
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* Lock the app shell to the viewport: no page-level horizontal pan / rubber-band on iOS
+   (overscroll-behavior kills the bounce; overflow:hidden on the root stops any drift). */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 body {
   margin: 0;
   background: var(--app-canvas);
@@ -33,7 +35,9 @@ button { font-family: var(--font-sans); }
   height: 100dvh;
   display: flex;
   flex-direction: row;
-  overflow: hidden;
+  /* clip (not hidden): hard-clips the off-screen drawer WITHOUT creating a scroll
+     container that iOS Safari would let you pan/rubber-band horizontally. */
+  overflow: clip;
   isolation: isolate;
   background: var(--app-canvas);
 }
