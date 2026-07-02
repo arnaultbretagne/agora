@@ -17,7 +17,7 @@ import {
   snapshotEvent, convEvent, convDeletedEvent, messageEvent, typingEvent,
 } from '../../shared/protocol.js'
 import { buildSeedContent } from './seed.js'
-import { spawnSpec } from './supervisor.js'
+import { spawnSpec, cacheTtlFor } from './supervisor.js'
 
 const TYPING_TIMEOUT_MS = 180_000
 
@@ -51,6 +51,12 @@ export class Hub {
     // reap pendings whose channel never (re)appears — dead runtime or dead pipe
     this.sweeper = setInterval(() => this.#sweepPending(), 30_000)
     this.sweeper.unref?.()
+
+    // reap LIVE runtimes idle past their harness cache TTL: the prompt cache is
+    // dead, so keeping them alive buys nothing over a re-seed — kill and free RAM.
+    const reapEvery = Number(process.env.IDLE_REAP_INTERVAL_MS ?? 300_000)
+    this.idleReaper = setInterval(() => this.#reapIdle().catch((e) => this.log(`idle-reap error: ${e.message}`)), reapEvery)
+    this.idleReaper.unref?.()
   }
 
   /**
@@ -84,6 +90,26 @@ export class Hub {
       try { await this.supervisor.kill(p.sessionId) } catch { /* already gone */ }
       this.#broadcastConv(convId)
       this.log(`swept ${convId}: channel never claimed session ${p.sessionId}`)
+    }
+  }
+
+  /**
+   * Reap LIVE runtimes that have been idle past their harness cache TTL. Once the
+   * server-side prompt cache lapses (Claude Code / subscription = 1h), keeping the
+   * runtime alive is strictly wasteful: its next turn is a cold reprocess either
+   * way, so we kill it → `dormant` and reclaim RAM. Keyed on `lastTurnAt` (the last
+   * inference turn), NOT pipe activity — a reconnect must not reset the clock.
+   */
+  async #reapIdle() {
+    const now = Date.now()
+    for (const [convId, pipe] of [...this.pipes]) {
+      const conv = this.store.get(convId)
+      if (!conv) continue
+      const ttl = cacheTtlFor(conv.kind)
+      const idle = now - (pipe.lastTurnAt ?? now)
+      if (idle < ttl) continue
+      this.log(`reaping idle ${convId}: no turn for ${Math.round(idle / 60_000)}min ≥ ${conv.kind} TTL ${Math.round(ttl / 60_000)}min → dormant`)
+      try { await this.closeConversation(convId) } catch (err) { this.log(`idle-reap of ${convId} failed: ${err.message}`) }
     }
   }
 
@@ -179,6 +205,7 @@ export class Hub {
         content: text,
         meta: { user: 'user', ts: message.ts },
       })))
+      pipe.lastTurnAt = Date.now() // a turn is starting → cache being touched
       this.#setTyping(convId, true)
       return message
     }
@@ -251,7 +278,9 @@ export class Hub {
     // A RE-CLAIM is an already-running, already-ready runtime whose channel merely reconnected: it
     // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
     // would be stuck `starting` forever after every hub restart.
-    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh })
+    // lastTurnAt drives the idle-reaper — it tracks the last INFERENCE turn (push/reply),
+    // NOT pipe activity: a reconnect/re-hello must NOT count as warming the cache.
+    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh, lastTurnAt: Date.now() })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
     this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
@@ -316,6 +345,7 @@ export class Hub {
         pipe.ws.send(JSON.stringify(pushMsg({ id: m.id, content: m.text, meta: { user: 'user', ts: m.ts } })))
       }
     }
+    pipe.lastTurnAt = Date.now() // seed/backlog push → a turn is starting
     this.#setTyping(conv.id, true)
   }
 
@@ -326,7 +356,7 @@ export class Hub {
     const message = this.store.addMessage(conversationId, { role: 'assistant', text, replyTo })
     // a real reply proves the agent is healthy → ready, and clears any error
     const pipe = this.pipes.get(conversationId)
-    if (pipe) pipe.ready = true
+    if (pipe) { pipe.ready = true; pipe.lastTurnAt = Date.now() } // real turn just completed → cache warm
     this.store.clearError(conversationId)
     this.#setTyping(conversationId, false)
     this.broadcast(messageEvent(conversationId, message))

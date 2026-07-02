@@ -82,3 +82,16 @@ export function spawnSpec(conv, { sessionId, hubUrl, token, channelLogDir }) {
   if (channelLogDir) env.CHANNEL_LOG = `${channelLogDir}/${sessionId}.channel.log`
   return { kind: conv.kind, id: sessionId, args, env }
 }
+
+/**
+ * Per-kind prompt-cache TTL, in ms — the idle window past which keeping a runtime
+ * alive stops paying: once the server-side cache lapses, keep-alive ≡ re-seed ≡
+ * `--resume` (all a cold reprocess), so the hub reaps the idle runtime to reclaim
+ * RAM (see the idle-reaper). This is a HARNESS-NATIVE knob, not a global constant:
+ * Claude Code on a Max subscription auto-uses the 1h cache TTL (verified 2026-07-02);
+ * an API key defaults to 5m, another kind has its own (or ~0 with no caching).
+ */
+export function cacheTtlFor(kind) {
+  if (kind === 'claude') return Number(process.env.CLAUDE_CACHE_TTL_MS ?? 3_600_000) // 1h (subscription)
+  return Number(process.env.DEFAULT_CACHE_TTL_MS ?? 3_600_000)
+}
