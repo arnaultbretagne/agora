@@ -242,6 +242,9 @@ function connect() {
       ready = true
       attempts = 0
       log('ws_ready', { v: PROTOCOL_VERSION })
+      // on EVERY (re)connect, re-assert readiness if claude's loop is already up — a reconnect
+      // (e.g. after a hub restart) re-claims the pipe as `starting` and needs telling we're ready.
+      if (claudeReady) sendToHub(readyMsg())
       flushOutbox()
       return
     }

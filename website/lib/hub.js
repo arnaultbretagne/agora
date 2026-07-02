@@ -247,8 +247,11 @@ export class Hub {
     }
     const sessionId = pending?.sessionId ?? previous?.sessionId ?? conv.pipe?.sessionId
     const fresh = pending?.fresh ?? false
-    // socket connected but the agent loop isn't proven up yet → `starting` until a `ready` frame
-    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: false })
+    // A FRESH runtime is not proven up yet → `starting` until its `ready` frame (or first reply).
+    // A RE-CLAIM is an already-running, already-ready runtime whose channel merely reconnected: it
+    // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
+    // would be stuck `starting` forever after every hub restart.
+    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
     this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
