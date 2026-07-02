@@ -1,11 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="8 11 84 84" role="img" aria-label="Agora">
   <title>Agora</title>
-  
-  
-  <g fill="#cc785c">
-    <rect class="aba" x="16" y="19" width="68" height="6.5" rx="2"></rect>
-    <rect class="ech" x="21" y="27.5" width="58" height="5.5" rx="2"></rect>
-  </g>
-  
-  <path class="fut" fill="none" stroke="#cc785c" stroke-width="4" stroke-linecap="round" d="M28 39V85.5M39 39V76M50 39V72.3M61 39V76.9M72 39V67.5"></path>
+  <style>
+    /* Favicons don't inherit page CSS — theme-awareness must live INSIDE the SVG.
+       Light chrome: brand coral. Dark chrome: cream (matches the in-app logo, which
+       is already light-on-dark). To keep coral in dark instead, set the dark values
+       below to #e0966f. */
+    .fill { fill: #cc785c; }
+    .stroke { fill: none; stroke: #cc785c; }
+    @media (prefers-color-scheme: dark) {
+      .fill { fill: #efe7db; }
+      .stroke { stroke: #efe7db; }
+    }
+  </style>
+  <rect class="fill" x="16" y="19" width="68" height="6.5" rx="2"/>
+  <rect class="fill" x="21" y="27.5" width="58" height="5.5" rx="2"/>
+  <path class="stroke" stroke-width="4" stroke-linecap="round" d="M28 39V85.5M39 39V76M50 39V72.3M61 39V76.9M72 39V67.5"/>
 </svg>
