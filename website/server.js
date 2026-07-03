@@ -136,10 +136,6 @@ const server = createServer(async (req, res) => {
         const message = await hub.sendUserMessage(id, body.text)
         return sendJson(res, 202, { message, state: hub.stateOf(id) })
       }
-      if (sub === 'close' && method === 'POST') {
-        await hub.closeConversation(id)
-        return sendJson(res, 200, hub.summary(store.get(id)))
-      }
       return sendJson(res, 405, { error: 'method not allowed' })
     }
 

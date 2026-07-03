@@ -44,12 +44,25 @@ export class SupervisorClient {
     return ['claude'] // pre-/kinds supervisor
   }
 
-  async spawn({ kind, id, args, env }) {
-    return this.#json('POST', '/sessions', { kind, id, args, env })
+  async spawn({ kind, id, args, env, idleTtlMs }) {
+    return this.#json('POST', '/sessions', { kind, id, args, env, idleTtlMs })
+  }
+
+  /** All sessions the supervisor tracks (one round-trip; drives the liveness reconcile). */
+  async list() {
+    const data = await this.#json('GET', '/sessions')
+    return Array.isArray(data.sessions) ? data.sessions : []
   }
 
   async status(id) {
     return this.#json('GET', `/sessions/${encodeURIComponent(id)}`)
+  }
+
+  /** Heartbeat a session's idle clock (ADR 0008). Best-effort: a miss only risks an early reap. */
+  async touch(id) {
+    try {
+      await this.#json('POST', `/sessions/${encodeURIComponent(id)}/touch`)
+    } catch { /* session gone or supervisor blip — not worth surfacing */ }
   }
 
   async kill(id) {
@@ -80,7 +93,9 @@ export function spawnSpec(conv, { sessionId, hubUrl, token, channelLogDir }) {
     CHANNEL_TOKEN: token,
   }
   if (channelLogDir) env.CHANNEL_LOG = `${channelLogDir}/${sessionId}.channel.log`
-  return { kind: conv.kind, id: sessionId, args, env }
+  // idleTtlMs (ADR 0008): the supervisor idle-reaps the runtime after this much inactivity.
+  // The policy (the harness cache TTL) is the product's; the supervisor treats it as opaque.
+  return { kind: conv.kind, id: sessionId, args, env, idleTtlMs: cacheTtlFor(conv.kind) }
 }
 
 /**

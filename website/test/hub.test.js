@@ -21,10 +21,12 @@ class FakeWs extends EventEmitter {
 }
 
 class FakeSupervisor {
-  constructor() { this.spawned = []; this.killed = []; this.statuses = new Map() }
+  constructor() { this.spawned = []; this.killed = []; this.touched = []; this.statuses = new Map() }
   async kinds() { return ['claude'] }
   async spawn(spec) { this.spawned.push(spec); this.statuses.set(spec.id, { status: 'running' }); return spec }
-  async kill(id) { this.killed.push(id); this.statuses.set(id, { status: 'exited', exitCode: 0 }); return { id, killed: true } }
+  async kill(id) { this.killed.push(id); this.statuses.delete(id); return { id, killed: true } }
+  async list() { return [...this.statuses].map(([id, s]) => ({ id, ...s })) }
+  async touch(id) { this.touched.push(id); return this.statuses.has(id) }
   async status(id) {
     const s = this.statuses.get(id)
     if (!s) { const e = new Error('not found'); e.status = 404; throw e }
@@ -42,11 +44,14 @@ function rig() {
   return { dir, store, supervisor, hub, client }
 }
 
-/** attach a fake channel with the token the hub minted at spawn time */
+/** attach a fake channel with the token the hub minted at spawn time.
+ *  A fresh channel then signals `ready` (agent loop up) → the conv reaches `live`
+ *  (ready-gating: a fresh attach is `starting` until that frame). */
 function attach(hub, convId) {
   const token = hub.pending.get(convId).token
   const ws = new FakeWs()
   const ok = hub.attachChannel(ws, helloMsg({ conversationId: convId, token }))
+  if (ok) hub.onChannelReady(convId)
   return { ws, token, ok }
 }
 
@@ -158,6 +163,34 @@ test('channel drop parks the token; the SAME runtime can re-claim; exited runtim
   again.close()
   await new Promise((r) => setTimeout(r, 10))
   assert.equal(hub.stateOf(conv.id), 'dormant')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('liveness reconcile tears down a stale-green pipe (runtime gone under a live socket)', async () => {
+  const { dir, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'x')
+  const { ws } = attach(hub, conv.id)
+  assert.equal(hub.stateOf(conv.id), 'live')
+
+  // the runtime dies but the channel socket does NOT drop (the stale-green bug):
+  // the supervisor no longer knows the session → the liveness net must tear it down.
+  supervisor.statuses.delete(supervisor.spawned[0].id)
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv.id), 'dormant')
+  assert.equal(ws.readyState, 3, 'the stale socket was closed')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('liveness reconcile surfaces a crashed runtime as error', async () => {
+  const { dir, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'x')
+  attach(hub, conv.id)
+  // non-zero exit under a live pipe = a crash → error (a clean exit / gone → dormant)
+  supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 1 })
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv.id), 'error')
   rmSync(dir, { recursive: true, force: true })
 })
 
