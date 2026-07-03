@@ -194,6 +194,35 @@ test('liveness reconcile surfaces a crashed runtime as error', async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+test('idle-reap: supervisor forgets the session (404) → channel drops → dormant, not stuck starting', async () => {
+  const { dir, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'x')
+  const { ws } = attach(hub, conv.id)
+  assert.equal(hub.stateOf(conv.id), 'live')
+
+  // the supervisor idle-reaps: it KILLS + FORGETS the session (→ status 404), and the
+  // channel WS then drops. The ws-close handler re-parks in pending; #reapIfExited must
+  // read the 404 as "gone" and clear it → dormant (before the fix it stuck at 'starting').
+  supervisor.statuses.delete(supervisor.spawned[0].id)
+  ws.close()
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(hub.stateOf(conv.id), 'dormant')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('runtime crash (non-zero exit) → channel drops → error', async () => {
+  const { dir, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'x')
+  const { ws } = attach(hub, conv.id)
+  supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 137 })
+  ws.close()
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(hub.stateOf(conv.id), 'error')
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('delete kills, removes, and broadcasts', async () => {
   const { dir, store, supervisor, hub, client } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })

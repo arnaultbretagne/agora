@@ -317,15 +317,23 @@ export class Hub {
   }
 
   async #reapIfExited(conversationId, sessionId) {
+    let verdict // 'dormant' | 'error' | undefined (= leave state as-is)
     try {
       const info = await this.supervisor.status(sessionId)
-      if (info.status === 'exited' && this.pending.get(conversationId)?.sessionId === sessionId) {
-        this.pending.delete(conversationId)
-        this.store.setPipe(conversationId, undefined)
-        this.#broadcastConv(conversationId) // → dormant
-        this.log(`session ${sessionId} exited (${info.exitCode}) — ${conversationId} dormant`)
-      }
-    } catch { /* supervisor unreachable or session unknown: leave state as-is */ }
+      // exited: a non-zero code is an unexpected crash → error; a clean exit → dormant.
+      if (info.status === 'exited') verdict = info.exitCode ? 'error' : 'dormant'
+    } catch (err) {
+      // 404 = the supervisor no longer knows this session (idle-reaped or killed → gone) → dormant.
+      // Any other failure (supervisor unreachable) is transient → leave the state untouched.
+      if (err?.status === 404) verdict = 'dormant'
+      else return
+    }
+    if (!verdict || this.pending.get(conversationId)?.sessionId !== sessionId) return
+    this.pending.delete(conversationId)
+    if (verdict === 'error') this.store.setError(conversationId, 'runtime exited')
+    else this.store.setPipe(conversationId, undefined)
+    this.#broadcastConv(conversationId) // → dormant / error
+    this.log(`session ${sessionId} gone — ${conversationId} ${verdict}`)
   }
 
   /**
