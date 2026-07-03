@@ -32,12 +32,6 @@ const CHANNEL_HUB_URL = process.env.CHANNEL_HUB_URL ?? `ws://127.0.0.1:${PORT}/w
 const CHANNEL_LOG_DIR = process.env.CHANNEL_LOG_DIR || undefined
 const PUBLIC_DIR = join(__dirname, 'public')
 
-const MODELS = [
-  { id: 'default', name: 'Défaut' },
-  { id: 'opus', name: 'Opus' },
-  { id: 'sonnet', name: 'Sonnet' },
-]
-
 const store = new ConversationStore(DATA_DIR)
 const supervisor = new SupervisorClient(SUPERVISOR_URL)
 const hub = new Hub(store, supervisor, { hubUrlForChannels: CHANNEL_HUB_URL, channelLogDir: CHANNEL_LOG_DIR })
@@ -87,12 +81,22 @@ const server = createServer(async (req, res) => {
     if (path === '/api/meta' && method === 'GET') {
       let kinds = ['claude']
       let supervisorUp = true
+      const capabilities = {}
       try {
         kinds = await supervisor.kinds()
+        // Per-kind capabilities are DISCOVERED by the supervisor (models from the harness's
+        // own catalogue, efforts per model, agents scanned) — never a list we curate here.
+        for (const k of kinds) {
+          try {
+            capabilities[k] = await supervisor.capabilities(k)
+          } catch {
+            capabilities[k] = { models: [], agents: [], defaults: {} }
+          }
+        }
       } catch {
         supervisorUp = false
       }
-      return sendJson(res, 200, { kinds, models: MODELS, supervisorUp })
+      return sendJson(res, 200, { kinds, capabilities, supervisorUp })
     }
 
     if (path === '/api/conversations') {
@@ -101,7 +105,9 @@ const server = createServer(async (req, res) => {
       }
       if (method === 'POST') {
         const body = await readJson(req)
-        const conv = await hub.createConversation({ kind: body.kind, model: body.model })
+        const conv = await hub.createConversation({
+          kind: body.kind, model: body.model, effort: body.effort, agent: body.agent,
+        })
         if (typeof body.firstMessage === 'string' && body.firstMessage.trim()) {
           await hub.sendUserMessage(conv.id, body.firstMessage)
         }

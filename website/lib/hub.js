@@ -151,6 +151,8 @@ export class Hub {
       pinned: conv.pinned,
       kind: conv.kind,
       model: conv.model,
+      effort: conv.effort ?? null,
+      agent: conv.agent ?? null,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       state: this.stateOf(conv.id),
@@ -408,10 +410,10 @@ export class Hub {
    *  control plane                                                *
    * ------------------------------------------------------------ */
 
-  async createConversation({ kind, model }) {
+  async createConversation({ kind, model, effort, agent }) {
     const kinds = await this.supervisor.kinds()
     if (kind && !kinds.includes(kind)) throw new Error(`unknown kind: ${kind} (known: ${kinds.join(', ')})`)
-    const conv = this.store.create({ kind, model })
+    const conv = this.store.create({ kind, model, effort, agent })
     this.broadcast(convEvent(this.summary(conv)))
     return conv
   }

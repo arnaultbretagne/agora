@@ -33,6 +33,11 @@ export class SupervisorClient {
     return this.#json('GET', '/healthz')
   }
 
+  /** Discovered per-kind capabilities: {models:[{id,name,efforts}], agents:[], defaults}. */
+  async capabilities(kind) {
+    return this.#json('GET', `/kinds/${encodeURIComponent(kind)}/capabilities`)
+  }
+
   /** Closed registry of runtime kinds baked into the image (ADR 0002). */
   async kinds() {
     try {
@@ -87,6 +92,8 @@ export function spawnSpec(conv, { sessionId, hubUrl, token, channelLogDir }) {
     '--allowedTools', 'mcp__plugin_agora_agora__reply',
   ]
   if (conv.model && conv.model !== 'default') args.push('--model', conv.model)
+  if (conv.effort) args.push('--effort', conv.effort)
+  if (conv.agent) args.push('--agent', conv.agent)
   const env = {
     CHANNEL_HUB_URL: hubUrl,
     CHANNEL_CONVERSATION_ID: conv.id,

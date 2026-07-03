@@ -49,7 +49,7 @@ export class ConversationStore {
     return this.convs.get(id)
   }
 
-  create({ kind, model }) {
+  create({ kind, model, effort, agent }) {
     const now = new Date().toISOString()
     const conv = {
       id: `c-${randomUUID()}`,
@@ -57,6 +57,8 @@ export class ConversationStore {
       pinned: false,
       kind: kind ?? 'claude',
       model: model ?? 'default',
+      ...(effort ? { effort } : {}),
+      ...(agent ? { agent } : {}),
       createdAt: now,
       updatedAt: now,
       spawnCount: 0,
@@ -89,10 +91,15 @@ export class ConversationStore {
     return message
   }
 
-  patch(id, { title, pinned }) {
+  patch(id, { title, pinned, model, effort, agent }) {
     const conv = this.#must(id)
     if (typeof title === 'string' && title.trim()) conv.title = title.trim().slice(0, 120)
     if (typeof pinned === 'boolean') conv.pinned = pinned
+    // model/effort/agent are editable post-launch (topbar selectors); they take effect on
+    // the NEXT spawn/turn. `effort`/`agent` clear when set to '' (back to harness default).
+    if (typeof model === 'string' && model) conv.model = model
+    if (typeof effort === 'string') { if (effort) conv.effort = effort; else delete conv.effort }
+    if (typeof agent === 'string') { if (agent) conv.agent = agent; else delete conv.agent }
     conv.updatedAt = new Date().toISOString()
     this.#write(conv)
     return conv
