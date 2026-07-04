@@ -111,7 +111,12 @@ export class Hub {
     const byId = new Map(sessions.map((s) => [s.id, s]))
     for (const [convId, pipe] of [...this.pipes]) {
       const s = byId.get(pipe.sessionId)
-      if (s && s.status === 'running') continue // healthy — nothing to do
+      if (s && s.status === 'running') {
+        // Record the concrete model the runtime resolved (supervisor reads it from the native
+        // transcript). Only broadcasts on a change, not every tick.
+        if (s.model && this.store.setResolvedModel(convId, s.model)) this.#broadcastConv(convId)
+        continue // healthy — nothing else to do
+      }
       // Delete the pipe BEFORE closing the socket so the ws-close handler (which would
       // re-park it in pending) sees the pipe already gone and no-ops — this method is authoritative.
       this.pipes.delete(convId)
@@ -151,6 +156,7 @@ export class Hub {
       pinned: conv.pinned,
       kind: conv.kind,
       model: conv.model,
+      resolvedModel: conv.resolvedModel ?? null, // concrete id the runtime actually ran (audit truth)
       effort: conv.effort ?? null,
       agent: conv.agent ?? null,
       createdAt: conv.createdAt,

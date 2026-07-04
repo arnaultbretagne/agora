@@ -63,7 +63,10 @@ test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; rep
   assert.equal(hub.stateOf(conv.id), 'starting')
   assert.equal(supervisor.spawned.length, 1)
   const spec = supervisor.spawned[0]
-  assert.deepEqual(spec.args.slice(0, 2), ['--channels', 'plugin:agora@agora'])
+  assert.ok(spec.args.includes('--channels') && spec.args.includes('plugin:agora@agora'))
+  // a deterministic session UUID is passed so the supervisor can read the resolved model / --resume
+  const sid = spec.args[spec.args.indexOf('--session-id') + 1]
+  assert.match(sid, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   assert.equal(spec.env.CHANNEL_CONVERSATION_ID, conv.id)
   assert.equal(spec.env.CHANNEL_HUB_URL, 'ws://test/ws/channel')
   assert.ok(spec.env.CHANNEL_TOKEN.length > 10)

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 /**
  * Client for the agent-runtime supervisor API (the control plane, ADR 0004 #2):
  * POST/GET/DELETE /sessions + /kinds. The hub is the ONLY caller of this API.
@@ -88,6 +90,10 @@ export class SupervisorClient {
 export function spawnSpec(conv, { sessionId, hubUrl, token, channelLogDir }) {
   if (conv.kind !== 'claude') throw new Error(`no spawn recipe for kind: ${conv.kind}`)
   const args = [
+    // A deterministic session UUID → a known native transcript path (`~/.claude/projects/<slug>/
+    // <uuid>.jsonl`) the supervisor reads to report the CONCRETE model this runtime resolved to
+    // (audit truth vs the family alias). Also the anchor for native `--resume` (agora ADR 0007).
+    '--session-id', randomUUID(),
     '--channels', 'plugin:agora@agora',
     '--allowedTools', 'mcp__plugin_agora_agora__reply',
     // Gate C (agent-runtime README "Headless channel spawn"): since claude 2.1.153/2.1.196 a plugin

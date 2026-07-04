@@ -144,6 +144,21 @@ export class ConversationStore {
     return true
   }
 
+  /**
+   * Record the CONCRETE model the runtime resolved its `--model <alias>` to (e.g. the `sonnet`
+   * family → `claude-sonnet-5`), read from the runtime's native transcript by the supervisor. We
+   * keep BOTH: `model` (the family alias we spawn with, user-editable) and `resolvedModel` (the
+   * exact id that answered — the audit truth). Returns true only when it changes, so the caller
+   * broadcasts once rather than on every liveness tick.
+   */
+  setResolvedModel(id, resolvedModel) {
+    const conv = this.convs.get(id)
+    if (!conv || !resolvedModel || conv.resolvedModel === resolvedModel) return false
+    conv.resolvedModel = resolvedModel
+    this.#write(conv)
+    return true
+  }
+
   delete(id) {
     if (!this.convs.delete(id)) return false
     try {
