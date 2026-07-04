@@ -532,21 +532,18 @@ button { font-family: var(--font-sans); }
 
 /* effort: a segmented control folded into the bottom of the model panel */
 .menu-sep { height: 1px; background: var(--app-hairline); margin: 6px 10px; }
-/* Effort = an ORDERED scale (low→max) → a single-row segmented control with STRICTLY equal
-   segments (grid 1fr), on a track. min-width forces the model menu wide enough for all segments. */
-.effort-seg {
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px;
-  min-width: 244px; margin: 2px 6px 8px; padding: 3px;
-  background: var(--app-hover); border: 1px solid var(--app-hairline); border-radius: 10px;
-}
-.effort-opt {
-  min-width: 0; padding: 6px 2px; border: 0; border-radius: 7px;
-  background: transparent; color: var(--app-muted);
-  font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
-  text-align: center; white-space: nowrap; transition: background .12s, color .12s;
-}
-.effort-opt:hover { color: var(--app-ink); }
-.effort-opt.selected { background: var(--primary); color: var(--on-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+/* Effort = an ordered magnitude → a rail slider (Arnault's design): coral fill up to the knob,
+   levels ahead as faint coral dots, crossed levels as dark notches; click the rail snaps to the
+   nearest level. Header mirrors the "MODÈLE" label, with the live level in coral on the right. */
+.effort__head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px; }
+.effort__label { font: 500 11px/1 var(--font-sans); letter-spacing: 1px; text-transform: uppercase; color: var(--app-muted); }
+.effort__value { font: 600 12.5px/1 var(--font-sans); color: var(--primary); }
+.effort__rail { position: relative; height: 16px; min-width: 236px; margin: 2px 12px 12px; display: flex; align-items: center; cursor: pointer; }
+.effort__track { position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--app-strong); }
+.effort__fill { position: absolute; left: 0; height: 4px; border-radius: 2px; background: var(--primary); pointer-events: none; }
+.effort__dot { position: absolute; width: 5px; height: 5px; border-radius: 50%; transform: translateX(-50%); pointer-events: none; }
+.effort__knob { position: absolute; width: 15px; height: 15px; border-radius: 50%; background: var(--primary); border: 2.5px solid var(--app-panel); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35); transform: translateX(-50%); pointer-events: none; }
+.effort__rail:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 4px; }
 
 .send-btn {
   width: 38px;
