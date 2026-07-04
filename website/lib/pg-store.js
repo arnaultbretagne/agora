@@ -27,15 +27,20 @@ CREATE TABLE IF NOT EXISTS conversations (
   natives        jsonb NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS messages (
-  conv_id  text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  seq      integer NOT NULL,
-  id       text NOT NULL,
-  role     text NOT NULL,
-  text     text NOT NULL,
-  ts       text NOT NULL,
-  reply_to text,
+  conv_id        text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  seq            integer NOT NULL,
+  id             text NOT NULL,
+  role           text NOT NULL,
+  text           text NOT NULL,
+  ts             text NOT NULL,
+  reply_to       text,
+  resolved_model text,
   PRIMARY KEY (conv_id, seq)
 );
+-- additive migration for tables created before per-message resolved_model (2026-07-04):
+-- the exact model id that produced an assistant turn; NULL = unknown (pre-feature rows, or
+-- the transcript was unreadable at reply time). Conversation-level resolved_model = "current".
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS resolved_model text;
 `
 
 const UPSERT_CONV = `
@@ -49,8 +54,8 @@ const UPSERT_CONV = `
 `
 
 const INSERT_MESSAGE = `
-  INSERT INTO messages (conv_id, seq, id, role, text, ts, reply_to)
-  VALUES ($1,$2,$3,$4,$5,$6,$7)
+  INSERT INTO messages (conv_id, seq, id, role, text, ts, reply_to, resolved_model)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
   ON CONFLICT (conv_id, seq) DO NOTHING
 `
 
@@ -95,6 +100,7 @@ function rowToMessage(row) {
     text: row.text,
     ts: row.ts,
     ...(row.reply_to ? { replyTo: row.reply_to } : {}),
+    ...(row.resolved_model ? { resolvedModel: row.resolved_model } : {}),
   }
 }
 
@@ -150,7 +156,7 @@ export class PgConversationStore extends ConversationStore {
         await client.query(UPSERT_CONV, convParams(conv))
         await client.query(INSERT_MESSAGE, [
           conv.id, message.seq, message.id, message.role, message.text, message.ts,
-          message.replyTo ?? null,
+          message.replyTo ?? null, message.resolvedModel ?? null,
         ])
         await client.query('COMMIT')
       } catch (err) {

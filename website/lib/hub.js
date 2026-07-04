@@ -36,10 +36,12 @@ export class Hub {
     this.log = opts.log ?? ((m) => console.log(`[hub] ${m}`))
 
     /**
-     * live pipes: convId → {ws, sessionId, token, native, kind, resume, retriedFresh, replied}
-     * native/kind: the ADR 0007 handle this session is (or may become) anchored to. resume/
-     * retriedFresh/replied: whether THIS spawn reattached a handle, already used its one fallback
-     * retry, and has proven itself via a reply — see reconcileLiveness/#reapIfExited.
+     * live pipes: convId → {ws, sessionId, token, native, kind, resume, retriedFresh, replied,
+     * resolvedModel}. native/kind: the ADR 0007 handle this session is (or may become) anchored
+     * to. resume/retriedFresh/replied: whether THIS spawn reattached a handle, already used its
+     * one fallback retry, and has proven itself via a reply — see reconcileLiveness/#reapIfExited.
+     * resolvedModel: the concrete model this session runs (one per session life) — stamps each
+     * assistant message at reply time.
      */
     this.pipes = new Map()
     /**
@@ -123,8 +125,12 @@ export class Hub {
       const s = byId.get(pipe.sessionId)
       if (s && s.status === 'running') {
         // Record the concrete model the runtime resolved (supervisor reads it from the native
-        // transcript). Only broadcasts on a change, not every tick.
-        if (s.model && (await this.store.setResolvedModel(convId, s.model))) this.#broadcastConv(convId)
+        // transcript). Cached on the pipe so replies can stamp their message without a status
+        // round-trip (a session's model never changes mid-life). Broadcasts on change only.
+        if (s.model) {
+          pipe.resolvedModel = s.model
+          if (await this.store.setResolvedModel(convId, s.model)) this.#broadcastConv(convId)
+        }
         continue // healthy — nothing else to do
       }
       // Delete the pipe BEFORE closing the socket so the ws-close handler (which would
@@ -491,9 +497,24 @@ export class Hub {
   async onChannelReply(conversationId, { text, replyTo }) {
     const conv = this.store.get(conversationId)
     if (!conv) return
-    const message = await this.store.addMessage(conversationId, { role: 'assistant', text, replyTo })
-    // a real reply proves the agent is healthy → ready, and clears any error
     const pipe = this.pipes.get(conversationId)
+    // Per-message audit truth: a session runs exactly ONE model for its whole life (any
+    // spawn-parameter change kills + respawns — see patchConversation), so the session's resolved
+    // model IS this message's model. Normally cached on the pipe by the liveness poll; the status
+    // one-shot covers a first reply beating the first tick (the assistant line is already on disk
+    // by the time the reply tool call reaches us). Still unreadable → the message carries none.
+    let resolved = pipe?.resolvedModel
+    if (pipe && !resolved) {
+      try {
+        resolved = (await this.supervisor.status(pipe.sessionId)).model
+        if (resolved) pipe.resolvedModel = resolved
+      } catch { /* supervisor blip — leave the message unstamped */ }
+    }
+    const message = await this.store.addMessage(conversationId, {
+      role: 'assistant', text, replyTo, ...(resolved ? { resolvedModel: resolved } : {}),
+    })
+    if (resolved) await this.store.setResolvedModel(conversationId, resolved) // conv-level "current"
+    // a real reply proves the agent is healthy → ready, and clears any error
     if (pipe) {
       pipe.ready = true
       pipe.replied = true // proves this session (resumed or fresh) actually works — see reconcileLiveness
@@ -562,7 +583,26 @@ export class Hub {
   }
 
   async patchConversation(convId, fields) {
-    const conv = await this.store.patch(convId, fields)
+    const before = this.store.get(convId)
+    const prior = before ? { model: before.model, effort: before.effort, agent: before.agent } : {}
+    const conv = await this.store.patch(convId, fields) // throws on unknown conv
+    // A spawn parameter changed while a runtime exists: that runtime was spawned with the OLD
+    // parameters and would keep answering with them until its idle reap (up to ~1h). Kill it now —
+    // a product command, same category as delete (ADR 0008 amendment 2026-07-04). The anchor
+    // survives the kill, so the next spawn is `--resume <same uuid> --model <new>`: native context
+    // preserved (prod-verified), and the cold start that follows is the model-switch's intrinsic
+    // cache cost, not the kill's.
+    const changed = conv.model !== prior.model || conv.effort !== prior.effort || conv.agent !== prior.agent
+    if (changed && (this.pipes.has(convId) || this.pending.has(convId))) {
+      await this.closeConversation(convId)
+      // An unanswered user turn must not strand (nothing respawns on its own — spawns only happen
+      // on send): respawn now; #deliverBacklog re-derives and re-delivers it at attach, so the NEW
+      // parameters answer it. This also covers a turn that was mid-flight when the kill landed.
+      const lastAssistant = conv.messages.findLastIndex((m) => m.role === 'assistant')
+      if (conv.messages.slice(lastAssistant + 1).some((m) => m.role === 'user')) {
+        await this.#spawnFor(conv, [])
+      }
+    }
     this.#broadcastConv(convId)
     return conv
   }

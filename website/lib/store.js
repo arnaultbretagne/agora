@@ -51,8 +51,12 @@ export class ConversationStore {
     return conv
   }
 
-  /** Append a message; auto-titles the conversation from its first user turn. */
-  async addMessage(id, { role, text, replyTo }) {
+  /** Append a message; auto-titles the conversation from its first user turn.
+   *  `resolvedModel` (assistant turns only): the exact model id that produced THIS message —
+   *  the per-message audit truth. Knowable because a session runs exactly one model for its
+   *  whole life (a spawn-parameter change kills + respawns — hub.patchConversation); the
+   *  conversation-level `resolvedModel` is merely "current" (the last one that answered). */
+  async addMessage(id, { role, text, replyTo, resolvedModel }) {
     const conv = this.#must(id)
     conv.seq += 1
     const message = {
@@ -62,6 +66,7 @@ export class ConversationStore {
       text,
       ts: new Date().toISOString(),
       ...(replyTo ? { replyTo } : {}),
+      ...(resolvedModel ? { resolvedModel } : {}),
     }
     conv.messages.push(message)
     conv.updatedAt = message.ts
@@ -77,8 +82,10 @@ export class ConversationStore {
     const conv = this.#must(id)
     if (typeof title === 'string' && title.trim()) conv.title = title.trim().slice(0, 120)
     if (typeof pinned === 'boolean') conv.pinned = pinned
-    // model/effort/agent are editable post-launch (topbar selectors); they take effect on
-    // the NEXT spawn/turn. `effort`/`agent` clear when set to '' (back to harness default).
+    // model/effort/agent are editable post-launch (topbar selectors). The hub kills a live
+    // runtime when one of them changes (hub.patchConversation) so the NEXT turn — not the
+    // next idle reap — answers with the new parameters. `effort`/`agent` clear when set to ''
+    // (back to harness default).
     if (typeof model === 'string' && model) conv.model = model
     if (typeof effort === 'string') { if (effort) conv.effort = effort; else delete conv.effort }
     if (typeof agent === 'string') { if (agent) conv.agent = agent; else delete conv.agent }

@@ -274,11 +274,25 @@ Chaque scénario = un chemin dans l'arbre du §3.
       coût de cold-start égal, le resume conserve tout. C'est l'arbitrage de Claude Code
       lui-même, qui au `/model` mi-session continue la conversation telle quelle (et `opusplan`
       alterne deux modèles dans une même session) — le warning qu'il affiche signale le coût
-      cache, pas une nécessité de repartir de zéro. Nuances : le patch ne tue pas le runtime en
-      cours — le nouveau modèle ne prend effet qu'au prochain spawn (d'ici là, les messages vont
-      au runtime vivant, `resolvedModel` dit la vérité) ; et comme ce prochain spawn suit en
-      général un reap idle (1 h), le cache était déjà mort au moment où le nouveau modèle
-      démarre — le « switch qui casse un cache chaud » n'existe donc pas dans le flux actuel.
+      cache, pas une nécessité de repartir de zéro.
+
+      **Effet immédiat (2026-07-04, amendement ADR 0008)** : le patch d'un paramètre de spawn
+      (`model`/`effort`/`agent`) sur une conversation qui a un runtime **tue ce runtime**
+      (commande produit, même catégorie que delete) : la conversation redevient `dormant`, et le
+      tour suivant respawn `--resume <même uuid> --model <nouveau>`. Un tour resté sans réponse
+      au moment du patch déclenche un respawn immédiat (rien d'autre ne respawnerait pour lui),
+      pour être servi par les nouveaux paramètres ; un tour en cours de traitement est
+      volontairement abandonné — changer de modèle en pleine réponse veut dire qu'on veut la
+      réponse du nouveau. Le cold-start qui suit est le coût intrinsèque du switch (cache keyé
+      par modèle), pas un coût du kill. `title`/`pinned` ne tuent jamais rien.
+
+      **`resolvedModel` est une vérité par message, pas par conversation** : une session ne court
+      qu'un seul modèle de toute sa vie (le kill-au-patch le garantit), donc chaque message
+      assistant est estampillé à la réponse avec le modèle résolu de la session qui l'a produit
+      (`message.resolvedModel` ; `NULL` = inconnu, tours pré-feature). `conv.resolvedModel` reste
+      le « courant » (sidebar) ; les segments par modèle se dérivent à l'affichage en groupant
+      les messages consécutifs de même valeur.
+
       **Vérifié en prod le 2026-07-04** (pod agent-runtime, claude 2.1.197 épinglé) : tour 1
       `claude -p … --session-id U --model sonnet`, tour 2 `claude -p … --resume U --model opus`
       → rappel du codeword correct, un seul fichier `U.jsonl` (pas de fork), lignes assistant
@@ -358,7 +372,8 @@ non conforme dégrade, il ne casse pas.
 |---|---|
 | Décision 1 (ancre → `--resume`/`--session-id`) | `website/lib/hub.js` `#spawnFor` ; flags CLI dans `website/lib/supervisor.js` `spawnSpec` |
 | Décision 2 (seed complet / delta / push) | `hub.js` `#deliverBacklog` ; builders dans `website/lib/seed.js` (`buildSeedContent`, `computeDelta`, `buildDeltaSeedContent`) |
-| Succès (écriture de l'ancre) | `hub.js` `onChannelReply` → `store.setNativeHandle` |
+| Succès (écriture de l'ancre + estampille `resolvedModel` du message) | `hub.js` `onChannelReply` → `store.setNativeHandle`, `store.addMessage` |
+| Kill-au-patch (changement `model`/`effort`/`agent`) | `hub.js` `patchConversation` → `closeConversation` (+ respawn si tour sans réponse) |
 | Détecteurs de mort | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) |
 | Fallback | `hub.js` `#fallbackToFreshResume` |
 | États | `hub.js` `stateOf` |

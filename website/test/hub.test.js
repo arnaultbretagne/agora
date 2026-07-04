@@ -445,3 +445,77 @@ test('reconcile clears leases of dead runtimes; close works from the lease after
   await hub3.closeConversation(conv2.id)
   assert.ok(supervisor.killed.includes(supervisor.spawned[1].id))
 })
+
+test('patch model on a live conv kills the runtime; next message resumes with the new model', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  const firstSession = supervisor.spawned[0].id
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
+
+  // patch → immediate kill; nothing unanswered → no respawn, conv dormant
+  await hub.patchConversation(conv.id, { model: 'opus' })
+  assert.deepEqual(supervisor.killed, [firstSession])
+  assert.equal(supervisor.spawned.length, 1)
+  assert.equal(hub.stateOf(conv.id), 'dormant')
+
+  // next message → resume (the anchor survived the kill) under the NEW model
+  await hub.sendUserMessage(conv.id, 'deux')
+  assert.equal(supervisor.spawned.length, 2)
+  const spec = supervisor.spawned[1]
+  assert.ok(spec.args.includes('--resume'))
+  assert.equal(spec.args[spec.args.indexOf('--model') + 1], 'opus')
+})
+
+test('patch model with an unanswered turn respawns immediately under the new model', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id) // attached, but claude never replied
+
+  await hub.patchConversation(conv.id, { model: 'opus' })
+  assert.equal(supervisor.killed.length, 1)
+  assert.equal(supervisor.spawned.length, 2) // respawned for the stranded turn
+  const spec = supervisor.spawned[1]
+  assert.equal(spec.args[spec.args.indexOf('--model') + 1], 'opus')
+  assert.ok(!spec.args.includes('--resume')) // never replied → no proven anchor → fresh
+  assert.equal(hub.stateOf(conv.id), 'starting')
+})
+
+test('patch title/pinned never kills; a model patch without a runtime never spawns', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+
+  await hub.patchConversation(conv.id, { title: 'renommée', pinned: true })
+  assert.equal(supervisor.killed.length, 0)
+
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok', replyTo: 'm1' }))
+  await hub.closeConversation(conv.id)
+  supervisor.killed.length = 0
+  await hub.patchConversation(conv.id, { model: 'opus' }) // dormant: nothing to kill or spawn
+  assert.equal(supervisor.killed.length, 0)
+  assert.equal(supervisor.spawned.length, 1)
+})
+
+test('a reply stamps its message with the session resolved model (status one-shot, then cached)', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  const sid = supervisor.spawned[0].id
+  supervisor.statuses.get(sid).model = 'claude-sonnet-5' // supervisor read the transcript
+
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
+  const conv1 = store.get(conv.id)
+  assert.equal(conv1.messages[1].resolvedModel, 'claude-sonnet-5') // per-message audit truth
+  assert.equal(conv1.resolvedModel, 'claude-sonnet-5') // conv-level "current" follows
+
+  // cached on the pipe: even if the supervisor stops reporting it, later replies still stamp
+  supervisor.statuses.get(sid).model = undefined
+  await hub.sendUserMessage(conv.id, 'deux')
+  await hub.onChannelReply(conv.id, replyMsg({ text: 're', replyTo: 'm3' }))
+  assert.equal(store.get(conv.id).messages[3].resolvedModel, 'claude-sonnet-5')
+})

@@ -153,3 +153,16 @@ composition of §1** → `dormant`. One mechanic; the two decisions close on eac
   composition and the reaper are agnostic to *process vs pod*; only the **terminal-axis owner** changes
   (read K8s pod status instead of a PTY map; reap = delete a pod; clean-slate = ownerReferences/TTL
   controller instead of `/proc`-scan). So we are not painting into a corner by starting single-supervisor.
+
+## Amendment (2026-07-04) — product-command kills
+
+"The hub initiates no kills" governs **lifecycle** management (idle, health): that authority stays
+with the supervisor's reaper and the death detectors, and nothing above re-acquires it. It was never
+meant to forbid a kill that *is* the product command itself — `deleteConversation` always closed the
+runtime, and `patchConversation` now does too when a **spawn parameter** (`model`/`effort`/`agent`)
+changes on a conversation with a live/pending runtime: without it, the old runtime keeps answering
+with the old parameters until its idle reap (up to ~1h), which is not what the user asked. The next
+turn respawns `--resume <anchor> --model <new>` (native context preserved — prod-verified
+2026-07-04); an unanswered turn triggers an immediate respawn instead, so the NEW parameters answer
+it. A turn mid-flight at kill time is deliberately abandoned: switching models mid-answer means you
+want the new model's answer. See `docs/runtime-lifecycle.md` scenario 12.
