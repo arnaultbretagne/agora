@@ -291,7 +291,15 @@ Chaque scénario = un chemin dans l'arbre du §3.
       assistant est estampillé à la réponse avec le modèle résolu de la session qui l'a produit
       (`message.resolvedModel` ; `NULL` = inconnu, tours pré-feature). `conv.resolvedModel` reste
       le « courant » (sidebar) ; les segments par modèle se dérivent à l'affichage en groupant
-      les messages consécutifs de même valeur.
+      les messages consécutifs de même valeur. Deux gardes rendent l'estampille fiable, toutes
+      deux attrapées par le verrou prod du 2026-07-04 : côté superviseur, la lecture du modèle
+      ignore tout ce qui précède le spawn (`transcriptBase` — un transcript *resumé* porte les
+      tours, donc le modèle, du runtime précédent) ; côté hub, une réponse arrivée avant que la
+      ligne du tour ne soit sur disque (claude écrit en fin de tour, après le tool `reply`) part
+      sans estampille et est complétée au poll suivant — backfill du dernier message assistant,
+      correct car une conversation n'a qu'un runtime à la fois. Verrou complet : sonnet → patch
+      opus → resume → messages estampillés `claude-sonnet-5` puis `claude-opus-4-8`, même ancre
+      de bout en bout.
 
       **Vérifié en prod le 2026-07-04** (pod agent-runtime, claude 2.1.197 épinglé) : tour 1
       `claude -p … --session-id U --model sonnet`, tour 2 `claude -p … --resume U --model opus`
