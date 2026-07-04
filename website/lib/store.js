@@ -142,6 +142,20 @@ export class ConversationStore {
     return true
   }
 
+  /**
+   * Update the per-harness native-resume anchor (ADR 0007): `handle = {sessionId, syncedSeq}`
+   * merges into `conv.natives[kind]` (other kinds' handles are untouched); `handle = null` drops
+   * that kind's entry (the anchor is dead — next reopen cross-seeds). Called only on a PROVEN
+   * reply, never at spawn — a fresh runtime that dies before its first reply must leave the
+   * previous anchor standing.
+   */
+  async setNativeHandle(id, kind, handle) {
+    const conv = this.#must(id)
+    if (handle === null) delete conv.natives[kind]
+    else conv.natives[kind] = handle
+    await this._persistConv(conv)
+  }
+
   async delete(id) {
     if (!this.convs.delete(id)) return false
     await this._persistDelete(id)

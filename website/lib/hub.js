@@ -244,19 +244,24 @@ export class Hub {
 
   async #spawnFor(conv, queuedIds) {
     const token = randomUUID()
+    // Hub-generated (not claude-self-chosen) native session uuid — the anchor for native
+    // `--resume` (agora ADR 0007). Only promoted to conv.natives on a PROVEN reply (see
+    // onChannelReply); a runtime that dies before replying leaves the prior anchor standing.
+    const native = randomUUID()
     const attempt = await this.store.bumpSpawn(conv.id)
     const sessionId = `${conv.id}-r${attempt}`
     await this.store.clearError(conv.id) // a spawn attempt clears the prior error
-    this.pending.set(conv.id, { token, sessionId, queue: [...queuedIds], fresh: true, since: Date.now() })
+    this.pending.set(conv.id, { token, sessionId, native, kind: conv.kind, queue: [...queuedIds], fresh: true, since: Date.now() })
     this.#broadcastConv(conv.id) // → starting
     try {
       await this.supervisor.spawn(spawnSpec(conv, {
         sessionId,
+        nativeSessionId: native,
         hubUrl: this.hubUrlForChannels,
         token,
         channelLogDir: this.channelLogDir,
       }))
-      await this.store.setPipe(conv.id, { token, sessionId })
+      await this.store.setPipe(conv.id, { token, sessionId, native, kind: conv.kind })
       this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}`)
     } catch (err) {
       // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
@@ -295,12 +300,16 @@ export class Hub {
       try { previous.ws.close() } catch { /* already down */ }
     }
     const sessionId = pending?.sessionId ?? previous?.sessionId ?? conv.pipe?.sessionId
+    // native/kind (ADR 0007 handle bookkeeping): carried the same three-way (pending → previous →
+    // persisted lease) so a hub-restart re-claim keeps the anchor tracked, not just the pipe.
+    const native = pending?.native ?? previous?.native ?? conv.pipe?.native
+    const kind = pending?.kind ?? previous?.kind ?? conv.pipe?.kind
     const fresh = pending?.fresh ?? false
     // A FRESH runtime is not proven up yet → `starting` until its `ready` frame (or first reply).
     // A RE-CLAIM is an already-running, already-ready runtime whose channel merely reconnected: it
     // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
     // would be stuck `starting` forever after every hub restart.
-    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh })
+    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh, native, kind })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
     this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
@@ -386,6 +395,9 @@ export class Hub {
     if (pipe) {
       pipe.ready = true
       this.supervisor.touch(pipe.sessionId) // completed turn → reset the supervisor's idle clock (ADR 0008)
+      // the reply is the ONE point a native session is proven faithful (ADR 0007) — promote the
+      // handle here, never at spawn (a runtime that dies before replying leaves the prior anchor).
+      if (pipe.native) await this.store.setNativeHandle(conversationId, pipe.kind, { sessionId: pipe.native, syncedSeq: conv.seq })
     }
     await this.store.clearError(conversationId)
     this.#setTyping(conversationId, false)

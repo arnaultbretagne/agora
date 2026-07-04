@@ -84,6 +84,36 @@ test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; rep
   assert.ok(client.frames('typing').some((f) => f.active === false))
 })
 
+test('a reply proves the native handle (ADR 0007); a spawn without a reply leaves it untouched', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  const spec = supervisor.spawned[0]
+  const nativeUuid = spec.args[spec.args.indexOf('--session-id') + 1]
+
+  assert.deepEqual(store.get(conv.id).natives, {}, 'no handle before any reply — spawn alone must not set it')
+  await attach(hub, conv.id)
+  assert.deepEqual(store.get(conv.id).natives, {}, 'still nothing — attach/ready is not a reply either')
+
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  const seqAfterFirst = store.get(conv.id).seq
+  assert.deepEqual(store.get(conv.id).natives.claude, { sessionId: nativeUuid, syncedSeq: seqAfterFirst })
+
+  // a second turn on the SAME runtime bumps syncedSeq but keeps the same native session id
+  await hub.sendUserMessage(conv.id, 'deux')
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'encore' }))
+  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid)
+  assert.ok(store.get(conv.id).natives.claude.syncedSeq > seqAfterFirst)
+
+  // the runtime dies, a FRESH one spawns (new native uuid) but never replies — old anchor must stand
+  const handleBeforeSecondSpawn = store.get(conv.id).natives.claude
+  await hub.closeConversation(conv.id)
+  await hub.sendUserMessage(conv.id, 'trois')
+  assert.equal(supervisor.spawned.length, 2)
+  assert.notEqual(supervisor.spawned[1].args[supervisor.spawned[1].args.indexOf('--session-id') + 1], nativeUuid)
+  assert.deepEqual(store.get(conv.id).natives.claude, handleBeforeSecondSpawn, 'no reply yet ⇒ prior anchor untouched')
+})
+
 test('bad token / unknown conversation are rejected', async () => {
   const { hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
@@ -229,8 +259,9 @@ test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'retiens le mot: zèbre')
   const { token } = await attach(hub, conv.id)
+  const nativeUuid = supervisor.spawned[0].args[supervisor.spawned[0].args.indexOf('--session-id') + 1]
   await hub.onChannelReply(conv.id, replyMsg({ text: 'noté' }))
-  assert.deepEqual(store.get(conv.id).pipe, { token, sessionId: supervisor.spawned[0].id })
+  assert.deepEqual(store.get(conv.id).pipe, { token, sessionId: supervisor.spawned[0].id, native: nativeUuid, kind: 'claude' })
 
   // "restart": a brand-new hub over the same store/supervisor (empty memory)
   const hub2 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
@@ -243,10 +274,13 @@ test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed
   assert.equal(hub2.stateOf(conv.id), 'live')
   assert.equal(ws.frames('push').length, 0, 're-claimed runtime must NOT be seeded')
 
-  // messages flow again through the re-claimed pipe
+  // messages flow again through the re-claimed pipe — the native handle keeps tracking the SAME
+  // session across the restart (ADR 0007: the persisted lease carries native/kind through re-claim)
   await hub2.sendUserMessage(conv.id, 'quel était le mot ?')
   assert.equal(ws.frames('push').length, 1)
   assert.equal(ws.frames('push')[0].content, 'quel était le mot ?')
+  await hub2.onChannelReply(conv.id, replyMsg({ text: 'zèbre' }))
+  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid, 'native anchor survives the hub restart')
 })
 
 test('reconcile clears leases of dead runtimes; close works from the lease after restart', async () => {
