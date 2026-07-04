@@ -9,6 +9,7 @@
     "test": "node --test test/"
   },
   "dependencies": {
+    "pg": "^8",
     "ws": "^8.18.0"
   }
 }

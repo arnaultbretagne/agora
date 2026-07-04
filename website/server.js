@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { parseChannelFrame, errMsg } from '../shared/protocol.js'
 import { ConversationStore } from './lib/store.js'
+import { PgConversationStore } from './lib/pg-store.js'
 import { SupervisorClient } from './lib/supervisor.js'
 import { Hub } from './lib/hub.js'
 
@@ -32,7 +33,13 @@ const CHANNEL_HUB_URL = process.env.CHANNEL_HUB_URL ?? `ws://127.0.0.1:${PORT}/w
 const CHANNEL_LOG_DIR = process.env.CHANNEL_LOG_DIR || undefined
 const PUBLIC_DIR = join(__dirname, 'public')
 
-const store = new ConversationStore(DATA_DIR)
+const DATABASE_URL = process.env.DATABASE_URL
+if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
+  console.error('[website] FATAL: NODE_ENV=production without DATABASE_URL (ADR 0009 — no silent memory store)')
+  process.exit(1)
+}
+const store = DATABASE_URL ? await PgConversationStore.open(DATABASE_URL) : new ConversationStore()
+if (!DATABASE_URL) console.warn('[website] MEMORY store — conversations will NOT survive a restart')
 const supervisor = new SupervisorClient(SUPERVISOR_URL)
 const hub = new Hub(store, supervisor, { hubUrlForChannels: CHANNEL_HUB_URL, channelLogDir: CHANNEL_LOG_DIR })
 
@@ -127,7 +134,7 @@ const server = createServer(async (req, res) => {
         if (method === 'GET') return sendJson(res, 200, hub.full(conv))
         if (method === 'PATCH') {
           const body = await readJson(req)
-          return sendJson(res, 200, hub.summary(hub.patchConversation(id, body)))
+          return sendJson(res, 200, hub.summary(await hub.patchConversation(id, body)))
         }
         if (method === 'DELETE') {
           await hub.deleteConversation(id)
@@ -192,9 +199,9 @@ function acceptChannel(ws) {
       ws.send(JSON.stringify(errMsg('not_attached', 'hello first')))
       return
     }
-    if (msg.type === 'reply') hub.onChannelReply(conversationId, msg)
-    if (msg.type === 'ready') hub.onChannelReady(conversationId)
-    if (msg.type === 'unresponsive') hub.onChannelUnresponsive(conversationId, msg)
+    if (msg.type === 'reply') hub.onChannelReply(conversationId, msg).catch((e) => console.error('[website] channel frame failed:', e))
+    if (msg.type === 'ready') hub.onChannelReady(conversationId).catch((e) => console.error('[website] channel frame failed:', e))
+    if (msg.type === 'unresponsive') hub.onChannelUnresponsive(conversationId, msg).catch((e) => console.error('[website] channel frame failed:', e))
     if (msg.type === 'err') console.error(`[website] channel ${conversationId} error: ${msg.message}`)
   })
 }
@@ -211,7 +218,7 @@ setInterval(() => {
 server.listen(PORT, HOST, () => {
   console.log(`[website] agora hub on http://${HOST}:${PORT}`)
   console.log(`[website] supervisor: ${SUPERVISOR_URL} — channels dial back: ${CHANNEL_HUB_URL}`)
-  console.log(`[website] data: ${DATA_DIR} (${store.list().length} conversations)`)
+  console.log(`[website] store: ${DATABASE_URL ? 'postgres' : 'memory'} (${store.list().length} conversations)`)
   // re-arm the pipe leases of runtimes that survived a hub restart
   hub.reconcile().catch((err) => console.error('[website] reconcile failed:', err.message))
 })

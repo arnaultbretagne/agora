@@ -49,7 +49,7 @@ export class Hub {
     this.typingTimers = new Map()
 
     // sweep pendings whose channel never (re)appears — a spawn that never came up
-    this.sweeper = setInterval(() => this.#sweepPending(), 30_000)
+    this.sweeper = setInterval(() => this.#sweepPending().catch((e) => this.log(`sweep error: ${e.message}`)), 30_000)
     this.sweeper.unref?.()
 
     // terminal-liveness safety net (ADR 0008): a live pipe can sit atop a DEAD runtime,
@@ -79,7 +79,7 @@ export class Hub {
         this.pending.set(conv.id, { ...lease, queue: [], fresh: false, since: Date.now() })
         this.log(`reconciled ${conv.id}: session ${lease.sessionId} still running, awaiting re-hello`)
       } else {
-        this.store.setPipe(conv.id, undefined)
+        await this.store.setPipe(conv.id, undefined)
         this.log(`reconciled ${conv.id}: session ${lease.sessionId} gone → dormant`)
       }
     }
@@ -92,7 +92,7 @@ export class Hub {
       // NOT kill (ADR 0008 — the hub initiates no kills): the supervisor idle-reaps the
       // runtime's RAM on its own. A late hello can still re-claim via the persisted lease.
       this.pending.delete(convId)
-      this.store.setPipe(convId, undefined)
+      await this.store.setPipe(convId, undefined)
       this.#broadcastConv(convId)
       this.log(`swept ${convId}: channel never claimed session ${p.sessionId} (supervisor will idle-reap)`)
     }
@@ -114,7 +114,7 @@ export class Hub {
       if (s && s.status === 'running') {
         // Record the concrete model the runtime resolved (supervisor reads it from the native
         // transcript). Only broadcasts on a change, not every tick.
-        if (s.model && this.store.setResolvedModel(convId, s.model)) this.#broadcastConv(convId)
+        if (s.model && (await this.store.setResolvedModel(convId, s.model))) this.#broadcastConv(convId)
         continue // healthy — nothing else to do
       }
       // Delete the pipe BEFORE closing the socket so the ws-close handler (which would
@@ -124,9 +124,9 @@ export class Hub {
       this.pending.delete(convId)
       this.#setTyping(convId, false)
       if (s && s.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
-        this.store.setError(convId, `runtime exited (${s.exitCode})`)
+        await this.store.setError(convId, `runtime exited (${s.exitCode})`)
       } else {
-        this.store.setPipe(convId, undefined) // clean dormant
+        await this.store.setPipe(convId, undefined) // clean dormant
       }
       this.#broadcastConv(convId)
       this.log(`liveness: ${convId} session ${pipe.sessionId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
@@ -216,8 +216,8 @@ export class Hub {
     const conv = this.store.get(convId)
     if (!conv) throw new Error(`unknown conversation: ${convId}`)
 
-    const message = this.store.addMessage(convId, { role: 'user', text })
-    this.store.clearError(convId) // a new user message is a fresh attempt → drop any prior error
+    const message = await this.store.addMessage(convId, { role: 'user', text })
+    await this.store.clearError(convId) // a new user message is a fresh attempt → drop any prior error
     this.broadcast(messageEvent(convId, message))
     this.#broadcastConv(convId) // title/updatedAt moved
 
@@ -244,9 +244,9 @@ export class Hub {
 
   async #spawnFor(conv, queuedIds) {
     const token = randomUUID()
-    const attempt = this.store.bumpSpawn(conv.id)
+    const attempt = await this.store.bumpSpawn(conv.id)
     const sessionId = `${conv.id}-r${attempt}`
-    this.store.clearError(conv.id) // a spawn attempt clears the prior error
+    await this.store.clearError(conv.id) // a spawn attempt clears the prior error
     this.pending.set(conv.id, { token, sessionId, queue: [...queuedIds], fresh: true, since: Date.now() })
     this.#broadcastConv(conv.id) // → starting
     try {
@@ -256,12 +256,12 @@ export class Hub {
         token,
         channelLogDir: this.channelLogDir,
       }))
-      this.store.setPipe(conv.id, { token, sessionId })
+      await this.store.setPipe(conv.id, { token, sessionId })
       this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}`)
     } catch (err) {
       // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
       this.pending.delete(conv.id)
-      this.store.setError(conv.id, `spawn_failed: ${err.message}`)
+      await this.store.setError(conv.id, `spawn_failed: ${err.message}`)
       this.#broadcastConv(conv.id) // → error
       this.log(`runtime spawn failed for ${conv.id}: ${err.message}`)
     }
@@ -338,8 +338,8 @@ export class Hub {
     }
     if (!verdict || this.pending.get(conversationId)?.sessionId !== sessionId) return
     this.pending.delete(conversationId)
-    if (verdict === 'error') this.store.setError(conversationId, 'runtime exited')
-    else this.store.setPipe(conversationId, undefined)
+    if (verdict === 'error') await this.store.setError(conversationId, 'runtime exited')
+    else await this.store.setPipe(conversationId, undefined)
     this.#broadcastConv(conversationId) // → dormant / error
     this.log(`session ${sessionId} gone — ${conversationId} ${verdict}`)
   }
@@ -377,36 +377,36 @@ export class Hub {
   }
 
   /** The agent's outbound turn arrived over a channel. */
-  onChannelReply(conversationId, { text, replyTo }) {
+  async onChannelReply(conversationId, { text, replyTo }) {
     const conv = this.store.get(conversationId)
     if (!conv) return
-    const message = this.store.addMessage(conversationId, { role: 'assistant', text, replyTo })
+    const message = await this.store.addMessage(conversationId, { role: 'assistant', text, replyTo })
     // a real reply proves the agent is healthy → ready, and clears any error
     const pipe = this.pipes.get(conversationId)
     if (pipe) {
       pipe.ready = true
       this.supervisor.touch(pipe.sessionId) // completed turn → reset the supervisor's idle clock (ADR 0008)
     }
-    this.store.clearError(conversationId)
+    await this.store.clearError(conversationId)
     this.#setTyping(conversationId, false)
     this.broadcast(messageEvent(conversationId, message))
     this.#broadcastConv(conversationId)
   }
 
   /** The channel signals claude's agent loop is up → the pipe is truly ready (`live`, not `starting`). */
-  onChannelReady(conversationId) {
+  async onChannelReady(conversationId) {
     const pipe = this.pipes.get(conversationId)
     if (!pipe || pipe.ready) return
     pipe.ready = true
-    this.store.clearError(conversationId) // becoming ready clears a prior error
+    await this.store.clearError(conversationId) // becoming ready clears a prior error
     this.#broadcastConv(conversationId) // → live
     this.log(`channel ready for ${conversationId}`)
   }
 
   /** The channel gave up re-delivering an unanswered push → the agent is stuck. Mark `error`. */
-  onChannelUnresponsive(conversationId, { messageId } = {}) {
+  async onChannelUnresponsive(conversationId, { messageId } = {}) {
     if (!this.store.get(conversationId)) return
-    this.store.setError(conversationId, 'unresponsive')
+    await this.store.setError(conversationId, 'unresponsive')
     this.#setTyping(conversationId, false)
     this.#broadcastConv(conversationId) // → error
     this.log(`channel unresponsive for ${conversationId} (push ${messageId ?? '?'})`)
@@ -419,7 +419,7 @@ export class Hub {
   async createConversation({ kind, model, effort, agent }) {
     const kinds = await this.supervisor.kinds()
     if (kind && !kinds.includes(kind)) throw new Error(`unknown kind: ${kind} (known: ${kinds.join(', ')})`)
-    const conv = this.store.create({ kind, model, effort, agent })
+    const conv = await this.store.create({ kind, model, effort, agent })
     this.broadcast(convEvent(this.summary(conv)))
     return conv
   }
@@ -434,7 +434,7 @@ export class Hub {
     this.pending.delete(convId)
     if (pipe) { try { pipe.ws.close() } catch { /* already down */ } }
     if (sessionId) await this.supervisor.kill(sessionId)
-    if (this.store.get(convId)) this.store.setPipe(convId, undefined)
+    if (this.store.get(convId)) await this.store.setPipe(convId, undefined)
     this.#setTyping(convId, false)
     this.#broadcastConv(convId)
     this.log(`closed ${convId} (session ${sessionId ?? 'none'})`)
@@ -442,12 +442,12 @@ export class Hub {
 
   async deleteConversation(convId) {
     await this.closeConversation(convId)
-    this.store.delete(convId)
+    await this.store.delete(convId)
     this.broadcast(convDeletedEvent(convId))
   }
 
-  patchConversation(convId, fields) {
-    const conv = this.store.patch(convId, fields)
+  async patchConversation(convId, fields) {
+    const conv = await this.store.patch(convId, fields)
     this.#broadcastConv(convId)
     return conv
   }

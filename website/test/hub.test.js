@@ -1,9 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { ConversationStore } from '../lib/store.js'
 import { Hub } from '../lib/hub.js'
 import { helloMsg, replyMsg } from '../../shared/protocol.js'
@@ -35,28 +32,27 @@ class FakeSupervisor {
 }
 
 function rig() {
-  const dir = mkdtempSync(join(tmpdir(), 'agora-hub-'))
-  const store = new ConversationStore(dir)
+  const store = new ConversationStore()
   const supervisor = new FakeSupervisor()
   const hub = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test/ws/channel', log: () => {} })
   const client = new FakeWs()
   hub.addClient(client)
-  return { dir, store, supervisor, hub, client }
+  return { store, supervisor, hub, client }
 }
 
 /** attach a fake channel with the token the hub minted at spawn time.
  *  A fresh channel then signals `ready` (agent loop up) → the conv reaches `live`
  *  (ready-gating: a fresh attach is `starting` until that frame). */
-function attach(hub, convId) {
+async function attach(hub, convId) {
   const token = hub.pending.get(convId).token
   const ws = new FakeWs()
   const ok = hub.attachChannel(ws, helloMsg({ conversationId: convId, token }))
-  if (ok) hub.onChannelReady(convId)
+  if (ok) await hub.onChannelReady(convId)
   return { ws, token, ok }
 }
 
 test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; reply persists', async () => {
-  const { dir, store, supervisor, hub, client } = rig()
+  const { store, supervisor, hub, client } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'salut')
 
@@ -71,7 +67,7 @@ test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; rep
   assert.equal(spec.env.CHANNEL_HUB_URL, 'ws://test/ws/channel')
   assert.ok(spec.env.CHANNEL_TOKEN.length > 10)
 
-  const { ws, ok } = attach(hub, conv.id)
+  const { ws, ok } = await attach(hub, conv.id)
   assert.equal(ok, true)
   assert.equal(hub.stateOf(conv.id), 'live')
   assert.equal(ws.frames('hello_ok').length, 1)
@@ -79,18 +75,17 @@ test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; rep
   assert.equal(pushes.length, 1)
   assert.equal(pushes[0].content, 'salut') // fresh conversation → plain push, NO seed wrapper
 
-  hub.onChannelReply(conv.id, replyMsg({ text: 'bonjour !', replyTo: pushes[0].id }))
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'bonjour !', replyTo: pushes[0].id }))
   const messages = store.get(conv.id).messages
   assert.equal(messages.length, 2)
   assert.equal(messages[1].role, 'assistant')
   // clients saw: conv (created), message (user), conv (starting), conv (live), typing, message (assistant)…
   assert.ok(client.frames('message').some((f) => f.message.role === 'assistant'))
   assert.ok(client.frames('typing').some((f) => f.active === false))
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('bad token / unknown conversation are rejected', async () => {
-  const { dir, hub } = rig()
+  const { hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
 
@@ -101,15 +96,14 @@ test('bad token / unknown conversation are rejected', async () => {
   const ghost = new FakeWs()
   assert.equal(hub.attachChannel(ghost, helloMsg({ conversationId: 'c-ghost', token: 'x' })), false)
   assert.equal(ghost.frames('err')[0].code, 'unknown_conversation')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('live conversation pushes immediately; close kills the session', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'un')
-  const { ws } = attach(hub, conv.id)
-  hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  const { ws } = await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
 
   await hub.sendUserMessage(conv.id, 'deux')
   assert.equal(ws.frames('push').length, 2)
@@ -117,15 +111,14 @@ test('live conversation pushes immediately; close kills the session', async () =
   await hub.closeConversation(conv.id)
   assert.equal(supervisor.killed.length, 1)
   assert.equal(hub.stateOf(conv.id), 'dormant')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('reopening a dormant conversation seeds ONE message with the history', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'La capitale de la Bavière ?')
-  attach(hub, conv.id)
-  hub.onChannelReply(conv.id, replyMsg({ text: 'Munich.' }))
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'Munich.' }))
   await hub.closeConversation(conv.id)
 
   await hub.sendUserMessage(conv.id, 'Et sa population ?')
@@ -134,7 +127,7 @@ test('reopening a dormant conversation seeds ONE message with the history', asyn
   assert.notEqual(supervisor.spawned[1].id, supervisor.spawned[0].id, 'fresh session id per spawn')
   assert.notEqual(supervisor.spawned[1].env.CHANNEL_TOKEN, supervisor.spawned[0].env.CHANNEL_TOKEN)
 
-  const { ws } = attach(hub, conv.id)
+  const { ws } = await attach(hub, conv.id)
   const pushes = ws.frames('push')
   assert.equal(pushes.length, 1, 'exactly one seed push')
   assert.match(pushes[0].content, /\[conversation resumed\]/)
@@ -142,14 +135,13 @@ test('reopening a dormant conversation seeds ONE message with the history', asyn
   assert.match(pushes[0].content, /\[assistant\] Munich\./)
   assert.match(pushes[0].content, /\[user\] Et sa population \?$/)
   assert.equal(pushes[0].meta.seed, 'true')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('channel drop parks the token; the SAME runtime can re-claim; exited runtime reaps to dormant', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  const first = attach(hub, conv.id)
+  const first = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
   // transient drop (hub keeps the session running) → token parked, re-hello works
@@ -166,14 +158,13 @@ test('channel drop parks the token; the SAME runtime can re-claim; exited runtim
   again.close()
   await new Promise((r) => setTimeout(r, 10))
   assert.equal(hub.stateOf(conv.id), 'dormant')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('liveness reconcile tears down a stale-green pipe (runtime gone under a live socket)', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  const { ws } = attach(hub, conv.id)
+  const { ws } = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
   // the runtime dies but the channel socket does NOT drop (the stale-green bug):
@@ -182,26 +173,24 @@ test('liveness reconcile tears down a stale-green pipe (runtime gone under a liv
   await hub.reconcileLiveness()
   assert.equal(hub.stateOf(conv.id), 'dormant')
   assert.equal(ws.readyState, 3, 'the stale socket was closed')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('liveness reconcile surfaces a crashed runtime as error', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  attach(hub, conv.id)
+  await attach(hub, conv.id)
   // non-zero exit under a live pipe = a crash → error (a clean exit / gone → dormant)
   supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 1 })
   await hub.reconcileLiveness()
   assert.equal(hub.stateOf(conv.id), 'error')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('idle-reap: supervisor forgets the session (404) → channel drops → dormant, not stuck starting', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  const { ws } = attach(hub, conv.id)
+  const { ws } = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
   // the supervisor idle-reaps: it KILLS + FORGETS the session (→ status 404), and the
@@ -211,39 +200,36 @@ test('idle-reap: supervisor forgets the session (404) → channel drops → dorm
   ws.close()
   await new Promise((r) => setTimeout(r, 10))
   assert.equal(hub.stateOf(conv.id), 'dormant')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('runtime crash (non-zero exit) → channel drops → error', async () => {
-  const { dir, supervisor, hub } = rig()
+  const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  const { ws } = attach(hub, conv.id)
+  const { ws } = await attach(hub, conv.id)
   supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 137 })
   ws.close()
   await new Promise((r) => setTimeout(r, 10))
   assert.equal(hub.stateOf(conv.id), 'error')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('delete kills, removes, and broadcasts', async () => {
-  const { dir, store, supervisor, hub, client } = rig()
+  const { store, supervisor, hub, client } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  attach(hub, conv.id)
+  await attach(hub, conv.id)
   await hub.deleteConversation(conv.id)
   assert.equal(store.get(conv.id), undefined)
   assert.equal(supervisor.killed.length, 1)
   assert.ok(client.frames('conv_deleted').some((f) => f.conversationId === conv.id))
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed', async () => {
-  const { dir, store, supervisor, hub } = rig()
+  const { store, supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'retiens le mot: zèbre')
-  const { token } = attach(hub, conv.id)
-  hub.onChannelReply(conv.id, replyMsg({ text: 'noté' }))
+  const { token } = await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'noté' }))
   assert.deepEqual(store.get(conv.id).pipe, { token, sessionId: supervisor.spawned[0].id })
 
   // "restart": a brand-new hub over the same store/supervisor (empty memory)
@@ -261,14 +247,13 @@ test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed
   await hub2.sendUserMessage(conv.id, 'quel était le mot ?')
   assert.equal(ws.frames('push').length, 1)
   assert.equal(ws.frames('push')[0].content, 'quel était le mot ?')
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test('reconcile clears leases of dead runtimes; close works from the lease after restart', async () => {
-  const { dir, store, supervisor, hub } = rig()
+  const { store, supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'x')
-  attach(hub, conv.id)
+  await attach(hub, conv.id)
   const sessionId = supervisor.spawned[0].id
 
   // runtime died while the hub was away
@@ -286,5 +271,4 @@ test('reconcile clears leases of dead runtimes; close works from the lease after
   clearInterval(hub3.sweeper)
   await hub3.closeConversation(conv2.id)
   assert.ok(supervisor.killed.includes(supervisor.spawned[1].id))
-  rmSync(dir, { recursive: true, force: true })
 })
