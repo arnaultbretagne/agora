@@ -90,6 +90,12 @@ export function spawnSpec(conv, { sessionId, hubUrl, token, channelLogDir }) {
   const args = [
     '--channels', 'plugin:agora@agora',
     '--allowedTools', 'mcp__plugin_agora_agora__reply',
+    // Gate C (agent-runtime README "Headless channel spawn"): since claude 2.1.153/2.1.196 a plugin
+    // `.mcp.json` server is `Pending approval` and WON'T spawn headlessly (no operator to answer the
+    // prompt) → the channel MCP server never starts → conversation stuck `starting`, silently. Approving
+    // it via `.claude.json` is not durable (claude rewrites & strips it on startup). The pod IS the
+    // sandbox (ADR 0003, non-root `node`), so bypassing the in-boundary prompt is by design.
+    '--dangerously-skip-permissions',
   ]
   if (conv.model && conv.model !== 'default') args.push('--model', conv.model)
   if (conv.effort) args.push('--effort', conv.effort)
