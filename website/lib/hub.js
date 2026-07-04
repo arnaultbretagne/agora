@@ -3,6 +3,15 @@
  * (control plane), routes messages between clients and pipes (data plane).
  * No agent logic lives here — the hub relays and records.
  *
+ * Data model (ADR 0010, "runs as facts"): a conversation is identity + state;
+ * every spawn freezes its execution config into a RUN (`<convId>-rN`, also the
+ * supervisor session id); messages point at their producing run; the resume
+ * anchor per kind is a mutable pointer into the runs journal. Execution config
+ * is never stored as intent — it travels with each message and is compared to
+ * the live run's: same → plain push (same run, warm cache); different → the
+ * live runtime is closed (product-command kill, ADR 0008 amendment) and a new
+ * run materialises the config.
+ *
  * Pipe lifecycle for one conversation:
  *   send on dormant → spawn runtime (supervisor) → conv `starting`, messages queue
  *   channel hello(conv, token) → conv `live` → flush queue (seeded if history exists)
@@ -10,7 +19,7 @@
  *   channel socket drops → conv `dormant` (the channel auto-reconnects if its
  *     runtime still lives — the conv simply goes live again on re-hello)
  *   close → supervisor kill → dormant. Reopen later = anchor + delta resume when a proven
- *     native handle exists (ADR 0007), else full re-seed (ADR 0005) — the correctness floor.
+ *     anchor exists (ADR 0007), else full re-seed (ADR 0005) — the correctness floor.
  */
 import { randomUUID } from 'node:crypto'
 import {
@@ -21,6 +30,29 @@ import { buildSeedContent, computeDelta, buildDeltaSeedContent } from './seed.js
 import { spawnSpec } from './supervisor.js'
 
 const TYPING_TIMEOUT_MS = 180_000
+
+/** Server-side floor when a message carries no config and no run exists yet (bare API use). */
+const DEFAULT_CONFIG = { kind: 'claude', model: 'default' }
+
+/** The four spawn knobs, normalised: '' → undefined for the optional ones. */
+function normalizeConfig(config) {
+  if (!config || typeof config !== 'object') return undefined
+  const kind = typeof config.kind === 'string' && config.kind ? config.kind : undefined
+  const model = typeof config.model === 'string' && config.model ? config.model : undefined
+  const effort = typeof config.effort === 'string' && config.effort ? config.effort : undefined
+  const agent = typeof config.agent === 'string' && config.agent ? config.agent : undefined
+  if (!kind && !model && !effort && !agent) return undefined
+  return { kind: kind ?? DEFAULT_CONFIG.kind, model: model ?? DEFAULT_CONFIG.model, effort, agent }
+}
+
+/** Does this config match the one frozen into a run? (undefined-safe on the optionals) */
+function sameConfig(config, run) {
+  return config.kind === run.kind && config.model === run.model
+    && (config.effort ?? null) === (run.effort ?? null)
+    && (config.agent ?? null) === (run.agent ?? null)
+}
+
+const configOfRun = (run) => ({ kind: run.kind, model: run.model, effort: run.effort, agent: run.agent })
 
 export class Hub {
   /**
@@ -36,23 +68,22 @@ export class Hub {
     this.log = opts.log ?? ((m) => console.log(`[hub] ${m}`))
 
     /**
-     * live pipes: convId → {ws, sessionId, token, native, kind, resume, retriedFresh, replied,
-     * resolvedModel}. native/kind: the ADR 0007 handle this session is (or may become) anchored
-     * to. resume/retriedFresh/replied: whether THIS spawn reattached a handle, already used its
-     * one fallback retry, and has proven itself via a reply — see reconcileLiveness/#reapIfExited.
-     * resolvedModel: the concrete model this session runs (one per session life) — stamps each
-     * assistant message at reply time.
+     * live pipes: convId → {ws, runId, token, ready, resume, retriedFresh, replied}.
+     * runId doubles as the supervisor session id AND the runs-journal key (everything
+     * per-run — kind, native uuid, resolved model — derefs through the store). resume/
+     * retriedFresh/replied: whether THIS spawn reattached an anchor, already used its one
+     * fallback retry, and has proven itself via a reply — see reconcileLiveness/#reapIfExited.
      */
     this.pipes = new Map()
     /**
      * spawned or awaiting re-claim, channel not hello'd yet:
-     * convId → {token, sessionId, native, kind, queue: string[] (msg ids), fresh, since,
+     * convId → {token, runId, queue: string[] (msg ids), fresh, since,
      *           resume?, anchorSeq?, retriedFresh?}
      * `fresh` = a brand-new runtime (seed on attach); a re-claim of a running runtime is NOT
      * fresh (it already holds its context — never re-seed it). `resume`/`anchorSeq` (ADR 0007,
-     * only meaningful when `fresh`) = this spawn reattached a proven native handle instead of
-     * starting cold; `retriedFresh` marks a pending entry AS the one automatic fallback retry
-     * (reconcileLiveness), capping it at one.
+     * only meaningful when `fresh`) = this spawn reattached a proven anchor instead of
+     * starting cold; `retriedFresh` marks a pending entry AS the one automatic fallback
+     * retry (reconcileLiveness), capping it at one.
      */
     this.pending = new Map()
     /** browser sockets */
@@ -75,24 +106,24 @@ export class Hub {
   }
 
   /**
-   * After a hub restart: re-arm the persisted pipe leases. Running runtimes
+   * After a hub restart: re-arm the persisted runtime leases. Running runtimes
    * get parked in `pending` (their channel re-hellos within seconds); dead
    * ones are cleaned up to `dormant`.
    */
   async reconcile() {
     for (const conv of this.store.list()) {
-      const lease = conv.pipe
+      const lease = conv.live
       if (!lease) continue
       let status = 'unknown'
       try {
-        status = (await this.supervisor.status(lease.sessionId)).status
+        status = (await this.supervisor.status(lease.runId)).status
       } catch { /* 404 or supervisor down → treat as gone */ }
       if (status === 'running') {
         this.pending.set(conv.id, { ...lease, queue: [], fresh: false, since: Date.now() })
-        this.log(`reconciled ${conv.id}: session ${lease.sessionId} still running, awaiting re-hello`)
+        this.log(`reconciled ${conv.id}: run ${lease.runId} still running, awaiting re-hello`)
       } else {
-        await this.store.setPipe(conv.id, undefined)
-        this.log(`reconciled ${conv.id}: session ${lease.sessionId} gone → dormant`)
+        await this.store.setLive(conv.id, undefined)
+        this.log(`reconciled ${conv.id}: run ${lease.runId} gone → dormant`)
       }
     }
   }
@@ -101,12 +132,13 @@ export class Hub {
     for (const [convId, p] of [...this.pending]) {
       if (Date.now() - p.since < 120_000) continue
       // The channel never (re)claimed this session. Drop the pending → `dormant`; we do
-      // NOT kill (ADR 0008 — the hub initiates no kills): the supervisor idle-reaps the
-      // runtime's RAM on its own. A late hello can still re-claim via the persisted lease.
+      // NOT kill (ADR 0008 — the hub initiates no lifecycle kills): the supervisor
+      // idle-reaps the runtime's RAM on its own. A late hello can still re-claim via the
+      // persisted lease.
       this.pending.delete(convId)
-      await this.store.setPipe(convId, undefined)
+      await this.store.setLive(convId, undefined)
       this.#broadcastConv(convId)
-      this.log(`swept ${convId}: channel never claimed session ${p.sessionId} (supervisor will idle-reap)`)
+      this.log(`swept ${convId}: channel never claimed run ${p.runId} (supervisor will idle-reap)`)
     }
   }
 
@@ -122,27 +154,14 @@ export class Hub {
     try { sessions = await this.supervisor.list() } catch { return } // supervisor blip → skip this tick
     const byId = new Map(sessions.map((s) => [s.id, s]))
     for (const [convId, pipe] of [...this.pipes]) {
-      const s = byId.get(pipe.sessionId)
+      const s = byId.get(pipe.runId)
       if (s && s.status === 'running') {
-        // Record the concrete model the runtime resolved (supervisor reads it from the native
-        // transcript). Cached on the pipe so replies can stamp their message without a status
-        // round-trip (a session's model never changes mid-life). Broadcasts on change only.
-        if (s.model) {
-          pipe.resolvedModel = s.model
-          // Backfill: a reply can land before this session's first transcript line is readable
-          // (claude writes the assistant line at turn end, after the reply tool ran), so that
-          // message went out unstamped. Once this session HAS replied, the conversation's last
-          // assistant message is necessarily this session's (one runtime per conversation) —
-          // stamp it if blank.
-          if (pipe.replied) {
-            const conv = this.store.get(convId)
-            const last = conv?.messages.findLast((m) => m.role === 'assistant')
-            if (last && !last.resolvedModel
-              && (await this.store.setMessageResolvedModel(convId, last.id, s.model))) {
-              this.broadcast(messageEvent(convId, last))
-            }
-          }
-          if (await this.store.setResolvedModel(convId, s.model)) this.#broadcastConv(convId)
+        // Record the concrete model this run resolved (the supervisor reads it from the
+        // run's own transcript lines — transcriptBase guarantees it is THIS run's). One
+        // write on the run; every message pointing at it derives the value, retroactively
+        // correct — no per-message stamping, no backfill, no race (ADR 0010).
+        if (s.model && (await this.store.setRunResolvedModel(convId, pipe.runId, s.model))) {
+          this.#broadcastConv(convId)
         }
         continue // healthy — nothing else to do
       }
@@ -156,19 +175,19 @@ export class Hub {
       // proving itself with a reply (e.g. the transcript went missing mid-flight — the channel can
       // connect in tens of ms, well before claude's own resume logic discovers the failure and
       // exits) must fall back to fresh, same as a resume that never attached at all — not surface
-      // as a plain error the conversation can never escape (its handle would still point at the
-      // same dead uuid on every retry).
+      // as a plain error the conversation can never escape (its anchor would still point at the
+      // same dead transcript on every retry).
       if (pipe.resume && !pipe.replied && !pipe.retriedFresh) {
-        await this.#fallbackToFreshResume(convId, pipe.kind)
+        await this.#fallbackToFreshResume(convId, pipe.runId)
         continue
       }
       if (s && s.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
         await this.store.setError(convId, `runtime exited (${s.exitCode})`)
       } else {
-        await this.store.setPipe(convId, undefined) // clean dormant
+        await this.store.setLive(convId, undefined) // clean dormant
       }
       this.#broadcastConv(convId)
-      this.log(`liveness: ${convId} session ${pipe.sessionId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
+      this.log(`liveness: ${convId} run ${pipe.runId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
     }
 
     // Resume-death fallback net (ADR 0007, "optimistic, degradable"): a resume whose transcript is
@@ -178,25 +197,27 @@ export class Hub {
     // so a fresh spawn that also dies just follows the normal error paths.
     for (const [convId, p] of [...this.pending]) {
       if (!p.resume || p.retriedFresh) continue
-      const s = byId.get(p.sessionId)
+      const s = byId.get(p.runId)
       if (s && s.status === 'running') continue // still alive — give it more time to hello
-      await this.#fallbackToFreshResume(convId, p.kind)
+      await this.#fallbackToFreshResume(convId, p.runId)
     }
   }
 
   /**
-   * Clear a dead native handle and retry once, fresh (ADR 0007's resume-death fallback). Shared by
+   * Clear a dead anchor and retry once, fresh (ADR 0007's resume-death fallback). Shared by
    * every path that can discover a dead resume attempt: the pending-scan above, `#reapIfExited`
    * (a resume that died right after attach, via the ws-close event), and the pipe-liveness loop
-   * above (a resume that died without its ws ever closing — the stale-green case).
+   * above (a resume that died without its ws ever closing — the stale-green case). The retry
+   * keeps the dead run's config (that's what the user asked for) — only the anchor is dropped.
    */
-  async #fallbackToFreshResume(convId, kind) {
+  async #fallbackToFreshResume(convId, runId) {
     const conv = this.store.get(convId)
     this.pending.delete(convId)
     if (!conv) return
+    const run = this.store.getRun(convId, runId)
     this.log(`resume anchor dead for ${convId} — falling back to fresh`)
-    await this.store.setNativeHandle(convId, kind, null)
-    await this.#spawnFor(conv, [], { forceFresh: true })
+    if (run) await this.store.clearAnchor(convId, run.kind)
+    await this.#spawnFor(conv, [], { config: run ? configOfRun(run) : undefined, forceFresh: true })
   }
 
   /* ------------------------------------------------------------ *
@@ -216,15 +237,21 @@ export class Hub {
 
   summary(conv) {
     const last = conv.messages[conv.messages.length - 1]
+    // ADR 0010: the conversation stores no execution config — the UI's selectors derive
+    // from the last run (the last materialised fact); resolvedModel is the exact id that
+    // produced the most recent assistant turn (derefs message → run).
+    const lastRun = conv.runs[conv.runs.length - 1]
+    const lastAssistant = conv.messages.findLast((m) => m.role === 'assistant')
+    const answeredBy = lastAssistant?.runId ? this.store.getRun(conv.id, lastAssistant.runId) : undefined
     return {
       id: conv.id,
       title: conv.title,
       pinned: conv.pinned,
-      kind: conv.kind,
-      model: conv.model,
-      resolvedModel: conv.resolvedModel ?? null, // concrete id the runtime actually ran (audit truth)
-      effort: conv.effort ?? null,
-      agent: conv.agent ?? null,
+      kind: lastRun?.kind ?? null,
+      model: lastRun?.model ?? null,
+      effort: lastRun?.effort ?? null,
+      agent: lastRun?.agent ?? null,
+      resolvedModel: answeredBy?.resolvedModel ?? null,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       state: this.stateOf(conv.id),
@@ -234,7 +261,7 @@ export class Hub {
   }
 
   full(conv) {
-    return { ...this.summary(conv), messages: conv.messages }
+    return { ...this.summary(conv), messages: conv.messages, runs: conv.runs }
   }
 
   /* ------------------------------------------------------------ *
@@ -277,8 +304,29 @@ export class Hub {
    *  data plane: user → pipe                                      *
    * ------------------------------------------------------------ */
 
-  /** Persist a user message and get it to the runtime (spawning one if needed). */
-  async sendUserMessage(convId, text) {
+  /**
+   * A conversation is born WITH its first message (ADR 0010) — there is no empty
+   * conversation. The config (if any) materialises as the first run.
+   */
+  async startConversation(text, config) {
+    const cfg = normalizeConfig(config)
+    if (cfg) {
+      const kinds = await this.supervisor.kinds()
+      if (!kinds.includes(cfg.kind)) throw new Error(`unknown kind: ${cfg.kind} (known: ${kinds.join(', ')})`)
+    }
+    const conv = await this.store.create()
+    await this.sendUserMessage(conv.id, text, cfg)
+    return conv
+  }
+
+  /**
+   * Persist a user message and get it to a runtime running the requested config.
+   * `config` is the message's execution config (ADR 0010): omitted → sticky (the live
+   * run's, else the last run's, else the server default). A live runtime whose config
+   * differs is closed (product-command kill, ADR 0008 amendment) and a new run spawned —
+   * this message is then (re)delivered at attach by #deliverBacklog.
+   */
+  async sendUserMessage(convId, text, config) {
     const conv = this.store.get(convId)
     if (!conv) throw new Error(`unknown conversation: ${convId}`)
 
@@ -287,60 +335,76 @@ export class Hub {
     this.broadcast(messageEvent(convId, message))
     this.#broadcastConv(convId) // title/updatedAt moved
 
-    const pipe = this.pipes.get(convId)
-    if (pipe) {
-      pipe.ws.send(JSON.stringify(pushMsg({
-        id: message.id,
-        content: text,
-        meta: { user: 'user', ts: message.ts },
-      })))
-      this.#setTyping(convId, true)
+    const requested = normalizeConfig(config)
+    const current = this.pipes.get(convId) ?? this.pending.get(convId)
+    if (current) {
+      const run = this.store.getRun(convId, current.runId)
+      if (requested && run && !sameConfig(requested, run)) {
+        // The message asks for a different config than the runtime that is up: that runtime
+        // would answer with parameters the user no longer wants. Close it now (a turn
+        // mid-flight is deliberately abandoned — switching means you want the NEW config's
+        // answer) and respawn; the anchor survives, so the new run resumes the same native
+        // session under the new flags, and #deliverBacklog re-delivers this message.
+        await this.closeConversation(convId)
+        await this.#spawnFor(conv, [], { config: requested })
+        return message
+      }
+      const pipe = this.pipes.get(convId)
+      if (pipe) {
+        pipe.ws.send(JSON.stringify(pushMsg({
+          id: message.id,
+          content: text,
+          meta: { user: 'user', ts: message.ts },
+        })))
+        this.#setTyping(convId, true)
+      } else {
+        this.pending.get(convId).queue.push(message.id)
+      }
       return message
     }
 
-    const pending = this.pending.get(convId)
-    if (pending) {
-      pending.queue.push(message.id)
-      return message
-    }
-
-    await this.#spawnFor(conv, [message.id])
+    await this.#spawnFor(conv, [message.id], { config: requested })
     return message
   }
 
   /**
-   * @param {{forceFresh?: boolean}} [opts] forceFresh skips the anchor even if one exists — used
-   *   by the resume-death fallback net (reconcileLiveness) to cap automatic retries at one.
+   * Spawn a runtime for `config` (falling back to the last run's config, then the server
+   * default) and journal it as a run (ADR 0010). forceFresh skips the anchor even if one
+   * exists — used by the resume-death fallback net to cap automatic retries at one.
+   * @param {{config?: object, forceFresh?: boolean}} [opts]
    */
-  async #spawnFor(conv, queuedIds, { forceFresh = false } = {}) {
+  async #spawnFor(conv, queuedIds, { config, forceFresh = false } = {}) {
+    const lastRun = this.store.lastRun(conv.id)
+    const cfg = config ?? (lastRun ? configOfRun(lastRun) : DEFAULT_CONFIG)
     const token = randomUUID()
-    // Anchor + delta resume (ADR 0007): reuse the last PROVEN native handle for this harness kind,
-    // unless forceFresh (the caller already knows it's dead). No handle, or forceFresh → fresh.
-    const handle = !forceFresh ? conv.natives?.[conv.kind] : undefined
-    const resume = Boolean(handle?.sessionId)
-    // Same-file confirmed (C0): resuming reattaches the SAME transcript uuid, so the anchor IS the
-    // native id to track going forward — no new uuid, no --session-id/--resume combo needed.
-    const native = resume ? handle.sessionId : randomUUID()
-    const anchorSeq = resume ? handle.syncedSeq : 0
-    const attempt = await this.store.bumpSpawn(conv.id)
-    const sessionId = `${conv.id}-r${attempt}`
+    // Anchor + delta resume (ADR 0007): reuse the last PROVEN anchor for this kind, unless
+    // forceFresh (the caller already knows it's dead). No anchor, or forceFresh → fresh.
+    const anchor = !forceFresh ? conv.anchors?.[cfg.kind] : undefined
+    const anchorRun = anchor ? this.store.getRun(conv.id, anchor.runId) : undefined
+    const resume = Boolean(anchorRun?.nativeSessionId)
+    // Same-file confirmed (C0): resuming reattaches the SAME transcript uuid, so the new run
+    // inherits the anchor run's native session id — that uuid IS the thing being resumed.
+    const native = resume ? anchorRun.nativeSessionId : randomUUID()
+    const anchorSeq = resume ? anchor.syncedSeq : 0
+    const run = await this.store.addRun(conv.id, { ...cfg, nativeSessionId: native, resume })
     await this.store.clearError(conv.id) // a spawn attempt clears the prior error
     this.pending.set(conv.id, {
-      token, sessionId, native, kind: conv.kind, queue: [...queuedIds], fresh: true,
+      token, runId: run.id, queue: [...queuedIds], fresh: true,
       resume, anchorSeq, retriedFresh: forceFresh, since: Date.now(),
     })
     this.#broadcastConv(conv.id) // → starting
     try {
-      await this.supervisor.spawn(spawnSpec(conv, {
-        sessionId,
+      await this.supervisor.spawn(spawnSpec(cfg, {
+        convId: conv.id,
+        runId: run.id,
         nativeSessionId: native,
-        resumeFrom: resume ? handle.sessionId : undefined,
+        resumeFrom: resume ? native : undefined,
         hubUrl: this.hubUrlForChannels,
         token,
         channelLogDir: this.channelLogDir,
       }))
-      await this.store.setPipe(conv.id, { token, sessionId, native, kind: conv.kind })
-      this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}${resume ? ' (resume)' : ''}`)
+      await this.store.setLive(conv.id, { runId: run.id, token })
+      this.log(`spawned ${cfg.kind} run ${run.id} for ${conv.id}${resume ? ' (resume)' : ''}`)
     } catch (err) {
       // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
       this.pending.delete(conv.id)
@@ -366,7 +430,7 @@ export class Hub {
     const previous = this.pipes.get(conversationId)
     // three legitimate claim paths: a spawn in flight, a live-socket takeover,
     // or (after a hub restart) the lease persisted with the conversation
-    const expected = pending?.token ?? previous?.token ?? conv.pipe?.token
+    const expected = pending?.token ?? previous?.token ?? conv.live?.token
     if (!expected || token !== expected) {
       ws.send(JSON.stringify(errMsg('bad_token', 'channel token mismatch')))
       ws.close()
@@ -377,11 +441,7 @@ export class Hub {
     if (previous && previous.ws !== ws) {
       try { previous.ws.close() } catch { /* already down */ }
     }
-    const sessionId = pending?.sessionId ?? previous?.sessionId ?? conv.pipe?.sessionId
-    // native/kind (ADR 0007 handle bookkeeping): carried the same three-way (pending → previous →
-    // persisted lease) so a hub-restart re-claim keeps the anchor tracked, not just the pipe.
-    const native = pending?.native ?? previous?.native ?? conv.pipe?.native
-    const kind = pending?.kind ?? previous?.kind ?? conv.pipe?.kind
+    const runId = pending?.runId ?? previous?.runId ?? conv.live?.runId
     const fresh = pending?.fresh ?? false
     // anchorSeq (ADR 0007) only matters for THIS attach's backlog decision, never persisted — a
     // re-claim always has fresh=false regardless, so it never reads it (see #deliverBacklog).
@@ -397,11 +457,11 @@ export class Hub {
     // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
     // would be stuck `starting` forever after every hub restart.
     this.pipes.set(conversationId, {
-      ws, sessionId, token: expected, ready: !fresh, native, kind, resume, retriedFresh, replied: false,
+      ws, runId, token: expected, ready: !fresh, resume, retriedFresh, replied: false,
     })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
-    this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
+    this.log(`channel attached for ${conversationId} (run ${runId}${fresh ? ', fresh' : ', re-claim'})`)
     this.#broadcastConv(conversationId) // → starting (awaiting ready)
 
     ws.on('close', () => {
@@ -413,14 +473,14 @@ export class Hub {
         // (only if not yet proven by a reply) so #reapIfExited can still fall back to fresh if this
         // turns out to be the resume dying rather than a transient drop.
         this.pending.set(conversationId, {
-          token: expected, sessionId, native: dying.native, kind: dying.kind, queue: [], fresh: false,
+          token: expected, runId, queue: [], fresh: false,
           resume: dying.resume && !dying.replied, retriedFresh: dying.retriedFresh, since: Date.now(),
         })
         this.#setTyping(conversationId, false)
         this.#broadcastConv(conversationId)
         this.log(`channel down for ${conversationId}`)
         // if the runtime is truly gone, drop back to dormant
-        this.#reapIfExited(conversationId, sessionId)
+        this.#reapIfExited(conversationId, runId)
       }
     })
 
@@ -428,10 +488,10 @@ export class Hub {
     return true
   }
 
-  async #reapIfExited(conversationId, sessionId) {
+  async #reapIfExited(conversationId, runId) {
     let verdict // 'dormant' | 'error' | undefined (= leave state as-is)
     try {
-      const info = await this.supervisor.status(sessionId)
+      const info = await this.supervisor.status(runId)
       // exited: a non-zero code is an unexpected crash → error; a clean exit → dormant.
       if (info.status === 'exited') verdict = info.exitCode ? 'error' : 'dormant'
     } catch (err) {
@@ -441,19 +501,19 @@ export class Hub {
       else return
     }
     const pending = this.pending.get(conversationId)
-    if (!verdict || pending?.sessionId !== sessionId) return
+    if (!verdict || pending?.runId !== runId) return
     // A resume that reached the channel but crashed before ever proving itself (no reply) falls
     // back to fresh instead of surfacing error/dormant — same remediation as reconcileLiveness's
     // fallback net, reached faster here via the ws-close event instead of the next poll tick.
     if (pending.resume && !pending.retriedFresh) {
-      await this.#fallbackToFreshResume(conversationId, pending.kind)
+      await this.#fallbackToFreshResume(conversationId, runId)
       return
     }
     this.pending.delete(conversationId)
     if (verdict === 'error') await this.store.setError(conversationId, 'runtime exited')
-    else await this.store.setPipe(conversationId, undefined)
+    else await this.store.setLive(conversationId, undefined)
     this.#broadcastConv(conversationId) // → dormant / error
-    this.log(`session ${sessionId} gone — ${conversationId} ${verdict}`)
+    this.log(`run ${runId} gone — ${conversationId} ${verdict}`)
   }
 
   /**
@@ -511,30 +571,20 @@ export class Hub {
     const conv = this.store.get(conversationId)
     if (!conv) return
     const pipe = this.pipes.get(conversationId)
-    // Per-message audit truth: a session runs exactly ONE model for its whole life (any
-    // spawn-parameter change kills + respawns — see patchConversation), so the session's resolved
-    // model IS this message's model. Normally cached on the pipe by the liveness poll; the status
-    // one-shot covers a first reply beating the first tick (the assistant line is already on disk
-    // by the time the reply tool call reaches us). Still unreadable → the message carries none.
-    let resolved = pipe?.resolvedModel
-    if (pipe && !resolved) {
-      try {
-        resolved = (await this.supervisor.status(pipe.sessionId)).model
-        if (resolved) pipe.resolvedModel = resolved
-      } catch { /* supervisor blip — leave the message unstamped */ }
-    }
+    // The message points at its producing run (ADR 0010) — model/kind/agent per message all
+    // derive from there, retroactively correct once the run's resolvedModel is read.
     const message = await this.store.addMessage(conversationId, {
-      role: 'assistant', text, replyTo, ...(resolved ? { resolvedModel: resolved } : {}),
+      role: 'assistant', text, replyTo, runId: pipe?.runId,
     })
-    if (resolved) await this.store.setResolvedModel(conversationId, resolved) // conv-level "current"
     // a real reply proves the agent is healthy → ready, and clears any error
     if (pipe) {
       pipe.ready = true
-      pipe.replied = true // proves this session (resumed or fresh) actually works — see reconcileLiveness
-      this.supervisor.touch(pipe.sessionId) // completed turn → reset the supervisor's idle clock (ADR 0008)
-      // the reply is the ONE point a native session is proven faithful (ADR 0007) — promote the
-      // handle here, never at spawn (a runtime that dies before replying leaves the prior anchor).
-      if (pipe.native) await this.store.setNativeHandle(conversationId, pipe.kind, { sessionId: pipe.native, syncedSeq: conv.seq })
+      pipe.replied = true // proves this run (resumed or fresh) actually works — see reconcileLiveness
+      this.supervisor.touch(pipe.runId) // completed turn → reset the supervisor's idle clock (ADR 0008)
+      // the reply is the ONE point a native session is proven faithful (ADR 0007) — move the
+      // anchor here, never at spawn (a runtime that dies before replying leaves the prior anchor).
+      const run = this.store.getRun(conversationId, pipe.runId)
+      if (run) await this.store.setAnchor(conversationId, run.kind, { runId: run.id, syncedSeq: conv.seq })
     }
     await this.store.clearError(conversationId)
     this.#setTyping(conversationId, false)
@@ -565,28 +615,20 @@ export class Hub {
    *  control plane                                                *
    * ------------------------------------------------------------ */
 
-  async createConversation({ kind, model, effort, agent }) {
-    const kinds = await this.supervisor.kinds()
-    if (kind && !kinds.includes(kind)) throw new Error(`unknown kind: ${kind} (known: ${kinds.join(', ')})`)
-    const conv = await this.store.create({ kind, model, effort, agent })
-    this.broadcast(convEvent(this.summary(conv)))
-    return conv
-  }
-
-  /** Kill the runtime; the conversation stays (dormant), reopenable by re-seed. */
+  /** Kill the runtime; the conversation stays (dormant), reopenable by resume/re-seed. */
   async closeConversation(convId) {
-    const sessionId = this.pipes.get(convId)?.sessionId
-      ?? this.pending.get(convId)?.sessionId
-      ?? this.store.get(convId)?.pipe?.sessionId
+    const runId = this.pipes.get(convId)?.runId
+      ?? this.pending.get(convId)?.runId
+      ?? this.store.get(convId)?.live?.runId
     const pipe = this.pipes.get(convId)
     this.pipes.delete(convId)
     this.pending.delete(convId)
     if (pipe) { try { pipe.ws.close() } catch { /* already down */ } }
-    if (sessionId) await this.supervisor.kill(sessionId)
-    if (this.store.get(convId)) await this.store.setPipe(convId, undefined)
+    if (runId) await this.supervisor.kill(runId)
+    if (this.store.get(convId)) await this.store.setLive(convId, undefined)
     this.#setTyping(convId, false)
     this.#broadcastConv(convId)
-    this.log(`closed ${convId} (session ${sessionId ?? 'none'})`)
+    this.log(`closed ${convId} (run ${runId ?? 'none'})`)
   }
 
   async deleteConversation(convId) {
@@ -595,27 +637,9 @@ export class Hub {
     this.broadcast(convDeletedEvent(convId))
   }
 
+  /** Metadata only (title/pinned) — execution config travels with messages (ADR 0010). */
   async patchConversation(convId, fields) {
-    const before = this.store.get(convId)
-    const prior = before ? { model: before.model, effort: before.effort, agent: before.agent } : {}
-    const conv = await this.store.patch(convId, fields) // throws on unknown conv
-    // A spawn parameter changed while a runtime exists: that runtime was spawned with the OLD
-    // parameters and would keep answering with them until its idle reap (up to ~1h). Kill it now —
-    // a product command, same category as delete (ADR 0008 amendment 2026-07-04). The anchor
-    // survives the kill, so the next spawn is `--resume <same uuid> --model <new>`: native context
-    // preserved (prod-verified), and the cold start that follows is the model-switch's intrinsic
-    // cache cost, not the kill's.
-    const changed = conv.model !== prior.model || conv.effort !== prior.effort || conv.agent !== prior.agent
-    if (changed && (this.pipes.has(convId) || this.pending.has(convId))) {
-      await this.closeConversation(convId)
-      // An unanswered user turn must not strand (nothing respawns on its own — spawns only happen
-      // on send): respawn now; #deliverBacklog re-derives and re-delivers it at attach, so the NEW
-      // parameters answer it. This also covers a turn that was mid-flight when the kill landed.
-      const lastAssistant = conv.messages.findLastIndex((m) => m.role === 'assistant')
-      if (conv.messages.slice(lastAssistant + 1).some((m) => m.role === 'user')) {
-        await this.#spawnFor(conv, [])
-      }
-    }
+    const conv = await this.store.patch(convId, fields)
     this.#broadcastConv(convId)
     return conv
   }

@@ -104,3 +104,12 @@ Concretely:
   contract, restated here as the two-tier model.
 - Privacy posture: conversation content now leaves the box (R2, TLS in transit, encrypted at rest) —
   same posture as the IdP database, which already does this.
+
+## Schema note (2026-07-04)
+
+The two-table schema described here (conversations + messages) is **superseded by ADR 0010**
+("runs as facts": conversations / runs / messages / anchors, config travelling with each
+message). Everything infrastructural in this ADR — the dedicated CNPG cluster, sizing, WAL→R2,
+backups and restore drills, the `agora-pg-app` DATABASE_URL wiring, fail-fast without it —
+stands unchanged. The one-shot JSON→PG migration script was removed with the v3 schema (the
+operator chose a fresh start; the script remains in git history).

@@ -112,12 +112,13 @@ const server = createServer(async (req, res) => {
       }
       if (method === 'POST') {
         const body = await readJson(req)
-        const conv = await hub.createConversation({
-          kind: body.kind, model: body.model, effort: body.effort, agent: body.agent,
-        })
-        if (typeof body.firstMessage === 'string' && body.firstMessage.trim()) {
-          await hub.sendUserMessage(conv.id, body.firstMessage)
+        // ADR 0010: a conversation is born WITH its first message — no empty conversations.
+        // `config` {kind, model, effort, agent} is the message's execution config, not
+        // conversation state; it materialises as the first run.
+        if (typeof body.text !== 'string' || !body.text.trim()) {
+          return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
+        const conv = await hub.startConversation(body.text, body.config)
         return sendJson(res, 201, hub.full(store.get(conv.id)))
       }
       return sendJson(res, 405, { error: 'method not allowed' })
@@ -146,7 +147,9 @@ const server = createServer(async (req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
-        const message = await hub.sendUserMessage(id, body.text)
+        // `config` (optional) = this message's execution config (ADR 0010): same as the live
+        // run → plain push into it; different → the runtime is closed and a new run spawned.
+        const message = await hub.sendUserMessage(id, body.text, body.config)
         return sendJson(res, 202, { message, state: hub.stateOf(id) })
       }
       return sendJson(res, 405, { error: 'method not allowed' })

@@ -85,8 +85,8 @@ export class SupervisorClient {
  * kept OUT of the supervisor (ADR 0002: it forwards, it does not interpret).
  * Adding a runtime kind = adding its recipe here + its bridge artefact.
  */
-export function spawnSpec(conv, { sessionId, nativeSessionId, resumeFrom, hubUrl, token, channelLogDir }) {
-  if (conv.kind !== 'claude') throw new Error(`no spawn recipe for kind: ${conv.kind}`)
+export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, hubUrl, token, channelLogDir }) {
+  if (config.kind !== 'claude') throw new Error(`no spawn recipe for kind: ${config.kind}`)
   const args = [
     // Resume mode (agora ADR 0007): reattach the native session that's the proven anchor for this
     // conv — C0 (the ADR's verify gate) confirmed `--resume` grows the SAME transcript file rather
@@ -104,18 +104,18 @@ export function spawnSpec(conv, { sessionId, nativeSessionId, resumeFrom, hubUrl
     // sandbox (ADR 0003, non-root `node`), so bypassing the in-boundary prompt is by design.
     '--dangerously-skip-permissions',
   ]
-  if (conv.model && conv.model !== 'default') args.push('--model', conv.model)
-  if (conv.effort) args.push('--effort', conv.effort)
-  if (conv.agent) args.push('--agent', conv.agent)
+  if (config.model && config.model !== 'default') args.push('--model', config.model)
+  if (config.effort) args.push('--effort', config.effort)
+  if (config.agent) args.push('--agent', config.agent)
   const env = {
     CHANNEL_HUB_URL: hubUrl,
-    CHANNEL_CONVERSATION_ID: conv.id,
+    CHANNEL_CONVERSATION_ID: convId,
     CHANNEL_TOKEN: token,
   }
-  if (channelLogDir) env.CHANNEL_LOG = `${channelLogDir}/${sessionId}.channel.log`
+  if (channelLogDir) env.CHANNEL_LOG = `${channelLogDir}/${runId}.channel.log`
   // idleTtlMs (ADR 0008): the supervisor idle-reaps the runtime after this much inactivity.
   // The policy (the harness cache TTL) is the product's; the supervisor treats it as opaque.
-  return { kind: conv.kind, id: sessionId, args, env, idleTtlMs: cacheTtlFor(conv.kind) }
+  return { kind: config.kind, id: runId, args, env, idleTtlMs: cacheTtlFor(config.kind) }
 }
 
 /**

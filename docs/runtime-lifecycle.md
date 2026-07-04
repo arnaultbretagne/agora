@@ -5,9 +5,13 @@ Couvre tous les cas : premier message, réouverture, reprise native (`--resume`)
 disparu, crash, redémarrage du hub, runtime muet.
 
 Références : ADR 0005 (re-seed), ADR 0007 (resume ancre + delta), ADR 0008 (autorité d'état,
-reaper). État du code : Phase 4 déployée (`7bbd932`, `94ff374`, `739beda`, fix fallback
-`e823795` ; agent-runtime `57cfa4b`). Vérifié en prod le 2026-07-04 : verrou C4 (resume,
-fallback, re-claim) + probe cross-model (`--resume` + `--model`, scénario 12).
+reaper), **ADR 0010 (runs as facts — le data model)**. Vérifié en prod le 2026-07-04 : verrou C4
+(resume, fallback, re-claim) + probe cross-model (`--resume` + `--model`, scénario 12).
+
+Modèle de données (ADR 0010) : la conversation ne porte AUCUNE config d'exécution — la config
+voyage avec chaque message et se fige au spawn dans un **run** (`<convId>-rN`, table `runs`, le
+journal immuable) ; chaque message assistant pointe son run producteur ; l'ancre de reprise est
+un pointeur mutable par kind dans ce journal (table `anchors`).
 
 ---
 
@@ -16,16 +20,17 @@ fallback, re-claim) + probe cross-model (`--resume` + `--model`, scénario 12).
 | terme | définition exacte |
 |---|---|
 | **conversation** | L'objet du hub : la suite des messages, chacun numéroté par `seq` (1, 2, 3, …). C'est **la source de vérité** (ADR 0005) — persistée en Postgres, sauvegardée. |
-| **runtime** | Un process `claude` lancé par le superviseur pour servir *une* conversation. Identifiant superviseur : `<convId>-rN` (N = numéro de tentative). Jetable. |
+| **run** | Un process `claude` lancé par le superviseur pour servir *une* conversation, ET le fait journalisé qui le décrit (table `runs`, ADR 0010) : id `<convId>-rN` (aussi l'id de session superviseur), config figée au spawn (`kind`, `model`, `effort`, `agent`), `resolvedModel` (backfillé une fois), l'uuid de sa session native, `resume`. Le process est jetable ; le fait est immuable. |
 | **session native** | La session interne de claude : le transcript `~/.claude/projects/<slug>/<uuid>.jsonl` sur le PVC. L'uuid est choisi par le hub, pas par claude. **Accélérateur jetable** : ni sauvegardé, ni garanti d'exister encore demain. |
-| **ancre** | `conv.natives[kind] = { sessionId, syncedSeq }`. En clair : « la dernière session native qui a *réellement répondu*, et le `seq` du dernier message du hub qui lui a été remis ». Borne **exacte**, pas une estimation — voir « sur quoi porte le pari », §2. Une ancre par **kind** (harness) — pas par modèle : changer le modèle d'une conversation garde la même ancre (scénario 12). C'est tout ce qu'on retient d'un runtime mort. |
+| **ancre** | `anchors[kind] = { runId, syncedSeq }` (table `anchors`). En clair : « le dernier run qui a *réellement répondu* — reprends sa session native — et le `seq` du dernier message du hub qui lui a été remis ». Borne **exacte**, pas une estimation — voir « sur quoi porte le pari », §2. Un pointeur **mutable** dans le journal immuable des runs (git : la ref vs le log). Une ancre par **kind** — pas par modèle : changer le modèle garde la même ancre (scénario 12). |
+| **config** | Les quatre réglages de spawn `{kind, model, effort, agent}`. Jamais stockée comme intention : elle **voyage avec chaque message** (ADR 0010), et l'UI dérive ses sélecteurs du dernier run. |
 | **seed complet** | Rejouer l'historique du hub (les 80 derniers tours max) en un seul message texte au démarrage d'un runtime à froid (ADR 0005). Le **plancher de correction** : toujours possible, toujours juste, juste lent. |
 | **delta-seed** | Ne rejouer *que* les tours du hub postérieurs à `syncedSeq` (ADR 0007) — la session native reprise connaît déjà le reste. |
 | **pending / pipe** | Les deux états en RAM du hub pour un runtime : `pending` = lancé (ou à re-réclamer), channel pas encore connecté ; `pipe` = channel WebSocket connecté. |
 
-Deux identifiants à ne pas confondre : l'**id superviseur** (`<convId>-rN`) désigne le *process* ;
-l'**uuid natif** désigne le *transcript*. Le pari `--resume` porte sur l'uuid natif ; les
-détecteurs de mort interrogent l'id superviseur.
+Deux identifiants à ne pas confondre : l'**id de run** (`<convId>-rN`) désigne le *process* (et
+sa ligne de journal) ; l'**uuid natif** désigne le *transcript*. Le pari `--resume` porte sur
+l'uuid natif (déréférencé via le run ancré) ; les détecteurs de mort interrogent l'id de run.
 
 ---
 
@@ -63,10 +68,15 @@ seed complet.
 
 ## 3. L'arbre complet
 
+Préambule (ADR 0010) — le message arrive AVEC sa config : si un runtime vit et que sa config
+est identique → push simple dans le même run, l'arbre ne s'ouvre pas ; si elle diffère → le
+runtime est tué (commande produit, ADR 0008) et l'arbre s'ouvre ; s'il n'y a pas de runtime →
+l'arbre s'ouvre directement.
+
 ```
-message utilisateur, conversation sans runtime
+message utilisateur (+ config), pas de runtime compatible
 │
-├─ DÉCISION 1 — au spawn (#spawnFor) : une ancre existe-t-elle pour conv.kind ?
+├─ DÉCISION 1 — au spawn (#spawnFor) : une ancre existe-t-elle pour le kind demandé ?
 │    NON → lance `claude --session-id <uuid neuf>`   ── départ à froid
 │    OUI → lance `claude --resume <uuid de l'ancre>` ── pari : le transcript existe encore
 │
@@ -82,13 +92,13 @@ message utilisateur, conversation sans runtime
 └─ ISSUE — deux événements possibles, un seul arrivera :
      │
      ├─ une réponse arrive (tool `reply`) ──────────────────────────→ SUCCÈS
-     │    l'ancre est écrite/avancée : { uuid natif, syncedSeq = seq de la réponse }
+     │    l'ancre est écrite/avancée : { runId, syncedSeq = seq de la réponse }
      │    (seul endroit du code qui écrit une ancre : onChannelReply)
      │
      └─ le runtime meurt sans avoir répondu (vu par un des 3 détecteurs, §6)
           │
           ├─ resume ∧ ¬replied ∧ ¬retriedFresh → FALLBACK, une seule fois :
-          │     1. effacer l'ancre morte        (setNativeHandle null)
+          │     1. effacer l'ancre morte        (clearAnchor)
           │     2. respawn immédiat forceFresh  (#spawnFor { forceFresh: true })
           │     → re-rentre en DÉCISION 1, branche NON → seed complet
           │
@@ -214,10 +224,11 @@ Chaque scénario = un chemin dans l'arbre du §3.
    du scénario 3 comme cas nominal.
 
    **Aujourd'hui ce chemin est du code dormant** : le registry n'a qu'un seul `kind`
-   (`claude`) et `kind` n'est pas éditable (scénario 12) — le delta-seed ne peut pas se
-   déclencher en prod avant l'arrivée d'un second harness. Il est couvert par les tests
-   unitaires de `seed.js` ; pour l'observer en vrai, il faut simuler une ancre en retard
-   (abaisser `syncedSeq` en base, puis rouvrir la conversation — log `delta-seeded …`).
+   (`claude`) — le delta-seed ne peut pas se déclencher en prod avant l'arrivée d'un second
+   harness (le kind est changeable par message depuis l'ADR 0010, mais il n'y a rien d'autre
+   à demander). Couvert par les tests unitaires de `seed.js` ; pour l'observer en vrai,
+   simuler une ancre en retard (abaisser `synced_seq` en base, puis rouvrir — log
+   `delta-seeded …`).
 
 5. **Réouverture, transcript disparu — le fallback** (bug trouvé et corrigé en C4, `e823795`).
    Pari `--resume` → channel s'attache (~40 ms), `ready` émis → claude découvre l'absence du
@@ -261,58 +272,43 @@ Chaque scénario = un chemin dans l'arbre du §3.
     la session disparaît (`404`) ou sort code 0 → `dormant`. Un `404`/code 0 n'est **jamais**
     traité comme une panne : « pas de code de sortie = mort voulue » (ADR 0008).
 
-12. **Changement de `kind`** (multi-harness, futur) — et pourquoi **changer de modèle n'en est
-    pas un**. Deux choses distinctes :
+12. **Changement de config en cours de conversation** (ADR 0010). La config `{kind, model,
+    effort, agent}` voyage avec chaque message — il n'y a **pas** de patch de config (PATCH ne
+    porte que `title`/`pinned`), et les sélecteurs de l'UI ne sont qu'un brouillon local dérivé
+    du dernier run. Trois cas à la réception d'un message :
 
-    - **Changer de modèle** (sonnet → opus → …) : `model` est éditable (`store.patch`), mais
-      l'ancre est indexée par *kind*, pas par modèle → au prochain spawn, `--resume <même uuid>
-      --model <nouveau>`. La même session native continue, contexte natif intact, delta vide →
-      push simple. **« Pas de seed » ne veut pas dire gratuit** : le prompt-cache est keyé par
-      modèle, donc changer de modèle invalide le cache *quoi qu'on fasse* — le premier tour du
-      nouveau modèle reprocesse tout le contexte à froid. Un re-seed n'y changerait rien (cache
-      froid à l'identique) et *perdrait* de la fidélité (replay plat, tronqué à 80 tours) : à
-      coût de cold-start égal, le resume conserve tout. C'est l'arbitrage de Claude Code
-      lui-même, qui au `/model` mi-session continue la conversation telle quelle (et `opusplan`
-      alterne deux modèles dans une même session) — le warning qu'il affiche signale le coût
-      cache, pas une nécessité de repartir de zéro.
+    - **Config identique au runtime vivant** → push simple dans le même run (cache chaud,
+      aucun churn). Le cas nominal.
+    - **Config différente** (ex. sonnet → opus) → le runtime vivant est **tué** (commande
+      produit, amendement ADR 0008 — un tour en cours est volontairement abandonné : changer
+      de modèle en pleine réponse veut dire qu'on veut la réponse du nouveau) et un nouveau
+      run matérialise la config. L'ancre étant indexée par *kind*, pas par modèle, le nouveau
+      run fait `--resume <même uuid natif> --model <nouveau>` : contexte natif intact, delta
+      vide, push simple — et c'est le nouveau modèle qui répond au message. **« Pas de seed »
+      ne veut pas dire gratuit** : le prompt-cache est keyé par modèle, donc le premier tour
+      du nouveau modèle reprocesse tout à froid ; un re-seed n'y changerait rien (cache froid
+      à l'identique) et *perdrait* de la fidélité (replay plat, ≤ 80 tours). Même arbitrage
+      que Claude Code lui-même (`/model` mi-session continue la conversation ; `opusplan`
+      alterne deux modèles dans une même session).
+      **Vérifié en prod le 2026-07-04** : probe `-p` (tour 1 `--session-id U --model sonnet`,
+      tour 2 `--resume U --model opus` → rappel correct, un seul fichier `U.jsonl`, lignes
+      assistant `claude-sonnet-5` puis `claude-opus-4-8`) + verrou E2E côté hub (kill,
+      respawn-resume, réponse du nouveau modèle, même uuid natif de bout en bout).
+    - **Changement de `kind`** (multi-harness, futur — le registry n'a qu'un kind
+      aujourd'hui) : le nouveau kind n'a pas d'ancre → seed complet (« cross-seed = ancre 0 »,
+      ADR 0007) ; au retour, `--resume` sur l'ancre du premier kind + delta-seed des tours
+      faits entre-temps (cf. 4). Chaque kind rattrape ce qui s'est dit pendant qu'il était figé.
 
-      **Effet immédiat (2026-07-04, amendement ADR 0008)** : le patch d'un paramètre de spawn
-      (`model`/`effort`/`agent`) sur une conversation qui a un runtime **tue ce runtime**
-      (commande produit, même catégorie que delete) : la conversation redevient `dormant`, et le
-      tour suivant respawn `--resume <même uuid> --model <nouveau>`. Un tour resté sans réponse
-      au moment du patch déclenche un respawn immédiat (rien d'autre ne respawnerait pour lui),
-      pour être servi par les nouveaux paramètres ; un tour en cours de traitement est
-      volontairement abandonné — changer de modèle en pleine réponse veut dire qu'on veut la
-      réponse du nouveau. Le cold-start qui suit est le coût intrinsèque du switch (cache keyé
-      par modèle), pas un coût du kill. `title`/`pinned` ne tuent jamais rien.
-
-      **`resolvedModel` est une vérité par message, pas par conversation** : une session ne court
-      qu'un seul modèle de toute sa vie (le kill-au-patch le garantit), donc chaque message
-      assistant est estampillé à la réponse avec le modèle résolu de la session qui l'a produit
-      (`message.resolvedModel` ; `NULL` = inconnu, tours pré-feature). `conv.resolvedModel` reste
-      le « courant » (sidebar) ; les segments par modèle se dérivent à l'affichage en groupant
-      les messages consécutifs de même valeur. Deux gardes rendent l'estampille fiable, toutes
-      deux attrapées par le verrou prod du 2026-07-04 : côté superviseur, la lecture du modèle
-      ignore tout ce qui précède le spawn (`transcriptBase` — un transcript *resumé* porte les
-      tours, donc le modèle, du runtime précédent) ; côté hub, une réponse arrivée avant que la
-      ligne du tour ne soit sur disque (claude écrit en fin de tour, après le tool `reply`) part
-      sans estampille et est complétée au poll suivant — backfill du dernier message assistant,
-      correct car une conversation n'a qu'un runtime à la fois. Verrou complet : sonnet → patch
-      opus → resume → messages estampillés `claude-sonnet-5` puis `claude-opus-4-8`, même ancre
-      de bout en bout.
-
-      **Vérifié en prod le 2026-07-04** (pod agent-runtime, claude 2.1.197 épinglé) : tour 1
-      `claude -p … --session-id U --model sonnet`, tour 2 `claude -p … --resume U --model opus`
-      → rappel du codeword correct, un seul fichier `U.jsonl` (pas de fork), lignes assistant
-      `claude-sonnet-5` puis `claude-opus-4-8` dans le même transcript — ce que `resolvedModel`
-      remontera fidèlement.
-
-    - **Changer de kind** (claude → autre harness) : le seul cas qui crée une seconde ancre.
-      Aujourd'hui impossible : `kind` est fixé à la création (pas dans la whitelist de
-      `store.patch`) et le registry n'a qu'un kind. Quand un second harness existera : aller =
-      le nouveau kind n'a pas d'ancre → seed complet (« cross-seed = ancre 0 », ADR 0007) ;
-      retour = `--resume` sur l'ancre du premier kind + delta-seed des tours faits entre-temps
-      (cf. 4). Chaque kind rattrape ainsi ce qui s'est dit pendant qu'il était figé.
+    **`resolvedModel` est une vérité par run, dérivée par message** : un run ne court qu'un
+    modèle de toute sa vie (garanti : tout changement de config = nouveau run), donc chaque
+    message assistant pointe son run (`message.runId`) et le modèle exact se lit `message →
+    run → resolvedModel` — rétroactivement juste dès que le superviseur a lu le modèle (une
+    écriture par run, aucune estampille par message, aucune course de backfill). Garde côté
+    superviseur : la lecture ignore tout ce qui précède le spawn (`transcriptBase` — un
+    transcript *resumé* porte les tours, donc le modèle, du run précédent ; bug réel attrapé
+    au verrou du 2026-07-04). Le `resolvedModel` affiché au niveau conversation = celui du run
+    du dernier message assistant ; les segments par modèle/kind/agent se dérivent en groupant
+    les messages consécutifs par run.
 
 ---
 
@@ -378,10 +374,12 @@ non conforme dégrade, il ne casse pas.
 
 | concept | code |
 |---|---|
-| Décision 1 (ancre → `--resume`/`--session-id`) | `website/lib/hub.js` `#spawnFor` ; flags CLI dans `website/lib/supervisor.js` `spawnSpec` |
+| Config au message + kill si différente (ADR 0010) | `hub.js` `sendUserMessage` (comparaison à la config du run vivant) ; `startConversation` (naissance = premier message) |
+| Décision 1 (ancre → `--resume`/`--session-id`) + journal du run | `website/lib/hub.js` `#spawnFor` → `store.addRun` ; flags CLI dans `website/lib/supervisor.js` `spawnSpec` |
 | Décision 2 (seed complet / delta / push) | `hub.js` `#deliverBacklog` ; builders dans `website/lib/seed.js` (`buildSeedContent`, `computeDelta`, `buildDeltaSeedContent`) |
-| Succès (écriture de l'ancre + estampille `resolvedModel` du message) | `hub.js` `onChannelReply` → `store.setNativeHandle`, `store.addMessage` |
-| Kill-au-patch (changement `model`/`effort`/`agent`) | `hub.js` `patchConversation` → `closeConversation` (+ respawn si tour sans réponse) |
+| Succès (déplacement de l'ancre ; le message pointe son run) | `hub.js` `onChannelReply` → `store.setAnchor`, `store.addMessage({runId})` |
+| `resolvedModel` du run (une écriture, dérivé partout) | `hub.js` `reconcileLiveness` → `store.setRunResolvedModel` |
+| Tables `runs` / `anchors` / lease `live_run_id` | `website/lib/store.js` + `website/lib/pg-store.js` (schéma ADR 0010) |
 | Détecteurs de mort | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) |
 | Fallback | `hub.js` `#fallbackToFreshResume` |
 | États | `hub.js` `stateOf` |

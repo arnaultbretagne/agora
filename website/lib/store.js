@@ -1,15 +1,25 @@
 /**
- * Conversation store — the hub-owned history, sole source of truth (ADR 0005).
+ * Conversation store — the hub-owned history, sole source of truth (ADR 0005),
+ * modelled per ADR 0010 ("runs as facts"):
  *
- * Neutral format: a conversation is `{id, title, pinned, kind, model, createdAt,
- * updatedAt, spawnCount, seq, natives, messages: [{id, seq, role, text, ts, replyTo?}]}`
- * — nothing harness-specific ever enters here except the opaque `natives` handle map
- * (ADR 0007: per-harness-kind last-proven native session handle).
+ *   conversation — identity + state: `{id, title, pinned, createdAt, updatedAt, seq,
+ *     spawnCount, error?, live?: {runId, token}, runs: [], anchors: {}, messages: []}`
+ *   run — an execution FACT, immutable except `resolvedModel` (one backfill):
+ *     `{id: '<convId>-rN', kind, model, effort?, agent?, resolvedModel?,
+ *       nativeSessionId, resume, spawnedAt}`
+ *   message — content, pointing at its producer: `{id, seq, role, text, ts,
+ *     replyTo?, runId?}` (`runId` on assistant turns only)
+ *   anchor — the resume pointer (ADR 0007), one per kind: `{runId, syncedSeq}` —
+ *     mutable state (advanced on reply, deleted by the fallback), like a git ref
+ *     into the immutable `runs` log.
+ *
+ * No execution config lives on the conversation: the config travels with each
+ * message (ADR 0010) and is frozen into a run at spawn.
  *
  * This base class is pure in-memory (dev / unit tests / no DATABASE_URL). Every
  * mutation is `async` and ends by calling a `_persist*` hook — a no-op here,
  * overridden by `PgConversationStore` (ADR 0009) for real durability. Reads
- * (`list`, `get`) stay synchronous — the hub's hot path is untouched.
+ * (`list`, `get`, `getRun`) stay synchronous — the hub's hot path is untouched.
  */
 import { randomUUID } from 'node:crypto'
 
@@ -29,21 +39,34 @@ export class ConversationStore {
     return this.convs.get(id)
   }
 
-  async create({ kind, model, effort, agent }) {
+  /** A run of a conversation, by id (`<convId>-rN`). */
+  getRun(id, runId) {
+    return this.convs.get(id)?.runs.find((r) => r.id === runId)
+  }
+
+  /** The most recent run — the fact the UI derives its selectors from (ADR 0010). */
+  lastRun(id) {
+    const conv = this.convs.get(id)
+    return conv?.runs[conv.runs.length - 1]
+  }
+
+  /**
+   * Create the conversation shell. A conversation is only ever born WITH its first
+   * message (ADR 0010) — the caller (hub.startConversation) adds it in the same
+   * breath; the title derives from it in addMessage.
+   */
+  async create() {
     const now = new Date().toISOString()
     const conv = {
       id: `c-${randomUUID()}`,
       title: 'Nouvelle conversation',
       pinned: false,
-      kind: kind ?? 'claude',
-      model: model ?? 'default',
-      ...(effort ? { effort } : {}),
-      ...(agent ? { agent } : {}),
       createdAt: now,
       updatedAt: now,
-      spawnCount: 0,
       seq: 0,
-      natives: {},
+      spawnCount: 0, // run-id allocator (monotonic, never reused)
+      runs: [],
+      anchors: {},
       messages: [],
     }
     this.convs.set(conv.id, conv)
@@ -52,11 +75,9 @@ export class ConversationStore {
   }
 
   /** Append a message; auto-titles the conversation from its first user turn.
-   *  `resolvedModel` (assistant turns only): the exact model id that produced THIS message —
-   *  the per-message audit truth. Knowable because a session runs exactly one model for its
-   *  whole life (a spawn-parameter change kills + respawns — hub.patchConversation); the
-   *  conversation-level `resolvedModel` is merely "current" (the last one that answered). */
-  async addMessage(id, { role, text, replyTo, resolvedModel }) {
+   *  `runId` (assistant turns): the run that produced this message — everything
+   *  per-message (model, harness, agent) derives from that run, never duplicated. */
+  async addMessage(id, { role, text, replyTo, runId }) {
     const conv = this.#must(id)
     conv.seq += 1
     const message = {
@@ -66,7 +87,7 @@ export class ConversationStore {
       text,
       ts: new Date().toISOString(),
       ...(replyTo ? { replyTo } : {}),
-      ...(resolvedModel ? { resolvedModel } : {}),
+      ...(runId ? { runId } : {}),
     }
     conv.messages.push(message)
     conv.updatedAt = message.ts
@@ -78,55 +99,83 @@ export class ConversationStore {
     return message
   }
 
-  /**
-   * Backfill an assistant message's `resolvedModel` once the supervisor reports the session's
-   * model: a reply can land BEFORE the session's first transcript line is readable (claude
-   * writes the assistant line at turn end, after the reply tool ran), leaving the message
-   * unstamped at addMessage time. Only ever fills a blank — never overwrites.
-   */
-  async setMessageResolvedModel(id, messageId, resolvedModel) {
-    const conv = this.#must(id)
-    const message = conv.messages.find((m) => m.id === messageId)
-    if (!message || message.resolvedModel || !resolvedModel) return false
-    message.resolvedModel = resolvedModel
-    await this._persistMessage(conv, message)
-    return true
-  }
-
-  async patch(id, { title, pinned, model, effort, agent }) {
+  /** Metadata only — execution config is per-message (ADR 0010), never patched. */
+  async patch(id, { title, pinned }) {
     const conv = this.#must(id)
     if (typeof title === 'string' && title.trim()) conv.title = title.trim().slice(0, 120)
     if (typeof pinned === 'boolean') conv.pinned = pinned
-    // model/effort/agent are editable post-launch (topbar selectors). The hub kills a live
-    // runtime when one of them changes (hub.patchConversation) so the NEXT turn — not the
-    // next idle reap — answers with the new parameters. `effort`/`agent` clear when set to ''
-    // (back to harness default).
-    if (typeof model === 'string' && model) conv.model = model
-    if (typeof effort === 'string') { if (effort) conv.effort = effort; else delete conv.effort }
-    if (typeof agent === 'string') { if (agent) conv.agent = agent; else delete conv.agent }
     // updatedAt reflects message activity ONLY (bumped by addMessage) — a metadata edit
-    // (pin/title/model/effort/agent) must never move the conversation's sidebar sort/date-group.
+    // must never move the conversation's sidebar sort/date-group.
     await this._persistConv(conv)
     return conv
   }
 
-  /** A new runtime is being spawned for this conversation; returns the attempt #. */
-  async bumpSpawn(id) {
+  /**
+   * Journal a new run (ADR 0010): allocates its id (`<convId>-rN`), freezes the spawn
+   * config into it. Immutable afterwards except `resolvedModel`.
+   */
+  async addRun(id, { kind, model, effort, agent, nativeSessionId, resume }) {
     const conv = this.#must(id)
     conv.spawnCount += 1
-    await this._persistConv(conv)
-    return conv.spawnCount
+    const run = {
+      id: `${id}-r${conv.spawnCount}`,
+      kind,
+      model,
+      ...(effort ? { effort } : {}),
+      ...(agent ? { agent } : {}),
+      nativeSessionId,
+      resume: Boolean(resume),
+      spawnedAt: new Date().toISOString(),
+    }
+    conv.runs.push(run)
+    await this._persistConv(conv) // spawnCount moved
+    await this._persistRun(conv, run)
+    return run
   }
 
   /**
-   * Persist the current pipe lease {token, sessionId} so a hub restart can
-   * still authenticate the channel of an already-running runtime (the channel
-   * reconnects on its own and re-presents this token).
+   * Record the CONCRETE model a run resolved its `--model <alias>` to (e.g. `sonnet` →
+   * `claude-sonnet-5`), read by the supervisor from the run's own transcript lines. One
+   * write per run; every message pointing at the run derives it — retroactively correct,
+   * no per-message backfill. Returns true only on change, so the caller broadcasts once.
    */
-  async setPipe(id, pipe) {
+  async setRunResolvedModel(id, runId, resolvedModel) {
     const conv = this.#must(id)
-    conv.pipe = pipe ?? undefined
+    const run = conv.runs.find((r) => r.id === runId)
+    if (!run || !resolvedModel || run.resolvedModel === resolvedModel) return false
+    run.resolvedModel = resolvedModel
+    await this._persistRun(conv, run)
+    return true
+  }
+
+  /**
+   * Persist the runtime lease `{runId, token}` so a hub restart can still authenticate
+   * the channel of an already-running runtime (it reconnects and re-presents the token).
+   * Ephemeral state — kind/native uuid deref through the run.
+   */
+  async setLive(id, live) {
+    const conv = this.#must(id)
+    conv.live = live ?? undefined
     await this._persistConv(conv)
+  }
+
+  /**
+   * Move the resume anchor for a kind (ADR 0007 / 0010): `{runId, syncedSeq}` — "resume
+   * that run's native session; it faithfully holds hub history up to syncedSeq". Written
+   * only on a PROVEN reply, never at spawn.
+   */
+  async setAnchor(id, kind, anchor) {
+    const conv = this.#must(id)
+    conv.anchors[kind] = anchor
+    await this._persistAnchor(conv, kind, anchor)
+  }
+
+  /** Drop a kind's anchor (the transcript is dead — next reopen re-seeds, ADR 0005 floor). */
+  async clearAnchor(id, kind) {
+    const conv = this.#must(id)
+    if (!(kind in conv.anchors)) return
+    delete conv.anchors[kind]
+    await this._persistAnchor(conv, kind, null)
   }
 
   /**
@@ -149,35 +198,6 @@ export class ConversationStore {
     return true
   }
 
-  /**
-   * Record the CONCRETE model the runtime resolved its `--model <alias>` to (e.g. the `sonnet`
-   * family → `claude-sonnet-5`), read from the runtime's native transcript by the supervisor. We
-   * keep BOTH: `model` (the family alias we spawn with, user-editable) and `resolvedModel` (the
-   * exact id that answered — the audit truth). Returns true only when it changes, so the caller
-   * broadcasts once rather than on every liveness tick.
-   */
-  async setResolvedModel(id, resolvedModel) {
-    const conv = this.convs.get(id)
-    if (!conv || !resolvedModel || conv.resolvedModel === resolvedModel) return false
-    conv.resolvedModel = resolvedModel
-    await this._persistConv(conv)
-    return true
-  }
-
-  /**
-   * Update the per-harness native-resume anchor (ADR 0007): `handle = {sessionId, syncedSeq}`
-   * merges into `conv.natives[kind]` (other kinds' handles are untouched); `handle = null` drops
-   * that kind's entry (the anchor is dead — next reopen cross-seeds). Called only on a PROVEN
-   * reply, never at spawn — a fresh runtime that dies before its first reply must leave the
-   * previous anchor standing.
-   */
-  async setNativeHandle(id, kind, handle) {
-    const conv = this.#must(id)
-    if (handle === null) delete conv.natives[kind]
-    else conv.natives[kind] = handle
-    await this._persistConv(conv)
-  }
-
   async delete(id) {
     if (!this.convs.delete(id)) return false
     await this._persistDelete(id)
@@ -187,6 +207,8 @@ export class ConversationStore {
   /* Persistence hooks — no-ops here; overridden by PgConversationStore (ADR 0009). */
   async _persistConv(_conv) {}
   async _persistMessage(_conv, _message) {}
+  async _persistRun(_conv, _run) {}
+  async _persistAnchor(_conv, _kind, _anchor) {}
   async _persistDelete(_id) {}
 
   #must(id) {

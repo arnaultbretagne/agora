@@ -51,21 +51,28 @@ async function attach(hub, convId) {
   return { ws, token, ok }
 }
 
-test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; reply persists', async () => {
+test('a conversation is born WITH its first message (ADR 0010): spawn, hello, plain push, reply', async () => {
   const { store, supervisor, hub, client } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'salut')
+  const conv = await hub.startConversation('salut', { kind: 'claude' })
 
+  assert.equal(store.get(conv.id).messages.length, 1, 'first message persisted at birth')
+  assert.equal(store.get(conv.id).title, 'salut', 'title derives from the first user turn')
   assert.equal(hub.stateOf(conv.id), 'starting')
   assert.equal(supervisor.spawned.length, 1)
   const spec = supervisor.spawned[0]
   assert.ok(spec.args.includes('--channels') && spec.args.includes('plugin:agora@agora'))
-  // a deterministic session UUID is passed so the supervisor can read the resolved model / --resume
-  const sid = spec.args[spec.args.indexOf('--session-id') + 1]
-  assert.match(sid, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  // a deterministic native UUID is passed so the supervisor can read the resolved model / --resume
+  const native = spec.args[spec.args.indexOf('--session-id') + 1]
+  assert.match(native, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   assert.equal(spec.env.CHANNEL_CONVERSATION_ID, conv.id)
   assert.equal(spec.env.CHANNEL_HUB_URL, 'ws://test/ws/channel')
   assert.ok(spec.env.CHANNEL_TOKEN.length > 10)
+  // the spawn was journalled as a run (ADR 0010): id doubles as the supervisor session id
+  const run = store.getRun(conv.id, spec.id)
+  assert.ok(run, 'run journalled at spawn')
+  assert.equal(run.kind, 'claude')
+  assert.equal(run.nativeSessionId, native)
+  assert.equal(run.resume, false)
 
   const { ws, ok } = await attach(hub, conv.id)
   assert.equal(ok, true)
@@ -79,45 +86,47 @@ test('dormant + message → spawn with CHANNEL_* env; hello flushes plainly; rep
   const messages = store.get(conv.id).messages
   assert.equal(messages.length, 2)
   assert.equal(messages[1].role, 'assistant')
-  // clients saw: conv (created), message (user), conv (starting), conv (live), typing, message (assistant)…
+  assert.equal(messages[1].runId, spec.id, 'the assistant message points at its producing run')
   assert.ok(client.frames('message').some((f) => f.message.role === 'assistant'))
   assert.ok(client.frames('typing').some((f) => f.active === false))
 })
 
-test('a reply proves the native handle (ADR 0007); a spawn without a reply leaves it untouched', async () => {
+test('a reply moves the anchor (ADR 0007/0010); a spawn without a reply leaves it untouched', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   const spec = supervisor.spawned[0]
   const nativeUuid = spec.args[spec.args.indexOf('--session-id') + 1]
 
-  assert.deepEqual(store.get(conv.id).natives, {}, 'no handle before any reply — spawn alone must not set it')
+  assert.deepEqual(store.get(conv.id).anchors, {}, 'no anchor before any reply — spawn alone must not set it')
   await attach(hub, conv.id)
-  assert.deepEqual(store.get(conv.id).natives, {}, 'still nothing — attach/ready is not a reply either')
+  assert.deepEqual(store.get(conv.id).anchors, {}, 'still nothing — attach/ready is not a reply either')
 
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   const seqAfterFirst = store.get(conv.id).seq
-  assert.deepEqual(store.get(conv.id).natives.claude, { sessionId: nativeUuid, syncedSeq: seqAfterFirst })
+  assert.deepEqual(store.get(conv.id).anchors.claude, { runId: spec.id, syncedSeq: seqAfterFirst })
 
-  // a second turn on the SAME runtime bumps syncedSeq but keeps the same native session id
+  // a second turn on the SAME runtime bumps syncedSeq but keeps pointing at the same run
   await hub.sendUserMessage(conv.id, 'deux')
   await hub.onChannelReply(conv.id, replyMsg({ text: 'encore' }))
-  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid)
-  assert.ok(store.get(conv.id).natives.claude.syncedSeq > seqAfterFirst)
+  assert.equal(store.get(conv.id).anchors.claude.runId, spec.id)
+  assert.ok(store.get(conv.id).anchors.claude.syncedSeq > seqAfterFirst)
 
-  // the runtime dies, a FRESH one spawns (new native uuid) but never replies — old anchor must stand
-  const handleBeforeSecondSpawn = store.get(conv.id).natives.claude
+  // the runtime dies; the next spawn RESUMES the anchored native session (new run, same uuid) —
+  // and since it never replies, the anchor keeps pointing at the PROVEN run
+  const anchorBefore = { ...store.get(conv.id).anchors.claude }
   await hub.closeConversation(conv.id)
   await hub.sendUserMessage(conv.id, 'trois')
   assert.equal(supervisor.spawned.length, 2)
-  assert.notEqual(supervisor.spawned[1].args[supervisor.spawned[1].args.indexOf('--session-id') + 1], nativeUuid)
-  assert.deepEqual(store.get(conv.id).natives.claude, handleBeforeSecondSpawn, 'no reply yet ⇒ prior anchor untouched')
+  const spec2 = supervisor.spawned[1]
+  assert.ok(spec2.args.includes('--resume'), 'an anchor exists → the new run resumes it')
+  assert.equal(spec2.args[spec2.args.indexOf('--resume') + 1], nativeUuid)
+  assert.equal(store.getRun(conv.id, spec2.id).nativeSessionId, nativeUuid, 'the new run inherits the native uuid')
+  assert.deepEqual(store.get(conv.id).anchors.claude, anchorBefore, 'no reply yet ⇒ prior anchor untouched')
 })
 
 test('bad token / unknown conversation are rejected', async () => {
   const { hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
 
   const bad = new FakeWs()
   assert.equal(hub.attachChannel(bad, helloMsg({ conversationId: conv.id, token: 'WRONG' })), false)
@@ -128,15 +137,15 @@ test('bad token / unknown conversation are rejected', async () => {
   assert.equal(ghost.frames('err')[0].code, 'unknown_conversation')
 })
 
-test('live conversation pushes immediately; close kills the session', async () => {
+test('live conversation pushes immediately (same config = same run); close kills the session', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   const { ws } = await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
 
   await hub.sendUserMessage(conv.id, 'deux')
   assert.equal(ws.frames('push').length, 2)
+  assert.equal(supervisor.spawned.length, 1, 'no config change → same run')
 
   await hub.closeConversation(conv.id)
   assert.equal(supervisor.killed.length, 1)
@@ -145,8 +154,7 @@ test('live conversation pushes immediately; close kills the session', async () =
 
 test('reopening after one reply resumes with an EMPTY delta — plain push, no seed frame (ADR 0007)', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'La capitale de la Bavière ?')
+  const conv = await hub.startConversation('La capitale de la Bavière ?', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'Munich.' }))
   await hub.closeConversation(conv.id)
@@ -154,9 +162,9 @@ test('reopening after one reply resumes with an EMPTY delta — plain push, no s
   await hub.sendUserMessage(conv.id, 'Et sa population ?')
   assert.equal(hub.stateOf(conv.id), 'starting')
   assert.equal(supervisor.spawned.length, 2)
-  assert.notEqual(supervisor.spawned[1].id, supervisor.spawned[0].id, 'fresh session id per spawn')
+  assert.notEqual(supervisor.spawned[1].id, supervisor.spawned[0].id, 'fresh run id per spawn')
   assert.notEqual(supervisor.spawned[1].env.CHANNEL_TOKEN, supervisor.spawned[0].env.CHANNEL_TOKEN)
-  // a proven handle exists from the first reply → this spawn RESUMES the same native session
+  // a proven anchor exists from the first reply → this spawn RESUMES the same native session
   const firstNative = supervisor.spawned[0].args[supervisor.spawned[0].args.indexOf('--session-id') + 1]
   assert.ok(supervisor.spawned[1].args.includes('--resume'))
   assert.equal(supervisor.spawned[1].args[supervisor.spawned[1].args.indexOf('--resume') + 1], firstNative)
@@ -173,17 +181,16 @@ test('reopening after one reply resumes with an EMPTY delta — plain push, no s
 
 test('resume with a NON-EMPTY delta: one delta-seed push (missed turns only, never full history)', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok un' }))
   await hub.sendUserMessage(conv.id, 'deux')
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok deux' }))
-  // simulate the anchor lagging (still the SAME native session, just behind on syncedSeq) —
-  // realistic if an earlier resume's handle update raced with more turns; constructed directly
-  // here since the point is to exercise computeDelta's non-empty branch deterministically
-  const nativeUuid = store.get(conv.id).natives.claude.sessionId
-  await store.setNativeHandle(conv.id, 'claude', { sessionId: nativeUuid, syncedSeq: 2 })
+  // simulate the anchor lagging (still the SAME run, just behind on syncedSeq) — realistic if
+  // an earlier anchor update raced with more turns; constructed directly here since the point
+  // is to exercise computeDelta's non-empty branch deterministically
+  const run1 = supervisor.spawned[0].id
+  await store.setAnchor(conv.id, 'claude', { runId: run1, syncedSeq: 2 })
   await hub.closeConversation(conv.id)
 
   await hub.sendUserMessage(conv.id, 'trois')
@@ -200,16 +207,16 @@ test('resume with a NON-EMPTY delta: one delta-seed push (missed turns only, nev
   assert.doesNotMatch(pushes[0].content, /<history>/)
   assert.match(pushes[0].content, /\[user\] trois$/)
 
-  // the reply after resuming still advances syncedSeq on the SAME native session
+  // the reply after resuming moves the anchor to the NEW run — which carries the SAME native uuid
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok trois' }))
-  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid)
-  assert.ok(store.get(conv.id).natives.claude.syncedSeq > 2)
+  assert.equal(store.get(conv.id).anchors.claude.runId, spec.id)
+  assert.equal(store.getRun(conv.id, spec.id).nativeSessionId, store.getRun(conv.id, run1).nativeSessionId)
+  assert.ok(store.get(conv.id).anchors.claude.syncedSeq > 2)
 })
 
 test('resume-death fallback: a dead anchor (before any hello) falls back to fresh + full re-seed', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   await hub.closeConversation(conv.id)
@@ -222,7 +229,7 @@ test('resume-death fallback: a dead anchor (before any hello) falls back to fres
   supervisor.statuses.delete(supervisor.spawned[1].id)
   await hub.reconcileLiveness()
 
-  assert.equal(store.get(conv.id).natives.claude, undefined, 'the dead anchor is cleared')
+  assert.equal(store.get(conv.id).anchors.claude, undefined, 'the dead anchor is cleared')
   assert.equal(supervisor.spawned.length, 3, 'the fallback spawned a third attempt')
   assert.ok(supervisor.spawned[2].args.includes('--session-id'))
   assert.ok(!supervisor.spawned[2].args.includes('--resume'), 'the retry is fresh, never another resume')
@@ -236,8 +243,7 @@ test('resume-death fallback: a dead anchor (before any hello) falls back to fres
 
 test('resume-death fallback caps at ONE automatic retry per send', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   await hub.closeConversation(conv.id)
@@ -257,10 +263,9 @@ test('a resume that attaches (and goes ready) but crashes before ever replying s
   // The channel/MCP layer can connect in tens of ms — well before claude's own --resume logic
   // discovers a missing transcript and exits. This reproduces that: the death is discovered via
   // the ws-close path (#reapIfExited), not the pending-scan, and must not get stuck as a permanent
-  // `error` pointing at a dead handle (every retry would otherwise resume the same dead uuid).
+  // `error` pointing at a dead anchor (every retry would otherwise resume the same dead uuid).
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   await hub.closeConversation(conv.id)
@@ -275,29 +280,28 @@ test('a resume that attaches (and goes ready) but crashes before ever replying s
   ws.close()
   await new Promise((r) => setTimeout(r, 10))
 
-  assert.equal(store.get(conv.id).natives.claude, undefined, 'dead anchor cleared, not left dangling')
+  assert.equal(store.get(conv.id).anchors.claude, undefined, 'dead anchor cleared, not left dangling')
   assert.equal(supervisor.spawned.length, 3, 'fell back to a third, fresh attempt')
   assert.ok(supervisor.spawned[2].args.includes('--session-id'))
   assert.ok(!supervisor.spawned[2].args.includes('--resume'))
   assert.notEqual(hub.stateOf(conv.id), 'error', 'never surfaces as a stuck error')
 })
 
-test('a handle for a different kind is invisible — no handle found ⇒ fresh + full seed (anchor 0)', async () => {
+test('an anchor for a different kind is invisible — no anchor found ⇒ fresh + full seed (anchor 0)', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   await hub.closeConversation(conv.id)
 
-  // a DIFFERENT harness kind has its own handle (natives is keyed per kind) — it must be
+  // a DIFFERENT harness kind has its own anchor (anchors are keyed per kind) — it must be
   // invisible when this conv reopens as claude, same as if it had never resumed before
-  await store.setNativeHandle(conv.id, 'codex', { sessionId: 'not-a-real-uuid', syncedSeq: 99 })
-  await store.setNativeHandle(conv.id, 'claude', null)
+  await store.setAnchor(conv.id, 'codex', { runId: 'not-a-real-run', syncedSeq: 99 })
+  await store.clearAnchor(conv.id, 'claude')
 
   await hub.sendUserMessage(conv.id, 'deux')
   const spec = supervisor.spawned[supervisor.spawned.length - 1]
-  assert.ok(spec.args.includes('--session-id'), 'fresh — the codex handle does not apply to claude')
+  assert.ok(spec.args.includes('--session-id'), 'fresh — the codex anchor does not apply to claude')
   assert.ok(!spec.args.includes('--resume'))
 
   const { ws } = await attach(hub, conv.id)
@@ -308,8 +312,7 @@ test('a handle for a different kind is invisible — no handle found ⇒ fresh +
 
 test('channel drop parks the token; the SAME runtime can re-claim; exited runtime reaps to dormant', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   const first = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
@@ -322,8 +325,8 @@ test('channel drop parks the token; the SAME runtime can re-claim; exited runtim
   assert.equal(hub.stateOf(conv.id), 'live')
 
   // now the runtime truly dies: supervisor reports exited → reap to dormant
-  const sessionId = supervisor.spawned[0].id
-  supervisor.statuses.set(sessionId, { status: 'exited', exitCode: 0 })
+  const runId = supervisor.spawned[0].id
+  supervisor.statuses.set(runId, { status: 'exited', exitCode: 0 })
   again.close()
   await new Promise((r) => setTimeout(r, 10))
   assert.equal(hub.stateOf(conv.id), 'dormant')
@@ -331,8 +334,7 @@ test('channel drop parks the token; the SAME runtime can re-claim; exited runtim
 
 test('liveness reconcile tears down a stale-green pipe (runtime gone under a live socket)', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   const { ws } = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
@@ -346,8 +348,7 @@ test('liveness reconcile tears down a stale-green pipe (runtime gone under a liv
 
 test('liveness reconcile surfaces a crashed runtime as error', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   await attach(hub, conv.id)
   // non-zero exit under a live pipe = a crash → error (a clean exit / gone → dormant)
   supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 1 })
@@ -357,14 +358,13 @@ test('liveness reconcile surfaces a crashed runtime as error', async () => {
 
 test('idle-reap: supervisor forgets the session (404) → channel drops → dormant, not stuck starting', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   const { ws } = await attach(hub, conv.id)
   assert.equal(hub.stateOf(conv.id), 'live')
 
   // the supervisor idle-reaps: it KILLS + FORGETS the session (→ status 404), and the
   // channel WS then drops. The ws-close handler re-parks in pending; #reapIfExited must
-  // read the 404 as "gone" and clear it → dormant (before the fix it stuck at 'starting').
+  // read the 404 as "gone" and clear it → dormant.
   supervisor.statuses.delete(supervisor.spawned[0].id)
   ws.close()
   await new Promise((r) => setTimeout(r, 10))
@@ -373,8 +373,7 @@ test('idle-reap: supervisor forgets the session (404) → channel drops → dorm
 
 test('runtime crash (non-zero exit) → channel drops → error', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   const { ws } = await attach(hub, conv.id)
   supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 137 })
   ws.close()
@@ -384,8 +383,7 @@ test('runtime crash (non-zero exit) → channel drops → error', async () => {
 
 test('delete kills, removes, and broadcasts', async () => {
   const { store, supervisor, hub, client } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.deleteConversation(conv.id)
   assert.equal(store.get(conv.id), undefined)
@@ -395,12 +393,12 @@ test('delete kills, removes, and broadcasts', async () => {
 
 test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'retiens le mot: zèbre')
+  const conv = await hub.startConversation('retiens le mot: zèbre', { kind: 'claude' })
   const { token } = await attach(hub, conv.id)
+  const runId = supervisor.spawned[0].id
   const nativeUuid = supervisor.spawned[0].args[supervisor.spawned[0].args.indexOf('--session-id') + 1]
   await hub.onChannelReply(conv.id, replyMsg({ text: 'noté' }))
-  assert.deepEqual(store.get(conv.id).pipe, { token, sessionId: supervisor.spawned[0].id, native: nativeUuid, kind: 'claude' })
+  assert.deepEqual(store.get(conv.id).live, { runId, token })
 
   // "restart": a brand-new hub over the same store/supervisor (empty memory)
   const hub2 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
@@ -413,125 +411,124 @@ test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed
   assert.equal(hub2.stateOf(conv.id), 'live')
   assert.equal(ws.frames('push').length, 0, 're-claimed runtime must NOT be seeded')
 
-  // messages flow again through the re-claimed pipe — the native handle keeps tracking the SAME
-  // session across the restart (ADR 0007: the persisted lease carries native/kind through re-claim)
+  // messages flow again through the re-claimed pipe — the anchor keeps tracking the SAME
+  // run across the restart (the persisted lease carries the runId through re-claim)
   await hub2.sendUserMessage(conv.id, 'quel était le mot ?')
   assert.equal(ws.frames('push').length, 1)
   assert.equal(ws.frames('push')[0].content, 'quel était le mot ?')
   await hub2.onChannelReply(conv.id, replyMsg({ text: 'zèbre' }))
-  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid, 'native anchor survives the hub restart')
+  assert.equal(store.get(conv.id).anchors.claude.runId, runId, 'anchor survives the hub restart')
+  assert.equal(store.getRun(conv.id, runId).nativeSessionId, nativeUuid)
 })
 
 test('reconcile clears leases of dead runtimes; close works from the lease after restart', async () => {
   const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv.id, 'x')
+  const conv = await hub.startConversation('x', { kind: 'claude' })
   await attach(hub, conv.id)
-  const sessionId = supervisor.spawned[0].id
+  const runId = supervisor.spawned[0].id
 
   // runtime died while the hub was away
-  supervisor.statuses.set(sessionId, { status: 'exited', exitCode: 1 })
+  supervisor.statuses.set(runId, { status: 'exited', exitCode: 1 })
   const hub2 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
   clearInterval(hub2.sweeper)
   await hub2.reconcile()
   assert.equal(hub2.stateOf(conv.id), 'dormant')
-  assert.equal(store.get(conv.id).pipe, undefined)
+  assert.equal(store.get(conv.id).live, undefined)
 
   // and a still-running one can be closed via the persisted lease alone
-  const conv2 = await hub.createConversation({ kind: 'claude' })
-  await hub.sendUserMessage(conv2.id, 'y')
+  const conv2 = await hub.startConversation('y', { kind: 'claude' })
   const hub3 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
   clearInterval(hub3.sweeper)
   await hub3.closeConversation(conv2.id)
   assert.ok(supervisor.killed.includes(supervisor.spawned[1].id))
 })
 
-test('patch model on a live conv kills the runtime; next message resumes with the new model', async () => {
-  const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
-  await hub.sendUserMessage(conv.id, 'un')
+test('a message with a DIFFERENT config kills the live runtime and respawns — resuming the anchor', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude', model: 'sonnet' })
   await attach(hub, conv.id)
-  const firstSession = supervisor.spawned[0].id
+  const run1 = supervisor.spawned[0].id
   await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
 
-  // patch → immediate kill; nothing unanswered → no respawn, conv dormant
-  await hub.patchConversation(conv.id, { model: 'opus' })
-  assert.deepEqual(supervisor.killed, [firstSession])
-  assert.equal(supervisor.spawned.length, 1)
-  assert.equal(hub.stateOf(conv.id), 'dormant')
-
-  // next message → resume (the anchor survived the kill) under the NEW model
-  await hub.sendUserMessage(conv.id, 'deux')
+  // the next message asks for opus: the sonnet runtime is closed, a new run materialises the
+  // config, and — the anchor having survived — it RESUMES the same native session
+  await hub.sendUserMessage(conv.id, 'deux', { kind: 'claude', model: 'opus' })
+  assert.deepEqual(supervisor.killed, [run1])
   assert.equal(supervisor.spawned.length, 2)
-  const spec = supervisor.spawned[1]
-  assert.ok(spec.args.includes('--resume'))
-  assert.equal(spec.args[spec.args.indexOf('--model') + 1], 'opus')
-})
-
-test('patch model with an unanswered turn respawns immediately under the new model', async () => {
-  const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
-  await hub.sendUserMessage(conv.id, 'un')
-  await attach(hub, conv.id) // attached, but claude never replied
-
-  await hub.patchConversation(conv.id, { model: 'opus' })
-  assert.equal(supervisor.killed.length, 1)
-  assert.equal(supervisor.spawned.length, 2) // respawned for the stranded turn
-  const spec = supervisor.spawned[1]
-  assert.equal(spec.args[spec.args.indexOf('--model') + 1], 'opus')
-  assert.ok(!spec.args.includes('--resume')) // never replied → no proven anchor → fresh
+  const spec2 = supervisor.spawned[1]
+  assert.equal(spec2.args[spec2.args.indexOf('--model') + 1], 'opus')
+  assert.ok(spec2.args.includes('--resume'))
+  assert.equal(store.getRun(conv.id, spec2.id).model, 'opus', 'the run journals the config as fact')
   assert.equal(hub.stateOf(conv.id), 'starting')
+
+  // the pending message is re-delivered at attach — answered by the NEW config
+  const { ws } = await attach(hub, conv.id)
+  assert.equal(ws.frames('push').length, 1)
+  assert.equal(ws.frames('push')[0].content, 'deux')
 })
 
-test('patch title/pinned never kills; a model patch without a runtime never spawns', async () => {
+test('a message with the SAME config rides the live runtime — no kill, no respawn', async () => {
   const { supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude', model: 'sonnet', effort: 'high' })
+  const { ws } = await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok', replyTo: 'm1' }))
+
+  await hub.sendUserMessage(conv.id, 'deux', { kind: 'claude', model: 'sonnet', effort: 'high' })
+  assert.equal(supervisor.killed.length, 0)
+  assert.equal(supervisor.spawned.length, 1)
+  assert.equal(ws.frames('push').length, 2)
+
+  // omitted config is sticky too (no comparison, plain push)
+  await hub.sendUserMessage(conv.id, 'trois')
+  assert.equal(supervisor.spawned.length, 1)
+  assert.equal(ws.frames('push').length, 3)
+})
+
+test('title/pinned patch never touches the runtime; summary derives config from the last run', async () => {
+  const { supervisor, hub, store } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude', model: 'sonnet', effort: 'high' })
   await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok', replyTo: 'm1' }))
 
   await hub.patchConversation(conv.id, { title: 'renommée', pinned: true })
   assert.equal(supervisor.killed.length, 0)
+  assert.equal(store.get(conv.id).title, 'renommée')
 
-  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok', replyTo: 'm1' }))
-  await hub.closeConversation(conv.id)
-  supervisor.killed.length = 0
-  await hub.patchConversation(conv.id, { model: 'opus' }) // dormant: nothing to kill or spawn
-  assert.equal(supervisor.killed.length, 0)
-  assert.equal(supervisor.spawned.length, 1)
+  const s = hub.summary(store.get(conv.id))
+  assert.equal(s.kind, 'claude')
+  assert.equal(s.model, 'sonnet')
+  assert.equal(s.effort, 'high')
 })
 
-test('a reply stamps its message with the session resolved model (status one-shot, then cached)', async () => {
-  const { store, supervisor, hub } = rig()
-  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
-  await hub.sendUserMessage(conv.id, 'un')
-  await attach(hub, conv.id)
-  const sid = supervisor.spawned[0].id
-  supervisor.statuses.get(sid).model = 'claude-sonnet-5' // supervisor read the transcript
-
-  await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
-  const conv1 = store.get(conv.id)
-  assert.equal(conv1.messages[1].resolvedModel, 'claude-sonnet-5') // per-message audit truth
-  assert.equal(conv1.resolvedModel, 'claude-sonnet-5') // conv-level "current" follows
-
-  // cached on the pipe: even if the supervisor stops reporting it, later replies still stamp
-  supervisor.statuses.get(sid).model = undefined
-  await hub.sendUserMessage(conv.id, 'deux')
-  await hub.onChannelReply(conv.id, replyMsg({ text: 're', replyTo: 'm3' }))
-  assert.equal(store.get(conv.id).messages[3].resolvedModel, 'claude-sonnet-5')
-})
-
-test('liveness backfills a reply that landed before the model was readable', async () => {
+test('resolvedModel lives on the run; messages and summary derive it (no stamping, no backfill)', async () => {
   const { store, supervisor, hub } = rig()
   clearInterval(hub.liveness)
-  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
-  await hub.sendUserMessage(conv.id, 'un')
+  const conv = await hub.startConversation('un', { kind: 'claude', model: 'sonnet' })
   await attach(hub, conv.id)
-  // reply arrives while the supervisor cannot read the transcript yet → message unstamped
+  const run1 = supervisor.spawned[0].id
+
+  // reply lands BEFORE the supervisor could read the transcript — nothing is lost:
+  // the message points at its run; the value arrives on the run later
   await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
-  assert.equal(store.get(conv.id).messages[1].resolvedModel, undefined)
-  // next poll: the supervisor now reports the model → the blank reply is backfilled
-  supervisor.statuses.get(supervisor.spawned[0].id).model = 'claude-opus-4-8'
+  assert.equal(store.get(conv.id).messages[1].runId, run1)
+  assert.equal(hub.summary(store.get(conv.id)).resolvedModel, null, 'unknown until the run learns it')
+
+  // next liveness tick: the supervisor reports the model → ONE write on the run,
+  // and every message pointing at it is retroactively resolved
+  supervisor.statuses.get(run1).model = 'claude-sonnet-5'
   await hub.reconcileLiveness()
-  assert.equal(store.get(conv.id).messages[1].resolvedModel, 'claude-opus-4-8')
-  assert.equal(store.get(conv.id).resolvedModel, 'claude-opus-4-8')
+  assert.equal(store.getRun(conv.id, run1).resolvedModel, 'claude-sonnet-5')
+  assert.equal(hub.summary(store.get(conv.id)).resolvedModel, 'claude-sonnet-5')
+
+  // a config switch spawns run2 (opus): per-message truth stays per-run
+  await hub.sendUserMessage(conv.id, 'deux', { kind: 'claude', model: 'opus' })
+  const run2 = supervisor.spawned[1].id
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 're', replyTo: 'm3' }))
+  supervisor.statuses.get(run2).model = 'claude-opus-4-8'
+  await hub.reconcileLiveness()
+  const msgs = store.get(conv.id).messages
+  assert.equal(store.getRun(conv.id, msgs[1].runId).resolvedModel, 'claude-sonnet-5')
+  assert.equal(store.getRun(conv.id, msgs[3].runId).resolvedModel, 'claude-opus-4-8')
+  assert.equal(hub.summary(store.get(conv.id)).resolvedModel, 'claude-opus-4-8')
 })
