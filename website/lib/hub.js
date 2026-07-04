@@ -35,7 +35,12 @@ export class Hub {
     this.channelLogDir = opts.channelLogDir // optional: per-session channel log sink
     this.log = opts.log ?? ((m) => console.log(`[hub] ${m}`))
 
-    /** live pipes: convId → {ws, sessionId, token, native, kind} (native/kind: ADR 0007 handle) */
+    /**
+     * live pipes: convId → {ws, sessionId, token, native, kind, resume, retriedFresh, replied}
+     * native/kind: the ADR 0007 handle this session is (or may become) anchored to. resume/
+     * retriedFresh/replied: whether THIS spawn reattached a handle, already used its one fallback
+     * retry, and has proven itself via a reply — see reconcileLiveness/#reapIfExited.
+     */
     this.pipes = new Map()
     /**
      * spawned or awaiting re-claim, channel not hello'd yet:
@@ -128,6 +133,16 @@ export class Hub {
       try { pipe.ws.close() } catch { /* already down */ }
       this.pending.delete(convId)
       this.#setTyping(convId, false)
+      // A resume that reached the channel/MCP layer (ws attached, hello'd) but crashed BEFORE ever
+      // proving itself with a reply (e.g. the transcript went missing mid-flight — the channel can
+      // connect in tens of ms, well before claude's own resume logic discovers the failure and
+      // exits) must fall back to fresh, same as a resume that never attached at all — not surface
+      // as a plain error the conversation can never escape (its handle would still point at the
+      // same dead uuid on every retry).
+      if (pipe.resume && !pipe.replied && !pipe.retriedFresh) {
+        await this.#fallbackToFreshResume(convId, pipe.kind)
+        continue
+      }
       if (s && s.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
         await this.store.setError(convId, `runtime exited (${s.exitCode})`)
       } else {
@@ -138,21 +153,31 @@ export class Hub {
     }
 
     // Resume-death fallback net (ADR 0007, "optimistic, degradable"): a resume whose transcript is
-    // gone dies in seconds, BEFORE any channel WS ever exists — the pipe loop above never sees it
-    // (no pipe yet), and #sweepPending's 120s is too slow. Catch it here instead: any pending resume
-    // attempt whose session is already absent/exited falls back to fresh, capped at one retry
-    // (retriedFresh) so a fresh spawn that also dies just follows the normal error paths.
+    // gone can die BEFORE any channel WS ever exists — the pipe loop above never sees it (no pipe
+    // yet), and #sweepPending's 120s is too slow. Catch it here instead: any pending resume attempt
+    // whose session is already absent/exited falls back to fresh, capped at one retry (retriedFresh)
+    // so a fresh spawn that also dies just follows the normal error paths.
     for (const [convId, p] of [...this.pending]) {
       if (!p.resume || p.retriedFresh) continue
       const s = byId.get(p.sessionId)
       if (s && s.status === 'running') continue // still alive — give it more time to hello
-      const conv = this.store.get(convId)
-      this.pending.delete(convId)
-      if (!conv) continue
-      this.log(`resume anchor dead for ${convId} — falling back to fresh`)
-      await this.store.setNativeHandle(convId, p.kind, null)
-      await this.#spawnFor(conv, p.queue, { forceFresh: true })
+      await this.#fallbackToFreshResume(convId, p.kind)
     }
+  }
+
+  /**
+   * Clear a dead native handle and retry once, fresh (ADR 0007's resume-death fallback). Shared by
+   * every path that can discover a dead resume attempt: the pending-scan above, `#reapIfExited`
+   * (a resume that died right after attach, via the ws-close event), and the pipe-liveness loop
+   * above (a resume that died without its ws ever closing — the stale-green case).
+   */
+  async #fallbackToFreshResume(convId, kind) {
+    const conv = this.store.get(convId)
+    this.pending.delete(convId)
+    if (!conv) return
+    this.log(`resume anchor dead for ${convId} — falling back to fresh`)
+    await this.store.setNativeHandle(convId, kind, null)
+    await this.#spawnFor(conv, [], { forceFresh: true })
   }
 
   /* ------------------------------------------------------------ *
@@ -339,26 +364,39 @@ export class Hub {
     const native = pending?.native ?? previous?.native ?? conv.pipe?.native
     const kind = pending?.kind ?? previous?.kind ?? conv.pipe?.kind
     const fresh = pending?.fresh ?? false
-    // resume/anchorSeq (ADR 0007) only matter for THIS attach's backlog decision, never persisted —
-    // a re-claim always has fresh=false regardless, so it never reads them (see #deliverBacklog).
+    // anchorSeq (ADR 0007) only matters for THIS attach's backlog decision, never persisted — a
+    // re-claim always has fresh=false regardless, so it never reads it (see #deliverBacklog).
+    // resume/retriedFresh DO need to live on the pipe past this attach: a resume that reaches the
+    // channel but crashes before ever replying must still fall back to fresh (see reconcileLiveness
+    // and #reapIfExited) — `replied` starts false and is promoted in onChannelReply, the ONE proof
+    // a resume actually worked.
     const resume = pending?.resume ?? false
     const anchorSeq = pending?.anchorSeq ?? 0
+    const retriedFresh = pending?.retriedFresh ?? false
     // A FRESH runtime is not proven up yet → `starting` until its `ready` frame (or first reply).
     // A RE-CLAIM is an already-running, already-ready runtime whose channel merely reconnected: it
     // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
     // would be stuck `starting` forever after every hub restart.
-    this.pipes.set(conversationId, { ws, sessionId, token: expected, ready: !fresh, native, kind })
+    this.pipes.set(conversationId, {
+      ws, sessionId, token: expected, ready: !fresh, native, kind, resume, retriedFresh, replied: false,
+    })
     this.pending.delete(conversationId)
     ws.send(JSON.stringify(helloOkMsg()))
     this.log(`channel attached for ${conversationId} (session ${sessionId}${fresh ? ', fresh' : ', re-claim'})`)
     this.#broadcastConv(conversationId) // → starting (awaiting ready)
 
     ws.on('close', () => {
-      if (this.pipes.get(conversationId)?.ws === ws) {
+      const dying = this.pipes.get(conversationId)
+      if (dying?.ws === ws) {
         this.pipes.delete(conversationId)
-        // keep the token reachable for a re-hello of the SAME runtime: park it
-        // back in pending with an empty queue (the channel reconnects on its own)
-        this.pending.set(conversationId, { token: expected, sessionId, queue: [], fresh: false, since: Date.now() })
+        // keep the token reachable for a re-hello of the SAME runtime: park it back in pending with
+        // an empty queue (the channel reconnects on its own). Carry resume/retriedFresh forward
+        // (only if not yet proven by a reply) so #reapIfExited can still fall back to fresh if this
+        // turns out to be the resume dying rather than a transient drop.
+        this.pending.set(conversationId, {
+          token: expected, sessionId, native: dying.native, kind: dying.kind, queue: [], fresh: false,
+          resume: dying.resume && !dying.replied, retriedFresh: dying.retriedFresh, since: Date.now(),
+        })
         this.#setTyping(conversationId, false)
         this.#broadcastConv(conversationId)
         this.log(`channel down for ${conversationId}`)
@@ -383,7 +421,15 @@ export class Hub {
       if (err?.status === 404) verdict = 'dormant'
       else return
     }
-    if (!verdict || this.pending.get(conversationId)?.sessionId !== sessionId) return
+    const pending = this.pending.get(conversationId)
+    if (!verdict || pending?.sessionId !== sessionId) return
+    // A resume that reached the channel but crashed before ever proving itself (no reply) falls
+    // back to fresh instead of surfacing error/dormant — same remediation as reconcileLiveness's
+    // fallback net, reached faster here via the ws-close event instead of the next poll tick.
+    if (pending.resume && !pending.retriedFresh) {
+      await this.#fallbackToFreshResume(conversationId, pending.kind)
+      return
+    }
     this.pending.delete(conversationId)
     if (verdict === 'error') await this.store.setError(conversationId, 'runtime exited')
     else await this.store.setPipe(conversationId, undefined)
@@ -450,6 +496,7 @@ export class Hub {
     const pipe = this.pipes.get(conversationId)
     if (pipe) {
       pipe.ready = true
+      pipe.replied = true // proves this session (resumed or fresh) actually works — see reconcileLiveness
       this.supervisor.touch(pipe.sessionId) // completed turn → reset the supervisor's idle clock (ADR 0008)
       // the reply is the ONE point a native session is proven faithful (ADR 0007) — promote the
       // handle here, never at spawn (a runtime that dies before replying leaves the prior anchor).

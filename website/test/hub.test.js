@@ -253,6 +253,35 @@ test('resume-death fallback caps at ONE automatic retry per send', async () => {
   assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
 })
 
+test('a resume that attaches (and goes ready) but crashes before ever replying still falls back to fresh', async () => {
+  // The channel/MCP layer can connect in tens of ms — well before claude's own --resume logic
+  // discovers a missing transcript and exits. This reproduces that: the death is discovered via
+  // the ws-close path (#reapIfExited), not the pending-scan, and must not get stuck as a permanent
+  // `error` pointing at a dead handle (every retry would otherwise resume the same dead uuid).
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  await hub.sendUserMessage(conv.id, 'deux')
+  assert.ok(supervisor.spawned[1].args.includes('--resume'))
+  const { ws } = await attach(hub, conv.id) // attaches + ready — but never replies
+
+  // the resumed process crashes right after attaching; its stdio closing is what the channel
+  // reports as its own ws dropping
+  supervisor.statuses.set(supervisor.spawned[1].id, { status: 'exited', exitCode: 1 })
+  ws.close()
+  await new Promise((r) => setTimeout(r, 10))
+
+  assert.equal(store.get(conv.id).natives.claude, undefined, 'dead anchor cleared, not left dangling')
+  assert.equal(supervisor.spawned.length, 3, 'fell back to a third, fresh attempt')
+  assert.ok(supervisor.spawned[2].args.includes('--session-id'))
+  assert.ok(!supervisor.spawned[2].args.includes('--resume'))
+  assert.notEqual(hub.stateOf(conv.id), 'error', 'never surfaces as a stuck error')
+})
+
 test('a handle for a different kind is invisible — no handle found ⇒ fresh + full seed (anchor 0)', async () => {
   const { store, supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
