@@ -33,6 +33,22 @@ test('a fresh conversation carries an empty natives map (ADR 0007 handle map)', 
   assert.deepEqual(conv.natives, {})
 })
 
+test('patch (pin/title/model/effort/agent) never moves updatedAt — only addMessage does', async () => {
+  const store = new ConversationStore()
+  const conv = await store.create({})
+  await store.addMessage(conv.id, { role: 'user', text: 'a' })
+  const stamp = store.get(conv.id).updatedAt
+
+  await store.patch(conv.id, { pinned: true })
+  await store.patch(conv.id, { pinned: false })
+  await store.patch(conv.id, { title: 'Renommée' })
+  await store.patch(conv.id, { model: 'opus', effort: 'high', agent: 'reviewer' })
+  assert.equal(store.get(conv.id).updatedAt, stamp, 'metadata patches must not touch updatedAt')
+
+  const m2 = await store.addMessage(conv.id, { role: 'assistant', text: 'b' })
+  assert.equal(store.get(conv.id).updatedAt, m2.ts, 'a real message still sets updatedAt to its own ts')
+})
+
 test('delete removes it from memory; unknown ops reject', async () => {
   const store = new ConversationStore()
   const conv = await store.create({})

@@ -82,7 +82,8 @@ export class ConversationStore {
     if (typeof model === 'string' && model) conv.model = model
     if (typeof effort === 'string') { if (effort) conv.effort = effort; else delete conv.effort }
     if (typeof agent === 'string') { if (agent) conv.agent = agent; else delete conv.agent }
-    conv.updatedAt = new Date().toISOString()
+    // updatedAt reflects message activity ONLY (bumped by addMessage) — a metadata edit
+    // (pin/title/model/effort/agent) must never move the conversation's sidebar sort/date-group.
     await this._persistConv(conv)
     return conv
   }
