@@ -2,9 +2,11 @@
 
 ## Status
 
-Proposed — **empirically validated 2026-07-02** (see *Validation*). **Amends, does not supersede,
-ADR 0005**: the hub-owned neutral history stays the **sole source of truth**; this ADR adds an *optional*
-native-resume fast-path on top of it, and folds re-seed and resume into a single mechanism.
+Accepted — 2026-07-04 (implementation green-lit as a staged plan; empirically validated 2026-07-02,
+see *Validation*). **Amends, does not supersede, ADR 0005**: the hub-owned neutral history stays the
+**sole source of truth**; this ADR adds an *optional* native-resume fast-path on top of it, and folds
+re-seed and resume into a single mechanism. The persisted `natives` handle map lands in the Postgres
+schema of ADR 0009 from day one.
 
 ## Context
 
