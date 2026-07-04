@@ -78,6 +78,21 @@ export class ConversationStore {
     return message
   }
 
+  /**
+   * Backfill an assistant message's `resolvedModel` once the supervisor reports the session's
+   * model: a reply can land BEFORE the session's first transcript line is readable (claude
+   * writes the assistant line at turn end, after the reply tool ran), leaving the message
+   * unstamped at addMessage time. Only ever fills a blank — never overwrites.
+   */
+  async setMessageResolvedModel(id, messageId, resolvedModel) {
+    const conv = this.#must(id)
+    const message = conv.messages.find((m) => m.id === messageId)
+    if (!message || message.resolvedModel || !resolvedModel) return false
+    message.resolvedModel = resolvedModel
+    await this._persistMessage(conv, message)
+    return true
+  }
+
   async patch(id, { title, pinned, model, effort, agent }) {
     const conv = this.#must(id)
     if (typeof title === 'string' && title.trim()) conv.title = title.trim().slice(0, 120)

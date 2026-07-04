@@ -129,6 +129,19 @@ export class Hub {
         // round-trip (a session's model never changes mid-life). Broadcasts on change only.
         if (s.model) {
           pipe.resolvedModel = s.model
+          // Backfill: a reply can land before this session's first transcript line is readable
+          // (claude writes the assistant line at turn end, after the reply tool ran), so that
+          // message went out unstamped. Once this session HAS replied, the conversation's last
+          // assistant message is necessarily this session's (one runtime per conversation) —
+          // stamp it if blank.
+          if (pipe.replied) {
+            const conv = this.store.get(convId)
+            const last = conv?.messages.findLast((m) => m.role === 'assistant')
+            if (last && !last.resolvedModel
+              && (await this.store.setMessageResolvedModel(convId, last.id, s.model))) {
+              this.broadcast(messageEvent(convId, last))
+            }
+          }
           if (await this.store.setResolvedModel(convId, s.model)) this.#broadcastConv(convId)
         }
         continue // healthy — nothing else to do

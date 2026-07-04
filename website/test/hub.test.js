@@ -519,3 +519,19 @@ test('a reply stamps its message with the session resolved model (status one-sho
   await hub.onChannelReply(conv.id, replyMsg({ text: 're', replyTo: 'm3' }))
   assert.equal(store.get(conv.id).messages[3].resolvedModel, 'claude-sonnet-5')
 })
+
+test('liveness backfills a reply that landed before the model was readable', async () => {
+  const { store, supervisor, hub } = rig()
+  clearInterval(hub.liveness)
+  const conv = await hub.createConversation({ kind: 'claude', model: 'sonnet' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  // reply arrives while the supervisor cannot read the transcript yet → message unstamped
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'réponse', replyTo: 'm1' }))
+  assert.equal(store.get(conv.id).messages[1].resolvedModel, undefined)
+  // next poll: the supervisor now reports the model → the blank reply is backfilled
+  supervisor.statuses.get(supervisor.spawned[0].id).model = 'claude-opus-4-8'
+  await hub.reconcileLiveness()
+  assert.equal(store.get(conv.id).messages[1].resolvedModel, 'claude-opus-4-8')
+  assert.equal(store.get(conv.id).resolvedModel, 'claude-opus-4-8')
+})

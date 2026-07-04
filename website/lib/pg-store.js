@@ -56,8 +56,10 @@ const UPSERT_CONV = `
 const INSERT_MESSAGE = `
   INSERT INTO messages (conv_id, seq, id, role, text, ts, reply_to, resolved_model)
   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-  ON CONFLICT (conv_id, seq) DO NOTHING
+  ON CONFLICT (conv_id, seq) DO UPDATE SET resolved_model = EXCLUDED.resolved_model
 `
+// ^ resolved_model is the ONE mutable message field: it may be backfilled after insert when the
+// supervisor's model report lands later than the reply (store.setMessageResolvedModel).
 
 function convParams(conv) {
   return [
