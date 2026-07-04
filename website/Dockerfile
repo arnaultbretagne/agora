@@ -32,7 +32,6 @@ RUN npm install --omit=dev --no-audit --no-fund
 COPY shared /app/shared
 COPY website/server.js ./server.js
 COPY website/lib ./lib
-COPY website/scripts ./scripts
 COPY website/public ./public
 
 # the channel delivery (for the agent pod's initContainer to copy onto the PVC)
