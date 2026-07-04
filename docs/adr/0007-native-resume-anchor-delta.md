@@ -136,3 +136,12 @@ Environment notes that make the result trustworthy — and that explain why an e
   claude — strip them (`env -u`; setting them to `undefined` in node-pty does **not** unset);
 - an expired/blanked `~/.claude/.credentials.json` (`expiresAt:0`) makes claude sit at *"Not logged in"*,
   reply nothing, and write no usable transcript — verify creds before trusting a negative resume result.
+
+## Companion doc
+
+The full runtime lifecycle this ADR is part of (spawn, seed, resume, fallback — every case, the
+decision tree, the flags, the invariants, the per-harness resume contract) is documented in
+[`docs/runtime-lifecycle.md`](../runtime-lifecycle.md) (French). Prod-verified 2026-07-04: the C4
+verrou (resume, fallback drill, hub-restart re-claim) plus a cross-model probe — `--resume <uuid>
+--model <other>` reattaches the same transcript file with the new model answering in restored
+context (anchors are per *kind*, not per model).
