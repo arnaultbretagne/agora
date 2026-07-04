@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildSeedContent } from '../lib/seed.js'
+import { buildSeedContent, computeDelta, buildDeltaSeedContent } from '../lib/seed.js'
 
 const conv = { title: 'Ma conversation' }
 
@@ -38,4 +38,45 @@ test('multiple queued user turns are all delivered', () => {
     { text: 'second' },
   ])
   assert.match(seed, /\[user\] premier\n\n\[user\] second$/)
+})
+
+test('computeDelta excludes everything up to and including syncedSeq, and anything queued', () => {
+  const conv = {
+    messages: [
+      { id: 'm1', seq: 1, role: 'user', text: 'a' },
+      { id: 'm2', seq: 2, role: 'assistant', text: 'b' },
+      { id: 'm3', seq: 3, role: 'user', text: 'c' },
+      { id: 'm4', seq: 4, role: 'assistant', text: 'd' },
+      { id: 'm5', seq: 5, role: 'user', text: 'e' },
+    ],
+  }
+  assert.deepEqual(computeDelta(conv, 2, ['m5']).map((m) => m.id), ['m3', 'm4'])
+})
+
+test('computeDelta is empty when nothing was missed — the common resume case', () => {
+  const conv = {
+    messages: [
+      { id: 'm1', seq: 1, role: 'user', text: 'a' },
+      { id: 'm2', seq: 2, role: 'assistant', text: 'b' },
+    ],
+  }
+  assert.deepEqual(computeDelta(conv, 2, []), [])
+})
+
+test('buildDeltaSeedContent carries the missed turns and the new message, distinct from a full seed', () => {
+  const delta = [
+    { role: 'user', text: 'Et sinon ?' },
+    { role: 'assistant', text: 'Rien de neuf.' },
+  ]
+  const seed = buildDeltaSeedContent(conv, delta, [{ text: 'Et maintenant ?' }])
+  assert.match(seed, /^\[conversation resumed — native session restored\]/)
+  assert.match(seed, /<missed-turns>/)
+  assert.match(seed, /\[user\] Et sinon \?/)
+  assert.match(seed, /\[assistant\] Rien de neuf\./)
+  assert.match(seed, /<\/missed-turns>/)
+  assert.match(seed, /\[user\] Et maintenant \?$/)
+  assert.doesNotMatch(seed, /<history>/, 'distinct wrapper from the full re-seed (buildSeedContent)')
+  // missed turns stay inside the tags; the new turn stays outside
+  const inside = seed.slice(seed.indexOf('<missed-turns>'), seed.indexOf('</missed-turns>'))
+  assert.doesNotMatch(inside, /Et maintenant/)
 })
