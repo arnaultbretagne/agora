@@ -9,14 +9,15 @@
  *   claude replies (reply tool → channel → WS) → persist + broadcast, typing off
  *   channel socket drops → conv `dormant` (the channel auto-reconnects if its
  *     runtime still lives — the conv simply goes live again on re-hello)
- *   close → supervisor kill → dormant. Reopen later = re-seed (ADR 0005).
+ *   close → supervisor kill → dormant. Reopen later = anchor + delta resume when a proven
+ *     native handle exists (ADR 0007), else full re-seed (ADR 0005) — the correctness floor.
  */
 import { randomUUID } from 'node:crypto'
 import {
   helloOkMsg, pushMsg, errMsg,
   snapshotEvent, convEvent, convDeletedEvent, messageEvent, typingEvent,
 } from '../../shared/protocol.js'
-import { buildSeedContent } from './seed.js'
+import { buildSeedContent, computeDelta, buildDeltaSeedContent } from './seed.js'
 import { spawnSpec } from './supervisor.js'
 
 const TYPING_TIMEOUT_MS = 180_000
@@ -34,13 +35,17 @@ export class Hub {
     this.channelLogDir = opts.channelLogDir // optional: per-session channel log sink
     this.log = opts.log ?? ((m) => console.log(`[hub] ${m}`))
 
-    /** live pipes: convId → {ws, sessionId, token} */
+    /** live pipes: convId → {ws, sessionId, token, native, kind} (native/kind: ADR 0007 handle) */
     this.pipes = new Map()
     /**
      * spawned or awaiting re-claim, channel not hello'd yet:
-     * convId → {token, sessionId, queue: string[] (msg ids), fresh, since}
-     * `fresh` = a brand-new runtime (seed on attach); a re-claim of a running
-     * runtime is NOT fresh (it already holds its context — never re-seed it).
+     * convId → {token, sessionId, native, kind, queue: string[] (msg ids), fresh, since,
+     *           resume?, anchorSeq?, retriedFresh?}
+     * `fresh` = a brand-new runtime (seed on attach); a re-claim of a running runtime is NOT
+     * fresh (it already holds its context — never re-seed it). `resume`/`anchorSeq` (ADR 0007,
+     * only meaningful when `fresh`) = this spawn reattached a proven native handle instead of
+     * starting cold; `retriedFresh` marks a pending entry AS the one automatic fallback retry
+     * (reconcileLiveness), capping it at one.
      */
     this.pending = new Map()
     /** browser sockets */
@@ -130,6 +135,23 @@ export class Hub {
       }
       this.#broadcastConv(convId)
       this.log(`liveness: ${convId} session ${pipe.sessionId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
+    }
+
+    // Resume-death fallback net (ADR 0007, "optimistic, degradable"): a resume whose transcript is
+    // gone dies in seconds, BEFORE any channel WS ever exists — the pipe loop above never sees it
+    // (no pipe yet), and #sweepPending's 120s is too slow. Catch it here instead: any pending resume
+    // attempt whose session is already absent/exited falls back to fresh, capped at one retry
+    // (retriedFresh) so a fresh spawn that also dies just follows the normal error paths.
+    for (const [convId, p] of [...this.pending]) {
+      if (!p.resume || p.retriedFresh) continue
+      const s = byId.get(p.sessionId)
+      if (s && s.status === 'running') continue // still alive — give it more time to hello
+      const conv = this.store.get(convId)
+      this.pending.delete(convId)
+      if (!conv) continue
+      this.log(`resume anchor dead for ${convId} — falling back to fresh`)
+      await this.store.setNativeHandle(convId, p.kind, null)
+      await this.#spawnFor(conv, p.queue, { forceFresh: true })
     }
   }
 
@@ -242,27 +264,39 @@ export class Hub {
     return message
   }
 
-  async #spawnFor(conv, queuedIds) {
+  /**
+   * @param {{forceFresh?: boolean}} [opts] forceFresh skips the anchor even if one exists — used
+   *   by the resume-death fallback net (reconcileLiveness) to cap automatic retries at one.
+   */
+  async #spawnFor(conv, queuedIds, { forceFresh = false } = {}) {
     const token = randomUUID()
-    // Hub-generated (not claude-self-chosen) native session uuid — the anchor for native
-    // `--resume` (agora ADR 0007). Only promoted to conv.natives on a PROVEN reply (see
-    // onChannelReply); a runtime that dies before replying leaves the prior anchor standing.
-    const native = randomUUID()
+    // Anchor + delta resume (ADR 0007): reuse the last PROVEN native handle for this harness kind,
+    // unless forceFresh (the caller already knows it's dead). No handle, or forceFresh → fresh.
+    const handle = !forceFresh ? conv.natives?.[conv.kind] : undefined
+    const resume = Boolean(handle?.sessionId)
+    // Same-file confirmed (C0): resuming reattaches the SAME transcript uuid, so the anchor IS the
+    // native id to track going forward — no new uuid, no --session-id/--resume combo needed.
+    const native = resume ? handle.sessionId : randomUUID()
+    const anchorSeq = resume ? handle.syncedSeq : 0
     const attempt = await this.store.bumpSpawn(conv.id)
     const sessionId = `${conv.id}-r${attempt}`
     await this.store.clearError(conv.id) // a spawn attempt clears the prior error
-    this.pending.set(conv.id, { token, sessionId, native, kind: conv.kind, queue: [...queuedIds], fresh: true, since: Date.now() })
+    this.pending.set(conv.id, {
+      token, sessionId, native, kind: conv.kind, queue: [...queuedIds], fresh: true,
+      resume, anchorSeq, retriedFresh: forceFresh, since: Date.now(),
+    })
     this.#broadcastConv(conv.id) // → starting
     try {
       await this.supervisor.spawn(spawnSpec(conv, {
         sessionId,
         nativeSessionId: native,
+        resumeFrom: resume ? handle.sessionId : undefined,
         hubUrl: this.hubUrlForChannels,
         token,
         channelLogDir: this.channelLogDir,
       }))
       await this.store.setPipe(conv.id, { token, sessionId, native, kind: conv.kind })
-      this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}`)
+      this.log(`spawned ${conv.kind} session ${sessionId} for ${conv.id}${resume ? ' (resume)' : ''}`)
     } catch (err) {
       // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
       this.pending.delete(conv.id)
@@ -305,6 +339,10 @@ export class Hub {
     const native = pending?.native ?? previous?.native ?? conv.pipe?.native
     const kind = pending?.kind ?? previous?.kind ?? conv.pipe?.kind
     const fresh = pending?.fresh ?? false
+    // resume/anchorSeq (ADR 0007) only matter for THIS attach's backlog decision, never persisted —
+    // a re-claim always has fresh=false regardless, so it never reads them (see #deliverBacklog).
+    const resume = pending?.resume ?? false
+    const anchorSeq = pending?.anchorSeq ?? 0
     // A FRESH runtime is not proven up yet → `starting` until its `ready` frame (or first reply).
     // A RE-CLAIM is an already-running, already-ready runtime whose channel merely reconnected: it
     // will NOT re-emit `ready` (that fires once, on first ListTools), so mark it ready now — else it
@@ -329,7 +367,7 @@ export class Hub {
       }
     })
 
-    this.#deliverBacklog(conv, { fresh })
+    this.#deliverBacklog(conv, { fresh, resume, anchorSeq })
     return true
   }
 
@@ -354,33 +392,51 @@ export class Hub {
   }
 
   /**
-   * On attach: deliver whatever the runtime hasn't seen. A FRESH runtime gets
-   * the seed (history replay, ADR 0005) when history exists; a re-claimed
-   * runtime already holds its context and gets plain pushes only.
+   * On attach: deliver whatever the runtime hasn't seen. Three cases (ADR 0007's anchor + delta
+   * model, `anchor = 0` being the ADR 0005 floor):
+   *   - fresh + resume: the native session already holds its own context — inject only the hub
+   *     turns it missed (the delta), or a plain push if it missed nothing.
+   *   - fresh + !resume: no usable anchor (cross-kind, lost transcript, or never resumed before) —
+   *     full history replay, same as ever.
+   *   - re-claim (!fresh): an already-running, already-context-holding runtime — never re-seed.
    */
-  #deliverBacklog(conv, { fresh }) {
+  #deliverBacklog(conv, { fresh, resume, anchorSeq }) {
     const pipe = this.pipes.get(conv.id)
     if (!pipe) return
     const lastAssistant = conv.messages.findLastIndex((m) => m.role === 'assistant')
     const newUserMessages = conv.messages.slice(lastAssistant + 1).filter((m) => m.role === 'user')
     if (newUserMessages.length === 0) return
 
-    const history = conv.messages.slice(0, conv.messages.length - newUserMessages.length)
     const latest = newUserMessages[newUserMessages.length - 1]
-
-    if (fresh && history.length > 0) {
-      // resumed conversation → ONE seed push carrying history + the new turns (ADR 0005)
-      const content = buildSeedContent(conv, history, newUserMessages)
-      pipe.ws.send(JSON.stringify(pushMsg({
-        id: latest.id,
-        content,
-        meta: { user: 'user', ts: latest.ts, seed: 'true' },
-      })))
-      this.log(`seeded ${conv.id} (${history.length} history turns, ${newUserMessages.length} new)`)
-    } else {
+    const pushPlain = () => {
       for (const m of newUserMessages) {
         pipe.ws.send(JSON.stringify(pushMsg({ id: m.id, content: m.text, meta: { user: 'user', ts: m.ts } })))
       }
+    }
+    const pushSeed = (content) => {
+      pipe.ws.send(JSON.stringify(pushMsg({
+        id: latest.id, content, meta: { user: 'user', ts: latest.ts, seed: 'true' },
+      })))
+    }
+
+    if (fresh && resume) {
+      const delta = computeDelta(conv, anchorSeq, newUserMessages.map((m) => m.id))
+      if (delta.length > 0) {
+        pushSeed(buildDeltaSeedContent(conv, delta, newUserMessages))
+        this.log(`delta-seeded ${conv.id} (${delta.length} missed turns, ${newUserMessages.length} new)`)
+      } else {
+        pushPlain()
+      }
+    } else if (fresh) {
+      const history = conv.messages.slice(0, conv.messages.length - newUserMessages.length)
+      if (history.length > 0) {
+        pushSeed(buildSeedContent(conv, history, newUserMessages))
+        this.log(`seeded ${conv.id} (${history.length} history turns, ${newUserMessages.length} new)`)
+      } else {
+        pushPlain()
+      }
+    } else {
+      pushPlain()
     }
     this.#setTyping(conv.id, true)
   }

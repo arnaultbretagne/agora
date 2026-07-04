@@ -85,14 +85,16 @@ export class SupervisorClient {
  * kept OUT of the supervisor (ADR 0002: it forwards, it does not interpret).
  * Adding a runtime kind = adding its recipe here + its bridge artefact.
  */
-export function spawnSpec(conv, { sessionId, nativeSessionId, hubUrl, token, channelLogDir }) {
+export function spawnSpec(conv, { sessionId, nativeSessionId, resumeFrom, hubUrl, token, channelLogDir }) {
   if (conv.kind !== 'claude') throw new Error(`no spawn recipe for kind: ${conv.kind}`)
   const args = [
-    // The hub-generated (not claude-self-chosen) native session uuid → a known transcript path
-    // (`~/.claude/projects/<slug>/<uuid>.jsonl`) the supervisor reads to report the CONCRETE model
-    // this runtime resolved to (audit truth vs the family alias), and the anchor the hub tracks
-    // for native `--resume` (agora ADR 0007 — the hub owns the conv→transcript mapping).
-    '--session-id', nativeSessionId,
+    // Resume mode (agora ADR 0007): reattach the native session that's the proven anchor for this
+    // conv — C0 (the ADR's verify gate) confirmed `--resume` grows the SAME transcript file rather
+    // than forking, so a bare `--resume <uuid>` suffices, no `--session-id` combo needed. Fresh
+    // mode: the hub-generated (not claude-self-chosen) uuid names a known transcript path
+    // (`~/.claude/projects/<slug>/<uuid>.jsonl`) the supervisor reads for the resolved-model report,
+    // and becomes the anchor a future resume reattaches to.
+    ...(resumeFrom ? ['--resume', resumeFrom] : ['--session-id', nativeSessionId]),
     '--channels', 'plugin:agora@agora',
     '--allowedTools', 'mcp__plugin_agora_agora__reply',
     // Gate C (agent-runtime README "Headless channel spawn"): since claude 2.1.153/2.1.196 a plugin

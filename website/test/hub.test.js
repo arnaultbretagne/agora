@@ -143,7 +143,7 @@ test('live conversation pushes immediately; close kills the session', async () =
   assert.equal(hub.stateOf(conv.id), 'dormant')
 })
 
-test('reopening a dormant conversation seeds ONE message with the history', async () => {
+test('reopening after one reply resumes with an EMPTY delta — plain push, no seed frame (ADR 0007)', async () => {
   const { supervisor, hub } = rig()
   const conv = await hub.createConversation({ kind: 'claude' })
   await hub.sendUserMessage(conv.id, 'La capitale de la Bavière ?')
@@ -156,15 +156,125 @@ test('reopening a dormant conversation seeds ONE message with the history', asyn
   assert.equal(supervisor.spawned.length, 2)
   assert.notEqual(supervisor.spawned[1].id, supervisor.spawned[0].id, 'fresh session id per spawn')
   assert.notEqual(supervisor.spawned[1].env.CHANNEL_TOKEN, supervisor.spawned[0].env.CHANNEL_TOKEN)
+  // a proven handle exists from the first reply → this spawn RESUMES the same native session
+  const firstNative = supervisor.spawned[0].args[supervisor.spawned[0].args.indexOf('--session-id') + 1]
+  assert.ok(supervisor.spawned[1].args.includes('--resume'))
+  assert.equal(supervisor.spawned[1].args[supervisor.spawned[1].args.indexOf('--resume') + 1], firstNative)
+  assert.ok(!supervisor.spawned[1].args.includes('--session-id'), 'same-file branch: no --session-id alongside --resume')
 
   const { ws } = await attach(hub, conv.id)
   const pushes = ws.frames('push')
-  assert.equal(pushes.length, 1, 'exactly one seed push')
-  assert.match(pushes[0].content, /\[conversation resumed\]/)
-  assert.match(pushes[0].content, /\[user\] La capitale de la Bavière \?/)
-  assert.match(pushes[0].content, /\[assistant\] Munich\./)
-  assert.match(pushes[0].content, /\[user\] Et sa population \?$/)
-  assert.equal(pushes[0].meta.seed, 'true')
+  assert.equal(pushes.length, 1, 'exactly one push')
+  // nothing was missed since the anchor (the resumed session already holds turn 1 itself) —
+  // a plain push, never a seed frame
+  assert.equal(pushes[0].content, 'Et sa population ?')
+  assert.equal(pushes[0].meta.seed, undefined)
+})
+
+test('resume with a NON-EMPTY delta: one delta-seed push (missed turns only, never full history)', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok un' }))
+  await hub.sendUserMessage(conv.id, 'deux')
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok deux' }))
+  // simulate the anchor lagging (still the SAME native session, just behind on syncedSeq) —
+  // realistic if an earlier resume's handle update raced with more turns; constructed directly
+  // here since the point is to exercise computeDelta's non-empty branch deterministically
+  const nativeUuid = store.get(conv.id).natives.claude.sessionId
+  await store.setNativeHandle(conv.id, 'claude', { sessionId: nativeUuid, syncedSeq: 2 })
+  await hub.closeConversation(conv.id)
+
+  await hub.sendUserMessage(conv.id, 'trois')
+  const spec = supervisor.spawned[supervisor.spawned.length - 1]
+  assert.ok(spec.args.includes('--resume'))
+
+  const { ws } = await attach(hub, conv.id)
+  const pushes = ws.frames('push')
+  assert.equal(pushes.length, 1)
+  assert.match(pushes[0].content, /^\[conversation resumed — native session restored\]/)
+  assert.match(pushes[0].content, /<missed-turns>/)
+  assert.match(pushes[0].content, /\[user\] deux/)
+  assert.match(pushes[0].content, /\[assistant\] ok deux/)
+  assert.doesNotMatch(pushes[0].content, /<history>/)
+  assert.match(pushes[0].content, /\[user\] trois$/)
+
+  // the reply after resuming still advances syncedSeq on the SAME native session
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok trois' }))
+  assert.equal(store.get(conv.id).natives.claude.sessionId, nativeUuid)
+  assert.ok(store.get(conv.id).natives.claude.syncedSeq > 2)
+})
+
+test('resume-death fallback: a dead anchor (before any hello) falls back to fresh + full re-seed', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  await hub.sendUserMessage(conv.id, 'deux')
+  assert.ok(supervisor.spawned[1].args.includes('--resume'))
+
+  // the resumed session dies (missing transcript, say) BEFORE any channel ever attaches —
+  // #sweepPending's 120s is too slow for this; reconcileLiveness's fallback net must catch it
+  supervisor.statuses.delete(supervisor.spawned[1].id)
+  await hub.reconcileLiveness()
+
+  assert.equal(store.get(conv.id).natives.claude, undefined, 'the dead anchor is cleared')
+  assert.equal(supervisor.spawned.length, 3, 'the fallback spawned a third attempt')
+  assert.ok(supervisor.spawned[2].args.includes('--session-id'))
+  assert.ok(!supervisor.spawned[2].args.includes('--resume'), 'the retry is fresh, never another resume')
+
+  const { ws } = await attach(hub, conv.id)
+  const pushes = ws.frames('push')
+  assert.equal(pushes.length, 1)
+  assert.match(pushes[0].content, /^\[conversation resumed\]/, 'anchor 0 ⇒ the ADR 0005 floor: full history')
+  assert.match(pushes[0].content, /<history>/)
+})
+
+test('resume-death fallback caps at ONE automatic retry per send', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  await hub.sendUserMessage(conv.id, 'deux')
+  supervisor.statuses.delete(supervisor.spawned[1].id)
+  await hub.reconcileLiveness() // → fallback spawns a third, fresh attempt
+  assert.equal(supervisor.spawned.length, 3)
+
+  // that fresh retry ALSO dies before ever attaching — must NOT trigger a second automatic retry
+  supervisor.statuses.delete(supervisor.spawned[2].id)
+  await hub.reconcileLiveness()
+  assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
+})
+
+test('a handle for a different kind is invisible — no handle found ⇒ fresh + full seed (anchor 0)', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.createConversation({ kind: 'claude' })
+  await hub.sendUserMessage(conv.id, 'un')
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  // a DIFFERENT harness kind has its own handle (natives is keyed per kind) — it must be
+  // invisible when this conv reopens as claude, same as if it had never resumed before
+  await store.setNativeHandle(conv.id, 'codex', { sessionId: 'not-a-real-uuid', syncedSeq: 99 })
+  await store.setNativeHandle(conv.id, 'claude', null)
+
+  await hub.sendUserMessage(conv.id, 'deux')
+  const spec = supervisor.spawned[supervisor.spawned.length - 1]
+  assert.ok(spec.args.includes('--session-id'), 'fresh — the codex handle does not apply to claude')
+  assert.ok(!spec.args.includes('--resume'))
+
+  const { ws } = await attach(hub, conv.id)
+  const pushes = ws.frames('push')
+  assert.match(pushes[0].content, /^\[conversation resumed\]/)
+  assert.match(pushes[0].content, /<history>/)
 })
 
 test('channel drop parks the token; the SAME runtime can re-claim; exited runtime reaps to dormant', async () => {
