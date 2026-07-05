@@ -145,3 +145,11 @@ decision tree, the flags, the invariants, the per-harness resume contract) is do
 verrou (resume, fallback drill, hub-restart re-claim) plus a cross-model probe — `--resume <uuid>
 --model <other>` reattaches the same transcript file with the new model answering in restored
 context (anchors are per *kind*, not per model).
+
+### Amendment 2026-07-05 (ADR 0011 — substrats)
+
+Sur le substrat `isolated`, la survie du transcript natif est **médiée par le manager**
+(agent-runtime ADR 0010 §4) : locale à la loge pendant sa fenêtre de linger, sinon réinjectée
+au spawn depuis le store d'ancres du manager. Un resume dont le transcript n'existe plus nulle
+part échoue en **`409 anchor_transcript_missing`**, que le hub traite par son retry `forceFresh`
+unique existant. Le plancher re-seed reste le plancher de correction — rien d'autre ne change.

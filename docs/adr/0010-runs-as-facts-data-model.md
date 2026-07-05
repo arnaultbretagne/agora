@@ -83,3 +83,9 @@ anchors — resume state (the "refs")          the supervisor reads it)
   OSC escapes carry a topic only on TUI-typed input — in channel mode (MCP notifications) they
   stay generic. The supervisor still reports the pty title (`sessions[].title`, dormant) in
   case a future claude titles in channel mode.
+
+### Amendment 2026-07-05 (ADR 0011 — substrats)
+
+Deux colonnes additives : `conversations.substrate` (attribut de naissance, politique
+plateforme — PAS un élément du config-qui-voyage) et `runs.substrate` (copié au spawn : le fait
+« où ce run a tourné », immuable comme le reste du run).
