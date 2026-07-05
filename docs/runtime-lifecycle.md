@@ -17,11 +17,13 @@ un pointeur mutable par kind dans ce journal (table `anchors`).
 
 ---
 
-## 1. Vocabulaire — sept termes, pas un de plus
+## 1. Vocabulaire — neuf termes, pas un de plus
 
 | terme | définition exacte |
 |---|---|
 | **conversation** | L'objet du hub : la suite des messages, chacun numéroté par `seq` (1, 2, 3, …). C'est **la source de vérité** (ADR 0005) — persistée en Postgres, sauvegardée. |
+| **substrat** | Attribut de naissance de la conversation (ADR 0011) : `shared` (pod partagé, aujourd'hui) ou `isolated` (une loge par conversation). Politique plateforme (`AGORA_SUBSTRATE_DEFAULT`, overridable à la naissance), jamais un réglage utilisateur en vol ; immuable — changer de substrat, c'est naître une nouvelle conversation. Un **fait de run** (`runs.substrate`) copié de la conversation à chaque spawn, jamais l'inverse. |
+| **loge** | Le mécanisme du substrat `isolated` (agent-runtime ADR 0010) : un pod sandboxé (gVisor, `runtimeClassName: sandboxed`) par conversation, créé à la demande par le **manager** dans le namespace `agent-runs`, HOME éphémère (`emptyDir`, jamais le PVC partagé). Linge après sa dernière session (`LOGE_LINGER_MS`) pour que le switch de config reste local ; au-delà, drainée (custody) puis supprimée. |
 | **run** | Un process `claude` lancé par le superviseur pour servir *une* conversation, ET le fait journalisé qui le décrit (table `runs`, ADR 0010) : id `<convId>-rN` (aussi l'id de session superviseur), config figée au spawn (`kind`, `model`, `effort`, `agent`), `resolvedModel` (backfillé une fois), l'uuid de sa session native, `resume`. Le process est jetable ; le fait est immuable. |
 | **session native** | La session interne de claude : le transcript `~/.claude/projects/<slug>/<uuid>.jsonl` sur le PVC. L'uuid est choisi par le hub, pas par claude. **Accélérateur jetable** : ni sauvegardé, ni garanti d'exister encore demain. |
 | **ancre** | `anchors[kind] = { runId, syncedSeq }` (table `anchors`). En clair : « le dernier run qui a *réellement répondu* — reprends sa session native — et le `seq` du dernier message du hub qui lui a été remis ». Borne **exacte**, pas une estimation — voir « sur quoi porte le pari », §2. Un pointeur **mutable** dans le journal immuable des runs (git : la ref vs le log). Une ancre par **kind** — pas par modèle : changer le modèle garde la même ancre (scénario 12). |
@@ -65,6 +67,32 @@ transcript ni en interrogeant claude. Et si le pari échoue, le delta-seed pouss
 le runtime mort, sans conséquence : pousser un message ne le consomme pas — chaque attache
 re-dérive ce qu'il faut livrer depuis l'historique, et le respawn de secours rejoue tout en
 seed complet.
+
+---
+
+## 2bis. Où ça tourne
+
+Tout ce qui précède décrit *comment* une conversation obtient une réponse — jamais *où* le
+runtime s'exécute. C'est une politique plateforme fixée à la naissance (ADR 0011), orthogonale à
+la config qui voyage avec les messages :
+
+- **`shared`** (par défaut) : le pod partagé actuel, inchangé — ce document s'applique tel quel.
+- **`isolated`** : une **loge** par conversation (agent-runtime ADR 0010) — un pod sandboxé créé
+  à la demande par le **manager**, le point d'entrée unique du hub désormais (`SUPERVISOR_URL`
+  pointe sur lui ; son API est un sur-ensemble strict de celle du superviseur — le code du hub
+  ne change pas). Le manager route chaque spawn vers la loge du `group` (l'id de conversation,
+  opaque pour lui, ADR 0002) — get-or-create, jamais deux loges pour la même conversation.
+- **Linger** : après sa dernière session, une loge reste debout `LOGE_LINGER_MS` (défaut 120 s) —
+  le switch de config en vol (scénario 12) reste local à la loge, `--resume` sans transplant.
+- **Custody** : passé le linger, le manager **draine** (récupère chaque transcript natif de la
+  loge) avant de la supprimer — la loge n'a pas d'autre disque que son `emptyDir`. Une reprise
+  ultérieure réinjecte le transcript sauvé avant le spawn (agent-runtime ADR 0010 §4).
+- **Le plancher ne change pas** : un transcript introuvable — ni dans la loge, ni chez le
+  manager — échoue en `409 anchor_transcript_missing`, que le hub absorbe par son fallback
+  `forceFresh` existant (scénario 5, ADR 0007). Toujours le même plancher : re-seed complet.
+
+Trois scénarios dédiés (§7, en fin de liste) déroulent cet axe pas à pas : S-switch-config-dans-
+la-loge, S-réouverture-avec-injection, S-ancre-absente.
 
 ---
 
@@ -208,6 +236,13 @@ attache (§2).
 aucune des trois conditions de fallback ne peut plus jamais être vraie pour lui. S'il meurt
 aussi, il suit le classement normal (`error`/`dormant`).
 
+**Note (substrat `isolated`, §2bis)** : une loge supprimée (drainée par le manager après son
+linger, ou tombstonée `Failed`) répond `404` au prochain `GET /sessions/:id` — exactement le
+signal qu'un superviseur partagé donne pour une session oubliée. Les trois détecteurs ci-dessus
+ne savent pas, et n'ont pas besoin de savoir, si le `404` vient du superviseur partagé ou du
+manager : c'est tout l'intérêt de l'API superset (agent-runtime ADR 0010 §1) — zéro branche
+substrat dans ce code.
+
 ---
 
 ## 7. Tous les scénarios, déroulés
@@ -340,6 +375,36 @@ Chaque scénario = un chemin dans l'arbre du §3.
     du dernier message assistant ; les segments par modèle/kind/agent se dérivent en groupant
     les messages consécutifs par run.
 
+13. **S-switch-config-dans-la-loge** (substrat `isolated`, scénario 12 rejoué à travers le
+    manager). Changement de modèle en cours de conversation isolée : le hub tue le run vivant
+    (même mécanisme que le substrat partagé, amendement ADR 0008) et respawn — le spawn passe
+    par le manager avec `group` = l'id de la conversation. Le manager retrouve la MÊME loge
+    (get-or-create → get, aucune création) : `--resume` reste local au pod, rien à transplanter.
+    Le linger (§2bis) existe précisément pour ce cas — kill+respawn ne traverse jamais deux pods
+    tant que la fenêtre n'est pas écoulée.
+
+14. **S-réouverture-avec-injection** (la loge a été drainée). La conversation dort depuis plus
+    que `LOGE_LINGER_MS` après sa dernière session : le manager a drainé la loge (chaque
+    transcript natif copié dans son store d'ancres) puis supprimé le pod. Un nouveau message :
+    le hub parie `--resume` comme toujours (rien ne lui dit que le pod a changé — l'ancre est
+    indexée par kind, pas par pod) ; le manager crée une loge FRAÎCHE pour le même `group`, ne
+    trouve pas le transcript localement (`GET /transcripts/:uuid` sur la nouvelle loge →
+    absent), le trouve dans son propre store, l'injecte dans le corps du spawn AVANT de
+    forwarder au superviseur de la loge — qui l'écrit sur le disque éphémère avant même de
+    lancer claude (agent-runtime ADR 0010 §3/§4). `--resume` réussit exactement comme s'il n'y
+    avait jamais eu de coupure : la custody a traversé deux générations de pod sans que le hub
+    le sache.
+
+15. **S-ancre-absente** (le plancher, substrat `isolated`). Le transcript a disparu partout — ni
+    dans une loge vivante, ni dans le store d'ancres du manager (TTL expiré, ou jamais drainé —
+    un pod qui crashe perd tout ce qu'il n'a pas encore fait drainer, ADR 0010 §5). Le manager
+    répond `409 { error: 'anchor_transcript_missing' }` au lieu de forwarder un spawn qui
+    échouerait de toute façon. Le hub traite ce 409 exactement comme un resume mort ordinaire
+    (scénario 5) : ancre effacée, retry `forceFresh` immédiat, seed complet. **Rien de nouveau
+    pour l'utilisateur** — une réponse un peu plus lente, jamais une erreur visible. Le plancher
+    ADR 0005 n'a pas bougé d'un pouce ; le substrat isolated lui ajoute juste une deuxième façon
+    d'y atterrir.
+
 ---
 
 ## 8. Ce que l'interface affiche (`stateOf`)
@@ -417,3 +482,8 @@ non conforme dégrade, il ne casse pas.
 | États | `hub.js` `stateOf` |
 | Relivraison + `unresponsive` (3×9 s) | `channel/server.js` (`ACK_RETRY_MS`, `ACK_MAX_TRIES`) |
 | Reap idle (1 h, `touch` sur réponse) | superviseur agent-runtime ; TTL passé par `spawnSpec` (`cacheTtlFor`) |
+| Substrat à la naissance (policy + override + validation) | `server.js` (route POST, via `website/lib/substrate.js` `resolveSubstrate`) ; `store.js` `create(substrate)` |
+| Fait de run + `spawnSpec`/`spawn()` portant `substrate`/`group` | `store.js` `addRun` (copie `conv.substrate`) ; `website/lib/supervisor.js` `spawnSpec`, `SupervisorClient#spawn` |
+| 409 `anchor_transcript_missing` → un seul retry `forceFresh` | `hub.js` `#spawnFor` (catch du spawn, même mécanisme que `#fallbackToFreshResume`) |
+| Purge des ancres à la suppression | `hub.js` `deleteConversation` → `supervisor.js` `anchorsDelete` |
+| Le manager (routing, loges, custody, sweep) | `agent-runtime/src/manager.ts` (`Manager#spawn`, `#getOrCreateLoge`, `#drainLoge`, `#resolveResumeTranscript`, `sweepOnce`, `bootReconcile`) |

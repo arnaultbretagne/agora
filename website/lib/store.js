@@ -56,14 +56,18 @@ export class ConversationStore {
    * Create the conversation shell. A conversation is only ever born WITH its first
    * message (ADR 0010) — the caller (hub.startConversation) adds it in the same
    * breath; the title derives from it in addMessage.
+   *
+   * `substrate` (agora ADR 0011) — where it runs, decided by platform policy at birth,
+   * immutable thereafter. Never part of the config that travels with messages.
    */
-  async create() {
+  async create(substrate = 'shared') {
     const now = new Date().toISOString()
     const conv = {
       id: `c-${randomUUID()}`,
       title: 'Nouvelle conversation',
       titleSource: 'auto', // 'user' once renamed by hand — a user title outranks any derived one
       pinned: false,
+      substrate,
       createdAt: now,
       updatedAt: now,
       seq: 0,
@@ -118,7 +122,9 @@ export class ConversationStore {
 
   /**
    * Journal a new run (ADR 0010): allocates its id (`<convId>-rN`), freezes the spawn
-   * config into it. Immutable afterwards except `resolvedModel`.
+   * config into it. Immutable afterwards except `resolvedModel`. `substrate` (agora ADR
+   * 0011) is copied from the conversation, not from the caller — where a run executed
+   * is a fact of the conversation's birth policy, never a per-message choice.
    */
   async addRun(id, { kind, model, effort, agent, nativeSessionId, resume }) {
     const conv = this.#must(id)
@@ -129,6 +135,7 @@ export class ConversationStore {
       model,
       ...(effort ? { effort } : {}),
       ...(agent ? { agent } : {}),
+      substrate: conv.substrate,
       nativeSessionId,
       resume: Boolean(resume),
       spawnedAt: new Date().toISOString(),

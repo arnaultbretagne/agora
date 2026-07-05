@@ -49,8 +49,8 @@ export class SupervisorClient {
     return ['claude'] // pre-/kinds supervisor
   }
 
-  async spawn({ kind, id, args, env, idleTtlMs }) {
-    return this.#json('POST', '/sessions', { kind, id, args, env, idleTtlMs })
+  async spawn({ kind, id, args, env, idleTtlMs, substrate, group }) {
+    return this.#json('POST', '/sessions', { kind, id, args, env, idleTtlMs, substrate, group })
   }
 
   /** All sessions the supervisor tracks (one round-trip; drives the liveness reconcile). */
@@ -78,6 +78,17 @@ export class SupervisorClient {
       throw err
     }
   }
+
+  /** Best-effort purge of native transcript anchors at the manager (agent-runtime ADR 0010 §4),
+   *  called on conversation deletion. Errors are swallowed: a miss just means the manager's own
+   *  TTL sweep backstops it later — never worth failing a delete over. */
+  async anchorsDelete(uuids) {
+    await Promise.all(uuids.map(async (uuid) => {
+      try {
+        await this.#json('DELETE', `/anchors/${encodeURIComponent(uuid)}`)
+      } catch { /* best-effort */ }
+    }))
+  }
 }
 
 /**
@@ -85,7 +96,7 @@ export class SupervisorClient {
  * kept OUT of the supervisor (ADR 0002: it forwards, it does not interpret).
  * Adding a runtime kind = adding its recipe here + its bridge artefact.
  */
-export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, hubUrl, token, channelLogDir }) {
+export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, hubUrl, token, channelLogDir, substrate, group }) {
   if (config.kind !== 'claude') throw new Error(`no spawn recipe for kind: ${config.kind}`)
   const args = [
     // Resume mode (agora ADR 0007): reattach the native session that's the proven anchor for this
@@ -115,7 +126,10 @@ export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, 
   if (channelLogDir) env.CHANNEL_LOG = `${channelLogDir}/${runId}.channel.log`
   // idleTtlMs (ADR 0008): the supervisor idle-reaps the runtime after this much inactivity.
   // The policy (the harness cache TTL) is the product's; the supervisor treats it as opaque.
-  return { kind: config.kind, id: runId, args, env, idleTtlMs: cacheTtlFor(config.kind) }
+  // substrate/group (agora ADR 0011, agent-runtime ADR 0010): where to place the runtime and
+  // the opaque co-location key — meaningless to the supervisor itself, only the manager acts on
+  // them (a `shared` spawn strips both before proxying verbatim).
+  return { kind: config.kind, id: runId, args, env, idleTtlMs: cacheTtlFor(config.kind), substrate, group }
 }
 
 /**

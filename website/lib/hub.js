@@ -334,15 +334,17 @@ export class Hub {
 
   /**
    * A conversation is born WITH its first message (ADR 0010) — there is no empty
-   * conversation. The config (if any) materialises as the first run.
+   * conversation. The config (if any) materialises as the first run. `substrate`
+   * (agora ADR 0011) is a platform-policy birth attribute, validated by the caller
+   * (server.js) — never part of `config`, which travels with messages.
    */
-  async startConversation(text, config) {
+  async startConversation(text, config, substrate) {
     const cfg = normalizeConfig(config)
     if (cfg) {
       const kinds = await this.supervisor.kinds()
       if (!kinds.includes(cfg.kind)) throw new Error(`unknown kind: ${cfg.kind} (known: ${kinds.join(', ')})`)
     }
-    const conv = await this.store.create()
+    const conv = await this.store.create(substrate)
     await this.sendUserMessage(conv.id, text, cfg)
     return conv
   }
@@ -430,10 +432,24 @@ export class Hub {
         hubUrl: this.hubUrlForChannels,
         token,
         channelLogDir: this.channelLogDir,
+        substrate: conv.substrate,
+        group: conv.id,
       }))
       await this.store.setLive(conv.id, { runId: run.id, token })
       this.log(`spawned ${cfg.kind} run ${run.id} for ${conv.id}${resume ? ' (resume)' : ''}`)
     } catch (err) {
+      // The manager's one typed error (agent-runtime ADR 0010 §4): the transcript this resume
+      // bet on is gone everywhere (loge-local AND the anchor store). Same remedy as any other
+      // dead resume (ADR 0007) — drop the bet, reseed cold, exactly once (forceFresh caps it).
+      if (err.status === 409 && !forceFresh && String(err.message).includes('anchor_transcript_missing')) {
+        this.pending.delete(conv.id)
+        // Drop the now-proven-dead anchor too (like #fallbackToFreshResume) — otherwise every
+        // future reopen would repeat this same 409→retry dance instead of going fresh directly.
+        if (resume) await this.store.clearAnchor(conv.id, cfg.kind)
+        this.log(`anchor transcript missing for ${conv.id} — retrying forceFresh`)
+        await this.#spawnFor(conv, queuedIds, { config: cfg, forceFresh: true })
+        return
+      }
       // spawn failure is a visible OUTCOME, not a thrown 500: mark the conv `error` (retry-able)
       this.pending.delete(conv.id)
       await this.store.setError(conv.id, `spawn_failed: ${err.message}`)
@@ -673,9 +689,14 @@ export class Hub {
   }
 
   async deleteConversation(convId) {
+    const conv = this.store.get(convId)
     await this.closeConversation(convId)
     await this.store.delete(convId)
     this.broadcast(convDeletedEvent(convId))
+    // Best-effort purge of the manager's anchor custody (agent-runtime ADR 0010 §4) — a miss
+    // just means the manager's own TTL sweep backstops it later, never a user-visible failure.
+    const uuids = [...new Set((conv?.runs ?? []).map((r) => r.nativeSessionId).filter(Boolean))]
+    if (uuids.length > 0) await this.supervisor.anchorsDelete(uuids)
   }
 
   /** Metadata only (title/pinned) — execution config travels with messages (ADR 0010). */

@@ -18,9 +18,17 @@ class FakeWs extends EventEmitter {
 }
 
 class FakeSupervisor {
-  constructor() { this.spawned = []; this.killed = []; this.touched = []; this.statuses = new Map() }
+  constructor() { this.spawned = []; this.killed = []; this.touched = []; this.statuses = new Map(); this.anchorsDeleted = []; this.spawnErrors = [] }
   async kinds() { return ['claude'] }
-  async spawn(spec) { this.spawned.push(spec); this.statuses.set(spec.id, { status: 'running' }); return spec }
+  /** Queue an error to throw on the NEXT spawn() call (shift order) — lets a test simulate a
+   *  resume bet failing (409 anchor_transcript_missing) with fine-grained control over exactly
+   *  which attempt(s) fail. */
+  async spawn(spec) {
+    if (this.spawnErrors.length > 0) throw this.spawnErrors.shift()
+    this.spawned.push(spec)
+    this.statuses.set(spec.id, { status: 'running' })
+    return spec
+  }
   async kill(id) { this.killed.push(id); this.statuses.delete(id); return { id, killed: true } }
   async list() { return [...this.statuses].map(([id, s]) => ({ id, ...s })) }
   async touch(id) { this.touched.push(id); return this.statuses.has(id) }
@@ -29,6 +37,7 @@ class FakeSupervisor {
     if (!s) { const e = new Error('not found'); e.status = 404; throw e }
     return { id, ...s }
   }
+  async anchorsDelete(uuids) { this.anchorsDeleted.push(...uuids) }
 }
 
 function rig() {
@@ -89,6 +98,19 @@ test('a conversation is born WITH its first message (ADR 0010): spawn, hello, pl
   assert.equal(messages[1].runId, spec.id, 'the assistant message points at its producing run')
   assert.ok(client.frames('message').some((f) => f.message.role === 'assistant'))
   assert.ok(client.frames('typing').some((f) => f.active === false))
+})
+
+test('substrate/group flow from the conversation to the actual spawn call (agora ADR 0011)', async () => {
+  const { store, supervisor, hub } = rig()
+  const shared = await hub.startConversation('un', { kind: 'claude' }) // no override -> default
+  assert.equal(supervisor.spawned[0].substrate, 'shared')
+  assert.equal(supervisor.spawned[0].group, shared.id)
+
+  const isolated = await hub.startConversation('deux', { kind: 'claude' }, 'isolated')
+  assert.equal(store.get(isolated.id).substrate, 'isolated')
+  assert.equal(supervisor.spawned[1].substrate, 'isolated')
+  assert.equal(supervisor.spawned[1].group, isolated.id, 'group is the opaque conversation id, never interpreted')
+  assert.equal(store.getRun(isolated.id, supervisor.spawned[1].id).substrate, 'isolated', 'the run copies the fact')
 })
 
 test('a reply moves the anchor (ADR 0007/0010); a spawn without a reply leaves it untouched', async () => {
@@ -261,6 +283,43 @@ test('resume-death fallback caps at ONE automatic retry per send', async () => {
   hub.pending.get(conv.id).since -= 10_000
   await hub.reconcileLiveness()
   assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
+})
+
+test('409 anchor_transcript_missing (synchronous, from the manager): one forceFresh retry, then succeeds', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  const err409 = Object.assign(new Error('supervisor POST /sessions → 409: anchor_transcript_missing'), { status: 409 })
+  supervisor.spawnErrors.push(err409) // the resume bet itself fails synchronously, at spawn time
+
+  await hub.sendUserMessage(conv.id, 'deux')
+
+  assert.equal(store.get(conv.id).anchors.claude, undefined, 'the dead anchor is cleared, like any other fallback')
+  assert.equal(hub.stateOf(conv.id), 'starting', 'the retry succeeded — never surfaced as error')
+  assert.equal(supervisor.spawned.length, 2, 'only the successful forceFresh retry is recorded (the 409 threw before ever being pushed)')
+  assert.ok(supervisor.spawned[1].args.includes('--session-id'))
+  assert.ok(!supervisor.spawned[1].args.includes('--resume'), 'forceFresh — never bets on the missing anchor again')
+})
+
+test('409 anchor_transcript_missing: exactly one retry — a second 409 surfaces as spawn_failed', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  const spawnedBefore = supervisor.spawned.length // the birth spawn above already succeeded once
+  const err409 = () => Object.assign(new Error('supervisor POST /sessions → 409: anchor_transcript_missing'), { status: 409 })
+  supervisor.spawnErrors.push(err409(), err409()) // both the resume bet AND the forceFresh retry fail
+
+  await hub.sendUserMessage(conv.id, 'deux')
+
+  assert.equal(hub.stateOf(conv.id), 'error')
+  assert.match(store.get(conv.id).error.reason, /spawn_failed/)
+  assert.equal(supervisor.spawned.length, spawnedBefore, 'neither reopen attempt ever reached a running state')
 })
 
 test('a pending absent from the supervisor list right after spawn is NOT judged dead (settle window)', async () => {
@@ -456,10 +515,13 @@ test('delete kills, removes, and broadcasts', async () => {
   const { store, supervisor, hub, client } = rig()
   const conv = await hub.startConversation('x', { kind: 'claude' })
   await attach(hub, conv.id)
+  const nativeSessionId = store.get(conv.id).runs[0].nativeSessionId
   await hub.deleteConversation(conv.id)
   assert.equal(store.get(conv.id), undefined)
   assert.equal(supervisor.killed.length, 1)
   assert.ok(client.frames('conv_deleted').some((f) => f.conversationId === conv.id))
+  // agora ADR 0011 / agent-runtime ADR 0010 §4: best-effort purge of the manager's anchor custody
+  assert.deepEqual(supervisor.anchorsDeleted, [nativeSessionId])
 })
 
 test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed', async () => {
