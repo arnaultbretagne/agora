@@ -336,6 +336,34 @@ test('a pending absent from the supervisor list right after spawn is NOT judged 
   assert.equal(hub.stateOf(conv.id), 'starting')
 })
 
+test('isolated substrate: an in-flight spawn survives well past the plain settle window (agora ADR 0011)', async () => {
+  // Incident 2026-07-05 (P4.1, live): the manager's get-or-create-loge dance can legitimately
+  // take far longer than the shared substrate's near-instant spawn — a liveness tick firing
+  // mid-spawn must not judge it dead just because SPAWN_SETTLE_MS (tuned for `shared`) elapsed.
+  const { supervisor, hub, store } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' }, 'isolated')
+  assert.equal(store.get(conv.id).substrate, 'isolated')
+
+  supervisor.statuses.delete(supervisor.spawned[0].id) // still absent from the list: loge not ready yet
+  hub.pending.get(conv.id).since -= 10_000 // past the plain 5s SPAWN_SETTLE_MS, well within the isolated one
+  await hub.reconcileLiveness()
+
+  assert.equal(hub.stateOf(conv.id), 'starting', 'still legitimately spawning — must not be judged dead yet')
+  assert.equal(hub.pending.has(conv.id), true)
+})
+
+test('shared substrate: the same 10s absence IS already a verdict (contrast case)', async () => {
+  const { supervisor, hub, store } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' }) // shared, the default
+  assert.equal(store.get(conv.id).substrate, 'shared')
+
+  supervisor.statuses.delete(supervisor.spawned[0].id)
+  hub.pending.get(conv.id).since -= 10_000
+  await hub.reconcileLiveness()
+
+  assert.equal(hub.stateOf(conv.id), 'dormant', 'shared spawns settle fast — 10s absence is a real verdict')
+})
+
 test('slow boot: a running-but-unattached pending is left alone under the cap; the late hello then attaches correctly', async () => {
   const { supervisor, hub } = rig()
   const conv = await hub.startConversation('un', { kind: 'claude' })

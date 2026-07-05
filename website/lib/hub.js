@@ -36,6 +36,15 @@ const TYPING_TIMEOUT_MS = 180_000
  *  report needs no such settling: it is a positive verdict). */
 const SPAWN_SETTLE_MS = 5000
 
+/** Same idea, but for a substrate=isolated spawn (agora ADR 0011): the hub's spawn POST doesn't
+ *  return until the manager finishes its whole get-or-create-loge dance — pod create + gVisor +
+ *  readiness wait, up to LOGE_READY_TIMEOUT_MS (agent-runtime ADR 0010 §1.4, 90s default) — all
+ *  BEFORE the run is visible in any session list. Found live 2026-07-05 (P4.1): a liveness tick
+ *  firing mid-spawn saw the run absent, aged past the plain SPAWN_SETTLE_MS, and prematurely
+ *  judged a legitimately in-flight isolated spawn dead. Bounded (not unbounded) so a genuinely
+ *  hung spawn still eventually gets judged. */
+const ISOLATED_SPAWN_SETTLE_MS = Number(process.env.ISOLATED_SPAWN_SETTLE_MS ?? 120_000)
+
 /** Server-side floor when a message carries no config and no run exists yet (bare API use). */
 const DEFAULT_CONFIG = { kind: 'claude', model: 'default' }
 
@@ -209,7 +218,9 @@ export class Hub {
         this.log(`abandoned ${convId}: run ${p.runId} alive but its channel never attached — supervisor will idle-reap`)
         continue
       }
-      if (!s && age < SPAWN_SETTLE_MS) continue // spawn POST may still be in flight — absence is not a verdict yet
+      // spawn POST may still be in flight — absence is not a verdict yet (isolated substrate:
+      // the manager's get-or-create-loge dance can legitimately take much longer, ADR 0011)
+      if (!s && age < (p.isolated ? ISOLATED_SPAWN_SETTLE_MS : SPAWN_SETTLE_MS)) continue
       if (p.resume && !p.retriedFresh) {
         await this.#fallbackToFreshResume(convId, p.runId)
         continue
@@ -421,6 +432,7 @@ export class Hub {
     this.pending.set(conv.id, {
       token, runId: run.id, queue: [...queuedIds], fresh: true,
       resume, anchorSeq, retriedFresh: forceFresh, since: Date.now(),
+      isolated: conv.substrate === 'isolated',
     })
     this.#broadcastConv(conv.id) // → starting
     try {
