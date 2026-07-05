@@ -31,7 +31,7 @@ Four tables, one role each:
 conversations — identity + state        runs — facts, immutable*              messages — content
   id, title, pinned                       id '<convId>-rN' PK                   (conv_id, seq) PK
   created_at, updated_at, seq             conv_id FK CASCADE                    id, role, text, ts, reply_to
-  error jsonb                             kind, model, effort?, agent?          run_id FK NULL → runs
+  error_reason, error_ts                  kind, model, effort?, agent?          run_id FK NULL → runs
   live_run_id, live_token                 resolved_model? (backfilled once)       assistant → its producer
   (the runtime lease, no FK —             native_session_id, resume bool          user / pre-v3 → NULL
    ephemeral state, code-managed)         spawned_at
@@ -63,8 +63,10 @@ anchors — resume state (the "refs")          the supervisor reads it)
   the message plus one write on the run replaces all of it.
 - Multi-harness (ADR 0007 cross-kind) needs zero further modelling: segments = group messages by
   their run's kind/model/agent.
-- jsonb survives only where structure is open and never queried (`error`). Anything relational
-  (anchors, the lease) is columns/tables.
+- No jsonb at all (amendment 2026-07-05, review pass): `error` — the last one — flattened to
+  `error_reason`/`error_ts`, and every timestamp typed `timestamptz` instead of ISO text (the
+  store still speaks ISO strings; loads normalise). Anything relational (anchors, the lease)
+  is columns/tables. Migrated in place with `ALTER TABLE` (one live conversation preserved).
 - Migration: **fresh start** (operator's call — dev-stage data). Old tables dropped; anchors
   start empty, so each pre-existing conversation would have re-seeded once (ADR 0005 floor) had
   any been kept.

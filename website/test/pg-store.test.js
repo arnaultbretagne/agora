@@ -14,12 +14,14 @@ test('pg store roundtrip (ADR 0010 schema: conversations, runs, messages, anchor
   await store.setAnchor(conv.id, 'claude', { runId: run.id, syncedSeq: 2 })
   await store.setLive(conv.id, { runId: run.id, token: 'tok-1' })
   await store.patch(conv.id, { pinned: true, title: 'Renommée' })
+  await store.setError(conv.id, 'boom')
 
   const before = store.get(conv.id)
   await store.close()
 
   const reopened = await PgConversationStore.open(url)
   assert.deepEqual(reopened.get(conv.id), before)
+  assert.equal(reopened.get(conv.id).error.reason, 'boom', 'error survives as flat columns')
   assert.equal(reopened.getRun(conv.id, run.id).resolvedModel, 'claude-sonnet-5')
   assert.deepEqual(reopened.get(conv.id).anchors.claude, { runId: run.id, syncedSeq: 2 })
 

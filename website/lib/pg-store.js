@@ -5,26 +5,28 @@
  * order. A failed commit throws to the caller — the base class never catches, so
  * DB-down is loud (user-visible on send, logged on reply), never silent divergence.
  *
- * jsonb is used only where structure is open and never queried (`error`); anything
- * relational is columns/tables (ADR 0010): `runs` is the immutable journal,
- * `anchors` the mutable resume pointers into it, `live_run_id`/`live_token` the
- * ephemeral runtime lease (no FK — state managed by the hub, not a reference).
+ * No jsonb: everything is columns/tables (ADR 0010) — `runs` the immutable journal,
+ * `anchors` the mutable resume pointers into it, `error_reason`/`error_ts` the
+ * flattened error outcome, `live_run_id`/`live_token` the ephemeral runtime lease
+ * (no FK — state managed by the hub, not a reference). Timestamps are timestamptz
+ * in the DB while the store speaks ISO strings — loads normalise (see `iso`).
  */
 import pg from 'pg'
 import { ConversationStore } from './store.js'
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS conversations (
-  id          text PRIMARY KEY,
-  title       text NOT NULL,
-  pinned      boolean NOT NULL DEFAULT false,
-  created_at  text NOT NULL,
-  updated_at  text NOT NULL,
-  seq         integer NOT NULL DEFAULT 0,
-  spawn_count integer NOT NULL DEFAULT 0,
-  error       jsonb,
-  live_run_id text,
-  live_token  text
+  id           text PRIMARY KEY,
+  title        text NOT NULL,
+  pinned       boolean NOT NULL DEFAULT false,
+  created_at   timestamptz NOT NULL,
+  updated_at   timestamptz NOT NULL,
+  seq          integer NOT NULL DEFAULT 0,
+  spawn_count  integer NOT NULL DEFAULT 0,
+  error_reason text,
+  error_ts     timestamptz,
+  live_run_id  text,
+  live_token   text
 );
 CREATE TABLE IF NOT EXISTS runs (
   id                text PRIMARY KEY,
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS runs (
   resolved_model    text,
   native_session_id text NOT NULL,
   resume            boolean NOT NULL DEFAULT false,
-  spawned_at        text NOT NULL
+  spawned_at        timestamptz NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
   conv_id  text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -44,7 +46,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id       text NOT NULL,
   role     text NOT NULL,
   text     text NOT NULL,
-  ts       text NOT NULL,
+  ts       timestamptz NOT NULL,
   reply_to text,
   run_id   text REFERENCES runs(id),
   PRIMARY KEY (conv_id, seq)
@@ -60,11 +62,11 @@ CREATE TABLE IF NOT EXISTS anchors (
 
 const UPSERT_CONV = `
   INSERT INTO conversations
-    (id, title, pinned, created_at, updated_at, seq, spawn_count, error, live_run_id, live_token)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    (id, title, pinned, created_at, updated_at, seq, spawn_count, error_reason, error_ts, live_run_id, live_token)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
   ON CONFLICT (id) DO UPDATE SET
     title = $2, pinned = $3, created_at = $4, updated_at = $5,
-    seq = $6, spawn_count = $7, error = $8, live_run_id = $9, live_token = $10
+    seq = $6, spawn_count = $7, error_reason = $8, error_ts = $9, live_run_id = $10, live_token = $11
 `
 
 // A run is immutable except resolved_model — the one backfill (ADR 0010).
@@ -87,11 +89,16 @@ const UPSERT_ANCHOR = `
   ON CONFLICT (conv_id, kind) DO UPDATE SET run_id = $3, synced_seq = $4
 `
 
+/** timestamptz comes back from the pg driver as a JS Date; the store (and the whole
+ *  hub) speaks ISO strings — normalise on load so memory keeps a single shape. */
+const iso = (v) => (v instanceof Date ? v.toISOString() : v)
+
 function convParams(conv) {
   return [
     conv.id, conv.title, conv.pinned, conv.createdAt, conv.updatedAt,
     conv.seq, conv.spawnCount,
-    conv.error ? JSON.stringify(conv.error) : null,
+    conv.error?.reason ?? null,
+    conv.error?.ts ?? null,
     conv.live?.runId ?? null,
     conv.live?.token ?? null,
   ]
@@ -102,11 +109,11 @@ function rowToConv(row, { messages, runs, anchors }) {
     id: row.id,
     title: row.title,
     pinned: row.pinned,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
     seq: row.seq,
     spawnCount: row.spawn_count,
-    ...(row.error ? { error: row.error } : {}),
+    ...(row.error_reason ? { error: { reason: row.error_reason, ts: iso(row.error_ts) } } : {}),
     ...(row.live_run_id ? { live: { runId: row.live_run_id, token: row.live_token } } : {}),
     runs,
     anchors,
@@ -124,7 +131,7 @@ function rowToRun(row) {
     ...(row.resolved_model ? { resolvedModel: row.resolved_model } : {}),
     nativeSessionId: row.native_session_id,
     resume: row.resume,
-    spawnedAt: row.spawned_at,
+    spawnedAt: iso(row.spawned_at),
   }
 }
 
@@ -134,7 +141,7 @@ function rowToMessage(row) {
     seq: row.seq,
     role: row.role,
     text: row.text,
-    ts: row.ts,
+    ts: iso(row.ts),
     ...(row.reply_to ? { replyTo: row.reply_to } : {}),
     ...(row.run_id ? { runId: row.run_id } : {}),
   }
