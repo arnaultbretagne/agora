@@ -568,6 +568,23 @@ test('title/pinned patch never touches the runtime; summary derives config from 
   assert.equal(s.effort, 'high')
 })
 
+test('onChannelSetTitle records the topic as a fact on the live run; summary derives it', async () => {
+  const { store, hub } = rig()
+  const conv = await hub.startConversation('parle-moi du kouign-amann et de son histoire', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'volontiers' }))
+
+  await hub.onChannelSetTitle(conv.id, { title: '  Histoire du kouign-amann  ' })
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Histoire du kouign-amann', 'trimmed, derived in summary')
+  assert.equal(store.get(conv.id).runs[0].nativeTitle, 'Histoire du kouign-amann', 'a fact on the run')
+  assert.match(store.get(conv.id).title, /^parle-moi du kouign/, 'stored auto title untouched')
+
+  // no live pipe (dormant) → a stray frame is ignored, never crashes
+  await hub.closeConversation(conv.id)
+  await hub.onChannelSetTitle(conv.id, { title: 'trop tard' })
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Histoire du kouign-amann')
+})
+
 test('the conversation names itself: pty title → run nativeTitle → summary; a manual rename wins for good', async () => {
   const { store, supervisor, hub } = rig()
   clearInterval(hub.liveness)

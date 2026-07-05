@@ -72,10 +72,14 @@ anchors — resume state (the "refs")          the supervisor reads it)
   start empty, so each pre-existing conversation would have re-seeded once (ADR 0005 floor) had
   any been kept.
 - `spawn_count` stays on conversations as the run-id allocator (monotonic, never reused).
-- Native titles (amendment 2026-07-05): claude re-titles its terminal tab each turn with an
-  AI-generated topic — OSC escapes in the pty stream, the ONLY place it exists (probe: 2.1.x
-  writes no transcript summary lines; the sessions-registry name stays mechanical). The
-  supervisor reads it off the pty and reports it like `model`; `runs.native_title` records it
-  as a fact (re-writable — the topic follows the conversation). The displayed title derives:
-  hand-rename (`title_source = 'user'`) > newest titled run > first-message truncation — that
-  floor also covers any kind that never titles itself.
+- Native titles (amendment 2026-07-05): `runs.native_title` records the topic the runtime
+  gives its own conversation, as a re-writable fact (the topic follows the conversation). The
+  displayed title derives: hand-rename (`title_source = 'user'`) > newest titled run >
+  first-message truncation — that floor also covers any kind that never titles itself.
+  **Source**: the channel's `set_title` tool — the runtime names itself (instructed by the
+  tool description + MCP instructions; a Claude Code Stop-hook can enforce it if the
+  behavioural path ever proves flaky). Probed dead ends, for the record: 2.1.x writes no
+  transcript summary lines; the sessions-registry name stays mechanical; and the terminal-title
+  OSC escapes carry a topic only on TUI-typed input — in channel mode (MCP notifications) they
+  stay generic. The supervisor still reports the pty title (`sessions[].title`, dormant) in
+  case a future claude titles in channel mode.

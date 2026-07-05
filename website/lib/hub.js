@@ -620,6 +620,19 @@ export class Hub {
     this.#broadcastConv(conversationId)
   }
 
+  /** The runtime named its conversation (the channel's `set_title` tool). Recorded as a fact
+   *  on the LIVE run (`nativeTitle`, ADR 0010 amendment) — the displayed title derives from
+   *  it, and a manual rename (`titleSource = 'user'`) outranks it for good. */
+  async onChannelSetTitle(conversationId, { title }) {
+    const pipe = this.pipes.get(conversationId)
+    if (!pipe || !this.store.get(conversationId)) return
+    const topic = String(title).trim().slice(0, 120)
+    if (topic && (await this.store.setRunNativeTitle(conversationId, pipe.runId, topic))) {
+      this.#broadcastConv(conversationId)
+      this.log(`titled ${conversationId}: "${topic}" (run ${pipe.runId})`)
+    }
+  }
+
   /** The channel signals claude's agent loop is up → the pipe is truly ready (`live`, not `starting`). */
   async onChannelReady(conversationId) {
     const pipe = this.pipes.get(conversationId)

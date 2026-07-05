@@ -43,6 +43,13 @@ export function readyMsg() {
   return { type: 'ready', v: PROTOCOL_VERSION }
 }
 
+/** channel → hub: the runtime named its conversation (the `set_title` tool) — a short topic
+ *  in the conversation's language, re-sent only when the topic drifts. Recorded as a fact on
+ *  the live run (`native_title`, ADR 0010); the displayed title derives from it. */
+export function setTitleMsg({ title }) {
+  return { type: 'set_title', title }
+}
+
 /** channel → hub: an inbound push went unanswered after all retries — the agent is stuck
  *  (crashed loop, logged out, hung). Marks the conversation `error`. */
 export function unresponsiveMsg({ messageId, tries }) {
@@ -88,6 +95,7 @@ const CHANNEL_TO_HUB = {
     && typeof m.token === 'string' && m.v === PROTOCOL_VERSION,
   reply: (m) => typeof m.text === 'string',
   ready: () => true,
+  set_title: (m) => typeof m.title === 'string' && m.title.trim().length > 0,
   unresponsive: (m) => typeof m.messageId === 'string',
   err: (m) => typeof m.message === 'string',
 }

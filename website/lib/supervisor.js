@@ -96,7 +96,7 @@ export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, 
     // and becomes the anchor a future resume reattaches to.
     ...(resumeFrom ? ['--resume', resumeFrom] : ['--session-id', nativeSessionId]),
     '--channels', 'plugin:agora@agora',
-    '--allowedTools', 'mcp__plugin_agora_agora__reply',
+    '--allowedTools', 'mcp__plugin_agora_agora__reply,mcp__plugin_agora_agora__set_title',
     // Gate C (agent-runtime README "Headless channel spawn"): since claude 2.1.153/2.1.196 a plugin
     // `.mcp.json` server is `Pending approval` and WON'T spawn headlessly (no operator to answer the
     // prompt) → the channel MCP server never starts → conversation stuck `starting`, silently. Approving

@@ -23,7 +23,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { appendFileSync } from 'node:fs'
 import WebSocket from 'ws'
-import { PROTOCOL_VERSION, helloMsg, replyMsg, readyMsg, unresponsiveMsg, parseHubFrame } from './protocol.js'
+import { PROTOCOL_VERSION, helloMsg, replyMsg, readyMsg, setTitleMsg, unresponsiveMsg, parseHubFrame } from './protocol.js'
 
 const HUB_URL = process.env.CHANNEL_HUB_URL
 const CONVERSATION_ID = process.env.CHANNEL_CONVERSATION_ID
@@ -54,6 +54,8 @@ const mcp = new Server(
       `User messages arrive as <channel source="agora" chat_id="${CONVERSATION_ID}"> events. ` +
       'ALWAYS answer with the `reply` tool — anything you print outside of it never reaches the user. ' +
       'Reply once per user message, with your complete final answer (markdown is fine). ' +
+      'Right after your FIRST reply, call `set_title` with a short topic naming this conversation; ' +
+      'call it again only if the topic clearly changes later. ' +
       'A message may open with a [conversation resumed] block containing the prior history: treat it ' +
       'as your own past conversation and answer the new message in that context.',
   },
@@ -84,11 +86,37 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['text'],
         },
       },
+      {
+        name: 'set_title',
+        description:
+          'Name this conversation on the agora hub: a short topic label (3–6 words, no trailing ' +
+          'punctuation) in the language of the conversation. Call it right after your FIRST reply, ' +
+          'then again only when the topic clearly changes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'The topic label, e.g. "Migration de la table orders".' },
+          },
+          required: ['title'],
+        },
+      },
     ],
   }
 })
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  if (req.params.name === 'set_title') {
+    const title = String(req.params.arguments?.title ?? '').trim()
+    if (!title) {
+      return { content: [{ type: 'text', text: 'set_title needs a non-empty `title`' }], isError: true }
+    }
+    // orthogonal to the push/reply ack cycle: naming the conversation answers nothing
+    const delivered = sendToHub(setTitleMsg({ title }))
+    log('set_title', { title, delivered })
+    return {
+      content: [{ type: 'text', text: delivered ? 'title set' : 'queued (hub offline, will re-deliver)' }],
+    }
+  }
   if (req.params.name !== 'reply') {
     return { content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }], isError: true }
   }

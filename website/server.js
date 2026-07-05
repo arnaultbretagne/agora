@@ -204,6 +204,7 @@ function acceptChannel(ws) {
     }
     if (msg.type === 'reply') hub.onChannelReply(conversationId, msg).catch((e) => console.error('[website] channel frame failed:', e))
     if (msg.type === 'ready') hub.onChannelReady(conversationId).catch((e) => console.error('[website] channel frame failed:', e))
+    if (msg.type === 'set_title') hub.onChannelSetTitle(conversationId, msg).catch((e) => console.error('[website] channel frame failed:', e))
     if (msg.type === 'unresponsive') hub.onChannelUnresponsive(conversationId, msg).catch((e) => console.error('[website] channel frame failed:', e))
     if (msg.type === 'err') console.error(`[website] channel ${conversationId} error: ${msg.message}`)
   })
