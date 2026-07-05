@@ -18,6 +18,7 @@ const DDL = `
 CREATE TABLE IF NOT EXISTS conversations (
   id           text PRIMARY KEY,
   title        text NOT NULL,
+  title_source text NOT NULL DEFAULT 'auto',
   pinned       boolean NOT NULL DEFAULT false,
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS runs (
   effort            text,
   agent             text,
   resolved_model    text,
+  native_title      text,
   native_session_id text NOT NULL,
   resume            boolean NOT NULL DEFAULT false,
   spawned_at        timestamptz NOT NULL
@@ -62,19 +64,19 @@ CREATE TABLE IF NOT EXISTS anchors (
 
 const UPSERT_CONV = `
   INSERT INTO conversations
-    (id, title, pinned, created_at, updated_at, seq, spawn_count, error_reason, error_ts, live_run_id, live_token)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    (id, title, title_source, pinned, created_at, updated_at, seq, spawn_count, error_reason, error_ts, live_run_id, live_token)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
   ON CONFLICT (id) DO UPDATE SET
-    title = $2, pinned = $3, created_at = $4, updated_at = $5,
-    seq = $6, spawn_count = $7, error_reason = $8, error_ts = $9, live_run_id = $10, live_token = $11
+    title = $2, title_source = $3, pinned = $4, created_at = $5, updated_at = $6,
+    seq = $7, spawn_count = $8, error_reason = $9, error_ts = $10, live_run_id = $11, live_token = $12
 `
 
-// A run is immutable except resolved_model — the one backfill (ADR 0010).
+// A run is immutable except resolved_model (one backfill) and native_title (follows the topic).
 const UPSERT_RUN = `
   INSERT INTO runs
-    (id, conv_id, kind, model, effort, agent, resolved_model, native_session_id, resume, spawned_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-  ON CONFLICT (id) DO UPDATE SET resolved_model = $7
+    (id, conv_id, kind, model, effort, agent, resolved_model, native_title, native_session_id, resume, spawned_at)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+  ON CONFLICT (id) DO UPDATE SET resolved_model = $7, native_title = $8
 `
 
 const INSERT_MESSAGE = `
@@ -95,7 +97,7 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v)
 
 function convParams(conv) {
   return [
-    conv.id, conv.title, conv.pinned, conv.createdAt, conv.updatedAt,
+    conv.id, conv.title, conv.titleSource, conv.pinned, conv.createdAt, conv.updatedAt,
     conv.seq, conv.spawnCount,
     conv.error?.reason ?? null,
     conv.error?.ts ?? null,
@@ -108,6 +110,7 @@ function rowToConv(row, { messages, runs, anchors }) {
   return {
     id: row.id,
     title: row.title,
+    titleSource: row.title_source,
     pinned: row.pinned,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
@@ -129,6 +132,7 @@ function rowToRun(row) {
     ...(row.effort ? { effort: row.effort } : {}),
     ...(row.agent ? { agent: row.agent } : {}),
     ...(row.resolved_model ? { resolvedModel: row.resolved_model } : {}),
+    ...(row.native_title ? { nativeTitle: row.native_title } : {}),
     nativeSessionId: row.native_session_id,
     resume: row.resume,
     spawnedAt: iso(row.spawned_at),
@@ -210,7 +214,7 @@ export class PgConversationStore extends ConversationStore {
   async _persistRun(conv, run) {
     return this.#enqueue(() => this.pool.query(UPSERT_RUN, [
       run.id, conv.id, run.kind, run.model, run.effort ?? null, run.agent ?? null,
-      run.resolvedModel ?? null, run.nativeSessionId, run.resume, run.spawnedAt,
+      run.resolvedModel ?? null, run.nativeTitle ?? null, run.nativeSessionId, run.resume, run.spawnedAt,
     ]))
   }
 

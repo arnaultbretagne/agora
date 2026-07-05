@@ -568,6 +568,39 @@ test('title/pinned patch never touches the runtime; summary derives config from 
   assert.equal(s.effort, 'high')
 })
 
+test('the conversation names itself: pty title → run nativeTitle → summary; a manual rename wins for good', async () => {
+  const { store, supervisor, hub } = rig()
+  clearInterval(hub.liveness)
+  const conv = await hub.startConversation('parle-moi des fromages de Bretagne s il te plait', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'volontiers' }))
+  const run1 = supervisor.spawned[0].id
+  assert.match(hub.summary(store.get(conv.id)).title, /^parle-moi des fromages/, 'floor: first-message truncation')
+
+  // the supervisor reports the topic claude titled its tab with → fact on the run, display derives
+  supervisor.statuses.get(run1).title = 'Fromages bretons'
+  await hub.reconcileLiveness()
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Fromages bretons')
+  assert.notEqual(store.get(conv.id).title, 'Fromages bretons', 'stored auto title untouched — display is derived')
+
+  // a config switch spawns r2, which has not titled itself yet → the newest titled run still shows
+  await hub.sendUserMessage(conv.id, 'et en opus ?', { kind: 'claude', model: 'opus' })
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Fromages bretons')
+
+  // r2 titles itself in turn → newest titled run wins
+  await attach(hub, conv.id)
+  const run2 = supervisor.spawned[1].id
+  supervisor.statuses.get(run2).title = 'Fromages bretons, la suite'
+  await hub.reconcileLiveness()
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Fromages bretons, la suite')
+
+  // a manual rename outranks any native title, including future ones
+  await hub.patchConversation(conv.id, { title: 'Kig ha farz' })
+  supervisor.statuses.get(run2).title = 'Autre sujet'
+  await hub.reconcileLiveness()
+  assert.equal(hub.summary(store.get(conv.id)).title, 'Kig ha farz')
+})
+
 test('resolvedModel lives on the run; messages and summary derive it (no stamping, no backfill)', async () => {
   const { store, supervisor, hub } = rig()
   clearInterval(hub.liveness)

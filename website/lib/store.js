@@ -2,10 +2,12 @@
  * Conversation store — the hub-owned history, sole source of truth (ADR 0005),
  * modelled per ADR 0010 ("runs as facts"):
  *
- *   conversation — identity + state: `{id, title, pinned, createdAt, updatedAt, seq,
- *     spawnCount, error?, live?: {runId, token}, runs: [], anchors: {}, messages: []}`
- *   run — an execution FACT, immutable except `resolvedModel` (one backfill):
- *     `{id: '<convId>-rN', kind, model, effort?, agent?, resolvedModel?,
+ *   conversation — identity + state: `{id, title, titleSource: 'auto'|'user', pinned,
+ *     createdAt, updatedAt, seq, spawnCount, error?, live?: {runId, token},
+ *     runs: [], anchors: {}, messages: []}`
+ *   run — an execution FACT, immutable except `resolvedModel` (one backfill) and
+ *     `nativeTitle` (the runtime's self-given topic, re-written as it drifts):
+ *     `{id: '<convId>-rN', kind, model, effort?, agent?, resolvedModel?, nativeTitle?,
  *       nativeSessionId, resume, spawnedAt}`
  *   message — content, pointing at its producer: `{id, seq, role, text, ts,
  *     replyTo?, runId?}` (`runId` on assistant turns only)
@@ -60,6 +62,7 @@ export class ConversationStore {
     const conv = {
       id: `c-${randomUUID()}`,
       title: 'Nouvelle conversation',
+      titleSource: 'auto', // 'user' once renamed by hand — a user title outranks any derived one
       pinned: false,
       createdAt: now,
       updatedAt: now,
@@ -102,7 +105,10 @@ export class ConversationStore {
   /** Metadata only — execution config is per-message (ADR 0010), never patched. */
   async patch(id, { title, pinned }) {
     const conv = this.#must(id)
-    if (typeof title === 'string' && title.trim()) conv.title = title.trim().slice(0, 120)
+    if (typeof title === 'string' && title.trim()) {
+      conv.title = title.trim().slice(0, 120)
+      conv.titleSource = 'user' // an explicit rename outranks derived titles for good
+    }
     if (typeof pinned === 'boolean') conv.pinned = pinned
     // updatedAt reflects message activity ONLY (bumped by addMessage) — a metadata edit
     // must never move the conversation's sidebar sort/date-group.
@@ -144,6 +150,21 @@ export class ConversationStore {
     const run = conv.runs.find((r) => r.id === runId)
     if (!run || !resolvedModel || run.resolvedModel === resolvedModel) return false
     run.resolvedModel = resolvedModel
+    await this._persistRun(conv, run)
+    return true
+  }
+
+  /**
+   * Record the topic title the runtime gave itself (claude re-titles its terminal tab
+   * each turn; the supervisor reads the OSC escapes off the PTY). Unlike resolvedModel
+   * this is RE-writable — the topic follows the conversation as it drifts, last write
+   * wins. Returns true only on change, so the caller broadcasts once.
+   */
+  async setRunNativeTitle(id, runId, nativeTitle) {
+    const conv = this.#must(id)
+    const run = conv.runs.find((r) => r.id === runId)
+    if (!run || !nativeTitle || run.nativeTitle === nativeTitle) return false
+    run.nativeTitle = nativeTitle
     await this._persistRun(conv, run)
     return true
   }

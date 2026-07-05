@@ -29,12 +29,13 @@ Four tables, one role each:
 
 ```
 conversations — identity + state        runs — facts, immutable*              messages — content
-  id, title, pinned                       id '<convId>-rN' PK                   (conv_id, seq) PK
+  id, title, title_source, pinned         id '<convId>-rN' PK                   (conv_id, seq) PK
   created_at, updated_at, seq             conv_id FK CASCADE                    id, role, text, ts, reply_to
   error_reason, error_ts                  kind, model, effort?, agent?          run_id FK NULL → runs
   live_run_id, live_token                 resolved_model? (backfilled once)       assistant → its producer
-  (the runtime lease, no FK —             native_session_id, resume bool          user / pre-v3 → NULL
-   ephemeral state, code-managed)         spawned_at
+  (the runtime lease, no FK —             native_title? (follows the topic)       user / pre-v3 → NULL
+   ephemeral state, code-managed)         native_session_id, resume bool
+                                          spawned_at
                                           (* resolved_model: one write when
 anchors — resume state (the "refs")          the supervisor reads it)
   (conv_id, kind) PK
@@ -71,3 +72,10 @@ anchors — resume state (the "refs")          the supervisor reads it)
   start empty, so each pre-existing conversation would have re-seeded once (ADR 0005 floor) had
   any been kept.
 - `spawn_count` stays on conversations as the run-id allocator (monotonic, never reused).
+- Native titles (amendment 2026-07-05): claude re-titles its terminal tab each turn with an
+  AI-generated topic — OSC escapes in the pty stream, the ONLY place it exists (probe: 2.1.x
+  writes no transcript summary lines; the sessions-registry name stays mechanical). The
+  supervisor reads it off the pty and reports it like `model`; `runs.native_title` records it
+  as a fact (re-writable — the topic follows the conversation). The displayed title derives:
+  hand-rename (`title_source = 'user'`) > newest titled run > first-message truncation — that
+  floor also covers any kind that never titles itself.

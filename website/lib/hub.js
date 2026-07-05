@@ -151,13 +151,14 @@ export class Hub {
     for (const [convId, pipe] of [...this.pipes]) {
       const s = byId.get(pipe.runId)
       if (s && s.status === 'running') {
-        // Record the concrete model this run resolved (the supervisor reads it from the
-        // run's own transcript lines — transcriptBase guarantees it is THIS run's). One
-        // write on the run; every message pointing at it derives the value, retroactively
-        // correct — no per-message stamping, no backfill, no race (ADR 0010).
-        if (s.model && (await this.store.setRunResolvedModel(convId, pipe.runId, s.model))) {
-          this.#broadcastConv(convId)
-        }
+        // Harness-native facts read back off the runtime (ADR 0010 — facts live on the run,
+        // everything else derives): the concrete model it resolved (from the run's own
+        // transcript lines, transcriptBase-guarded) and the topic title it gave itself
+        // (claude's terminal-title escapes, read off the PTY — re-written as topics drift).
+        let changed = false
+        if (s.model && (await this.store.setRunResolvedModel(convId, pipe.runId, s.model))) changed = true
+        if (s.title && (await this.store.setRunNativeTitle(convId, pipe.runId, s.title))) changed = true
+        if (changed) this.#broadcastConv(convId)
         continue // healthy — nothing else to do
       }
       // Delete the pipe BEFORE closing the socket so the ws-close handler (which would
@@ -264,9 +265,15 @@ export class Hub {
     const lastRun = conv.runs[conv.runs.length - 1]
     const lastAssistant = conv.messages.findLast((m) => m.role === 'assistant')
     const answeredBy = lastAssistant?.runId ? this.store.getRun(conv.id, lastAssistant.runId) : undefined
+    // Displayed title precedence: a hand-given title wins for good; else the topic the
+    // runtime last gave itself (the newest run that has one — a fresh run hasn't titled
+    // yet); else the stored auto title (first-message truncation, the per-kind floor).
+    const title = conv.titleSource === 'user'
+      ? conv.title
+      : (conv.runs.findLast((r) => r.nativeTitle)?.nativeTitle ?? conv.title)
     return {
       id: conv.id,
-      title: conv.title,
+      title,
       pinned: conv.pinned,
       kind: lastRun?.kind ?? null,
       model: lastRun?.model ?? null,

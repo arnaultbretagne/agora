@@ -54,6 +54,21 @@ test('addRun journals the frozen config and allocates monotonic ids; resolvedMod
   assert.equal(store.getRun(conv.id, run1.id).resolvedModel, 'claude-sonnet-5')
 })
 
+test('nativeTitle is re-writable on the run; a manual rename flips titleSource to user', async () => {
+  const store = new ConversationStore()
+  const conv = await store.create()
+  assert.equal(conv.titleSource, 'auto')
+  const run = await store.addRun(conv.id, { kind: 'claude', model: 'sonnet', nativeSessionId: 'u1', resume: false })
+
+  assert.equal(await store.setRunNativeTitle(conv.id, run.id, 'Comparatif de fromages'), true)
+  assert.equal(await store.setRunNativeTitle(conv.id, run.id, 'Comparatif de fromages'), false, 'idempotent → no re-broadcast')
+  assert.equal(await store.setRunNativeTitle(conv.id, run.id, 'Accords vins et fromages'), true, 're-writable: the topic drifts')
+  assert.equal(store.getRun(conv.id, run.id).nativeTitle, 'Accords vins et fromages')
+
+  await store.patch(conv.id, { title: 'Mon titre à moi' })
+  assert.equal(store.get(conv.id).titleSource, 'user')
+})
+
 test('anchors move, clear, and are keyed per kind (ADR 0007/0010)', async () => {
   const store = new ConversationStore()
   const conv = await store.create()

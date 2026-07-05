@@ -11,6 +11,7 @@ test('pg store roundtrip (ADR 0010 schema: conversations, runs, messages, anchor
   const run = await store.addRun(conv.id, { kind: 'claude', model: 'sonnet', effort: 'high', nativeSessionId: 'uuid-test-1', resume: false })
   await store.addMessage(conv.id, { role: 'assistant', text: 'deux', runId: run.id })
   await store.setRunResolvedModel(conv.id, run.id, 'claude-sonnet-5')
+  await store.setRunNativeTitle(conv.id, run.id, 'Sujet natif')
   await store.setAnchor(conv.id, 'claude', { runId: run.id, syncedSeq: 2 })
   await store.setLive(conv.id, { runId: run.id, token: 'tok-1' })
   await store.patch(conv.id, { pinned: true, title: 'Renommée' })
@@ -22,7 +23,9 @@ test('pg store roundtrip (ADR 0010 schema: conversations, runs, messages, anchor
   const reopened = await PgConversationStore.open(url)
   assert.deepEqual(reopened.get(conv.id), before)
   assert.equal(reopened.get(conv.id).error.reason, 'boom', 'error survives as flat columns')
+  assert.equal(reopened.get(conv.id).titleSource, 'user', 'the rename in patch() flipped and persisted the source')
   assert.equal(reopened.getRun(conv.id, run.id).resolvedModel, 'claude-sonnet-5')
+  assert.equal(reopened.getRun(conv.id, run.id).nativeTitle, 'Sujet natif')
   assert.deepEqual(reopened.get(conv.id).anchors.claude, { runId: run.id, syncedSeq: 2 })
 
   // anchor deletion persists too
