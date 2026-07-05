@@ -31,6 +31,11 @@ import { spawnSpec } from './supervisor.js'
 
 const TYPING_TIMEOUT_MS = 180_000
 
+/** A pending absent from the supervisor's list may just be a spawn POST still in flight —
+ *  absence only reads as death once the entry is older than this (an explicit `exited`
+ *  report needs no such settling: it is a positive verdict). */
+const SPAWN_SETTLE_MS = 5000
+
 /** Server-side floor when a message carries no config and no run exists yet (bare API use). */
 const DEFAULT_CONFIG = { kind: 'claude', model: 'default' }
 
@@ -91,14 +96,16 @@ export class Hub {
     /** convId → typing-clear timer */
     this.typingTimers = new Map()
 
-    // sweep pendings whose channel never (re)appears — a spawn that never came up
-    this.sweeper = setInterval(() => this.#sweepPending().catch((e) => this.log(`sweep error: ${e.message}`)), 30_000)
-    this.sweeper.unref?.()
+    // how long a spawned-but-never-attached runtime may stay `starting` before the attempt
+    // is abandoned (the channel is judged never-coming). Wide enough for slow cold starts
+    // under host contention (90s+ observed 2026-07-04), far under the supervisor's idle reap.
+    this.pendingAttachCapMs = Number(process.env.PENDING_ATTACH_CAP_MS ?? 600_000)
 
     // terminal-liveness safety net (ADR 0008): a live pipe can sit atop a DEAD runtime,
     // because the channel's WS does not always drop when claude dies (a wedged/half-dead
     // claude keeps stdio open → stale-green). Poll the supervisor and tear down any pipe
-    // whose session is gone/exited. Idle-reaping itself now lives in the supervisor
+    // whose session is gone/exited; the same poll settles pending attempts (dead → verdict,
+    // alive past the attach cap → abandoned). Idle-reaping itself now lives in the supervisor
     // (idleTtlMs passed at spawn), NOT here.
     const livenessEvery = Number(process.env.LIVENESS_INTERVAL_MS ?? 3000)
     this.liveness = setInterval(() => this.reconcileLiveness().catch((e) => this.log(`liveness error: ${e.message}`)), livenessEvery)
@@ -128,26 +135,14 @@ export class Hub {
     }
   }
 
-  async #sweepPending() {
-    for (const [convId, p] of [...this.pending]) {
-      if (Date.now() - p.since < 120_000) continue
-      // The channel never (re)claimed this session. Drop the pending → `dormant`; we do
-      // NOT kill (ADR 0008 — the hub initiates no lifecycle kills): the supervisor
-      // idle-reaps the runtime's RAM on its own. A late hello can still re-claim via the
-      // persisted lease.
-      this.pending.delete(convId)
-      await this.store.setLive(convId, undefined)
-      this.#broadcastConv(convId)
-      this.log(`swept ${convId}: channel never claimed run ${p.runId} (supervisor will idle-reap)`)
-    }
-  }
-
   /**
    * Terminal-liveness safety net (ADR 0008). A pipe is `live` in the hub's eyes, but the
    * runtime behind it may have died WITHOUT the channel WS dropping (a wedged/half-dead
    * claude keeps stdio open — the exact stale-green incident). Poll the supervisor and tear
    * down any pipe whose session is no longer running — the one death the event path misses.
    * `exitCode` present ⇒ a crash ⇒ `error`; gone / clean exit ⇒ `dormant`.
+   * The same poll then settles `pending` attempts (see the loop below): dead → verdict or
+   * ADR 0007 fallback; alive but never-attached past the cap → abandoned visibly.
    */
   async reconcileLiveness() {
     let sessions
@@ -190,16 +185,42 @@ export class Hub {
       this.log(`liveness: ${convId} run ${pipe.runId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
     }
 
-    // Resume-death fallback net (ADR 0007, "optimistic, degradable"): a resume whose transcript is
-    // gone can die BEFORE any channel WS ever exists — the pipe loop above never sees it (no pipe
-    // yet), and #sweepPending's 120s is too slow. Catch it here instead: any pending resume attempt
-    // whose session is already absent/exited falls back to fresh, capped at one retry (retriedFresh)
-    // so a fresh spawn that also dies just follows the normal error paths.
+    // Pending verdicts — same authority rule as the pipes above (ADR 0008: no verdict
+    // without the supervisor). A pending entry is a spawn (or re-claim) whose channel hasn't
+    // attached yet; only the supervisor can say whether that's "claude still booting" or
+    // "already dead":
+    //   dead + unproven resume → the ADR 0007 fallback (clear the anchor, one fresh retry)
+    //   dead otherwise         → classify error/dormant now, within a poll tick
+    //   running, under the cap → claude is slow, not dead: leave the pending intact, so a
+    //                            late hello still finds its token, seed decision and flags
+    //   running, over the cap  → the channel is never coming (wedged plugin): abandon the
+    //                            attempt visibly (error), clear the lease so the zombie is
+    //                            fenced out. No kill — the supervisor idle-reaps it.
     for (const [convId, p] of [...this.pending]) {
-      if (!p.resume || p.retriedFresh) continue
       const s = byId.get(p.runId)
-      if (s && s.status === 'running') continue // still alive — give it more time to hello
-      await this.#fallbackToFreshResume(convId, p.runId)
+      const age = Date.now() - p.since
+      if (s?.status === 'running') {
+        if (age < this.pendingAttachCapMs) continue
+        this.pending.delete(convId)
+        await this.store.setLive(convId, undefined)
+        await this.store.setError(convId, 'channel_never_attached')
+        this.#broadcastConv(convId)
+        this.log(`abandoned ${convId}: run ${p.runId} alive but its channel never attached — supervisor will idle-reap`)
+        continue
+      }
+      if (!s && age < SPAWN_SETTLE_MS) continue // spawn POST may still be in flight — absence is not a verdict yet
+      if (p.resume && !p.retriedFresh) {
+        await this.#fallbackToFreshResume(convId, p.runId)
+        continue
+      }
+      this.pending.delete(convId)
+      if (s?.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
+        await this.store.setError(convId, `runtime exited (${s.exitCode})`)
+      } else {
+        await this.store.setLive(convId, undefined)
+      }
+      this.#broadcastConv(convId)
+      this.log(`liveness: ${convId} pending run ${p.runId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
     }
   }
 

@@ -86,6 +86,9 @@ message utilisateur (+ config), pas de runtime compatible
 │    OUI → lance `claude --resume <uuid du run ancré>` ── pari : le transcript existe encore
 │
 ├─ le channel s'attache (~40 ms) : tuyauterie branchée — ne prouve RIEN sur le pari
+│    (s'il ne s'attache jamais : tant que le superviseur dit `running`, on attend — claude
+│     peut être lent à booter ; au plafond de 10 min, abandon visible → error
+│     `channel_never_attached`, bail effacé, pas de kill ; s'il est mort, §6 tranche en ~3 s)
 │
 ├─ DÉCISION 2 — à l'attache (#deliverBacklog) : que pousser au runtime ?
 │    départ à froid + historique non vide → SEED COMPLET (replay ≤ 80 tours + nouveaux msgs)
@@ -188,12 +191,17 @@ Détails d'exécution :
   « pari non prouvé », et le détecteur n'y re-teste que `¬retriedFresh`. Même règle, encodée
   une étape plus tôt.
 
-Hors tableau, un **balai** complète les trois détecteurs : `#sweepPending` (toutes les 30 s)
-abandonne toute entrée `pending` vieille de plus de 120 s — le cas « personne n'est mort, mais
-le channel ne s'est jamais (re)connecté » (plugin cassé, spawn frais mort avant toute attache),
-invisible des détecteurs de mort. Sans kill (ADR 0008) : la conv redevient `dormant`, le bail
-`conv.live` est effacé, le superviseur reapera le runtime à l'idle. Rien n'est perdu : le
-message resté en file est re-dérivé de l'historique à la prochaine attache (§2).
+La boucle `pending` rend aussi le verdict inverse — « personne n'est mort, mais le channel ne
+vient pas » — à la même autorité : tant que le superviseur répond `running`, l'entrée est
+laissée **intacte** (claude boote lentement, pas mort ; le hello tardif retrouve son token, sa
+décision de seed et ses drapeaux — l'attache tardive est donc correcte). Au-delà d'un plafond
+(10 min, `PENDING_ATTACH_CAP_MS`), la tentative est abandonnée *visiblement* : error
+`channel_never_attached`, bail effacé (un hello encore plus tardif est rejeté `bad_token` — le
+zombie est clôturé), toujours **sans kill** (ADR 0008) — le superviseur le reapera à l'idle.
+Deux gardes de lecture : une session *absente* de la liste ne vaut verdict qu'après 5 s (le
+POST de spawn peut encore être en vol — un `exited` explicite, lui, tranche immédiatement), et
+rien n'est perdu à l'abandon : le message en file est re-dérivé de l'historique à la prochaine
+attache (§2).
 
 **Le plafond à un seul retry est structurel, pas compté** : le respawn de secours part
 `forceFresh`, donc son `pending`/`pipe` porte `resume = false` et `retriedFresh = true` —
@@ -277,6 +285,10 @@ Chaque scénario = un chemin dans l'arbre du §3.
 9. **Le spawn lui-même échoue** (`POST /sessions` en erreur : image, superviseur, etc.).
    Aucun process n'existe → `error` immédiat (`spawn_failed`), pas de fallback. Tout nouveau
    message utilisateur efface l'erreur et retente (décision 1 normale).
+   Variante : le spawn réussit mais **le channel ne s'attache jamais**. Runtime mort → les
+   détecteurs du §6 classent (ou fallback si c'était un pari) en quelques secondes ; runtime
+   vivant → on attend tant qu'il est `running` (boot lent toléré), puis abandon au plafond de
+   10 min → error `channel_never_attached`, sans kill (§6). Même sortie : un message relance.
 
 10. **Runtime vivant mais muet** (boucle d'agent plantée, push jamais répondu). Le channel
     relivre le push 3 fois à 9 s d'intervalle, puis envoie `unresponsive` (~36 s au total) →
@@ -334,7 +346,7 @@ Chaque scénario = un chemin dans l'arbre du §3.
 
 | état | condition (première vraie, dans cet ordre) |
 |---|---|
-| `error` | `conv.error` persisté en base — survit à un restart du hub. Posé par : `spawn_failed`, exit code ≠ 0, `unresponsive`. Effacé par : nouveau message utilisateur, nouveau spawn, `ready`, réponse. |
+| `error` | `conv.error` persisté en base — survit à un restart du hub. Posé par : `spawn_failed`, exit code ≠ 0, `unresponsive`, `channel_never_attached` (plafond d'attache, §6). Effacé par : nouveau message utilisateur, nouveau spawn, `ready`, réponse. |
 | `live` | pipe connecté **et** `ready` (ListTools vu, ou re-claim) |
 | `starting` | `pending` (runtime lancé, channel pas là), ou pipe connecté pas encore `ready` |
 | `dormant` | rien en RAM pour cette conversation |
@@ -400,7 +412,7 @@ non conforme dégrade, il ne casse pas.
 | Succès (déplacement de l'ancre ; le message pointe son run) | `hub.js` `onChannelReply` → `store.setAnchor`, `store.addMessage({runId})` |
 | `resolvedModel` du run (une écriture, dérivé partout) | `hub.js` `reconcileLiveness` → `store.setRunResolvedModel` |
 | Tables `runs` / `anchors` / lease `live_run_id` | `website/lib/store.js` + `website/lib/pg-store.js` (schéma ADR 0010) |
-| Détecteurs de mort + balai | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) ; `#sweepPending` (30 s, seuil 120 s) |
+| Détecteurs de mort + verdicts `pending` (plafond d'attache 10 min) | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) |
 | Fallback | `hub.js` `#fallbackToFreshResume` |
 | États | `hub.js` `stateOf` |
 | Relivraison + `unresponsive` (3×9 s) | `channel/server.js` (`ACK_RETRY_MS`, `ACK_MAX_TRIES`) |

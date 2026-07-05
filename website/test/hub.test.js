@@ -225,8 +225,10 @@ test('resume-death fallback: a dead anchor (before any hello) falls back to fres
   assert.ok(supervisor.spawned[1].args.includes('--resume'))
 
   // the resumed session dies (missing transcript, say) BEFORE any channel ever attaches —
-  // #sweepPending's 120s is too slow for this; reconcileLiveness's fallback net must catch it
+  // reconcileLiveness's pending loop must catch it (aged past the spawn-settle window:
+  // absence from the supervisor's list only reads as death once the POST can't be in flight)
   supervisor.statuses.delete(supervisor.spawned[1].id)
+  hub.pending.get(conv.id).since -= 10_000
   await hub.reconcileLiveness()
 
   assert.equal(store.get(conv.id).anchors.claude, undefined, 'the dead anchor is cleared')
@@ -250,13 +252,82 @@ test('resume-death fallback caps at ONE automatic retry per send', async () => {
 
   await hub.sendUserMessage(conv.id, 'deux')
   supervisor.statuses.delete(supervisor.spawned[1].id)
+  hub.pending.get(conv.id).since -= 10_000
   await hub.reconcileLiveness() // → fallback spawns a third, fresh attempt
   assert.equal(supervisor.spawned.length, 3)
 
   // that fresh retry ALSO dies before ever attaching — must NOT trigger a second automatic retry
   supervisor.statuses.delete(supervisor.spawned[2].id)
+  hub.pending.get(conv.id).since -= 10_000
   await hub.reconcileLiveness()
   assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
+})
+
+test('a pending absent from the supervisor list right after spawn is NOT judged dead (settle window)', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
+  await hub.closeConversation(conv.id)
+
+  await hub.sendUserMessage(conv.id, 'deux') // resume attempt, pending entry seconds old
+  supervisor.statuses.delete(supervisor.spawned[1].id)
+  await hub.reconcileLiveness() // absence ≠ death while the spawn POST could still be in flight
+  assert.equal(supervisor.spawned.length, 2, 'no premature fallback inside the settle window')
+  assert.equal(hub.stateOf(conv.id), 'starting')
+})
+
+test('slow boot: a running-but-unattached pending is left alone under the cap; the late hello then attaches correctly', async () => {
+  const { supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  // claude is booting slowly (host contention): session running, no channel, 5 min in
+  hub.pending.get(conv.id).since -= 300_000
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv.id), 'starting', 'running means booting, not dead — keep waiting')
+  assert.equal(supervisor.killed.length, 0)
+
+  // the late hello finds its pending intact (token + seed decision + flags) and works normally
+  const { ws, ok } = await attach(hub, conv.id)
+  assert.equal(ok, true)
+  assert.equal(hub.stateOf(conv.id), 'live')
+  assert.equal(ws.frames('push')[0].content, 'un')
+})
+
+test('a running runtime whose channel never attaches is abandoned at the cap: visible error, no kill, zombie fenced', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  const token = hub.pending.get(conv.id).token
+  hub.pending.get(conv.id).since -= 700_000 // past the 10 min attach cap
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv.id), 'error', 'after minutes of `starting`, the give-up must be visible')
+  assert.equal(store.get(conv.id).live, undefined, 'lease cleared')
+  assert.equal(supervisor.killed.length, 0, 'no lifecycle kill (ADR 0008) — the supervisor idle-reaps')
+
+  // a hello arriving after the abandon is fenced out (its token no longer matches anything)
+  const late = new FakeWs()
+  assert.equal(hub.attachChannel(late, helloMsg({ conversationId: conv.id, token })), false)
+  assert.equal(late.frames('err')[0].code, 'bad_token')
+
+  // a new user message clears the error and starts a fresh attempt, like any other error
+  await hub.sendUserMessage(conv.id, 'deux')
+  assert.equal(hub.stateOf(conv.id), 'starting')
+  assert.equal(supervisor.spawned.length, 2)
+})
+
+test('a fresh spawn that dies before its channel ever attaches is classified within a poll tick', async () => {
+  const { supervisor, hub } = rig()
+  // crash (exit code reported by the supervisor) → error, no settle window needed
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  supervisor.statuses.set(supervisor.spawned[0].id, { status: 'exited', exitCode: 1 })
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv.id), 'error')
+
+  // gone without a trace (reaped/forgotten) → dormant, once past the settle window
+  const conv2 = await hub.startConversation('deux', { kind: 'claude' })
+  supervisor.statuses.delete(supervisor.spawned[1].id)
+  hub.pending.get(conv2.id).since -= 10_000
+  await hub.reconcileLiveness()
+  assert.equal(hub.stateOf(conv2.id), 'dormant')
 })
 
 test('a resume that attaches (and goes ready) but crashes before ever replying still falls back to fresh', async () => {
@@ -402,7 +473,6 @@ test('hub restart: reconcile re-arms persisted leases; re-claim does NOT re-seed
 
   // "restart": a brand-new hub over the same store/supervisor (empty memory)
   const hub2 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
-  clearInterval(hub2.sweeper)
   await hub2.reconcile()
   assert.equal(hub2.stateOf(conv.id), 'starting') // parked, awaiting re-hello
 
@@ -430,7 +500,6 @@ test('reconcile clears leases of dead runtimes; close works from the lease after
   // runtime died while the hub was away
   supervisor.statuses.set(runId, { status: 'exited', exitCode: 1 })
   const hub2 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
-  clearInterval(hub2.sweeper)
   await hub2.reconcile()
   assert.equal(hub2.stateOf(conv.id), 'dormant')
   assert.equal(store.get(conv.id).live, undefined)
@@ -438,7 +507,6 @@ test('reconcile clears leases of dead runtimes; close works from the lease after
   // and a still-running one can be closed via the persisted lease alone
   const conv2 = await hub.startConversation('y', { kind: 'claude' })
   const hub3 = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test', log: () => {} })
-  clearInterval(hub3.sweeper)
   await hub3.closeConversation(conv2.id)
   assert.ok(supervisor.killed.includes(supervisor.spawned[1].id))
 })
