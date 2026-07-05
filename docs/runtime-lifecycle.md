@@ -2,11 +2,13 @@
 
 Comment le hub fait vivre, mourir et renaître le runtime qui sert une conversation.
 Couvre tous les cas : premier message, réouverture, reprise native (`--resume`), transcript
-disparu, crash, redémarrage du hub, runtime muet.
+disparu, crash, redémarrage du hub, runtime muet, changement de config en vol.
 
 Références : ADR 0005 (re-seed), ADR 0007 (resume ancre + delta), ADR 0008 (autorité d'état,
 reaper), **ADR 0010 (runs as facts — le data model)**. Vérifié en prod le 2026-07-04 : verrou C4
-(resume, fallback, re-claim) + probe cross-model (`--resume` + `--model`, scénario 12).
+(resume, fallback, re-claim), probe cross-model (`--resume` + `--model`, scénario 12), et verrou
+E2E ADR 0010 (naissance avec message, kill au changement de config, reprise même uuid natif,
+journal `runs`/`anchors` lu en SQL, delete en cascade).
 
 Modèle de données (ADR 0010) : la conversation ne porte AUCUNE config d'exécution — la config
 voyage avec chaque message et se fige au spawn dans un **run** (`<convId>-rN`, table `runs`, le
@@ -23,7 +25,7 @@ un pointeur mutable par kind dans ce journal (table `anchors`).
 | **run** | Un process `claude` lancé par le superviseur pour servir *une* conversation, ET le fait journalisé qui le décrit (table `runs`, ADR 0010) : id `<convId>-rN` (aussi l'id de session superviseur), config figée au spawn (`kind`, `model`, `effort`, `agent`), `resolvedModel` (backfillé une fois), l'uuid de sa session native, `resume`. Le process est jetable ; le fait est immuable. |
 | **session native** | La session interne de claude : le transcript `~/.claude/projects/<slug>/<uuid>.jsonl` sur le PVC. L'uuid est choisi par le hub, pas par claude. **Accélérateur jetable** : ni sauvegardé, ni garanti d'exister encore demain. |
 | **ancre** | `anchors[kind] = { runId, syncedSeq }` (table `anchors`). En clair : « le dernier run qui a *réellement répondu* — reprends sa session native — et le `seq` du dernier message du hub qui lui a été remis ». Borne **exacte**, pas une estimation — voir « sur quoi porte le pari », §2. Un pointeur **mutable** dans le journal immuable des runs (git : la ref vs le log). Une ancre par **kind** — pas par modèle : changer le modèle garde la même ancre (scénario 12). |
-| **config** | Les quatre réglages de spawn `{kind, model, effort, agent}`. Jamais stockée comme intention : elle **voyage avec chaque message** (ADR 0010), et l'UI dérive ses sélecteurs du dernier run. |
+| **config** | Les quatre réglages de spawn `{kind, model, effort, agent}`. Jamais stockée comme intention : elle **voyage avec chaque message** (ADR 0010), et l'UI dérive ses sélecteurs du dernier run. Message sans config = **sticky** : la config en vigueur s'applique (préambule du §3). |
 | **seed complet** | Rejouer l'historique du hub (les 80 derniers tours max) en un seul message texte au démarrage d'un runtime à froid (ADR 0005). Le **plancher de correction** : toujours possible, toujours juste, juste lent. |
 | **delta-seed** | Ne rejouer *que* les tours du hub postérieurs à `syncedSeq` (ADR 0007) — la session native reprise connaît déjà le reste. |
 | **pending / pipe** | Les deux états en RAM du hub pour un runtime : `pending` = lancé (ou à re-réclamer), channel pas encore connecté ; `pipe` = channel WebSocket connecté. |
@@ -68,17 +70,20 @@ seed complet.
 
 ## 3. L'arbre complet
 
-Préambule (ADR 0010) — le message arrive AVEC sa config : si un runtime vit et que sa config
-est identique → push simple dans le même run, l'arbre ne s'ouvre pas ; si elle diffère → le
-runtime est tué (commande produit, ADR 0008) et l'arbre s'ouvre ; s'il n'y a pas de runtime →
-l'arbre s'ouvre directement.
+Préambule (ADR 0010) — le message arrive AVEC sa config ; s'il n'en porte pas, **sticky** : la
+config en vigueur s'applique (celle du runtime en place, sinon celle du dernier run, sinon le
+défaut serveur `{kind: claude, model: default}`) et ne provoque jamais de kill. Si un runtime
+est en place (pipe connecté, ou spawn en vol côté `pending`) et que sa config correspond → le
+message part dans le même run (push sur le pipe, ou mis en file et livré à l'attache), l'arbre
+ne s'ouvre pas ; si elle diffère → le runtime est tué (commande produit, ADR 0008) et l'arbre
+s'ouvre ; s'il n'y a pas de runtime → l'arbre s'ouvre directement.
 
 ```
 message utilisateur (+ config), pas de runtime compatible
 │
 ├─ DÉCISION 1 — au spawn (#spawnFor) : une ancre existe-t-elle pour le kind demandé ?
 │    NON → lance `claude --session-id <uuid neuf>`   ── départ à froid
-│    OUI → lance `claude --resume <uuid de l'ancre>` ── pari : le transcript existe encore
+│    OUI → lance `claude --resume <uuid du run ancré>` ── pari : le transcript existe encore
 │
 ├─ le channel s'attache (~40 ms) : tuyauterie branchée — ne prouve RIEN sur le pari
 │
@@ -99,7 +104,8 @@ message utilisateur (+ config), pas de runtime compatible
           │
           ├─ resume ∧ ¬replied ∧ ¬retriedFresh → FALLBACK, une seule fois :
           │     1. effacer l'ancre morte        (clearAnchor)
-          │     2. respawn immédiat forceFresh  (#spawnFor { forceFresh: true })
+          │     2. respawn immédiat forceFresh  (#spawnFor { forceFresh: true }),
+          │        avec la config du run mort — c'est elle que le message demandait
           │     → re-rentre en DÉCISION 1, branche NON → seed complet
           │
           └─ sinon → classement normal :
@@ -117,7 +123,7 @@ Portés par la tentative en cours (`pending` puis `pipe`), jamais persistés :
 
 | drapeau | signifie | posé où | lu où |
 |---|---|---|---|
-| `resume` | ce runtime a été lancé avec `--resume` | au spawn, figé | par les 3 détecteurs de mort |
+| `resume` | ce runtime a été lancé avec `--resume` et le pari n'est pas encore prouvé | au spawn ; ré-encodé `resume ∧ ¬replied` à la re-parque en `pending` (§6) | par les 3 détecteurs de mort |
 | `replied` | ce runtime a déjà livré au moins une réponse | `false` au départ ; passe à `true` en **un seul point du code** : `onChannelReply` | par les 3 détecteurs de mort |
 | `retriedFresh` | ce runtime **est** le retry du fallback | au spawn, `true` ssi `forceFresh` | bloque un second fallback |
 
@@ -182,6 +188,13 @@ Détails d'exécution :
   « pari non prouvé », et le détecteur n'y re-teste que `¬retriedFresh`. Même règle, encodée
   une étape plus tôt.
 
+Hors tableau, un **balai** complète les trois détecteurs : `#sweepPending` (toutes les 30 s)
+abandonne toute entrée `pending` vieille de plus de 120 s — le cas « personne n'est mort, mais
+le channel ne s'est jamais (re)connecté » (plugin cassé, spawn frais mort avant toute attache),
+invisible des détecteurs de mort. Sans kill (ADR 0008) : la conv redevient `dormant`, le bail
+`conv.live` est effacé, le superviseur reapera le runtime à l'idle. Rien n'est perdu : le
+message resté en file est re-dérivé de l'historique à la prochaine attache (§2).
+
 **Le plafond à un seul retry est structurel, pas compté** : le respawn de secours part
 `forceFresh`, donc son `pending`/`pipe` porte `resume = false` et `retriedFresh = true` —
 aucune des trois conditions de fallback ne peut plus jamais être vraie pour lui. S'il meurt
@@ -193,7 +206,9 @@ aussi, il suit le classement normal (`error`/`dormant`).
 
 Chaque scénario = un chemin dans l'arbre du §3.
 
-1. **Premier message d'une conversation neuve.** Pas d'ancre → départ à froid, aucun historique
+1. **Premier message d'une conversation neuve.** La conversation naît *avec* ce message
+   (`POST /api/conversations {text, config?}` — il n'existe pas de conversation vide, ADR 0010 ;
+   le brouillon des sélecteurs vit côté client). Pas d'ancre → départ à froid, aucun historique
    → push simple. À la première réponse, l'ancre naît. L'utilisateur voit : `starting` → `live`
    → réponse.
 
@@ -246,7 +261,8 @@ Chaque scénario = un chemin dans l'arbre du §3.
    Le système reste réparable par un simple message — c'est le plancher ADR 0005.
 
 7. **Redémarrage du hub** (re-claim). `reconcile()` au boot : pour chaque bail persisté
-   (`conv.pipe`), interroge le superviseur — `running` → re-parqué en `pending` avec
+   (`conv.live = {runId, token}`), interroge le superviseur sur le `runId` — `running` →
+   re-parqué en `pending` avec
    `fresh = false`, le channel du runtime re-hello tout seul en quelques secondes ; mort →
    `dormant`. Un re-claim n'est jamais re-seedé (le runtime a déjà son contexte) et est marqué
    `ready` immédiatement (la frame `ready` ne part qu'une fois par vie de process, au premier
@@ -264,7 +280,8 @@ Chaque scénario = un chemin dans l'arbre du §3.
 
 10. **Runtime vivant mais muet** (boucle d'agent plantée, push jamais répondu). Le channel
     relivre le push 3 fois à 9 s d'intervalle, puis envoie `unresponsive` (~36 s au total) →
-    `error` persisté. Le hub **ne tue pas** (ADR 0008) ; le superviseur reapera ce runtime à
+    `error` persisté. Le hub **ne tue pas** — un runtime muet est un cas de cycle de vie, jamais
+    un kill du hub (ADR 0008) ; le superviseur reapera ce runtime à
     l'idle (1 h sans réponse, car seul un `reply` fait `touch`). Si c'était un pari jamais
     prouvé, le fallback se déclenchera *à sa mort effective* (le reap), via les détecteurs.
 
@@ -275,7 +292,8 @@ Chaque scénario = un chemin dans l'arbre du §3.
 12. **Changement de config en cours de conversation** (ADR 0010). La config `{kind, model,
     effort, agent}` voyage avec chaque message — il n'y a **pas** de patch de config (PATCH ne
     porte que `title`/`pinned`), et les sélecteurs de l'UI ne sont qu'un brouillon local dérivé
-    du dernier run. Trois cas à la réception d'un message :
+    du dernier run. Trois cas à la réception d'un message (config absente → sticky, préambule
+    du §3 — jamais de kill) :
 
     - **Config identique au runtime vivant** → push simple dans le même run (cache chaud,
       aucun churn). Le cas nominal.
@@ -334,8 +352,10 @@ ne voit qu'un `starting` prolongé.
    rien : l'ancienne ancre reste en place tant qu'une nouvelle n'a pas répondu.
 3. **Au plus un retry automatique, garanti par construction** (le retry est inéligible au
    fallback par ses propres drapeaux), pas par un compteur.
-4. **Le hub ne tue jamais un runtime** (ADR 0008) — il constate des morts (crash, reap idle du
-   superviseur, kill explicite de close/delete) et les classe.
+4. **Le hub ne tue jamais pour le cycle de vie** (ADR 0008) — santé, idle, panne : il constate
+   ces morts-là (crash, reap idle du superviseur) et les classe. Les seuls kills qu'il émet sont
+   des **commandes produit** (amendement ADR 0008) : close, delete, et changement de config en
+   vol (ADR 0010, scénario 12).
 
 ---
 
@@ -380,7 +400,7 @@ non conforme dégrade, il ne casse pas.
 | Succès (déplacement de l'ancre ; le message pointe son run) | `hub.js` `onChannelReply` → `store.setAnchor`, `store.addMessage({runId})` |
 | `resolvedModel` du run (une écriture, dérivé partout) | `hub.js` `reconcileLiveness` → `store.setRunResolvedModel` |
 | Tables `runs` / `anchors` / lease `live_run_id` | `website/lib/store.js` + `website/lib/pg-store.js` (schéma ADR 0010) |
-| Détecteurs de mort | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) |
+| Détecteurs de mort + balai | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) ; `#sweepPending` (30 s, seuil 120 s) |
 | Fallback | `hub.js` `#fallbackToFreshResume` |
 | États | `hub.js` `stateOf` |
 | Relivraison + `unresponsive` (3×9 s) | `channel/server.js` (`ACK_RETRY_MS`, `ACK_MAX_TRIES`) |
