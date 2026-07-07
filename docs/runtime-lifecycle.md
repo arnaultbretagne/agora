@@ -108,19 +108,17 @@ manager entre — et sort — du chemin**. Un seul aller-retour de spawn, vu des
   SupervisorClient                  ns : agent                     ns : agent-runs
   SUPERVISOR_URL → manager              │                          ┆  (n'existe pas encore)
       │                                 │                          ┆
-      │  POST /spawn {args, group}      │                          ┆
-      │────────────────────────────────▶                          ┆
-      │                                 │ getOrCreateLoge(group)    ┆
-      │                                 │   └─ k8s createPod ──────▶┌───────────┐
-      │                                 │      …gVisor + readiness  │  la loge  │
-      │                                 │        (≤ 90 s)           │   naît    │
-      │                                 │                           └─────┬─────┘
-      │                                 │ [resume ?] injecte le           │
-      │                                 │   transcript sous custody       │
-      │                                 │   forward POST /spawn ─────────▶│  le superviseur
-      │                                 │                                 │  lance claude
-      │                                 │◀────────── 200 {id} ────────────│
-      │◀───────────── 200 {id} ─────────                                  │
+      │  POST /spawn {args, id, group}  │                          ┆
+      │────────────────────────────────▶ enregistre `creating`     ┆
+      │◀──── 202 {id, status:creating} ── rend la main AUSSITÔT     ┆
+      │                                 │                           ┆
+      │                                 │ ══ EN TÂCHE DE FOND ══    ┆
+      │                                 │ getOrCreateLoge ─────────▶┌───────────┐
+      │  ┄ poll GET /sessions/:id ┄     │   …gVisor + readiness     │  la loge  │
+      │  ┄▶ `creating` → j'attends      │     (≤ 90 s)              │   naît    │
+      │      (un FAIT, pas de settle)   │                           └─────┬─────┘
+      │                                 │ [resume?] custody + forward ───▶│  lance claude
+      │  ┄▶ `running` ◀──────────────────  (creating → running)          │
       │                                                                   │
       │   ═══════  le manager sort du chemin de données  ═══════          │
       │                                                                   │
@@ -136,11 +134,13 @@ manager entre — et sort — du chemin**. Un seul aller-retour de spawn, vu des
 
 Trois choses à retenir :
 
-- **Le manager est un relay, pas un maître.** Le hub émet UN `POST /spawn` vers `SUPERVISOR_URL`
-  et reçoit UN `{id}` — exactement le contrat d'un superviseur. Il ne sait pas qu'un pod a été
-  créé, attendu (gVisor + readiness), ni qu'un transcript a peut-être été réinjecté sous custody.
-  L'API du manager est un **sur-ensemble strict** de celle du superviseur (agent-runtime ADR 0010
-  §1) : basculer shared→isolated a été *le changement d'une seule variable*, `SUPERVISOR_URL`.
+- **Le manager est un relay, pas un maître — et il rend la main aussitôt.** Le hub émet un
+  `POST /spawn` et reçoit `202 {creating}` *immédiatement* : le manager n'attend pas la loge, il la
+  construit en tâche de fond. Le hub ne bloque pas et ne devine pas — il **lit** l'état
+  (`creating`→`running`, agent-runtime ADR 0010 amendé, §6). Il ignore qu'un pod a été créé, attendu
+  (gVisor + readiness), ou qu'un transcript a été réinjecté sous custody. L'API du manager reste un
+  **sur-ensemble strict** de celle du superviseur (§1) : basculer shared→isolated fut *le changement
+  d'une seule variable*, `SUPERVISOR_URL`.
 - **Deux plans, un seul passe par le manager.** Le manager n'est que sur le **plan de contrôle**
   (spawn, liveness `GET /sessions/:id`, custody, delete). Dès que la loge est debout, le **plan de
   données** — le channel WebSocket, le pipe neutre — s'établit **en direct** hub↔loge (claude
@@ -261,7 +261,7 @@ détecteurs. **Les trois posent exactement la même question avant tout verdict*
 |---|---|---|---|
 | `#reapIfExited` | événement : le WS du channel se ferme | immédiate | mort « normale » — la stdio meurt avec le process, le WS tombe |
 | `reconcileLiveness`, boucle `pipes` | poll superviseur `GET /sessions`, ~3 s | ≤ 3 s | mort **sans** fermeture du WS — claude wedgé garde sa stdio ouverte (l'incident stale-green, ADR 0008) |
-| `reconcileLiveness`, boucle `pending` | même poll | ≤ 3 s | mort **avant** que le WS n'ait existé |
+| `reconcileLiveness`, boucle `pending` | **lit** `GET /sessions/:id` par entrée, ~3 s | ≤ 3 s | mort — ou **boot** (`creating`) — avant que le WS n'ait existé ; un statut *lu*, jamais deviné |
 
 Détails d'exécution :
 
@@ -282,9 +282,15 @@ décision de seed et ses drapeaux — l'attache tardive est donc correcte). Au-d
 (10 min, `PENDING_ATTACH_CAP_MS`), la tentative est abandonnée *visiblement* : error
 `channel_never_attached`, bail effacé (un hello encore plus tardif est rejeté `bad_token` — le
 zombie est clôturé), toujours **sans kill** (ADR 0008) — le superviseur le reapera à l'idle.
-Deux gardes de lecture : une session *absente* de la liste ne vaut verdict qu'après 5 s (le
-POST de spawn peut encore être en vol — un `exited` explicite, lui, tranche immédiatement), et
-rien n'est perdu à l'abandon : le message en file est re-dérivé de l'historique à la prochaine
+La lecture est un **fait, pas une devinette** (read-driven, agent-runtime ADR 0010 amendé) : la
+boucle `pending` interroge `GET /sessions/:id` pour *chaque* entrée. `creating` = le manager
+construit encore la loge, borné par son propre timeout → on attend, **sans fenêtre de settle** qui
+encoderait la latence de boot côté hub ; `exited`/`404` = mort → verdict. Deux garde-fous, tous
+deux **bornés** — donc jamais de conversation figée en `starting` : (1) tant que le POST de spawn
+n'a pas rendu la main, l'entrée est `postInFlight` et **sautée** (le manager ne connaît peut-être
+pas encore le run — ne pas lire son absence comme une mort) ; (2) chaque appel superviseur est
+borné par un timeout (15 s), donc un endpoint wedgé échoue franchement au lieu de figer l'entrée.
+Rien n'est perdu à l'abandon : le message en file est re-dérivé de l'historique à la prochaine
 attache (§2).
 
 **Le plafond à un seul retry est structurel, pas compté** : le respawn de secours part
@@ -292,12 +298,12 @@ attache (§2).
 aucune des trois conditions de fallback ne peut plus jamais être vraie pour lui. S'il meurt
 aussi, il suit le classement normal (`error`/`dormant`).
 
-**Note (substrat `isolated`, §2bis)** : une loge supprimée (drainée par le manager après son
-linger, ou tombstonée `Failed`) répond `404` au prochain `GET /sessions/:id` — exactement le
-signal qu'un superviseur partagé donne pour une session oubliée. Les trois détecteurs ci-dessus
-ne savent pas, et n'ont pas besoin de savoir, si le `404` vient du superviseur partagé ou du
-manager : c'est tout l'intérêt de l'API superset (agent-runtime ADR 0010 §1) — zéro branche
-substrat dans ce code.
+**Note (substrat `isolated`, §2bis)** : le manager expose chaque état de la loge comme un **fait
+lisible** — `creating` pendant qu'il la construit, `404` quand elle est supprimée (drainée après
+son linger, ou tombstonée `Failed`) — le même vocabulaire (`running`/`exited`/`404`) qu'un
+superviseur partagé donne, plus le `creating` que seul l'asynchrone du manager produit. Les
+détecteurs ne savent pas, et n'ont pas besoin de savoir, d'où vient la réponse : c'est tout
+l'intérêt de l'API superset (agent-runtime ADR 0010 §1) — zéro branche substrat dans ce code.
 
 ---
 
@@ -533,12 +539,12 @@ non conforme dégrade, il ne casse pas.
 | Succès (déplacement de l'ancre ; le message pointe son run) | `hub.js` `onChannelReply` → `store.setAnchor`, `store.addMessage({runId})` |
 | `resolvedModel` du run (une écriture, dérivé partout) | `hub.js` `reconcileLiveness` → `store.setRunResolvedModel` |
 | Tables `runs` / `anchors` / lease `live_run_id` | `website/lib/store.js` + `website/lib/pg-store.js` (schéma ADR 0010) |
-| Détecteurs de mort + verdicts `pending` (plafond d'attache 10 min) | `hub.js` `#reapIfExited`, `reconcileLiveness` (boucles `pipes` puis `pending`) |
+| Détecteurs de mort + verdicts `pending` (read-driven, plafond d'attache 10 min) | `hub.js` `#reapIfExited`, `reconcileLiveness` : boucle `pipes` (liste) puis boucle `pending` qui **lit** `supervisor.status(runId)` = `GET /sessions/:id` (`creating`→attends, `running`→plafond, `exited`/404→verdict), garde `postInFlight` ; timeout borné dans `supervisor.js` `#json` |
 | Fallback | `hub.js` `#fallbackToFreshResume` |
 | États | `hub.js` `stateOf` |
 | Relivraison + `unresponsive` (3×9 s) | `channel/server.js` (`ACK_RETRY_MS`, `ACK_MAX_TRIES`) |
 | Reap idle (1 h, `touch` sur réponse) | superviseur agent-runtime ; TTL passé par `spawnSpec` (`cacheTtlFor`) |
 | Placement = décision du manager, jamais du hub | le hub n'envoie aucun substrat ; il ne porte que le `group` (id de conversation) dans `website/lib/supervisor.js` `spawnSpec` / `SupervisorClient#spawn`, et n'atteint le runtime qu'à travers l'API superset du superviseur (`SUPERVISOR_URL` → manager) |
-| 409 `anchor_transcript_missing` → un seul retry `forceFresh` | `hub.js` `#spawnFor` (catch du spawn, même mécanisme que `#fallbackToFreshResume`) |
+| `anchor_transcript_missing` → un seul retry `forceFresh` | manager (async) le rend en statut `exited{reason}` lu par la boucle `pending` ; `hub.js` `#spawnFor` garde aussi le catch d'un 409 synchrone (défensif) — même mécanisme que `#fallbackToFreshResume` |
 | Purge des ancres à la suppression | `hub.js` `deleteConversation` → `supervisor.js` `anchorsDelete` |
-| Le manager (routing, loges, custody, sweep) | `agent-runtime/src/manager.ts` (`Manager#spawn`, `#getOrCreateLoge`, `#drainLoge`, `#resolveResumeTranscript`, `sweepOnce`, `bootReconcile`) |
+| Le manager (spawn async + `creating`, routing, loges, custody, sweep) | `agent-runtime/src/manager.ts` (`Manager#spawn` → `202 creating` + `createLogeAndForward` en fond, `getSession`/`markExited`, `#getOrCreateLoge`, `#drainLoge`, `sweepOnce`, `bootReconcile`) |
