@@ -22,7 +22,7 @@ un pointeur mutable par kind dans ce journal (table `anchors`).
 | terme | définition exacte |
 |---|---|
 | **conversation** | L'objet du hub : la suite des messages, chacun numéroté par `seq` (1, 2, 3, …). C'est **la source de vérité** (ADR 0005) — persistée en Postgres, sauvegardée. |
-| **substrat** | Attribut de naissance de la conversation (ADR 0011) : `shared` (pod partagé, aujourd'hui) ou `isolated` (une loge par conversation). Politique plateforme (`AGORA_SUBSTRATE_DEFAULT`, overridable à la naissance), jamais un réglage utilisateur en vol ; immuable — changer de substrat, c'est naître une nouvelle conversation. Un **fait de run** (`runs.substrate`) copié de la conversation à chaque spawn, jamais l'inverse. |
+| **substrat** | Où un run s'exécute : `shared` (pod partagé) ou `isolated` (une loge par conversation). **Politique plateforme pure, résolue à chaque spawn** (ADR 0011, révisée le 2026-07-06), jamais un état de conversation ni un fait de run — le contenu ne peut pas influencer son propre isolement. Résolu dans le hub (`resolveSubstrate`, aujourd'hui juste `AGORA_SUBSTRATE_DEFAULT`), passé au manager dans le spawn, puis oublié. Le **placement** effectif (quel pod) appartient au manager, en état vivant ; rien n'est persisté côté agora. |
 | **loge** | Le mécanisme du substrat `isolated` (agent-runtime ADR 0010) : un pod sandboxé (gVisor, `runtimeClassName: sandboxed`) par conversation, créé à la demande par le **manager** dans le namespace `agent-runs`, HOME éphémère (`emptyDir`, jamais le PVC partagé). Linge après sa dernière session (`LOGE_LINGER_MS`) pour que le switch de config reste local ; au-delà, drainée (custody) puis supprimée. |
 | **run** | Un process `claude` lancé par le superviseur pour servir *une* conversation, ET le fait journalisé qui le décrit (table `runs`, ADR 0010) : id `<convId>-rN` (aussi l'id de session superviseur), config figée au spawn (`kind`, `model`, `effort`, `agent`), `resolvedModel` (backfillé une fois), l'uuid de sa session native, `resume`. Le process est jetable ; le fait est immuable. |
 | **session native** | La session interne de claude : le transcript `~/.claude/projects/<slug>/<uuid>.jsonl` sur le PVC. L'uuid est choisi par le hub, pas par claude. **Accélérateur jetable** : ni sauvegardé, ni garanti d'exister encore demain. |
@@ -73,8 +73,9 @@ seed complet.
 ## 2bis. Où ça tourne
 
 Tout ce qui précède décrit *comment* une conversation obtient une réponse — jamais *où* le
-runtime s'exécute. C'est une politique plateforme fixée à la naissance (ADR 0011), orthogonale à
-la config qui voyage avec les messages :
+runtime s'exécute. C'est une politique plateforme résolue à chaque spawn (ADR 0011, révisée le
+2026-07-06), orthogonale à la config qui voyage avec les messages, et que le contenu ne peut jamais
+influencer :
 
 - **`shared`** (par défaut) : le pod partagé actuel, inchangé — ce document s'applique tel quel.
 - **`isolated`** : une **loge** par conversation (agent-runtime ADR 0010) — un pod sandboxé créé
@@ -482,8 +483,8 @@ non conforme dégrade, il ne casse pas.
 | États | `hub.js` `stateOf` |
 | Relivraison + `unresponsive` (3×9 s) | `channel/server.js` (`ACK_RETRY_MS`, `ACK_MAX_TRIES`) |
 | Reap idle (1 h, `touch` sur réponse) | superviseur agent-runtime ; TTL passé par `spawnSpec` (`cacheTtlFor`) |
-| Substrat à la naissance (policy + override + validation) | `server.js` (route POST, via `website/lib/substrate.js` `resolveSubstrate`) ; `store.js` `create(substrate)` |
-| Fait de run + `spawnSpec`/`spawn()` portant `substrate`/`group` | `store.js` `addRun` (copie `conv.substrate`) ; `website/lib/supervisor.js` `spawnSpec`, `SupervisorClient#spawn` |
+| Substrat = politique plateforme résolue au spawn | `hub.js` `#spawnFor` (`resolveSubstrate(conv, this.substrateDefault)`) ; `website/lib/substrate.js` (`resolveSubstrate`, `normalizeSubstrateDefault`) ; jamais lu depuis `body.config` |
+| `spawnSpec`/`spawn()` portant `substrate`/`group` vers le manager | `website/lib/supervisor.js` `spawnSpec`, `SupervisorClient#spawn` (la frontière où la politique entre dans le runtime layer) |
 | 409 `anchor_transcript_missing` → un seul retry `forceFresh` | `hub.js` `#spawnFor` (catch du spawn, même mécanisme que `#fallbackToFreshResume`) |
 | Purge des ancres à la suppression | `hub.js` `deleteConversation` → `supervisor.js` `anchorsDelete` |
 | Le manager (routing, loges, custody, sweep) | `agent-runtime/src/manager.ts` (`Manager#spawn`, `#getOrCreateLoge`, `#drainLoge`, `#resolveResumeTranscript`, `sweepOnce`, `bootReconcile`) |

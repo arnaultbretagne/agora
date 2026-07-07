@@ -23,7 +23,6 @@ import { ConversationStore } from './lib/store.js'
 import { PgConversationStore } from './lib/pg-store.js'
 import { SupervisorClient } from './lib/supervisor.js'
 import { Hub } from './lib/hub.js'
-import { resolveSubstrate, InvalidSubstrate } from './lib/substrate.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const PORT = Number(process.env.PORT ?? 8600)
@@ -34,9 +33,10 @@ const CHANNEL_HUB_URL = process.env.CHANNEL_HUB_URL ?? `ws://127.0.0.1:${PORT}/w
 const CHANNEL_LOG_DIR = process.env.CHANNEL_LOG_DIR || undefined
 const PUBLIC_DIR = join(__dirname, 'public')
 
-// Execution substrate (agora ADR 0011): platform policy at conversation birth, overridable
-// per-birth-request for operator/tests/future agent profiles — never a per-message user knob.
-const AGORA_SUBSTRATE_DEFAULT = process.env.AGORA_SUBSTRATE_DEFAULT ?? 'shared'
+// Execution substrate (ADR 0011, superseded 2026-07-06): pure platform policy resolved per
+// spawn inside the hub — the request never influences it. This is only the policy's default
+// input; validated at hub construction so a bad value fails loudly at boot.
+const AGORA_SUBSTRATE_DEFAULT = process.env.AGORA_SUBSTRATE_DEFAULT
 
 const DATABASE_URL = process.env.DATABASE_URL
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
@@ -46,7 +46,11 @@ if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
 const store = DATABASE_URL ? await PgConversationStore.open(DATABASE_URL) : new ConversationStore()
 if (!DATABASE_URL) console.warn('[website] MEMORY store — conversations will NOT survive a restart')
 const supervisor = new SupervisorClient(SUPERVISOR_URL)
-const hub = new Hub(store, supervisor, { hubUrlForChannels: CHANNEL_HUB_URL, channelLogDir: CHANNEL_LOG_DIR })
+const hub = new Hub(store, supervisor, {
+  hubUrlForChannels: CHANNEL_HUB_URL,
+  channelLogDir: CHANNEL_LOG_DIR,
+  substrateDefault: AGORA_SUBSTRATE_DEFAULT,
+})
 
 /* ------------------------------------------------------------------ *
  *  HTTP: static + REST                                                *
@@ -123,16 +127,9 @@ const server = createServer(async (req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
-        // ADR 0011: substrate is a birth-time platform-policy attribute, never part of the
-        // config that travels with messages — resolved and validated here, not in the hub.
-        let substrate
-        try {
-          substrate = resolveSubstrate(body.config?.substrate, AGORA_SUBSTRATE_DEFAULT)
-        } catch (err) {
-          if (err instanceof InvalidSubstrate) return sendJson(res, 400, { error: err.message })
-          throw err
-        }
-        const conv = await hub.startConversation(body.text, body.config, substrate)
+        // Substrate is not accepted from the request (ADR 0011 superseded): where a run
+        // executes is platform policy resolved inside the hub, never a caller input.
+        const conv = await hub.startConversation(body.text, body.config)
         return sendJson(res, 201, hub.full(store.get(conv.id)))
       }
       return sendJson(res, 405, { error: 'method not allowed' })
