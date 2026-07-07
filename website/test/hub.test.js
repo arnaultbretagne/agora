@@ -245,11 +245,9 @@ test('resume-death fallback: a dead anchor (before any hello) falls back to fres
   await hub.sendUserMessage(conv.id, 'deux')
   assert.ok(supervisor.spawned[1].args.includes('--resume'))
 
-  // the resumed session dies (missing transcript, say) BEFORE any channel ever attaches —
-  // reconcileLiveness's pending loop must catch it (aged past the spawn-settle window:
-  // absence from the supervisor's list only reads as death once the POST can't be in flight)
+  // the resumed session dies (missing transcript, say) BEFORE any channel ever attaches — the
+  // manager reports it gone (404), which the pending loop READS as death (no settle window).
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv.id).since -= 130_000 // past the generous settle window (ISOLATED_SPAWN_SETTLE_MS)
   await hub.reconcileLiveness()
 
   assert.equal(store.get(conv.id).anchors.claude, undefined, 'the dead anchor is cleared')
@@ -273,13 +271,11 @@ test('resume-death fallback caps at ONE automatic retry per send', async () => {
 
   await hub.sendUserMessage(conv.id, 'deux')
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv.id).since -= 130_000
-  await hub.reconcileLiveness() // → fallback spawns a third, fresh attempt
+  await hub.reconcileLiveness() // → 404 read as death → fallback spawns a third, fresh attempt
   assert.equal(supervisor.spawned.length, 3)
 
   // that fresh retry ALSO dies before ever attaching — must NOT trigger a second automatic retry
   supervisor.statuses.delete(supervisor.spawned[2].id)
-  hub.pending.get(conv.id).since -= 130_000
   await hub.reconcileLiveness()
   assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
 })
@@ -321,34 +317,32 @@ test('409 anchor_transcript_missing: exactly one retry — a second 409 surfaces
   assert.equal(supervisor.spawned.length, spawnedBefore, 'neither reopen attempt ever reached a running state')
 })
 
-test('a pending absent from the supervisor list right after spawn is NOT judged dead (settle window)', async () => {
+test('a pending run the manager reports `creating` is NOT judged dead (read-driven: booting is a fact)', async () => {
   const { supervisor, hub } = rig()
   const conv = await hub.startConversation('un', { kind: 'claude' })
   await attach(hub, conv.id)
   await hub.onChannelReply(conv.id, replyMsg({ text: 'ok' }))
   await hub.closeConversation(conv.id)
 
-  await hub.sendUserMessage(conv.id, 'deux') // resume attempt, pending entry seconds old
-  supervisor.statuses.delete(supervisor.spawned[1].id)
-  await hub.reconcileLiveness() // absence ≠ death while the spawn POST could still be in flight
-  assert.equal(supervisor.spawned.length, 2, 'no premature fallback inside the settle window')
+  await hub.sendUserMessage(conv.id, 'deux') // resume attempt
+  supervisor.statuses.set(supervisor.spawned[1].id, { status: 'creating' }) // manager still building the loge
+  await hub.reconcileLiveness() // `creating` is a fact → wait, no premature fallback
+  assert.equal(supervisor.spawned.length, 2, 'no fallback while the manager reports creating')
   assert.equal(hub.stateOf(conv.id), 'starting')
 })
 
-test('an in-flight (loge) spawn survives well past the plain settle window', async () => {
-  // Incident 2026-07-05 (P4.1, live): the manager's get-or-create-loge dance (pod create + gVisor
-  // + readiness) can legitimately take far longer than a near-instant spawn — a liveness tick
-  // firing mid-spawn must not judge it dead just because the plain SPAWN_SETTLE_MS elapsed. Every
-  // spawn now goes through that path, so every pending entry takes the generous window.
+test('a pending whose spawn POST is still in flight is skipped, not misread as gone', async () => {
+  // The pending entry is set BEFORE the spawn POST returns (a fast hello must find it). Until the
+  // POST resolves, the manager may not know the run yet — the liveness scan skips it rather than
+  // read its absence (404) as death.
   const { supervisor, hub } = rig()
   const conv = await hub.startConversation('un', { kind: 'claude' })
-  assert.equal(hub.pending.get(conv.id).isolated, true, 'every spawn takes the generous settle window')
+  hub.pending.get(conv.id).postInFlight = true // simulate the spawn POST not yet returned
+  supervisor.statuses.delete(supervisor.spawned[0].id) // manager doesn't know it yet → would 404
 
-  supervisor.statuses.delete(supervisor.spawned[0].id) // still absent from the list: loge not ready yet
-  hub.pending.get(conv.id).since -= 10_000 // past the plain 5s SPAWN_SETTLE_MS, well within the generous one
   await hub.reconcileLiveness()
 
-  assert.equal(hub.stateOf(conv.id), 'starting', 'still legitimately spawning — must not be judged dead yet')
+  assert.equal(hub.stateOf(conv.id), 'starting', 'an in-flight spawn must not be judged dead')
   assert.equal(hub.pending.has(conv.id), true)
 })
 
@@ -397,10 +391,9 @@ test('a fresh spawn that dies before its channel ever attaches is classified wit
   await hub.reconcileLiveness()
   assert.equal(hub.stateOf(conv.id), 'error')
 
-  // gone without a trace (reaped/forgotten) → dormant, once past the settle window
+  // gone without a trace (reaped/forgotten) → dormant — read as 404, no settle window
   const conv2 = await hub.startConversation('deux', { kind: 'claude' })
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv2.id).since -= 130_000
   await hub.reconcileLiveness()
   assert.equal(hub.stateOf(conv2.id), 'dormant')
 })
