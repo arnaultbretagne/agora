@@ -98,6 +98,60 @@ la-loge, S-réouverture-avec-injection, S-ancre-absente.
 
 ---
 
+## 2ter. La séquence d'un spawn isolé — hub → manager → loge
+
+Le §2bis dit *qui* fait quoi ; cette séquence dit *dans quel ordre*, et surtout **où le
+manager entre — et sort — du chemin**. Un seul aller-retour de spawn, vu des trois participants :
+
+```
+  HUB                               MANAGER  (relay)               LOGE  (pod, gVisor)
+  SupervisorClient                  ns : agent                     ns : agent-runs
+  SUPERVISOR_URL → manager              │                          ┆  (n'existe pas encore)
+      │                                 │                          ┆
+      │  POST /spawn {args, group}      │                          ┆
+      │────────────────────────────────▶                          ┆
+      │                                 │ getOrCreateLoge(group)    ┆
+      │                                 │   └─ k8s createPod ──────▶┌───────────┐
+      │                                 │      …gVisor + readiness  │  la loge  │
+      │                                 │        (≤ 90 s)           │   naît    │
+      │                                 │                           └─────┬─────┘
+      │                                 │ [resume ?] injecte le           │
+      │                                 │   transcript sous custody       │
+      │                                 │   forward POST /spawn ─────────▶│  le superviseur
+      │                                 │                                 │  lance claude
+      │                                 │◀────────── 200 {id} ────────────│
+      │◀───────────── 200 {id} ─────────                                  │
+      │                                                                   │
+      │   ═══════  le manager sort du chemin de données  ═══════          │
+      │                                                                   │
+      │◀═══ channel WS — pipe neutre, DIRECT hub↔loge (claude --channels) ═══▶
+      │        hello → ready → reply → …                                  │
+      │                                                                   │
+      │   liveness : GET /sessions/:id ──▶ manager ──▶ route vers la loge │
+      ⋮                                  │                                 ⋮
+   idle > LOGE_LINGER_MS                 │                                 │
+      │                                  │ DRAIN : GET /transcripts ◀──────│  (custody)
+      │                                  │ supprime le pod ───────────────▶ ×
+```
+
+Trois choses à retenir :
+
+- **Le manager est un relay, pas un maître.** Le hub émet UN `POST /spawn` vers `SUPERVISOR_URL`
+  et reçoit UN `{id}` — exactement le contrat d'un superviseur. Il ne sait pas qu'un pod a été
+  créé, attendu (gVisor + readiness), ni qu'un transcript a peut-être été réinjecté sous custody.
+  L'API du manager est un **sur-ensemble strict** de celle du superviseur (agent-runtime ADR 0010
+  §1) : basculer shared→isolated a été *le changement d'une seule variable*, `SUPERVISOR_URL`.
+- **Deux plans, un seul passe par le manager.** Le manager n'est que sur le **plan de contrôle**
+  (spawn, liveness `GET /sessions/:id`, custody, delete). Dès que la loge est debout, le **plan de
+  données** — le channel WebSocket, le pipe neutre — s'établit **en direct** hub↔loge (claude
+  compose l'URL `--channels`, sans repasser par le manager). Le manager route la *naissance* ; il
+  ne relaie jamais la *conversation*.
+- **Tout l'asynchrone de cycle de vie est côté manager.** Linger, drain (custody), suppression du
+  pod : le hub n'en voit qu'un `404` au prochain sondage — indistinct d'un reap d'idle sur un
+  superviseur partagé (§6). Zéro branche substrat dans le code du hub.
+
+---
+
 ## 3. L'arbre complet
 
 Préambule (ADR 0010) — le message arrive AVEC sa config ; s'il n'en porte pas, **sticky** : la
