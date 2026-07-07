@@ -100,23 +100,16 @@ test('a conversation is born WITH its first message (ADR 0010): spawn, hello, pl
   assert.ok(client.frames('typing').some((f) => f.active === false))
 })
 
-test('substrate flows from platform policy into the spawn call, and is never persisted on the run', async () => {
-  // Default policy = shared: the spawn carries substrate:'shared' + the opaque group id...
-  const shared = rig()
-  const sConv = await shared.hub.startConversation('un', { kind: 'claude' })
-  assert.equal(shared.supervisor.spawned[0].substrate, 'shared')
-  assert.equal(shared.supervisor.spawned[0].group, sConv.id, 'group is the opaque conversation id, never interpreted')
-  // ...but the run journals no substrate — placement is not a stored fact (ADR 0011 superseded)
-  assert.equal(shared.store.getRun(sConv.id, shared.supervisor.spawned[0].id).substrate, undefined)
-
-  // A hub whose platform default is isolated spawns isolated — same conversation code path,
-  // the difference is pure policy, decided at spawn, not a conversation attribute.
-  const iso = rig({ substrateDefault: 'isolated' })
-  const iConv = await iso.hub.startConversation('deux', { kind: 'claude' })
-  assert.equal(iso.supervisor.spawned[0].substrate, 'isolated')
-  assert.equal(iso.supervisor.spawned[0].group, iConv.id)
-  assert.equal(iso.store.getRun(iConv.id, iso.supervisor.spawned[0].id).substrate, undefined)
-  assert.equal(iso.store.get(iConv.id).substrate, undefined, 'the conversation stores no substrate either')
+test('placement is neither a hub input nor a persisted fact: the spawn carries the group but no substrate', async () => {
+  const { hub, supervisor, store } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  // The spawn carries the opaque group (the conversation id) so the manager can get-or-create
+  // the loge — but no substrate: whether to isolate is the manager's call, never a hub input.
+  assert.equal(supervisor.spawned[0].group, conv.id, 'group is the opaque conversation id, never interpreted')
+  assert.equal('substrate' in supervisor.spawned[0], false, 'the hub sends no substrate')
+  // ...and nothing about placement is journaled — not on the run, not on the conversation.
+  assert.equal(store.getRun(conv.id, supervisor.spawned[0].id).substrate, undefined)
+  assert.equal(store.get(conv.id).substrate, undefined, 'the conversation stores no substrate either')
 })
 
 test('a reply moves the anchor (ADR 0007/0010); a spawn without a reply leaves it untouched', async () => {
@@ -256,7 +249,7 @@ test('resume-death fallback: a dead anchor (before any hello) falls back to fres
   // reconcileLiveness's pending loop must catch it (aged past the spawn-settle window:
   // absence from the supervisor's list only reads as death once the POST can't be in flight)
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv.id).since -= 10_000
+  hub.pending.get(conv.id).since -= 130_000 // past the generous settle window (ISOLATED_SPAWN_SETTLE_MS)
   await hub.reconcileLiveness()
 
   assert.equal(store.get(conv.id).anchors.claude, undefined, 'the dead anchor is cleared')
@@ -280,13 +273,13 @@ test('resume-death fallback caps at ONE automatic retry per send', async () => {
 
   await hub.sendUserMessage(conv.id, 'deux')
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv.id).since -= 10_000
+  hub.pending.get(conv.id).since -= 130_000
   await hub.reconcileLiveness() // → fallback spawns a third, fresh attempt
   assert.equal(supervisor.spawned.length, 3)
 
   // that fresh retry ALSO dies before ever attaching — must NOT trigger a second automatic retry
   supervisor.statuses.delete(supervisor.spawned[2].id)
-  hub.pending.get(conv.id).since -= 10_000
+  hub.pending.get(conv.id).since -= 130_000
   await hub.reconcileLiveness()
   assert.equal(supervisor.spawned.length, 3, 'no further automatic spawn — follows the normal error paths')
 })
@@ -342,34 +335,21 @@ test('a pending absent from the supervisor list right after spawn is NOT judged 
   assert.equal(hub.stateOf(conv.id), 'starting')
 })
 
-test('isolated substrate: an in-flight spawn survives well past the plain settle window', async () => {
-  // Incident 2026-07-05 (P4.1, live): the manager's get-or-create-loge dance can legitimately
-  // take far longer than the shared substrate's near-instant spawn — a liveness tick firing
-  // mid-spawn must not judge it dead just because SPAWN_SETTLE_MS (tuned for `shared`) elapsed.
-  // The settle-window choice keys off the resolved policy stashed in the pending entry, not a
-  // stored conversation attribute — so an isolated-policy hub gets the long window.
-  const { supervisor, hub } = rig({ substrateDefault: 'isolated' })
+test('an in-flight (loge) spawn survives well past the plain settle window', async () => {
+  // Incident 2026-07-05 (P4.1, live): the manager's get-or-create-loge dance (pod create + gVisor
+  // + readiness) can legitimately take far longer than a near-instant spawn — a liveness tick
+  // firing mid-spawn must not judge it dead just because the plain SPAWN_SETTLE_MS elapsed. Every
+  // spawn now goes through that path, so every pending entry takes the generous window.
+  const { supervisor, hub } = rig()
   const conv = await hub.startConversation('un', { kind: 'claude' })
-  assert.equal(hub.pending.get(conv.id).isolated, true, 'pending entry reflects the resolved isolated policy')
+  assert.equal(hub.pending.get(conv.id).isolated, true, 'every spawn takes the generous settle window')
 
   supervisor.statuses.delete(supervisor.spawned[0].id) // still absent from the list: loge not ready yet
-  hub.pending.get(conv.id).since -= 10_000 // past the plain 5s SPAWN_SETTLE_MS, well within the isolated one
+  hub.pending.get(conv.id).since -= 10_000 // past the plain 5s SPAWN_SETTLE_MS, well within the generous one
   await hub.reconcileLiveness()
 
   assert.equal(hub.stateOf(conv.id), 'starting', 'still legitimately spawning — must not be judged dead yet')
   assert.equal(hub.pending.has(conv.id), true)
-})
-
-test('shared substrate: the same 10s absence IS already a verdict (contrast case)', async () => {
-  const { supervisor, hub } = rig() // default policy = shared
-  const conv = await hub.startConversation('un', { kind: 'claude' })
-  assert.equal(hub.pending.get(conv.id).isolated, false, 'pending entry reflects the resolved shared policy')
-
-  supervisor.statuses.delete(supervisor.spawned[0].id)
-  hub.pending.get(conv.id).since -= 10_000
-  await hub.reconcileLiveness()
-
-  assert.equal(hub.stateOf(conv.id), 'dormant', 'shared spawns settle fast — 10s absence is a real verdict')
 })
 
 test('slow boot: a running-but-unattached pending is left alone under the cap; the late hello then attaches correctly', async () => {
@@ -420,7 +400,7 @@ test('a fresh spawn that dies before its channel ever attaches is classified wit
   // gone without a trace (reaped/forgotten) → dormant, once past the settle window
   const conv2 = await hub.startConversation('deux', { kind: 'claude' })
   supervisor.statuses.delete(supervisor.spawned[1].id)
-  hub.pending.get(conv2.id).since -= 10_000
+  hub.pending.get(conv2.id).since -= 130_000
   await hub.reconcileLiveness()
   assert.equal(hub.stateOf(conv2.id), 'dormant')
 })

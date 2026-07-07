@@ -33,11 +33,6 @@ const CHANNEL_HUB_URL = process.env.CHANNEL_HUB_URL ?? `ws://127.0.0.1:${PORT}/w
 const CHANNEL_LOG_DIR = process.env.CHANNEL_LOG_DIR || undefined
 const PUBLIC_DIR = join(__dirname, 'public')
 
-// Execution substrate (ADR 0011, superseded 2026-07-06): pure platform policy resolved per
-// spawn inside the hub — the request never influences it. This is only the policy's default
-// input; validated at hub construction so a bad value fails loudly at boot.
-const AGORA_SUBSTRATE_DEFAULT = process.env.AGORA_SUBSTRATE_DEFAULT
-
 const DATABASE_URL = process.env.DATABASE_URL
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
   console.error('[website] FATAL: NODE_ENV=production without DATABASE_URL (ADR 0009 — no silent memory store)')
@@ -49,7 +44,6 @@ const supervisor = new SupervisorClient(SUPERVISOR_URL)
 const hub = new Hub(store, supervisor, {
   hubUrlForChannels: CHANNEL_HUB_URL,
   channelLogDir: CHANNEL_LOG_DIR,
-  substrateDefault: AGORA_SUBSTRATE_DEFAULT,
 })
 
 /* ------------------------------------------------------------------ *
@@ -127,8 +121,8 @@ const server = createServer(async (req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
-        // Substrate is not accepted from the request (ADR 0011 superseded): where a run
-        // executes is platform policy resolved inside the hub, never a caller input.
+        // Where a run executes (isolation) is neither a caller input nor a hub concern: the
+        // manager owns placement entirely (ADR 0011 superseded). The hub only forwards config.
         const conv = await hub.startConversation(body.text, body.config)
         return sendJson(res, 201, hub.full(store.get(conv.id)))
       }

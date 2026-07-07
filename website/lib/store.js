@@ -57,9 +57,9 @@ export class ConversationStore {
    * message (ADR 0010) — the caller (hub.startConversation) adds it in the same
    * breath; the title derives from it in addMessage.
    *
-   * Where a conversation runs (its execution substrate) is NOT stored here: it is pure
-   * per-spawn platform policy resolved by the hub (ADR 0011 superseded 2026-07-06),
-   * never a birth attribute of the conversation.
+   * Where a conversation runs (its isolation) is NOT stored here: the manager owns
+   * placement entirely (ADR 0011 superseded 2026-07-06), never a birth attribute of
+   * the conversation.
    */
   async create() {
     const now = new Date().toISOString()
