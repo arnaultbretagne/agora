@@ -40,10 +40,10 @@ class FakeSupervisor {
   async anchorsDelete(uuids) { this.anchorsDeleted.push(...uuids) }
 }
 
-function rig() {
+function rig(opts = {}) {
   const store = new ConversationStore()
   const supervisor = new FakeSupervisor()
-  const hub = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test/ws/channel', log: () => {} })
+  const hub = new Hub(store, supervisor, { hubUrlForChannels: 'ws://test/ws/channel', log: () => {}, ...opts })
   const client = new FakeWs()
   hub.addClient(client)
   return { store, supervisor, hub, client }
@@ -100,17 +100,23 @@ test('a conversation is born WITH its first message (ADR 0010): spawn, hello, pl
   assert.ok(client.frames('typing').some((f) => f.active === false))
 })
 
-test('substrate/group flow from the conversation to the actual spawn call (agora ADR 0011)', async () => {
-  const { store, supervisor, hub } = rig()
-  const shared = await hub.startConversation('un', { kind: 'claude' }) // no override -> default
-  assert.equal(supervisor.spawned[0].substrate, 'shared')
-  assert.equal(supervisor.spawned[0].group, shared.id)
+test('substrate flows from platform policy into the spawn call, and is never persisted on the run', async () => {
+  // Default policy = shared: the spawn carries substrate:'shared' + the opaque group id...
+  const shared = rig()
+  const sConv = await shared.hub.startConversation('un', { kind: 'claude' })
+  assert.equal(shared.supervisor.spawned[0].substrate, 'shared')
+  assert.equal(shared.supervisor.spawned[0].group, sConv.id, 'group is the opaque conversation id, never interpreted')
+  // ...but the run journals no substrate — placement is not a stored fact (ADR 0011 superseded)
+  assert.equal(shared.store.getRun(sConv.id, shared.supervisor.spawned[0].id).substrate, undefined)
 
-  const isolated = await hub.startConversation('deux', { kind: 'claude' }, 'isolated')
-  assert.equal(store.get(isolated.id).substrate, 'isolated')
-  assert.equal(supervisor.spawned[1].substrate, 'isolated')
-  assert.equal(supervisor.spawned[1].group, isolated.id, 'group is the opaque conversation id, never interpreted')
-  assert.equal(store.getRun(isolated.id, supervisor.spawned[1].id).substrate, 'isolated', 'the run copies the fact')
+  // A hub whose platform default is isolated spawns isolated — same conversation code path,
+  // the difference is pure policy, decided at spawn, not a conversation attribute.
+  const iso = rig({ substrateDefault: 'isolated' })
+  const iConv = await iso.hub.startConversation('deux', { kind: 'claude' })
+  assert.equal(iso.supervisor.spawned[0].substrate, 'isolated')
+  assert.equal(iso.supervisor.spawned[0].group, iConv.id)
+  assert.equal(iso.store.getRun(iConv.id, iso.supervisor.spawned[0].id).substrate, undefined)
+  assert.equal(iso.store.get(iConv.id).substrate, undefined, 'the conversation stores no substrate either')
 })
 
 test('a reply moves the anchor (ADR 0007/0010); a spawn without a reply leaves it untouched', async () => {
@@ -336,13 +342,15 @@ test('a pending absent from the supervisor list right after spawn is NOT judged 
   assert.equal(hub.stateOf(conv.id), 'starting')
 })
 
-test('isolated substrate: an in-flight spawn survives well past the plain settle window (agora ADR 0011)', async () => {
+test('isolated substrate: an in-flight spawn survives well past the plain settle window', async () => {
   // Incident 2026-07-05 (P4.1, live): the manager's get-or-create-loge dance can legitimately
   // take far longer than the shared substrate's near-instant spawn — a liveness tick firing
   // mid-spawn must not judge it dead just because SPAWN_SETTLE_MS (tuned for `shared`) elapsed.
-  const { supervisor, hub, store } = rig()
-  const conv = await hub.startConversation('un', { kind: 'claude' }, 'isolated')
-  assert.equal(store.get(conv.id).substrate, 'isolated')
+  // The settle-window choice keys off the resolved policy stashed in the pending entry, not a
+  // stored conversation attribute — so an isolated-policy hub gets the long window.
+  const { supervisor, hub } = rig({ substrateDefault: 'isolated' })
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  assert.equal(hub.pending.get(conv.id).isolated, true, 'pending entry reflects the resolved isolated policy')
 
   supervisor.statuses.delete(supervisor.spawned[0].id) // still absent from the list: loge not ready yet
   hub.pending.get(conv.id).since -= 10_000 // past the plain 5s SPAWN_SETTLE_MS, well within the isolated one
@@ -353,9 +361,9 @@ test('isolated substrate: an in-flight spawn survives well past the plain settle
 })
 
 test('shared substrate: the same 10s absence IS already a verdict (contrast case)', async () => {
-  const { supervisor, hub, store } = rig()
-  const conv = await hub.startConversation('un', { kind: 'claude' }) // shared, the default
-  assert.equal(store.get(conv.id).substrate, 'shared')
+  const { supervisor, hub } = rig() // default policy = shared
+  const conv = await hub.startConversation('un', { kind: 'claude' })
+  assert.equal(hub.pending.get(conv.id).isolated, false, 'pending entry reflects the resolved shared policy')
 
   supervisor.statuses.delete(supervisor.spawned[0].id)
   hub.pending.get(conv.id).since -= 10_000

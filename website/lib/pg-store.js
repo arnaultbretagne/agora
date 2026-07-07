@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS conversations (
   title        text NOT NULL,
   title_source text NOT NULL DEFAULT 'auto',
   pinned       boolean NOT NULL DEFAULT false,
-  substrate    text NOT NULL DEFAULT 'shared',
   created_at   timestamptz NOT NULL,
   updated_at   timestamptz NOT NULL,
   seq          integer NOT NULL DEFAULT 0,
@@ -37,18 +36,18 @@ CREATE TABLE IF NOT EXISTS runs (
   model             text NOT NULL,
   effort            text,
   agent             text,
-  substrate         text NOT NULL DEFAULT 'shared',
   resolved_model    text,
   native_title      text,
   native_session_id text NOT NULL,
   resume            boolean NOT NULL DEFAULT false,
   spawned_at        timestamptz NOT NULL
 );
--- additive migration for tables created before substrate (2026-07-05, agora ADR 0011): the
--- execution substrate is a birth-time platform-policy attribute, DEFAULT 'shared' so every
--- pre-existing conversation/run keeps behaving exactly as it does today.
-ALTER TABLE conversations ADD COLUMN IF NOT EXISTS substrate text NOT NULL DEFAULT 'shared';
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS substrate text NOT NULL DEFAULT 'shared';
+-- ADR 0011 superseded (2026-07-06): substrate stopped being conversation/run state. It is
+-- pure per-spawn platform policy (resolved by the hub, passed to the manager, never persisted) —
+-- placement is the manager's live-state concern, not a product fact. Drop the columns wherever
+-- they were added; the values they held (all 'shared' or 'isolated') drove no read path.
+ALTER TABLE conversations DROP COLUMN IF EXISTS substrate;
+ALTER TABLE runs DROP COLUMN IF EXISTS substrate;
 CREATE TABLE IF NOT EXISTS messages (
   conv_id  text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   seq      integer NOT NULL,
@@ -71,20 +70,19 @@ CREATE TABLE IF NOT EXISTS anchors (
 
 const UPSERT_CONV = `
   INSERT INTO conversations
-    (id, title, title_source, pinned, created_at, updated_at, seq, spawn_count, error_reason, error_ts, live_run_id, live_token, substrate)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    (id, title, title_source, pinned, created_at, updated_at, seq, spawn_count, error_reason, error_ts, live_run_id, live_token)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
   ON CONFLICT (id) DO UPDATE SET
     title = $2, title_source = $3, pinned = $4, created_at = $5, updated_at = $6,
-    seq = $7, spawn_count = $8, error_reason = $9, error_ts = $10, live_run_id = $11, live_token = $12, substrate = $13
+    seq = $7, spawn_count = $8, error_reason = $9, error_ts = $10, live_run_id = $11, live_token = $12
 `
 
-// A run is immutable except resolved_model (one backfill) and native_title (follows the topic) —
-// substrate is a frozen fact too (agora ADR 0011), deliberately absent from the UPDATE SET below.
+// A run is immutable except resolved_model (one backfill) and native_title (follows the topic).
 const UPSERT_RUN = `
   INSERT INTO runs
-    (id, conv_id, kind, model, effort, agent, substrate, resolved_model, native_title, native_session_id, resume, spawned_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-  ON CONFLICT (id) DO UPDATE SET resolved_model = $8, native_title = $9
+    (id, conv_id, kind, model, effort, agent, resolved_model, native_title, native_session_id, resume, spawned_at)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+  ON CONFLICT (id) DO UPDATE SET resolved_model = $7, native_title = $8
 `
 
 const INSERT_MESSAGE = `
@@ -111,7 +109,6 @@ function convParams(conv) {
     conv.error?.ts ?? null,
     conv.live?.runId ?? null,
     conv.live?.token ?? null,
-    conv.substrate ?? 'shared',
   ]
 }
 
@@ -121,7 +118,6 @@ function rowToConv(row, { messages, runs, anchors }) {
     title: row.title,
     titleSource: row.title_source,
     pinned: row.pinned,
-    substrate: row.substrate,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     seq: row.seq,
@@ -141,7 +137,6 @@ function rowToRun(row) {
     model: row.model,
     ...(row.effort ? { effort: row.effort } : {}),
     ...(row.agent ? { agent: row.agent } : {}),
-    substrate: row.substrate,
     ...(row.resolved_model ? { resolvedModel: row.resolved_model } : {}),
     ...(row.native_title ? { nativeTitle: row.native_title } : {}),
     nativeSessionId: row.native_session_id,
@@ -224,7 +219,7 @@ export class PgConversationStore extends ConversationStore {
 
   async _persistRun(conv, run) {
     return this.#enqueue(() => this.pool.query(UPSERT_RUN, [
-      run.id, conv.id, run.kind, run.model, run.effort ?? null, run.agent ?? null, run.substrate ?? 'shared',
+      run.id, conv.id, run.kind, run.model, run.effort ?? null, run.agent ?? null,
       run.resolvedModel ?? null, run.nativeTitle ?? null, run.nativeSessionId, run.resume, run.spawnedAt,
     ]))
   }

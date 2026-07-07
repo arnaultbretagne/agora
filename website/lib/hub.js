@@ -28,6 +28,7 @@ import {
 } from '../../shared/protocol.js'
 import { buildSeedContent, computeDelta, buildDeltaSeedContent } from './seed.js'
 import { spawnSpec } from './supervisor.js'
+import { resolveSubstrate, normalizeSubstrateDefault } from './substrate.js'
 
 const TYPING_TIMEOUT_MS = 180_000
 
@@ -72,7 +73,7 @@ export class Hub {
   /**
    * @param {import('./store.js').ConversationStore} store
    * @param {import('./supervisor.js').SupervisorClient} supervisor
-   * @param {{hubUrlForChannels: string, log?: (msg: string) => void}} opts
+   * @param {{hubUrlForChannels: string, substrateDefault?: string, log?: (msg: string) => void}} opts
    */
   constructor(store, supervisor, opts) {
     this.store = store
@@ -80,6 +81,9 @@ export class Hub {
     this.hubUrlForChannels = opts.hubUrlForChannels
     this.channelLogDir = opts.channelLogDir // optional: per-session channel log sink
     this.log = opts.log ?? ((m) => console.log(`[hub] ${m}`))
+    // Execution-substrate policy default (ADR 0011 superseded): validated here so a bad
+    // AGORA_SUBSTRATE_DEFAULT fails loudly at boot, not silently at the first spawn.
+    this.substrateDefault = normalizeSubstrateDefault(opts.substrateDefault)
 
     /**
      * live pipes: convId → {ws, runId, token, ready, resume, retriedFresh, replied}.
@@ -345,17 +349,17 @@ export class Hub {
 
   /**
    * A conversation is born WITH its first message (ADR 0010) — there is no empty
-   * conversation. The config (if any) materialises as the first run. `substrate`
-   * (agora ADR 0011) is a platform-policy birth attribute, validated by the caller
-   * (server.js) — never part of `config`, which travels with messages.
+   * conversation. The config (if any) materialises as the first run. Where it runs
+   * (substrate) is not decided here: it is platform policy resolved per spawn in
+   * #spawnFor (ADR 0011 superseded), never a birth attribute.
    */
-  async startConversation(text, config, substrate) {
+  async startConversation(text, config) {
     const cfg = normalizeConfig(config)
     if (cfg) {
       const kinds = await this.supervisor.kinds()
       if (!kinds.includes(cfg.kind)) throw new Error(`unknown kind: ${cfg.kind} (known: ${kinds.join(', ')})`)
     }
-    const conv = await this.store.create(substrate)
+    const conv = await this.store.create()
     await this.sendUserMessage(conv.id, text, cfg)
     return conv
   }
@@ -429,10 +433,14 @@ export class Hub {
     const anchorSeq = resume ? anchor.syncedSeq : 0
     const run = await this.store.addRun(conv.id, { ...cfg, nativeSessionId: native, resume })
     await this.store.clearError(conv.id) // a spawn attempt clears the prior error
+    // Substrate is platform policy, resolved fresh at each spawn (ADR 0011 superseded) — not a
+    // stored conversation fact. It flows into the spawn payload and the settle-window choice, and
+    // is then forgotten: the manager owns placement as live state, nothing persists here.
+    const substrate = resolveSubstrate(conv, this.substrateDefault)
     this.pending.set(conv.id, {
       token, runId: run.id, queue: [...queuedIds], fresh: true,
       resume, anchorSeq, retriedFresh: forceFresh, since: Date.now(),
-      isolated: conv.substrate === 'isolated',
+      isolated: substrate === 'isolated',
     })
     this.#broadcastConv(conv.id) // → starting
     try {
@@ -444,7 +452,7 @@ export class Hub {
         hubUrl: this.hubUrlForChannels,
         token,
         channelLogDir: this.channelLogDir,
-        substrate: conv.substrate,
+        substrate,
         group: conv.id,
       }))
       await this.store.setLive(conv.id, { runId: run.id, token })

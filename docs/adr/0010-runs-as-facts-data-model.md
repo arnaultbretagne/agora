@@ -84,8 +84,11 @@ anchors — resume state (the "refs")          the supervisor reads it)
   stay generic. The supervisor still reports the pty title (`sessions[].title`, dormant) in
   case a future claude titles in channel mode.
 
-### Amendment 2026-07-05 (ADR 0011 — substrats)
+### Amendment 2026-07-05 (ADR 0011 — substrats) — REVERTED 2026-07-06
 
-Deux colonnes additives : `conversations.substrate` (attribut de naissance, politique
-plateforme — PAS un élément du config-qui-voyage) et `runs.substrate` (copié au spawn : le fait
-« où ce run a tourné », immuable comme le reste du run).
+Le premier jet ajoutait deux colonnes (`conversations.substrate` + `runs.substrate`). **Annulé** :
+ADR 0011 a été révisée — le substrat est de la politique plateforme par-spawn, pas un état de
+conversation ni un fait de run (le placement appartient au manager, en état vivant, jamais lu ici).
+Les deux colonnes sont supprimées (`ALTER TABLE … DROP COLUMN IF EXISTS`). Le modèle « runs as
+facts » n'enregistre donc PAS où un run a tourné — un run journalise sa config (kind/model/effort/
+agent) et ses faits natifs, rien sur son placement.

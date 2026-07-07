@@ -1,18 +1,27 @@
 /**
- * Execution substrate resolution (agora ADR 0011): platform policy at conversation birth,
- * overridable per-birth-request. Split out of server.js so it's testable without pulling in
- * its module-load side effects (DB connection, HTTP listen).
+ * Execution substrate = pure platform policy, resolved per spawn (ADR 0011, superseded
+ * 2026-07-06). It answers one question — "should this run be isolated (its own sandbox)
+ * or shared?" — as a decision the PLATFORM makes, never one the running content can
+ * influence (a sandbox whose occupant picks its own sandboxing is not a sandbox). So it
+ * is deliberately NOT read from the request body: it is computed from platform config
+ * alone. Today the policy is a single global default; a richer policy (per-user,
+ * per-trust-level) would still be evaluated here, from platform inputs, never the caller's.
  */
 export const SUBSTRATES = ['shared', 'isolated']
 
-export class InvalidSubstrate extends Error {}
-
-/** The request's override if valid, else the platform default. Throws InvalidSubstrate if the
- *  request named something outside SUBSTRATES. */
-export function resolveSubstrate(requested, defaultSubstrate) {
-  if (requested === undefined) return defaultSubstrate
-  if (!SUBSTRATES.includes(requested)) {
-    throw new InvalidSubstrate(`invalid substrate: ${requested} (must be one of: ${SUBSTRATES.join(', ')})`)
+/** The platform default, validated once. Throws on a bad config value so a typo in
+ *  AGORA_SUBSTRATE_DEFAULT fails loudly at boot, not silently at spawn. */
+export function normalizeSubstrateDefault(value) {
+  if (value === undefined || value === '') return 'shared'
+  if (!SUBSTRATES.includes(value)) {
+    throw new Error(`invalid AGORA_SUBSTRATE_DEFAULT: ${value} (must be one of: ${SUBSTRATES.join(', ')})`)
   }
-  return requested
+  return value
+}
+
+/** Resolve the substrate for a spawn. Pure policy: today it ignores the conversation and
+ *  returns the platform default. The signature takes the conversation so a future policy
+ *  can key off platform-side facts about it (never off caller-supplied config). */
+export function resolveSubstrate(_conv, platformDefault) {
+  return platformDefault
 }

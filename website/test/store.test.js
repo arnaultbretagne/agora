@@ -37,20 +37,18 @@ test('a fresh conversation carries empty runs and anchors (ADR 0010)', async () 
   assert.equal(conv.spawnCount, 0)
 })
 
-test('substrate: defaults to shared, carries an override, and runs copy the fact (agora ADR 0011)', async () => {
+test('substrate is not stored on conversations or runs (ADR 0011 superseded: it is per-spawn policy)', async () => {
   const store = new ConversationStore()
-  const defaultConv = await store.create()
-  assert.equal(defaultConv.substrate, 'shared')
+  // create takes no substrate argument, and the conversation carries no substrate field
+  const conv = await store.create()
+  assert.equal(conv.substrate, undefined)
 
-  const isolatedConv = await store.create('isolated')
-  assert.equal(isolatedConv.substrate, 'isolated')
-
-  // a run never receives substrate from the caller — it's always copied from the conversation
-  const run = await store.addRun(isolatedConv.id, { kind: 'claude', model: 'sonnet', nativeSessionId: 'uuid-1', resume: false })
-  assert.equal(run.substrate, 'isolated')
-  // immutable thereafter: a later run on the same conversation still copies the birth value
-  const run2 = await store.addRun(isolatedConv.id, { kind: 'claude', model: 'opus', nativeSessionId: 'uuid-1', resume: true })
-  assert.equal(run2.substrate, 'isolated')
+  // a run journals config facts (kind/model/effort/agent) but never where it ran — placement
+  // is the manager's live concern, resolved per spawn, read by nothing here
+  const run = await store.addRun(conv.id, { kind: 'claude', model: 'sonnet', nativeSessionId: 'uuid-1', resume: false })
+  assert.equal(run.substrate, undefined)
+  assert.equal(run.kind, 'claude')
+  assert.equal(run.model, 'sonnet')
 })
 
 test('addRun journals the frozen config and allocates monotonic ids; resolvedModel is the one backfill', async () => {
