@@ -7,14 +7,8 @@ const OPTS = {
   hubUrl: 'ws://test/ws/channel', token: 't1', channelLogDir: undefined,
 }
 
-test('spawnSpec carries substrate/group through to the supervisor payload (agent-runtime ADR 0010)', () => {
-  const spec = spawnSpec({ kind: 'claude', model: 'sonnet' }, { ...OPTS, substrate: 'isolated', group: 'c-1' })
-  assert.equal(spec.substrate, 'isolated')
-  assert.equal(spec.group, 'c-1')
-})
-
-test('spawnSpec: shared substrate still carries the (undefined-safe) fields', () => {
-  const spec = spawnSpec({ kind: 'claude', model: 'sonnet' }, { ...OPTS, substrate: 'shared', group: 'c-1' })
-  assert.equal(spec.substrate, 'shared')
-  assert.equal(spec.group, 'c-1')
+test('spawnSpec carries the group (co-location key) to the supervisor payload, and no substrate (agent-runtime ADR 0010)', () => {
+  const spec = spawnSpec({ kind: 'claude', model: 'sonnet' }, { ...OPTS, group: 'c-1' })
+  assert.equal(spec.group, 'c-1', 'the manager routes on the group to get-or-create the loge')
+  assert.equal('substrate' in spec, false, 'placement is the manager’s call — the hub sends no substrate')
 })

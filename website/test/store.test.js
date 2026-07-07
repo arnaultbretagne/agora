@@ -37,14 +37,14 @@ test('a fresh conversation carries empty runs and anchors (ADR 0010)', async () 
   assert.equal(conv.spawnCount, 0)
 })
 
-test('substrate is not stored on conversations or runs (ADR 0011 superseded: it is per-spawn policy)', async () => {
+test('substrate is not stored on conversations or runs (ADR 0011 superseded: the manager owns placement)', async () => {
   const store = new ConversationStore()
   // create takes no substrate argument, and the conversation carries no substrate field
   const conv = await store.create()
   assert.equal(conv.substrate, undefined)
 
   // a run journals config facts (kind/model/effort/agent) but never where it ran — placement
-  // is the manager's live concern, resolved per spawn, read by nothing here
+  // is the manager's live concern, read by nothing here
   const run = await store.addRun(conv.id, { kind: 'claude', model: 'sonnet', nativeSessionId: 'uuid-1', resume: false })
   assert.equal(run.substrate, undefined)
   assert.equal(run.kind, 'claude')
