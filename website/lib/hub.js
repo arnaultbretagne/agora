@@ -31,20 +31,6 @@ import { spawnSpec } from './supervisor.js'
 
 const TYPING_TIMEOUT_MS = 180_000
 
-/** A pending absent from the supervisor's list may just be a spawn POST still in flight —
- *  absence only reads as death once the entry is older than this (an explicit `exited`
- *  report needs no such settling: it is a positive verdict). */
-const SPAWN_SETTLE_MS = 5000
-
-/** Same idea, but for a substrate=isolated spawn (agora ADR 0011): the hub's spawn POST doesn't
- *  return until the manager finishes its whole get-or-create-loge dance — pod create + gVisor +
- *  readiness wait, up to LOGE_READY_TIMEOUT_MS (agent-runtime ADR 0010 §1.4, 90s default) — all
- *  BEFORE the run is visible in any session list. Found live 2026-07-05 (P4.1): a liveness tick
- *  firing mid-spawn saw the run absent, aged past the plain SPAWN_SETTLE_MS, and prematurely
- *  judged a legitimately in-flight isolated spawn dead. Bounded (not unbounded) so a genuinely
- *  hung spawn still eventually gets judged. */
-const ISOLATED_SPAWN_SETTLE_MS = Number(process.env.ISOLATED_SPAWN_SETTLE_MS ?? 120_000)
-
 /** Server-side floor when a message carries no config and no run exists yet (bare API use). */
 const DEFAULT_CONFIG = { kind: 'claude', model: 'default' }
 
@@ -207,9 +193,23 @@ export class Hub {
     //                            attempt visibly (error), clear the lease so the zombie is
     //                            fenced out. No kill — the supervisor idle-reaps it.
     for (const [convId, p] of [...this.pending]) {
-      const s = byId.get(p.runId)
+      // The spawn POST is set pending BEFORE it returns (so a fast hello finds its entry). Until it
+      // returns, the manager may not have registered the run yet — skip, don't misread it as gone.
+      if (p.postInFlight) continue
+      // Read-driven liveness (agent-runtime ADR 0010 amendment): read this run's status as a FACT
+      // rather than guess it from absence. `creating` = the manager is still building the loge,
+      // bounded by its own timeout → wait, never a settle-window guess. (The list omits `creating`;
+      // we read it per-pending here via GET /sessions/:id.)
+      let s
+      try {
+        s = await this.supervisor.status(p.runId)
+      } catch (err) {
+        if (err.status !== 404) continue // manager unreachable — a tolerated blip; retry next tick
+        s = { status: 'gone' } // 404 everywhere → the run is dead
+      }
+      if (s.status === 'creating') continue // still booting — a bounded fact, not a verdict
       const age = Date.now() - p.since
-      if (s?.status === 'running') {
+      if (s.status === 'running') {
         if (age < this.pendingAttachCapMs) continue
         this.pending.delete(convId)
         await this.store.setLive(convId, undefined)
@@ -218,21 +218,19 @@ export class Hub {
         this.log(`abandoned ${convId}: run ${p.runId} alive but its channel never attached — supervisor will idle-reap`)
         continue
       }
-      // spawn POST may still be in flight — absence is not a verdict yet (isolated substrate:
-      // the manager's get-or-create-loge dance can legitimately take much longer, ADR 0011)
-      if (!s && age < (p.isolated ? ISOLATED_SPAWN_SETTLE_MS : SPAWN_SETTLE_MS)) continue
+      // exited / gone (404) → dead: the ADR 0007 fallback for an unproven resume, else classify.
       if (p.resume && !p.retriedFresh) {
         await this.#fallbackToFreshResume(convId, p.runId)
         continue
       }
       this.pending.delete(convId)
-      if (s?.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
+      if (s.status === 'exited' && s.exitCode != null && s.exitCode !== 0) {
         await this.store.setError(convId, `runtime exited (${s.exitCode})`)
       } else {
         await this.store.setLive(convId, undefined)
       }
       this.#broadcastConv(convId)
-      this.log(`liveness: ${convId} pending run ${p.runId} ${s ? s.status : 'gone'} → ${this.stateOf(convId)}`)
+      this.log(`liveness: ${convId} pending run ${p.runId} ${s.status} → ${this.stateOf(convId)}`)
     }
   }
 
@@ -432,13 +430,10 @@ export class Hub {
     this.pending.set(conv.id, {
       token, runId: run.id, queue: [...queuedIds], fresh: true,
       resume, anchorSeq, retriedFresh: forceFresh, since: Date.now(),
-      // Every spawn now goes through the manager's get-or-create-loge path (the hub no longer
-      // decides placement — the manager owns isolation). That path is slow (pod create + gVisor +
-      // readiness), so a pending entry always takes the generous settle window
-      // (ISOLATED_SPAWN_SETTLE_MS). This unconditional `true` is the vestige of the removed
-      // substrate flag: whether the hub should be spawn-latency-aware at all — or leave that to
-      // the manager — is the open reaper question, deliberately left untouched here.
-      isolated: true,
+      // Read-driven liveness (agent-runtime ADR 0010 amendment): the entry is set BEFORE the spawn
+      // POST returns (a fast hello must find it), so mark it in-flight — the liveness scan skips it
+      // until the POST resolves and the manager knows the run. Cleared right after spawn() returns.
+      postInFlight: true,
     })
     this.#broadcastConv(conv.id) // → starting
     try {
@@ -452,6 +447,8 @@ export class Hub {
         channelLogDir: this.channelLogDir,
         group: conv.id,
       }))
+      const pending = this.pending.get(conv.id)
+      if (pending) pending.postInFlight = false // the manager now knows the run — its status is readable
       await this.store.setLive(conv.id, { runId: run.id, token })
       this.log(`spawned ${cfg.kind} run ${run.id} for ${conv.id}${resume ? ' (resume)' : ''}`)
     } catch (err) {

@@ -1,3 +1,9 @@
+/** Bounds every supervisor/manager call (agent-runtime ADR 0010 amendment: read-driven liveness).
+ *  With the async manager no call blocks on loge boot any more — spawn returns 202 at once, status/
+ *  list are quick — so a call that exceeds this is a wedged endpoint and MUST fail loudly rather
+ *  than hang a pending entry forever (that hang was exactly leak #2). */
+const REQUEST_TIMEOUT_MS = Number(process.env.SUPERVISOR_REQUEST_TIMEOUT_MS ?? 15_000)
+
 /**
  * Client for the agent-runtime supervisor API (the control plane, ADR 0004 #2):
  * POST/GET/DELETE /sessions + /kinds. The hub is the ONLY caller of this API.
@@ -13,6 +19,7 @@ export class SupervisorClient {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
     const text = await res.text()
     let data
