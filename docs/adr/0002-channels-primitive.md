@@ -70,3 +70,20 @@ A channel, concretely:
   `.mcp.json`) **+** `--allowedTools` for the reply tool (`/srv/spike/FINDINGS.md`).
 - **fakechat** (Anthropic) is the **proof** that this design holds (channel + web UI) and our
   **reference** (ADR 0006).
+
+## Amendment 2026-07-14 — the channel WS gets its own listener (`:8601`), split from the human plane
+
+The channel's hub-side face (the WS pipe, §Consequences) has until now shared `website:8600` with the
+human UI + API. But a loge must reach the channel, so the CiliumNetworkPolicy that permits that also
+exposes the port serving the **human run-lifecycle API** — and that internal route does not necessarily
+pass `oauth2-proxy`. A compromised loge could try to drive run lifecycle, or request a more privileged
+capability profile (ADR 0012), through it. Once loges gain credentialed reach via the broker
+(agent-runtime ADR 0011), that path is unacceptable.
+
+**Decision.** The channel WS moves to a dedicated listener **`:8601`**, serving `/ws/channel` (plus a
+minimal probe health) and **nothing else** — no assets, no `/api/*`, no detailed health. The human UI/API
+stays on **`:8600`** behind `oauth2-proxy`. Loges are granted network access to **`:8601` only**. It is
+the **same in-process hub/store** (one state authority, ADR 0008) — a listener split, not a second hub.
+
+This is a **security prerequisite**, not an optimisation: only the human plane may set a run's equipment.
+Rollout is two-step (open 8601 compatibly, then close loges→8600 in the CNP); see master plan P1.
