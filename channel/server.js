@@ -20,7 +20,7 @@
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { ListToolsRequestSchema, CallToolRequestSchema, EmptyResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { appendFileSync } from 'node:fs'
 import WebSocket from 'ws'
 import { PROTOCOL_VERSION, helloMsg, replyMsg, readyMsg, setTitleMsg, unresponsiveMsg, parseHubFrame } from './protocol.js'
@@ -151,9 +151,17 @@ const outbox = [] // frames waiting for a live, hello_ok'd socket
  * acknowledges it. `reply` = the ack: the spike proved exactly one reply per
  * inbound, so a still-unanswered push after several seconds means it was dropped. */
 const inboundQueue = []
-let pendingAck = null // { push, tries, timer } awaiting a reply
-const ACK_RETRY_MS = 9000
-const ACK_MAX_TRIES = 3
+let pendingAck = null // { push, redeliveries, missed, redeliverTimer, pingTimer } — claude owes a reply
+// Race insurance: a startup notification can be dropped before claude's loop is truly up (spike S5),
+// so re-notify a few times. SEPARATE from liveness now — re-delivery never escalates to `unresponsive`.
+const REDELIVER_MS = 3000
+const REDELIVER_MAX = 3
+// Liveness: while claude owes a reply, ping it. Its MCP loop pongs in ~1ms even mid-generation (spike
+// 2026-07-14: 32/32 pongs across a 103s reply), so a long "cooking" answer is NEVER falsely flagged.
+// Only a genuinely stuck/dead loop — no pong for ~PING_MISS_MAX×PING_MS — is. `reply` clears both.
+const PING_MS = 10000
+const PING_TIMEOUT_MS = 8000
+const PING_MISS_MAX = 3
 
 function enqueueInbound(push) {
   inboundQueue.push(push)
@@ -186,30 +194,56 @@ function notify(push) {
 
 function armAck(push) {
   clearAck()
-  pendingAck = { push, tries: 0, timer: null }
-  scheduleAck()
+  pendingAck = { push, redeliveries: 0, missed: 0, redeliverTimer: null, pingTimer: null }
+  scheduleRedeliver()
+  schedulePing()
 }
 
-function scheduleAck() {
+// Re-notify the unanswered push a few times to beat the startup race, then stop — claude has it and is
+// now cooking. Crucially this NO LONGER declares `unresponsive`: a busy claude is not a dead one.
+function scheduleRedeliver() {
   if (!pendingAck) return
-  pendingAck.timer = setTimeout(() => {
+  pendingAck.redeliverTimer = setTimeout(() => {
+    if (!pendingAck || pendingAck.redeliveries >= REDELIVER_MAX) return
+    pendingAck.redeliveries += 1
+    log('redeliver', { id: pendingAck.push.id, try: pendingAck.redeliveries })
+    notify(pendingAck.push)
+    scheduleRedeliver()
+  }, REDELIVER_MS)
+  pendingAck.redeliverTimer.unref?.()
+}
+
+// Liveness probe: ping claude while it owes a reply. A pong = alive (cooking, however long). Enough
+// consecutive missed pongs = genuinely stuck/dead → `unresponsive`. This is what lets a reply take
+// minutes with no false failure, while still catching a truly hung agent.
+function schedulePing() {
+  if (!pendingAck) return
+  pendingAck.pingTimer = setTimeout(async () => {
     if (!pendingAck) return
-    if (pendingAck.tries >= ACK_MAX_TRIES) {
-      log('ack_giveup', { id: pendingAck.push.id, tries: pendingAck.tries })
-      sendToHub(unresponsiveMsg({ messageId: pendingAck.push.id, tries: pendingAck.tries }))
+    let alive = false
+    try {
+      await mcp.request({ method: 'ping' }, EmptyResultSchema, { timeout: PING_TIMEOUT_MS })
+      alive = true
+    } catch { /* no pong within the timeout → a miss */ }
+    if (!pendingAck) return // claude replied while the ping was in flight
+    if (alive) {
+      pendingAck.missed = 0
+    } else if ((pendingAck.missed += 1) >= PING_MISS_MAX) {
+      log('ack_giveup', { id: pendingAck.push.id, missed: pendingAck.missed })
+      sendToHub(unresponsiveMsg({ messageId: pendingAck.push.id, tries: pendingAck.missed }))
       clearAck()
       return
+    } else {
+      log('ping_miss', { id: pendingAck.push.id, missed: pendingAck.missed })
     }
-    pendingAck.tries += 1
-    log('redeliver', { id: pendingAck.push.id, try: pendingAck.tries })
-    notify(pendingAck.push)
-    scheduleAck()
-  }, ACK_RETRY_MS)
-  pendingAck.timer.unref?.()
+    schedulePing()
+  }, PING_MS)
+  pendingAck.pingTimer.unref?.()
 }
 
 function clearAck() {
-  if (pendingAck?.timer) clearTimeout(pendingAck.timer)
+  if (pendingAck?.redeliverTimer) clearTimeout(pendingAck.redeliverTimer)
+  if (pendingAck?.pingTimer) clearTimeout(pendingAck.pingTimer)
   pendingAck = null
 }
 
