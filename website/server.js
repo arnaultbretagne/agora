@@ -26,6 +26,7 @@ import { Hub } from './lib/hub.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const PORT = Number(process.env.PORT ?? 8600)
+const CHANNEL_PORT = Number(process.env.CHANNEL_PORT ?? 8601)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const DATA_DIR = process.env.DATA_DIR ?? join(__dirname, 'data')
 const SUPERVISOR_URL = process.env.SUPERVISOR_URL ?? 'http://127.0.0.1:8080'
@@ -224,10 +225,42 @@ setInterval(() => {
   }
 }, 20_000).unref()
 
-server.listen(PORT, HOST, () => {
-  console.log(`[website] agora hub on http://${HOST}:${PORT}`)
-  console.log(`[website] supervisor: ${SUPERVISOR_URL} — channels dial back: ${CHANNEL_HUB_URL}`)
-  console.log(`[website] store: ${DATABASE_URL ? 'postgres' : 'memory'} (${store.list().length} conversations)`)
-  // re-arm the pipe leases of runtimes that survived a hub restart
-  hub.reconcile().catch((err) => console.error('[website] reconcile failed:', err.message))
+/* ------------------------------------------------------------------ *
+ *  Channel plane (:8601) — loge-facing, WS /ws/channel ONLY.          *
+ *  Split from the human plane (:8600) so a loge never reaches the      *
+ *  human UI/API (agora ADR 0002 amendment; agent-broker plan P1).      *
+ * ------------------------------------------------------------------ */
+
+const channelServer = createServer((req, res) => {
+  // Probe-only surface: no assets, no /api, no detailed health.
+  const path = new URL(req.url ?? '/', 'http://localhost').pathname.replace(/\/+$/, '') || '/'
+  if (path === '/healthz' && (req.method ?? 'GET') === 'GET') return sendJson(res, 200, { ok: true })
+  return sendJson(res, 404, { error: 'not found' })
 })
+
+channelServer.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost')
+  if (pathname === '/ws/channel') {
+    channelWss.handleUpgrade(req, socket, head, (ws) => acceptChannel(ws))
+  } else {
+    socket.destroy() // /ws/client and the human plane live on :8600 only
+  }
+})
+
+/** Start both listeners. Exported so tests can bind ephemeral ports. */
+export function start({ port = PORT, channelPort = CHANNEL_PORT, host = HOST } = {}) {
+  server.listen(port, host, () => {
+    console.log(`[website] agora hub (human plane) on http://${host}:${port}`)
+    console.log(`[website] supervisor: ${SUPERVISOR_URL} — channels dial back: ${CHANNEL_HUB_URL}`)
+    console.log(`[website] store: ${DATABASE_URL ? 'postgres' : 'memory'} (${store.list().length} conversations)`)
+    // re-arm the pipe leases of runtimes that survived a hub restart
+    hub.reconcile().catch((err) => console.error('[website] reconcile failed:', err.message))
+  })
+  channelServer.listen(channelPort, host, () => {
+    console.log(`[website] channel plane (WS /ws/channel only) on http://${host}:${channelPort}`)
+  })
+  return { server, channelServer }
+}
+
+// Run when executed directly; stay importable (tests) without auto-listening.
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) start()
