@@ -26,9 +26,9 @@
     {
       "name": "repo-dev-v1",
       "label": "Dépôts — écriture",
-      "description": "Peut ouvrir des PR sur tes dépôts (jamais pousser sur main).",
+      "description": "Peut ouvrir des PR sur tes dépôts. Ne peut ni pousser sur main, ni merger.",
       "needsTarget": false,
-      "visible": false
+      "visible": true
     },
     {
       "name": "repo-dev-vault-v1",

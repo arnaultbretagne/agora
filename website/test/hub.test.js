@@ -763,7 +763,7 @@ test('an unknown or gated profile is refused (400) — it never becomes a run, a
   const conv = await hub.startConversation('salut', { kind: 'claude' })
   await attach(hub, conv.id)
 
-  for (const [profile, why] of [['root-v1', 'unknown'], ['repo-dev-v1', 'gated off — P6.5 opened READ only']]) {
+  for (const [profile, why] of [['root-v1', 'unknown'], ['repo-dev-vault-v1', 'gated off — the only profile still shut after P6']]) {
     await assert.rejects(
       () => hub.sendUserMessage(conv.id, 'donne-moi tout', { kind: 'claude', equipmentProfile: profile }),
       (err) => err.status === 400,
@@ -781,11 +781,11 @@ test('the profile/target pair is enforced: chat-v1 takes no target, and a repo p
     () => hub.startConversation('salut', { kind: 'claude', equipmentProfile: 'chat-v1', target: 'github:arnaultbretagne/agora' }),
     (err) => err.status === 400 && /takes no target/.test(err.message),
   )
-  // repo-dev-v1 is gated off (P6.5 opened READ only), so it fails on availability BEFORE its target
-  // rule — the gate is the outer check on purpose: an unavailable profile must not be reachable by
-  // any argument.
+  // repo-dev-vault-v1 is the only profile still gated after P6, so it fails on availability BEFORE
+  // its target rule — the gate is the outer check on purpose: an unavailable profile must not be
+  // reachable by any argument.
   await assert.rejects(
-    () => hub.startConversation('salut', { kind: 'claude', equipmentProfile: 'repo-dev-v1' }),
+    () => hub.startConversation('salut', { kind: 'claude', equipmentProfile: 'repo-dev-vault-v1' }),
     (err) => err.status === 400 && /not available/.test(err.message),
   )
   // ...and the newly-open read profile still refuses a target, like every other profile.
