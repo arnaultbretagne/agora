@@ -67,11 +67,11 @@ test('/api/meta projects the equipment catalogue: labels and shape, never capabi
   const res = await fetch(`http://127.0.0.1:${HUMAN}/api/meta`)
   const meta = await res.json()
   const names = meta.equipment.profiles.map((p) => p.name)
-  // P5 opened vault-v1; P6.5 opened repo-read-v1. Every WRITE profile is still absent — not
+  // P5 opened vault-v1; P6 opened both repo profiles. repo-dev-vault-v1 is still absent — not
   // disabled, ABSENT: the projection simply does not carry it, so no UI and no hand-made API call
-  // can reach one.
-  assert.deepEqual(names, ['chat-v1', 'vault-v1', 'repo-read-v1'], 'exactly the profiles whose gate is open')
-  assert.equal(names.some((n) => n.startsWith('repo-dev')), false, 'a gated write profile must not even be nameable')
+  // can reach it.
+  assert.deepEqual(names, ['chat-v1', 'vault-v1', 'repo-read-v1', 'repo-dev-v1'], 'exactly the profiles whose gate is open')
+  assert.equal(names.includes('repo-dev-vault-v1'), false, 'a gated profile must not even be nameable')
   const chat = meta.equipment.profiles[0]
   assert.equal(chat.label, 'Chat')
   assert.equal(chat.needsTarget, false)
