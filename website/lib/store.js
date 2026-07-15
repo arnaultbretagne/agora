@@ -7,8 +7,8 @@
  *     runs: [], anchors: {}, messages: []}`
  *   run — an execution FACT, immutable except `resolvedModel` (one backfill) and
  *     `nativeTitle` (the runtime's self-given topic, re-written as it drifts):
- *     `{id: '<convId>-rN', kind, model, effort?, agent?, resolvedModel?, nativeTitle?,
- *       nativeSessionId, resume, spawnedAt}`
+ *     `{id: '<convId>-rN', kind, model, effort?, agent?, equipmentProfile, target?,
+ *       resolvedModel?, nativeTitle?, nativeSessionId, resume, spawnedAt}`
  *   message — content, pointing at its producer: `{id, seq, role, text, ts,
  *     replyTo?, runId?}` (`runId` on assistant turns only)
  *   anchor — the resume pointer (ADR 0007), one per kind: `{runId, syncedSeq}` —
@@ -24,6 +24,7 @@
  * (`list`, `get`, `getRun`) stay synchronous — the hub's hot path is untouched.
  */
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_PROFILE } from '../../shared/equipment.js'
 
 const TITLE_MAX = 44
 
@@ -125,8 +126,13 @@ export class ConversationStore {
    * config into it. Immutable afterwards except `resolvedModel`. The run does NOT record
    * where it executed: placement is the manager's live-state concern (ADR 0011
    * superseded 2026-07-06), read by nothing here, so not a fact worth persisting.
+   *
+   * Equipment (ADR 0012) freezes here like the rest: `equipmentProfile` always (the floor
+   * when nothing was asked), `target` only for the profiles that take one. What the run
+   * says it was equipped with is what the manager was asked for — never a live value read
+   * back from a loge, which is precisely why it can be trusted as history.
    */
-  async addRun(id, { kind, model, effort, agent, nativeSessionId, resume }) {
+  async addRun(id, { kind, model, effort, agent, equipmentProfile, target, nativeSessionId, resume }) {
     const conv = this.#must(id)
     conv.spawnCount += 1
     const run = {
@@ -135,6 +141,8 @@ export class ConversationStore {
       model,
       ...(effort ? { effort } : {}),
       ...(agent ? { agent } : {}),
+      equipmentProfile: equipmentProfile ?? DEFAULT_PROFILE,
+      ...(target ? { target } : {}),
       nativeSessionId,
       resume: Boolean(resume),
       spawnedAt: new Date().toISOString(),

@@ -19,6 +19,7 @@ import { join, normalize, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { parseChannelFrame, errMsg } from '../shared/protocol.js'
+import { equipmentProjection } from '../shared/equipment.js'
 import { ConversationStore } from './lib/store.js'
 import { PgConversationStore } from './lib/pg-store.js'
 import { SupervisorClient } from './lib/supervisor.js'
@@ -66,6 +67,20 @@ function sendJson(res, code, body) {
   res.end(JSON.stringify(body))
 }
 
+/**
+ * A caller names an equipment PROFILE (ADR 0012) — it never brings its own credential or composes
+ * its own access. Credential-shaped config fields are REFUSED rather than ignored: a silent drop
+ * hides the buggy client and the probing one alike. The manager refuses them again on its side of
+ * the boundary (plan §2.6) — this is the polite half, not the enforcing one.
+ */
+const MINTED_CONFIG_FIELDS = ['credentialLease', 'capabilities', 'scopes', 'token', 'brokerUrl']
+
+function mintedFieldError(config) {
+  if (!config || typeof config !== 'object') return null
+  const found = MINTED_CONFIG_FIELDS.filter((f) => f in config)
+  return found.length ? `config may not carry ${found.join(', ')}: equipment is named by profile` : null
+}
+
 async function readJson(req) {
   const chunks = []
   for await (const c of req) chunks.push(c)
@@ -107,7 +122,11 @@ const server = createServer(async (req, res) => {
       } catch {
         supervisorUp = false
       }
-      return sendJson(res, 200, { kinds, capabilities, supervisorUp })
+      // Equipment (ADR 0012) is NOT discovered like kinds/capabilities: it is a build-time
+      // projection of agent-runtime's catalogue, so the UI can render choices it has no power to
+      // define. Gated profiles are absent from it entirely — not disabled — and the manager
+      // re-checks whatever comes back anyway.
+      return sendJson(res, 200, { kinds, capabilities, supervisorUp, equipment: equipmentProjection() })
     }
 
     if (path === '/api/conversations') {
@@ -122,6 +141,8 @@ const server = createServer(async (req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
+        const minted = mintedFieldError(body.config)
+        if (minted) return sendJson(res, 400, { error: minted })
         // Where a run executes (isolation) is neither a caller input nor a hub concern: the
         // manager owns placement entirely (ADR 0011 superseded). The hub only forwards config.
         const conv = await hub.startConversation(body.text, body.config)
@@ -153,6 +174,8 @@ const server = createServer(async (req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return sendJson(res, 400, { error: '`text` (non-empty string) is required' })
         }
+        const minted = mintedFieldError(body.config)
+        if (minted) return sendJson(res, 400, { error: minted })
         // `config` (optional) = this message's execution config (ADR 0010): same as the live
         // run → plain push into it; different → the runtime is closed and a new run spawned.
         const message = await hub.sendUserMessage(id, body.text, body.config)
@@ -166,6 +189,9 @@ const server = createServer(async (req, res) => {
     return serveStatic(res, path)
   } catch (err) {
     if (err instanceof SyntaxError) return sendJson(res, 400, { error: 'invalid JSON body' })
+    // A rejected equipment pair is the caller's fault, not the hub's: surface it as the 400 it is
+    // rather than a 500 that reads like the server broke (ADR 0012 §4).
+    if (err.status === 400) return sendJson(res, 400, { error: err.message })
     console.error(`[website] ${method} ${path} failed:`, err)
     return sendJson(res, 500, { error: err.message })
   }

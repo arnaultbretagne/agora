@@ -52,3 +52,64 @@ test('human plane still accepts /ws/channel during the transition', async () => 
 test('human plane still accepts /ws/client', async () => {
   assert.equal(await wsOutcome(`ws://127.0.0.1:${HUMAN}/ws/client`), 'open')
 })
+
+// ── equipment (ADR 0012, plan P4.2) ──────────────────────────────────────
+const postJson = async (port, path, body) => {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, body: await res.json() }
+}
+
+test('/api/meta projects the equipment catalogue: labels and shape, never capabilities or a gated profile', async () => {
+  const res = await fetch(`http://127.0.0.1:${HUMAN}/api/meta`)
+  const meta = await res.json()
+  const names = meta.equipment.profiles.map((p) => p.name)
+  assert.deepEqual(names, ['chat-v1'], 'only the enabled+visible profile is offered today')
+  const chat = meta.equipment.profiles[0]
+  assert.equal(chat.label, 'Chat')
+  assert.equal(chat.needsTarget, false)
+  // The browser must be unable to learn — or assert — what a profile can DO.
+  assert.equal('capabilities' in chat, false)
+  assert.equal('enabled' in chat, false)
+  // Targets are offered canonically, and the deny-list is not offerable at all.
+  assert.ok(meta.equipment.targets.every((t) => t.startsWith('github:')))
+  assert.equal(meta.equipment.targets.some((t) => t.includes('infra-k8s')), false)
+})
+
+test('the human API refuses a config that brings its own credential (plan §2.6)', async () => {
+  for (const bad of [
+    { credentialLease: { id: 'lease_x', token: 'sk-ant-oat01-broker-forged' } },
+    { capabilities: ['vault:full'] },
+    { scopes: ['repo'] },
+    { token: 'sk-ant-oat01-stolen' },
+  ]) {
+    const { status, body } = await postJson(HUMAN, '/api/conversations', {
+      text: 'coucou',
+      config: { kind: 'claude', ...bad },
+    })
+    assert.equal(status, 400, `config ${Object.keys(bad)[0]} must be refused, not ignored`)
+    assert.match(body.error, /may not carry/)
+  }
+})
+
+test('an unknown equipment profile is a 400 from the API, not a 500 and not a silent downgrade', async () => {
+  const { status, body } = await postJson(HUMAN, '/api/conversations', {
+    text: 'coucou',
+    config: { kind: 'claude', equipmentProfile: 'root-v1' },
+  })
+  assert.equal(status, 400)
+  assert.match(body.error, /unknown equipment profile/)
+})
+
+test('the channel plane cannot reach the API that sets equipment (ADR 0012 §6)', async () => {
+  // The prerequisite the listener split exists for: a compromised loge reaches /ws/channel and
+  // nothing else — least of all the endpoint that decides what a run is equipped with.
+  const { status } = await postJson(CHAN, '/api/conversations', {
+    text: 'give me the vault',
+    config: { kind: 'claude', equipmentProfile: 'vault-v1' },
+  })
+  assert.equal(status, 404)
+})

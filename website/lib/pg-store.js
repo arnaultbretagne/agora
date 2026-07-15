@@ -13,6 +13,7 @@
  */
 import pg from 'pg'
 import { ConversationStore } from './store.js'
+import { DEFAULT_PROFILE } from '../../shared/equipment.js'
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -48,6 +49,11 @@ CREATE TABLE IF NOT EXISTS runs (
 -- they were added; the values they held (all 'shared' or 'isolated') drove no read path.
 ALTER TABLE conversations DROP COLUMN IF EXISTS substrate;
 ALTER TABLE runs DROP COLUMN IF EXISTS substrate;
+-- ADR 0012 (2026-07-15): equipment is two more frozen run-facts. Additive on purpose — every
+-- historical run answers 'chat-v1' / no target, which is exactly what it ran with (chat was the
+-- only thing that existed), so there is nothing to backfill and nothing to rewrite.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS equipment_profile text NOT NULL DEFAULT 'chat-v1';
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS target text;
 CREATE TABLE IF NOT EXISTS messages (
   conv_id  text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   seq      integer NOT NULL,
@@ -78,11 +84,14 @@ const UPSERT_CONV = `
 `
 
 // A run is immutable except resolved_model (one backfill) and native_title (follows the topic).
+// equipment_profile/target are deliberately NOT in the DO UPDATE set: re-equipping is a new run
+// (ADR 0012 §3), so an UPDATE touching them could only ever be a bug rewriting history.
 const UPSERT_RUN = `
   INSERT INTO runs
-    (id, conv_id, kind, model, effort, agent, resolved_model, native_title, native_session_id, resume, spawned_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-  ON CONFLICT (id) DO UPDATE SET resolved_model = $7, native_title = $8
+    (id, conv_id, kind, model, effort, agent, equipment_profile, target,
+     resolved_model, native_title, native_session_id, resume, spawned_at)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+  ON CONFLICT (id) DO UPDATE SET resolved_model = $9, native_title = $10
 `
 
 const INSERT_MESSAGE = `
@@ -137,6 +146,10 @@ function rowToRun(row) {
     model: row.model,
     ...(row.effort ? { effort: row.effort } : {}),
     ...(row.agent ? { agent: row.agent } : {}),
+    // A row written before the migration has the column DEFAULT, so this coalesce only ever fires
+    // for a row read mid-migration; either way a run is never equipment-less in memory.
+    equipmentProfile: row.equipment_profile ?? DEFAULT_PROFILE,
+    ...(row.target ? { target: row.target } : {}),
     ...(row.resolved_model ? { resolvedModel: row.resolved_model } : {}),
     ...(row.native_title ? { nativeTitle: row.native_title } : {}),
     nativeSessionId: row.native_session_id,
@@ -220,6 +233,7 @@ export class PgConversationStore extends ConversationStore {
   async _persistRun(conv, run) {
     return this.#enqueue(() => this.pool.query(UPSERT_RUN, [
       run.id, conv.id, run.kind, run.model, run.effort ?? null, run.agent ?? null,
+      run.equipmentProfile ?? DEFAULT_PROFILE, run.target ?? null,
       run.resolvedModel ?? null, run.nativeTitle ?? null, run.nativeSessionId, run.resume, run.spawnedAt,
     ]))
   }

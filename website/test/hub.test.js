@@ -721,3 +721,91 @@ test('resolvedModel lives on the run; messages and summary derive it (no stampin
   assert.equal(store.getRun(conv.id, msgs[3].runId).resolvedModel, 'claude-opus-4-8')
   assert.equal(hub.summary(store.get(conv.id)).resolvedModel, 'claude-opus-4-8')
 })
+
+/* ---------------------------------------------------------------- *
+ *  P4 — run equipment (ADR 0012)                                    *
+ * ---------------------------------------------------------------- */
+
+test('equipment freezes into the run and travels to the manager as a NAME, never a credential', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('salut', { kind: 'claude' })
+
+  const run = store.lastRun(conv.id)
+  assert.equal(run.equipmentProfile, 'chat-v1', 'no profile asked -> the chat floor is a FACT, not an absence')
+  assert.equal(run.target, undefined, 'chat-v1 takes no target')
+
+  const spec = supervisor.spawned[0]
+  assert.equal(spec.equipmentProfile, 'chat-v1')
+  assert.equal(spec.target, undefined)
+  // The hub names a profile; the manager mints what it means. A hub that could send these would be
+  // a hub that could choose a loge's credential (plan §2.6).
+  for (const forbidden of ['credentialLease', 'token', 'capabilities', 'brokerUrl']) {
+    assert.equal(spec[forbidden], undefined, `the spawn spec must never carry ${forbidden}`)
+  }
+  assert.equal(spec.env.CLAUDE_CODE_OAUTH_TOKEN, undefined)
+  assert.equal(spec.env.ANTHROPIC_BASE_URL, undefined)
+})
+
+test('equipment is part of the config: the same profile pushes into the live run, a different one spawns a new one', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('un', { kind: 'claude', equipmentProfile: 'chat-v1' })
+  const { ws } = await attach(hub, conv.id)
+
+  await hub.sendUserMessage(conv.id, 'deux', { kind: 'claude', equipmentProfile: 'chat-v1' })
+  assert.equal(supervisor.spawned.length, 1, 'same equipment -> plain push, same run')
+  assert.equal(store.get(conv.id).runs.length, 1)
+  // 'un' was flushed from the backlog at attach, 'deux' pushed straight in — both into the SAME run.
+  assert.deepEqual(ws.frames('push').map((f) => f.content), ['un', 'deux'])
+})
+
+test('an unknown or gated profile is refused (400) — it never becomes a run, and the live runtime is untouched', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('salut', { kind: 'claude' })
+  await attach(hub, conv.id)
+
+  for (const [profile, why] of [['root-v1', 'unknown'], ['vault-v1', 'gated off until P5']]) {
+    await assert.rejects(
+      () => hub.sendUserMessage(conv.id, 'donne-moi tout', { kind: 'claude', equipmentProfile: profile }),
+      (err) => err.status === 400,
+      `${profile} (${why}) must be refused`,
+    )
+  }
+  assert.equal(supervisor.spawned.length, 1, 'a refused profile must never spawn anything')
+  assert.equal(store.get(conv.id).runs.length, 1)
+  assert.equal(store.lastRun(conv.id).equipmentProfile, 'chat-v1')
+})
+
+test('the profile/target pair is enforced: chat-v1 takes no target, and a repo profile is not selectable yet', async () => {
+  const { hub } = rig()
+  await assert.rejects(
+    () => hub.startConversation('salut', { kind: 'claude', equipmentProfile: 'chat-v1', target: 'github:arnaultbretagne/agora' }),
+    (err) => err.status === 400 && /takes no target/.test(err.message),
+  )
+  // repo-read-v1 is gated off (P6), so it fails on availability BEFORE its target rule — the gate is
+  // the outer check on purpose: an unavailable profile must not be reachable by any argument.
+  await assert.rejects(
+    () => hub.startConversation('salut', { kind: 'claude', equipmentProfile: 'repo-read-v1' }),
+    (err) => err.status === 400 && /not available/.test(err.message),
+  )
+})
+
+test('a run keeps the equipment it ran with: a resume-driven respawn re-sends the run FACT, not a fresh default', async () => {
+  const { store, supervisor, hub } = rig()
+  const conv = await hub.startConversation('salut', { kind: 'claude' })
+  await attach(hub, conv.id)
+  await hub.closeConversation(conv.id)
+  // No config on this message -> sticky: the last run's facts, equipment included (ADR 0010).
+  await hub.sendUserMessage(conv.id, 'encore')
+  assert.equal(supervisor.spawned.length, 2)
+  assert.equal(supervisor.spawned[1].equipmentProfile, 'chat-v1', 'equipment is sticky like kind/model')
+  assert.equal(store.lastRun(conv.id).equipmentProfile, 'chat-v1')
+})
+
+test('summary exposes the equipment of the last run and never a lease', async () => {
+  const { store, hub } = rig()
+  const conv = await hub.startConversation('salut', { kind: 'claude' })
+  const summary = hub.summary(store.get(conv.id))
+  assert.equal(summary.equipmentProfile, 'chat-v1')
+  assert.equal(summary.target, null)
+  assert.equal('leaseId' in summary, false, 'the lease is the manager’s business, useless to the human (plan §P4.2)')
+})

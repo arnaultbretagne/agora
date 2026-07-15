@@ -299,6 +299,9 @@ button { font-family: var(--font-sans); }
 .chip.live .dot { background: var(--accent-teal); }
 .chip.starting .dot { background: var(--accent-teal); animation: agoraPulse 1.2s infinite; }
 .chip.error .dot { background: var(--accent-red); }
+/* Equipment badge (ADR 0012): only on turns that ran with more than chat — see equipmentBadge(). */
+.chip.equip { gap: 4px; padding: 3px 8px; font-size: 11.5px; }
+.chip.equip svg { opacity: .7; }
 
 /* ---------------- messages ---------------- */
 
@@ -326,6 +329,10 @@ button { font-family: var(--font-sans); }
 }
 .msg-row.user { justify-content: flex-end; }
 .msg-row.assistant { justify-content: flex-start; }
+/* Only a badged turn becomes a column (badge above its text) — the default row layout, which every
+   ordinary chat turn uses, is left exactly as it was. */
+.msg-row.equipped { flex-direction: column; align-items: flex-start; gap: 6px; }
+.msg-row.user.equipped { align-items: flex-end; }
 
 .msg-row.user .msg-text {
   max-width: 78%;
@@ -532,6 +539,8 @@ button { font-family: var(--font-sans); }
 
 /* effort: a segmented control folded into the bottom of the model panel */
 .menu-sep { height: 1px; background: var(--app-hairline); margin: 6px 10px; }
+/* Says the cost of a pick BEFORE it is made (ADR 0012 §6: re-equipping spawns a new run). */
+.menu-note { padding: 6px 12px 4px; font-size: 12px; line-height: 1.4; color: var(--app-muted); }
 /* Effort = an ordered magnitude → a rail slider (Arnault's design): coral fill up to the knob,
    levels ahead as faint coral dots, crossed levels as dark notches; click the rail snaps to the
    nearest level. Header mirrors the "MODÈLE" label, with the live level in coral on the right. */

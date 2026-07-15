@@ -1,0 +1,46 @@
+{
+  "_generated": "agent-runtime `npm run print-projection` — do not edit by hand",
+  "_source": "agent-runtime src/broker/profiles.ts (the security authority)",
+  "profiles": [
+    {
+      "name": "chat-v1",
+      "label": "Chat",
+      "description": "Conversation seule. Aucun accès au vault ni à un dépôt.",
+      "needsTarget": false,
+      "visible": true
+    },
+    {
+      "name": "vault-v1",
+      "label": "Vault",
+      "description": "Lecture et écriture sur tout le vault Obsidian.",
+      "needsTarget": false,
+      "visible": false
+    },
+    {
+      "name": "repo-read-v1",
+      "label": "Dépôt — lecture",
+      "description": "Lecture seule du dépôt choisi.",
+      "needsTarget": true,
+      "visible": false
+    },
+    {
+      "name": "repo-dev-v1",
+      "label": "Dépôt — écriture",
+      "description": "Lecture et écriture sur le dépôt choisi.",
+      "needsTarget": true,
+      "visible": false
+    },
+    {
+      "name": "repo-dev-vault-v1",
+      "label": "Dépôt — écriture + Vault",
+      "description": "Lecture et écriture sur le dépôt choisi, plus tout le vault.",
+      "needsTarget": true,
+      "visible": false
+    }
+  ],
+  "targets": [
+    "github:arnaultbretagne/agent-runtime",
+    "github:arnaultbretagne/agora",
+    "github:arnaultbretagne/obsidian-stack"
+  ]
+}
