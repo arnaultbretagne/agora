@@ -763,7 +763,7 @@ test('an unknown or gated profile is refused (400) — it never becomes a run, a
   const conv = await hub.startConversation('salut', { kind: 'claude' })
   await attach(hub, conv.id)
 
-  for (const [profile, why] of [['root-v1', 'unknown'], ['vault-v1', 'gated off until P5']]) {
+  for (const [profile, why] of [['root-v1', 'unknown'], ['repo-read-v1', 'gated off until P6']]) {
     await assert.rejects(
       () => hub.sendUserMessage(conv.id, 'donne-moi tout', { kind: 'claude', equipmentProfile: profile }),
       (err) => err.status === 400,

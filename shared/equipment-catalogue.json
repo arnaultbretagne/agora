@@ -14,7 +14,7 @@
       "label": "Vault",
       "description": "Lecture et écriture sur tout le vault Obsidian.",
       "needsTarget": false,
-      "visible": false
+      "visible": true
     },
     {
       "name": "repo-read-v1",
