@@ -1,3 +1,5 @@
+import { DEFAULT_PROFILE } from '../../shared/equipment.js'
+
 /** Bounds every supervisor/manager call (agent-runtime ADR 0010 amendment: read-driven liveness).
  *  With the async manager no call blocks on loge boot any more — spawn returns 202 at once, status/
  *  list are quick — so a call that exceeds this is a wedged endpoint and MUST fail loudly rather
@@ -56,8 +58,8 @@ export class SupervisorClient {
     return ['claude'] // pre-/kinds supervisor
   }
 
-  async spawn({ kind, id, args, env, idleTtlMs, group }) {
-    return this.#json('POST', '/sessions', { kind, id, args, env, idleTtlMs, group })
+  async spawn({ kind, id, args, env, idleTtlMs, group, equipmentProfile, target }) {
+    return this.#json('POST', '/sessions', { kind, id, args, env, idleTtlMs, group, equipmentProfile, target })
   }
 
   /** All sessions the supervisor tracks (one round-trip; drives the liveness reconcile). */
@@ -135,7 +137,20 @@ export function spawnSpec(config, { convId, runId, nativeSessionId, resumeFrom, 
   // The policy (the harness cache TTL) is the product's; the supervisor treats it as opaque.
   // group (agent-runtime ADR 0010): the opaque co-location key (the conversation id) — meaningless
   // to the supervisor itself; only the manager acts on it, to get-or-create the conversation's loge.
-  return { kind: config.kind, id: runId, args, env, idleTtlMs: cacheTtlFor(config.kind), group }
+  // equipmentProfile/target (ADR 0012): what this run asked to be equipped with. A NAME, never a
+  // capability list — the manager maps it to real access and is the final authority on both. Note
+  // what is NOT here: no token, no lease, no broker URL. Those the manager mints; a hub that could
+  // send them would be a hub that could pick a loge's credential (plan §2.6).
+  return {
+    kind: config.kind,
+    id: runId,
+    args,
+    env,
+    idleTtlMs: cacheTtlFor(config.kind),
+    group,
+    equipmentProfile: config.equipmentProfile ?? DEFAULT_PROFILE,
+    ...(config.target ? { target: config.target } : {}),
+  }
 }
 
 /**

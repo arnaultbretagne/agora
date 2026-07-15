@@ -28,31 +28,68 @@ import {
 } from '../../shared/protocol.js'
 import { buildSeedContent, computeDelta, buildDeltaSeedContent } from './seed.js'
 import { spawnSpec } from './supervisor.js'
+import { DEFAULT_PROFILE, checkEquipment } from '../../shared/equipment.js'
 
 const TYPING_TIMEOUT_MS = 180_000
 
 /** Server-side floor when a message carries no config and no run exists yet (bare API use). */
-const DEFAULT_CONFIG = { kind: 'claude', model: 'default' }
+const DEFAULT_CONFIG = { kind: 'claude', model: 'default', equipmentProfile: DEFAULT_PROFILE }
 
-/** The four spawn knobs, normalised: '' → undefined for the optional ones. */
+/**
+ * The spawn knobs, normalised: '' → undefined for the optional ones.
+ *
+ * Equipment (ADR 0012) is validated, not merely normalised: a caller may name a profile from the
+ * catalogue and nothing else — never a capability list, a GitHub permission, a provider URL or a
+ * lease. `credentialLease` and friends are not stripped here but simply never read: config is a
+ * closed set of fields, so anything else a body carries dies at this boundary.
+ *
+ * @throws if the equipment pair is invalid — a bad profile/target is a 400, not a silent downgrade
+ *   to `chat-v1` (which would hand someone the wrong answer while looking like it worked).
+ */
 function normalizeConfig(config) {
   if (!config || typeof config !== 'object') return undefined
   const kind = typeof config.kind === 'string' && config.kind ? config.kind : undefined
   const model = typeof config.model === 'string' && config.model ? config.model : undefined
   const effort = typeof config.effort === 'string' && config.effort ? config.effort : undefined
   const agent = typeof config.agent === 'string' && config.agent ? config.agent : undefined
-  if (!kind && !model && !effort && !agent) return undefined
-  return { kind: kind ?? DEFAULT_CONFIG.kind, model: model ?? DEFAULT_CONFIG.model, effort, agent }
+  const profile = typeof config.equipmentProfile === 'string' && config.equipmentProfile ? config.equipmentProfile : undefined
+  const rawTarget = typeof config.target === 'string' && config.target ? config.target : undefined
+  if (!kind && !model && !effort && !agent && !profile && !rawTarget) return undefined
+
+  const checked = checkEquipment(profile, rawTarget)
+  if (!checked.ok) {
+    const err = new Error(checked.error)
+    err.status = 400
+    throw err
+  }
+  return {
+    kind: kind ?? DEFAULT_CONFIG.kind,
+    model: model ?? DEFAULT_CONFIG.model,
+    effort,
+    agent,
+    ...checked.equipment,
+  }
 }
 
-/** Does this config match the one frozen into a run? (undefined-safe on the optionals) */
+/** Does this config match the one frozen into a run? (undefined-safe on the optionals)
+ *  Equipment counts: asking for a different profile/target is asking for a different run, so it
+ *  closes the live runtime and spawns — never a silent re-equip of what is already up (ADR 0012 §3). */
 function sameConfig(config, run) {
   return config.kind === run.kind && config.model === run.model
     && (config.effort ?? null) === (run.effort ?? null)
     && (config.agent ?? null) === (run.agent ?? null)
+    && (config.equipmentProfile ?? DEFAULT_PROFILE) === (run.equipmentProfile ?? DEFAULT_PROFILE)
+    && (config.target ?? null) === (run.target ?? null)
 }
 
-const configOfRun = (run) => ({ kind: run.kind, model: run.model, effort: run.effort, agent: run.agent })
+const configOfRun = (run) => ({
+  kind: run.kind,
+  model: run.model,
+  effort: run.effort,
+  agent: run.agent,
+  equipmentProfile: run.equipmentProfile ?? DEFAULT_PROFILE,
+  target: run.target ?? null,
+})
 
 export class Hub {
   /**
@@ -288,6 +325,11 @@ export class Hub {
       model: lastRun?.model ?? null,
       effort: lastRun?.effort ?? null,
       agent: lastRun?.agent ?? null,
+      // Equipment derives from the last run like everything else (ADR 0012): what the conversation
+      // IS equipped with is whatever its newest fact says, never a separate mutable setting. No
+      // leaseId here — the lease is the manager's business and useless to the human (plan §P4.2).
+      equipmentProfile: lastRun?.equipmentProfile ?? null,
+      target: lastRun?.target ?? null,
       resolvedModel: answeredBy?.resolvedModel ?? null,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
