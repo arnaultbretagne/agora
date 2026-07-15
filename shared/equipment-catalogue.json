@@ -18,29 +18,24 @@
     },
     {
       "name": "repo-read-v1",
-      "label": "Dépôt — lecture",
-      "description": "Lecture seule du dépôt choisi.",
-      "needsTarget": true,
-      "visible": false
+      "label": "Dépôts — lecture",
+      "description": "Lecture de tous tes dépôts GitHub. Ne peut rien y écrire.",
+      "needsTarget": false,
+      "visible": true
     },
     {
       "name": "repo-dev-v1",
-      "label": "Dépôt — écriture",
-      "description": "Lecture et écriture sur le dépôt choisi.",
-      "needsTarget": true,
+      "label": "Dépôts — écriture",
+      "description": "Peut ouvrir des PR sur tes dépôts (jamais pousser sur main).",
+      "needsTarget": false,
       "visible": false
     },
     {
       "name": "repo-dev-vault-v1",
-      "label": "Dépôt — écriture + Vault",
-      "description": "Lecture et écriture sur le dépôt choisi, plus tout le vault.",
-      "needsTarget": true,
+      "label": "Dépôts — écriture + Vault",
+      "description": "Peut ouvrir des PR sur tes dépôts, plus tout le vault.",
+      "needsTarget": false,
       "visible": false
     }
-  ],
-  "targets": [
-    "github:arnaultbretagne/agent-runtime",
-    "github:arnaultbretagne/agora",
-    "github:arnaultbretagne/obsidian-stack"
   ]
 }

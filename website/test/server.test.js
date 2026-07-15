@@ -67,19 +67,23 @@ test('/api/meta projects the equipment catalogue: labels and shape, never capabi
   const res = await fetch(`http://127.0.0.1:${HUMAN}/api/meta`)
   const meta = await res.json()
   const names = meta.equipment.profiles.map((p) => p.name)
-  // P5 opened vault-v1. Every repo profile is still absent — not disabled, ABSENT: the projection
-  // simply does not carry them, so no UI and no hand-made API call can reach one.
-  assert.deepEqual(names, ['chat-v1', 'vault-v1'], 'exactly the profiles whose gate is open')
-  assert.equal(names.some((n) => n.startsWith('repo-')), false, 'a gated profile must not even be nameable')
+  // P5 opened vault-v1; P6.5 opened repo-read-v1. Every WRITE profile is still absent — not
+  // disabled, ABSENT: the projection simply does not carry it, so no UI and no hand-made API call
+  // can reach one.
+  assert.deepEqual(names, ['chat-v1', 'vault-v1', 'repo-read-v1'], 'exactly the profiles whose gate is open')
+  assert.equal(names.some((n) => n.startsWith('repo-dev')), false, 'a gated write profile must not even be nameable')
   const chat = meta.equipment.profiles[0]
   assert.equal(chat.label, 'Chat')
   assert.equal(chat.needsTarget, false)
   // The browser must be unable to learn — or assert — what a profile can DO.
   assert.equal('capabilities' in chat, false)
   assert.equal('enabled' in chat, false)
-  // Targets are offered canonically, and the deny-list is not offerable at all.
-  assert.ok(meta.equipment.targets.every((t) => t.startsWith('github:')))
-  assert.equal(meta.equipment.targets.some((t) => t.includes('infra-k8s')), false)
+  // No target is offered at all any more (P6 dropped them). Asserted as ABSENCE: the two checks
+  // that used to live here ran `.every()`/`.some()` over the list, which pass vacuously on an empty
+  // one — and in fact the field had already become `undefined`, so they would have thrown had the
+  // assertion above not failed first. An assertion that cannot distinguish "correct" from "gone" is
+  // not an assertion.
+  assert.equal('targets' in meta.equipment, false, 'the projection must not carry a targets field')
 })
 
 test('the human API refuses a config that brings its own credential (plan §2.6)', async () => {
