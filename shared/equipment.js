@@ -6,7 +6,9 @@
  * Never a capability list — agora must be able to NAME a profile, never to define what it can do.
  * Regenerate the projection from agent-runtime (its catalogue is the source):
  *
- *   npm run print-projection > ../agora/shared/equipment-catalogue.json
+ *   npm run --silent print-projection > ../agora/shared/equipment-catalogue.json
+ *
+ * (`--silent` matters: npm prints its banner on stdout and would corrupt the file.)
  *
  * The manager re-validates every choice and is the final authority (ADR 0012 §5), so a stale
  * projection is fail-closed: it can only ever offer a name the manager then refuses. That is also
@@ -21,18 +23,18 @@ const projection = JSON.parse(readFileSync(new URL('./equipment-catalogue.json',
 export const DEFAULT_PROFILE = 'chat-v1'
 
 export const EQUIPMENT_PROFILES = Object.freeze(projection.profiles)
-export const EQUIPMENT_TARGETS = Object.freeze(projection.targets)
 
 const byName = new Map(EQUIPMENT_PROFILES.map((p) => [p.name, p]))
 
-/** What the browser may see and pick: visible profiles only, plus the allow-listed targets in the
- *  canonical form they must travel in. A gated profile is absent, not disabled — the UI cannot
- *  reveal what the projection does not carry. */
+/** What the browser may see and pick: visible profiles only. A gated profile is absent, not
+ *  disabled — the UI cannot reveal what the projection does not carry.
+ *
+ *  No `targets` any more: P6 dropped the per-run repo target (GitHub has no permission separating
+ *  "push a branch" from "push main", so the repository ruleset draws that line, not a token scope).
+ *  The key lingered here reading a projection field that no longer exists — i.e. it shipped
+ *  `undefined`, which JSON silently drops. Removed rather than left to look meaningful. */
 export function equipmentProjection() {
-  return {
-    profiles: EQUIPMENT_PROFILES.filter((p) => p.visible),
-    targets: EQUIPMENT_TARGETS,
-  }
+  return { profiles: EQUIPMENT_PROFILES.filter((p) => p.visible) }
 }
 
 /** Syntax only — the shape a GitHub target must have. Authority (allow-list, deny-list, the App's
