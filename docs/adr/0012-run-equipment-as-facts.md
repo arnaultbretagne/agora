@@ -43,6 +43,22 @@ permissions, provider URLs or a lease.
 Changing profile or target creates a **new run**; a live run is never re-equipped. Both values join
 `sameConfig`. The conversation history shows the profile + target each turn actually used.
 
+#### Amendment (2026-07-15, P4) — "each turn actually used" was a category error; no history badge
+
+The sentence above conflates two different facts, and the badge built from it was withdrawn before it
+ever rendered. Equipment is a **permission held for a whole run**, not evidence that a given turn used
+it: every message of a run carries the same profile, so a per-turn badge repeats one run-level fact N
+times, and — worse — reads as "this answer touched your vault" when all it can honestly claim is "this
+answer was allowed to". It stood in for a signal the hub does not have.
+
+The question it was reaching for ("what did the agent actually do to answer?") is answered by the
+agent's **tool calls**, which today never leave the loge: the channel carries only `reply`/`set_title`
+(agora ADR 0002), so the hub has no record of them. Surfacing them is a pipe to build, not a badge to
+render, and it is deliberately left to its own palier rather than approximated here.
+
+Until then the history stays silent rather than misleading. What a conversation is equipped with is
+shown where it is a live, answerable fact: the selector (§6).
+
 ### 4. Constraints (application, and SQL where possible)
 
 - `equipment_profile` ∈ the known catalogue;
@@ -60,7 +76,9 @@ the manager is the final authority and refuses any profile its version does not 
 
 An **Equipment** selector: `Chat` visible and default; `Vault` visible after P5; `Repo — read` after
 P6; write profiles hidden until the infra gate opens. Target via an allow-listed autocomplete, not a
-free URL. A badge shows the run's profile + target; changing it warns "a new run will be created". The
+free URL. The selector itself shows the conversation's profile + target (derived from its last run, so
+it states a fact rather than a draft); changing it warns "a new run will be created" (the per-turn
+history badge this section originally called for was withdrawn — see the §3 amendment). The
 **channel listener (8601) cannot call the API that sets equipment** — only the human API on 8600 (behind
 oauth2-proxy) can, which is why the listener split (ADR 0002 amendment) is a prerequisite, not an
 optimisation.
