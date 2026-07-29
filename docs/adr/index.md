@@ -1,0 +1,38 @@
+# Architecture Decision Record index
+
+This is the only ADR index for Agora. The series was rewritten as a coherent baseline on
+2026-07-29 after retiring the former Agora/agent-runtime architecture.
+
+ADRs record decisions and rationale. Current behavior is specified under `docs/specs/`.
+
+| ADR | Status | Decision |
+|---|---|---|
+| [0001](0001-unified-repository.md) | Accepted | One Agora monorepo, separate trust-zone deployables |
+| [0002](0002-workstream-session-model.md) | Accepted | Workstream is the product aggregate; ACP Session is the execution unit |
+| [0003](0003-acp-only-agent-protocol.md) | Accepted | Stable ACP v1 is the only semantic Agent protocol |
+| [0004](0004-canonical-journal-and-projections.md) | Accepted | Full ACP envelopes form one canonical Workstream journal; UI models are projections |
+| [0005](0005-one-session-one-loge.md) | Accepted | One Session equals one logical Loge, with at most one active Pod |
+| [0006](0006-trusted-agent-registry.md) | Proposed | Trusted Agent registry and harness-specific adapters replace arbitrary spawn |
+| [0007](0007-opaque-custody.md) | Accepted | Versioned, opaque custody snapshots are stored separately from product meaning |
+| [0008](0008-anchor-delta-handoffs.md) | Accepted | Per-Agent durable anchors drive delta handoffs across Sessions |
+| [0009](0009-postgres-storage-boundaries.md) | Accepted | Postgres stores product facts, projections and opaque custody, not infrastructure logs |
+| [0010](0010-capability-grants.md) | Proposed | Independent capability grants replace fixed combination profiles |
+| [0011](0011-security-trust-zones.md) | Accepted | Loges are untrusted; controller, Broker and product use separate identities |
+| [0012](0012-state-authority-and-observability.md) | Accepted | Product, runtime and telemetry state keep distinct owners |
+| [0013](0013-greenfield-replacement.md) | Accepted | Replace the old implementation with contract-first greenfield vertical slices |
+| [0014](0014-adopt-credential-gateway.md) | Proposed | Evaluate and adopt OneCLI before building credential gateway code |
+
+## Retired vocabulary
+
+The new baseline deliberately removes `Conversation`, `Run`, harness `Thread` as a product object,
+`native_session_id`, runtime `kind`, reusable Loge `group`, fixed `profile`, Channel and Pipe. Git
+history before the baseline remains the historical source for those discarded decisions.
+
+## Status policy
+
+- `Proposed`: requires operator review before dependent implementation begins.
+- `Accepted`: binding for implementation.
+- `Superseded`: retained only if a later ADR replaces it.
+
+Coding agents MUST NOT implement a plan depending on a Proposed ADR until it is accepted or the plan
+explicitly limits itself to a reversible spike.

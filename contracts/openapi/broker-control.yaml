@@ -1,0 +1,264 @@
+openapi: 3.1.0
+info:
+  title: Agora Broker Control API
+  version: 0.1.0
+  description: Internal policy, execution-grant issue and revocation API.
+servers:
+  - url: /v1
+security:
+  - mutualTLS: []
+paths:
+  /equipment-catalogue:
+    get:
+      operationId: getBrokerEquipmentCatalogue
+      responses:
+        '200':
+          description: Broker-authoritative safe resource-intent vocabulary.
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/equipment-catalogue.schema.json
+  /execution-grants:
+    post:
+      operationId: issueExecutionGrant
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueGrantRequest'
+      responses:
+        '201':
+          description: Policy approved and issued a Session-bound grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedGrant'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /execution-grant-activations:
+    post:
+      operationId: activateExecutionGrant
+      description: >
+        Controller-only binding of a transient grant reference to one Loge workload identity. No
+        provider or data-plane credential is returned.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateGrantRequest'
+      responses:
+        '201':
+          description: Grant bound to the Loge workload identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantActivation'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /execution-grants/{grantId}/renew:
+    parameters:
+      - $ref: '#/components/parameters/GrantId'
+    post:
+      operationId: renewExecutionGrant
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Same capability digest renewed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedGrant'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /execution-grants/{grantId}:
+    parameters:
+      - $ref: '#/components/parameters/GrantId'
+    delete:
+      operationId: revokeExecutionGrant
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Revoked or already absent.
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GrantId:
+      name: grantId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Problem:
+      description: Typed policy/Broker denial or conflict.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    IssueGrantRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - sessionId
+        - agentId
+        - principalId
+        - workstreamCategory
+        - equipment
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+          minLength: 1
+        principalId:
+          type: string
+          description: Signed/delegated product principal; Broker validates caller authority.
+        workstreamCategory:
+          type: string
+          enum: [discussion, invocation]
+        equipment:
+          $ref: ../schemas/equipment-request.schema.json
+    IssuedGrant:
+      type: object
+      additionalProperties: false
+      required:
+        - grantId
+        - grantRef
+        - sessionId
+        - agentId
+        - policyVersion
+        - capabilityDigest
+        - capabilities
+        - mcpServers
+        - expiresAt
+      properties:
+        grantId:
+          type: string
+          format: uuid
+        grantRef:
+          type: string
+          description: Opaque controller-consumable reference, not a Loge bearer.
+          readOnly: true
+          x-sensitive: true
+        sessionId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+        policyVersion:
+          type: string
+        capabilityDigest:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapabilityFact'
+        mcpServers:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Safe ACP v1 McpServer descriptor containing no provider secret.
+            x-acp-type: McpServer
+        expiresAt:
+          type: string
+          format: date-time
+    ActivateGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [grantRef, sessionId, agentId, workloadIdentity]
+      properties:
+        grantRef:
+          type: string
+          writeOnly: true
+          x-sensitive: true
+        sessionId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+          minLength: 1
+        workloadIdentity:
+          type: string
+          description: Controller-created authenticated identity for exactly one Loge.
+          minLength: 1
+          maxLength: 500
+    GrantActivation:
+      type: object
+      additionalProperties: false
+      required:
+        - activationId
+        - grantId
+        - sessionId
+        - agentId
+        - workloadIdentity
+        - expiresAt
+      properties:
+        activationId:
+          type: string
+          format: uuid
+        grantId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+        workloadIdentity:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    CapabilityFact:
+      type: object
+      additionalProperties: false
+      required: [capabilityId, accessLevel, constraints]
+      properties:
+        capabilityId:
+          type: string
+        accessLevel:
+          type: string
+        constraints:
+          type: object
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string

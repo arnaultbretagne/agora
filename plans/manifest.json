@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "baselineReviewRequired": true,
+  "plans": [
+    {
+      "id": "P01",
+      "file": "01-domain-and-contracts.md",
+      "dependsOn": [],
+      "status": "blocked_on_baseline_review"
+    },
+    {
+      "id": "P02",
+      "file": "02-postgres-store.md",
+      "dependsOn": [
+        "P01"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P03",
+      "file": "03-acp-session-coordinator.md",
+      "dependsOn": [
+        "P01",
+        "P02"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P04",
+      "file": "04-loge-controller.md",
+      "dependsOn": [
+        "P01"
+      ],
+      "decisionGates": [
+        "ADR-0006"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P05",
+      "file": "05-web-and-projections.md",
+      "dependsOn": [
+        "P02",
+        "P03"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P06",
+      "file": "06-custody-and-resume.md",
+      "dependsOn": [
+        "P02",
+        "P03",
+        "P04"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P07",
+      "file": "07-cross-agent-handoff.md",
+      "dependsOn": [
+        "P03",
+        "P05",
+        "P06"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P08",
+      "file": "08-equipment-and-broker.md",
+      "dependsOn": [
+        "P01"
+      ],
+      "decisionGates": [
+        "ADR-0010",
+        "ADR-0014"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P09",
+      "file": "09-claude-agent.md",
+      "dependsOn": [
+        "P04",
+        "P06",
+        "P08"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P10",
+      "file": "10-codex-agent.md",
+      "dependsOn": [
+        "P04",
+        "P06",
+        "P08"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P11",
+      "file": "11-hardening-and-cutover.md",
+      "dependsOn": [
+        "P05",
+        "P07",
+        "P08",
+        "P09",
+        "P10"
+      ],
+      "status": "pending"
+    }
+  ]
+}

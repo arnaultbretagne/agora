@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agora.invalid/contracts/workstream-item.schema.json",
+  "title": "WorkstreamItem",
+  "description": "Current rebuildable Web representation of one ACP-derived entity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workstreamId",
+    "sessionId",
+    "kind",
+    "firstEventId",
+    "latestEventId",
+    "firstWorkstreamSeq",
+    "latestWorkstreamSeq",
+    "value",
+    "contentSha256",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "workstreamId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "kind": {
+      "enum": [
+        "message",
+        "thought",
+        "tool_call",
+        "plan",
+        "permission",
+        "elicitation",
+        "terminal",
+        "usage",
+        "session_info",
+        "handoff",
+        "unknown"
+      ]
+    },
+    "firstEventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "latestEventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "firstWorkstreamSeq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "latestWorkstreamSeq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "value": {
+      "type": "object",
+      "description": "Safe current ACP-derived value. Variant fields follow the pinned projector version.",
+      "additionalProperties": true
+    },
+    "contentSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

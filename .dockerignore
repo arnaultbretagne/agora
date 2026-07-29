@@ -1,7 +1,8 @@
-**/node_modules
-**/package-lock.json
-.poc
-website/data
 .git
+.github
+node_modules
+dist
+coverage
 docs
-**/test
+plans
+*.log

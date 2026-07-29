@@ -1,0 +1,12 @@
+# HTTP contracts
+
+- `product-api.yaml`: authenticated Browser/product surface.
+- `loge-control.yaml`: internal Loge lifecycle surface.
+- `broker-control.yaml`: internal policy and execution-grant surface.
+
+ACP is not repeated here. The control plane and Agents use stable ACP v1 from the pinned official
+SDK.
+
+Generated clients/servers MUST preserve the separation between public bearer authentication and
+internal workload/mTLS authentication. `writeOnly` grant/tunnel fields must be redacted from logs and
+serialization outside their immediate consumer.

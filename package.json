@@ -1,0 +1,29 @@
+{
+  "name": "@agora/root",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agora — ACP-native workstreams executed in isolated loges",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "agents/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node scripts/check-repository.mjs",
+    "test": "npm run check"
+  },
+  "overrides": {
+    "@agentclientprotocol/sdk": "1.3.0"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "12.1.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "typescript": "7.0.2",
+    "yaml": "2.9.0"
+  }
+}

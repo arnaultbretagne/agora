@@ -1,0 +1,6 @@
+{
+  "name": "@agora/loge-controller",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module"
+}

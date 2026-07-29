@@ -1,0 +1,942 @@
+openapi: 3.1.0
+info:
+  title: Agora Product API
+  version: 0.1.0
+  description: Public Workstream and Session command/read API.
+servers:
+  - url: /v1
+security:
+  - bearerAuth: []
+paths:
+  /workstreams:
+    post:
+      operationId: createWorkstream
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkstreamRequest'
+      responses:
+        '202':
+          description: Durable creation command accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkstreamAccepted'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+    get:
+      operationId: listWorkstreams
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+      responses:
+        '200':
+          description: Authorized Workstreams ordered by product activity.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workstream'
+                  nextCursor:
+                    type: [string, 'null']
+  /workstreams/{workstreamId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    get:
+      operationId: getWorkstream
+      responses:
+        '200':
+          description: Workstream aggregate read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkstreamDetail'
+        '404':
+          $ref: '#/components/responses/Problem'
+    patch:
+      operationId: patchWorkstream
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                pinned:
+                  type: boolean
+              minProperties: 1
+      responses:
+        '200':
+          description: Metadata updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workstream'
+        '404':
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteWorkstream
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Ordered deletion accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/sessions:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    post:
+      operationId: openSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenSessionRequest'
+      responses:
+        '202':
+          description: Session provisioning accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [command, session]
+                properties:
+                  command:
+                    $ref: '#/components/schemas/CommandAccepted'
+                  session:
+                    $ref: '#/components/schemas/Session'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/feed:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+      - name: after
+        in: query
+        description: Last fully applied feed position.
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+    get:
+      operationId: streamWorkstreamFeed
+      responses:
+        '200':
+          description: Resumable Server-Sent Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Each data field validates against feed-event.schema.json.
+        '404':
+          $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/items:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    get:
+      operationId: listWorkstreamItems
+      description: >
+        Returns a reverse-chronological projection page. The first page also establishes a feed
+        position from which concurrent changes can be applied idempotently.
+      parameters:
+        - name: beforeSeq
+          in: query
+          description: Exclusive first-Workstream-sequence boundary for older-page pagination.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Current rebuildable Workstream items and synchronization positions.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, throughWorkstreamSeq, feedPosition]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkstreamItem'
+                  throughWorkstreamSeq:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  feedPosition:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  nextBeforeSeq:
+                    type: [integer, 'null']
+                    format: int64
+                    minimum: 1
+        '404':
+          $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/memberships:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    get:
+      operationId: listWorkstreamMemberships
+      responses:
+        '200':
+          description: Memberships visible to a Workstream owner.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkstreamMembership'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/memberships/{principalId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+      - $ref: '#/components/parameters/PrincipalId'
+    put:
+      operationId: putWorkstreamMembership
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, editor, viewer]
+      responses:
+        '200':
+          description: Membership created or changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkstreamMembership'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteWorkstreamMembership
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Membership removed or already absent; the last owner cannot be removed.
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /commands/{commandId}:
+    parameters:
+      - $ref: '#/components/parameters/CommandId'
+    get:
+      operationId: getCommand
+      description: Authorization is evaluated through the command's owning Workstream.
+      responses:
+        '200':
+          description: Durable command status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /agents:
+    get:
+      operationId: listAgents
+      responses:
+        '200':
+          description: Safe public projection of Agent registry entries available to the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PublicAgent'
+  /equipment-catalogue:
+    get:
+      operationId: getEquipmentCatalogue
+      responses:
+        '200':
+          description: Versioned resource-intent vocabulary available to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EquipmentCatalogue'
+  /sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSession
+      parameters:
+        - name: includeLive
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Durable Session and optional live Loge state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/activate:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: activateSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Suspend/switch/resume/handoff orchestration accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/prompts:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: promptSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptRequest'
+      responses:
+        '202':
+          description: Prompt durably accepted; output is delivered by the feed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/suspend:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: suspendSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Durable suspension accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+  /sessions/{sessionId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: cancelSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Cancellation accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+  /sessions/{sessionId}/close:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: closeSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Close accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+  /sessions/{sessionId}/mode:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: setSessionMode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [modeId]
+              properties:
+                modeId:
+                  type: string
+                  minLength: 1
+      responses:
+        '202':
+          description: ACP mode change accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/config-options/{optionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - name: optionId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    put:
+      operationId: setSessionConfigOption
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [value]
+              properties:
+                value:
+                  description: Value validated against the Agent-advertised ACP config option.
+      responses:
+        '202':
+          description: ACP config-option change accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/permission-requests/{requestId}/decision:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: decidePermissionRequest
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [optionId]
+              properties:
+                optionId:
+                  type: string
+                  minLength: 1
+      responses:
+        '202':
+          description: Permission decision durably accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /sessions/{sessionId}/elicitation-requests/{requestId}/response:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: respondToElicitation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [response]
+              properties:
+                response:
+                  description: Value validated against the pending ACP elicitation schema.
+      responses:
+        '202':
+          description: Elicitation response durably accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 200
+    WorkstreamId:
+      name: workstreamId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommandId:
+      name: commandId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PrincipalId:
+      name: principalId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 300
+  responses:
+    Problem:
+      description: Typed safe error.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    ACPContentBlock:
+      type: object
+      description: A stable ACP v1 ContentBlock validated with the pinned official SDK.
+      x-acp-type: ContentBlock
+      additionalProperties: true
+    WorkspaceIntent:
+      type: object
+      additionalProperties: false
+      required: [workspaceRef]
+      properties:
+        workspaceRef:
+          type: string
+          minLength: 1
+          maxLength: 300
+        cwd:
+          type: string
+          default: /workspace
+        additionalWorkspaceRefs:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+    EquipmentRequest:
+      $ref: ../schemas/equipment-request.schema.json
+    CreateWorkstreamRequest:
+      type: object
+      additionalProperties: false
+      required: [category, agentId, workspace, equipment, prompt]
+      properties:
+        category:
+          type: string
+          enum: [discussion, invocation]
+        agentId:
+          type: string
+          minLength: 1
+          maxLength: 120
+        workspace:
+          $ref: '#/components/schemas/WorkspaceIntent'
+        equipment:
+          $ref: '#/components/schemas/EquipmentRequest'
+        prompt:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ACPContentBlock'
+    OpenSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [agentId, workspace, equipment, activate]
+      properties:
+        agentId:
+          type: string
+          minLength: 1
+          maxLength: 120
+        workspace:
+          $ref: '#/components/schemas/WorkspaceIntent'
+        equipment:
+          $ref: '#/components/schemas/EquipmentRequest'
+        activate:
+          type: boolean
+    PromptRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ACPContentBlock'
+    Workstream:
+      type: object
+      additionalProperties: false
+      required: [id, category, title, pinned, role, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [discussion, invocation]
+        title:
+          type: string
+        pinned:
+          type: boolean
+        role:
+          type: string
+          enum: [owner, editor, viewer]
+        currentSessionId:
+          type: [string, 'null']
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    WorkstreamDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - category
+        - title
+        - pinned
+        - role
+        - createdAt
+        - updatedAt
+        - sessions
+        - projectionHead
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [discussion, invocation]
+        title:
+          type: string
+        pinned:
+          type: boolean
+        role:
+          type: string
+          enum: [owner, editor, viewer]
+        currentSessionId:
+          type: [string, 'null']
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        projectionHead:
+          type: integer
+          format: int64
+          minimum: 0
+    Session:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workstreamId
+        - ordinal
+        - agentId
+        - phase
+        - current
+        - runtimeDefinitionVersion
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workstreamId:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+          minimum: 1
+        agentId:
+          type: string
+        phase:
+          type: string
+          enum:
+            - requested
+            - provisioning
+            - ready
+            - busy
+            - suspending
+            - suspended
+            - closing
+            - closed
+            - failed
+        current:
+          type: boolean
+        runtimeDefinitionVersion:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        failure:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/SafeFailure'
+        liveLoge:
+          type: object
+          additionalProperties: false
+          properties:
+            state:
+              type: string
+              enum: [absent, provisioning, ready, capturing, terminating, failed]
+            podUid:
+              type: string
+    WorkstreamItem:
+      $ref: ../schemas/workstream-item.schema.json
+    WorkstreamMembership:
+      type: object
+      additionalProperties: false
+      required: [workstreamId, principalId, role, addedAt]
+      properties:
+        workstreamId:
+          type: string
+          format: uuid
+        principalId:
+          type: string
+        role:
+          type: string
+          enum: [owner, editor, viewer]
+        addedAt:
+          type: string
+          format: date-time
+    Command:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workstreamId
+        - commandType
+        - actorKind
+        - state
+        - acceptedAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workstreamId:
+          type: string
+          format: uuid
+        sessionId:
+          type: [string, 'null']
+          format: uuid
+        commandType:
+          type: string
+        purpose:
+          type: [string, 'null']
+          enum: [user, handoff, protocol, null]
+        actorKind:
+          type: string
+          enum: [human, service, system]
+        state:
+          type: string
+          enum: [accepted, dispatching, acknowledged, unknown, completed, failed]
+        acceptedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        failure:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/SafeFailure'
+    PublicAgent:
+      type: object
+      additionalProperties: false
+      required: [agentId, runtimeDefinitionVersion, label, description, availability]
+      properties:
+        agentId:
+          type: string
+        runtimeDefinitionVersion:
+          type: string
+          readOnly: true
+        label:
+          type: string
+        description:
+          type: string
+        availability:
+          type: string
+          enum: [enabled, unavailable, deprecated]
+    EquipmentCatalogue:
+      $ref: ../schemas/equipment-catalogue.schema.json
+    CreateWorkstreamAccepted:
+      type: object
+      additionalProperties: false
+      required: [command, workstream, session]
+      properties:
+        command:
+          $ref: '#/components/schemas/CommandAccepted'
+        workstream:
+          $ref: '#/components/schemas/Workstream'
+        session:
+          $ref: '#/components/schemas/Session'
+    CommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [commandId, state, acceptedAt]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          const: accepted
+        acceptedAt:
+          type: string
+          format: date-time
+    SafeFailure:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+        detail:
+          type: string
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+        detail:
+          type: string
+        commandId:
+          type: string
+          format: uuid
