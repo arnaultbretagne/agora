@@ -34,6 +34,10 @@
 - [ ] Implement permanent resume failure -> failed old Session + explicit new-Session command.
 - [ ] Implement retention without deleting anchored snapshots.
 - [ ] Add custody payload read audit and secret-path exclusions.
+- [ ] Exclude OneCLI auth stubs, proxy configuration, upstream Agent bearer and provider-auth paths
+  from every custody driver.
+- [ ] Obtain and activate a current execution grant before restore; never revive authority from the
+  snapshot.
 
 ## Required tests
 
@@ -46,12 +50,14 @@
 - Control-plane DB role cannot read payload.
 - No credential fixture appears in captured bytes.
 - `session/load` replay cannot duplicate Workstream items.
+- Pod replacement rotates/rebinds runtime authority while resuming the same ACP Session and custody.
 
 ## Non-goals
 
 - No real Claude/Codex native format.
 - No cross-Agent delta yet.
 - No object storage.
+- No persistence of OneCLI runtime configuration in custody.
 
 ## Exit criteria
 

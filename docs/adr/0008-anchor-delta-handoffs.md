@@ -19,6 +19,8 @@ missing Workstream range as a standard ACP Handoff prompt. The seed policy and s
 durably recorded.
 
 An Anchor advances only after custody capture succeeds.
+It never contains OneCLI Agent IDs, proxy authority or grant state; resume activates fresh
+Session-bound authority before restoring the anchored context.
 
 ## Alternatives rejected
 
@@ -26,6 +28,8 @@ An Anchor advances only after custody capture succeeds.
 - **Anchor only by ACP Session ID:** does not prove durable native state exists.
 - **One shared neutral Session across Agents:** ACP Sessions are Agent-owned contexts.
 - **Copy source messages into the target timeline:** duplicates the Workstream representation.
+- **Use gateway state as an Anchor:** credential lifecycle proves neither native context durability
+  nor a Workstream watermark.
 
 ## Consequences
 
@@ -33,6 +37,7 @@ An Anchor advances only after custody capture succeeds.
 - Seedability is versioned separately from storage and UI visibility.
 - A capture failure leaves the old Anchor, allowing deterministic replay of the delta.
 - Permanent resume failure creates a new Session and a larger handoff.
+- Cross-Agent switches never share OneCLI Agents or their upstream proxy bearers.
 
 ## Governing specs
 

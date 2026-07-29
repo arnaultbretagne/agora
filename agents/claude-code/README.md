@@ -2,5 +2,6 @@
 
 Trusted runtime definition and opaque custody driver for the selected Claude Code ACP adapter.
 
-The concrete adapter and Max-subscription authentication mechanism remain behind explicit validation
-gates in `plans/09-claude-agent.md`; neither is assumed by the core architecture.
+The image bakes pinned Claude Code and ACP-adapter binaries. Max-subscription authentication uses the
+fixed Broker-relay/OneCLI path; ACP and custody fidelity remain behind the validation gates in
+`plans/09-claude-agent.md`.

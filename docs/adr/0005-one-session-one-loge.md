@@ -19,12 +19,18 @@ without creating another Loge or Session.
 The Loge controller exposes idempotent resource operations keyed by Session ID. It never accepts a
 group or reuses a Pod for another Session.
 
+The Broker applies the same grain to OneCLI: one dedicated selective OneCLI Agent per Session. The
+OneCLI Agent may survive Pod replacement for that same Session, but is rotated/revoked while no Loge
+is active and is never reassigned.
+
 ## Alternatives rejected
 
 - **Loge per Workstream:** couples several Agent Sessions/security envelopes.
 - **Reusable pool Pod:** weakens isolation and custody ownership.
 - **Treat every Pod incarnation as a new Session:** makes ACP native resume impossible.
 - **Persist a separate Loge entity:** creates a permanent 1:1 alias without additional meaning.
+- **Share one OneCLI Agent across Sessions:** couples credentials, policy and revocation across
+  otherwise isolated Loges.
 
 ## Consequences
 
@@ -32,6 +38,7 @@ group or reuses a Pod for another Session.
 - One active Pod per Session is a hard invariant and alert.
 - Physical Pod status remains infrastructure state.
 - Custody is required before intentional dematerialization.
+- Session cleanup includes deterministic OneCLI Agent revocation and eventual deletion.
 
 ## Governing specs
 

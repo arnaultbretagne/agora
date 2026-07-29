@@ -33,6 +33,8 @@
 - [ ] Advance target Agent Anchor only through later custody capture.
 - [ ] Handle oversized/unsafe ranges with explicit summary/confirmation policy.
 - [ ] Surface resume/handoff failures as typed states.
+- [ ] Preserve one dedicated OneCLI Agent/grant mapping per target Session; switching Agents never
+  transfers or reuses gateway authority.
 
 ## Required tests
 
@@ -43,12 +45,14 @@
 - Capture failure after successful Handoff preserves old durable Anchor.
 - Repeating after crash regenerates byte-identical Handoff content/digest.
 - Thoughts/tool calls follow the explicit policy rather than UI collapse state.
+- A→B→A activates only the target Session's OneCLI authority; no cross-Session bearer is reused.
 
 ## Non-goals
 
 - No simultaneous active Agents in one Workstream.
 - No hidden native-context portability guarantee.
 - No arbitrary user-authored seed policy in v1.
+- No gateway policy or credential state in Handoff content.
 
 ## Exit criteria
 

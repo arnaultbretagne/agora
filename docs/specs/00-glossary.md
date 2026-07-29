@@ -182,14 +182,32 @@ independent rows, not named combinations.
 ### Execution grant
 
 A short-lived, opaque Broker authorization issued for a Session from its resolved capability
-grants. Its transient activation reference is consumed by the Loge controller and bound to that
-Loge's workload identity. It MUST NOT be persisted as a bearer token.
+grants. Its transient activation reference is consumed by the Loge controller and bound by the
+Broker access relay to that Loge's workload identity. It maps to one dedicated OneCLI Agent but never
+exposes the OneCLI upstream bearer. It MUST NOT be persisted as a bearer token in product state.
 
 ### Broker
 
-The security boundary that authorizes execution-grant use, proxies provider/MCP operations and
-mints downstream credentials without exposing provider secrets to the Loge. It may integrate an
-adopted gateway such as OneCLI; it does not imply a custom implementation.
+The Agora security boundary that resolves equipment intent, owns execution-grant lifecycle,
+provisions OneCLI policy/Agents and authenticates Loge use. Its access relay transports encrypted
+provider traffic opaquely; it never stores/injects provider credentials or terminates provider TLS.
+
+### OneCLI Agent
+
+One OneCLI authorization principal dedicated operationally to one Agora Session. It selects
+credential/policy access inside OneCLI and is never reused for another Session. It is not the Agora
+Agent, an ACP Session, a domain aggregate or a product identifier.
+
+### Broker access relay
+
+The credential-blind transport seam that authenticates one Loge workload identity, resolves its
+private OneCLI upstream proxy authority and relays CONNECT traffic to OneCLI. It MUST NOT terminate
+provider TLS, inspect provider content, inject credentials or contain provider-specific logic.
+
+### Credential gateway
+
+The component that terminates provider TLS for credential injection and owns provider-specific
+secret behavior. Self-hosted OneCLI is Agora's only credential gateway.
 
 ## Forbidden legacy terms
 

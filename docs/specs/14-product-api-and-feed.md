@@ -165,6 +165,9 @@ Public errors have stable codes and safe details:
 - `validation_failed`.
 
 Provider messages, stack traces, Pod specs, tokens and custody paths are never returned.
+OneCLI control, policy and gateway failures are mapped to the existing safe
+`equipment_denied | agent_unavailable | runtime_unavailable` boundary; OneCLI identifiers, rules
+and upstream error bodies are never exposed as product error details.
 
 ## Authorization
 

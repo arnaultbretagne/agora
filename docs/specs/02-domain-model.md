@@ -61,6 +61,8 @@ For `invocation`:
 - ACP modes and config options MAY change inside a Session through standard ACP operations.
 - A failed native resume MUST NOT clear or replace `acp_session_id`.
 - A fresh Agent context requires a new Session.
+- A OneCLI Agent is an operational one-to-one authorization mapping and MUST NOT become a Session
+  column or product entity.
 
 ## Why two Session identifiers
 
@@ -126,6 +128,7 @@ Live infrastructure state includes:
 - container restarts;
 - node placement;
 - transient bearer and tunnel tokens.
+- OneCLI Agent IDs/tokens, published gateway-rule rows and relay mappings.
 
 Live infrastructure state MUST be queried from its owner and MUST NOT be presented as a durable
 product fact.
@@ -138,7 +141,7 @@ Deletion is asynchronous and ordered:
 2. cancel/close current ACP work where possible;
 3. capture custody only when retention policy requires it;
 4. dematerialize all Loges;
-5. revoke execution grants;
+5. revoke execution grants, relay bindings and dedicated OneCLI Agent authority;
 6. delete product rows and custody snapshots according to policy.
 
 A database cascade MUST NOT be the only runtime cleanup mechanism.

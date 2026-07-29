@@ -10,22 +10,25 @@
 - `docs/specs/07-custody.md`
 - `docs/specs/09-agent-registry.md`
 - `docs/specs/11-security.md`
+- `apps/broker/ONECLI-SPIKE.md`
+- ADR 0006, 0014
 
-## Mandatory spike before implementation
+## Mandatory ACP/custody spike before implementation
 
-Evaluate two independent selections:
+The credential gateway selection is closed: use the P08 OneCLI control/relay path. The direct
+`onecli run -- claude` Max-auth gate already passed and is evidence, not the production launcher.
 
-- ACP semantics: test `@agentclientprotocol/claude-agent-acp` first; consider a minimal adapter only
-  for an evidenced contract failure.
-- authentication: integrate the P08-selected gateway path (OneCLI if its spike passed) without
-  treating that gateway as the ACP adapter.
+For ACP semantics, test `@agentclientprotocol/claude-agent-acp` first; consider a minimal adapter only
+for an evidenced contract failure. Integrate it with the fixed OneCLI path without treating OneCLI
+as the ACP adapter.
 
 Do not choose from feature lists alone. Re-run the gates below on the actual Claude Max subscription
 authentication available to the operator and the production ACP topology.
 
 ## Spike gates
 
-- [ ] Long-lived Max/subscription credential works in a fresh isolated Loge.
+- [ ] Long-lived Max/subscription credential works through ACP and the workload relay in a fresh
+  isolated Loge. Direct harness auth is already proven by P08.
 - [ ] Authentication survives Pod replacement without placing a refresh/provider secret in custody.
 - [ ] ACP `session/new`, prompt, cancel, close and `session/resume` work.
 - [ ] Resume continues the same native context and emits no replay under `session/resume`.
@@ -35,6 +38,11 @@ authentication available to the operator and the production ACP topology.
 - [ ] Capture while quiescent is consistent and restore is collision-safe.
 - [ ] Credential paths are excluded from custody.
 - [ ] Model/config choices are exposed as ACP config options/modes rather than CLI columns.
+- [ ] The image already contains pinned Claude Code and ACP-adapter executables; startup performs no
+  package install.
+- [ ] The Loge contains only relay endpoint, OneCLI CA and non-secret Claude auth stub—not OneCLI
+  control/upstream or Anthropic credentials.
+- [ ] Required Claude/Anthropic hosts are captured as a reviewed OneCLI route-set fixture.
 
 Write a spike report under `agents/claude-code/SPIKE.md` with commands, versions, observed files,
 redacted evidence, failure cases and recommendation. If the chosen path violates an accepted ADR,
@@ -46,9 +54,9 @@ stop and propose a replacement ADR.
 - [ ] Add registry definition validated by JSON Schema.
 - [ ] Implement custody driver with format/version and compatibility fixtures.
 - [ ] Add Loge health/readiness integration.
-- [ ] Wire Broker-backed inference/tool access as validated.
+- [ ] Wire inference/tool traffic through the Broker relay and OneCLI only.
 - [ ] Add full Session lifecycle and cross-Agent tests.
-- [ ] Document upgrade/rollback and credential renewal.
+- [ ] Document image/adapter/route-set upgrade, rollback and Max credential renewal.
 
 ## Non-goals
 
@@ -56,13 +64,14 @@ stop and propose a replacement ADR.
 - No Claude transcript endpoint in the controller.
 - No Channel plugin.
 - No assumption that Claude-specific IDs are Agora IDs.
+- No `onecli run`, SDK control key or runtime package installation in the production Loge.
 
 ## Exit criteria
 
 - All spike gates and baseline acceptance scenarios pass in a production-like Loge.
 - A Pod can be deleted and the same ACP Session resumed from opaque custody.
-- No real credential appears in Pod files outside the explicitly approved auth mechanism, custody,
-  product journal or logs.
+- No real credential appears in the Pod environment/filesystem, custody, product journal or logs.
+- The approved in-Loge auth stub is non-secret and contains no upstream OneCLI bearer.
 
 ## Evidence
 

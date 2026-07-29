@@ -10,19 +10,24 @@
 - `docs/specs/07-custody.md`
 - `docs/specs/09-agent-registry.md`
 - `docs/specs/11-security.md`
+- `apps/broker/ONECLI-SPIKE.md`
+- ADR 0006, 0014
 
-## Mandatory spike before implementation
+## Mandatory ACP/custody spike before implementation
 
-Evaluate the official `@agentclientprotocol/codex-acp` distribution first. Separately integrate the
-P08-selected credential gateway (OneCLI if its spike passed); it is not an ACP replacement. Record
-exact versions, bundled Codex version and authentication paths. Replacing the official adapter
-requires evidence of a contract failure; choosing it still requires the same empirical gates rather
-than package provenance alone.
+The credential gateway selection is closed: use the P08 OneCLI control/relay path. Direct
+`onecli run -- codex` with the operator's ChatGPT OAuth state already passed and is evidence, not the
+production launcher.
+
+Evaluate the official `@agentclientprotocol/codex-acp` distribution first and integrate it with that
+fixed path. Record exact adapter, bundled/pinned Codex and route-set versions. Replacing the official
+adapter requires evidence of a contract failure; choosing it still requires empirical ACP/custody
+gates rather than package provenance alone.
 
 ## Spike gates
 
-- [ ] ChatGPT subscription authentication works non-interactively in an isolated Loge, or a safe
-  operator bootstrap/renewal mechanism is specified.
+- [ ] ChatGPT subscription authentication works through ACP and the workload relay in an isolated
+  Loge, with a safe operator bootstrap/renewal mechanism. Direct harness auth is proven by P08.
 - [ ] Credential-bearing authentication state is separated from resumable Session custody; any
   retained non-secret harness marker is identified and justified.
 - [ ] ACP new/prompt/cancel/close/resume behavior is measured.
@@ -32,6 +37,12 @@ than package provenance alone.
 - [ ] Required native resume files/state are identified and bounded.
 - [ ] Custody capture/restore excludes credentials and survives Pod replacement.
 - [ ] Model, reasoning, approval and sandbox controls are ACP modes/config options.
+- [ ] The image already contains pinned Codex and ACP-adapter executables; startup performs no
+  package install.
+- [ ] The Loge contains only relay endpoint, OneCLI CA and read-only `onecli-managed` auth
+  stub—not OneCLI control/upstream or OpenAI credentials.
+- [ ] Required ChatGPT/OpenAI hosts are captured as a reviewed route-set fixture that excludes
+  unnecessary analytics endpoints.
 
 Write `agents/codex/SPIKE.md` with commands, versions, redacted evidence and recommendation.
 
@@ -41,10 +52,10 @@ Write `agents/codex/SPIKE.md` with commands, versions, redacted evidence and rec
 - [ ] Add validated registry definition.
 - [ ] Implement versioned custody driver and fixtures.
 - [ ] Add health/readiness integration.
-- [ ] Wire approved Broker/tool access.
+- [ ] Wire inference/tool traffic through the Broker relay and OneCLI only.
 - [ ] Map namespaced Codex `_meta` without making it core schema.
 - [ ] Add lifecycle, projection and A↔B handoff tests.
-- [ ] Document upgrade/rollback and auth renewal.
+- [ ] Document image/adapter/route-set upgrade, rollback and ChatGPT auth renewal.
 
 ## Non-goals
 
@@ -52,12 +63,14 @@ Write `agents/codex/SPIKE.md` with commands, versions, redacted evidence and rec
 - No Codex app-server protocol in the Agora core.
 - No parsing of custody by product code.
 - No automatic ACP v2 adoption.
+- No `onecli run`, SDK control key or runtime package installation in the production Loge.
 
 ## Exit criteria
 
 - Full baseline acceptance passes in a production-like Loge.
 - Same ACP Session resumes after Pod replacement.
 - Codex-specific metadata remains inspectable without coupling generic projections to it.
+- No upstream OneCLI bearer or OpenAI credential is readable from the Agent container.
 
 ## Evidence
 

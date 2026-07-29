@@ -1,117 +1,147 @@
-# P08 — Capability grants and Broker port
+# P08 — OneCLI-backed capability Broker
 
-- **Status:** pending; blocked until ADR 0010 and ADR 0014 are accepted
-- **Dependencies:** P01
+- **Status:** pending; OneCLI adoption spike complete
+- **Dependencies:** P01, P04
 - **Primary paths:** `apps/broker`, `packages/equipment-policy`, `contracts/openapi`
 
 ## Required reading
 
+- `apps/broker/ONECLI-SPIKE.md`
+- `docs/specs/08-loge-control.md`
 - `docs/specs/10-equipment-and-broker.md`
 - `docs/specs/11-security.md`
+- `docs/specs/12-observability.md`
+- `docs/specs/13-failure-and-idempotency.md`
 - ADR 0010, 0011, 0014
 
-## Mandatory adopt-before-build spike
+## Completed adoption gate
 
-Evaluate a self-hosted OneCLI deployment before porting or writing gateway/MITM code. Treat the ACP
-adapter and credential gateway as independent axes.
+The spike fixed the implementation direction:
 
-- [x] `onecli run -- claude` works with the operator's actual Claude Max/long-lived subscription
-  authentication in a fresh isolated Loge. **PASS on OneCLI 1.43.3.**
-- [x] `onecli run -- codex` works with the operator's actual ChatGPT/Codex subscription
-  authentication. **PASS on OneCLI 1.43.3.**
-- [ ] The selected Claude/Codex ACP adapters can launch their underlying harness through the
-  gateway without losing ACP new/resume/update behavior. **Not evaluated: explicitly outside the
-  OneCLI-only spike scope.**
-- [ ] Raw stored/provider credentials are inaccessible to the Agent process, filesystem, ACP
-  envelopes and custody capture. **Partial: process and filesystem pass; ACP and custody were
-  outside scope.**
-- [ ] Session A cannot use Session B's gateway authority or provider connections.
-  **Credential selection passes, but the replayable proxy bearer is not workload-bound.**
-- [ ] Grant activation, expiry, renewal and immediate revocation can be mapped without a fixed
-  combination profile. **Immediate rotation passes; expiry and renewal are absent.**
-- [ ] Required MCP/provider routes are allow-listed; arbitrary gateway use cannot bypass capability
-  facts. **Provider allow-listing passes with ordered allows plus explicit `block *`; MCP and
-  workload enforcement remain.**
-- [ ] Logs/audit expose decisions and safe IDs but no prompt/tool content or tokens.
-  **Failed: gateway stdout includes query strings and exposed a signed Codex URL.**
-- [ ] Pod replacement and subscription renewal have an explicit non-interactive operating path.
-  **Partial: credential recovery passes; ephemeral `/app/data` rotates the CA; a real token renewal
-  cycle remains.**
-- [ ] Self-hosting, version pinning, backup and failure behavior meet production requirements.
-  **Partial: self-hosting and pinning pass; backup/restore and fail-closed launch remain.**
+- [x] self-hosted OneCLI `1.43.3` ran the operator's real Claude Max credential;
+- [x] self-hosted OneCLI ran the operator's real ChatGPT/Codex OAuth state;
+- [x] provider credentials stayed out of the client process/filesystem;
+- [x] selective OneCLI Agent credential isolation and immediate rotation worked;
+- [x] explicit allow rules followed by `block *` enforced a real allow-list;
+- [x] restart recovered encrypted credentials with the external key;
+- [x] failed gates and production blockers were recorded with redacted evidence.
 
-Write `apps/broker/ONECLI-SPIKE.md` with versions, topology, commands, redacted evidence, failed
-gates and the precise adopt/wrap/build recommendation. No custom gateway port begins before this
-report is reviewed.
+Evidence: [`apps/broker/ONECLI-SPIKE.md`](../apps/broker/ONECLI-SPIKE.md).
 
-Spike evidence: [`apps/broker/ONECLI-SPIKE.md`](../apps/broker/ONECLI-SPIKE.md).
+## Locked implementation boundary
 
-## Reuse audit
+OneCLI is the sole MITM, provider-secret store and credential injector.
 
-Inspect old `agent-runtime/src/broker` behavior:
+Agora implements only:
 
-- likely reuse: provider token issuers, provider adapters, credential helper behavior, revocation
-  tests, secret stripping;
-- rewrite: profile catalogue, profile claims, `runId`, admin request, authorization lookup,
-  profile-projected UI model.
+- equipment intent and capability policy;
+- OneCLI control-plane lifecycle;
+- execution-grant/workload binding;
+- an opaque access relay that authenticates the Loge and supplies upstream proxy auth;
+- safe deployment, policy and audit integration.
 
-Port security invariants before convenience behavior. Record source commit/path for each port.
-Only behaviors missing from the accepted OneCLI recommendation are candidates for reuse.
+The relay MUST NOT terminate provider TLS, inspect provider payloads, inject credentials or contain
+provider-specific behavior. The old gateway/provider adapters are not candidates for reuse.
+
+The runtime mapping is fixed:
+
+```text
+one Agora Session = one Loge = one selective OneCLI Agent
+```
+
+The OneCLI Agent may be retained for suspension/resume of that same Session, with its token rotated
+or access disabled while inactive. It is deleted at terminal Session/Workstream cleanup and is never
+reassigned.
 
 ## Deliverables
 
 - Equipment catalogue projection and request validation.
-- Policy resolver to independent capability facts.
+- Deterministic policy resolver to independent capability facts and digest.
 - Broker control API conforming to `broker-control.yaml`.
-- Session-bound execution-grant lifecycle.
-- Broker-private grant/activation repository with restart-safe or fail-closed semantics.
-- Capability-based data-plane authorization.
-- Safe MCP server descriptors.
-- Ported Claude/GitHub/Vault adapters behind grant claims.
+- Pinned `@onecli-sh/sdk` control adapter using `getContainerConfig`.
+- Idempotent dedicated OneCLI Agent create/selective/configure/rotate/delete lifecycle.
+- Deterministic route-policy compiler with explicit allows and final `block *`.
+- Session-bound execution-grant repository outside `product.*`.
+- Workload-authenticated, non-MITM access relay to OneCLI's gateway.
+- Safe runtime bundle containing only relay endpoint, CA trust and non-secret auth stubs.
+- Query-free OneCLI gateway logs with a regression test.
+- Broker/OneCLI security audit containing safe IDs and decisions, never content/tokens.
+- Disposable self-hosted OneCLI integration environment with pinned image digest.
 
 ## Tasks
 
+- [ ] Reject raw provider scopes, endpoints, secret values and arbitrary OneCLI rules from Browser
+  or product APIs.
 - [ ] Define policy versioning and deterministic capability digest.
-- [ ] Reject raw capability/provider scope input from Browser/control API.
-- [ ] Persist returned capability facts through Session creation.
-- [ ] Issue, renew-equivalent and revoke grants idempotently.
-- [ ] Bind a transient grant reference once to the controller-created Loge workload identity.
-- [ ] Persist/reconcile issuance, activation, expiry and revocation outside the product schemas.
-- [ ] Ensure renewal cannot change capability digest.
-- [ ] Authorize every adapter route by capability fact and constraints.
-- [ ] Strip grant material before provider adapter.
-- [ ] Keep real downstream credentials inside isolated adapters.
-- [ ] Remove all profile names and `runId` claims.
-- [ ] Produce safe ACP MCP descriptors with no provider secret.
-- [ ] Prove ACP MCP descriptors contain no token and Broker authenticates outside the descriptor.
-- [ ] Port audit events without request content/tokens.
+- [ ] Persist only normalized capability facts against the Session.
+- [ ] Keep OneCLI identifiers and operational policy rows out of product schemas/history.
+- [ ] Authenticate the OneCLI control API only from the Broker control adapter.
+- [ ] Create exactly one uniquely identified OneCLI Agent for each Session and force selective mode.
+- [ ] Compile the pinned Agent route set plus approved capability routes into first-match policy.
+- [ ] Publish explicit allows followed by a final explicit `block *`; never rely on Default Block.
+- [ ] Diff/publish policy idempotently and fail closed on partial publication/cache invalidation.
+- [ ] Call `getContainerConfig`; reject unavailable/incomplete responses instead of launching.
+- [ ] Verify returned CA/stub material against P04's operator-managed runtime bundle and fail closed
+  on drift; do not add it to the activation response.
+- [ ] Strip the upstream `aoc_` bearer from all Loge-facing configuration.
+- [ ] Keep the upstream bearer encrypted in Broker-private operational state and expose it only to
+  the access relay.
+- [ ] Bind `grant + session_id + agent_id + workload_identity` exactly once.
+- [ ] Authenticate workload identity outside the Agent container and reject replay from another
+  workload.
+- [ ] Relay CONNECT traffic opaquely to OneCLI without provider TLS termination or body access.
+- [ ] Enforce expiry/revocation at the relay and rotate/delete OneCLI authority idempotently.
+- [ ] Renew only an unchanged capability digest; rotate upstream authority behind the same binding.
+- [ ] Reconcile Agent-without-Loge, Loge-without-active-grant and stale-relay-mapping states.
+- [ ] Provide the controller a credential-free, operator-managed CA/stub/runtime bundle.
+- [ ] Patch/upstream OneCLI logging to remove `path_and_query` before stdout.
+- [ ] Disable OneCLI manual approval for content-bearing LLM/tool routes.
+- [ ] Narrow OpenAI/ChatGPT hosts to the audited route set required by the pinned Codex image.
+- [ ] Emit safe issue/activate/deny/use-class/renew/revoke audit events.
+- [ ] Add restart smoke coverage for PostgreSQL, `/app/data` and external encryption-key continuity.
+- [ ] Remove all profile, `runId`, former gateway and provider-adapter port candidates.
 
 ## Required tests
 
-- Arbitrary/unknown resource intent is denied.
-- Request combinations do not require named combination profiles.
-- Loge cannot add capability to a grant.
-- Grant for Session A is denied for B.
-- A grant reference cannot be activated for two workload identities.
-- Renewal with changed digest is denied.
-- Revocation immediately blocks data plane.
-- Broker restart preserves correct grant state or invalidates it fail-closed.
-- Provider token never reaches Loge-facing response/log.
-- No activation or workload credential reaches an ACP envelope/product journal row.
-- Existing GitHub/Vault security invariants remain green.
+- Unknown/contradictory equipment intent is denied before OneCLI mutation.
+- Request combinations resolve to independent facts, not named profiles.
+- Concurrent equivalent issue creates one grant and one OneCLI Agent.
+- Session A and B receive distinct selective OneCLI Agents and policy sets.
+- Session A cannot use Session B's relay binding or upstream OneCLI authority.
+- The Agent process, environment, filesystem, ACP envelopes and custody fixtures contain no OneCLI
+  control key, upstream bearer or provider credential.
+- Exact required host succeeds; an unlisted uncredentialed host and an unlisted LLM host both fail.
+- Reordering/removing the terminal `block *` fails validation/publication.
+- Direct Loge egress to provider, OneCLI gateway and OneCLI control API is denied.
+- Revocation immediately blocks the relay and rotates/deletes upstream authority.
+- Renewal with a changed capability digest is rejected.
+- Broker/relay restart preserves correct state or invalidates it fail-closed.
+- OneCLI API outage and SDK `false` result prevent Loge readiness.
+- OneCLI CA/stub drift from the controller's pinned runtime bundle prevents activation.
+- Policy publish/cache-invalidation ambiguity prevents activation.
+- Gateway stdout, request audit and Broker logs contain no query string, prompt/tool content or
+  token under seeded leak canaries.
+- OneCLI Pod replacement with persistent state preserves credential decryption and CA continuity.
+- Cleanup after every crash boundary cannot leave usable orphan authority.
 
 ## Non-goals
 
-- No production Agent auth decision in this plan.
-- No user-defined policy language.
-- No mutable equipment on an existing Session.
+- No custom MITM, CA issuer, provider-secret store or credential injector.
+- No parallel Claude/OpenAI/GitHub/Vault credential adapters in Agora.
+- No production use of `onecli run` or SDK `applyContainerConfig`.
+- No ACP adapter/custody implementation; P09/P10 validate those on this fixed path.
+- No Browser access to OneCLI.
+- No production HA/capacity/cutover work beyond integration fixtures; P11 owns it.
 
 ## Exit criteria
 
-- Fake Loge accesses only explicitly granted adapters.
-- Old profile-centric modules have no ported equivalent.
-- P09/P10 can request Agent invocation and tools without receiving provider secrets.
+- A fake Loge uses only its bound relay and OneCLI Agent to reach explicitly granted routes.
+- No provider or OneCLI control/upstream credential enters the Loge.
+- OneCLI is observably the only provider TLS/credential-injection hop.
+- Every known spike blocker has an implemented regression test or an explicit P09/P10/P11 gate.
+- P09/P10 can run their pinned harness through OneCLI without learning gateway control material.
 
 ## Evidence
 
-To be completed by the implementing agent.
+To be completed by the implementing agent. The adoption evidence is already recorded in
+[`apps/broker/ONECLI-SPIKE.md`](../apps/broker/ONECLI-SPIKE.md).

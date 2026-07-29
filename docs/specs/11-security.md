@@ -26,10 +26,10 @@ Web/API ── product identity ── Control plane
                                   │
                  ┌────────────────┴───────────────┐
                  ▼                                ▼
-          Loge controller                      Broker
-                 │ workload API                  │ provider secrets
-                 ▼                                ▼
-          untrusted Loge ── scoped grant ── Broker data plane
+          Loge controller                  Broker control/policy ──► OneCLI control API
+                 │ workload API                  │
+                 ▼                               ▼
+          untrusted Loge ── workload ID ── Broker access relay ──► OneCLI gateway ──► provider
 ```
 
 Every arrow crosses authenticated authorization. Same-repository code does not imply same runtime
@@ -41,6 +41,7 @@ trust.
 - Workstream authorization is checked against durable `owner | editor | viewer` membership.
 - Service-to-service calls use workload identity and authenticated TLS.
 - Loge materialization requires an execution grant bound to Session and Agent.
+- One dedicated selective OneCLI Agent is mapped to exactly one Agora Session.
 - ACP bridge credentials are one-time or short-lived and Session-bound.
 - Database access uses distinct roles per deployable.
 - Authorization is checked at every resource boundary, not only in the UI.
@@ -65,6 +66,7 @@ Loge Pods:
 - receive a restrictive security context and runtime class;
 - cannot mount host paths or arbitrary PVCs;
 - cannot select an image, command, env or ServiceAccount;
+- cannot receive OneCLI control keys, upstream Agent bearers or provider credentials;
 - have CPU, memory, PID and ephemeral-storage limits;
 - carry deterministic Session/Agent labels without user-controlled label keys.
 
@@ -80,18 +82,28 @@ Default-deny NetworkPolicies isolate:
 - public Web ingress from internal control APIs;
 - Broker admin plane from Loges.
 
-Required Agent/provider egress and Broker data-plane access are explicitly allowed. Broad Internet
-egress, if required by an Agent, does not weaken secret isolation.
+Loges may reach the authenticated Broker access relay, ACP bridge and explicitly required internal
+services. They MUST NOT reach providers, the public Internet, OneCLI control API or OneCLI gateway
+directly.
+
+The relay may reach only the OneCLI gateway. OneCLI policy MUST contain reviewed explicit allows
+followed by a final explicit `block *`; its Default Rule is not sufficient. Agent/runtime upgrades
+require a route-set diff and negative tests for unlisted ordinary and LLM hosts.
 
 ## Secrets
 
-- Provider secrets live only in Broker adapters.
-- Execution-grant activation references and Loge workload credentials are ephemeral and never
-  persisted in product tables, ACP envelopes or logs.
+- Provider secrets and subscription auth live only in OneCLI.
+- The OneCLI organization/project control key is available only to Broker control.
+- The dedicated OneCLI Agent upstream bearer is encrypted in Broker-private operational state and
+  available only to the access relay.
+- Execution-grant activation references and platform Loge workload credentials are ephemeral and
+  never persisted in product tables, ACP envelopes or logs.
 - ACP tunnel credentials are ephemeral and redacted.
 - Custody drivers exclude credential paths.
 - Workspace content and custody are never placed in environment variables.
 - Secrets are not embedded in registry definitions or Pod templates.
+- OneCLI CA trust and `onecli-managed`/placeholder stubs are non-secret deployment assets and cannot
+  be used to recover upstream authority.
 
 ## Database
 
@@ -135,11 +147,14 @@ references belonging to another Session, or execution-grant material.
 ## Supply chain
 
 - Runtime images are pinned by digest.
+- OneCLI is pinned by digest and its source/release provenance is verified.
 - Agent adapter package versions are pinned and scanned.
+- Agent images already contain pinned harness/adapter binaries; Pods install nothing at startup.
 - Registry changes require review.
 - CI uses least-privilege tokens.
 - Production deployment artifacts are provenance-attested where available.
 - An adapter upgrade includes custody-compatibility and ACP contract tests.
+- A OneCLI/Agent upgrade includes route-diff, provider-auth, query-log-redaction and revocation tests.
 
 ## Audit
 
@@ -147,3 +162,5 @@ Security audit records include actor, Session, action class, decision, policy ve
 They exclude prompt content, tool output, tokens and custody bytes.
 
 Break-glass custody reads and policy overrides require dedicated, durable audit events.
+OneCLI gateway stdout MUST omit query strings, headers and bodies. OneCLI manual approval is disabled
+for content-bearing LLM/tool routes because its approval preview may summarize request bodies.

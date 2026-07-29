@@ -1,6 +1,6 @@
-# P04 — Loge controller and trusted Agent registry
+# P04 — Loge controller, trusted Agent images and credential-free runtime seam
 
-- **Status:** pending; blocked until ADR 0006 is accepted
+- **Status:** pending
 - **Dependencies:** P01
 - **Primary paths:** `apps/loge-controller`, `packages/runtime-control`, `packages/agent-registry`
 
@@ -9,7 +9,7 @@
 - `docs/specs/08-loge-control.md`
 - `docs/specs/09-agent-registry.md`
 - `docs/specs/11-security.md`
-- ADR 0001, 0005, 0006, 0011
+- ADR 0001, 0005, 0006, 0010, 0011, 0014
 
 ## Reuse audit
 
@@ -27,6 +27,7 @@ Record provenance for every reused module.
 - Registry loader/validator using `agent-runtime.schema.json`.
 - Controller-authoritative safe Agent/version selection projection.
 - Deterministic PodSpec builder.
+- Fixed credential-free runtime bundle seam for OneCLI CA/stubs and Broker relay endpoint.
 - Kubernetes reconciliation keyed by Session ID.
 - At-most-one-Pod enforcement.
 - Authenticated ACP bridge endpoint lifecycle.
@@ -39,6 +40,11 @@ Record provenance for every reused module.
 - [ ] Expose public metadata/exact selected version without image, command or custody paths.
 - [ ] Build Pods from immutable templates and safe references.
 - [ ] Create one Session-specific workload identity and bind the grant before Pod readiness.
+- [ ] Route Agent egress only to the workload-authenticated Broker relay; prohibit direct OneCLI
+  gateway/control API and Internet access.
+- [ ] Mount only the operator-managed OneCLI CA and non-secret harness auth stubs; never accept them
+  from the materialize request.
+- [ ] Verify the pinned image already contains the declared harness and ACP adapter versions.
 - [ ] Add required labels and prohibit user-provided Kubernetes fragments.
 - [ ] Reconcile state from Kubernetes after controller restart.
 - [ ] Make materialize/delete idempotent.
@@ -55,6 +61,10 @@ Record provenance for every reused module.
 - Restart with existing Pod returns the same logical Loge.
 - Duplicate-Pod injection triggers fail-closed reconciliation.
 - Pod has no API token and uses required security context.
+- Pod environment/files contain no OneCLI organization key, upstream `aoc_` bearer or provider
+  credential.
+- NetworkPolicy denies direct provider and OneCLI gateway access while the fake relay remains
+  reachable.
 - Session A cannot connect using Session B bridge credential.
 - `DELETE` absent Loge succeeds.
 
@@ -62,12 +72,14 @@ Record provenance for every reused module.
 
 - No real Claude/Codex integration.
 - No custody capture until P06.
-- No capability-policy implementation; use a fake signed grant.
+- No live OneCLI or capability-policy implementation; use a fake activation/relay contract for P08.
+- No runtime `npm install`/binary download.
 
 ## Exit criteria
 
 - Fake Agent Loge reaches ACP-ready state in a test namespace.
 - Controller has no in-memory-only authority.
+- P08 can replace the fake activation/relay without changing Loge lifecycle or accepting secret env.
 - P06 can add custody without changing the public lifecycle model.
 
 ## Evidence

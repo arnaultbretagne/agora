@@ -49,6 +49,10 @@ The controller consumes `executionGrantRef` exactly once to bind the generated L
 workload identity. It may retain/label the non-secret grant ID, but MUST NOT place the reference in a
 Pod, Kubernetes annotation, status object or log.
 
+The resulting Pod receives only a fixed credential-free Broker relay endpoint, operator-managed
+OneCLI CA trust and non-secret harness auth stubs. The controller MUST NOT receive or mount the
+OneCLI control key, dedicated Agent upstream bearer or provider credential.
+
 ## Materialization states
 
 - `absent`;
@@ -84,7 +88,7 @@ A Loge is `ready` only when:
 
 - workspace mounts are ready;
 - optional custody restore completed;
-- execution grant is consumable;
+- execution grant, dedicated OneCLI policy and workload relay binding are active;
 - ACP process is running;
 - authenticated bridge health passes.
 
@@ -133,7 +137,7 @@ Capture and deletion are separate operations so product Anchor commit can occur 
 - is idempotent;
 - revokes/ends bridge credentials;
 - terminates the Pod with a bounded grace period;
-- revokes the execution grant;
+- revokes the execution grant and relay mapping and rotates/disables OneCLI Agent authority;
 - waits or reports asynchronous deletion state;
 - never captures custody implicitly.
 
@@ -153,6 +157,6 @@ Each Pod:
 - runs one Session;
 - uses a non-root identity;
 - has no Kubernetes API token;
-- receives only its Session-bound workload identity for Broker data-plane access;
-- has network access constrained by policy and required Agent endpoints;
+- receives only its Session-bound workload identity for Broker-relay access;
+- can reach the Broker relay but not providers, the Internet or OneCLI directly;
 - cannot access product Postgres or another Session's workspace/custody.

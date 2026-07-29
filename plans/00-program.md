@@ -3,17 +3,18 @@
 ## Goal
 
 Deliver the new Agora as contract-first vertical slices without reintroducing the retired model or
-creating a second source of truth.
+creating a second source of truth or credential gateway.
 
-## Baseline gate
+## Baseline gate — satisfied 2026-07-29
 
 Before P01:
 
-- operator reviews every spec;
-- ADR 0006, ADR 0010 and ADR 0014 are accepted, amended or explicitly deferred;
-- open questions are resolved in specs/contracts;
-- `npm test` validates links, YAML, JSON and JSON Schemas;
-- this plan manifest is updated to unblock P01.
+- [x] operator reviewed the consolidated baseline;
+- [x] ADR 0006, ADR 0010 and ADR 0014 are accepted;
+- [x] the OneCLI spike fixed the credential-gateway direction;
+- [x] current open questions are encoded as implementation/acceptance gates;
+- [x] `npm test` validates links, YAML, JSON and JSON Schemas;
+- [x] the plan manifest unblocks P01.
 
 ## Global engineering rules
 
@@ -32,6 +33,11 @@ domain <- stores/adapters <- application services <- deployables
 - Use a real Kubernetes test namespace for controller acceptance.
 - All external commands are idempotency-tested.
 - Every failure path has a typed public/internal code.
+- Use OneCLI as the only credential-injection/MITM gateway.
+- Keep the OneCLI organization key, provider credentials and upstream Agent bearer out of Loges.
+- Treat OneCLI rule publication, Agent lifecycle and relay activation as fail-closed external side
+  effects.
+- Bake pinned Claude/Codex and ACP adapters into Agent images; never install them at Pod startup.
 
 ## Integration strategy
 
@@ -49,8 +55,9 @@ before dependent branches rebase.
 4. ACP Client/fake-Agent protocol tests.
 5. Controller reconciliation tests.
 6. Broker authorization tests.
-7. End-to-end production-like scenarios.
-8. Fault injection at durable/external boundaries.
+7. OneCLI policy, workload-relay, revocation and secret-leak tests.
+8. End-to-end production-like scenarios.
+9. Fault injection at durable/external boundaries.
 
 ## Evidence
 

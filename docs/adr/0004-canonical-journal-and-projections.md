@@ -20,6 +20,8 @@ Messages, thoughts, tool calls, plans, permission interactions and Web feed entr
 projections from that journal. Rendering may collapse content but persistence does not hide it.
 
 Custody remains separate because it is opaque resume state, not product meaning.
+OneCLI request/audit records and gateway logs remain operational security telemetry and are never
+copied into the Workstream journal.
 
 ## Alternatives rejected
 
@@ -29,6 +31,8 @@ Custody remains separate because it is opaque resume state, not product meaning.
 - **Store only a normalized event model:** discards new/unknown ACP fields.
 - **Build the UI directly from raw rows on every request:** preserves truth but produces expensive,
   fragile query-time assembly.
+- **Use OneCLI request logs as Agent history:** records network enforcement rather than ACP meaning
+  and would create a second, incomplete transcript.
 
 ## Consequences
 
@@ -37,6 +41,7 @@ Custody remains separate because it is opaque resume state, not product meaning.
 - Journal notification and Web feed positions remain separate mechanisms.
 - ACP v1 missing message IDs require explicit projection fallback.
 - Projection equivalence becomes an acceptance gate.
+- Product projections remain independent from OneCLI retention, schema and availability.
 
 ## Governing specs
 

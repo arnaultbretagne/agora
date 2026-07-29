@@ -27,3 +27,6 @@ Tests MUST run against real PostgreSQL and additionally prove:
 
 The DDL creates NOLOGIN privilege roles only. Deployment bootstraps a migration LOGIN/ownership path
 and grants `agora_migrator`; it creates no application credential in SQL.
+
+OneCLI owns a separate operational PostgreSQL database. Its credentials, Agents, policy and request
+audit MUST NOT be added to these product/projection/custody migrations.

@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "baselineReviewRequired": true,
+  "baselineReviewRequired": false,
   "plans": [
     {
       "id": "P01",
       "file": "01-domain-and-contracts.md",
       "dependsOn": [],
-      "status": "blocked_on_baseline_review"
+      "status": "ready"
     },
     {
       "id": "P02",
@@ -30,9 +30,6 @@
       "file": "04-loge-controller.md",
       "dependsOn": [
         "P01"
-      ],
-      "decisionGates": [
-        "ADR-0006"
       ],
       "status": "pending"
     },
@@ -69,11 +66,8 @@
       "id": "P08",
       "file": "08-equipment-and-broker.md",
       "dependsOn": [
-        "P01"
-      ],
-      "decisionGates": [
-        "ADR-0010",
-        "ADR-0014"
+        "P01",
+        "P04"
       ],
       "status": "pending"
     },

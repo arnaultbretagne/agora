@@ -1,6 +1,6 @@
 # P01 — Domain and generated contract foundation
 
-- **Status:** blocked on baseline review
+- **Status:** ready
 - **Dependencies:** none
 - **Primary paths:** `packages/domain`, `packages/runtime-control`, `contracts`, repository tooling
 
@@ -9,7 +9,7 @@
 - `docs/specs/00-glossary.md`
 - `docs/specs/02-domain-model.md`
 - `docs/specs/13-failure-and-idempotency.md`
-- ADR 0002, 0003, 0005
+- ADR 0002, 0003, 0005, 0010, 0014
 
 ## Deliverables
 
@@ -17,6 +17,8 @@
 - Workstream category and Session phase types matching SQL/OpenAPI exactly.
 - Pure constructors and transition guards.
 - Command/idempotency model.
+- Implementation-neutral execution-grant and activation types that expose no OneCLI identifier,
+  proxy bearer or provider credential.
 - Runtime-control generated or hand-verified bindings from OpenAPI.
 - Schema fixture runner for every `contracts/schemas` file.
 - Architecture test preventing imports from packages into deployables or privileged packages into
@@ -30,6 +32,8 @@
 - [ ] Implement membership role/last-owner guards.
 - [ ] Implement Session state transition table and terminal-state guards.
 - [ ] Implement immutable Session launch-envelope types.
+- [ ] Keep OneCLI Agent IDs, control keys, proxy URLs and route-rule rows out of domain types.
+- [ ] Mark grant references and bridge credentials sensitive in generated bindings and serializers.
 - [ ] Implement typed failure codes shared only where contracts require them.
 - [ ] Add valid/invalid JSON Schema fixtures.
 - [ ] Validate OpenAPI operation IDs and duplicate schema names.
@@ -43,13 +47,15 @@
 - Illegal phase transitions fail with typed errors.
 - Same idempotency scope/key resolves to the same command.
 - No local type duplicates ACP ContentBlock/SessionUpdate.
+- Broker/Loge contract fixtures cannot place an `aoc_` bearer, OneCLI control key or provider token
+  in public/product/ACP shapes.
 
 ## Non-goals
 
 - No database repository.
 - No HTTP server.
 - No ACP connection.
-- No Kubernetes or Broker code.
+- No Kubernetes, OneCLI client or Broker implementation.
 
 ## Exit criteria
 

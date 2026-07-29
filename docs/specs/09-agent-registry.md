@@ -42,6 +42,14 @@ Each versioned definition contains:
 
 The machine-readable shape is `contracts/schemas/agent-runtime.schema.json`.
 
+The immutable image MUST already contain the exact harness and ACP-adapter executables; readiness
+cannot install or download them. CI records their versions and smoke-tests both commands before the
+image digest becomes launchable.
+
+Broker policy maintains a reviewed route-set mapping keyed by the exact runtime-definition version.
+That mapping is privileged operator configuration, not Browser input or a combined capability
+profile.
+
 ## Agent ID semantics
 
 `agent_id` identifies an ACP Agent distribution, not just a provider name. A materially different
@@ -76,6 +84,8 @@ A Session records the resolved runtime-definition version. Resume SHOULD use a c
 - otherwise no native resume.
 
 Automatic upgrades MUST NOT strand anchored custody without a tested rollback path.
+They also MUST NOT publish new OneCLI provider routes without an explicit route diff and terminal
+block validation.
 
 ## Driver boundary
 

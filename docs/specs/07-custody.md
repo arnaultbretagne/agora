@@ -93,12 +93,15 @@ Database grants MUST enforce these rules independently of application code.
 Custody may contain prompts, tool results, file paths or harness metadata. It MUST:
 
 - use encrypted storage and encrypted transport;
-- never contain active Broker leases or provider secrets by design;
+- never contain active Broker leases, OneCLI control/upstream authority, generated auth stubs or
+  provider secrets by design;
 - never be logged;
 - have payload reads audited;
 - follow Workstream deletion and retention policy.
 
 The custody driver MUST explicitly exclude known credential paths.
+The OneCLI CA and non-secret runtime stubs are rematerialized from trusted deployment state rather
+than captured.
 
 ## Retention
 

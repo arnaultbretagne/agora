@@ -7,6 +7,7 @@ Production integrations MUST use stable ACP v1 through the official
 ADR, compatibility plan and migration tests before adoption.
 
 The control plane is the ACP Client. Agent packages provide or select an ACP Agent implementation.
+OneCLI operates below the harness network layer and is never an ACP Agent, Client or transport.
 
 Normative upstream references, verified for this baseline on 2026-07-29:
 
@@ -97,6 +98,10 @@ Each request and response MUST be journaled. Permission policy MAY auto-decide o
 authorized by the Session's grants; otherwise the request is surfaced to the user and remains
 pending until answered or timed out.
 
+Client-provided `mcpServers` MUST contain no execution-grant reference, OneCLI identifier, relay
+credential, upstream proxy bearer or provider secret. The complete envelope must remain safe to
+journal.
+
 ## Content visibility
 
 All ACP output MUST be retained:
@@ -142,3 +147,6 @@ The bridge MUST:
 
 The bridge MUST NOT inspect Agent meaning, synthesize tool calls, collapse chunks or provide its own
 resume abstraction.
+
+OneCLI proxy/CA/stub configuration is runtime infrastructure and MUST NOT cross the ACP bridge as
+protocol metadata.

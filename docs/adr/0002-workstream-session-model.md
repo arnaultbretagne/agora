@@ -20,6 +20,8 @@ business home.
 - There is no Run entity.
 - A Session has an Agora ID and an Agent-assigned ACP Session ID because ACP assigns the latter after
   provisioning.
+- A Session receives one dedicated OneCLI Agent authorization principal. That principal is
+  operational Broker state, is never shared with another Session and is not another Agora entity.
 - ACP prompt turn is used as the protocol's own interaction term.
 
 An invocation has one user-purpose prompt turn in v1. A discussion may have many.
@@ -31,6 +33,8 @@ An invocation has one user-purpose prompt turn in v1. A discussion may have many
 - **Call the Workstream an ACP thread:** ACP has no such core aggregate and a Workstream spans
   Sessions.
 - **Use only the ACP Session ID:** it is unavailable until after the Loge and ACP connection exist.
+- **Persist OneCLI Agent as another Session identity:** duplicates a one-to-one operational mapping
+  and leaks an adopted component's data model into the product domain.
 
 ## Consequences
 
@@ -38,6 +42,8 @@ An invocation has one user-purpose prompt turn in v1. A discussion may have many
 - Failed provisioning remains an auditable Session fact.
 - Fresh fallback always creates a new Session.
 - Product and runtime APIs use the same Agora Session ID.
+- OneCLI identifiers remain behind the Broker boundary and never replace `session_id` or
+  `agent_id`.
 
 ## Governing specs
 

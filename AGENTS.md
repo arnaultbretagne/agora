@@ -53,10 +53,19 @@ The only accepted terms and meanings are in the glossary.
 - Browser input expresses resource intent, never raw capabilities or provider scopes.
 - Only the policy service resolves intent into grants.
 - Only the Loge controller owns Kubernetes workload permissions.
-- Provider secrets stay behind the Broker.
-- Do not build/port a credential gateway before the ADR 0014 OneCLI spike records a failed gate.
-- Never persist bearer tokens, one-time ACP tunnel tokens, or provider credentials.
+- Provider secrets live only in OneCLI; its control key and upstream Agent bearer never enter a
+  Loge.
+- OneCLI is the only credential gateway. Never build/port a parallel MITM, secret store, injector or
+  provider adapter.
+- Broker may implement only OneCLI control lifecycle and a workload-authenticated opaque relay; that
+  relay must not terminate provider TLS, inspect provider content or inject credentials.
+- Every Session uses one dedicated selective OneCLI Agent and explicit allows followed by `block *`.
+- Agent images contain pinned harness/ACP binaries; Pods never install them at startup.
+- Never persist bearer tokens, one-time ACP tunnel tokens or provider credentials in product,
+  projection, custody or ACP data. The only exception is encrypted Broker-private upstream OneCLI
+  authority required by ADR 0010; provider credentials remain OneCLI-owned.
 - The public runtime API must not accept arbitrary commands, argv, environment variables or images.
+- Gateway/process logs must omit URL query strings, headers, prompts, tool content and tokens.
 
 ## Delivery rules
 

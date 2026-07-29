@@ -35,6 +35,8 @@
 - [ ] Implement ACP mode/config methods without model-specific columns.
 - [ ] Handle missing v1 message IDs in projection input metadata.
 - [ ] Implement delivery-unknown terminal state without blind prompt retry.
+- [ ] Reject credential-bearing MCP descriptors and prove OneCLI/relay configuration never enters an
+  ACP envelope.
 
 ## Required tests
 
@@ -45,6 +47,8 @@
 - Duplicate dispatcher wakeup does not send acknowledged prompt twice.
 - Lost response to `session/new` fails closed without rebinding another ID.
 - Invocation cardinality remains enforced at command acceptance.
+- Complete `session/new`/`session/resume` envelopes journal safely without OneCLI bearer, control key
+  or provider auth state.
 
 ## Non-goals
 
@@ -52,6 +56,7 @@
 - No native custody.
 - No cross-Agent handoff.
 - No Browser UI.
+- No OneCLI process launch; supplied streams and credential-free MCP descriptors only.
 
 ## Exit criteria
 

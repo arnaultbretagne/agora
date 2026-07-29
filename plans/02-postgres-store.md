@@ -36,6 +36,8 @@
 - [ ] Implement snapshot insert/stream/read and retention queries.
 - [ ] Implement atomic Anchor upsert validating snapshot metadata/watermark.
 - [ ] Prove control-plane credentials cannot read custody payload.
+- [ ] Prove product/projection/custody schemas contain no OneCLI Agent row, upstream proxy bearer,
+  provider credential or OneCLI request log.
 
 ## Required tests
 
@@ -50,6 +52,9 @@
 - Transaction rollback leaves no event/journal-outbox split.
 - Concurrent Workstreams cannot cause a projector checkpoint to skip committed events.
 - Database role tests execute actual denied SQL.
+- Gateway/grant secret-pattern fixtures cannot be persisted in product grant, command or
+  non-envelope journal metadata fields; canonical ACP content retains its separate confidentiality
+  rules.
 
 ## Non-goals
 
@@ -57,11 +62,13 @@
 - No Web API.
 - No Kubernetes.
 - No external object store.
+- No OneCLI operational database schema or migration; OneCLI owns and migrates that database.
 
 ## Exit criteria
 
 - All SQL constraints are exercised by a failing test.
-- Backup/restore smoke test covers all three schemas.
+- Backup/restore smoke test covers all three Agora schemas independently from the later OneCLI
+  recovery set.
 - P03 can consume a durable command/journal interface without raw SQL.
 
 ## Evidence

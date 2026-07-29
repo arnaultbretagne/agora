@@ -26,6 +26,10 @@ These remain separate deployables with:
 
 Repository colocation is a delivery decision, not a runtime trust decision.
 
+Self-hosted OneCLI is an adopted infrastructure dependency, not code Agora reimplements. Agora owns
+the Broker control adapter, policy mapping and workload-authentication relay in this repository;
+OneCLI runs from a pinned upstream image with its own persistence and identity.
+
 ## Alternatives rejected
 
 - **Keep separate repositories:** preserves the contract/version skew that caused the redesign.
@@ -38,6 +42,7 @@ Repository colocation is a delivery decision, not a runtime trust decision.
 - CI can run end-to-end contract tests.
 - Deployment pipelines must still build and release multiple artifacts.
 - Package boundaries and import rules must prevent accidental privilege coupling.
+- Deployment manifests pin and operate OneCLI independently from Agora-built images.
 
 ## Governing specs
 

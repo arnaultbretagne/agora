@@ -25,7 +25,7 @@ apps/
   web/               Human-facing web application
   control-plane/     Workstream API, Session coordinator and ACP Client
   loge-controller/   Kubernetes lifecycle for Loges
-  broker/            Capability policy, leases and credential adapters
+  broker/            Capability policy, OneCLI lifecycle and opaque workload relay
 
 packages/
   domain/            Domain types and invariants
@@ -50,6 +50,9 @@ plans/               Ordered implementation plans for coding agents
 The repository is a monorepo, not a monolith. `control-plane`, `loge-controller`, and `broker` are
 separate deployables with separate identities and permissions.
 
+Self-hosted OneCLI is the separately operated, pinned credential gateway. It alone stores/injects
+provider credentials and performs MITM; Agora does not contain a parallel gateway.
+
 ## Read order
 
 1. [Glossary](docs/specs/00-glossary.md)
@@ -70,5 +73,5 @@ plan graph. CI additionally applies both SQL contracts to a disposable PostgreSQ
 
 ## Status
 
-Architecture baseline complete and awaiting operator review. No application package is
-implementation-ready until its plan's prerequisites and decision gates are satisfied.
+Architecture baseline accepted on 2026-07-29 after the OneCLI spike. P01 is ready; every later
+package remains gated by the dependency graph and its plan exit criteria.

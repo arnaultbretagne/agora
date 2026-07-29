@@ -19,6 +19,10 @@ ACP methods and types.
 A temporary authenticated cluster bridge may carry ACP between a remote Loge and control plane. It
 may add transport behavior only and cannot create another semantic protocol.
 
+OneCLI is orthogonal to ACP. It supplies network credential injection below the harness, while the
+Agent image supplies the ACP adapter and harness. OneCLI configuration MUST NOT alter, wrap or
+normalize ACP envelopes.
+
 ACP v2 requires a future ADR.
 
 ## Alternatives rejected
@@ -27,6 +31,8 @@ ACP v2 requires a future ADR.
 - **Normalize ACP into a local Agent protocol:** creates semantic drift and loses unknown updates.
 - **Adopt ACP v2 draft immediately:** accepts uncontrolled breaking changes in the storage contract.
 - **Drive TUIs through PTY scraping:** loses structured thoughts, tools, plans and permissions.
+- **Treat `onecli run` as the production Agent protocol:** confuses a local process wrapper with ACP
+  Session semantics and risks passing OneCLI control credentials to the harness.
 
 ## Consequences
 
@@ -34,6 +40,7 @@ ACP v2 requires a future ADR.
 - The SDK is a pinned architectural dependency.
 - Complete ACP envelopes must be preserved.
 - Bridge implementation must be tested for transparent ordering/backpressure.
+- P09/P10 test ACP semantics and the already-selected OneCLI credential path as independent axes.
 
 ## Governing specs
 

@@ -1,6 +1,6 @@
 # ADR 0006 — Trusted Agent registry and harness adapters
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-29
 
 ## Context
@@ -8,6 +8,9 @@
 The Loge controller must launch Claude Code, Codex and future Agents without accepting arbitrary
 commands from the product. It also needs harness-specific custody behavior without teaching the
 product core native file formats.
+
+The OneCLI spike proved that OneCLI configures credentials but does not install either harness.
+Runtime images therefore remain an Agora supply-chain responsibility.
 
 ## Decision
 
@@ -19,6 +22,10 @@ negotiation remains authoritative over dynamic features.
 
 Sessions pin the resolved registry-definition version.
 
+Each image MUST contain pinned, smoke-tested harness and ACP-adapter binaries. The matching Broker
+policy mapping pins the OneCLI route-set version required by that exact runtime definition; it is
+reviewed with the image and cannot be supplied by the Browser.
+
 ## Alternatives rejected
 
 - **Arbitrary command/image in materialize requests:** creates remote code execution through the
@@ -27,6 +34,8 @@ Sessions pin the resolved registry-definition version.
   configuration.
 - **Hard-code Claude/Codex branches in the controller:** couples lifecycle code to harness details.
 - **Let the Browser install Agents:** violates the trust boundary.
+- **Install Claude/Codex at Pod startup:** makes runtime behavior mutable, network-dependent and
+  unattested even when the image digest is pinned.
 
 ## Consequences
 
@@ -34,6 +43,7 @@ Sessions pin the resolved registry-definition version.
 - Public UI receives only a safe registry projection.
 - Custody compatibility is explicit and testable.
 - Retirement must account for retained Sessions.
+- Agent upgrades include executable-version and OneCLI route-diff tests.
 
 ## Governing specs
 

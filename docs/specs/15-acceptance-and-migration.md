@@ -55,8 +55,18 @@ The architecture is implementation-complete only when the following black-box sc
 - Enforce owner/editor/viewer membership and reject removal of the last owner.
 - Deny cross-Session custody and ACP bridge use.
 - Prove Broker descriptors contain no token and a grant cannot bind to a second Loge identity.
-- Prove the ADR 0014 gateway decision against real Claude Max and ChatGPT/Codex authentication; no
-  custom gateway is accepted without recorded failed adoption gates.
+- Run real Claude Max and ChatGPT/Codex through ACP, the workload relay and the adopted OneCLI
+  gateway.
+- Prove each Session owns a distinct selective OneCLI Agent and no default/`all` Agent serves a
+  Loge.
+- Prove the Loge cannot read/replay the OneCLI control key, upstream Agent bearer or provider
+  credential.
+- Prove explicit allows followed by `block *` deny both unlisted ordinary and recognized LLM hosts.
+- Prove direct provider, Internet and OneCLI gateway/control access from the Loge is denied.
+- Seed signed query/token canaries and prove Broker/OneCLI stdout and audit remain content/token
+  free.
+- Prove OneCLI restart/restore preserves credential decryption and CA continuity.
+- Prove no custom/parallel credential gateway or provider-secret adapter exists.
 - Revoke Broker access after dematerialization.
 - Prove Loges cannot reach product Postgres or Kubernetes API.
 
@@ -101,7 +111,7 @@ proven by the Claude Agent plan or old runtime state is archived.
 4. Discussion and Web projection.
 5. Custody suspend/resume.
 6. Cross-Agent handoff.
-7. Broker/grants and hardened Loges.
+7. OneCLI-backed Broker/grants, opaque relay and hardened Loges.
 8. Claude and Codex acceptance.
 9. Shadow deployment.
 10. Explicit data policy and production cutover.
@@ -113,9 +123,11 @@ sources of truth.
 ## Go-live criteria
 
 - all baseline scenarios pass in a production-like cluster;
-- backup/restore is proven for product and custody schemas;
+- backup/restore is proven independently for Agora product/custody and the compatible OneCLI
+  database + `/app/data` + external encryption-key recovery set;
 - security review closes all critical/high findings;
 - SLOs and alerts exist;
 - adapter auth/custody gates pass for both selected Agents;
-- operator runbooks cover stuck Loges, custody failure, Broker outage and rollback;
+- operator runbooks cover stuck Loges, custody failure, Broker/relay/OneCLI outage, provider-auth
+  renewal, CA rotation and rollback;
 - no deprecated concept remains in current code or contracts.

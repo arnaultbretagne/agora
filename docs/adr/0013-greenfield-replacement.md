@@ -21,6 +21,9 @@ from `agent-runtime` are ported selectively only after adopt-before-build gates;
 Manager/Supervisor architecture is not copied as the new core.
 
 No production code is written before the governing spec, machine-readable contract and plan exist.
+The OneCLI spike satisfied the credential-gateway adopt-before-build gate: the old custom MITM,
+provider credential store and injection code have no port candidate. Only independent security
+invariants and non-gateway provider behavior may be reconsidered through an explicit plan.
 
 ## Alternatives rejected
 
@@ -29,6 +32,8 @@ No production code is written before the governing spec, machine-readable contra
 - **Fork a second permanent v2 repository:** recreates repository/decision drift.
 - **Copy all agent-runtime code first:** imports the group/profile/transcript assumptions being
   removed.
+- **Port the old gateway as a fallback beside OneCLI:** preserves duplicate credential paths and
+  defeats the greenfield trust model.
 
 ## Consequences
 
@@ -37,6 +42,7 @@ No production code is written before the governing spec, machine-readable contra
 - Port decisions are made file/behavior by file/behavior.
 - Cutover requires an explicit legacy-data policy.
 - Plans and acceptance tests become the implementation coordination mechanism.
+- Decommissioning explicitly revokes the former gateway credentials after OneCLI acceptance.
 
 ## Governing specs
 

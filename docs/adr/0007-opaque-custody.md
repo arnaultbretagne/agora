@@ -17,12 +17,18 @@ format/version/checksum/size/watermark metadata and never parses payloads.
 The baseline stores bounded payloads in a restricted Postgres `bytea` column. Capture completes
 before Anchor advancement and intentional Pod deletion.
 
+Custody drivers explicitly exclude provider authentication, OneCLI proxy authority, control keys
+and generated credential stubs. Safe CA/stub configuration is rematerialized from the trusted
+runtime bundle; it is not restored from custody.
+
 ## Alternatives rejected
 
 - **PVC per Session:** expensive lifecycle and backup complexity.
 - **JSONB transcript model:** falsely makes native state a product contract.
 - **Use product journal as native resume state:** cannot restore hidden harness context.
 - **Let the application read custody:** breaks concern and secret boundaries.
+- **Restore OneCLI authentication from custody:** mixes renewable execution authority with native
+  Agent context and can revive revoked access.
 
 ## Consequences
 
@@ -30,6 +36,7 @@ before Anchor advancement and intentional Pod deletion.
 - Drivers must exclude credentials and declare compatibility.
 - Object storage remains a future backend option behind the same interface.
 - A corrupted/incompatible snapshot causes explicit resume failure.
+- Rematerialization always obtains a current execution grant independently from snapshot restore.
 
 ## Governing specs
 

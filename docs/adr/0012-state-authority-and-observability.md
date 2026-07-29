@@ -16,7 +16,9 @@ State remains with its natural owner:
 
 - product/ACP facts in Postgres;
 - live Loge/Pod state in the Loge controller and Kubernetes;
-- grant state in the Broker;
+- execution-grant/workload binding and OneCLI mapping state in the Broker;
+- provider credentials, OneCLI Agents, gateway policy and request audit in OneCLI's operational
+  stores;
 - infrastructure logs/metrics/traces in OTel/Loki;
 - Web state as a composed read.
 
@@ -36,6 +38,8 @@ Session ID and trace context.
 - Reconciliation is level-based.
 - Operators use telemetry stores, while users see safe typed product status.
 - Infrastructure outages may degrade live status without corrupting history.
+- OneCLI request audit may inform operators but never becomes Workstream history or product
+  authorization truth.
 
 ## Governing specs
 

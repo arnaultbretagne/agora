@@ -27,6 +27,9 @@ operation-specific.
 |---|---|---|
 | Create Workstream/Session rows | yes | database transaction + idempotency key |
 | Issue equivalent execution grant | yes | same Session and capability digest |
+| Reconcile dedicated OneCLI Agent | yes | deterministic Session mapping; selective mode required |
+| Publish OneCLI policy | conditional | same policy digest; verify complete ordered published state |
+| Bind grant/relay workload identity | yes | same request, Session, Agent and identity only |
 | Materialize Loge | yes | idempotent `PUT` by Session |
 | Read Loge status | yes | read-only |
 | ACP `initialize` | connection-scoped | reconnect creates a new connection |
@@ -37,6 +40,7 @@ operation-specific.
 | Capture custody | yes | same capture request ID; one committed generation |
 | Dematerialize Loge | yes | idempotent `DELETE` |
 | Revoke grant | yes | idempotent |
+| Rotate/delete OneCLI Agent authority | yes | same Session/grant cleanup intent |
 | Projection apply | yes | event ID/checkpoint |
 | Journal outbox publish | yes | event identity + per-Workstream canonical-head sweep |
 | Feed read/replay | yes | durable feed position + idempotent item operation |
@@ -93,11 +97,39 @@ rebuilds. Clients may see a declared feed delay, never fabricated completeness.
 No new Loge is materialized. Existing grants follow their expiry; the system does not bypass policy
 or inject provider secrets directly.
 
+### Broker creates a OneCLI Agent then crashes
+
+Reconciliation finds the deterministic Session mapping, forces selective mode and either completes
+the exact policy digest or revokes/deletes the orphan. It never creates a second OneCLI Agent for the
+Session.
+
+### OneCLI policy publication is unknown
+
+The grant remains inactive. Reconciliation reads the effective published rule order and only
+activates when all explicit allows and the final `block *` match the expected digest.
+
+### Broker access relay is unavailable
+
+The Loge has no provider path. It does not receive the upstream OneCLI bearer and cannot connect
+directly to OneCLI or providers.
+
+### OneCLI gateway is unavailable
+
+Active Agent calls fail with a typed runtime/provider-path failure. No custom gateway, direct
+credential injection or provider fallback is attempted.
+
+### OneCLI CA or encryption state is incompatible
+
+Readiness fails closed. Operators restore the compatible OneCLI database, `/app/data` and external
+encryption key or execute an explicit CA rotation; existing Loges are not silently reconfigured.
+
 ## Timeouts
 
 Timeouts are typed by phase:
 
 - `grant_timeout`;
+- `onecli_policy_timeout`;
+- `relay_activation_timeout`;
 - `loge_provision_timeout`;
 - `acp_connect_timeout`;
 - `acp_initialize_timeout`;

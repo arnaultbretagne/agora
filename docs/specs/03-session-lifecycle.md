@@ -31,15 +31,20 @@ ready | busy | suspended ── close ──► closing ──► closed
    workspace/equipment intent and makes it current when requested.
 3. Policy resolves capability intent and atomically binds its policy version, capability digest and
    independent capability facts.
-4. Phase advances to `provisioning`.
-5. The control plane materializes the Loge without custody.
-6. It opens an ACP connection and calls `initialize`.
-7. It persists the negotiated protocol version and capabilities.
-8. It calls `session/new` with the Session workspace and allowed MCP servers.
-9. It binds the returned `acp_session_id` exactly once.
-10. Phase advances to `ready`.
+4. Broker issues the execution grant only after the dedicated selective OneCLI Agent and complete
+   allow-then-block policy are ready.
+5. Phase advances to `provisioning`.
+6. The control plane materializes the Loge without custody; the controller binds the grant to the
+   Loge workload identity and credential-free relay path.
+7. It opens an ACP connection and calls `initialize`.
+8. It persists the negotiated protocol version and capabilities.
+9. It calls `session/new` with the Session workspace and allowed MCP servers.
+10. It binds the returned `acp_session_id` exactly once.
+11. Phase advances to `ready`.
 
-Any failure before step 9 leaves an unbound failed Session. Its Agora ID MUST NOT be reused.
+Any failure before ACP binding completes at step 10 leaves an unbound failed Session. Its Agora ID
+MUST NOT be reused, and Broker/controller reconciliation MUST revoke any partial OneCLI/relay
+authority.
 
 ## Prompt turn
 
@@ -75,13 +80,14 @@ healthy Pod. An operator may explicitly force-close a broken Session, resulting 
 
 1. Read the anchor and referenced custody snapshot.
 2. Obtain a new execution grant with the Session's persisted capability facts.
-3. Materialize the same logical Loge ID using that snapshot.
-4. Connect and initialize ACP.
-5. Verify the Agent advertises `sessionCapabilities.resume`.
-6. Call `session/resume` with the persisted `acp_session_id`, workspace and allowed MCP servers.
-7. Do not ingest historical content as new Workstream content.
-8. If the Workstream advanced after the snapshot watermark, perform a handoff for the delta.
-9. Set phase to `ready`.
+3. Rotate/rebind the same Session's dedicated OneCLI Agent authority and complete route policy.
+4. Materialize the same logical Loge ID using that snapshot.
+5. Connect and initialize ACP.
+6. Verify the Agent advertises `sessionCapabilities.resume`.
+7. Call `session/resume` with the persisted `acp_session_id`, workspace and allowed MCP servers.
+8. Do not ingest historical content as new Workstream content.
+9. If the Workstream advanced after the snapshot watermark, perform a handoff for the delta.
+10. Set phase to `ready`.
 
 `session/load` is not the normal resume path because it replays history already persisted by Agora.
 
@@ -118,7 +124,7 @@ Close means no future prompt will be accepted for that Session. It:
 - asks ACP to close when supported;
 - captures custody only if retention policy requests a final snapshot;
 - dematerializes the Loge;
-- revokes the execution grant;
+- revokes the execution grant, relay mapping and OneCLI Agent authority;
 - records a terminal reason.
 
 Closed and failed Sessions remain part of Workstream history.

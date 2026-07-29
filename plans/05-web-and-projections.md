@@ -41,6 +41,8 @@ and deterministic state tests.
 - [ ] Implement reconnect after position and full reset on gap.
 - [ ] Add accessible keyboard/screen-reader interactions.
 - [ ] Add safe error rendering with no internal detail leak.
+- [ ] Project Broker/OneCLI-derived denial and degraded states only through typed Agora failures;
+  never expose OneCLI identifiers, routes or request logs.
 
 ## Required tests
 
@@ -53,6 +55,8 @@ and deterministic state tests.
 - Projection truncate/rebuild yields identical item hashes.
 - Unauthorized Workstream/Session/feed access is denied.
 - Viewer mutations and editor membership/deletion attempts are denied.
+- Browser responses/feed contain no grant reference, relay credential, OneCLI Agent ID or upstream
+  error body.
 
 ## Non-goals
 
@@ -60,6 +64,7 @@ and deterministic state tests.
 - No direct ACP or Loge connection from Browser.
 - No handoff algorithm yet.
 - No model-specific rendering required beyond safe generic metadata.
+- No OneCLI UI embedding or direct Browser access to its API.
 
 ## Exit criteria
 
