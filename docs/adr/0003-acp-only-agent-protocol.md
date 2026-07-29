@@ -16,8 +16,8 @@ ACP remote transports and v2 continue to evolve.
 Agora is an ACP Client using the official stable v1 TypeScript SDK. Agent interaction uses unmodified
 ACP methods and types.
 
-A temporary authenticated cluster bridge may carry ACP between a remote Loge and control plane. It
-may add transport behavior only and cannot create another semantic protocol.
+A temporary authenticated cluster bridge may carry ACP between a remote Session Runtime and control
+plane. It may add transport behavior only and cannot create another semantic protocol.
 
 OneCLI is orthogonal to ACP. It supplies network credential injection below the harness, while the
 Agent image supplies the ACP adapter and harness. OneCLI configuration MUST NOT alter, wrap or

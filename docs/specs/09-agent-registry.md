@@ -7,13 +7,15 @@ definition. It prevents the product API from becoming arbitrary remote execution
 
 ## Authority
 
-Registry definitions are code/operator configuration reviewed and deployed with the Loge controller.
-The Browser and control plane may select enabled IDs but cannot submit or mutate definitions.
+Registry definitions are code/operator configuration reviewed and deployed with the Session Runtime
+controller. The Browser and control plane may select enabled IDs but cannot submit or mutate
+definitions.
 
 The UI receives `GET /v1/agents`, a public projection containing labels and availability, never
 image digests, commands, custody paths or unverified runtime capabilities.
 
-The Loge controller is the launch authority and exposes an internal safe selection projection:
+The Session Runtime controller is the launch authority and exposes an internal safe selection
+projection:
 
 ```text
 GET /v1/agents -> registry revision + (agent_id, exact runtime-definition version, public metadata)

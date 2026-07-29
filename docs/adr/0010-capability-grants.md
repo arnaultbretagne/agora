@@ -8,7 +8,7 @@
 A fixed profile catalogue encodes combinations of inference, Vault and repository access. Every new
 resource doubles possible combinations and freezes arbitrary names into durable history.
 
-The Browser still must not submit raw provider scopes or escalate a Loge.
+The Browser still must not submit raw provider scopes or escalate a Session's runtime authority.
 
 ## Decision
 
@@ -23,10 +23,11 @@ Session and publishes deterministic first-match rules:
 
 OneCLI's Default Rule is not used as a general egress deny.
 
-The Loge controller binds the grant to one Session-specific workload identity. A Broker access relay
-authenticates that identity, resolves the Session's private OneCLI upstream bearer and relays CONNECT
-traffic opaquely. The relay MUST NOT terminate provider TLS, inspect provider payloads, inject
-credentials or implement provider-specific behavior; OneCLI remains the only credential gateway.
+The Session Runtime controller binds the grant to one Session-specific workload identity. A Broker
+access relay authenticates that identity, resolves the Session's private OneCLI upstream bearer and
+relays CONNECT traffic opaquely. The relay MUST NOT terminate provider TLS, inspect provider
+payloads, inject credentials or implement provider-specific behavior; OneCLI remains the only
+credential gateway.
 
 Neither the OneCLI bearer nor an execution-grant token enters the Agent container or ACP
 descriptors. Grant expiry/revocation is enforced at the relay and by rotating or deleting the
@@ -40,10 +41,10 @@ Changing the capability set creates a new Session.
 - **Enumerate every profile combination:** exponential catalogue and migration burden.
 - **Browser submits capability strings:** exposes security implementation and escalation surface.
 - **Mutable capability set on a live Session:** makes historical authority ambiguous and complicates
-  Loge revocation.
+  runtime-authority revocation.
 - **Manager owns policy:** mixes Kubernetes mechanism with authorization decisions.
-- **Place the OneCLI `aoc_…` bearer in the Loge:** allows replay from another workload until manual
-  rotation and fails the Session/workload binding invariant.
+- **Place the OneCLI `aoc_…` bearer in the Agent Pod:** allows replay from another workload until
+  manual rotation and fails the Session/workload binding invariant.
 - **Keep Agora provider adapters beside OneCLI:** creates two credential gateways, two policy
   surfaces and ambiguous audit authority.
 

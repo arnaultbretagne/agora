@@ -2,7 +2,7 @@
 
 - **Status:** pending
 - **Dependencies:** P02, P03, P04
-- **Primary paths:** `packages/custody`, `apps/loge-controller`, `apps/control-plane`, fake Agent
+- **Primary paths:** `packages/custody`, `apps/session-runtime-controller`, `apps/control-plane`, fake Agent
 
 ## Required reading
 

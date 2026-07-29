@@ -2,8 +2,8 @@
 
 ## Threat model
 
-The Agent and everything it executes inside a Loge are untrusted. Prompt injection may cause
-arbitrary code execution within that Loge.
+The Agent and everything it executes inside a Session Runtime are untrusted. Prompt injection may
+cause arbitrary code execution within that runtime.
 
 Primary assets are:
 
@@ -26,10 +26,11 @@ Web/API ── product identity ── Control plane
                                   │
                  ┌────────────────┴───────────────┐
                  ▼                                ▼
-          Loge controller                  Broker control/policy ──► OneCLI control API
+          Session Runtime controller           Broker control/policy ──► OneCLI control API
                  │ workload API                  │
                  ▼                               ▼
-          untrusted Loge ── workload ID ── Broker access relay ──► OneCLI gateway ──► provider
+          untrusted Session Runtime Pod ── workload ID ──► Broker access relay
+          Broker access relay ── opaque CONNECT ─────────► OneCLI gateway ──► provider
 ```
 
 Every arrow crosses authenticated authorization. Same-repository code does not imply same runtime
@@ -40,7 +41,7 @@ trust.
 - Human/API requests use the platform identity provider.
 - Workstream authorization is checked against durable `owner | editor | viewer` membership.
 - Service-to-service calls use workload identity and authenticated TLS.
-- Loge materialization requires an execution grant bound to Session and Agent.
+- Session Runtime materialization requires an execution grant bound to Session and Agent.
 - One dedicated selective OneCLI Agent is mapped to exactly one Agora Session.
 - ACP bridge credentials are one-time or short-lived and Session-bound.
 - Database access uses distinct roles per deployable.
@@ -57,9 +58,9 @@ manufacture a human membership.
 
 ## Kubernetes
 
-Only the Loge controller ServiceAccount may create/delete Loge workloads.
+Only the Session Runtime controller ServiceAccount may create/delete Session Runtime workloads.
 
-Loge Pods:
+Pods materializing Session Runtimes:
 
 - use no Kubernetes API token;
 - run non-root;
@@ -76,15 +77,15 @@ The controller validates the generated PodSpec before submission.
 
 Default-deny NetworkPolicies isolate:
 
-- Loges from product Postgres;
-- Loges from the Kubernetes API;
-- Loges from other Loges;
+- Session Runtime Pods from product Postgres;
+- Session Runtime Pods from the Kubernetes API;
+- Session Runtime Pods from other Session Runtime Pods;
 - public Web ingress from internal control APIs;
-- Broker admin plane from Loges.
+- Broker admin plane from Session Runtime Pods.
 
-Loges may reach the authenticated Broker access relay, ACP bridge and explicitly required internal
-services. They MUST NOT reach providers, the public Internet, OneCLI control API or OneCLI gateway
-directly.
+Session Runtime Pods may reach the authenticated Broker access relay, ACP bridge and explicitly
+required internal services. They MUST NOT reach providers, the public Internet, OneCLI control API
+or OneCLI gateway directly.
 
 The relay may reach only the OneCLI gateway. OneCLI policy MUST contain reviewed explicit allows
 followed by a final explicit `block *`; its Default Rule is not sufficient. Agent/runtime upgrades
@@ -96,8 +97,8 @@ require a route-set diff and negative tests for unlisted ordinary and LLM hosts.
 - The OneCLI organization/project control key is available only to Broker control.
 - The dedicated OneCLI Agent upstream bearer is encrypted in Broker-private operational state and
   available only to the access relay.
-- Execution-grant activation references and platform Loge workload credentials are ephemeral and
-  never persisted in product tables, ACP envelopes or logs.
+- Execution-grant activation references and platform Session Runtime workload credentials are
+  ephemeral and never persisted in product tables, ACP envelopes or logs.
 - ACP tunnel credentials are ephemeral and redacted.
 - Custody drivers exclude credential paths.
 - Workspace content and custody are never placed in environment variables.

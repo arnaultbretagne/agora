@@ -21,7 +21,9 @@ Do not introduce:
 
 - `Conversation` as a domain aggregate;
 - a `Run` entity or `run_id`;
-- a Loge reusable by several Sessions;
+- `Loge` or `loge_id`;
+- a persisted `SessionRuntime` entity or `runtime_id`;
+- a Session Runtime reusable by several Sessions;
 - `native_session_id`;
 - a harness `Thread` as an Agora aggregate;
 - `kind` as a synonym for Agent;
@@ -52,9 +54,9 @@ The only accepted terms and meanings are in the glossary.
 
 - Browser input expresses resource intent, never raw capabilities or provider scopes.
 - Only the policy service resolves intent into grants.
-- Only the Loge controller owns Kubernetes workload permissions.
+- Only the Session Runtime controller owns Kubernetes workload permissions.
 - Provider secrets live only in OneCLI; its control key and upstream Agent bearer never enter a
-  Loge.
+  Session Runtime.
 - OneCLI is the only credential gateway. Never build/port a parallel MITM, secret store, injector or
   provider adapter.
 - Broker may implement only OneCLI control lifecycle and a workload-authenticated opaque relay; that

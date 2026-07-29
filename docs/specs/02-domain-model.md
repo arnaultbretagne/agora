@@ -10,7 +10,7 @@ the aggregate by immutable identifiers.
 Workstream 1 ────── 1..N Session
     │                    │
     │                    ├── 1 Agent
-    │                    ├── 1 logical Loge
+    │                    ├── 1 Session Runtime lifecycle (no separate entity)
     │                    ├── 0..N prompt turns
     │                    └── 0..N custody snapshots
     │
@@ -51,7 +51,7 @@ For `invocation`:
 
 - A Session belongs to one immutable `workstream_id`.
 - `agent_id` is immutable.
-- The Agora `id` is immutable and is the Loge resource key.
+- The Agora `id` is immutable and is the only Session Runtime resource key.
 - `acp_session_id` is absent before binding and immutable after binding.
 - `(agent_id, acp_session_id)` MUST be unique when bound.
 - One Session has one immutable workspace root specification and one resolved capability envelope.
@@ -66,10 +66,10 @@ For `invocation`:
 
 ## Why two Session identifiers
 
-Agora must persist intent and provision a Loge before calling ACP `session/new`; ACP assigns its
-opaque `sessionId` in the response. Therefore:
+Agora must persist intent and provision a Session Runtime before calling ACP `session/new`; ACP
+assigns its opaque `sessionId` in the response. Therefore:
 
-- `Session.id` is the local durable identity and Loge key;
+- `Session.id` is the local durable identity and the only Session Runtime key;
 - `Session.acp_session_id` is the protocol locator.
 
 They identify the same entity at different boundaries. No binding table or separate native Session
@@ -140,7 +140,7 @@ Deletion is asynchronous and ordered:
 1. reject new commands;
 2. cancel/close current ACP work where possible;
 3. capture custody only when retention policy requires it;
-4. dematerialize all Loges;
+4. dematerialize all Session Runtimes;
 5. revoke execution grants, relay bindings and dedicated OneCLI Agent authority;
 6. delete product rows and custody snapshots according to policy.
 

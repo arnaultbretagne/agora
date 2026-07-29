@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Agora Loge Control API
+  title: Agora Session Runtime Control API
   version: 0.1.0
   description: Internal idempotent lifecycle API. It never accepts arbitrary process configuration.
 servers:
@@ -28,11 +28,11 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/LaunchableAgent'
-  /loges/{sessionId}:
+  /sessions/{sessionId}/runtime:
     parameters:
       - $ref: '#/components/parameters/SessionId'
     put:
-      operationId: materializeLoge
+      operationId: materializeSessionRuntime
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -40,39 +40,39 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MaterializeRequest'
+              $ref: '#/components/schemas/MaterializeSessionRuntimeRequest'
       responses:
         '200':
-          description: Existing compatible Loge returned.
+          description: Existing compatible Session Runtime state returned.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogeStatus'
+                $ref: '#/components/schemas/SessionRuntimeStatus'
         '202':
           description: Provisioning started.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogeStatus'
+                $ref: '#/components/schemas/SessionRuntimeStatus'
         '409':
           $ref: '#/components/responses/Problem'
     get:
-      operationId: getLoge
+      operationId: getSessionRuntime
       responses:
         '200':
           description: Current live state.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogeStatus'
+                $ref: '#/components/schemas/SessionRuntimeStatus'
         '404':
-          description: The logical Loge is currently absent.
+          description: The Session Runtime is currently not materialized.
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
     delete:
-      operationId: dematerializeLoge
+      operationId: dematerializeSessionRuntime
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -81,15 +81,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogeStatus'
+                $ref: '#/components/schemas/SessionRuntimeStatus'
         '204':
           description: Already absent.
-  /loges/{sessionId}/acp-connections:
+  /sessions/{sessionId}/runtime/acp-connections:
     parameters:
       - $ref: '#/components/parameters/SessionId'
     post:
       operationId: openACPConnection
-      description: Mint one Session-bound, single-purpose connection after the Loge is ready.
+      description: >
+        Mint one Session-bound, single-purpose connection after the Session Runtime is ready.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -101,7 +102,7 @@ paths:
                 $ref: '#/components/schemas/ACPBridgeEndpoint'
         '409':
           $ref: '#/components/responses/Problem'
-  /loges/{sessionId}/custody-snapshots:
+  /sessions/{sessionId}/runtime/custody-snapshots:
     parameters:
       - $ref: '#/components/parameters/SessionId'
     post:
@@ -175,7 +176,7 @@ components:
         availability:
           type: string
           enum: [enabled, unavailable, deprecated]
-    MaterializeRequest:
+    MaterializeSessionRuntimeRequest:
       type: object
       additionalProperties: false
       required:
@@ -206,7 +207,7 @@ components:
           format: uuid
         traceparent:
           type: string
-    LogeStatus:
+    SessionRuntimeStatus:
       type: object
       additionalProperties: false
       required: [sessionId, agentId, runtimeDefinitionVersion, state]

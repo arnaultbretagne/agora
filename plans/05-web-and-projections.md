@@ -37,7 +37,8 @@ and deterministic state tests.
 - [ ] Project messages/thoughts/tool calls/plans/permissions/usage/unknown updates.
 - [ ] Render all item classes; collapse verbose classes without discarding them.
 - [ ] Show Agent/Session boundaries and Handoff placeholders.
-- [ ] Distinguish durable Session phase from optional live Loge state.
+- [ ] Distinguish durable Session phase from optional `liveSessionRuntime` state composed from the
+  controller.
 - [ ] Implement reconnect after position and full reset on gap.
 - [ ] Add accessible keyboard/screen-reader interactions.
 - [ ] Add safe error rendering with no internal detail leak.
@@ -61,7 +62,7 @@ and deterministic state tests.
 ## Non-goals
 
 - No custody UI payload access.
-- No direct ACP or Loge connection from Browser.
+- No direct ACP or Session Runtime connection from Browser.
 - No handoff algorithm yet.
 - No model-specific rendering required beyond safe generic metadata.
 - No OneCLI UI embedding or direct Browser access to its API.

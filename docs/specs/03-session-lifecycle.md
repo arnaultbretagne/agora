@@ -34,8 +34,8 @@ ready | busy | suspended ── close ──► closing ──► closed
 4. Broker issues the execution grant only after the dedicated selective OneCLI Agent and complete
    allow-then-block policy are ready.
 5. Phase advances to `provisioning`.
-6. The control plane materializes the Loge without custody; the controller binds the grant to the
-   Loge workload identity and credential-free relay path.
+6. The control plane materializes the Session Runtime without custody; the controller binds the
+   grant to its workload identity and credential-free relay path.
 7. It opens an ACP connection and calls `initialize`.
 8. It persists the negotiated protocol version and capabilities.
 9. It calls `session/new` with the Session workspace and allowed MCP servers.
@@ -66,10 +66,10 @@ Suspension is a product operation, not merely Pod deletion:
 1. Stop accepting new prompt turns.
 2. If busy, either await completion or cancel according to the caller's explicit policy.
 3. Select the current committed Workstream watermark.
-4. Ask the Loge controller to capture a custody snapshot while leaving the Pod alive.
+4. Ask the Session Runtime controller to capture a custody snapshot while leaving the Pod alive.
 5. Verify snapshot metadata and atomically commit the corresponding Agent anchor.
 6. Call ACP `session/close` when supported and appropriate.
-7. Dematerialize the Loge.
+7. Dematerialize the Session Runtime.
 8. Set phase to `suspended`.
 
 If capture fails, the anchor MUST NOT advance and the controller MUST NOT intentionally delete a
@@ -81,7 +81,7 @@ healthy Pod. An operator may explicitly force-close a broken Session, resulting 
 1. Read the anchor and referenced custody snapshot.
 2. Obtain a new execution grant with the Session's persisted capability facts.
 3. Rotate/rebind the same Session's dedicated OneCLI Agent authority and complete route policy.
-4. Materialize the same logical Loge ID using that snapshot.
+4. Rematerialize the same Session's runtime using that snapshot.
 5. Connect and initialize ACP.
 6. Verify the Agent advertises `sessionCapabilities.resume`.
 7. Call `session/resume` with the persisted `acp_session_id`, workspace and allowed MCP servers.
@@ -123,7 +123,7 @@ Close means no future prompt will be accepted for that Session. It:
 - cancels active work;
 - asks ACP to close when supported;
 - captures custody only if retention policy requests a final snapshot;
-- dematerializes the Loge;
+- dematerializes the Session Runtime;
 - revokes the execution grant, relay mapping and OneCLI Agent authority;
 - records a terminal reason.
 

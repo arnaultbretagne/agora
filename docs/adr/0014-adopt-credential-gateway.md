@@ -46,8 +46,8 @@ fallback credential path.
 
 The relay is explicitly **not** a credential gateway. It cannot terminate provider TLS, inspect
 provider request bodies, inject credentials or contain provider-specific code. The OneCLI bearer
-stays in Broker-private operational state; the Loge receives only platform workload identity, a
-credential-free relay endpoint, CA trust and non-secret auth stubs.
+stays in Broker-private operational state; the Agent Pod receives only platform workload identity,
+a credential-free relay endpoint, CA trust and non-secret auth stubs.
 
 Production container integration uses `@onecli-sh/sdk#getContainerConfig` from the trusted Broker
 control adapter. `onecli run` remains a local diagnostic, and `applyContainerConfig` is forbidden in
@@ -61,18 +61,18 @@ The following are release-blocking requirements, not reasons to build another ga
 
 1. fix OneCLI gateway logging so stdout never includes query strings;
 2. enforce workload binding/confinement through the opaque relay;
-3. force Loge egress through the relay and publish the explicit terminal block;
+3. force Session Runtime egress through the relay and publish the explicit terminal block;
 4. persist and back up OneCLI PostgreSQL, `/app/data` and the external encryption key;
 5. prove provider subscription renewal and CA rotation/recovery;
-6. fail Loge materialization closed whenever OneCLI policy/configuration is incomplete.
+6. fail Session Runtime materialization closed whenever OneCLI policy/configuration is incomplete.
 
 ## Alternatives rejected
 
 - **Port the old gateway:** duplicates a capability already proven with real subscriptions.
 - **Run both gateways during normal operation:** creates ambiguous credential custody, policy,
   logging and revocation.
-- **Put OneCLI's Agent bearer directly in the Loge:** it is replayable, has no native TTL and is not
-  workload-bound.
+- **Put OneCLI's Agent bearer directly in the Agent Pod:** it is replayable, has no native TTL and
+  is not workload-bound.
 - **Use `onecli run` as the Kubernetes launcher:** requires the harness to be locally installed and
   risks inheriting OneCLI control credentials.
 - **Use OneCLI as Agora's Agent protocol:** conflates network credential transport with ACP

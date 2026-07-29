@@ -24,13 +24,14 @@
 
 ## Tasks
 
-- [ ] Deploy Web, control plane, controller, Broker/relay, OneCLI and Loges with separate identities.
+- [ ] Deploy Web, control plane, controller, Broker/relay, OneCLI and Session Runtimes with separate
+  identities.
 - [ ] Prove least privilege with negative authorization tests.
 - [ ] Pin and attest images/dependencies.
 - [ ] Pin the OneCLI image by digest and verify its release/source provenance.
 - [ ] Persist OneCLI PostgreSQL and `/app/data`; manage `SECRET_ENCRYPTION_KEY` outside both.
 - [ ] Prove a compatible backup/restore of OneCLI DB + CA/private key + encryption key.
-- [ ] Enforce Loge → relay → OneCLI gateway as the only provider egress path.
+- [ ] Enforce Session Runtime Pod → relay → OneCLI gateway as the only provider egress path.
 - [ ] Verify every published route set ends in explicit `block *`.
 - [ ] Prove gateway stdout is query-free and manual approval is disabled on content-bearing routes.
 - [ ] Exercise OneCLI control/gateway/relay outage, CA rotation and policy-cache invalidation.
@@ -39,7 +40,7 @@
 - [ ] Implement dashboards/alerts from `12-observability.md`.
 - [ ] Exercise every crash boundary and timeout.
 - [ ] Prove product+custody backup/restore consistency.
-- [ ] Load-test journal, projector, feed, custody and Loge churn.
+- [ ] Load-test journal, projector, feed, custody and Session Runtime materialization churn.
 - [ ] Perform security review and close critical/high findings.
 - [ ] Choose fresh database versus separately specified legacy archive/import.
 - [ ] Shadow real workloads without dual product truth.
@@ -61,7 +62,7 @@ Every scenario in `docs/specs/15-acceptance-and-migration.md`, plus:
 - custody growth/timeout/checksum failure;
 - projector lag/rebuild during live ingestion;
 - unauthorized cross-user/Session access;
-- adapter upgrade and rollback with retained custody.
+- adapter upgrade and rollback with retained custody;
 - OneCLI and Agent route-set upgrade/rollback with secret-leak canaries.
 
 ## Non-goals

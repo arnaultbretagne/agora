@@ -44,8 +44,8 @@ paths:
     post:
       operationId: activateExecutionGrant
       description: >
-        Controller-only binding of a transient grant reference to one Loge workload identity. No
-        provider or data-plane credential is returned.
+        Controller-only binding of a transient grant reference to one Session Runtime workload
+        identity. No provider or data-plane credential is returned.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -56,7 +56,7 @@ paths:
               $ref: '#/components/schemas/ActivateGrantRequest'
       responses:
         '201':
-          description: Grant bound to the Loge workload identity.
+          description: Grant bound to the Session Runtime workload identity.
           content:
             application/json:
               schema:
@@ -161,7 +161,7 @@ components:
           format: uuid
         grantRef:
           type: string
-          description: Opaque controller-consumable reference, not a Loge bearer.
+          description: Opaque controller-consumable reference, not an Agent/Pod bearer.
           readOnly: true
           x-sensitive: true
         sessionId:
@@ -205,7 +205,7 @@ components:
           minLength: 1
         workloadIdentity:
           type: string
-          description: Controller-created authenticated identity for exactly one Loge.
+          description: Controller-created authenticated identity for exactly one Session Runtime.
           minLength: 1
           maxLength: 500
     GrantActivation:

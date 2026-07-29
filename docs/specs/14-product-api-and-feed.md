@@ -77,8 +77,8 @@ commands are idempotent and MUST reject removal/demotion of the last owner.
 
 It may activate the Session. Creating a Session never mutates another Session's Agent or grants.
 
-`GET /v1/sessions/{id}` returns durable Session phase plus current live Loge status from its owner
-when requested.
+`GET /v1/sessions/{id}` returns durable Session phase plus optional `liveSessionRuntime` status from
+the Session Runtime controller when requested.
 
 `POST /v1/sessions/{id}/activate` performs suspend/switch/handoff orchestration.
 

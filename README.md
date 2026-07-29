@@ -1,22 +1,23 @@
 # Agora
 
-Agora is an ACP-native product for running durable human/agent workstreams in isolated execution
-environments called **Loges**.
+Agora is an ACP-native product for running durable human/agent workstreams in isolated
+**Session Runtimes**.
 
 This repository is a clean architectural baseline. It intentionally contains contracts,
 specifications and implementation plans before production code. Agents implementing the system must
 follow [AGENTS.md](AGENTS.md) and the plan dependency graph in [plans/README.md](plans/README.md).
 
-## Five primitives
+## Five core terms
 
 1. A **Workstream** is the non-null business object shown by the product.
 2. A **Session** is one ACP execution context attached to one Workstream and one Agent.
-3. A **Loge** is the isolated runtime resource of exactly one Session.
+3. A **Session Runtime** is the singleton infrastructure subresource through which exactly one
+   Session is materialized, not another domain entity.
 4. An **Anchor** records how much of a Workstream is durably known by one Agent.
 5. A **Custody snapshot** is opaque harness state used to resume one Session.
 
-There is no `Conversation`, `Run`, reusable Loge, generic runtime profile, or custom agent message
-protocol.
+There is no `Conversation`, `Run`, `Loge`, reusable Session Runtime, generic runtime profile or
+custom Agent message protocol.
 
 ## Repository shape
 
@@ -24,14 +25,15 @@ protocol.
 apps/
   web/               Human-facing web application
   control-plane/     Workstream API, Session coordinator and ACP Client
-  loge-controller/   Kubernetes lifecycle for Loges
+  session-runtime-controller/
+                     Kubernetes lifecycle for Session Runtimes
   broker/            Capability policy, OneCLI lifecycle and opaque workload relay
 
 packages/
   domain/            Domain types and invariants
   acp/               ACP connection and journaling integration
   store-pg/          Product journal and projections
-  runtime-control/   Loge control client/server contracts
+  session-runtime-control/   Session Runtime control client/server contracts
   custody/           Opaque custody persistence
   equipment-policy/ Capability request and grant resolution
   agent-registry/    Trusted Agent runtime definitions
@@ -47,8 +49,8 @@ docs/adr/            One consolidated ADR series and index
 plans/               Ordered implementation plans for coding agents
 ```
 
-The repository is a monorepo, not a monolith. `control-plane`, `loge-controller`, and `broker` are
-separate deployables with separate identities and permissions.
+The repository is a monorepo, not a monolith. `control-plane`, `session-runtime-controller`, and
+`broker` are separate deployables with separate identities and permissions.
 
 Self-hosted OneCLI is the separately operated, pinned credential gateway. It alone stores/injects
 provider credentials and performs MITM; Agora does not contain a parallel gateway.

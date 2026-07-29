@@ -15,7 +15,8 @@ Users still need a coherent view combining durable work and current execution st
 State remains with its natural owner:
 
 - product/ACP facts in Postgres;
-- live Loge/Pod state in the Loge controller and Kubernetes;
+- live Session Runtime state, including Pod status, in the Session Runtime controller and
+  Kubernetes;
 - execution-grant/workload binding and OneCLI mapping state in the Broker;
 - provider credentials, OneCLI Agents, gateway policy and request audit in OneCLI's operational
   stores;

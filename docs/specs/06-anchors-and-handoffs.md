@@ -28,7 +28,7 @@ An Anchor is a durable proof, not a guess based on the last sent prompt.
 2. Capture custody with that head as watermark.
 3. Verify the snapshot checksum and metadata.
 4. In one product transaction, upsert the Anchor if the watermark is not stale.
-5. Only then dematerialize the Loge.
+5. Only then dematerialize the Session Runtime.
 
 If the transaction loses a race to a newer Anchor, the snapshot remains unreferenced and is eligible
 for retention cleanup.

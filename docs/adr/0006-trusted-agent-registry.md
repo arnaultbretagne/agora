@@ -5,9 +5,9 @@
 
 ## Context
 
-The Loge controller must launch Claude Code, Codex and future Agents without accepting arbitrary
-commands from the product. It also needs harness-specific custody behavior without teaching the
-product core native file formats.
+The Session Runtime controller must launch Claude Code, Codex and future Agents without accepting
+arbitrary commands from the product. It also needs harness-specific custody behavior without
+teaching the product core native file formats.
 
 The OneCLI spike proved that OneCLI configures credentials but does not install either harness.
 Runtime images therefore remain an Agora supply-chain responsibility.

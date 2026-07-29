@@ -27,7 +27,7 @@
     },
     {
       "id": "P04",
-      "file": "04-loge-controller.md",
+      "file": "04-session-runtime-controller.md",
       "dependsOn": [
         "P01"
       ],

@@ -5,9 +5,9 @@
 
 ## Context
 
-`Conversation`, `Run`, native Session, runtime process and Loge described overlapping grains. A
-single native Agent context could span several Runs while a Loge could serve several Runs, making
-identity, resume and audit indirect.
+`Conversation`, `Run`, native Session, runtime process and the former `Loge` described overlapping
+grains. A single native Agent context could span several Runs while one runtime could serve several
+Runs, making identity, resume and audit indirect.
 
 Not every Agent invocation is conversational, while every product operation still requires a durable
 business home.
@@ -32,7 +32,8 @@ An invocation has one user-purpose prompt turn in v1. A discussion may have many
 - **Keep Run as an attempt:** creates multiple identities for one resumable context.
 - **Call the Workstream an ACP thread:** ACP has no such core aggregate and a Workstream spans
   Sessions.
-- **Use only the ACP Session ID:** it is unavailable until after the Loge and ACP connection exist.
+- **Use only the ACP Session ID:** it is unavailable until after runtime materialization and ACP
+  connection.
 - **Persist OneCLI Agent as another Session identity:** duplicates a one-to-one operational mapping
   and leaks an adopted component's data model into the product domain.
 

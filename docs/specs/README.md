@@ -17,7 +17,7 @@ the baseline is corrected; agents must not pick one silently.
 6. [Journal and projections](05-journal-and-projections.md)
 7. [Anchors and handoffs](06-anchors-and-handoffs.md)
 8. [Custody](07-custody.md)
-9. [Loge control](08-loge-control.md)
+9. [Session Runtime control](08-session-runtime-control.md)
 10. [Agent registry](09-agent-registry.md)
 11. [Equipment and Broker](10-equipment-and-broker.md)
 12. [Security](11-security.md)

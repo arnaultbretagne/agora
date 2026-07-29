@@ -338,7 +338,7 @@ paths:
             default: false
       responses:
         '200':
-          description: Durable Session and optional live Loge state.
+          description: Durable Session and optional live Session Runtime state.
           content:
             application/json:
               schema:
@@ -794,7 +794,7 @@ components:
           oneOf:
             - type: 'null'
             - $ref: '#/components/schemas/SafeFailure'
-        liveLoge:
+        liveSessionRuntime:
           type: object
           additionalProperties: false
           properties:

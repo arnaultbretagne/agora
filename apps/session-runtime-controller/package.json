@@ -1,5 +1,5 @@
 {
-  "name": "@agora/runtime-control",
+  "name": "@agora/session-runtime-controller",
   "version": "0.0.0",
   "private": true,
   "type": "module"

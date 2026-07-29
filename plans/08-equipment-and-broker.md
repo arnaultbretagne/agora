@@ -7,7 +7,7 @@
 ## Required reading
 
 - `apps/broker/ONECLI-SPIKE.md`
-- `docs/specs/08-loge-control.md`
+- `docs/specs/08-session-runtime-control.md`
 - `docs/specs/10-equipment-and-broker.md`
 - `docs/specs/11-security.md`
 - `docs/specs/12-observability.md`
@@ -37,7 +37,8 @@ Agora implements only:
 - equipment intent and capability policy;
 - OneCLI control-plane lifecycle;
 - execution-grant/workload binding;
-- an opaque access relay that authenticates the Loge and supplies upstream proxy auth;
+- an opaque access relay that authenticates the Session Runtime workload and supplies upstream
+  proxy auth;
 - safe deployment, policy and audit integration.
 
 The relay MUST NOT terminate provider TLS, inspect provider payloads, inject credentials or contain
@@ -46,7 +47,7 @@ provider-specific behavior. The old gateway/provider adapters are not candidates
 The runtime mapping is fixed:
 
 ```text
-one Agora Session = one Loge = one selective OneCLI Agent
+one Agora Session -> its SessionRuntime -> one selective OneCLI Agent
 ```
 
 The OneCLI Agent may be retained for suspension/resume of that same Session, with its token rotated
@@ -83,7 +84,7 @@ reassigned.
 - [ ] Call `getContainerConfig`; reject unavailable/incomplete responses instead of launching.
 - [ ] Verify returned CA/stub material against P04's operator-managed runtime bundle and fail closed
   on drift; do not add it to the activation response.
-- [ ] Strip the upstream `aoc_` bearer from all Loge-facing configuration.
+- [ ] Strip the upstream `aoc_` bearer from all Pod-facing configuration.
 - [ ] Keep the upstream bearer encrypted in Broker-private operational state and expose it only to
   the access relay.
 - [ ] Bind `grant + session_id + agent_id + workload_identity` exactly once.
@@ -92,7 +93,8 @@ reassigned.
 - [ ] Relay CONNECT traffic opaquely to OneCLI without provider TLS termination or body access.
 - [ ] Enforce expiry/revocation at the relay and rotate/delete OneCLI authority idempotently.
 - [ ] Renew only an unchanged capability digest; rotate upstream authority behind the same binding.
-- [ ] Reconcile Agent-without-Loge, Loge-without-active-grant and stale-relay-mapping states.
+- [ ] Reconcile dedicated Agent without a materialized runtime, materialized runtime without an
+  active grant and stale-relay-mapping states.
 - [ ] Provide the controller a credential-free, operator-managed CA/stub/runtime bundle.
 - [ ] Patch/upstream OneCLI logging to remove `path_and_query` before stdout.
 - [ ] Disable OneCLI manual approval for content-bearing LLM/tool routes.
@@ -112,11 +114,11 @@ reassigned.
   control key, upstream bearer or provider credential.
 - Exact required host succeeds; an unlisted uncredentialed host and an unlisted LLM host both fail.
 - Reordering/removing the terminal `block *` fails validation/publication.
-- Direct Loge egress to provider, OneCLI gateway and OneCLI control API is denied.
+- Direct Agent Pod egress to provider, OneCLI gateway and OneCLI control API is denied.
 - Revocation immediately blocks the relay and rotates/deletes upstream authority.
 - Renewal with a changed capability digest is rejected.
 - Broker/relay restart preserves correct state or invalidates it fail-closed.
-- OneCLI API outage and SDK `false` result prevent Loge readiness.
+- OneCLI API outage and SDK `false` result prevent Session Runtime readiness.
 - OneCLI CA/stub drift from the controller's pinned runtime bundle prevents activation.
 - Policy publish/cache-invalidation ambiguity prevents activation.
 - Gateway stdout, request audit and Broker logs contain no query string, prompt/tool content or
@@ -135,8 +137,8 @@ reassigned.
 
 ## Exit criteria
 
-- A fake Loge uses only its bound relay and OneCLI Agent to reach explicitly granted routes.
-- No provider or OneCLI control/upstream credential enters the Loge.
+- A fake Agent Pod uses only its bound relay and OneCLI Agent to reach explicitly granted routes.
+- No provider or OneCLI control/upstream credential enters the Session Runtime Pod.
 - OneCLI is observably the only provider TLS/credential-injection hop.
 - Every known spike blocker has an implemented regression test or an explicit P09/P10/P11 gate.
 - P09/P10 can run their pinned harness through OneCLI without learning gateway control material.

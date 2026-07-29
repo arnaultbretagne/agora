@@ -29,8 +29,8 @@ All signals use safe identifiers when available:
 Provider tokens, OneCLI control/upstream bearers, URL query strings, ACP tunnel credentials, prompt
 content and custody bytes are forbidden attributes.
 
-The Loge controller only requires `session_id`; observers may join to Workstream metadata through
-authorized product tooling.
+The Session Runtime controller only requires `session_id`; observers may join to Workstream metadata
+through authorized product tooling.
 
 ## Structured logs
 
@@ -57,7 +57,7 @@ Trace boundaries include:
 - database transaction;
 - execution-grant issuance;
 - OneCLI Agent/rule reconciliation and relay activation;
-- Loge materialization;
+- Session Runtime materialization;
 - ACP connection/initialize;
 - prompt turn;
 - custody capture/restore;
@@ -72,7 +72,7 @@ Required baseline metrics:
 
 - command latency/outcomes by command type;
 - active Workstreams/Sessions by phase;
-- Loge provisioning/ready/delete latency;
+- Session Runtime provisioning/ready/delete latency;
 - duplicate-Pod reconciliation incidents;
 - ACP initialize/new/resume/prompt outcomes;
 - prompt turn duration and stop reason;
@@ -92,7 +92,7 @@ High-cardinality IDs belong in traces/logs, not metric labels.
 
 - Liveness proves the process event loop is responsive.
 - Readiness proves required dependencies for new work.
-- Loge readiness follows `08-loge-control.md`, not container liveness.
+- Session Runtime readiness follows `08-session-runtime-control.md`, not container liveness.
 - A degraded projector may leave command ingestion ready while marking Web feed degraded, according
   to explicit deployment policy.
 
@@ -111,7 +111,7 @@ Minimum alerts cover:
 - OneCLI CA/encryption-key continuity failure;
 - gateway query-string leak canary;
 - leaked secret pattern detection;
-- Loge unable to dematerialize/revoke;
+- Session Runtime unable to dematerialize/revoke;
 - database role permission regression.
 
 ## User-visible diagnostics

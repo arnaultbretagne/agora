@@ -36,6 +36,7 @@
 - [ ] Implement snapshot insert/stream/read and retention queries.
 - [ ] Implement atomic Anchor upsert validating snapshot metadata/watermark.
 - [ ] Prove control-plane credentials cannot read custody payload.
+- [ ] Prove no `SessionRuntime` table, `runtime_id` or persisted live Pod status exists.
 - [ ] Prove product/projection/custody schemas contain no OneCLI Agent row, upstream proxy bearer,
   provider credential or OneCLI request log.
 
@@ -52,6 +53,7 @@
 - Transaction rollback leaves no event/journal-outbox split.
 - Concurrent Workstreams cannot cause a projector checkpoint to skip committed events.
 - Database role tests execute actual denied SQL.
+- Repository types expose durable Session phase but cannot persist live Session Runtime status.
 - Gateway/grant secret-pattern fixtures cannot be persisted in product grant, command or
   non-envelope journal metadata fields; canonical ACP content retains its separate confidentiality
   rules.

@@ -34,7 +34,8 @@ domain <- stores/adapters <- application services <- deployables
 - All external commands are idempotency-tested.
 - Every failure path has a typed public/internal code.
 - Use OneCLI as the only credential-injection/MITM gateway.
-- Keep the OneCLI organization key, provider credentials and upstream Agent bearer out of Loges.
+- Keep the OneCLI organization key, provider credentials and upstream Agent bearer out of Session
+  Runtime Pods.
 - Treat OneCLI rule publication, Agent lifecycle and relay activation as fail-closed external side
   effects.
 - Bake pinned Claude/Codex and ACP adapters into Agent images; never install them at Pod startup.

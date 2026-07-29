@@ -14,8 +14,8 @@ would collapse security boundaries.
 
 ## Decision
 
-Agora is one TypeScript monorepo containing Web, control plane, Loge controller, Broker, shared
-packages and Agent definitions.
+Agora is one TypeScript monorepo containing Web, control plane, Session Runtime controller, Broker,
+shared packages and Agent definitions.
 
 These remain separate deployables with:
 

@@ -6,7 +6,7 @@
 ## Context
 
 The previous codebase encoded the rejected concepts in its central modules and tests: Channel, Hub,
-Conversation, Run, shared/reused Loge, native transcript endpoints and combined profiles.
+Conversation, Run, shared/reused `Loge`, native transcript endpoints and combined profiles.
 
 An in-place refactor would require long-lived hybrid states and compatibility abstractions for a
 model intentionally discarded.

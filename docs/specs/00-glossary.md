@@ -39,7 +39,7 @@ A Session has:
 
 - an Agora `id`, allocated before runtime provisioning;
 - an opaque ACP `sessionId`, bound after `session/new`;
-- one logical Loge;
+- one Session Runtime lifecycle addressed by its Agora ID;
 - zero or more ACP prompt turns;
 - zero or more custody snapshot generations.
 
@@ -84,28 +84,31 @@ An adapter does not create a second product protocol.
 
 ## Runtime terms
 
-### Loge
+### Session Runtime
 
-The logical isolated runtime resource of exactly one Session. Its identity is the Agora Session ID;
-there is no separate persisted `loge_id`.
+The singleton infrastructure subresource through which exactly one Session is materialized.
+`SessionRuntime` is not another domain entity: it has no independent ID, persistence row or owner,
+and every operation is addressed by the Agora Session ID.
 
-A Loge may be dematerialized and later rematerialized. At most one Pod incarnation may exist for it
-at a time.
+Every Session has exactly one Session Runtime lifecycle. It may be dematerialized and later
+rematerialized; at most one Pod incarnation may exist for the Session at a time.
 
 ### Pod incarnation
 
-One Kubernetes Pod currently materializing a Loge. Its Pod UID is infrastructure identity, not
-product identity. A resumed Session may have a different Pod UID without becoming another Session.
+One Kubernetes Pod currently materializing a Session Runtime. Its Pod UID is infrastructure
+identity, not product identity. A resumed Session may have a different Pod UID without becoming
+another Session.
 
-### Loge controller
+### Session Runtime controller
 
-The trusted control-plane service that materializes, inspects, captures and dematerializes Loges. It
-owns Kubernetes workload permissions but does not understand Workstream content or ACP semantics.
+The trusted control-plane service that materializes, inspects, captures and dematerializes Session
+Runtimes. It owns Kubernetes workload permissions but does not understand Workstream content or ACP
+semantics.
 
 ### ACP bridge
 
-An authenticated byte/framing bridge between Agora's ACP Client and the ACP process in a Loge. It
-MUST preserve ACP JSON-RPC semantics unchanged.
+An authenticated byte/framing bridge between Agora's ACP Client and the ACP process in a Session
+Runtime. It MUST preserve ACP JSON-RPC semantics unchanged.
 
 ## Persistence terms
 
@@ -182,15 +185,17 @@ independent rows, not named combinations.
 ### Execution grant
 
 A short-lived, opaque Broker authorization issued for a Session from its resolved capability
-grants. Its transient activation reference is consumed by the Loge controller and bound by the
-Broker access relay to that Loge's workload identity. It maps to one dedicated OneCLI Agent but never
-exposes the OneCLI upstream bearer. It MUST NOT be persisted as a bearer token in product state.
+grants. Its transient activation reference is consumed by the Session Runtime controller and bound
+by the Broker access relay to the workload identity materializing that Session Runtime. It maps to
+one dedicated OneCLI Agent but never exposes the OneCLI upstream bearer. It MUST NOT be persisted as
+a bearer token in product state.
 
 ### Broker
 
 The Agora security boundary that resolves equipment intent, owns execution-grant lifecycle,
-provisions OneCLI policy/Agents and authenticates Loge use. Its access relay transports encrypted
-provider traffic opaquely; it never stores/injects provider credentials or terminates provider TLS.
+provisions OneCLI policy/Agents and authenticates Session Runtime workloads. Its access relay
+transports encrypted provider traffic opaquely; it never stores/injects provider credentials or
+terminates provider TLS.
 
 ### OneCLI Agent
 
@@ -200,9 +205,10 @@ Agent, an ACP Session, a domain aggregate or a product identifier.
 
 ### Broker access relay
 
-The credential-blind transport seam that authenticates one Loge workload identity, resolves its
-private OneCLI upstream proxy authority and relays CONNECT traffic to OneCLI. It MUST NOT terminate
-provider TLS, inspect provider content, inject credentials or contain provider-specific logic.
+The credential-blind transport seam that authenticates one Session Runtime workload identity,
+resolves its private OneCLI upstream proxy authority and relays CONNECT traffic to OneCLI. It MUST
+NOT terminate provider TLS, inspect provider content, inject credentials or contain
+provider-specific logic.
 
 ### Credential gateway
 
@@ -215,10 +221,14 @@ The following are not valid domain concepts:
 
 - `Conversation`;
 - `Run`;
+- `Loge`;
+- `loge_id`;
+- persisted `SessionRuntime` entity;
+- `runtime_id`;
 - `native_session_id`;
 - `Thread` as a product aggregate;
 - runtime `kind`;
-- reusable Loge `group`;
+- reusable runtime `group`;
 - combined capability `profile`;
 - channel;
 - pipe.

@@ -2,7 +2,7 @@
 
 - **Status:** ready
 - **Dependencies:** none
-- **Primary paths:** `packages/domain`, `packages/runtime-control`, `contracts`, repository tooling
+- **Primary paths:** `packages/domain`, `packages/session-runtime-control`, `contracts`, repository tooling
 
 ## Required reading
 
@@ -19,7 +19,7 @@
 - Command/idempotency model.
 - Implementation-neutral execution-grant and activation types that expose no OneCLI identifier,
   proxy bearer or provider credential.
-- Runtime-control generated or hand-verified bindings from OpenAPI.
+- Session Runtime control bindings generated or hand-verified from OpenAPI, with no runtime ID.
 - Schema fixture runner for every `contracts/schemas` file.
 - Architecture test preventing imports from packages into deployables or privileged packages into
   `domain`.
@@ -32,6 +32,8 @@
 - [ ] Implement membership role/last-owner guards.
 - [ ] Implement Session state transition table and terminal-state guards.
 - [ ] Implement immutable Session launch-envelope types.
+- [ ] Keep `SessionRuntimeStatus` in the control-contract package; do not create a domain
+  `SessionRuntime` entity or identifier.
 - [ ] Keep OneCLI Agent IDs, control keys, proxy URLs and route-rule rows out of domain types.
 - [ ] Mark grant references and bridge credentials sensitive in generated bindings and serializers.
 - [ ] Implement typed failure codes shared only where contracts require them.
@@ -47,8 +49,10 @@
 - Illegal phase transitions fail with typed errors.
 - Same idempotency scope/key resolves to the same command.
 - No local type duplicates ACP ContentBlock/SessionUpdate.
-- Broker/Loge contract fixtures cannot place an `aoc_` bearer, OneCLI control key or provider token
-  in public/product/ACP shapes.
+- Session Runtime operations are nested under Session ID and generated bindings expose no
+  `runtimeId`.
+- Broker/Session Runtime contract fixtures cannot place an `aoc_` bearer, OneCLI control key or
+  provider token in public/product/ACP shapes.
 
 ## Non-goals
 

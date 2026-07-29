@@ -5,4 +5,4 @@ and rollout metadata. Images already contain pinned harness/ACP binaries; the ex
 version selects a reviewed OneCLI route set. Definitions are operator-controlled and validated by
 contract.
 
-Implementation is governed by `plans/04-loge-controller.md`.
+Implementation is governed by `plans/04-session-runtime-controller.md`.

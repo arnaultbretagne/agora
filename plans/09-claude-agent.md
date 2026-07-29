@@ -2,7 +2,7 @@
 
 - **Status:** pending
 - **Dependencies:** P04, P06, P08
-- **Primary paths:** `agents/claude-code`, registry definitions, Loge image
+- **Primary paths:** `agents/claude-code`, registry definitions, Agent image
 
 ## Required reading
 
@@ -28,7 +28,7 @@ authentication available to the operator and the production ACP topology.
 ## Spike gates
 
 - [ ] Long-lived Max/subscription credential works through ACP and the workload relay in a fresh
-  isolated Loge. Direct harness auth is already proven by P08.
+  isolated Session Runtime. Direct harness auth is already proven by P08.
 - [ ] Authentication survives Pod replacement without placing a refresh/provider secret in custody.
 - [ ] ACP `session/new`, prompt, cancel, close and `session/resume` work.
 - [ ] Resume continues the same native context and emits no replay under `session/resume`.
@@ -40,8 +40,8 @@ authentication available to the operator and the production ACP topology.
 - [ ] Model/config choices are exposed as ACP config options/modes rather than CLI columns.
 - [ ] The image already contains pinned Claude Code and ACP-adapter executables; startup performs no
   package install.
-- [ ] The Loge contains only relay endpoint, OneCLI CA and non-secret Claude auth stub—not OneCLI
-  control/upstream or Anthropic credentials.
+- [ ] The Agent Pod contains only relay endpoint, OneCLI CA and non-secret Claude auth stub—not
+  OneCLI control/upstream or Anthropic credentials.
 - [ ] Required Claude/Anthropic hosts are captured as a reviewed OneCLI route-set fixture.
 
 Write a spike report under `agents/claude-code/SPIKE.md` with commands, versions, observed files,
@@ -53,7 +53,7 @@ stop and propose a replacement ADR.
 - [ ] Pin adapter/package/image versions and digest.
 - [ ] Add registry definition validated by JSON Schema.
 - [ ] Implement custody driver with format/version and compatibility fixtures.
-- [ ] Add Loge health/readiness integration.
+- [ ] Add Session Runtime health/readiness integration.
 - [ ] Wire inference/tool traffic through the Broker relay and OneCLI only.
 - [ ] Add full Session lifecycle and cross-Agent tests.
 - [ ] Document image/adapter/route-set upgrade, rollback and Max credential renewal.
@@ -64,14 +64,15 @@ stop and propose a replacement ADR.
 - No Claude transcript endpoint in the controller.
 - No Channel plugin.
 - No assumption that Claude-specific IDs are Agora IDs.
-- No `onecli run`, SDK control key or runtime package installation in the production Loge.
+- No `onecli run`, SDK control key or runtime package installation in the production Agent
+  container.
 
 ## Exit criteria
 
-- All spike gates and baseline acceptance scenarios pass in a production-like Loge.
+- All spike gates and baseline acceptance scenarios pass in a production-like Session Runtime.
 - A Pod can be deleted and the same ACP Session resumed from opaque custody.
 - No real credential appears in the Pod environment/filesystem, custody, product journal or logs.
-- The approved in-Loge auth stub is non-secret and contains no upstream OneCLI bearer.
+- The approved runtime auth stub is non-secret and contains no upstream OneCLI bearer.
 
 ## Evidence
 

@@ -1,7 +1,7 @@
 # HTTP contracts
 
 - `product-api.yaml`: authenticated Browser/product surface.
-- `loge-control.yaml`: internal Loge lifecycle surface.
+- `session-runtime-control.yaml`: internal Session Runtime lifecycle surface.
 - `broker-control.yaml`: internal policy and execution-grant surface.
 
 ACP is not repeated here. The control plane and Agents use stable ACP v1 from the pinned official

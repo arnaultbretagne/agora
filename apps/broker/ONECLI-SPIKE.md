@@ -17,14 +17,15 @@ immediate token rotation.
 This is not yet an unconditional production approval. OneCLI needs a narrow Agora integration layer
 for Session lifecycle and fail-closed provisioning, plus four production blockers must be resolved:
 
-1. bind or confine the replayable OneCLI proxy bearer to one Loge workload;
+1. bind or confine the replayable OneCLI proxy bearer to one Session Runtime workload;
 2. remove query strings from gateway process logs;
 3. publish an explicit catch-all block after the required allow rules and prevent direct egress;
 4. persist and back up the CA state, database and externally supplied encryption key.
 
-That integration layer provisions OneCLI and Loge configuration. Its selected workload-auth relay
-may tunnel CONNECT bytes, but must not terminate provider TLS, inspect provider content or inject
-credentials. The failed gates therefore do not justify restoring Agora's former MITM code.
+That integration layer provisions OneCLI and Session Runtime configuration. Its selected
+workload-auth relay may tunnel CONNECT bytes, but must not terminate provider TLS, inspect provider
+content or inject credentials. The failed gates therefore do not justify restoring Agora's former
+MITM code.
 
 ACP transport, ACP new/resume/update behavior and custody were deliberately not evaluated in this
 spike, following the explicit scope decision. They remain separate tests.
@@ -77,7 +78,7 @@ this was intentional and is not the proposed production persistence topology.
 
 ## Harness packaging result
 
-OneCLI does **not** install Claude Code or Codex and does not provide a Loge image. `onecli run`
+OneCLI does **not** install Claude Code or Codex and does not provide an Agent image. `onecli run`
 wraps a command that must already exist, while the SDK only supplies proxy, CA and credential-stub
 configuration.
 
@@ -102,7 +103,7 @@ attestation pipeline.
 | Direct container configuration | **PASS** | Claude and Codex also succeeded from SDK-derived proxy/CA/stub configuration |
 | TLS interception and CA trust | **PASS** | controlled HTTPS request validated against the generated OneCLI CA |
 | Credential injection | **PASS** | a generated credential absent from the client request appeared at the controlled upstream |
-| Provider credentials absent from Loge | **PASS** | process environment, Codex stub and 255 client files scanned; zero provider-credential matches |
+| Provider credentials absent from Agent Pod | **PASS** | process environment, Codex stub and 255 client files scanned; zero provider-credential matches |
 | Provider credentials absent from logs | **PASS** | exact credential scans across gateway logs returned zero matches |
 | Provider credentials encrypted in PostgreSQL | **PASS** | stored values were ciphertext and did not begin with their plaintext inputs |
 | Per-Agent credential selection | **PASS** | default Agent received the controlled credential; a selective Agent with no grant did not |
@@ -149,11 +150,11 @@ OneCLI's selective Agent mode correctly limits which stored credentials are inje
 mapping for Agora is:
 
 ```text
-one Agora Session = one Loge = one dedicated OneCLI Agent
+one Agora Session -> its SessionRuntime -> one dedicated OneCLI Agent
 ```
 
 The OneCLI Agent must never be reused by another Session, and the default Agent's `all` mode must
-never be used for a Loge.
+never be used for a Session Runtime Pod.
 
 However, the Agent access token is a bearer embedded in the proxy URL. Source inspection found no
 expiry field, and the token is stored as an Agent access token rather than bound to Kubernetes
@@ -161,8 +162,8 @@ identity or mTLS. Anyone who obtains Session B's proxy URL can exercise Session 
 authority. Rotation revokes it immediately, but does not prevent replay before rotation.
 
 The accepted architecture chooses to confine that bearer outside the Agent process and authenticate
-the Loge to a narrow, non-MITM forwarding seam using workload identity. It rejects placing the
-per-Session bearer in the Loge or weakening the Broker contract.
+the Session Runtime Pod to a narrow, non-MITM forwarding seam using workload identity. It rejects
+placing the per-Session bearer in the Agent Pod or weakening the Broker contract.
 
 Under the current security contract, this remains a production blocker. Any forwarding seam must
 only authenticate and relay to OneCLI; it must not become a second credential gateway.
@@ -179,10 +180,11 @@ A real OneCLI allow-list was nevertheless proven with first-match rules:
 2. an explicit `block` rule targeting `*` as the final rule;
 3. the terminal Default Rule left neutral.
 
-The final catch-all is a required configuration invariant, not an optional UI convention. Kubernetes
-network policy must additionally prevent the Loge from reaching the Internet directly and force
-provider egress through the Broker-relay-to-OneCLI path. The CLI's `--enforce` option is
-Claude-specific and is not a substitute for Kubernetes enforcement across both harnesses.
+The final catch-all is a required configuration invariant, not an optional UI convention.
+Kubernetes network policy must additionally prevent the Session Runtime Pod from reaching the
+Internet directly and force provider egress through the Broker-relay-to-OneCLI path. The CLI's
+`--enforce` option is Claude-specific and is not a substitute for Kubernetes enforcement across
+both harnesses.
 
 ### Gateway stdout leaks query-string secrets
 
@@ -234,7 +236,7 @@ reject the launch if OneCLI is unavailable, returns incomplete data or disagrees
 Likewise, `onecli run` is useful for local verification, not as the production launch contract. Its
 child process inherits the caller environment, so a control key supplied through
 `ONECLI_API_KEY` can be inherited by the wrapped harness. The OneCLI organization/project control
-key must remain in the trusted Broker control adapter and must never enter a Loge.
+key must remain in the trusted Broker control adapter and must never enter an Agent Pod.
 
 OneCLI publishes no Kubernetes or Helm deployment in the inspected source release. Agora therefore
 owns the Kubernetes packaging, readiness, disruption, network-policy and backup configuration for
@@ -253,9 +255,9 @@ configuration and successfully used the recovered credential. This proves that P
 same external encryption key can restore credential use.
 
 Because the spike mounted `/app/data` as `emptyDir`, the CA changed during that same replacement.
-Existing Loges holding the former CA would then fail TLS validation. Production must persist
-`/app/data` or implement an atomic CA-rotation/rematerialization procedure. A backup/restore drill
-covering all three assets remains mandatory before rollout.
+Existing Session Runtime Pods holding the former CA would then fail TLS validation. Production must
+persist `/app/data` or implement an atomic CA-rotation/rematerialization procedure. A backup/restore
+drill covering all three assets remains mandatory before rollout.
 
 ## Required production integration
 
@@ -265,15 +267,16 @@ The minimal Agora-owned integration is:
 2. set it to selective mode and publish only the Session's approved credential/policy rules;
 3. call `getContainerConfig` from the trusted Broker control adapter;
 4. keep upstream proxy authority in Broker-private state and bind it to the workload relay;
-5. materialize only credential-free relay endpoint, CA and non-secret stubs in the Loge;
-6. fail the Loge launch if any OneCLI/relay step fails;
+5. materialize only credential-free relay endpoint, CA and non-secret stubs in the Agent Pod;
+6. fail Session Runtime materialization if any OneCLI/relay step fails;
 7. enforce ordered allow rules followed by explicit `block *`;
-8. deny direct Loge egress outside the relay path;
+8. deny direct Agent Pod egress outside the relay path;
 9. rotate/delete the OneCLI Agent authority when the Session ends or is revoked;
 10. delete the OneCLI Agent rather than reusing it for a later Session.
 
-The integration must also reconcile partial failures idempotently: an Agent without a Loge, a Loge
-without complete container configuration, and a terminated Loge whose Agent token is still valid.
+The integration must also reconcile partial failures idempotently: a dedicated OneCLI Agent without
+a materialized runtime, a materialized runtime without complete container configuration, and a
+terminated runtime whose Agent token is still valid.
 
 ## Remaining acceptance work
 

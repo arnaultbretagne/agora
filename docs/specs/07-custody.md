@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Custody preserves the harness state required to resume one ACP Session after its Loge Pod is gone.
-It is not product history, ACP replay, an observability sink or a portable cross-Agent format.
+Custody preserves the harness state required to resume one ACP Session after its runtime Pod is
+gone. It is not product history, ACP replay, an observability sink or a portable cross-Agent format.
 
 ## Opacity
 
@@ -34,7 +34,7 @@ Generation is monotonically increasing per Session. A committed snapshot cannot 
 
 ## Capture contract
 
-The Loge controller calls the registered driver:
+The Session Runtime controller calls the registered driver:
 
 ```ts
 capture(source: HarnessHome): AsyncIterable<Uint8Array>
@@ -81,9 +81,9 @@ future object-store ADR without changing Session or Anchor semantics.
 ## Access control
 
 - `control-plane`: metadata `SELECT`, no payload access;
-- `loge-controller`: payload read/write for authorized Sessions;
+- `session-runtime-controller`: payload read/write for authorized Sessions;
 - `web`: no custody access;
-- `loge`: no database credentials; bytes enter through one-time restore/capture streams;
+- `session-runtime`: no database credentials; bytes enter through one-time restore/capture streams;
 - operators: audited break-glass access only.
 
 Database grants MUST enforce these rules independently of application code.

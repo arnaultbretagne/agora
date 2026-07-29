@@ -15,7 +15,7 @@ The ownership split is normative:
 | Session-to-OneCLI Agent lifecycle and rule publication | Agora Broker control adapter |
 | Workload authentication and opaque CONNECT relay | Agora Broker access relay |
 | Provider credential storage/injection, CA/MITM and route decision | OneCLI |
-| Pod lifecycle and fixed safe runtime bundle | Loge controller |
+| Pod lifecycle and fixed safe runtime bundle | Session Runtime controller |
 
 Agora MUST NOT implement provider TLS interception, a provider-secret store, credential injection or
 a fallback credential gateway.
@@ -84,8 +84,8 @@ Before a grant becomes issuable, the Broker control adapter:
 5. publishes the complete ordered policy;
 6. verifies the effective credentials and rules before activation.
 
-The OneCLI default Agent and `all` credential mode are forbidden for Loges. A OneCLI Agent is never
-shared or reassigned across Sessions.
+The OneCLI default Agent and `all` credential mode are forbidden for Session Runtime Pods. A OneCLI
+Agent is never shared or reassigned across Sessions.
 
 While a Session is suspended, the OneCLI Agent may remain as the same operational principal, but its
 relay binding is disabled and upstream bearer is rotated. Terminal Session/Workstream cleanup
@@ -125,8 +125,8 @@ An execution grant:
 - is revocable;
 - cannot be upgraded in place;
 - exposes one transient activation reference to the control plane for immediate forwarding to the
-  Loge controller;
-- is bound by the controller to one authenticated Loge workload identity;
+  Session Runtime controller;
+- is bound by the controller to one authenticated Session Runtime workload identity;
 - is never returned to the Browser;
 - is never stored as plaintext bearer material in product tables.
 
@@ -145,7 +145,7 @@ organization/project key. It uses pinned `@onecli-sh/sdk` and:
 - calls `getContainerConfig`;
 - extracts the upstream OneCLI proxy bearer into Broker-private encrypted state;
 - verifies returned CA/stub material against the operator-managed runtime bundle expected by the
-  Loge controller;
+  Session Runtime controller;
 - rotates authority on revoke/renew;
 - updates provider subscription authentication through an operator-only path.
 
@@ -191,8 +191,9 @@ imports OneCLI database tables into product code.
 
 ## Activation
 
-The control plane passes `grantRef` directly to the Loge controller. The controller creates the
-Session-specific workload identity and calls Broker activation. Broker atomically binds:
+The control plane passes `grantRef` directly to the Session Runtime controller. The controller
+creates the Session-specific workload identity and calls Broker activation. Broker atomically
+binds:
 
 ```text
 grant + session_id + agent_id + workload_identity + onecli_agent
@@ -202,7 +203,7 @@ The activation response contains identifiers and expiry only. It returns no prov
 OneCLI control key or data-plane bearer. Repeating the same request ID is idempotent; attempting to
 bind the reference to a different identity fails closed.
 
-The Loge controller supplies a fixed safe runtime bundle from trusted deployment state:
+The Session Runtime controller supplies a fixed safe runtime bundle from trusted deployment state:
 
 - credential-free Broker relay endpoint;
 - OneCLI CA trust;
@@ -234,10 +235,12 @@ Policy returns safe ACP `mcpServers` descriptors corresponding to grants. Descri
 - are resent explicitly on ACP new/resume as required;
 - are scoped by the active grant outside the descriptor.
 
-The Broker authenticates the Loge's workload identity outside ACP. Consequently, complete
-`session/new`/`session/resume` envelopes can be journaled without persisting credential material.
+The Broker authenticates the Session Runtime's workload identity outside ACP. Consequently,
+complete `session/new`/`session/resume` envelopes can be journaled without persisting credential
+material.
 
-The Loge controller MUST NOT derive MCP servers from a profile or append harness-specific CLI flags.
+The Session Runtime controller MUST NOT derive MCP servers from a profile or append harness-specific
+CLI flags.
 
 ## Persistence
 
@@ -280,10 +283,10 @@ Every transition is audited without prompt/tool content, URLs with query strings
 - Broker relay unavailable: no provider traffic bypasses it.
 - OneCLI gateway unavailable: the Agent call fails; no direct provider fallback exists.
 - Upstream bearer suspected leaked: disable relay mapping, rotate OneCLI Agent token and reconcile.
-- CA state lost/mismatched: Loges fail TLS readiness; operators restore the compatible recovery set
-  or perform an explicit rotation.
+- CA state lost/mismatched: Session Runtimes fail TLS readiness; operators restore the compatible
+  recovery set or perform an explicit rotation.
 - Provider token expires: typed provider-auth failure and operator renewal; never copy the token into
-  the Loge.
+  the Agent Pod.
 
 ## Equipment change
 

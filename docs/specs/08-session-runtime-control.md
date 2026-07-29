@@ -1,22 +1,22 @@
-# Loge control
+# Session Runtime control
 
 ## Scope
 
-The Loge controller owns the mechanism of creating and deleting isolated runtime Pods. Product
-policy stays in the control plane and Broker.
+The Session Runtime controller owns the mechanism of creating and deleting isolated runtime Pods.
+Product policy stays in the control plane and Broker.
 
-Its HTTP contract is `contracts/openapi/loge-control.yaml`.
+Its HTTP contract is `contracts/openapi/session-runtime-control.yaml`.
 
 ## Resource identity
 
 The resource path is:
 
 ```text
-/v1/loges/{session_id}
+/v1/sessions/{session_id}/runtime
 ```
 
-`session_id` is the Agora Session ID and is also the logical Loge key. There is no `group`, `run_id`
-or separate Loge identifier.
+`session_id` is the Agora Session ID and the only resource key. `SessionRuntime` has no separate
+identifier, persistence row or lifecycle outside its Session.
 
 The controller MUST ensure at most one non-terminal Pod for a Session ID.
 
@@ -45,7 +45,7 @@ It MUST NOT accept:
 
 The registry and Broker resolve all privileged details.
 
-The controller consumes `executionGrantRef` exactly once to bind the generated Loge
+The controller consumes `executionGrantRef` exactly once to bind the generated Session Runtime
 workload identity. It may retain/label the non-secret grant ID, but MUST NOT place the reference in a
 Pod, Kubernetes annotation, status object or log.
 
@@ -84,7 +84,7 @@ ready endpoint and reconcile according to a deterministic survivor policy.
 
 ## Readiness
 
-A Loge is `ready` only when:
+A Session Runtime is `ready` only when:
 
 - workspace mounts are ready;
 - optional custody restore completed;
@@ -100,7 +100,7 @@ Materialization and credential minting are separate. `PUT` and `GET` return safe
 Once status is `ready`, the control plane calls:
 
 ```text
-POST /v1/loges/{session_id}/acp-connections
+POST /v1/sessions/{session_id}/runtime/acp-connections
 ```
 
 The response returns:
@@ -110,7 +110,7 @@ The response returns:
 - one-time or very short-lived connect credential;
 - expiry;
 - runtime-definition version;
-- live Loge state.
+- live Session Runtime state.
 
 Credentials MUST be Session-bound, single-purpose, never stored in product tables and redacted from
 logs. Repeating a connection request ID may return the same still-unused credential; a consumed or
@@ -118,7 +118,7 @@ expired credential is never revived.
 
 ## Capture
 
-`POST /v1/loges/{session_id}/custody-snapshots`:
+`POST /v1/sessions/{session_id}/runtime/custody-snapshots`:
 
 - requires the Workstream watermark supplied by the control plane;
 - binds `X-Request-Id` to exactly one immutable snapshot generation;
@@ -132,7 +132,7 @@ Capture and deletion are separate operations so product Anchor commit can occur 
 
 ## Dematerialize
 
-`DELETE /v1/loges/{session_id}`:
+`DELETE /v1/sessions/{session_id}/runtime`:
 
 - is idempotent;
 - revokes/ends bridge credentials;
@@ -145,8 +145,8 @@ Callers must request capture explicitly.
 
 ## Idle collection
 
-The controller MAY garbage-collect an idle materialized Loge only after asking the control plane to
-perform a durable suspension or after an emergency hard limit.
+The controller MAY garbage-collect an idle materialized Session Runtime only after asking the
+control plane to perform a durable suspension or after an emergency hard limit.
 
 It MUST NOT silently delete a healthy resumable context whose latest state has no committed custody.
 

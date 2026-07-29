@@ -2,9 +2,9 @@
 
 ## Objective
 
-Agora MUST present durable Workstreams while executing ACP Agents inside isolated, resumable Loges.
-The architecture separates product history, agent protocol, runtime lifecycle, credentials,
-custody, and infrastructure observability.
+Agora MUST present durable Workstreams while executing ACP Agents inside isolated, resumable
+Session Runtimes. The architecture separates product history, agent protocol, runtime lifecycle,
+credentials, custody, and infrastructure observability.
 
 ## Component view
 
@@ -18,14 +18,15 @@ Web ───────────────► Control plane
                        ├── projector/feed ─────────────────► Postgres projection.*
                        ├── custody metadata only ──────────► Postgres custody.*
                        ├── equipment request ──────────────► Broker control/policy ──► OneCLI API
-                       ├── Loge lifecycle ─────────────────► Loge controller
-                       └── ACP v1 over opaque bridge ──────► Loge
+                       ├── Session Runtime lifecycle ──────► Session Runtime controller
+                       └── ACP v1 over opaque bridge ──────► Session Runtime Pod
                                                               ├── ACP adapter
                                                               ├── harness
                                                               └── custody driver
 
-Loge controller ── capture/restore bytes ─────────────────► Postgres custody.*
-Loge ── workload identity ──► Broker access relay ── opaque CONNECT ──► OneCLI gateway ──► providers
+Session Runtime controller ── capture/restore bytes ───────► Postgres custody.*
+Session Runtime Pod ── workload identity ──► Broker access relay
+Broker access relay ── opaque CONNECT ─────────────────────► OneCLI gateway ──► providers
 Broker ── grant/OneCLI mapping state ─────────────────────► Broker-private operational store
 OneCLI ── credentials/Agents/policy/audit ────────────────► OneCLI PostgreSQL + /app/data
 All services/Pods ── logs, metrics, traces ────────────────► OTel/Loki
@@ -37,10 +38,10 @@ All services/Pods ── logs, metrics, traces ───────────
 |---|---|---|
 | Web | rendering, local UI state, user commands | ACP, Kubernetes, grants, custody |
 | Control plane | Workstreams, Sessions, ACP Client, journal, anchors, feed | Pods, provider secrets, custody bytes |
-| Loge controller | Pod lifecycle, runtime definition resolution, bridge endpoint, custody streaming | Workstream content, ACP interpretation, capability policy |
+| Session Runtime controller | Pod lifecycle, runtime-definition resolution, bridge endpoint, custody streaming | Workstream content, ACP interpretation, capability policy |
 | Broker | policy, grants/activations, OneCLI control mapping, opaque access relay and private operational state | Provider secrets, provider TLS/content, Workstream history, Pod lifecycle |
 | OneCLI | provider credentials, dedicated Agents, route policy, CA/MITM injection and request audit | Workstream history, ACP, Pod lifecycle |
-| Loge | one Agent Session execution | another Session, policy authority, durable product history |
+| Session Runtime Pod | one Agent Session execution | another Session, policy authority, durable product history |
 | Postgres | product facts, projections, opaque custody | infrastructure logs |
 | OTel/Loki | telemetry and infrastructure audit | user-visible product history |
 
@@ -50,12 +51,13 @@ The repository is a monorepo but each deployable MUST use a distinct workload id
 
 - `web`: public ingress, no direct database or runtime access;
 - `control-plane`: product schema read/write, projection read/write, custody metadata read;
-- `loge-controller`: Kubernetes workload API, custody payload read/write, execution-grant consume;
+- `session-runtime-controller`: Kubernetes workload API, custody payload read/write,
+  execution-grant consume;
 - `broker-control`: policy, grant and OneCLI control API access;
 - `broker-relay`: workload-authenticated mapping to OneCLI upstream authority, no provider TLS keys;
 - `onecli`: provider-secret, policy, CA and gateway authority;
-- `loge`: one scoped workload identity bound to its execution grant, no Kubernetes API, product
-  database, OneCLI control API or direct OneCLI gateway access.
+- `session-runtime`: one scoped workload identity bound to its execution grant, no Kubernetes API,
+  product database, OneCLI control API or direct OneCLI gateway access.
 
 No shared all-powerful ServiceAccount is allowed.
 
@@ -75,17 +77,17 @@ The runtime controller never participates in this semantic data path.
 
 1. The control plane obtains an execution grant from policy/Broker; Broker provisions the Session's
    dedicated selective OneCLI Agent and complete route policy.
-2. It requests `PUT /v1/loges/{session_id}`.
-3. The Loge controller resolves `agent_id` from its trusted registry.
-4. The controller binds the grant to the Session-specific Loge workload identity at the Broker
-   access relay.
+2. It requests `PUT /v1/sessions/{session_id}/runtime`.
+3. The Session Runtime controller resolves `agent_id` from its trusted registry.
+4. The controller binds the grant to the Session Runtime's workload identity at the Broker access
+   relay.
 5. It restores custody when requested, creates the Pod with the credential-free relay/CA/stub
    runtime bundle and exposes safe readiness status.
 6. Once ready, the control plane requests a separate one-time ACP connection.
 7. The control plane establishes ACP and performs `initialize` plus `session/new` or
    `session/resume`.
 
-The Loge controller MUST be idempotent by Session ID.
+The Session Runtime controller MUST be idempotent by Session ID.
 
 ## Credential path
 
@@ -93,18 +95,19 @@ The Loge controller MUST be idempotent by Session ID.
    by `block *`.
 2. Broker obtains the dedicated OneCLI Agent's upstream proxy authority through
    `getContainerConfig` and stores it only in Broker-private operational state.
-3. The Loge authenticates to the Broker access relay using platform workload identity outside the
-   Agent container.
+3. The Session Runtime Pod authenticates to the Broker access relay using platform workload identity
+   outside the Agent container.
 4. The relay attaches upstream proxy authorization and tunnels bytes without terminating provider
    TLS.
 5. OneCLI alone terminates provider TLS, injects the stored credential and records the decision.
 
-Any failure before the complete policy and relay binding are active prevents Loge readiness.
+Any failure before the complete policy and relay binding are active prevents Session Runtime
+readiness.
 
 ## Custody path
 
 1. The control plane chooses a committed Workstream watermark.
-2. The Loge controller asks the Session's custody driver to capture bytes.
+2. The Session Runtime controller asks the Session's custody driver to capture bytes.
 3. The controller writes a new immutable snapshot and verifies its checksum.
 4. Only after the snapshot is committed may the product anchor advance.
 5. The Pod may then be deleted.
@@ -130,9 +133,9 @@ The baseline does not:
 
 - support concurrent active Sessions in one Workstream;
 - support one Session across several Agents;
-- support sharing one Loge;
+- attach one materialized runtime to multiple Sessions;
 - make ACP v2 stable by local convention;
 - guarantee cross-Agent reproduction of hidden model context;
 - make infrastructure logs a user-facing transcript;
-- permit arbitrary third-party Agent images at runtime.
+- permit arbitrary third-party Agent images at runtime;
 - implement a second credential gateway or direct provider credential path.

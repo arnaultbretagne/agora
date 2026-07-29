@@ -30,15 +30,15 @@ operation-specific.
 | Reconcile dedicated OneCLI Agent | yes | deterministic Session mapping; selective mode required |
 | Publish OneCLI policy | conditional | same policy digest; verify complete ordered published state |
 | Bind grant/relay workload identity | yes | same request, Session, Agent and identity only |
-| Materialize Loge | yes | idempotent `PUT` by Session |
-| Read Loge status | yes | read-only |
+| Materialize Session Runtime | yes | idempotent `PUT` by Session |
+| Read Session Runtime status | yes | read-only |
 | ACP `initialize` | connection-scoped | reconnect creates a new connection |
 | ACP `session/new` | no after unknown acceptance | reconcile if Agent supports discovery; otherwise fail provisioning |
 | ACP `session/resume` | only before accepted response | same Session ID, classified transport errors |
 | ACP `session/prompt` | no blind retry after possible acceptance | preserve command as unknown and reconcile/user-decision |
 | ACP cancel | yes | notification is idempotent in effect |
 | Capture custody | yes | same capture request ID; one committed generation |
-| Dematerialize Loge | yes | idempotent `DELETE` |
+| Dematerialize Session Runtime | yes | idempotent `DELETE` |
 | Revoke grant | yes | idempotent |
 | Rotate/delete OneCLI Agent authority | yes | same Session/grant cleanup intent |
 | Projection apply | yes | event ID/checkpoint |
@@ -69,7 +69,7 @@ Command remains accepted; dispatcher safely sends it.
 
 On restart it reconnects when possible and continues journaling. It does not blindly resend.
 
-### Loge controller crashes during provision
+### Session Runtime controller crashes during provision
 
 Reconciliation reads Kubernetes labels/status and completes or fails the same materialization.
 
@@ -94,8 +94,8 @@ rebuilds. Clients may see a declared feed delay, never fabricated completeness.
 
 ### Broker is unavailable
 
-No new Loge is materialized. Existing grants follow their expiry; the system does not bypass policy
-or inject provider secrets directly.
+No new Session Runtime is materialized. Existing grants follow their expiry; the system does not
+bypass policy or inject provider secrets directly.
 
 ### Broker creates a OneCLI Agent then crashes
 
@@ -110,8 +110,8 @@ activates when all explicit allows and the final `block *` match the expected di
 
 ### Broker access relay is unavailable
 
-The Loge has no provider path. It does not receive the upstream OneCLI bearer and cannot connect
-directly to OneCLI or providers.
+The Session Runtime Pod has no provider path. It does not receive the upstream OneCLI bearer and
+cannot connect directly to OneCLI or providers.
 
 ### OneCLI gateway is unavailable
 
@@ -121,7 +121,8 @@ credential injection or provider fallback is attempted.
 ### OneCLI CA or encryption state is incompatible
 
 Readiness fails closed. Operators restore the compatible OneCLI database, `/app/data` and external
-encryption key or execute an explicit CA rotation; existing Loges are not silently reconfigured.
+encryption key or execute an explicit CA rotation; existing Session Runtimes are not silently
+reconfigured.
 
 ## Timeouts
 

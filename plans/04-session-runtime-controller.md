@@ -1,12 +1,12 @@
-# P04 — Loge controller, trusted Agent images and credential-free runtime seam
+# P04 — Session Runtime controller, trusted Agent images and credential-free runtime seam
 
 - **Status:** pending
 - **Dependencies:** P01
-- **Primary paths:** `apps/loge-controller`, `packages/runtime-control`, `packages/agent-registry`
+- **Primary paths:** `apps/session-runtime-controller`, `packages/session-runtime-control`, `packages/agent-registry`
 
 ## Required reading
 
-- `docs/specs/08-loge-control.md`
+- `docs/specs/08-session-runtime-control.md`
 - `docs/specs/09-agent-registry.md`
 - `docs/specs/11-security.md`
 - ADR 0001, 0005, 0006, 0010, 0011, 0014
@@ -17,13 +17,13 @@ Inspect the old `agent-runtime` repository but port behavior selectively:
 
 - candidate reuse: Kubernetes client primitives, Pod security settings, tested shutdown logic;
 - do not port: group, runLocations, shared substrate, raw spawn args/env, transcript endpoints,
-  profiles, equipment-based Loge replacement.
+  profiles, equipment-based runtime replacement.
 
 Record provenance for every reused module.
 
 ## Deliverables
 
-- Internal server conforming to `loge-control.yaml`.
+- Internal server conforming to `session-runtime-control.yaml`.
 - Registry loader/validator using `agent-runtime.schema.json`.
 - Controller-authoritative safe Agent/version selection projection.
 - Deterministic PodSpec builder.
@@ -58,7 +58,7 @@ Record provenance for every reused module.
 
 - Arbitrary image/command/env fields are schema-rejected.
 - Concurrent `PUT` creates one Pod.
-- Restart with existing Pod returns the same logical Loge.
+- Restart with an existing Pod reconstructs the same Session Runtime state by `session_id`.
 - Duplicate-Pod injection triggers fail-closed reconciliation.
 - Pod has no API token and uses required security context.
 - Pod environment/files contain no OneCLI organization key, upstream `aoc_` bearer or provider
@@ -66,7 +66,7 @@ Record provenance for every reused module.
 - NetworkPolicy denies direct provider and OneCLI gateway access while the fake relay remains
   reachable.
 - Session A cannot connect using Session B bridge credential.
-- `DELETE` absent Loge succeeds.
+- `DELETE` for a non-materialized Session Runtime succeeds.
 
 ## Non-goals
 
@@ -77,9 +77,10 @@ Record provenance for every reused module.
 
 ## Exit criteria
 
-- Fake Agent Loge reaches ACP-ready state in a test namespace.
+- A fake Agent reaches ACP readiness inside a materialized Session Runtime in a test namespace.
 - Controller has no in-memory-only authority.
-- P08 can replace the fake activation/relay without changing Loge lifecycle or accepting secret env.
+- P08 can replace the fake activation/relay without changing Session Runtime lifecycle or accepting
+  secret environment values.
 - P06 can add custody without changing the public lifecycle model.
 
 ## Evidence

@@ -5,9 +5,9 @@
 
 ## Context
 
-Agora needs durable, ordered product history and resumable harness state. A PVC for each Loge is
-operationally heavy, while treating Postgres as a sink for every infrastructure signal would mix
-unrelated retention and ownership.
+Agora needs durable, ordered product history and resumable harness state. A PVC for each resumable
+Session is operationally heavy, while treating Postgres as a sink for every infrastructure signal
+would mix unrelated retention and ownership.
 
 ## Decision
 
@@ -21,6 +21,10 @@ Infrastructure logs, metrics, traces, Pod events and Broker audit remain in thei
 Ephemeral Broker grant/activation state remains owned by a Broker-private operational store.
 Distinct database roles enforce access boundaries within the Agora product cluster.
 
+`SessionRuntime` creates no table or identifier. Durable lifecycle intent remains on
+`product.sessions`; live materialization state belongs to the Session Runtime controller and
+Kubernetes.
+
 OneCLI owns a separate operational PostgreSQL database for encrypted provider credentials, policy,
 Agents and request audit. Its `/app/data` CA/private-key state and externally supplied encryption key
 are backed up with that database. None of these stores or assets belong to Agora's product cluster.
@@ -32,6 +36,8 @@ are backed up with that database. None of these stores or assets belong to Agora
 - **Object storage for all custody immediately:** adds distributed commit complexity for bounded
   snapshots.
 - **Postgres for logs:** turns the product application into infrastructure logging machinery.
+- **Persist Session Runtime rows:** duplicates Session identity and turns live infrastructure state
+  into stale product facts.
 - **Place OneCLI tables in `product.*`:** couples product backup, schema authority and access roles
   to an adopted component's operational data model.
 

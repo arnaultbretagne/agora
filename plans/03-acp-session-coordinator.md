@@ -52,7 +52,7 @@
 
 ## Non-goals
 
-- No Kubernetes Loge; use supplied streams/fakes.
+- No Kubernetes runtime; use supplied streams/fakes.
 - No native custody.
 - No cross-Agent handoff.
 - No Browser UI.

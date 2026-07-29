@@ -19,12 +19,13 @@ The architecture is implementation-complete only when the following black-box sc
 - Load an item page, reconnect the feed from its returned position, force a reset and refetch without
   loss or duplication.
 
-### One Session, one Loge
+### One Session, one Session Runtime
 
 - Concurrent materialize requests produce one Pod.
-- A Loge cannot be attached to another Session.
+- No independent `runtime_id` or Session Runtime entity exists.
+- A Pod or workload identity cannot be attached to another Session.
 - Controller restart reconstructs the same state from Kubernetes.
-- A rematerialized Session may have a new Pod UID but the same Session/Loge identity.
+- A rematerialized Session may have a new Pod UID while retaining only the same Session identity.
 
 ### Custody
 
@@ -50,25 +51,26 @@ The architecture is implementation-complete only when the following black-box sc
 
 ### Security
 
-- Reject arbitrary image/command/env through the Loge API.
+- Reject arbitrary image/command/env through the Session Runtime API.
 - Reject browser-supplied raw capabilities.
 - Enforce owner/editor/viewer membership and reject removal of the last owner.
 - Deny cross-Session custody and ACP bridge use.
-- Prove Broker descriptors contain no token and a grant cannot bind to a second Loge identity.
+- Prove Broker descriptors contain no token and a grant cannot bind to a second Session workload
+  identity.
 - Run real Claude Max and ChatGPT/Codex through ACP, the workload relay and the adopted OneCLI
   gateway.
 - Prove each Session owns a distinct selective OneCLI Agent and no default/`all` Agent serves a
-  Loge.
-- Prove the Loge cannot read/replay the OneCLI control key, upstream Agent bearer or provider
+  Session Runtime.
+- Prove the Agent Pod cannot read/replay the OneCLI control key, upstream Agent bearer or provider
   credential.
 - Prove explicit allows followed by `block *` deny both unlisted ordinary and recognized LLM hosts.
-- Prove direct provider, Internet and OneCLI gateway/control access from the Loge is denied.
+- Prove direct provider, Internet and OneCLI gateway/control access from the Agent Pod is denied.
 - Seed signed query/token canaries and prove Broker/OneCLI stdout and audit remain content/token
   free.
 - Prove OneCLI restart/restore preserves credential decryption and CA continuity.
 - Prove no custom/parallel credential gateway or provider-secret adapter exists.
 - Revoke Broker access after dematerialization.
-- Prove Loges cannot reach product Postgres or Kubernetes API.
+- Prove Session Runtime Pods cannot reach product Postgres or Kubernetes API.
 
 ## Contract gates
 
@@ -111,7 +113,7 @@ proven by the Claude Agent plan or old runtime state is archived.
 4. Discussion and Web projection.
 5. Custody suspend/resume.
 6. Cross-Agent handoff.
-7. OneCLI-backed Broker/grants, opaque relay and hardened Loges.
+7. OneCLI-backed Broker/grants, opaque relay and hardened Session Runtimes.
 8. Claude and Codex acceptance.
 9. Shadow deployment.
 10. Explicit data policy and production cutover.
@@ -128,6 +130,6 @@ sources of truth.
 - security review closes all critical/high findings;
 - SLOs and alerts exist;
 - adapter auth/custody gates pass for both selected Agents;
-- operator runbooks cover stuck Loges, custody failure, Broker/relay/OneCLI outage, provider-auth
-  renewal, CA rotation and rollback;
+- operator runbooks cover stuck Session Runtimes, custody failure, Broker/relay/OneCLI outage,
+  provider-auth renewal, CA rotation and rollback;
 - no deprecated concept remains in current code or contracts.
