@@ -15,26 +15,36 @@
 Evaluate a self-hosted OneCLI deployment before porting or writing gateway/MITM code. Treat the ACP
 adapter and credential gateway as independent axes.
 
-- [ ] `onecli run -- claude` works with the operator's actual Claude Max/long-lived subscription
-  authentication in a fresh isolated Loge.
-- [ ] `onecli run -- codex` works with the operator's actual ChatGPT/Codex subscription
-  authentication.
+- [x] `onecli run -- claude` works with the operator's actual Claude Max/long-lived subscription
+  authentication in a fresh isolated Loge. **PASS on OneCLI 1.43.3.**
+- [x] `onecli run -- codex` works with the operator's actual ChatGPT/Codex subscription
+  authentication. **PASS on OneCLI 1.43.3.**
 - [ ] The selected Claude/Codex ACP adapters can launch their underlying harness through the
-  gateway without losing ACP new/resume/update behavior.
+  gateway without losing ACP new/resume/update behavior. **Not evaluated: explicitly outside the
+  OneCLI-only spike scope.**
 - [ ] Raw stored/provider credentials are inaccessible to the Agent process, filesystem, ACP
-  envelopes and custody capture.
+  envelopes and custody capture. **Partial: process and filesystem pass; ACP and custody were
+  outside scope.**
 - [ ] Session A cannot use Session B's gateway authority or provider connections.
+  **Credential selection passes, but the replayable proxy bearer is not workload-bound.**
 - [ ] Grant activation, expiry, renewal and immediate revocation can be mapped without a fixed
-  combination profile.
+  combination profile. **Immediate rotation passes; expiry and renewal are absent.**
 - [ ] Required MCP/provider routes are allow-listed; arbitrary gateway use cannot bypass capability
-  facts.
+  facts. **Provider allow-listing passes with ordered allows plus explicit `block *`; MCP and
+  workload enforcement remain.**
 - [ ] Logs/audit expose decisions and safe IDs but no prompt/tool content or tokens.
+  **Failed: gateway stdout includes query strings and exposed a signed Codex URL.**
 - [ ] Pod replacement and subscription renewal have an explicit non-interactive operating path.
+  **Partial: credential recovery passes; ephemeral `/app/data` rotates the CA; a real token renewal
+  cycle remains.**
 - [ ] Self-hosting, version pinning, backup and failure behavior meet production requirements.
+  **Partial: self-hosting and pinning pass; backup/restore and fail-closed launch remain.**
 
 Write `apps/broker/ONECLI-SPIKE.md` with versions, topology, commands, redacted evidence, failed
 gates and the precise adopt/wrap/build recommendation. No custom gateway port begins before this
 report is reviewed.
+
+Spike evidence: [`apps/broker/ONECLI-SPIKE.md`](../apps/broker/ONECLI-SPIKE.md).
 
 ## Reuse audit
 
