@@ -1,0 +1,17 @@
+# Stand-in for the real Broker access relay (P08 territory) — just enough for the required test
+# "NetworkPolicy denies direct provider and OneCLI gateway access while the fake relay remains
+# reachable".
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fake-relay
+  namespace: agora-p04-test
+  labels:
+    app: fake-relay
+spec:
+  containers:
+    - name: fake-relay
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do echo -e 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok' | nc -l -p 8443; done"]
+      ports:
+        - containerPort: 8443

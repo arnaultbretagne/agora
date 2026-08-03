@@ -31,7 +31,7 @@
       "dependsOn": [
         "P01"
       ],
-      "status": "ready"
+      "status": "complete"
     },
     {
       "id": "P05",
@@ -50,7 +50,7 @@
         "P03",
         "P04"
       ],
-      "status": "pending"
+      "status": "ready"
     },
     {
       "id": "P07",
@@ -69,7 +69,7 @@
         "P01",
         "P04"
       ],
-      "status": "pending"
+      "status": "ready"
     },
     {
       "id": "P09",

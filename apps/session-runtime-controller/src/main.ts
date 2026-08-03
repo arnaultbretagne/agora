@@ -1,0 +1,38 @@
+import { createHash } from 'node:crypto'
+import { FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
+import { BridgeCredentialIssuer } from './bridge-credentials.js'
+import { K8sClient } from './k8s-client.js'
+import { createServer } from './server.js'
+
+// P09/P10 add real Claude/Codex `AgentRuntimeDefinition`s here; P04's non-goal is explicit
+// ("No real Claude/Codex integration") so only the fake Agent is wired for now.
+const DEFINITIONS = [FAKE_AGENT_DEFINITION]
+
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`${name} is required`)
+  return value
+}
+
+const namespace = requireEnv('AGORA_NAMESPACE')
+const controllerRevision = requireEnv('CONTROLLER_REVISION')
+const port = Number(process.env.PORT ?? 8443)
+const runtimeClassName = process.env.RUNTIME_CLASS_NAME
+const runAsUser = process.env.RUN_AS_USER ? Number(process.env.RUN_AS_USER) : undefined
+const imagePullSecretName = process.env.IMAGE_PULL_SECRET_NAME
+const registryRevision = createHash('sha256').update(JSON.stringify(DEFINITIONS)).digest('hex').slice(0, 16)
+
+const server = createServer({
+  k8s: new K8sClient({ namespace }),
+  definitions: DEFINITIONS,
+  registryRevision,
+  bridgeIssuer: new BridgeCredentialIssuer(),
+  controllerRevision,
+  ...(runAsUser !== undefined ? { runAsUser } : {}),
+  ...(runtimeClassName ? { runtimeClassName } : {}),
+  ...(imagePullSecretName ? { imagePullSecretName } : {}),
+})
+
+server.listen(port, () => {
+  process.stdout.write(`session-runtime-controller listening on :${port} (namespace=${namespace})\n`)
+})
