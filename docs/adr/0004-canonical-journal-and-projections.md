@@ -20,7 +20,8 @@ Messages, thoughts, tool calls, plans, permission interactions and Web feed entr
 projections from that journal. Rendering may collapse content but persistence does not hide it.
 
 High-frequency projections are typed relational satellite tables around a common item spine, named
-after ACP v2 nomenclature, plus a prompt-turn table absorbing usage and stop reasons; low-frequency
+after ACP v2 nomenclature, plus a prompt-turn table absorbing prompt-response usage snapshots and
+stop reasons; low-frequency
 and unknown kinds keep a contractual JSON value. This shapes only the disposable read model: the
 journal remains the sole canonical truth, and ACP-owned open enums are stored verbatim.
 

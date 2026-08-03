@@ -59,8 +59,8 @@ It is the required refetch path after a feed `reset`; clients never rebuild hist
 alone.
 
 `GET /v1/workstreams/{id}/turns` returns the same shape of page for rebuildable prompt turns
-(`workstream-turn.schema.json`): status, verbatim stop reason and exact usage facts keyed by the
-durable command ID. Live turn changes arrive as feed `status` events with subject `command`.
+(`workstream-turn.schema.json`): status, verbatim stop reason and the cumulative usage snapshot
+keyed by the durable command ID. Live turn changes arrive as feed `status` events with subject `command`.
 
 ### Patch/delete
 

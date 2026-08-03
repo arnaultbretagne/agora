@@ -35,8 +35,8 @@ and deterministic state tests.
 - [ ] Consume journal notifications with a canonical-head sweep and publish monotonic feed
   positions transactionally with item/checkpoint updates.
 - [ ] Project messages/thoughts/tool calls/plans/permissions into their typed satellite tables;
-  fold usage and stop reasons into turns; keep elicitation/terminal/session_info/handoff/unknown
-  as contractual generic items.
+  fold the prompt response's stop reason and cumulative usage snapshot into turns; keep
+  usage/elicitation/terminal/session_info/handoff/unknown as contractual generic items.
 - [ ] Serve the turns page endpoint and publish turn state changes as command status feed events.
 - [ ] Render all item classes; collapse verbose classes without discarding them.
 - [ ] Show Agent/Session boundaries and Handoff placeholders.

@@ -408,8 +408,6 @@ CREATE TABLE projection.turns (
   cached_write_tokens   bigint,
   thought_tokens        bigint,
   total_tokens          bigint,
-  cost_amount           numeric,
-  cost_currency         text,
   started_at            timestamptz NOT NULL,
   ended_at              timestamptz,
   UNIQUE (session_id, turn_ordinal),
@@ -419,8 +417,7 @@ CREATE TABLE projection.turns (
   FOREIGN KEY (id, workstream_id)
     REFERENCES product.commands(id, workstream_id) ON DELETE CASCADE,
   CHECK (status <> 'running' OR (stop_reason IS NULL AND ended_at IS NULL)),
-  CHECK (status = 'running' OR ended_at IS NOT NULL),
-  CHECK ((cost_amount IS NULL) = (cost_currency IS NULL))
+  CHECK (status = 'running' OR ended_at IS NOT NULL)
 );
 
 CREATE INDEX turns_workstream_order

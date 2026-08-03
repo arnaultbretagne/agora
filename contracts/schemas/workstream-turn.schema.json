@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://agora.invalid/contracts/workstream-turn.schema.json",
   "title": "WorkstreamTurn",
-  "description": "Rebuildable read model of one prompt turn. Its ID is the durable PromptSession command ID. Usage and stop reason fold here from usage_update events and the ACP prompt response; they are exact ACP facts, never billing guesses.",
+  "description": "Rebuildable read model of one prompt turn. Its ID is the durable PromptSession command ID. Stop reason and the cumulative usage snapshot fold here from the ACP prompt response (v1) / idle state update (v2); context-window telemetry (usage_update: used/size/cost) stays on the Workstream `usage` item. Exact ACP facts, never billing guesses.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,6 @@
     "firstWorkstreamSeq",
     "latestWorkstreamSeq",
     "usage",
-    "cost",
     "startedAt",
     "endedAt"
   ],
@@ -56,6 +55,7 @@
       "minimum": 1
     },
     "usage": {
+      "description": "Cumulative usage snapshot verbatim at turn close (v1 PromptResponse.usage; v2 idle state_update.usage). Counters are session-cumulative per the pinned SDK schema — per-turn deltas are derived at read time, never stored. Null while running or when the Agent reported none.",
       "anyOf": [
         {
           "type": "object",
@@ -78,26 +78,6 @@
             },
             "totalTokens": {
               "type": ["integer", "null"]
-            }
-          }
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "cost": {
-      "anyOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["amount", "currency"],
-          "properties": {
-            "amount": {
-              "type": "number"
-            },
-            "currency": {
-              "type": "string"
             }
           }
         },

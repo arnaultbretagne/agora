@@ -46,6 +46,7 @@
         "permission",
         "elicitation",
         "terminal",
+        "usage",
         "session_info",
         "handoff",
         "unknown"
@@ -169,7 +170,7 @@
       "if": {
         "properties": {
           "kind": {
-            "enum": ["elicitation", "terminal", "session_info", "handoff", "unknown"]
+            "enum": ["elicitation", "terminal", "usage", "session_info", "handoff", "unknown"]
           }
         }
       },

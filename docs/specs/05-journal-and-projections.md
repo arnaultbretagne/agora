@@ -127,9 +127,10 @@ It provides current renderable items:
 - permission interactions;
 - handoff cards;
 - terminal summaries;
+- context-window/cumulative-cost usage telemetry;
 - unknown ACP events as generic inspectable items;
 
-and, on turns, exact usage/stop-reason facts.
+and, on turns, the prompt-response stop reason and cumulative usage snapshot.
 
 Every item references its first and latest canonical event. Projection writes MUST be deterministic
 and idempotent by event ID.
@@ -156,15 +157,18 @@ choice only and changes no ACP semantics.
 A turn row is keyed by the durable `PromptSession` command ID and carries `purpose`
 (`user`/`handoff`), an ordinal per Session, lifecycle `status`
 (`running`/`completed`/`cancelled`/`failed`), the verbatim ACP stop reason, its Workstream sequence
-range and exact ACP usage/cost facts — never billing guesses.
+range and the verbatim cumulative usage snapshot — never billing guesses.
 
 The fold rules are:
 
 - the journaled `session/prompt` command event opens the turn as `running`;
-- `usage_update` events fold into the turn's usage columns and produce no item;
-- the ACP prompt response closes the turn: `stopReason` verbatim, status `completed` (or
-  `cancelled` when the response reports cancellation); a terminal protocol failure closes it
-  `failed`;
+- the ACP prompt response closes the turn: `stopReason` verbatim, usage snapshot copied verbatim
+  (v1 `PromptResponse.usage`; v2 idle `state_update.usage`) — per the pinned SDK schema these
+  counters are cumulative across the Session, so per-turn deltas are derived at read time and
+  never stored; status `completed` (or `cancelled` when the response reports cancellation); a
+  terminal protocol failure closes it `failed`;
+- `usage_update` events are context-window and cumulative-cost telemetry (`used`, `size`, `cost`):
+  they update the Session-scoped `usage` item and never touch turn columns;
 - turn state changes are published on the feed as `status` events with subject `command`, keyed by
   the same durable command ID.
 
@@ -192,12 +196,10 @@ MAY bound a copied `raw_output`; the complete value stays in the canonical journ
 | `permission` | Agora callback-request ID | `projection.permission_requests` | exact ACP subject/options and final selected/cancelled outcome, linked to its tool-call item when identified |
 | `elicitation` | Agora callback-request ID | spine `current_value` | exact ACP request schema/content and final safe outcome |
 | `terminal` | Agent terminal ID | spine `current_value` | current terminal metadata/status and canonical references; unbounded output remains chunked/resources |
+| `usage` | Session-scoped key | spine `current_value` | latest context-window and cumulative-cost facts verbatim (`used`, `size`, `cost`), never billing guesses |
 | `session_info` | Session-scoped key | spine `current_value` | latest Agent-advertised mode/config/session information |
 | `handoff` | Handoff command ID | spine `current_value` | source range, policy version, digest, fidelity and target outcome; copied source items are not expanded |
 | `unknown` | canonical event ID | spine `current_value` | method/update discriminator and inspectable complete envelope with no inferred semantics |
-
-`usage_update` is not an item kind: it folds into `projection.turns` (exact ACP usage facts, never
-billing guesses) and stays fully journaled like every other envelope.
 
 Missing optional ACP fields remain missing; a projector MUST NOT fabricate them for rendering
 convenience.
