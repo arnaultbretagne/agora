@@ -23,7 +23,7 @@
         "P01",
         "P02"
       ],
-      "status": "ready"
+      "status": "complete"
     },
     {
       "id": "P04",
@@ -40,7 +40,7 @@
         "P02",
         "P03"
       ],
-      "status": "pending"
+      "status": "ready"
     },
     {
       "id": "P06",

@@ -34,7 +34,7 @@ async function seedAnchorable(pool: import('pg').Pool) {
         direction: 'agent_to_client',
         rpcKind: 'notification',
         method: 'session/update',
-        envelope: { jsonrpc: '2.0', method: 'session/update', params: {} },
+        envelope: JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {} }),
         purpose: 'protocol',
         ingestMode: 'live',
         observedAt: new Date(),

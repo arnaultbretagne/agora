@@ -14,8 +14,17 @@ export interface AppendEventInput {
   readonly rpcKind: RpcKind
   readonly method?: string
   readonly rpcId?: unknown
-  /** The complete ACP JSON-RPC envelope, stored verbatim (docs/specs/05, packages/acp/SPIKE.md). */
-  readonly envelope: unknown
+  /**
+   * The complete ACP JSON-RPC envelope, as the EXACT ORIGINAL JSON TEXT — not a parsed-then-
+   * restringified object. packages/acp/SPIKE.md "Capture must be below ndJsonStream": ACP permits
+   * uint64 values outside JavaScript's safe integer range; `JSON.parse` then `JSON.stringify`
+   * silently rounds them, while binding the original text lets Postgres's own (arbitrary-
+   * precision) JSON parser preserve the real value. Callers that only have a parsed object (e.g.
+   * this package's own tests) must call `JSON.stringify` themselves and are accepting that
+   * lossiness for values already parsed by JS — production callers (packages/acp) must pass the
+   * raw wire text captured before SDK parsing.
+   */
+  readonly envelope: string
   readonly commandId?: string
   readonly causationEventId?: string
   readonly purpose: EventPurpose
@@ -86,7 +95,7 @@ export async function appendEvent(client: PoolClient, input: AppendEventInput): 
         input.rpcKind,
         input.method ?? null,
         input.rpcId !== undefined ? JSON.stringify(input.rpcId) : null,
-        JSON.stringify(input.envelope),
+        input.envelope,
         input.commandId ?? null,
         input.causationEventId ?? null,
         input.purpose,

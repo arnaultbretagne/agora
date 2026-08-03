@@ -79,3 +79,21 @@ test('phase transitions persist', async () => {
     }
   })
 })
+
+test('an illegal phase transition is rejected (no DB trigger enforces this — the domain guard must)', async () => {
+  await withTestDatabase(async (pool) => {
+    const sessionId = await seedSession(pool)
+    const client = await pool.connect()
+    try {
+      // fresh Session is 'requested'; jumping straight to 'ready' skips 'provisioning'.
+      await assert.rejects(
+        () => transitionSessionPhase(client, sessionId, 'ready'),
+        (error: unknown) => error instanceof Error && /illegal_session_transition/.test(error.message),
+      )
+      const { rows } = await client.query('SELECT phase FROM product.sessions WHERE id = $1', [sessionId])
+      assert.equal(rows[0].phase, 'requested')
+    } finally {
+      client.release()
+    }
+  })
+})
