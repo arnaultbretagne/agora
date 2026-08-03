@@ -33,6 +33,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          # packages/store-pg and packages/custody create their own uniquely named disposable
+          # database(s) on this server via their own migration runner (see packages/store-pg/test/
+          # support.ts) — independent from the "Apply database contracts" smoke test below, which
+          # targets agora_contracts directly.
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - name: Apply database contracts
         env:
           PGPASSWORD: postgres
