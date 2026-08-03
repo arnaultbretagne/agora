@@ -39,7 +39,12 @@ for (const file of files) {
   if (ext === '.json') {
     try {
       const value = JSON.parse(text)
-      if (relative(root, file).startsWith('contracts/schemas/')) schemas.push([file, value])
+      if (
+        relative(root, file).startsWith('contracts/schemas/') &&
+        !relative(root, file).startsWith('contracts/schemas/fixtures/')
+      ) {
+        schemas.push([file, value])
+      }
     } catch (error) {
       errors.push(`${relative(root, file)}: invalid JSON: ${error.message}`)
     }

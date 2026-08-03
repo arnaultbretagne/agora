@@ -1,0 +1,4 @@
+{
+  "catalogueVersion": "2026-08-01",
+  "resources": [{ "resource": "Vault_Read-Write!", "access": "read" }]
+}

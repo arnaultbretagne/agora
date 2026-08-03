@@ -6,7 +6,7 @@
       "id": "P01",
       "file": "01-domain-and-contracts.md",
       "dependsOn": [],
-      "status": "ready"
+      "status": "complete"
     },
     {
       "id": "P02",
@@ -14,7 +14,7 @@
       "dependsOn": [
         "P01"
       ],
-      "status": "pending"
+      "status": "ready"
     },
     {
       "id": "P03",
@@ -31,7 +31,7 @@
       "dependsOn": [
         "P01"
       ],
-      "status": "pending"
+      "status": "ready"
     },
     {
       "id": "P05",
