@@ -58,6 +58,10 @@ feed events is idempotent, so an item observed both in the page and a concurrent
 It is the required refetch path after a feed `reset`; clients never rebuild history from SSE events
 alone.
 
+`GET /v1/workstreams/{id}/turns` returns the same shape of page for rebuildable prompt turns
+(`workstream-turn.schema.json`): status, verbatim stop reason and exact usage facts keyed by the
+durable command ID. Live turn changes arrive as feed `status` events with subject `command`.
+
 ### Patch/delete
 
 `PATCH` changes title/pinning only. `DELETE` starts ordered cleanup and returns a deletion command.

@@ -19,6 +19,11 @@ journal. Minimal indexed metadata is stored beside the untouched envelope.
 Messages, thoughts, tool calls, plans, permission interactions and Web feed entries are disposable
 projections from that journal. Rendering may collapse content but persistence does not hide it.
 
+High-frequency projections are typed relational satellite tables around a common item spine, named
+after ACP v2 nomenclature, plus a prompt-turn table absorbing usage and stop reasons; low-frequency
+and unknown kinds keep a contractual JSON value. This shapes only the disposable read model: the
+journal remains the sole canonical truth, and ACP-owned open enums are stored verbatim.
+
 Custody remains separate because it is opaque resume state, not product meaning.
 OneCLI request/audit records and gateway logs remain operational security telemetry and are never
 copied into the Workstream journal.
@@ -41,6 +46,8 @@ copied into the Workstream journal.
 - Journal notification and Web feed positions remain separate mechanisms.
 - ACP v1 missing message IDs require explicit projection fallback.
 - Projection equivalence becomes an acceptance gate.
+- Adopting new ACP fields is a projector version bump plus rebuild, never a data migration of
+  canonical truth.
 - Product projections remain independent from OneCLI retention, schema and availability.
 
 ## Governing specs

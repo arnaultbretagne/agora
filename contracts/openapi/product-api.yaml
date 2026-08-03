@@ -220,6 +220,57 @@ paths:
                     minimum: 1
         '404':
           $ref: '#/components/responses/Problem'
+  /workstreams/{workstreamId}/turns:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    get:
+      operationId: listWorkstreamTurns
+      description: >
+        Returns a reverse-chronological page of rebuildable prompt turns. Live turn changes are
+        published on the feed as command status events keyed by the same durable command ID.
+      parameters:
+        - name: beforeSeq
+          in: query
+          description: Exclusive first-Workstream-sequence boundary for older-page pagination.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Current rebuildable prompt turns and synchronization positions.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [turns, throughWorkstreamSeq, feedPosition]
+                properties:
+                  turns:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkstreamTurn'
+                  throughWorkstreamSeq:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  feedPosition:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  nextBeforeSeq:
+                    type: [integer, 'null']
+                    format: int64
+                    minimum: 1
+        '404':
+          $ref: '#/components/responses/Problem'
   /workstreams/{workstreamId}/memberships:
     parameters:
       - $ref: '#/components/parameters/WorkstreamId'
@@ -805,6 +856,8 @@ components:
               type: string
     WorkstreamItem:
       $ref: ../schemas/workstream-item.schema.json
+    WorkstreamTurn:
+      $ref: ../schemas/workstream-turn.schema.json
     WorkstreamMembership:
       type: object
       additionalProperties: false

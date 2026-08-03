@@ -23,7 +23,10 @@ Tests MUST run against real PostgreSQL and additionally prove:
 - Anchor ownership, snapshot equality, non-regression and `watermark <= Workstream head` in the
   repository transaction;
 - denied `custody.payload` reads for control-plane roles;
-- per-Workstream projection checkpoints, durable feed positions and full rebuild.
+- per-Workstream projection checkpoints, durable feed positions and full rebuild;
+- typed-projection discipline: hot item kinds store no inline value and bind one-to-one to their
+  satellite by `(item, kind)`; turns bind to their durable command and cannot be referenced across
+  Sessions.
 
 The DDL creates NOLOGIN privilege roles only. Deployment bootstraps a migration LOGIN/ownership path
 and grants `agora_migrator`; it creates no application credential in SQL.

@@ -34,7 +34,10 @@ and deterministic state tests.
 - [ ] Implement Session create/activate/prompt/suspend/cancel/close command endpoints.
 - [ ] Consume journal notifications with a canonical-head sweep and publish monotonic feed
   positions transactionally with item/checkpoint updates.
-- [ ] Project messages/thoughts/tool calls/plans/permissions/usage/unknown updates.
+- [ ] Project messages/thoughts/tool calls/plans/permissions into their typed satellite tables;
+  fold usage and stop reasons into turns; keep elicitation/terminal/session_info/handoff/unknown
+  as contractual generic items.
+- [ ] Serve the turns page endpoint and publish turn state changes as command status feed events.
 - [ ] Render all item classes; collapse verbose classes without discarding them.
 - [ ] Show Agent/Session boundaries and Handoff placeholders.
 - [ ] Distinguish durable Session phase from optional `liveSessionRuntime` state composed from the
@@ -48,6 +51,7 @@ and deterministic state tests.
 ## Required tests
 
 - Chunk/upsert sequences produce deterministic UI items.
+- Turn rows converge to the exact PromptResponse stop reason and final usage facts.
 - Tool-call updates remain visible before/after cancel.
 - Thoughts and permission decisions are inspectable.
 - Unknown ACP update gets a generic inspectable card.

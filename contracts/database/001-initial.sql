@@ -390,11 +390,48 @@ CREATE TRIGGER agent_anchors_progress_guard
   BEFORE INSERT OR UPDATE ON product.agent_anchors
   FOR EACH ROW EXECUTE FUNCTION product.enforce_anchor_progress();
 
+CREATE TABLE projection.turns (
+  id                    uuid PRIMARY KEY,
+  workstream_id         uuid NOT NULL
+                        REFERENCES product.workstreams(id) ON DELETE CASCADE,
+  session_id            uuid NOT NULL,
+  turn_ordinal          integer NOT NULL CHECK (turn_ordinal > 0),
+  purpose               product.event_purpose NOT NULL CHECK (purpose <> 'protocol'),
+  status                text NOT NULL
+                        CHECK (status IN ('running', 'completed', 'cancelled', 'failed')),
+  stop_reason           text,
+  first_workstream_seq  bigint NOT NULL CHECK (first_workstream_seq > 0),
+  latest_workstream_seq bigint NOT NULL CHECK (latest_workstream_seq >= first_workstream_seq),
+  input_tokens          bigint,
+  output_tokens         bigint,
+  cached_read_tokens    bigint,
+  cached_write_tokens   bigint,
+  thought_tokens        bigint,
+  total_tokens          bigint,
+  cost_amount           numeric,
+  cost_currency         text,
+  started_at            timestamptz NOT NULL,
+  ended_at              timestamptz,
+  UNIQUE (session_id, turn_ordinal),
+  UNIQUE (id, session_id, workstream_id),
+  FOREIGN KEY (session_id, workstream_id)
+    REFERENCES product.sessions(id, workstream_id) ON DELETE CASCADE,
+  FOREIGN KEY (id, workstream_id)
+    REFERENCES product.commands(id, workstream_id) ON DELETE CASCADE,
+  CHECK (status <> 'running' OR (stop_reason IS NULL AND ended_at IS NULL)),
+  CHECK (status = 'running' OR ended_at IS NOT NULL),
+  CHECK ((cost_amount IS NULL) = (cost_currency IS NULL))
+);
+
+CREATE INDEX turns_workstream_order
+  ON projection.turns(workstream_id, first_workstream_seq);
+
 CREATE TABLE projection.workstream_items (
   id                    uuid PRIMARY KEY,
   workstream_id         uuid NOT NULL
                         REFERENCES product.workstreams(id) ON DELETE CASCADE,
   session_id            uuid NOT NULL,
+  turn_id               uuid,
   item_kind             text NOT NULL,
   acp_entity_id         text,
   synthetic_entity_key  text,
@@ -402,11 +439,14 @@ CREATE TABLE projection.workstream_items (
   latest_event_id       uuid NOT NULL,
   first_workstream_seq  bigint NOT NULL CHECK (first_workstream_seq > 0),
   latest_workstream_seq bigint NOT NULL CHECK (latest_workstream_seq >= first_workstream_seq),
-  current_value         jsonb NOT NULL,
+  current_value         jsonb,
   content_sha256        bytea NOT NULL CHECK (octet_length(content_sha256) = 32),
   updated_at            timestamptz NOT NULL,
+  UNIQUE (id, item_kind),
   FOREIGN KEY (session_id, workstream_id)
     REFERENCES product.sessions(id, workstream_id) ON DELETE CASCADE,
+  FOREIGN KEY (turn_id, session_id, workstream_id)
+    REFERENCES projection.turns(id, session_id, workstream_id),
   FOREIGN KEY (first_event_id, workstream_id, session_id, first_workstream_seq)
     REFERENCES product.workstream_events(id, workstream_id, session_id, workstream_seq)
     ON DELETE CASCADE,
@@ -416,7 +456,12 @@ CREATE TABLE projection.workstream_items (
   CHECK (
     (acp_entity_id IS NOT NULL AND synthetic_entity_key IS NULL)
     OR (acp_entity_id IS NULL AND synthetic_entity_key IS NOT NULL)
-  )
+  ),
+  CHECK (
+    (item_kind IN ('message', 'thought', 'tool_call', 'plan', 'permission'))
+    = (current_value IS NULL)
+  ),
+  CHECK (current_value IS NULL OR jsonb_typeof(current_value) = 'object')
 );
 
 CREATE UNIQUE INDEX workstream_items_acp_entity
@@ -429,6 +474,84 @@ CREATE UNIQUE INDEX workstream_items_synthetic_entity
 
 CREATE INDEX workstream_items_feed_order
   ON projection.workstream_items(workstream_id, first_workstream_seq, id);
+
+CREATE TABLE projection.messages (
+  item_id     uuid PRIMARY KEY,
+  item_kind   text NOT NULL CHECK (item_kind IN ('message', 'thought')),
+  role        text NOT NULL CHECK (role IN ('user', 'agent', 'thought')),
+  message_id  text,
+  content     jsonb NOT NULL CHECK (jsonb_typeof(content) = 'array'),
+  chunk_count integer NOT NULL DEFAULT 0 CHECK (chunk_count >= 0),
+  completed   boolean NOT NULL DEFAULT false,
+  FOREIGN KEY (item_id, item_kind)
+    REFERENCES projection.workstream_items(id, item_kind) ON DELETE CASCADE,
+  CHECK ((item_kind = 'thought') = (role = 'thought'))
+);
+
+CREATE TABLE projection.tool_calls (
+  item_id      uuid PRIMARY KEY,
+  item_kind    text NOT NULL DEFAULT 'tool_call' CHECK (item_kind = 'tool_call'),
+  tool_call_id text NOT NULL CHECK (length(tool_call_id) BETWEEN 1 AND 300),
+  name         text,
+  title        text,
+  kind         text,
+  status       text NOT NULL,
+  content      jsonb CHECK (content IS NULL OR jsonb_typeof(content) = 'array'),
+  raw_input    jsonb,
+  raw_output   jsonb,
+  FOREIGN KEY (item_id, item_kind)
+    REFERENCES projection.workstream_items(id, item_kind) ON DELETE CASCADE
+);
+
+CREATE TABLE projection.tool_call_locations (
+  item_id  uuid NOT NULL
+           REFERENCES projection.tool_calls(item_id) ON DELETE CASCADE,
+  ordinal  integer NOT NULL CHECK (ordinal > 0),
+  path     text NOT NULL CHECK (length(path) >= 1),
+  line     integer CHECK (line IS NULL OR line >= 0),
+  PRIMARY KEY (item_id, ordinal)
+);
+
+CREATE TABLE projection.plans (
+  item_id   uuid PRIMARY KEY,
+  item_kind text NOT NULL DEFAULT 'plan' CHECK (item_kind = 'plan'),
+  plan_id   text,
+  removed   boolean NOT NULL DEFAULT false,
+  FOREIGN KEY (item_id, item_kind)
+    REFERENCES projection.workstream_items(id, item_kind) ON DELETE CASCADE
+);
+
+CREATE TABLE projection.plan_entries (
+  item_id  uuid NOT NULL
+           REFERENCES projection.plans(item_id) ON DELETE CASCADE,
+  ordinal  integer NOT NULL CHECK (ordinal > 0),
+  content  text NOT NULL,
+  priority text NOT NULL,
+  status   text NOT NULL,
+  PRIMARY KEY (item_id, ordinal)
+);
+
+CREATE TABLE projection.permission_requests (
+  item_id            uuid PRIMARY KEY,
+  item_kind          text NOT NULL DEFAULT 'permission' CHECK (item_kind = 'permission'),
+  tool_call_item_id  uuid REFERENCES projection.tool_calls(item_id),
+  title              text,
+  options            jsonb NOT NULL CHECK (jsonb_typeof(options) = 'array'),
+  status             text NOT NULL CHECK (status IN ('pending', 'answered', 'cancelled')),
+  outcome            text,
+  selected_option_id text,
+  decided_by         text CHECK (decided_by IN ('user', 'policy')),
+  requested_at       timestamptz NOT NULL,
+  decided_at         timestamptz,
+  FOREIGN KEY (item_id, item_kind)
+    REFERENCES projection.workstream_items(id, item_kind) ON DELETE CASCADE,
+  CHECK ((status = 'pending') = (decided_at IS NULL)),
+  CHECK (
+    status <> 'pending'
+    OR (outcome IS NULL AND selected_option_id IS NULL AND decided_by IS NULL)
+  ),
+  CHECK (selected_option_id IS NULL OR outcome = 'selected')
+);
 
 CREATE TABLE projection.projector_checkpoints (
   projector_name         text NOT NULL,

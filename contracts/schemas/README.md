@@ -7,7 +7,12 @@ These schemas cover Agora-owned data only:
 - custody metadata;
 - journal row representation;
 - rebuildable Workstream items;
+- rebuildable prompt turns;
 - Web feed events.
+
+Workstream item values are typed per kind. Field names follow ACP v2 nomenclature; ACP-owned open
+enums (tool kind/status, plan priority/status, stop reasons) stay plain strings transported
+verbatim, while Agora-owned closed enums are constrained.
 
 The ACP envelope and content-block properties intentionally do not reproduce ACP's schema. They are
 validated with stable types/schema from the pinned `@agentclientprotocol/sdk`.

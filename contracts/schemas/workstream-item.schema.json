@@ -2,13 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://agora.invalid/contracts/workstream-item.schema.json",
   "title": "WorkstreamItem",
-  "description": "Current rebuildable Web representation of one ACP-derived entity.",
+  "description": "Current rebuildable Web representation of one ACP-derived entity. High-frequency kinds carry a typed value following ACP v2 nomenclature; low-frequency kinds carry a projector-versioned generic value. ACP-owned open enums (tool kind/status, plan priority/status, stop reasons) are transported verbatim as strings and never narrowed here.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "id",
     "workstreamId",
     "sessionId",
+    "turnId",
     "kind",
     "firstEventId",
     "latestEventId",
@@ -31,6 +32,11 @@
       "type": "string",
       "format": "uuid"
     },
+    "turnId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Durable prompt-turn (PromptSession command) this item belongs to; null outside a turn."
+    },
     "kind": {
       "enum": [
         "message",
@@ -40,7 +46,6 @@
         "permission",
         "elicitation",
         "terminal",
-        "usage",
         "session_info",
         "handoff",
         "unknown"
@@ -64,8 +69,7 @@
     },
     "value": {
       "type": "object",
-      "description": "Safe current ACP-derived value. Variant fields follow the pinned projector version.",
-      "additionalProperties": true
+      "description": "Typed per-kind value; see allOf variants below."
     },
     "contentSha256": {
       "type": "string",
@@ -74,6 +78,277 @@
     "updatedAt": {
       "type": "string",
       "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": ["message", "thought"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "$ref": "#/definitions/MessageValue"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "thought"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "properties": {
+              "role": {
+                "const": "thought"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "tool_call"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "$ref": "#/definitions/ToolCallValue"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "plan"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "$ref": "#/definitions/PlanValue"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "permission"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "$ref": "#/definitions/PermissionValue"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": ["elicitation", "terminal", "session_info", "handoff", "unknown"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "description": "Safe current ACP-derived value. Variant fields follow the pinned projector version.",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "ContentBlocks": {
+      "type": "array",
+      "description": "Ordered official ACP content blocks, validated by the pinned SDK schema, not re-modelled here.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "MessageValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content", "chunkCount", "completed"],
+      "properties": {
+        "role": {
+          "enum": ["user", "agent", "thought"]
+        },
+        "messageId": {
+          "type": ["string", "null"],
+          "description": "ACP messageId when the Agent provided one; null under ACP v1 without message IDs."
+        },
+        "content": {
+          "$ref": "#/definitions/ContentBlocks"
+        },
+        "chunkCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ToolCallValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolCallId", "status", "locations"],
+      "properties": {
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": ["string", "null"]
+        },
+        "title": {
+          "type": ["string", "null"]
+        },
+        "kind": {
+          "type": ["string", "null"],
+          "description": "ACP ToolKind, open set; known values: read, edit, delete, move, search, execute, think, fetch, switch_mode, other."
+        },
+        "status": {
+          "type": "string",
+          "description": "ACP ToolCallStatus, open set; known values: pending, in_progress, completed, failed, cancelled."
+        },
+        "content": {
+          "anyOf": [
+            {"$ref": "#/definitions/ContentBlocks"},
+            {"type": "null"}
+          ]
+        },
+        "rawInput": {},
+        "rawOutput": {
+          "description": "Possibly bounded by the projector; the complete value stays in the canonical journal."
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "PlanValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["removed", "entries"],
+      "properties": {
+        "planId": {
+          "type": ["string", "null"],
+          "description": "ACP v2 planId when provided; null under ACP v1 full-state plans."
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["content", "priority", "status"],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string",
+                "description": "ACP plan entry priority, open set; known values: high, medium, low."
+              },
+              "status": {
+                "type": "string",
+                "description": "ACP plan entry status, open set; known values: pending, in_progress, completed, cancelled."
+              }
+            }
+          }
+        }
+      }
+    },
+    "PermissionValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["options", "status", "requestedAt"],
+      "properties": {
+        "title": {
+          "type": ["string", "null"]
+        },
+        "toolCallItemId": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Projection item ID of the tool call this permission concerns, when identified."
+        },
+        "options": {
+          "type": "array",
+          "description": "Exact ACP PermissionOption objects, SDK-validated.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "status": {
+          "enum": ["pending", "answered", "cancelled"]
+        },
+        "outcome": {
+          "type": ["string", "null"],
+          "description": "ACP RequestPermissionOutcome discriminator, open set; known values: selected, cancelled."
+        },
+        "selectedOptionId": {
+          "type": ["string", "null"]
+        },
+        "decidedBy": {
+          "anyOf": [
+            {"enum": ["user", "policy"]},
+            {"type": "null"}
+          ]
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "decidedAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
     }
   }
 }

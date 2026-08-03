@@ -32,6 +32,9 @@
 - [ ] Append event + increment both heads + journal outbox in one transaction.
 - [ ] Reject Session/Workstream ownership mismatch in repository and SQL.
 - [ ] Implement per-Workstream projection checkpoint and feed-event transactions.
+- [ ] Prove typed-projection constraints with failing SQL: hot item kinds reject an inline
+  `current_value`, cold kinds require one, satellites bind by `(item, kind)` composite keys, and a
+  turn cannot be referenced across Sessions.
 - [ ] Implement rebuild/reset without reusing or decreasing feed positions.
 - [ ] Implement snapshot insert/stream/read and retention queries.
 - [ ] Implement atomic Anchor upsert validating snapshot metadata/watermark.
@@ -52,6 +55,8 @@
 - Projection rebuild produces identical hashes.
 - Transaction rollback leaves no event/journal-outbox split.
 - Concurrent Workstreams cannot cause a projector checkpoint to skip committed events.
+- Typed satellite and turn constraints reject kind mismatches, cross-Session turn references and
+  inline values on hot kinds through actual failing SQL.
 - Database role tests execute actual denied SQL.
 - Repository types expose durable Session phase but cannot persist live Session Runtime status.
 - Gateway/grant secret-pattern fixtures cannot be persisted in product grant, command or

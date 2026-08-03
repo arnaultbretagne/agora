@@ -111,37 +111,93 @@ fact.
 
 ## Projection model
 
-`projection.workstream_items` provides current renderable items:
+The projection is a typed relational read model, entirely rebuildable, with three parts:
+
+- `projection.turns`: one row per prompt turn;
+- `projection.workstream_items`: the ordered spine of renderable items;
+- typed satellite tables, exactly one row per item for the high-frequency kinds:
+  `projection.messages`, `projection.tool_calls` (plus `tool_call_locations`),
+  `projection.plans` (plus `plan_entries`) and `projection.permission_requests`.
+
+It provides current renderable items:
 
 - assembled user/agent/thought content;
 - current tool-call state and complete update trail reference;
 - current plan state;
 - permission interactions;
 - handoff cards;
-- terminal and usage summaries;
-- unknown ACP events as generic inspectable items.
+- terminal summaries;
+- unknown ACP events as generic inspectable items;
+
+and, on turns, exact usage/stop-reason facts.
 
 Every item references its first and latest canonical event. Projection writes MUST be deterministic
 and idempotent by event ID.
 
-The public item shape is `contracts/schemas/workstream-item.schema.json`. Variant values are
-ACP-derived and projector-versioned; they do not replace the canonical envelope.
+The public item shape is `contracts/schemas/workstream-item.schema.json`; the public turn shape is
+`contracts/schemas/workstream-turn.schema.json`. Values are ACP-derived and projector-versioned;
+they do not replace the canonical envelope.
+
+### Naming and enum rules
+
+Column and field names follow ACP v2 nomenclature in snake_case/camelCase (`toolCallId` →
+`tool_call_id`, `rawInput` → `raw_input`, `cachedReadTokens` → `cached_read_tokens`). The wire
+protocol remains stable v1 (ADR 0003); v2 naming is a storage/read-model forward-compatibility
+choice only and changes no ACP semantics.
+
+- ACP-owned enums (`ToolKind`, `ToolCallStatus`, plan entry `priority`/`status`, `StopReason`,
+  permission outcomes) are open sets: stored as plain text verbatim, never as SQL enums or CHECK
+  lists. The projector validates known values and stores unknown ones unchanged.
+- Agora-owned closed enums (turn `status`, permission `status` and `decided_by`, message `role`)
+  are constrained executable in SQL.
+
+### Prompt turns
+
+A turn row is keyed by the durable `PromptSession` command ID and carries `purpose`
+(`user`/`handoff`), an ordinal per Session, lifecycle `status`
+(`running`/`completed`/`cancelled`/`failed`), the verbatim ACP stop reason, its Workstream sequence
+range and exact ACP usage/cost facts — never billing guesses.
+
+The fold rules are:
+
+- the journaled `session/prompt` command event opens the turn as `running`;
+- `usage_update` events fold into the turn's usage columns and produce no item;
+- the ACP prompt response closes the turn: `stopReason` verbatim, status `completed` (or
+  `cancelled` when the response reports cancellation); a terminal protocol failure closes it
+  `failed`;
+- turn state changes are published on the feed as `status` events with subject `command`, keyed by
+  the same durable command ID.
+
+Items produced inside a turn carry its `turn_id`; Session-level items (for example `session_info`)
+stay outside any turn.
+
+### Storage discipline
+
+The five high-frequency kinds — `message`, `thought`, `tool_call`, `plan`, `permission` — MUST NOT
+store an inline generic value on the spine; their current state lives in typed satellite columns
+bound one-to-one by `(item, kind)` executable foreign keys. Low-frequency kinds (`elicitation`,
+`terminal`, `session_info`, `handoff`, `unknown`) keep a contractual `current_value` on the spine,
+which also absorbs future ACP update variants without schema migration. Message content and tool
+call content remain ordered official ACP content blocks (spec 04: no protocol wrapper). A projector
+MAY bound a copied `raw_output`; the complete value stays in the canonical journal.
 
 ### Required item mapping
 
-| `kind` | Entity key | `value` rule |
-|---|---|---|
-| `message` | Agent `messageId` or prompt-scoped synthetic key | role, ordered assembled official ACP content blocks and completion state |
-| `thought` | Agent `messageId` or prompt-scoped synthetic key | ordered assembled thought blocks exactly as exposed by the Agent and completion state |
-| `tool_call` | Agent `toolCallId` | latest official ACP tool-call state plus references to every contributing event |
-| `plan` | prompt-scoped synthetic plan key | latest complete official ACP plan state and contributing event |
-| `permission` | Agora callback-request ID | exact ACP subject/options and final selected/cancelled outcome |
-| `elicitation` | Agora callback-request ID | exact ACP request schema/content and final safe outcome |
-| `terminal` | Agent terminal ID | current terminal metadata/status and canonical references; unbounded output remains chunked/resources |
-| `usage` | prompt-scoped synthetic usage key | latest official ACP usage facts, never billing guesses |
-| `session_info` | Session-scoped key | latest Agent-advertised mode/config/session information |
-| `handoff` | Handoff command ID | source range, policy version, digest, fidelity and target outcome; copied source items are not expanded |
-| `unknown` | canonical event ID | method/update discriminator and inspectable complete envelope with no inferred semantics |
+| `kind` | Entity key | Storage | Current-state rule |
+|---|---|---|---|
+| `message` | Agent `messageId` or prompt-scoped synthetic key | `projection.messages` | role, ordered assembled official ACP content blocks and completion state |
+| `thought` | Agent `messageId` or prompt-scoped synthetic key | `projection.messages` (role `thought`) | ordered assembled thought blocks exactly as exposed by the Agent and completion state |
+| `tool_call` | Agent `toolCallId` | `projection.tool_calls` + `tool_call_locations` | latest official ACP tool-call state (name/title/kind/status/content/raw input/raw output/locations) plus references to every contributing event |
+| `plan` | `planId` or prompt-scoped synthetic plan key | `projection.plans` + `plan_entries` | latest complete official ACP plan state and contributing event |
+| `permission` | Agora callback-request ID | `projection.permission_requests` | exact ACP subject/options and final selected/cancelled outcome, linked to its tool-call item when identified |
+| `elicitation` | Agora callback-request ID | spine `current_value` | exact ACP request schema/content and final safe outcome |
+| `terminal` | Agent terminal ID | spine `current_value` | current terminal metadata/status and canonical references; unbounded output remains chunked/resources |
+| `session_info` | Session-scoped key | spine `current_value` | latest Agent-advertised mode/config/session information |
+| `handoff` | Handoff command ID | spine `current_value` | source range, policy version, digest, fidelity and target outcome; copied source items are not expanded |
+| `unknown` | canonical event ID | spine `current_value` | method/update discriminator and inspectable complete envelope with no inferred semantics |
+
+`usage_update` is not an item kind: it folds into `projection.turns` (exact ACP usage facts, never
+billing guesses) and stays fully journaled like every other envelope.
 
 Missing optional ACP fields remain missing; a projector MUST NOT fabricate them for rendering
 convenience.
@@ -155,7 +211,8 @@ sequence order.
 
 The projector commits these together:
 
-- item upserts/removals;
+- item spine and satellite upserts/removals;
+- turn upserts;
 - the `(projector_name, workstream_id)` checkpoint;
 - one or more durable `projection.feed_events`.
 
@@ -167,8 +224,8 @@ NOT be used interchangeably.
 A full rebuild:
 
 1. emits or arranges a client `reset` boundary;
-2. truncates only rebuildable projection items/checkpoints while preserving feed-position
-   monotonicity;
+2. truncates only rebuildable projection state (item spine, satellites, turns, checkpoints) while
+   preserving feed-position monotonicity;
 3. reads Workstream events in `(workstream_id, workstream_seq)` order and joins any referenced
    durable command metadata;
 4. applies the versioned projector;
