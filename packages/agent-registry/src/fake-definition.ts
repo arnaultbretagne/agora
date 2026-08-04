@@ -12,7 +12,7 @@ export const FAKE_AGENT_DEFINITION: AgentRuntimeDefinition = {
   version: '2026-08-03',
   label: 'Fake Agent (tests)',
   description: 'Deterministic in-process fake ACP Agent, wrapped for Session Runtime controller tests.',
-  imageDigest: 'ghcr.io/arnaultbretagne/agora-fake-agent@sha256:23bb5e63a97ca6b830cc083bcacc1216f08ddbfb5206db4cb26e01de29ea4059',
+  imageDigest: 'ghcr.io/arnaultbretagne/agora-fake-agent@sha256:6a89f69b789cf01dda473de205c4be559a827eeb159532268425a38d05854fac',
   // Matches fake-agent-image/Dockerfile's actual layout: the whole monorepo is copied to /repo and
   // built in place, so the entrypoint lives where the build put it, not at some separate /app.
   acpCommand: ['node', '/repo/apps/session-runtime-controller/dist/src/fake-agent-server.js'],
