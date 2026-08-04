@@ -22,7 +22,9 @@ import { createWebSocketStream, WebSocketServer } from 'ws'
  * already reports as `state: 'failed'` with no new reconciler logic required.
  */
 
-export const FAKE_NATIVE_FORMAT_ID = 'agora-fake-native'
+// Must match FAKE_AGENT_DEFINITION.custody.writeFormat (packages/agent-registry/src/fake-definition.ts)
+// exactly — the registry entry is the one source of truth for this Agent's declared format, not this file.
+export const FAKE_NATIVE_FORMAT_ID = 'fake-agent-null'
 export const FAKE_NATIVE_FORMAT_VERSION = '1'
 
 export function encodeFakeNativeState(state: FakeAgentNativeState): Uint8Array {

@@ -409,14 +409,11 @@ test('required: a format the fake Agent does not read is rejected before a Pod i
     headers: { 'content-type': 'application/json', 'x-request-id': randomUUID() },
     body: JSON.stringify(materializeBody({ restoreFrom: foreignSnapshotId })),
   })
-  assert.equal(res.status, 202, 'materialize itself is format-agnostic; the Pod must reject the format at restore time')
-  const [pod] = await k8s.listPods(`agora.dev/session-id=${sessionId}`)
-  const env = requiredPodEnv(pod)
-  await assert.rejects(() =>
-    startFakeAgentServer({
-      restore: { url: requireEnvValue(env, 'AGORA_CUSTODY_RESTORE_URL'), credential: requireEnvValue(env, 'AGORA_CUSTODY_RESTORE_CREDENTIAL') },
-    }),
-  )
+  // docs/specs/07 "Restore contract" step 3: format/adapter compatibility is validated by the
+  // CONTROLLER, against the registry's own declared `readFormats` — before any Pod exists.
+  assert.equal(res.status, 422, await res.text())
+  const pods = await k8s.listPods(`agora.dev/session-id=${sessionId}`)
+  assert.equal(pods.length, 0, 'an incompatible format must never reach Pod creation')
 })
 
 test('required: captured bytes never contain the execution grant reference or Broker relay endpoint — only the driver\'s own opaque native state', async () => {

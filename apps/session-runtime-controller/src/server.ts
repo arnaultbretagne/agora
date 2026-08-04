@@ -5,7 +5,7 @@ import { restoreSnapshot } from '@agora/custody'
 import type pg from 'pg'
 import type { ACPBridgeEndpoint, MaterializeSessionRuntimeRequest, Problem, SessionRuntimeStatus } from '@agora/session-runtime-control'
 import type { BridgeCredentialIssuer } from './bridge-credentials.js'
-import { captureCustody, checkRestoreSource, CustodyCaptureError } from './custody.js'
+import { captureCustody, checkRestoreSource, CustodyCaptureError, isReadableFormat } from './custody.js'
 import type { KubernetesPods } from './k8s-client.js'
 import { podName } from './labels.js'
 import { fakeRelayBundle } from './relay-bundle.js'
@@ -125,6 +125,12 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     if (source.invalidatedAt) {
       return sendProblem(res, problem(422, 'custody_snapshot_invalidated', 'restoreFrom names an invalidated snapshot'))
     }
+    if (!isReadableFormat(definition.custody.readFormats, source.formatId, source.formatVersion)) {
+      return sendProblem(
+        res,
+        problem(422, 'custody_format_incompatible', `Agent '${definition.agentId}@${definition.version}' cannot read format '${source.formatId}@${source.formatVersion}'`),
+      )
+    }
     const credential = deps.restoreIssuer.mint(sessionId, snapshotId)
     const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/runtime/custody-restore-stream`, deps.custodyControllerBaseUrl).toString()
     restoreFrom = { url, credential }
@@ -238,6 +244,7 @@ async function handleCaptureCustody(deps: ServerDeps, sessionId: string, req: In
       syncedThroughSeq: body.syncedThroughSeq,
       podIp,
       bridgePort: definition.bridge.listenPort,
+      definition,
     })
     sendJson(res, 201, ref)
   } catch (error) {

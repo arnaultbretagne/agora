@@ -1,12 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { AgentRuntimeDefinition, CustodyFormat } from '@agora/agent-registry'
 import type pg from 'pg'
 import { captureSnapshot } from '@agora/custody'
-import { FAKE_NATIVE_FORMAT_ID, FAKE_NATIVE_FORMAT_VERSION } from './fake-agent-server.js'
-
-/** This plan's only driver: the fake Agent's own tiny JSON format (see fake-agent-server.ts).
- * docs/specs/07 "Compatibility" (per-Agent readable/writable formats) is P09/P10 territory once a
- * second, real format exists — hardcoding one here is a deliberate simplification, not an oversight. */
-export const CAPTURE_ADAPTER_VERSION = '1'
 
 export interface CapturedRef {
   readonly snapshotId: string
@@ -34,10 +29,9 @@ export class CustodyCaptureError extends Error {
 
 /** docs/specs/07 "Capture contract" step 2: "stream with a configured maximum size and timeout." */
 const CAPTURE_TIMEOUT_MS = 30_000
-const CAPTURE_MAX_BYTES = 64 * 1024 * 1024
 
-/** `GET .../custody` on the fake Agent's own HTTP listener — direct Pod reach, the same pattern `handleOpenAcpConnection` already uses for the ACP bridge. */
-async function fetchNativeStateBytes(podIp: string, port: number): Promise<Uint8Array> {
+/** `GET .../custody` on the fake Agent's own HTTP listener — direct Pod reach, the same pattern `handleOpenAcpConnection` already uses for the ACP bridge. `maxBytes` is the registry's own `AgentRuntimeDefinition.custody.maxBytes`, never a value this package invents. */
+async function fetchNativeStateBytes(podIp: string, port: number, maxBytes: number): Promise<Uint8Array> {
   let response: Response
   try {
     response = await fetch(`http://${podIp}:${port}/custody`, { signal: AbortSignal.timeout(CAPTURE_TIMEOUT_MS) })
@@ -47,8 +41,8 @@ async function fetchNativeStateBytes(podIp: string, port: number): Promise<Uint8
   if (!response.ok) throw new CustodyCaptureError('capture_transport_failed', `Pod /custody returned ${response.status}`)
 
   const declaredLength = Number(response.headers.get('content-length') ?? '0')
-  if (declaredLength > CAPTURE_MAX_BYTES) {
-    throw new CustodyCaptureError('capture_transport_failed', `Pod /custody declared ${declaredLength} bytes, exceeding the ${CAPTURE_MAX_BYTES}-byte capture limit`)
+  if (declaredLength > maxBytes) {
+    throw new CustodyCaptureError('capture_transport_failed', `Pod /custody declared ${declaredLength} bytes, exceeding the ${maxBytes}-byte capture limit`)
   }
 
   if (!response.body) return new Uint8Array(await response.arrayBuffer())
@@ -59,9 +53,9 @@ async function fetchNativeStateBytes(podIp: string, port: number): Promise<Uint8
     const { done, value } = await reader.read()
     if (done) break
     total += value.length
-    if (total > CAPTURE_MAX_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel()
-      throw new CustodyCaptureError('capture_transport_failed', `Pod /custody exceeded the ${CAPTURE_MAX_BYTES}-byte capture limit while streaming`)
+      throw new CustodyCaptureError('capture_transport_failed', `Pod /custody exceeded the ${maxBytes}-byte capture limit while streaming`)
     }
     chunks.push(value)
   }
@@ -89,6 +83,8 @@ export async function captureCustody(
     readonly syncedThroughSeq: number
     readonly podIp: string
     readonly bridgePort: number
+    /** The RESOLVED definition for the Session's own Agent — `custody.writeFormat`/`driverId`/`maxBytes` are never invented here. */
+    readonly definition: AgentRuntimeDefinition
     readonly now?: () => Date
   },
 ): Promise<CapturedRef> {
@@ -131,8 +127,11 @@ export async function captureCustody(
     existingClient.release()
   }
 
+  const { formatId, formatVersion } = input.definition.custody.writeFormat
+  const adapterVersion = input.definition.custody.driverId
+
   // Bytes are fetched BEFORE the transaction opens: a transport failure must leave no DB trace at all.
-  const payload = await fetchNativeStateBytes(input.podIp, input.bridgePort)
+  const payload = await fetchNativeStateBytes(input.podIp, input.bridgePort, input.definition.custody.maxBytes)
 
   const client = await custodyPool.connect()
   try {
@@ -153,9 +152,9 @@ export async function captureCustody(
       sessionId: input.sessionId,
       generation,
       captureRequestId: input.captureRequestId,
-      formatId: FAKE_NATIVE_FORMAT_ID,
-      formatVersion: FAKE_NATIVE_FORMAT_VERSION,
-      adapterVersion: CAPTURE_ADAPTER_VERSION,
+      formatId,
+      formatVersion,
+      adapterVersion,
       syncedThroughSeq: input.syncedThroughSeq,
       payload,
       createdAt,
@@ -167,9 +166,9 @@ export async function captureCustody(
       sessionId: input.sessionId,
       generation,
       captureRequestId: input.captureRequestId,
-      formatId: FAKE_NATIVE_FORMAT_ID,
-      formatVersion: FAKE_NATIVE_FORMAT_VERSION,
-      adapterVersion: CAPTURE_ADAPTER_VERSION,
+      formatId,
+      formatVersion,
+      adapterVersion,
       syncedThroughSeq: input.syncedThroughSeq,
       sha256: createHash('sha256').update(payload).digest('hex'),
       sizeBytes: payload.length,
@@ -187,6 +186,7 @@ export interface RestoreSourceMetadata {
   readonly snapshotId: string
   readonly sessionId: string
   readonly formatId: string
+  readonly formatVersion: string
   readonly invalidatedAt: Date | null
 }
 
@@ -194,14 +194,19 @@ export interface RestoreSourceMetadata {
 export async function checkRestoreSource(custodyPool: pg.Pool, snapshotId: string): Promise<RestoreSourceMetadata | undefined> {
   const client = await custodyPool.connect()
   try {
-    const { rows } = await client.query<{ session_id: string; format_id: string; invalidated_at: Date | null }>(
-      'SELECT session_id, format_id, invalidated_at FROM custody.snapshots WHERE id = $1',
+    const { rows } = await client.query<{ session_id: string; format_id: string; format_version: string; invalidated_at: Date | null }>(
+      'SELECT session_id, format_id, format_version, invalidated_at FROM custody.snapshots WHERE id = $1',
       [snapshotId],
     )
     const row = rows[0]
     if (!row) return undefined
-    return { snapshotId, sessionId: row.session_id, formatId: row.format_id, invalidatedAt: row.invalidated_at }
+    return { snapshotId, sessionId: row.session_id, formatId: row.format_id, formatVersion: row.format_version, invalidatedAt: row.invalidated_at }
   } finally {
     client.release()
   }
+}
+
+/** docs/specs/07 "Restore contract" step 3: "validates format/adapter compatibility" — against the registry's OWN declared `readFormats`, never a hardcoded assumption. */
+export function isReadableFormat(readFormats: readonly CustodyFormat[], formatId: string, formatVersion: string): boolean {
+  return readFormats.some((f) => f.formatId === formatId && f.formatVersion === formatVersion)
 }
