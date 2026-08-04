@@ -1,9 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import * as acp from '@agentclientprotocol/sdk'
-import { bootstrapSession, cancelSession as acpCancelSession, promptSession, resumeAcpSession } from '@agora/acp'
-import { nameBasedUuid } from '@agora/domain'
-import { getAnchor, transitionSessionPhase, upsertAnchor } from '@agora/store-pg'
+import { bootstrapSession, cancelSession as acpCancelSession, promptSession, resumeAcpSession, type PromptSessionHandoffSource } from '@agora/acp'
+import { deriveCommandId, nameBasedUuid } from '@agora/domain'
+import {
+  buildHandoffContent,
+  getAnchor,
+  HANDOFF_SEED_POLICY_VERSION,
+  openAdditionalSession,
+  setCurrentSession,
+  transitionSessionPhase,
+  upsertAnchor,
+} from '@agora/store-pg'
 import {
   captureCustody,
   dematerializeSessionRuntime,
@@ -40,12 +48,20 @@ export interface ProvisionSessionInput {
   readonly runtimeDefinitionVersion: string
   readonly workspaceMountRef: string
   readonly initialPrompt: readonly acp.ContentBlock[]
+  /** docs/specs/06: a brand-new Agent joining a Workstream with prior history gets its first prompt as a Handoff, not a plain user prompt. Defaults to 'user' (P05's original behavior). */
+  readonly initialPromptPurpose?: 'user' | 'handoff'
+  readonly handoffSource?: PromptSessionHandoffSource
+  /** Defaults to the fixed `'initial-prompt'` key P05 always used; a Handoff needs its OWN deterministic key (docs/specs/06 "Dispatch exactly one Handoff command per idempotency key"). */
+  readonly promptIdempotencyKey?: string
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
   readonly now?: () => Date
 }
 
 /** Exported so tests can replicate the exact derivation to simulate a crash between capture and Anchor commit. */
 export const SUSPEND_CAPTURE_NAMESPACE = 'cbf5fa7c-3128-4e7e-b25a-3c4c7dd33084'
+
+/** `switchAgent`'s deterministic new-Session id, derived from (workstream, agent, Idempotency-Key) — never `randomUUID()`, so a retry before any Anchor exists resolves to the SAME Session. */
+export const SWITCH_AGENT_SESSION_NAMESPACE = 'c4f553e5-2238-4b7a-8bb7-f3d9ca2b4cfc'
 
 async function waitForRuntimeReady(transport: SessionRuntimeControlTransport, sessionId: string, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -113,9 +129,10 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
         storePersist: bootstrapped.storePersist,
         acpSessionId: bootstrapped.acpSessionId,
         prompt: input.initialPrompt,
-        purpose: 'user',
+        purpose: input.initialPromptPurpose ?? 'user',
         actor: input.actor,
-        idempotencyKey: 'initial-prompt',
+        idempotencyKey: input.promptIdempotencyKey ?? 'initial-prompt',
+        ...(input.handoffSource ? { handoffSource: input.handoffSource } : {}),
         now,
       })
     }
@@ -125,6 +142,12 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
 }
 
 export type ActivateResult = { readonly ok: true } | { readonly ok: false; readonly code: string; readonly detail: string }
+
+export interface ResumeSessionHandoffPrompt {
+  readonly content: readonly acp.ContentBlock[]
+  readonly handoffSource: PromptSessionHandoffSource
+  readonly idempotencyKey: string
+}
 
 export interface ResumeSessionRuntimeInput {
   readonly pool: pg.Pool
@@ -136,6 +159,8 @@ export interface ResumeSessionRuntimeInput {
   readonly runtimeDefinitionVersion: string
   readonly acpSessionId: string
   readonly workspaceMountRef: string
+  /** docs/specs/06 "Choosing a target Session": resuming an anchored Agent still needs the missing `(watermark, head]` range delivered as a Handoff, same as a brand-new Session would. */
+  readonly handoffPrompt?: ResumeSessionHandoffPrompt
   readonly now?: () => Date
 }
 
@@ -184,6 +209,23 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       acpSessionId: resumed.acpSessionId,
       storePersist: resumed.storePersist,
     })
+
+    if (input.handoffPrompt) {
+      await promptSession({
+        pool: input.pool,
+        workstreamId: input.workstreamId,
+        sessionId: input.sessionId,
+        connection: resumed.connection,
+        storePersist: resumed.storePersist,
+        acpSessionId: resumed.acpSessionId,
+        prompt: input.handoffPrompt.content,
+        purpose: 'handoff',
+        actor: { kind: 'system', id: 'agora' },
+        idempotencyKey: input.handoffPrompt.idempotencyKey,
+        handoffSource: input.handoffPrompt.handoffSource,
+        now: input.now ?? (() => new Date()),
+      })
+    }
   } catch (error) {
     await failClosed(input.pool, input.sessionId, 'resume_failed', error)
   }
@@ -237,6 +279,253 @@ export async function activateSession(
     return { ok: true }
   }
   return { ok: false, code: 'conflict', detail: `Session phase '${phase ?? 'unknown'}' cannot be activated` }
+}
+
+export interface SwitchAgentInput {
+  readonly pool: pg.Pool
+  readonly transport: SessionRuntimeControlTransport
+  readonly connections: SessionConnectionRegistry
+  readonly workstreamId: string
+  readonly agentId: string
+  readonly runtimeDefinitionVersion: string
+  readonly workspaceMountRef: string
+  readonly equipmentRequest: Record<string, unknown>
+  readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
+  /** The caller's own Idempotency-Key (from `POST .../sessions`) — the Handoff's own idempotency key is deterministically derived from it, never a fresh random one, so a retry never duplicates the Handoff. */
+  readonly idempotencyKey: string
+  readonly now?: () => Date
+}
+
+export type SwitchAgentResult = { readonly ok: true; readonly sessionId: string } | { readonly ok: false; readonly code: string; readonly detail: string }
+
+/**
+ * docs/specs/06-anchors-and-handoffs.md "Choosing a target Session" + "Handoff representation":
+ * the single entrypoint for "make Agent X active in this Workstream" — resolves whether that means
+ * resuming an existing Anchor or opening a brand-new Session, computes the missing
+ * `(watermark, head]` range, and (if non-empty) builds and dispatches it as a Handoff prompt.
+ * Fire-and-forget from the HTTP layer past the synchronous Session-identity resolution, matching
+ * `provisionSessionAndPrompt`/`resumeSessionRuntime` (docs/specs/14).
+ */
+export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentResult> {
+  const now = input.now ?? (() => new Date())
+
+  const infoClient = await input.pool.connect()
+  let anchor: Awaited<ReturnType<typeof getAnchor>>
+  let head: number
+  try {
+    anchor = await getAnchor(infoClient, input.workstreamId, input.agentId)
+    const { rows } = await infoClient.query<{ last_event_seq: number }>('SELECT last_event_seq FROM product.workstreams WHERE id = $1', [
+      input.workstreamId,
+    ])
+    head = rows[0]?.last_event_seq ?? 0
+  } finally {
+    infoClient.release()
+  }
+
+  // A retry of the SAME switch must rebuild the SAME range (hence byte-identical content) —
+  // never a wider one computed from a since-advanced head (docs/specs/06 "Repeating after crash
+  // regenerates byte-identical Handoff content/digest").
+  const promptIdempotencyKey = `handoff:${input.idempotencyKey}`
+  const rangeClient = await input.pool.connect()
+  let fromSeq: number
+  let throughSeq: number
+  try {
+    const { rows } = await rangeClient.query<{ source_from_seq: number; source_through_seq: number }>(
+      `SELECT source_from_seq, source_through_seq FROM product.commands
+       WHERE workstream_id = $1 AND idempotency_scope = 'prompt' AND idempotency_key = $2`,
+      [input.workstreamId, promptIdempotencyKey],
+    )
+    const existing = rows[0]
+    fromSeq = existing ? existing.source_from_seq : (anchor?.syncedThroughSeq ?? 0)
+    throughSeq = existing ? existing.source_through_seq : head
+  } finally {
+    rangeClient.release()
+  }
+
+  let sessionId: string
+  /** 'new': freshly created this call, safe to provision+handoff. 'anchored': resume from custody.
+   * 'reattach': a prior identical attempt already created this Session (no Anchor yet) — only
+   * safe to re-run through `activateSession`'s own phase-aware, idempotent logic; a Handoff still
+   * pending from that interrupted attempt is not re-dispatched here (see comment below). */
+  let sessionMode: 'new' | 'anchored' | 'reattach'
+  if (anchor) {
+    sessionId = anchor.sessionId
+    sessionMode = 'anchored'
+    const c = await input.pool.connect()
+    try {
+      await setCurrentSession(c, input.workstreamId, sessionId)
+    } finally {
+      c.release()
+    }
+  } else {
+    // Deterministic, not `randomUUID()`: a retry of the SAME Idempotency-Key before any Anchor
+    // exists yet (e.g. crash right after this Session was created) must resolve to the SAME
+    // Session id, never open a second, duplicate one for the same Agent.
+    sessionId = nameBasedUuid(SWITCH_AGENT_SESSION_NAMESPACE, `${input.workstreamId}:${input.agentId}:${input.idempotencyKey}`)
+    const existsClient = await input.pool.connect()
+    let alreadyCreated: boolean
+    try {
+      const { rows } = await existsClient.query('SELECT 1 FROM product.sessions WHERE id = $1', [sessionId])
+      alreadyCreated = rows.length > 0
+    } finally {
+      existsClient.release()
+    }
+    sessionMode = alreadyCreated ? 'reattach' : 'new'
+
+    const c = await input.pool.connect()
+    try {
+      if (!alreadyCreated) {
+        await openAdditionalSession(c, {
+          id: sessionId,
+          workstreamId: input.workstreamId,
+          launchEnvelope: {
+            agentId: input.agentId,
+            workspaceSpec: { workspaceRef: input.workspaceMountRef },
+            equipmentRequest: input.equipmentRequest as never,
+            runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+          },
+          runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+          createdAt: now(),
+          activate: true,
+        })
+      } else {
+        // A prior identical attempt already created this Session (no Anchor exists yet, so this
+        // cannot be a resume). `activateSession`'s own phase-aware logic is what safely re-runs
+        // provisioning below — a Handoff still pending from that interrupted attempt is not
+        // re-dispatched here (same pre-existing limitation as `activateSession`'s no-op 'ready'
+        // branch after a process restart with no in-memory live connection; a dedicated
+        // reconciliation sweep is future work, not this plan's scope).
+        await setCurrentSession(c, input.workstreamId, sessionId)
+      }
+    } finally {
+      c.release()
+    }
+  }
+
+  if (sessionMode === 'reattach') {
+    const result = await activateSession({
+      pool: input.pool,
+      transport: input.transport,
+      connections: input.connections,
+      workstreamId: input.workstreamId,
+      sessionId,
+      agentId: input.agentId,
+      runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      workspaceMountRef: input.workspaceMountRef,
+      actor: input.actor,
+      now,
+    })
+    return result.ok ? { ok: true, sessionId } : result
+  }
+
+  if (fromSeq >= throughSeq) {
+    // Nothing missing (e.g. a brand-new Workstream's very first Agent) — no Handoff needed.
+    if (sessionMode === 'new') {
+      void provisionSessionAndPrompt({
+        pool: input.pool,
+        transport: input.transport,
+        connections: input.connections,
+        workstreamId: input.workstreamId,
+        sessionId,
+        agentId: input.agentId,
+        runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+        workspaceMountRef: input.workspaceMountRef,
+        initialPrompt: [],
+        actor: input.actor,
+        now,
+      })
+    } else {
+      const result = await activateSession({
+        pool: input.pool,
+        transport: input.transport,
+        connections: input.connections,
+        workstreamId: input.workstreamId,
+        sessionId,
+        agentId: input.agentId,
+        runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+        workspaceMountRef: input.workspaceMountRef,
+        actor: input.actor,
+        now,
+      })
+      if (!result.ok) return result
+    }
+    return { ok: true, sessionId }
+  }
+
+  // docs/specs/06 "The builder ... MUST NOT build from a stale Web cache" — this throws
+  // HandoffNotReadyError if the projector hasn't caught up to `throughSeq` yet; the caller
+  // (server.ts) surfaces that as a typed, retryable 409 rather than silently under-seeding.
+  const commandId = deriveCommandId(input.workstreamId as never, 'prompt', promptIdempotencyKey)
+  const buildClient = await input.pool.connect()
+  let built
+  try {
+    built = await buildHandoffContent(buildClient, {
+      workstreamId: input.workstreamId,
+      commandId,
+      sourceFromSeq: fromSeq,
+      sourceThroughSeq: throughSeq,
+    })
+  } finally {
+    buildClient.release()
+  }
+
+  const handoffSource: PromptSessionHandoffSource = {
+    sourceFromSeq: fromSeq,
+    sourceThroughSeq: throughSeq,
+    seedPolicyVersion: HANDOFF_SEED_POLICY_VERSION,
+    contentSha256: built.sha256,
+    fidelity: built.fidelity,
+  }
+  const content: readonly acp.ContentBlock[] = [
+    { type: 'resource', resource: { uri: built.uri, text: built.text, mimeType: 'text/plain' } },
+  ]
+
+  if (sessionMode === 'new') {
+    void provisionSessionAndPrompt({
+      pool: input.pool,
+      transport: input.transport,
+      connections: input.connections,
+      workstreamId: input.workstreamId,
+      sessionId,
+      agentId: input.agentId,
+      runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      workspaceMountRef: input.workspaceMountRef,
+      initialPrompt: content,
+      initialPromptPurpose: 'handoff',
+      handoffSource,
+      promptIdempotencyKey,
+      actor: input.actor,
+      now,
+    })
+    return { ok: true, sessionId }
+  }
+
+  const sessClient = await input.pool.connect()
+  let acpSessionId: string | undefined
+  try {
+    const { rows } = await sessClient.query<{ acp_session_id: string | null }>('SELECT acp_session_id FROM product.sessions WHERE id = $1', [
+      sessionId,
+    ])
+    acpSessionId = rows[0]?.acp_session_id ?? undefined
+  } finally {
+    sessClient.release()
+  }
+  if (!acpSessionId) return { ok: false, code: 'resume_failed', detail: 'Anchored Session has no bound ACP Session id to resume' }
+
+  void resumeSessionRuntime({
+    pool: input.pool,
+    transport: input.transport,
+    connections: input.connections,
+    workstreamId: input.workstreamId,
+    sessionId,
+    agentId: input.agentId,
+    runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+    acpSessionId,
+    workspaceMountRef: input.workspaceMountRef,
+    handoffPrompt: { content, handoffSource, idempotencyKey: promptIdempotencyKey },
+    now,
+  })
+  return { ok: true, sessionId }
 }
 
 export interface SessionLifecycleInput {

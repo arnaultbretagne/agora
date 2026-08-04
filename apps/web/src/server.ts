@@ -24,6 +24,7 @@ import {
 } from '@agora/store-pg'
 import { nameBasedUuid, principalId, type PrincipalId, DomainError } from '@agora/domain'
 import { promptSession } from '@agora/acp'
+import { HandoffNotReadyError } from '@agora/store-pg'
 import { getSessionRuntime, listLaunchableAgents, type SessionRuntimeControlTransport } from '@agora/session-runtime-control'
 import {
   activateSession,
@@ -31,6 +32,7 @@ import {
   closeSession,
   provisionSessionAndPrompt,
   suspendSession,
+  switchAgent,
 } from './orchestration.js'
 import type { SessionConnectionRegistry } from './connections.js'
 import { getValidators } from './request-schemas.js'
@@ -372,7 +374,6 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
   const now = deps.now ?? (() => new Date())
   const client = await deps.pool.connect()
   let commandId: string
-  let sessionId: string
   try {
     const command = await createOrReuseCommand(client, {
       type: 'OpenSession',
@@ -384,22 +385,50 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
       request: request as unknown as Record<string, unknown>,
     })
     commandId = command.id as string
-    sessionId = randomUUID()
-    await openAdditionalSession(client, {
-      id: sessionId,
-      workstreamId,
-      launchEnvelope: {
-        agentId: request.agentId,
-        workspaceSpec: { workspaceRef: request.workspace.workspaceRef },
-        equipmentRequest: request.equipment as never,
-        runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
-      },
-      runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
-      createdAt: now(),
-      activate: request.activate,
-    })
   } finally {
     client.release()
+  }
+
+  let sessionId: string
+  if (request.activate) {
+    // docs/specs/06 "Choosing a target Session": may resolve to an EXISTING anchored Session for
+    // this Agent rather than a freshly created one — switchAgent owns that decision, the missing
+    // range computation, and (if non-empty) the Handoff dispatch.
+    const result = await switchAgent({
+      pool: deps.pool,
+      transport: deps.controllerTransport,
+      connections: deps.connections,
+      workstreamId,
+      agentId: request.agentId,
+      runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
+      workspaceMountRef: request.workspace.workspaceRef,
+      equipmentRequest: request.equipment,
+      actor: { kind: 'human', id: principal },
+      idempotencyKey,
+      now,
+    })
+    if (!result.ok) return sendProblem(res, problem(409, result.code, 'Agent could not be activated', result.detail))
+    sessionId = result.sessionId
+  } else {
+    sessionId = randomUUID()
+    const openClient = await deps.pool.connect()
+    try {
+      await openAdditionalSession(openClient, {
+        id: sessionId,
+        workstreamId,
+        launchEnvelope: {
+          agentId: request.agentId,
+          workspaceSpec: { workspaceRef: request.workspace.workspaceRef },
+          equipmentRequest: request.equipment as never,
+          runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
+        },
+        runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
+        createdAt: now(),
+        activate: false,
+      })
+    } finally {
+      openClient.release()
+    }
   }
 
   const sessionClient = await deps.pool.connect()
@@ -410,21 +439,6 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
     sessionClient.release()
   }
   sendJson(res, 202, { command: { commandId, state: 'accepted', acceptedAt: now().toISOString() }, session: sessionWire })
-
-  if (request.activate) {
-    void provisionSessionAndPrompt({
-      pool: deps.pool,
-      transport: deps.controllerTransport,
-      connections: deps.connections,
-      workstreamId,
-      sessionId,
-      agentId: request.agentId,
-      runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
-      workspaceMountRef: request.workspace.workspaceRef,
-      initialPrompt: [],
-      actor: { kind: 'human', id: principal },
-    })
-  }
 }
 
 // ---------- Items / Turns ----------
@@ -930,6 +944,12 @@ export function createServer(deps: ServerDeps): Server {
   return createHttpServer((req, res) => {
     void route(deps, req, res).catch((error: unknown) => {
       if (error instanceof DomainError) return sendProblem(res, domainErrorToProblem(error))
+      if (error instanceof HandoffNotReadyError) {
+        return sendProblem(
+          res,
+          problem(409, 'handoff_not_ready', 'the projector has not yet caught up to the Handoff source range; retry shortly', error.message),
+        )
+      }
       if (!res.headersSent) sendProblem(res, problem(500, 'validation_failed', 'unexpected error', error instanceof Error ? error.message : String(error)))
     })
   })

@@ -252,6 +252,15 @@ export interface PromptSessionActor {
   readonly id: string
 }
 
+export interface PromptSessionHandoffSource {
+  readonly sourceFromSeq: number
+  readonly sourceThroughSeq: number
+  readonly seedPolicyVersion: string
+  readonly contentSha256: Uint8Array
+  /** docs/specs/06 "Source range exceeds size policy": whether the built content is complete or a bounded manifest/preview. Not part of the domain's typed HandoffSourceRange — stored in the command's own request payload, read back by the projector via SQL. */
+  readonly fidelity: 'complete' | 'degraded'
+}
+
 export interface PromptSessionInput {
   readonly pool: pg.Pool
   readonly workstreamId: string
@@ -263,6 +272,8 @@ export interface PromptSessionInput {
   readonly purpose: 'user' | 'handoff'
   readonly actor: PromptSessionActor
   readonly idempotencyKey: string
+  /** Required when, and only meaningful when, `purpose === 'handoff'`. */
+  readonly handoffSource?: PromptSessionHandoffSource
   readonly now?: () => Date
 }
 
@@ -315,7 +326,17 @@ export async function promptSession(input: PromptSessionInput): Promise<PromptSe
       idempotencyKey: input.idempotencyKey,
       purpose: input.purpose,
       acceptedAt: now(),
-      request: { prompt: input.prompt },
+      request: input.handoffSource ? { prompt: input.prompt, fidelity: input.handoffSource.fidelity } : { prompt: input.prompt },
+      ...(input.handoffSource
+        ? {
+            handoffSource: {
+              sourceFromSeq: input.handoffSource.sourceFromSeq,
+              sourceThroughSeq: input.handoffSource.sourceThroughSeq,
+              seedPolicyVersion: input.handoffSource.seedPolicyVersion,
+              contentSha256: input.handoffSource.contentSha256,
+            },
+          }
+        : {}),
     })
   } finally {
     setupClient.release()

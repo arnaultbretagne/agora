@@ -19,6 +19,8 @@ export interface FakeControllerHandle {
   readonly baseUrl: string
   readonly fetch: typeof fetch
   readonly dematerializeCalls: readonly string[]
+  /** Test-only failure injection (plans/07 "Capture failure after successful Handoff preserves old durable Anchor"): when true, the next capture call fails without writing anything, then resets itself. */
+  failNextCapture(): void
   close(): Promise<void>
 }
 
@@ -90,6 +92,7 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
 
   const dematerializeCalls: string[] = []
   const sessions = new Map<string, { agentId: string; runtimeDefinitionVersion: string }>()
+  let failNextCapture = false
 
   const controllerHttpServer: Server = createServer((req, res) => {
     void (async () => {
@@ -106,6 +109,16 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
                 runtimeDefinitionVersion: 'v1',
                 label: 'Fake Agent (tests)',
                 description: 'Deterministic in-process fake ACP Agent for tests.',
+                availability: 'enabled',
+              },
+              {
+                // plans/07: a second, independent Agent identity for A-to-B-to-A cross-Agent tests —
+                // functionally identical to 'fake-agent' (same WS handler), just a distinct agentId
+                // so it gets its own Session/Anchor lane.
+                agentId: 'fake-agent-b',
+                runtimeDefinitionVersion: 'v1',
+                label: 'Fake Agent B (tests)',
+                description: 'A second deterministic in-process fake ACP Agent identity for cross-Agent tests.',
                 availability: 'enabled',
               },
             ],
@@ -136,6 +149,12 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
         return
       }
       if (suffix === '/custody-snapshots' && req.method === 'POST') {
+        if (failNextCapture) {
+          failNextCapture = false
+          res.writeHead(422, { 'content-type': 'application/problem+json' })
+          res.end(JSON.stringify({ type: 'about:blank', title: 'injected capture failure', status: 422, code: 'capture_transport_failed' }))
+          return
+        }
         const requestId = req.headers['x-request-id']
         if (typeof requestId !== 'string') {
           res.writeHead(400)
@@ -258,6 +277,9 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
     baseUrl: `http://127.0.0.1:${controllerPort}`,
     fetch,
     dematerializeCalls,
+    failNextCapture() {
+      failNextCapture = true
+    },
     async close() {
       for (const ws of openSockets) ws.terminate()
       await new Promise<void>((resolve) => controllerHttpServer.close(() => resolve()))

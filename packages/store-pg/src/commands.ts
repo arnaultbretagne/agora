@@ -31,6 +31,10 @@ interface CommandRow {
   readonly idempotency_key: string
   readonly state: CommandState
   readonly accepted_at: Date
+  readonly source_from_seq: number | null
+  readonly source_through_seq: number | null
+  readonly seed_policy_version: string | null
+  readonly content_sha256: Buffer | null
 }
 
 function hydrate(row: CommandRow): DurableCommand {
@@ -45,14 +49,27 @@ function hydrate(row: CommandRow): DurableCommand {
     purpose: row.purpose ?? undefined,
     state: row.state,
     acceptedAt: row.accepted_at,
+    handoffSource:
+      row.source_from_seq !== null && row.source_through_seq !== null && row.seed_policy_version !== null && row.content_sha256
+        ? {
+            sourceFromSeq: row.source_from_seq,
+            sourceThroughSeq: row.source_through_seq,
+            seedPolicyVersion: row.seed_policy_version,
+            contentSha256: new Uint8Array(row.content_sha256),
+          }
+        : undefined,
   }
 }
 
 /**
  * Create-or-reuse by (workstream, idempotency scope, idempotency key): the domain layer already
  * derives a deterministic id from that triple (see @agora/domain deriveCommandId), and the
- * database's own UNIQUE constraint is the race-safe source of truth — `ON CONFLICT DO NOTHING`
- * plus a re-SELECT means two concurrent identical retries both return the SAME row.
+ * database's own primary key is the race-safe source of truth — `ON CONFLICT (id) DO NOTHING` plus
+ * a re-SELECT means two concurrent identical retries both return the SAME row. Targeting `id`
+ * specifically (not the `(workstream_id, idempotency_scope, idempotency_key)` UNIQUE constraint,
+ * even though the two are logically equivalent via the deterministic derivation) matters: Postgres
+ * only suppresses a conflict on the NAMED arbiter, and under real concurrency the primary key's
+ * own index can be the one that raises first.
  */
 export async function createOrReuseCommand(
   client: PoolClient,
@@ -64,9 +81,10 @@ export async function createOrReuseCommand(
   await client.query(
     `INSERT INTO product.commands
        (id, workstream_id, session_id, command_type, purpose, actor_kind, actor_id,
-        idempotency_scope, idempotency_key, request, state, accepted_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-     ON CONFLICT (workstream_id, idempotency_scope, idempotency_key) DO NOTHING`,
+        idempotency_scope, idempotency_key, request, state, accepted_at, updated_at,
+        source_from_seq, source_through_seq, seed_policy_version, content_sha256)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15, $16)
+     ON CONFLICT (id) DO NOTHING`,
     [
       command.id,
       command.workstreamId,
@@ -80,12 +98,17 @@ export async function createOrReuseCommand(
       JSON.stringify(input.request),
       command.state,
       command.acceptedAt,
+      command.handoffSource?.sourceFromSeq ?? null,
+      command.handoffSource?.sourceThroughSeq ?? null,
+      command.handoffSource?.seedPolicyVersion ?? null,
+      command.handoffSource ? Buffer.from(command.handoffSource.contentSha256) : null,
     ],
   )
 
   const { rows } = await client.query<CommandRow>(
     `SELECT id, workstream_id, session_id, command_type, purpose, actor_kind, actor_id,
-            idempotency_scope, idempotency_key, state, accepted_at
+            idempotency_scope, idempotency_key, state, accepted_at,
+            source_from_seq, source_through_seq, seed_policy_version, content_sha256
      FROM product.commands
      WHERE workstream_id = $1 AND idempotency_scope = $2 AND idempotency_key = $3`,
     [command.workstreamId, command.idempotencyScope, command.idempotencyKey],

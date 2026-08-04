@@ -666,9 +666,51 @@ async function openTurn(client: PoolClient, event: RawEventRow, workstreamId: st
   touched.turns.add(event.command_id)
 }
 
+interface HandoffCommandRow {
+  readonly source_from_seq: number | null
+  readonly source_through_seq: number | null
+  readonly seed_policy_version: string | null
+  readonly content_sha256: Buffer | null
+  readonly request: { readonly fidelity?: 'complete' | 'degraded' } | null
+}
+
+/**
+ * docs/specs/05 item mapping "handoff | Handoff command ID | ... | source range, policy version,
+ * digest, fidelity and target outcome; copied source items are not expanded" — this is the ONLY
+ * item this plan creates from a handoff prompt; it never expands the source range back into
+ * duplicate copies of the original items (those stay exactly where the projector already put them,
+ * on the SOURCE Session).
+ */
+async function upsertHandoffItem(
+  client: PoolClient,
+  event: RawEventRow,
+  workstreamId: string,
+  commandId: string,
+  targetOutcome: 'pending' | 'completed' | 'failed',
+  touched: TouchTracker,
+): Promise<void> {
+  const { rows } = await client.query<HandoffCommandRow>(
+    'SELECT source_from_seq, source_through_seq, seed_policy_version, content_sha256, request FROM product.commands WHERE id = $1',
+    [commandId],
+  )
+  const row = rows[0]
+  if (!row || row.source_from_seq === null || row.source_through_seq === null || row.seed_policy_version === null || !row.content_sha256) return
+
+  const value: Json = {
+    sourceFromSeq: row.source_from_seq,
+    sourceThroughSeq: row.source_through_seq,
+    seedPolicyVersion: row.seed_policy_version,
+    digest: row.content_sha256.toString('hex'),
+    fidelity: row.request?.fidelity ?? 'complete',
+    targetOutcome,
+  }
+  await upsertGenericSpine(client, event, workstreamId, commandId, 'handoff', `handoff:${commandId}`, value, touched)
+}
+
 async function closeTurn(
   client: PoolClient,
   event: RawEventRow,
+  workstreamId: string,
   turnId: string,
   status: 'completed' | 'cancelled' | 'failed',
   stopReason: string | null,
@@ -698,6 +740,10 @@ async function closeTurn(
   )
   touched.turns.add(turnId)
   await markTurnMessagesCompleted(client, turnId, touched)
+  if (event.purpose === 'handoff') {
+    const outcome = status === 'completed' ? 'completed' : 'failed'
+    await upsertHandoffItem(client, event, workstreamId, turnId, outcome, touched)
+  }
 }
 
 async function applyUnknown(client: PoolClient, event: RawEventRow, workstreamId: string, turnId: string | null, touched: TouchTracker): Promise<void> {
@@ -792,7 +838,11 @@ async function applyNotification(client: PoolClient, event: RawEventRow, workstr
 
 async function applyRequest(client: PoolClient, event: RawEventRow, workstreamId: string, turnId: string | null, touched: TouchTracker): Promise<void> {
   if (event.method === 'session/prompt' && event.direction === 'client_to_agent') {
-    return openTurn(client, event, workstreamId, touched)
+    await openTurn(client, event, workstreamId, touched)
+    if (event.purpose === 'handoff' && event.command_id) {
+      await upsertHandoffItem(client, event, workstreamId, event.command_id, 'pending', touched)
+    }
+    return
   }
   if (event.method === 'session/request_permission') {
     const params = event.envelope['params'] as Record<string, unknown> | undefined
@@ -834,9 +884,9 @@ async function applyResponse(client: PoolClient, event: RawEventRow, workstreamI
     const error = event.envelope['error']
     if (result) {
       const status = result.stopReason === 'cancelled' ? 'cancelled' : 'completed'
-      return closeTurn(client, event, request.commandId, status, result.stopReason ?? null, result.usage ?? null, touched)
+      return closeTurn(client, event, workstreamId, request.commandId, status, result.stopReason ?? null, result.usage ?? null, touched)
     }
-    if (error) return closeTurn(client, event, request.commandId, 'failed', null, null, touched)
+    if (error) return closeTurn(client, event, workstreamId, request.commandId, 'failed', null, null, touched)
     return
   }
 

@@ -16,6 +16,9 @@ export type DomainErrorCode =
   | 'capability_digest_invalid'
   | 'idempotency_key_required'
   | 'handoff_command_incomplete'
+  | 'handoff_source_not_allowed'
+  | 'handoff_digest_invalid'
+  | 'handoff_range_invalid'
   | 'command_transition_illegal'
   | 'command_transition_terminal'
 

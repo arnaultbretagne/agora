@@ -110,7 +110,33 @@ function renderPermission(item: WorkstreamItem): HTMLElement {
   return card
 }
 
-/** Low-frequency contractual-value kinds (elicitation/terminal/usage/session_info/handoff) and unknown share one generic, always-inspectable rendering — never a data loss point. */
+function renderHandoff(item: WorkstreamItem): HTMLElement {
+  const value = item.value as {
+    sourceFromSeq: number
+    sourceThroughSeq: number
+    seedPolicyVersion: string
+    digest: string
+    fidelity: 'complete' | 'degraded'
+    targetOutcome: 'pending' | 'completed' | 'failed'
+  }
+  const card = el('article', {
+    class: `item item-handoff fidelity-${value.fidelity}`,
+    'data-item-id': item.id,
+    'aria-label': `handoff, source range ${value.sourceFromSeq} to ${value.sourceThroughSeq}`,
+  })
+  card.append(
+    el('header', { class: 'item-header' }, [
+      el('span', { class: 'role-badge' }, ['handoff']),
+      el('span', { class: 'status-badge' }, [value.targetOutcome]),
+      ...(value.fidelity === 'degraded' ? [el('span', { class: 'status-badge fidelity-degraded' }, ['degraded'])] : []),
+    ]),
+    el('p', {}, [`Synchronized range (${value.sourceFromSeq}, ${value.sourceThroughSeq}] — policy ${value.seedPolicyVersion}`]),
+    disclosure('Content digest', `sha256:${value.digest}`),
+  )
+  return card
+}
+
+/** Low-frequency contractual-value kinds (elicitation/terminal/usage/session_info) and unknown share one generic, always-inspectable rendering — never a data loss point. */
 function renderGeneric(item: WorkstreamItem): HTMLElement {
   const card = el('article', { class: `item item-${item.kind}`, 'data-item-id': item.id, 'aria-label': `${item.kind} event` })
   card.append(el('header', { class: 'item-header' }, [el('span', { class: 'role-badge' }, [item.kind])]), disclosure('Details', JSON.stringify(item.value, null, 2)))
@@ -128,6 +154,8 @@ export function renderItem(item: WorkstreamItem): HTMLElement {
       return renderPlan(item)
     case 'permission':
       return renderPermission(item)
+    case 'handoff':
+      return renderHandoff(item)
     default:
       return renderGeneric(item)
   }

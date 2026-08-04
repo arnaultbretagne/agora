@@ -46,6 +46,15 @@ export type DomainCommandType =
 
 export type CommandPurpose = 'user' | 'handoff'
 
+/** docs/specs/06-anchors-and-handoffs.md "Handoff representation": `sourceFromSeq` exclusive, `sourceThroughSeq` inclusive — present on a command only when `purpose === 'handoff'`. */
+export interface HandoffSourceRange {
+  readonly sourceFromSeq: number
+  readonly sourceThroughSeq: number
+  readonly seedPolicyVersion: string
+  /** SHA-256 of the complete rendered Handoff resource — 32 bytes. */
+  readonly contentSha256: Uint8Array
+}
+
 export interface DurableCommand {
   readonly id: CommandId
   readonly type: DomainCommandType
@@ -57,6 +66,7 @@ export interface DurableCommand {
   readonly purpose: CommandPurpose | undefined
   readonly state: CommandState
   readonly acceptedAt: Date
+  readonly handoffSource: HandoffSourceRange | undefined
 }
 
 export interface CreateCommandInput {
@@ -68,6 +78,7 @@ export interface CreateCommandInput {
   readonly idempotencyKey: string
   readonly purpose?: CommandPurpose
   readonly acceptedAt: Date
+  readonly handoffSource?: HandoffSourceRange
 }
 
 /**
@@ -87,6 +98,18 @@ export function createCommand(input: CreateCommandInput): DurableCommand {
   if (input.purpose === 'handoff' && input.sessionId === undefined) {
     throw new DomainError('handoff_command_incomplete', 'A handoff command must target a Session')
   }
+  if (input.purpose === 'handoff' && input.handoffSource === undefined) {
+    throw new DomainError('handoff_command_incomplete', 'A handoff command must record its source range, policy version and content digest')
+  }
+  if (input.purpose !== 'handoff' && input.handoffSource !== undefined) {
+    throw new DomainError('handoff_source_not_allowed', 'Only a handoff-purpose command may record a source range')
+  }
+  if (input.handoffSource && input.handoffSource.contentSha256.length !== 32) {
+    throw new DomainError('handoff_digest_invalid', 'Handoff content digest must be a 32-byte SHA-256 value')
+  }
+  if (input.handoffSource && input.handoffSource.sourceThroughSeq <= input.handoffSource.sourceFromSeq) {
+    throw new DomainError('handoff_range_invalid', 'sourceThroughSeq must be greater than sourceFromSeq')
+  }
   return Object.freeze({
     id: deriveCommandId(input.workstreamId, input.idempotencyScope, input.idempotencyKey),
     type: input.type,
@@ -98,6 +121,7 @@ export function createCommand(input: CreateCommandInput): DurableCommand {
     purpose: input.purpose,
     state: 'accepted',
     acceptedAt: input.acceptedAt,
+    handoffSource: input.handoffSource,
   })
 }
 
