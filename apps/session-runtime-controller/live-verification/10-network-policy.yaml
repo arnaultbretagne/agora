@@ -17,6 +17,16 @@ spec:
       ports:
         - protocol: TCP
           port: 8443
+    # plans/06-custody-and-resume.md: the Pod pulls its restore stream from the controller using a
+    # one-time credential the controller itself minted — same trust level as the relay endpoint
+    # above, never an attacker-reachable destination (AGORA_CUSTODY_RESTORE_URL is controller-set).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: session-runtime-controller
+      ports:
+        - protocol: TCP
+          port: 8443
     - to:
         - namespaceSelector:
             matchLabels:

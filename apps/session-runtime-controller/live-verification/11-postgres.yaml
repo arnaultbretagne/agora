@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: custody-postgres
+  namespace: agora-p04-test
+  labels:
+    app: custody-postgres
+spec:
+  containers:
+    - name: postgres
+      image: postgres:17-alpine
+      env:
+        - name: POSTGRES_PASSWORD
+          value: custody-test-only
+        - name: POSTGRES_DB
+          value: postgres
+      ports:
+        - containerPort: 5432
+      readinessProbe:
+        exec:
+          command: ["pg_isready", "-U", "postgres"]
+        initialDelaySeconds: 2
+        periodSeconds: 2

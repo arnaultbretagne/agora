@@ -67,10 +67,9 @@
 - [x] No credential fixture appears in captured bytes.
 - [x] `session/load` replay cannot duplicate Workstream items (proven via the actual `session/resume`
   path, which by design never replays — see Tasks note above).
-- [ ] Pod replacement rotates/rebinds runtime authority while resuming the same ACP Session and
-  custody — proven at the integration level (real Postgres, real HTTP/WS, real fake-agent-server
-  process restarted from scratch and fed restored bytes); **not yet proven against a real
-  Kubernetes cluster** (a genuine Pod delete + new Pod). See Evidence.
+- [x] Pod replacement rotates/rebinds runtime authority while resuming the same ACP Session and
+  custody — proven at the integration level AND live against the real k0s cluster (real Pod
+  delete + new Pod, new UID, new IP). See Evidence.
 
 ## Non-goals
 
@@ -81,10 +80,10 @@
 
 ## Exit criteria
 
-- [x] **Partial** Fake Agent survives physical Pod replacement as the same Session — proven against
-  a real, freshly-started OS process with no shared memory (real capture/restore/checksum/one-time
-  credential, real Postgres); NOT yet proven against a real Kubernetes Pod delete/recreate. See
-  Evidence.
+- [x] Fake Agent survives physical Pod replacement as the same Session — proven both at the
+  integration level and live against the real k0s cluster (real `DELETE`+`PUT`, a genuinely new Pod
+  UID/IP, `session/resume` succeeding, `promptsSeen` continuing from 1 to 2 instead of resetting).
+  See Evidence.
 - [x] All capture/delete crash boundaries are fault-injection tested.
 - [x] P07 can rely on a truthful durable Anchor.
 
@@ -237,13 +236,58 @@
     older/un-anchored/non-newest snapshots past a grace period, never an anchored or newest one, and
     idempotent on a second sweep; the `agora_product`/`agora_custody_meta` DB-role boundary (P02's
     pre-existing tests, still exercised here since new code now depends on that boundary holding).
-  - **Not yet proven**: the exit criterion's literal "physical Pod replacement" — every test above
-    proves the SAME logic against a real, freshly-started OS process standing in for a Pod (a real
-    fresh `fake-agent-server` instance, no shared memory with the one that was captured), which is
-    the part of "physical replacement" that actually exercises this plan's logic (no in-memory state
-    survives). What is NOT exercised is an actual `kubectl delete pod` / new Pod scheduling cycle on
-    a real cluster (gVisor RuntimeClass, real Pod IP change, real NetworkPolicy, real kubelet
-    readiness gating on `/healthz`) — P04's own live-cluster verification pattern
-    (`apps/session-runtime-controller/live-verification/`, an Arnault-approved isolated namespace)
-    would be the way to close this, and has not been run for this plan. Flagged rather than
-    silently claimed.
+- **Registry-consumption fix, caught before going live, not by a failing test**: `custody.ts`
+  originally hardcoded its own `formatId`/`formatVersion`/`adapterVersion`/`maxBytes` instead of
+  reading `AgentRuntimeDefinition.custody` (`packages/agent-registry/src/fake-definition.ts`),
+  which P01/P04 had already fully declared (`writeFormat`, `readFormats`, `driverId`, `maxBytes`,
+  `restoreCollision`) for exactly this purpose. Found by re-reading the registry entry before
+  starting live verification, not by a test failure. Fixed: capture now reads
+  `definition.custody.writeFormat`/`.driverId`/`.maxBytes`; the controller now also validates
+  `restoreFrom`'s format against `definition.custody.readFormats` BEFORE creating a Pod
+  (docs/specs/07 step 3 — previously this was Pod-side only), 422 `custody_format_incompatible`
+  otherwise. `fake-agent-server.ts`'s format constant corrected from an invented `agora-fake-native`
+  to match the registry's actual `fake-agent-null`. Commit `3adc361`.
+- **Live-cluster verification — RUN, exit criterion closed for real** (2026-08-04, k0s cluster,
+  isolated namespace `agora-p04-test` reused from P04 and torn down again afterward per its own
+  README's convention; RBAC-scoped ServiceAccount token, gVisor `sandboxed` RuntimeClass, real
+  `imagePullSecret`):
+  - Rebuilt and pushed BOTH images with the current code: `ghcr.io/arnaultbretagne/agora-fake-agent`
+    (re-pinned in `fake-definition.ts`, commit `0ff8f4d` — the previously-pinned digest predated the
+    custody protocol entirely) and a new `ghcr.io/arnaultbretagne/agora-session-runtime-controller`
+    (new `controller-image/Dockerfile` — this plan needed the controller reachable at a real Service
+    DNS name for the Pod's restore callback, unlike P04's verification, which drove the controller's
+    functions directly from the node host).
+  - A throwaway `postgres:17-alpine` Pod+Service in the SAME namespace stood in for
+    `agora_custody_runtime` (migrated with the real schema; connected as the Postgres superuser — this
+    verification is about the Kubernetes/materialize side, not re-proving the SQL role boundary
+    P02's tests already cover).
+  - The controller ran as an actual Pod (ServiceAccount `session-runtime-controller`, already
+    RBAC-bound by P04's manifests) with `CUSTODY_CONTROLLER_BASE_URL` pointed at its own real
+    Service DNS name — exactly the production shape the code comments describe, not a host-process
+    stand-in.
+  - **Exit criterion driven end-to-end over real HTTP + a real ACP WebSocket**: materialize (real
+    Pod, `podUid bf2408f2…`) → `initialize`→`session/new`→`session/prompt` (real ACP handshake,
+    genuine non-empty native state) → capture (`201`, real `custody.snapshots` row) → dematerialize
+    (real Pod delete) → re-materialize the SAME sessionId with `restoreFrom` (a genuinely NEW Pod)
+    → `initialize`→`session/resume` (not `session/new`) → `session/prompt` again.
+  - **A real bug this caught, not visible at the integration-test level**: the FIRST live attempt
+    landed the replacement Pod in `state: 'failed'` — `fake-agent-server: restore failed, exiting:
+    fetch failed`. Root cause: P04's own `session-runtime-egress` NetworkPolicy (correctly)
+    restricts session Pods to ONLY the fake relay and kube-dns — the Pod's restore-stream callback to
+    the controller's Service was a THIRD, un-allow-listed destination, silently dropped. This is
+    exactly the class of bug integration tests (no real NetworkPolicy enforcement) cannot catch.
+    Fixed by adding an explicit egress rule for the controller's own Pods
+    (`apps/session-runtime-controller/live-verification/10-network-policy.yaml`) — a deliberate,
+    documented addition (the restore URL is controller-minted, same trust level as the relay
+    endpoint, never an attacker-reachable destination), not a loosening for convenience. Re-ran after
+    the fix: **PASS** — new Pod UID `4d514fd0…` (from `bf2408f2…`, via a `failed` `d7559f2f…` in
+    between, now gone entirely, not just relabeled — confirmed via `kubectl get pods`), `session/resume`
+    returned `{}` (success), and the reply notification read **`"hello from the fake Agent (prompt
+    #2)"`** — continuing the counter from the ONE prompt made before capture, not reset to 1. That
+    single number is the whole exit criterion: the fake Agent's native state genuinely crossed a real
+    Kubernetes Pod replacement.
+  - Manifests added to `apps/session-runtime-controller/live-verification/`: `10-network-policy.yaml`
+    (updated), `11-postgres.yaml`, `12-postgres-service.yaml`, `13-controller.yaml`,
+    `14-controller-service.yaml`. Namespace torn down after verification
+    (`kubectl delete namespace agora-p04-test`), matching the README's own stated convention — it had
+    been left running since P04 and was cleaned up as part of this pass.

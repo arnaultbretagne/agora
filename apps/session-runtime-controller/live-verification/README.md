@@ -1,8 +1,18 @@
-# P04 live-cluster verification
+# Session Runtime controller — live-cluster verification
 
-Manifests used to verify plans/04-session-runtime-controller.md's exit criterion and required
-tests against a real k0s cluster, in an isolated namespace (never the product's own namespaces).
-Evidence/results are recorded in the plan file, not here.
+Manifests used to verify this controller's plans (P04, then P06) against a real k0s cluster, in an
+isolated namespace (never the product's own namespaces) — `agora-p04-test` despite the name, since
+P06 reused the same namespace rather than duplicating the RBAC/PVC/ConfigMap setup. Evidence/results
+are recorded in each plan file, not here. The namespace is torn down after each verification pass
+(`sudo k0s kubectl delete namespace agora-p04-test`) and re-created from these manifests next time.
+
+`10-network-policy.yaml`'s egress rule for `session-runtime-controller` Pods exists because P06's
+restore-before-start flow has the Session Runtime Pod pull custody bytes from the controller's own
+Service — found missing live (see plans/06-custody-and-resume.md Evidence), not designed in upfront.
+
+`11`-`14` (Postgres + the controller itself, run as a real Pod with a real Service DNS name) are
+P06-specific — P04's own verification drove the controller's functions directly from the node host
+instead, since it had no reason to need the controller reachable FROM inside the cluster.
 
 ```
 sudo k0s kubectl apply -f apps/session-runtime-controller/live-verification/
