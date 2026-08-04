@@ -1,0 +1,245 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #666666;
+  --border: #d0d0d0;
+  --accent: #2952a3;
+  --danger: #a32929;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e8e8;
+    --bg: #16181c;
+    --muted: #9aa0a6;
+    --border: #3a3d42;
+    --accent: #7aa2f7;
+    --danger: #e06c75;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  z-index: 100;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+a,
+button,
+input,
+select,
+textarea,
+summary {
+  font: inherit;
+  color: inherit;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.site-header {
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.site-title {
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 1.1rem;
+}
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.principal-bar {
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.principal-bar input {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.button,
+button[type='submit'] {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.workstream-list {
+  list-style: none;
+  padding: 0;
+}
+.workstream-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+form label {
+  display: block;
+  margin-top: 0.75rem;
+  font-weight: 600;
+}
+form input,
+form select,
+form textarea {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  margin-top: 0.25rem;
+}
+.form-status {
+  margin-top: 0.75rem;
+}
+
+.detail-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.sessions {
+  list-style: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.turn-badge {
+  display: inline-block;
+  margin: 0.5rem 0.5rem 0 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.turn-badge.status-completed {
+  border-color: #2e7d32;
+}
+.turn-badge.status-failed,
+.turn-badge.status-cancelled {
+  border-color: var(--danger);
+}
+
+.items-list {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.item-header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.role-badge {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.status-badge,
+.kind-badge {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+}
+
+.content-block {
+  white-space: pre-wrap;
+  margin: 0.35rem 0;
+}
+
+.disclosure {
+  margin-top: 0.5rem;
+}
+.disclosure summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.raw {
+  white-space: pre-wrap;
+  font-size: 0.85em;
+  background: rgba(127, 127, 127, 0.1);
+  padding: 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.locations,
+.permission-options,
+.plan-entries {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+.permission-options .selected {
+  font-weight: 700;
+}
+
+.error-box {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.feed-status {
+  font-size: 0.85rem;
+}
