@@ -1,13 +1,17 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { AgentNotLaunchableError, resolveLaunchableDefinition, selectLaunchableAgents } from '@agora/agent-registry'
 import type { AgentRuntimeDefinition } from '@agora/agent-registry'
+import { restoreSnapshot } from '@agora/custody'
+import type pg from 'pg'
 import type { ACPBridgeEndpoint, MaterializeSessionRuntimeRequest, Problem, SessionRuntimeStatus } from '@agora/session-runtime-control'
 import type { BridgeCredentialIssuer } from './bridge-credentials.js'
+import { captureCustody, checkRestoreSource, CustodyCaptureError } from './custody.js'
 import type { KubernetesPods } from './k8s-client.js'
 import { podName } from './labels.js'
 import { fakeRelayBundle } from './relay-bundle.js'
 import { dematerializeSessionRuntime, materializeSessionRuntime, reconcileSessionRuntime, type ReconciledStatus } from './reconciler.js'
 import { getMaterializeRequestValidator } from './request-schemas.js'
+import { CustodyStreamIssuer } from './restore-credentials.js'
 
 /**
  * Internal server conforming to `contracts/openapi/session-runtime-control.yaml`. `security:
@@ -16,9 +20,9 @@ import { getMaterializeRequestValidator } from './request-schemas.js'
  * its OWN outbound k8s API calls) — this listener itself speaks plain HTTP, matching how
  * `k8s-client.ts` trusts its transport rather than re-implementing TLS.
  *
- * `/sessions/{id}/runtime/custody-snapshots` is deliberately UNBOUND: plans/04's own non-goal is
- * "No custody capture until P06" (plans/06-custody-and-resume.md owns "Controller capture
- * endpoint"). Faking a matching 2xx here would be more misleading than a 404.
+ * `/sessions/{id}/runtime/custody-snapshots` (capture) and the restore-stream Pods pull from are
+ * this plan's own additions (plans/06-custody-and-resume.md "Controller capture endpoint" /
+ * "restore-before-start flow") — P04 deliberately left capture unbound (404, not a faked 2xx).
  */
 export interface ServerDeps {
   readonly k8s: KubernetesPods
@@ -29,11 +33,18 @@ export interface ServerDeps {
   readonly runAsUser?: number
   readonly runtimeClassName?: string
   readonly imagePullSecretName?: string
+  /** `agora_custody_runtime`-role connection — the ONLY place in this deployable that touches Postgres, and only this schema/columns (docs/specs/07 "Access control"). */
+  readonly custodyPool: pg.Pool
+  readonly restoreIssuer: CustodyStreamIssuer
+  /** Fixed, non-secret, cluster-internal DNS name this controller is reachable at — Pods pull their restore stream from here (docs/specs/07 "session-runtime: ... bytes enter through one-time restore/capture streams"), mirroring `relay-bundle.ts`'s fixed-endpoint pattern. */
+  readonly custodyControllerBaseUrl: string
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const RUNTIME_PATH_RE = /^\/v1\/sessions\/([^/]+)\/runtime$/
 const ACP_CONNECTIONS_PATH_RE = /^\/v1\/sessions\/([^/]+)\/runtime\/acp-connections$/
+const CUSTODY_SNAPSHOTS_PATH_RE = /^\/v1\/sessions\/([^/]+)\/runtime\/custody-snapshots$/
+const CUSTODY_RESTORE_STREAM_PATH_RE = /^\/v1\/sessions\/([^/]+)\/runtime\/custody-restore-stream$/
 
 function sendJson(res: ServerResponse, status: number, body: unknown, contentType = 'application/json'): void {
   res.writeHead(status, { 'content-type': contentType })
@@ -104,6 +115,21 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     throw error
   }
 
+  let restoreFrom: { readonly url: string; readonly credential: string } | undefined
+  if (materializeRequest.restoreFrom) {
+    const snapshotId = materializeRequest.restoreFrom
+    const source = await checkRestoreSource(deps.custodyPool, snapshotId)
+    if (!source || source.sessionId !== sessionId) {
+      return sendProblem(res, problem(409, 'custody_snapshot_not_found', 'restoreFrom does not name a snapshot owned by this Session'))
+    }
+    if (source.invalidatedAt) {
+      return sendProblem(res, problem(422, 'custody_snapshot_invalidated', 'restoreFrom names an invalidated snapshot'))
+    }
+    const credential = deps.restoreIssuer.mint(sessionId, snapshotId)
+    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/runtime/custody-restore-stream`, deps.custodyControllerBaseUrl).toString()
+    restoreFrom = { url, credential }
+  }
+
   const result = await materializeSessionRuntime(deps.k8s, {
     sessionId,
     definition,
@@ -114,6 +140,7 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     ...(deps.runAsUser !== undefined ? { runAsUser: deps.runAsUser } : {}),
     ...(deps.runtimeClassName !== undefined ? { runtimeClassName: deps.runtimeClassName } : {}),
     ...(deps.imagePullSecretName !== undefined ? { imagePullSecretName: deps.imagePullSecretName } : {}),
+    ...(restoreFrom ? { restoreFrom } : {}),
   })
   sendJson(res, result.httpStatus, toWireStatus(sessionId, result.status))
 }
@@ -134,6 +161,7 @@ async function handleDematerialize(deps: ServerDeps, sessionId: string, req: Inc
   // docs/specs/08: "Revoke bridge/grant during dematerialization" — unconditional and idempotent,
   // whether or not this Session ever minted a bridge connection.
   deps.bridgeIssuer.revokeSession(sessionId)
+  deps.restoreIssuer.revokeSession(sessionId)
   if (result.httpStatus === 204) {
     res.writeHead(204)
     res.end()
@@ -169,6 +197,84 @@ async function handleOpenAcpConnection(deps: ServerDeps, sessionId: string, req:
   sendJson(res, 201, response)
 }
 
+function isValidCaptureBody(body: unknown): body is { syncedThroughSeq: number } {
+  if (typeof body !== 'object' || body === null) return false
+  const keys = Object.keys(body)
+  if (keys.some((k) => k !== 'syncedThroughSeq')) return false
+  const value = (body as { syncedThroughSeq?: unknown }).syncedThroughSeq
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+/** docs/specs/07 "Capture contract" (plans/06 "Controller capture endpoint"). */
+async function handleCaptureCustody(deps: ServerDeps, sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const requestId = requireRequestId(req)
+  if (!requestId) return sendProblem(res, problem(400, 'missing_request_id', 'X-Request-Id header is required and must be a UUID'))
+
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch {
+    return sendProblem(res, problem(400, 'invalid_json', 'request body is not valid JSON'))
+  }
+  if (!isValidCaptureBody(body)) {
+    return sendProblem(res, problem(400, 'invalid_request', 'request body must be { syncedThroughSeq: integer >= 0 }'))
+  }
+
+  const status = await reconcileSessionRuntime(deps.k8s, sessionId)
+  if (status.state !== 'ready') {
+    return sendProblem(res, problem(409, 'session_runtime_not_ready', `Session Runtime state is '${status.state}', not 'ready'`))
+  }
+  const definition = deps.definitions.find((d) => d.agentId === status.agentId && d.version === status.runtimeDefinitionVersion)
+  const pod = await deps.k8s.getPod(podName(sessionId))
+  const podIp = (pod?.status as { podIP?: string } | undefined)?.podIP
+  if (!definition || !podIp) {
+    return sendProblem(res, problem(409, 'session_runtime_not_ready', 'Session Runtime Pod has no address yet'))
+  }
+
+  try {
+    const ref = await captureCustody(deps.custodyPool, {
+      sessionId,
+      captureRequestId: requestId,
+      syncedThroughSeq: body.syncedThroughSeq,
+      podIp,
+      bridgePort: definition.bridge.listenPort,
+    })
+    sendJson(res, 201, ref)
+  } catch (error) {
+    if (error instanceof CustodyCaptureError) {
+      return sendProblem(res, problem(422, error.code, error.message))
+    }
+    throw error
+  }
+}
+
+/** Pod-initiated pull (docs/specs/07 "Restore contract" step 4) — never the payload itself over any other channel. */
+async function handleRestoreStream(deps: ServerDeps, sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = req.headers.authorization
+  const credential = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined
+  if (!credential) return sendProblem(res, problem(401, 'missing_credential', 'Authorization: Bearer <credential> is required'))
+
+  const consumed = deps.restoreIssuer.consume(sessionId, credential)
+  if (!consumed) return sendProblem(res, problem(403, 'invalid_or_used_credential', 'restore credential is invalid, expired or already used'))
+
+  const client = await deps.custodyPool.connect()
+  try {
+    const restored = await restoreSnapshot(client, consumed.snapshotId)
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': String(restored.payload.length),
+      'x-agora-format-id': restored.formatId,
+      'x-agora-format-version': restored.formatVersion,
+      'x-agora-sha256': restored.sha256,
+    })
+    res.end(Buffer.from(restored.payload))
+  } catch (error) {
+    sendProblem(res, problem(500, 'restore_failed', 'could not read snapshot', error instanceof Error ? error.message : String(error)))
+  } finally {
+    client.release()
+  }
+}
+
 async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://internal')
   const method = req.method ?? 'GET'
@@ -189,6 +295,20 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     const sessionId = decodeURIComponent(acpMatch[1])
     if (!UUID_RE.test(sessionId)) return sendProblem(res, problem(400, 'invalid_session_id', 'sessionId must be a UUID'))
     return handleOpenAcpConnection(deps, sessionId, req, res)
+  }
+
+  const captureMatch = CUSTODY_SNAPSHOTS_PATH_RE.exec(url.pathname)
+  if (captureMatch?.[1] && method === 'POST') {
+    const sessionId = decodeURIComponent(captureMatch[1])
+    if (!UUID_RE.test(sessionId)) return sendProblem(res, problem(400, 'invalid_session_id', 'sessionId must be a UUID'))
+    return handleCaptureCustody(deps, sessionId, req, res)
+  }
+
+  const restoreMatch = CUSTODY_RESTORE_STREAM_PATH_RE.exec(url.pathname)
+  if (restoreMatch?.[1] && method === 'GET') {
+    const sessionId = decodeURIComponent(restoreMatch[1])
+    if (!UUID_RE.test(sessionId)) return sendProblem(res, problem(400, 'invalid_session_id', 'sessionId must be a UUID'))
+    return handleRestoreStream(deps, sessionId, req, res)
   }
 
   sendProblem(res, problem(404, 'not_found', 'no such route'))

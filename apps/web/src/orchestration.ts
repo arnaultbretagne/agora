@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import * as acp from '@agentclientprotocol/sdk'
-import { bootstrapSession, cancelSession as acpCancelSession, promptSession } from '@agora/acp'
-import { transitionSessionPhase } from '@agora/store-pg'
+import { bootstrapSession, cancelSession as acpCancelSession, promptSession, resumeAcpSession } from '@agora/acp'
+import { nameBasedUuid } from '@agora/domain'
+import { getAnchor, transitionSessionPhase, upsertAnchor } from '@agora/store-pg'
 import {
+  captureCustody,
   dematerializeSessionRuntime,
   materializeSessionRuntime,
   openACPConnection,
@@ -41,6 +43,9 @@ export interface ProvisionSessionInput {
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
   readonly now?: () => Date
 }
+
+/** Exported so tests can replicate the exact derivation to simulate a crash between capture and Anchor commit. */
+export const SUSPEND_CAPTURE_NAMESPACE = 'cbf5fa7c-3128-4e7e-b25a-3c4c7dd33084'
 
 async function waitForRuntimeReady(transport: SessionRuntimeControlTransport, sessionId: string, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -121,23 +126,95 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
 
 export type ActivateResult = { readonly ok: true } | { readonly ok: false; readonly code: string; readonly detail: string }
 
+export interface ResumeSessionRuntimeInput {
+  readonly pool: pg.Pool
+  readonly transport: SessionRuntimeControlTransport
+  readonly connections: SessionConnectionRegistry
+  readonly workstreamId: string
+  readonly sessionId: string
+  readonly agentId: string
+  readonly runtimeDefinitionVersion: string
+  readonly acpSessionId: string
+  readonly workspaceMountRef: string
+  readonly now?: () => Date
+}
+
 /**
- * Narrowed to what real infra supports today: a `requested` Session runs the real provisioning
- * chain; an already-live Session is a no-op; a `suspended` Session needs custody restore (P06,
- * not implemented) so it fails closed with a typed, honest reason rather than hanging or
- * pretending to resume.
+ * docs/specs/03 "Resume" / docs/specs/07 "Restore contract": rematerializes from the Workstream's
+ * durable Anchor (never a caller-supplied snapshot id — resume always restores the ONE snapshot
+ * product history actually points at), then `session/resume` over a fresh ACP connection to the
+ * SAME Agora-known ACP Session id (ADR 0005: a new Pod UID, not a new Session identity).
+ * Fire-and-forget from the HTTP layer, matching `provisionSessionAndPrompt` (docs/specs/14).
+ */
+export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Promise<void> {
+  try {
+    const anchorClient = await input.pool.connect()
+    let anchor
+    try {
+      anchor = await getAnchor(anchorClient, input.workstreamId, input.agentId)
+    } finally {
+      anchorClient.release()
+    }
+    if (!anchor || anchor.sessionId !== input.sessionId) {
+      throw new Error(`no custody Anchor found for Session '${input.sessionId}' (workstream '${input.workstreamId}', agent '${input.agentId}')`)
+    }
+
+    await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
+      agentId: input.agentId,
+      runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      workspaceMountRef: input.workspaceMountRef,
+      executionGrantRef: FAKE_EXECUTION_GRANT_REF,
+      restoreFrom: anchor.custodySnapshotId,
+    })
+    await waitForRuntimeReady(input.transport, input.sessionId)
+
+    const endpoint = await openACPConnection(input.transport, input.sessionId as never, randomUUID())
+    const stream = await connectAcpBridge(endpoint.url, endpoint.credential)
+
+    const resumed = await resumeAcpSession({
+      pool: input.pool,
+      workstreamId: input.workstreamId,
+      sessionId: input.sessionId,
+      stream,
+      cwd: '/home/node/work',
+      acpSessionId: input.acpSessionId,
+    })
+    input.connections.set(input.sessionId, {
+      connection: resumed.connection,
+      acpSessionId: resumed.acpSessionId,
+      storePersist: resumed.storePersist,
+    })
+  } catch (error) {
+    await failClosed(input.pool, input.sessionId, 'resume_failed', error)
+  }
+}
+
+/**
+ * A `requested` Session runs the real provisioning chain; an already-live Session is a no-op; a
+ * `suspended` Session resumes from its durable custody Anchor (plans/06-custody-and-resume.md).
  */
 export async function activateSession(
   input: Omit<ProvisionSessionInput, 'initialPrompt'>,
 ): Promise<ActivateResult> {
+  interface SessionActivationRow {
+    readonly phase: string
+    readonly workstream_id: string
+    readonly agent_id: string
+    readonly runtime_definition_version: string
+    readonly acp_session_id: string | null
+  }
   const client = await input.pool.connect()
-  let phase: string | undefined
+  let row: SessionActivationRow | undefined
   try {
-    const { rows } = await client.query<{ phase: string }>('SELECT phase FROM product.sessions WHERE id = $1', [input.sessionId])
-    phase = rows[0]?.phase
+    const { rows } = await client.query<SessionActivationRow>(
+      'SELECT phase, workstream_id, agent_id, runtime_definition_version, acp_session_id FROM product.sessions WHERE id = $1',
+      [input.sessionId],
+    )
+    row = rows[0]
   } finally {
     client.release()
   }
+  const phase = row?.phase
 
   if (phase === 'ready' || phase === 'busy') return { ok: true }
   if (phase === 'requested') {
@@ -145,7 +222,19 @@ export async function activateSession(
     return { ok: true }
   }
   if (phase === 'suspended') {
-    return { ok: false, code: 'resume_failed', detail: 'Resume requires a custody restore (plans/06-custody-and-resume.md), not implemented yet' }
+    if (!row?.acp_session_id) return { ok: false, code: 'resume_failed', detail: 'Suspended Session has no bound ACP Session id to resume' }
+    void resumeSessionRuntime({
+      pool: input.pool,
+      transport: input.transport,
+      connections: input.connections,
+      workstreamId: row.workstream_id,
+      sessionId: input.sessionId,
+      agentId: row.agent_id,
+      runtimeDefinitionVersion: row.runtime_definition_version,
+      acpSessionId: row.acp_session_id,
+      workspaceMountRef: input.workspaceMountRef,
+    })
+    return { ok: true }
   }
   return { ok: false, code: 'conflict', detail: `Session phase '${phase ?? 'unknown'}' cannot be activated` }
 }
@@ -165,12 +254,23 @@ export async function cancelSessionCommand(input: Pick<SessionLifecycleInput, 'c
   return { ok: true }
 }
 
+export interface SuspendSessionInput extends SessionLifecycleInput {
+  /** The HTTP request's own Idempotency-Key: a retry of the SAME suspend must reuse the SAME
+   * capture request id (docs/specs/13 "capture retry cannot allocate two generations for one
+   * request id"), while a genuinely NEW suspend later must not collide with an old one. */
+  readonly idempotencyKey: string
+  readonly now?: () => Date
+}
+
 /**
- * Narrowed suspend (docs/specs/03 "Suspend"): dematerializes the real Session Runtime (P04) —
- * no custody snapshot (P06 doesn't exist yet), so a Session suspended today has no resume point;
- * `activateSession` fails closed on it rather than pretending resume is possible.
+ * docs/specs/03 "Suspend" + docs/specs/07 "Capture contract": cancel live work (so capture
+ * observes a quiescent harness), capture custody, commit the Anchor, THEN dematerialize — in that
+ * order, so a crash between capture and the Anchor leaves a safe unreferenced snapshot (the
+ * retention job's own job), and a crash between the Anchor and dematerialize just leaves an
+ * already-suspended-in-substance Pod that a retried suspend dematerializes again (idempotent).
  */
-export async function suspendSession(input: SessionLifecycleInput): Promise<void> {
+export async function suspendSession(input: SuspendSessionInput): Promise<void> {
+  const now = input.now ?? (() => new Date())
   const openClient = await input.pool.connect()
   try {
     await transitionSessionPhase(openClient, input.sessionId, 'suspending')
@@ -178,6 +278,46 @@ export async function suspendSession(input: SessionLifecycleInput): Promise<void
     openClient.release()
   }
   try {
+    const live = input.connections.get(input.sessionId)
+    if (live) await acpCancelSession({ connection: live.connection, acpSessionId: live.acpSessionId })
+
+    const infoClient = await input.pool.connect()
+    let workstreamId: string
+    let agentId: string
+    let syncedThroughSeq: number
+    try {
+      const { rows } = await infoClient.query<{ workstream_id: string; agent_id: string; last_event_seq: number }>(
+        `SELECT s.workstream_id, s.agent_id, w.last_event_seq
+         FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id
+         WHERE s.id = $1`,
+        [input.sessionId],
+      )
+      const row = rows[0]
+      if (!row) throw new Error(`session ${input.sessionId} not found`)
+      workstreamId = row.workstream_id
+      agentId = row.agent_id
+      syncedThroughSeq = row.last_event_seq
+    } finally {
+      infoClient.release()
+    }
+
+    const captureRequestId = nameBasedUuid(SUSPEND_CAPTURE_NAMESPACE, `${input.sessionId}:${input.idempotencyKey}`)
+    const ref = await captureCustody(input.transport, input.sessionId as never, captureRequestId, syncedThroughSeq)
+
+    const anchorClient = await input.pool.connect()
+    try {
+      await upsertAnchor(anchorClient, {
+        workstreamId,
+        agentId,
+        sessionId: input.sessionId,
+        custodySnapshotId: ref.snapshotId,
+        syncedThroughSeq: ref.syncedThroughSeq,
+        updatedAt: now(),
+      })
+    } finally {
+      anchorClient.release()
+    }
+
     await dematerializeSessionRuntime(input.transport, input.sessionId as never, randomUUID())
     input.connections.delete(input.sessionId)
     const closeClient = await input.pool.connect()

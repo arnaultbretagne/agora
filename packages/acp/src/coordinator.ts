@@ -63,6 +63,44 @@ function methodNotSupported<Response>(method: string): () => Response {
   }
 }
 
+interface ClientAppOptions {
+  readonly onPermissionRequest?: ((params: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>) | undefined
+}
+
+/** The Client-side handler set is identical whether this connection is for a new Session or a resume — shared so the two never silently drift. */
+function buildClientApp(options: ClientAppOptions): acp.ClientApp {
+  return acp
+    .client({ name: 'agora-control-plane' })
+    .onNotification(acp.methods.client.session.update, () => {})
+    .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
+      if (options.onPermissionRequest) return options.onPermissionRequest(params)
+      return { outcome: { outcome: 'cancelled' } }
+    })
+    .onRequest(acp.methods.client.fs.readTextFile, methodNotSupported(acp.methods.client.fs.readTextFile))
+    .onRequest(acp.methods.client.fs.writeTextFile, methodNotSupported(acp.methods.client.fs.writeTextFile))
+    .onRequest(acp.methods.client.terminal.create, methodNotSupported(acp.methods.client.terminal.create))
+    .onRequest(acp.methods.client.terminal.output, methodNotSupported(acp.methods.client.terminal.output))
+    .onRequest(acp.methods.client.terminal.release, methodNotSupported(acp.methods.client.terminal.release))
+    .onRequest(acp.methods.client.terminal.waitForExit, methodNotSupported(acp.methods.client.terminal.waitForExit))
+    .onRequest(acp.methods.client.terminal.kill, methodNotSupported(acp.methods.client.terminal.kill))
+}
+
+/** Shared fail-closed transition: any failure before the caller's own ACP handshake completes leaves the Session in a typed `failed` state, never a silent retry or fallback. */
+function failClosedTransition(pool: pg.Pool, sessionId: string): (code: string, error: unknown) => Promise<never> {
+  return async (code, error) => {
+    const client = await pool.connect()
+    try {
+      await transitionSessionPhase(client, sessionId, 'failed', {
+        failureCode: code,
+        failureDetail: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      client.release()
+    }
+    throw error
+  }
+}
+
 /**
  * docs/specs/04-acp-integration.md "Connection bootstrap": initialize -> session/new -> bind the
  * Agent-returned sessionId exactly once. Any failure before binding completes leaves the Session
@@ -77,35 +115,9 @@ export async function bootstrapSession(input: BootstrapSessionInput): Promise<Bo
   const journaled = journalDuplexStream(input.stream, storePersist.persist)
   const wire = acp.ndJsonStream(journaled.writable, journaled.readable)
 
-  const clientApp = acp
-    .client({ name: 'agora-control-plane' })
-    .onNotification(acp.methods.client.session.update, () => {})
-    .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
-      if (input.onPermissionRequest) return input.onPermissionRequest(params)
-      return { outcome: { outcome: 'cancelled' } }
-    })
-    .onRequest(acp.methods.client.fs.readTextFile, methodNotSupported(acp.methods.client.fs.readTextFile))
-    .onRequest(acp.methods.client.fs.writeTextFile, methodNotSupported(acp.methods.client.fs.writeTextFile))
-    .onRequest(acp.methods.client.terminal.create, methodNotSupported(acp.methods.client.terminal.create))
-    .onRequest(acp.methods.client.terminal.output, methodNotSupported(acp.methods.client.terminal.output))
-    .onRequest(acp.methods.client.terminal.release, methodNotSupported(acp.methods.client.terminal.release))
-    .onRequest(acp.methods.client.terminal.waitForExit, methodNotSupported(acp.methods.client.terminal.waitForExit))
-    .onRequest(acp.methods.client.terminal.kill, methodNotSupported(acp.methods.client.terminal.kill))
-
+  const clientApp = buildClientApp({ onPermissionRequest: input.onPermissionRequest })
   const connection = clientApp.connect(wire)
-
-  async function failClosed(code: string, error: unknown): Promise<never> {
-    const client = await input.pool.connect()
-    try {
-      await transitionSessionPhase(client, input.sessionId, 'failed', {
-        failureCode: code,
-        failureDetail: error instanceof Error ? error.message : String(error),
-      })
-    } finally {
-      client.release()
-    }
-    throw error
-  }
+  const failClosed = failClosedTransition(input.pool, input.sessionId)
 
   // docs/specs/03 "New Session" step 3: capability facts bind before the phase leaves
   // {requested, failed} — before initialize/session.new, not just before "provisioning".
@@ -166,6 +178,73 @@ export async function bootstrapSession(input: BootstrapSessionInput): Promise<Bo
     protocolVersion: initializeResponse.protocolVersion,
     storePersist,
   }
+}
+
+export interface ResumeAcpSessionInput {
+  readonly pool: pg.Pool
+  readonly workstreamId: string
+  readonly sessionId: string
+  readonly stream: DuplexByteStream
+  readonly cwd: string
+  /** The ORIGINAL ACP Session id, bound once at first bootstrap (`bindAcpSession` is write-once) — resume reuses it, it never rebinds. */
+  readonly acpSessionId: string
+  readonly clientCapabilities?: acp.ClientCapabilities
+  readonly onPermissionRequest?: (params: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>
+}
+
+export interface ResumeAcpSessionResult {
+  readonly connection: acp.ClientConnection
+  readonly acpSessionId: string
+  readonly storePersist: StorePersist
+}
+
+/**
+ * docs/specs/03 "Resume": a fresh ACP connection to the (rematerialized) Pod, `initialize` ->
+ * verify `agentCapabilities.session.resume` -> `session/resume` with the SAME Agora-known ACP
+ * Session id (never a new one — ADR 0005 "Pod replacement may produce a new Pod UID without a new
+ * Session/runtime identity"). `session/resume` deliberately never replays prior messages (unlike
+ * `session/load`) — the journal is this system's own replay mechanism; a second replica of history
+ * from the Agent side would risk duplicate Workstream items, which this plan explicitly avoids.
+ */
+export async function resumeAcpSession(input: ResumeAcpSessionInput): Promise<ResumeAcpSessionResult> {
+  const storePersist = createStorePersist({ pool: input.pool, workstreamId: input.workstreamId, sessionId: input.sessionId })
+  const journaled = journalDuplexStream(input.stream, storePersist.persist)
+  const wire = acp.ndJsonStream(journaled.writable, journaled.readable)
+
+  const clientApp = buildClientApp({ onPermissionRequest: input.onPermissionRequest })
+  const connection = clientApp.connect(wire)
+  const failClosed = failClosedTransition(input.pool, input.sessionId)
+
+  let initializeResponse: acp.InitializeResponse
+  try {
+    initializeResponse = await connection.agent.request(acp.methods.agent.initialize, {
+      protocolVersion: acp.PROTOCOL_VERSION,
+      clientCapabilities: input.clientCapabilities ?? DEFAULT_CLIENT_CAPABILITIES,
+    })
+  } catch (error) {
+    return failClosed('acp_initialize_failed', error)
+  }
+
+  if (!initializeResponse.agentCapabilities?.sessionCapabilities?.resume) {
+    return failClosed('acp_resume_not_supported', new Error("Agent does not advertise the 'session.resume' capability"))
+  }
+
+  try {
+    await connection.agent.request(acp.methods.agent.session.resume, { sessionId: input.acpSessionId, cwd: input.cwd })
+  } catch (error) {
+    // docs/specs/13 "Compatibility": never pretend native resume succeeded — fail closed, typed,
+    // no fallback to a new Session invented here (the caller decides whether to offer that).
+    return failClosed('acp_session_resume_failed', error)
+  }
+
+  const client = await input.pool.connect()
+  try {
+    await transitionSessionPhase(client, input.sessionId, 'ready')
+  } finally {
+    client.release()
+  }
+
+  return { connection, acpSessionId: input.acpSessionId, storePersist }
 }
 
 export interface PromptSessionActor {

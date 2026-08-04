@@ -700,7 +700,7 @@ async function handleSuspendSession(deps: ServerDeps, principal: string, session
   if (!canMutate(loaded.role)) return sendProblem(res, problem(403, 'validation_failed', 'Viewers cannot suspend a Session'))
 
   const now = deps.now ?? (() => new Date())
-  void suspendSession({ pool: deps.pool, transport: deps.controllerTransport, connections: deps.connections, sessionId })
+  void suspendSession({ pool: deps.pool, transport: deps.controllerTransport, connections: deps.connections, sessionId, idempotencyKey, now })
   sendJson(res, 202, { commandId: randomUUID(), state: 'accepted', acceptedAt: now().toISOString() })
 }
 

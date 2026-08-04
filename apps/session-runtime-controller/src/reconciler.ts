@@ -127,6 +127,7 @@ export interface MaterializeInput {
    * resolves to (e.g. a private GHCR repository) — never caller-supplied; bound to the per-Session
    * ServiceAccount, never the materialize request. */
   readonly imagePullSecretName?: string
+  readonly restoreFrom?: { readonly url: string; readonly credential: string }
 }
 
 export interface MaterializeResult {

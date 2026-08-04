@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { principalId, workstreamId } from '@agora/domain'
 import { getAnchor, listRetentionCandidates, upsertAnchor } from '../src/anchors.js'
 import { appendEvent } from '../src/journal.js'
+import { sweepCustodyRetention } from '../src/retention.js'
 import { createWorkstreamWithFirstSession } from '../src/workstreams.js'
 import { randomId, withTestDatabase } from './support.js'
 
@@ -193,5 +194,95 @@ test('listRetentionCandidates finds an older, un-anchored snapshot but not the a
     } finally {
       client.release()
     }
+  })
+})
+
+test('required: sweepCustodyRetention deletes only an older, un-anchored, non-newest snapshot past the grace period', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedAnchorable(pool)
+    const client = await pool.connect()
+    let oldSnapshotId: string
+    let newestSnapshotId: string
+    try {
+      const old = new Date('2020-01-01T00:00:00Z')
+      oldSnapshotId = randomId()
+      await client.query(
+        `INSERT INTO custody.snapshots
+           (id, session_id, generation, capture_request_id, format_id, format_version, adapter_version,
+            synced_through_seq, payload, payload_sha256, size_bytes, created_at)
+         VALUES ($1,$2,2,$3,'claude-code-fs','1','1',1,$4,$5,3,$6)`,
+        [oldSnapshotId, sessionId, randomId(), Buffer.from('abc'), Buffer.alloc(32, 4), old],
+      )
+      newestSnapshotId = randomId()
+      await client.query(
+        `INSERT INTO custody.snapshots
+           (id, session_id, generation, capture_request_id, format_id, format_version, adapter_version,
+            synced_through_seq, payload, payload_sha256, size_bytes, created_at)
+         VALUES ($1,$2,3,$3,'claude-code-fs','1','1',3,$4,$5,3,$6)`,
+        [newestSnapshotId, sessionId, randomId(), Buffer.from('xyz'), Buffer.alloc(32, 5), old],
+      )
+      await upsertAnchor(client, {
+        workstreamId: wsId,
+        agentId: 'claude-code',
+        sessionId,
+        custodySnapshotId: newestSnapshotId,
+        syncedThroughSeq: 3,
+        updatedAt: new Date(),
+      })
+    } finally {
+      client.release()
+    }
+
+    const now = new Date('2026-01-01T00:00:00Z')
+    const result = await sweepCustodyRetention(pool, now, 24 * 60 * 60 * 1000)
+    assert.deepEqual(result.deletedSnapshotIds, [oldSnapshotId])
+
+    const check = await pool.connect()
+    try {
+      const { rows } = await check.query<{ id: string }>('SELECT id FROM custody.snapshots WHERE session_id = $1', [sessionId])
+      const remaining = rows.map((r) => r.id)
+      assert.equal(remaining.includes(oldSnapshotId), false, 'the unreferenced older snapshot must be gone')
+      assert.ok(remaining.includes(newestSnapshotId), 'the anchored/newest snapshot must survive')
+
+      // Idempotent: a second sweep finds nothing left to delete.
+      const second = await sweepCustodyRetention(pool, now, 24 * 60 * 60 * 1000)
+      assert.deepEqual(second.deletedSnapshotIds, [])
+    } finally {
+      check.release()
+    }
+  })
+})
+
+test('required: sweepCustodyRetention never deletes anything inside the grace period', async () => {
+  await withTestDatabase(async (pool) => {
+    const { sessionId } = await seedAnchorable(pool)
+    const client = await pool.connect()
+    let recentSnapshotId: string
+    try {
+      const recent = new Date('2025-12-31T23:00:00Z')
+      recentSnapshotId = randomId()
+      await client.query(
+        `INSERT INTO custody.snapshots
+           (id, session_id, generation, capture_request_id, format_id, format_version, adapter_version,
+            synced_through_seq, payload, payload_sha256, size_bytes, created_at)
+         VALUES ($1,$2,2,$3,'claude-code-fs','1','1',1,$4,$5,3,$6)`,
+        [recentSnapshotId, sessionId, randomId(), Buffer.from('abc'), Buffer.alloc(32, 4), recent],
+      )
+      // A later generation makes the recent one non-newest and thus a would-be candidate, but it's
+      // still inside the grace period.
+      await client.query(
+        `INSERT INTO custody.snapshots
+           (id, session_id, generation, capture_request_id, format_id, format_version, adapter_version,
+            synced_through_seq, payload, payload_sha256, size_bytes, created_at)
+         VALUES ($1,$2,3,$3,'claude-code-fs','1','1',3,$4,$5,3,$6)`,
+        [randomId(), sessionId, randomId(), Buffer.from('xyz'), Buffer.alloc(32, 5), recent],
+      )
+    } finally {
+      client.release()
+    }
+
+    const now = new Date('2026-01-01T00:00:00Z')
+    const result = await sweepCustodyRetention(pool, now, 24 * 60 * 60 * 1000)
+    assert.deepEqual(result.deletedSnapshotIds, [])
   })
 })

@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { Duplex } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import { createFakeAgent, type FakeAgentOptions } from '@agora/acp'
+import { createFakeAgent, type FakeAgentNativeState, type FakeAgentOptions } from '@agora/acp'
+import { captureSnapshot } from '@agora/custody'
+import type pg from 'pg'
 import { createWebSocketStream, WebSocketServer } from 'ws'
 
 /**
@@ -34,7 +37,32 @@ function readJson(req: import('node:http').IncomingMessage): Promise<Record<stri
   })
 }
 
-export async function startFakeController(agentOptions: FakeAgentOptions = {}): Promise<FakeControllerHandle> {
+/** plans/06: a fake but real-enough (session-scoped, idempotent, restorable) custody snapshot — opaque to every caller exactly like the real one. */
+interface FakeSnapshot {
+  readonly snapshotId: string
+  readonly sessionId: string
+  readonly generation: number
+  readonly captureRequestId: string
+  readonly syncedThroughSeq: number
+  readonly nativeState: FakeAgentNativeState | undefined
+  readonly createdAt: string
+}
+
+/**
+ * `pool`, when given, is only used to satisfy `custody.snapshots.session_id`/`product.agent_anchors`
+ * foreign keys against the SAME test database `suspendSession`'s Anchor commit runs against — the
+ * actual capture/restore byte transport (checksum, one-time credential, checksum-mismatch handling)
+ * is proven for real at the controller level (apps/session-runtime-controller/test/server.test.ts);
+ * this double only needs FK-satisfying rows plus session-scoped native-state continuity.
+ */
+export async function startFakeController(agentOptions: FakeAgentOptions = {}, pool?: pg.Pool): Promise<FakeControllerHandle> {
+  // Per-Session native state, keyed by the sessionId carried in the minted WS URL — this is what
+  // lets a suspend (WS closes) then resume (a NEW WS to the SAME session-scoped URL) actually
+  // observe continuity, and what `custody-snapshots` captures / `restoreFrom` seeds.
+  const sessionStates = new Map<string, { current: FakeAgentNativeState | undefined }>()
+  const snapshotsByRequestId = new Map<string, FakeSnapshot>()
+  const snapshotsById = new Map<string, FakeSnapshot>()
+
   const agentHttpServer = createServer((req, res) => {
     if (req.url === '/healthz') {
       res.writeHead(200)
@@ -46,13 +74,16 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}): 
   })
   const openSockets = new Set<import('ws').WebSocket>()
   const wss = new WebSocketServer({ server: agentHttpServer })
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     openSockets.add(ws)
     ws.once('close', () => openSockets.delete(ws))
+    const sessionId = new URL(req.url ?? '/', 'http://internal').searchParams.get('session') ?? ''
+    const stateCell = sessionStates.get(sessionId) ?? { current: undefined }
+    sessionStates.set(sessionId, stateCell)
     const duplex = createWebSocketStream(ws)
     const { readable, writable } = Duplex.toWeb(duplex)
     const wire = acp.ndJsonStream(writable as WritableStream<Uint8Array>, readable as ReadableStream<Uint8Array>)
-    createFakeAgent(agentOptions).connect(wire)
+    createFakeAgent({ ...agentOptions, nativeState: stateCell }).connect(wire)
   })
   await new Promise<void>((resolve) => agentHttpServer.listen(0, resolve))
   const agentPort = (agentHttpServer.address() as { port: number }).port
@@ -83,37 +114,113 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}): 
         return
       }
 
-      const match = /^\/v1\/sessions\/([^/]+)\/runtime(\/acp-connections)?$/.exec(url.pathname)
+      const match = /^\/v1\/sessions\/([^/]+)\/runtime(\/acp-connections|\/custody-snapshots)?$/.exec(url.pathname)
       if (!match?.[1]) {
         res.writeHead(404)
         res.end()
         return
       }
       const sessionId = match[1]
-      const isAcpConnections = Boolean(match[2])
+      const suffix = match[2] ?? ''
 
-      if (isAcpConnections && req.method === 'POST') {
+      if (suffix === '/acp-connections' && req.method === 'POST') {
         res.writeHead(201, { 'content-type': 'application/json' })
         res.end(
           JSON.stringify({
             transport: 'websocket',
-            url: `ws://127.0.0.1:${agentPort}/`,
+            url: `ws://127.0.0.1:${agentPort}/?session=${encodeURIComponent(sessionId)}`,
             credential: 'fake-test-credential',
             expiresAt: new Date(Date.now() + 60_000).toISOString(),
           }),
         )
         return
       }
-      if (req.method === 'PUT') {
+      if (suffix === '/custody-snapshots' && req.method === 'POST') {
+        const requestId = req.headers['x-request-id']
+        if (typeof requestId !== 'string') {
+          res.writeHead(400)
+          res.end()
+          return
+        }
+        const body = await readJson(req)
+        const syncedThroughSeq = Number(body['syncedThroughSeq'] ?? 0)
+        const idempotencyKey = `${sessionId}:${requestId}`
+        let snapshot = snapshotsByRequestId.get(idempotencyKey)
+        if (!snapshot) {
+          const priorGenerations = [...snapshotsById.values()].filter((s) => s.sessionId === sessionId).length
+          const createdAt = new Date()
+          snapshot = {
+            snapshotId: randomUUID(),
+            sessionId,
+            generation: priorGenerations + 1,
+            captureRequestId: requestId,
+            syncedThroughSeq,
+            nativeState: sessionStates.get(sessionId)?.current,
+            createdAt: createdAt.toISOString(),
+          }
+          if (pool) {
+            const client = await pool.connect()
+            try {
+              await captureSnapshot(client, {
+                snapshotId: snapshot.snapshotId,
+                sessionId: snapshot.sessionId,
+                generation: snapshot.generation,
+                captureRequestId: snapshot.captureRequestId,
+                formatId: 'fake-test-format',
+                formatVersion: '1',
+                adapterVersion: '1',
+                syncedThroughSeq: snapshot.syncedThroughSeq,
+                payload: new TextEncoder().encode(JSON.stringify(snapshot.nativeState ?? {})),
+                createdAt,
+              })
+            } finally {
+              client.release()
+            }
+          }
+          snapshotsByRequestId.set(idempotencyKey, snapshot)
+          snapshotsById.set(snapshot.snapshotId, snapshot)
+        }
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(
+          JSON.stringify({
+            snapshotId: snapshot.snapshotId,
+            sessionId: snapshot.sessionId,
+            generation: snapshot.generation,
+            captureRequestId: snapshot.captureRequestId,
+            formatId: 'fake-test-format',
+            formatVersion: '1',
+            adapterVersion: '1',
+            syncedThroughSeq: snapshot.syncedThroughSeq,
+            sha256: '0'.repeat(64),
+            sizeBytes: 0,
+            createdAt: snapshot.createdAt,
+          }),
+        )
+        return
+      }
+      if (suffix === '' && req.method === 'PUT') {
         const body = await readJson(req)
         const agentId = String(body['agentId'] ?? '')
         const runtimeDefinitionVersion = String(body['runtimeDefinitionVersion'] ?? '')
+        const restoreFrom = typeof body['restoreFrom'] === 'string' ? body['restoreFrom'] : undefined
+        if (restoreFrom) {
+          const snapshot = snapshotsById.get(restoreFrom)
+          if (!snapshot) {
+            res.writeHead(409, { 'content-type': 'application/problem+json' })
+            res.end(JSON.stringify({ type: 'about:blank', title: 'unknown snapshot', status: 409, code: 'custody_snapshot_not_found' }))
+            return
+          }
+          // Restore-before-start, faithfully enough: the next WS connection for this Session
+          // starts from the restored state rather than empty (the real restore-stream transport
+          // itself is proven at the controller level, apps/session-runtime-controller/test).
+          sessionStates.set(sessionId, { current: snapshot.nativeState })
+        }
         sessions.set(sessionId, { agentId, runtimeDefinitionVersion })
         res.writeHead(202, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ sessionId, agentId, runtimeDefinitionVersion, state: 'ready', podUid: 'fake-pod-uid', failure: null }))
         return
       }
-      if (req.method === 'GET') {
+      if (suffix === '' && req.method === 'GET') {
         const session = sessions.get(sessionId)
         if (!session) {
           res.writeHead(404, { 'content-type': 'application/problem+json' })

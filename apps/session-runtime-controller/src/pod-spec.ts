@@ -21,6 +21,13 @@ export interface BuildPodSpecInput {
    * threat model: prompt injection = arbitrary code execution). Omit only if the target namespace
    * has no such RuntimeClass installed. */
   readonly runtimeClassName?: string
+  /**
+   * docs/specs/07-custody.md "Restore contract": present only when this materialize resumes from a
+   * snapshot. The Pod pulls its own native state from `url` using this one-time `credential` before
+   * opening for readiness — it never receives the snapshot id, a database credential or the bytes
+   * themselves at materialize time.
+   */
+  readonly restoreFrom?: { readonly url: string; readonly credential: string }
 }
 
 const DEFAULT_UID = 1000
@@ -73,6 +80,12 @@ export function buildPodSpec(input: BuildPodSpecInput): K8sObject {
             { name: 'AGORA_ONECLI_CA_PATH', value: ONECLI_CA_PATH },
             { name: 'AGORA_ONECLI_STUBS_DIR', value: AUTH_STUBS_DIR },
             { name: 'AGORA_WORKSPACE_ROOT', value: '/home/node/work' },
+            ...(input.restoreFrom
+              ? [
+                  { name: 'AGORA_CUSTODY_RESTORE_URL', value: input.restoreFrom.url },
+                  { name: 'AGORA_CUSTODY_RESTORE_CREDENTIAL', value: input.restoreFrom.credential },
+                ]
+              : []),
           ],
           securityContext: {
             allowPrivilegeEscalation: false,
