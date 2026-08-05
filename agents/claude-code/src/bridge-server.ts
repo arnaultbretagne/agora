@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
+import { dirname, join } from 'node:path'
 import { Duplex } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createWebSocketStream, WebSocketServer } from 'ws'
@@ -18,18 +19,27 @@ import { watchForSessionId } from './session-id-tap.js'
  * The container entrypoint `packages/agent-registry`'s `claude-code` runtime definition names —
  * same seam as `apps/session-runtime-controller/src/fake-agent-server.ts`, adapted for a REAL
  * external ACP Agent process (`@agentclientprotocol/claude-agent-acp`) instead of an in-process
- * fake. Spawns a fresh child LAZILY on every WebSocket connection (same pattern
- * `fake-agent-server.ts` already uses, `createFakeAgent()` per connection) — NOT eagerly at
- * startup. Found live, on a real cluster: the real Agent process exits cleanly (`code=0`, no
- * stderr) if it sits idle for even a few seconds without receiving its first real ACP request —
- * spawning it at Pod startup and only later opening a WS connection (the real gap between
- * readiness and the controller's own `openACPConnection` call) reliably lost the race. Spawning at
- * connection time means its first bytes arrive within milliseconds, matching every case that
- * worked in the original spike. This does not weaken "one Session Runtime Pod = one Agora Session"
- * (docs/specs/08): in production exactly one real connection is ever opened per Pod; native state
- * lives on disk (`custody.ts`), not in the process, so even a reconnect after credential expiry
- * (docs/specs/04) is safe — a fresh child resuming from that same file is the exact same
- * "kill + fresh process + session/resume" path already proven to preserve context.
+ * fake. Spawns a fresh child on every WebSocket connection (same pattern `fake-agent-server.ts`
+ * already uses, `createFakeAgent()` per connection).
+ *
+ * A real Pod run of this bridge originally showed the child exiting cleanly (`code=0`, no stderr)
+ * moments after every connection, which first looked like an idle-without-input timeout. Traced
+ * live, on the real cluster (byte-level tracing on the stdio pipes, then a battery of manual
+ * `claude-agent-acp` invocations replicating the exact env/cwd/stdio bridge-server uses): the
+ * child WAS receiving the first ACP request within milliseconds and never responded anyway. The
+ * actual cause was `defaultAgentCommand`'s own bug, now fixed — resolving the bare package
+ * specifier lands on the package's "main" entry (`dist/lib.js`, a library export with no top-level
+ * side effects), not its "bin" entry (`dist/index.js`, the one that calls `runAcp()` and
+ * `process.stdin.resume()` to actually stay alive and serve ACP). Confirmed live: the correctly
+ * invoked binary sat idle for 12s with zero input and never exited — there is no idle timeout.
+ * Spawning per connection (rather than once at Pod startup) is kept anyway, matching
+ * `fake-agent-server.ts`'s own pattern and avoiding a lingering child if a Pod is never connected
+ * to, but it is no longer standing in for a timing workaround. This does not weaken "one Session
+ * Runtime Pod = one Agora Session" (docs/specs/08): in production exactly one real connection is
+ * ever opened per Pod; native state lives on disk (`custody.ts`), not in the process, so even a
+ * reconnect after credential expiry (docs/specs/04) is safe — a fresh child resuming from that
+ * same file is the exact same "kill + fresh process + session/resume" path already proven to
+ * preserve context.
  *
  * `agents/claude-code/SPIKE.md`: the child needs `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS`/
  * `CLAUDE_CODE_OAUTH_TOKEN` specifically, but `pod-spec.ts` mounts Agora's own GENERIC contract
@@ -63,12 +73,27 @@ export interface RunningBridgeServer {
 
 const DEFAULT_HOME = process.env.HOME ?? '/home/node'
 
-function defaultAgentCommand(): readonly string[] {
+async function defaultAgentCommand(): Promise<readonly string[]> {
   // Real Node module resolution (not a hardcoded relative path) — npm workspaces hoist this
   // package to the monorepo root's node_modules in normal installs, so a path fixed relative to
   // this file's own directory is wrong there (verified live: the image build's smoke-test caught
   // exactly this). `import.meta.resolve` walks the same lookup Node itself would.
-  const entry = fileURLToPath(import.meta.resolve('@agentclientprotocol/claude-agent-acp'))
+  //
+  // Resolving the BARE package specifier (`import.meta.resolve('@agentclientprotocol/claude-agent-acp')`)
+  // lands on the package's "main"/"exports" entry (`dist/lib.js`) — a library module that only
+  // re-exports helpers (`runAcp`, etc.) and has no top-level side effects. Found live, on a real
+  // cluster: running THAT file as a script does nothing and Node's event loop drains once its
+  // async imports settle, so the process exits cleanly (`code=0`, no stderr) a moment later — this
+  // was mistaken for an idle-exit/timing bug before being traced to the wrong entry point
+  // entirely. The actual CLI entry (`dist/index.js`, the one that calls `runAcp()` and
+  // `process.stdin.resume()` to stay alive) is only named in the package's own "bin" field, so it
+  // has to be read from there rather than guessed at a fixed relative path (that guess would break
+  // the moment the package restructures its dist layout).
+  const packageJsonPath = fileURLToPath(import.meta.resolve('@agentclientprotocol/claude-agent-acp/package.json'))
+  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { bin: string | Record<string, string> }
+  const binRelative = typeof packageJson.bin === 'string' ? packageJson.bin : packageJson.bin['claude-agent-acp']
+  if (!binRelative) throw new Error("@agentclientprotocol/claude-agent-acp's package.json names no 'claude-agent-acp' bin entry")
+  const entry = join(dirname(packageJsonPath), binRelative)
   return [process.execPath, entry, '--dangerously-skip-permissions']
 }
 
@@ -185,11 +210,14 @@ function bridgeChildStdio(
 
 /** Spawns one fresh Agent process. Logs its exit for the life of the Pod (previously invisible:
  * `/healthz` only ever checks the bridge itself, so a dead child left every subsequent request
- * hanging silently — found live, on a real cluster, not by inspection). */
+ * hanging silently — found live, on a real cluster, not by inspection). `detached: true` on Linux
+ * makes the child its own process group leader (pgid = its own pid) rather than joining this
+ * process's group — required so `killAgentTree` below can kill it AND the native `claude` process
+ * it launches (a grandchild `child.kill()` alone never reaches) in one shot. */
 function spawnAgent(agentCommand: readonly string[], childEnv: Record<string, string | undefined>, cwd: string | undefined): ChildProcessWithoutNullStreams {
   const [command, ...args] = agentCommand
   if (!command) throw new Error('agentCommand must name an executable')
-  const child = spawn(command, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) })
+  const child = spawn(command, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true, ...(cwd ? { cwd } : {}) })
   child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
   child.on('error', (error) => {
     process.stderr.write(`claude-code bridge-server: agent process failed to start: ${String(error)}\n`)
@@ -198,6 +226,22 @@ function spawnAgent(agentCommand: readonly string[], childEnv: Record<string, st
     process.stderr.write(`claude-code bridge-server: agent process exited (code=${code}, signal=${signal})\n`)
   })
   return child
+}
+
+/** Kills the Agent process's whole process group (see `spawnAgent`'s own doc) — found live: a
+ * plain `child.kill()` left the native `claude` process it launches running as an orphan after
+ * every connection closed. Falls back to a plain `child.kill()` if the group is already gone
+ * (ESRCH) or `pid` was never assigned. */
+function killAgentTree(child: ChildProcessWithoutNullStreams): void {
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, 'SIGTERM')
+      return
+    } catch {
+      // Group already gone, or this platform doesn't support negative-pid group kill — fall through.
+    }
+  }
+  child.kill()
 }
 
 /**
@@ -216,7 +260,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     sessionIdCell.current = sessionId
   }
 
-  const agentCommand = options.agentCommand ?? defaultAgentCommand()
+  const agentCommand = options.agentCommand ?? (await defaultAgentCommand())
   const childEnv = options.childEnv ?? { ...process.env, ...(await claudeSpecificEnv(process.env)) }
   // Found live, on a real cluster: without an explicit `cwd`, the child inherits THIS process's
   // own — the image's build-time WORKDIR, root-owned and read-only to the non-root user every
@@ -300,6 +344,16 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     bridged = true
     void (clientReadable as ReadableStream<Uint8Array>).pipeTo(agentWritable).catch(() => {})
     void agentReadable.pipeTo(clientWritable as WritableStream<Uint8Array>).catch(() => {})
+
+    // A normal client-initiated close (or a lost connection) otherwise leaves this child — and, in
+    // turn, the native `claude` process it launches — running as an orphan for the rest of the
+    // Pod's life. Found live: two verification connections in a row left two full sets of orphaned
+    // processes behind. `once` because `child.once('exit')` above already removes from
+    // `liveChildren` on its own path; killing an already-exited child is a harmless no-op.
+    ws.once('close', () => {
+      liveChildren.delete(child)
+      killAgentTree(child)
+    })
   })
 
   await new Promise<void>((resolve) => httpServer.listen(options.port ?? 0, resolve))
@@ -311,7 +365,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     port,
     close: () =>
       new Promise<void>((resolve, reject) => {
-        for (const child of liveChildren) child.kill()
+        for (const child of liveChildren) killAgentTree(child)
         wss.close(() => {})
         httpServer.close((err) => (err ? reject(err) : resolve()))
       }),

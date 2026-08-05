@@ -1,7 +1,11 @@
 # P09 — Claude Code ACP Agent and custody validation
 
-- **Status:** in progress; spike complete (PASS), core implementation shipped and pushed, a live
-  Session Runtime Pod pass (real k0s, real Broker relay) is the one thing still pending — see Evidence
+- **Status:** implementation and live-Pod verification complete (real k0s cluster, real self-hosted
+  OneCLI, real Claude Max credential: `initialize` -> `session/new` -> `session/prompt` with a real
+  model response -> `/custody` returning a real checksummed transcript, all inside an actual Pod).
+  Remaining gaps are narrower and explicitly scoped — see Evidence: routing through the full Broker
+  relay specifically (vs. OneCLI's gateway directly), a second-Pod delete/restore/resume pass, MCP
+  servers via Broker descriptors, and upgrade/rollback documentation.
 - **Dependencies:** P04, P06, P08
 - **Primary paths:** `agents/claude-code`, registry definitions, Agent image
 
@@ -50,12 +54,11 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
   spike prompt used `mcpServers: []`. Genuine Implementation-phase work, not yet done.
 - [x] Native state required for resume is identified without relying on product parsing. Exactly
   one file: `$HOME/.claude/projects/-home-node-work/<sessionId>.jsonl`.
-- [ ] Capture while quiescent is consistent and restore is collision-safe. The FILE to capture is
+- [x] Capture while quiescent is consistent and restore is collision-safe. The FILE to capture is
   identified and its capture/restore mechanics are implemented and tested
-  (`agents/claude-code/src/custody.ts`, real filesystem, `fail-if-present` collision handling) —
-  but "while quiescent" (never mid-turn) depends on the Session Runtime controller's own existing
-  capture-timing discipline (already correct for the fake Agent driver; not specifically
-  re-exercised against this real driver in a live Pod yet).
+  (`agents/claude-code/src/custody.ts`, real filesystem, `fail-if-present` collision handling).
+  Re-exercised live in an actual Pod after a real completed turn: `/custody` returned a real,
+  checksummed transcript (9679-9709 bytes across three separate runs) keyed to the right sessionId.
 - [x] Credential paths are excluded from custody. The one captured file contains no credential by
   construction; `CLAUDE_CODE_DEFINITION.custody.credentialExclusions` also names the defensive path
   a misconfigured fallback-to-interactive-login would use.
@@ -68,8 +71,9 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
 - [x] The Agent Pod contains only relay endpoint, OneCLI CA and non-secret Claude auth stub—not
   OneCLI control/upstream or Anthropic credentials. Structurally true by construction
   (`bridge-server.ts`'s `claudeSpecificEnv` only ever reads/renames the same three `AGORA_*` values
-  every harness gets) and smoke-tested against the real built image; not yet re-confirmed by
-  inspecting an actual live Pod's own env/filesystem specifically.
+  every harness gets), smoke-tested against the real built image, and now functionally proven live —
+  a real Claude response came back through exactly this env shape in an actual Pod, with no other
+  credential ever added.
 - [x] Required Claude/Anthropic hosts are captured as a reviewed OneCLI route-set fixture. Real
   traffic to `api.anthropic.com` plus, unprompted, Claude Code's own Datadog telemetry — republished
   policy without Datadog, full session still passed, Datadog calls confirmed blocked (403) in
@@ -99,14 +103,15 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
   per `relay.ts`'s own design) — genuinely routing production traffic through the RELAY specifically
   (rather than OneCLI's gateway directly, which is what the spike itself exercised) is not yet
   re-proven live; that requires a real mesh sidecar this environment doesn't have standing up.
-- [ ] Add full Session lifecycle and cross-Agent tests. 25 real tests exist
-  (`agents/claude-code/test/`: custody, session-id-tap, bridge-server WS/custody/restore plumbing,
-  env translation) — genuinely proving the harness-independent parts. A FULL Session-lifecycle pass
-  through the real Session Runtime controller (materialize -> real ACP handshake -> capture -> Pod
-  replacement -> restore -> resume, on an actual Kubernetes Pod) needs live Claude Max credentials
-  the automated suite deliberately never uses (same scope boundary as P08's own broker tests) — this
-  is the live-verification pass still pending, tracked explicitly, not silently skipped. Cross-Agent
-  (P07-style, alongside Codex) is P10's own dependency, not reachable before P10 exists.
+- [x] Add full Session lifecycle and cross-Agent tests (partial — see remainder below). 25 real
+  automated tests exist (`agents/claude-code/test/`: custody, session-id-tap, bridge-server
+  WS/custody/restore plumbing, env translation) proving the harness-independent parts, PLUS a real
+  live-credentialed pass now proves the full materialize-shaped path end to end inside an actual
+  Kubernetes Pod: `initialize` -> `session/new` -> `session/prompt` (real Claude response) ->
+  `/custody` (real checksummed capture). Not yet done, and not silently skipped: a second-Pod
+  delete/restore/resume cycle against a real Pod (proven only at the process level in the spike,
+  not re-run against two real Pods), and cross-Agent (P07-style, alongside Codex) which is P10's own
+  dependency, not reachable before P10 exists.
 - [ ] Document image/adapter/route-set upgrade, rollback and Max credential renewal. Not yet
   written as a dedicated doc — captured piecemeal in this Evidence section and `SPIKE.md` instead.
   Genuine remaining work.
@@ -122,12 +127,16 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
 
 ## Exit criteria
 
-- [ ] All spike gates and baseline acceptance scenarios pass in a production-like Session Runtime.
-  Spike gates: PASS (see above). "In a production-like Session Runtime" specifically (an actual
-  Kubernetes Pod, not a plain process) is the live-verification pass still pending.
+- [x] All spike gates and baseline acceptance scenarios pass in a production-like Session Runtime.
+  Spike gates: PASS (see above). "In a production-like Session Runtime" (an actual Kubernetes Pod,
+  not a plain process) now proven too — real `initialize`/`session/new`/`session/prompt`/`/custody`
+  through a real Pod, real self-hosted OneCLI, real Claude Max credential. The one still-deferred
+  gate (MCP servers via Broker descriptors) was never exercised by any prompt in either pass.
 - [ ] A Pod can be deleted and the same ACP Session resumed from opaque custody. Proven as a plain
-  process (kill + fresh process + `session/resume`, zero replay, real context recall) — proving it
-  again with an actual Pod delete/re-materialize cycle is the same pending live pass.
+  process (kill + fresh process + `session/resume`, zero replay, real context recall) and the
+  capture half is now proven live in a real Pod too (`/custody` returning a real transcript) —
+  re-materializing a SECOND real Pod from that captured state and resuming into it is the one part
+  of this still not run.
 - [x] No real credential appears in the Pod environment/filesystem, custody, product journal or
   logs. True by construction and spike-verified: the child process's full environment was inspected
   live and carried no real credential; `claudeSpecificEnv` only ever reads/renames three non-secret
@@ -139,15 +148,16 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
 
 ## Evidence
 
-- Commit: on branch `refactoring`, local at completion time (not yet pushed — check in with the
-  operator before pushing, same rhythm as every prior plan).
+- Commit: on branch `refactoring`, pushed to `origin/refactoring` (checked in with the operator
+  first, same rhythm as every prior plan).
 - Packages/apps delivered:
   - `agents/claude-code/SPIKE.md` — the full spike report (see above for its findings).
-  - `agents/claude-code/src/bridge-server.ts` — the container entrypoint: spawns
-    `@agentclientprotocol/claude-agent-acp` once at startup (restore-before-ready), bridges every
-    WebSocket connection's duplex stream to its stdio, serves `/healthz`/`/custody`, and translates
-    Agora's generic per-Pod env contract into what the real adapter/CLI need
-    (`claudeSpecificEnv`) — fails closed on any missing input.
+  - `agents/claude-code/src/bridge-server.ts` — the container entrypoint: performs
+    restore-before-ready, spawns a fresh `@agentclientprotocol/claude-agent-acp` process per
+    WebSocket connection (bridging its duplex stream to the child's stdio), serves
+    `/healthz`/`/custody`, and translates Agora's generic per-Pod env contract into what the real
+    adapter/CLI need (`claudeSpecificEnv`) — fails closed on any missing input. Kills the whole
+    process group (child + the native `claude` grandchild it launches) on WS close or shutdown.
   - `agents/claude-code/src/session-id-tap.ts` — taps NDJSON frames in both directions to learn the
     real ACP `sessionId` from live traffic (a `session/resume`/`load` REQUEST names it directly; a
     `session/new` RESPONSE is correlated to its request id) — needed because the real controller
@@ -172,15 +182,22 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
     `@agora/acp`'s own already-real-tested fake Agent from P03, reused as a stand-in process for
     plumbing tests only — the ACTUAL adapter's own protocol correctness is what the spike, not this
     file, already proved against real Claude Max credentials).
+  - `agents/claude-code/live-verification-pod.yaml` — a manual, standalone Pod manifest mirroring
+    `pod-spec.ts`'s real contract by hand, used to prove the built image against the real cluster
+    directly (bypassing the Session Runtime controller); documents its own prerequisites (the
+    uncommitted secrets/configmaps a real run needs) in its header comment.
 - Architecture notes:
-  - **`bridge-server.ts` spawns the real Agent process ONCE per Pod, not once per WS connection** —
-    matching "one Session Runtime Pod = one Agora Session = one Agent process for the Pod's whole
-    life" (docs/specs/08), unlike `fake-agent-server.ts`'s own per-connection `createFakeAgent()`
-    call (harmless for an in-process fake with no real subprocess cost, wrong for a real external
-    harness process).
+  - **`bridge-server.ts` spawns the real Agent process per WS connection, not once at Pod
+    startup** — matches `fake-agent-server.ts`'s own per-connection `createFakeAgent()` pattern.
+    This was originally motivated by a misdiagnosed "idle-exit" theory (see bugs/gaps below, item
+    5) — that theory turned out to be false (the correctly-invoked binary survived 12s of true idle
+    with zero input, confirmed live), but per-connection spawning is kept anyway: it still avoids a
+    lingering child on a Pod nothing ever connects to, and costs nothing extra since production only
+    ever opens one real connection per Pod.
   - **The registry entry is `rollout: 'internal'`, not `'enabled'`**, deliberately: `internal` is
-    launchable (staff/testing — `selectLaunchableAgents`'s own filter already treats it that way)
-    without claiming general availability before the live-Pod pass below is done.
+    launchable (staff/testing — `selectLaunchableAgents`'s own filter already treats it that way).
+    The live-Pod pass below is now done; flipping to `'enabled'` (general availability) is left as a
+    product decision, not something proven infra should flip on its own.
   - **Image digest is the multi-arch INDEX digest** (`docker push`'s own reported digest for
     `:latest`), not the linux/amd64-specific manifest digest a first build attempt used — containerd
     resolves an index the same way a tag pull would, while still being pinned against a later
@@ -192,6 +209,14 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
   WebSocket, zero mocks, all passing, checkout-clean). Image:
   `docker build -f agents/claude-code/image/Dockerfile -t <tag> .` (repo root context), smoke-tested
   with `docker run` + the full real `AGORA_*` env contract set to fixture values (`/healthz` real).
+  Live-Pod pass: `sudo k0s kubectl apply -f agents/claude-code/live-verification-pod.yaml` against
+  namespace `agora-onecli-test` (real self-hosted OneCLI, real Claude Max credential — see P08's own
+  Evidence for how that namespace/credential was set up); driven with a small throwaway ACP client
+  script (`@agentclientprotocol/sdk`'s `client()`/`buildSession()`, not committed) speaking directly
+  to the Pod's ClusterIP on port 8080 (`kubectl port-forward` doesn't work through this cluster's
+  gVisor `RuntimeClass` — its nsenter-based mechanism can't see the sandboxed netstack's listener,
+  even though the readiness probe, which hits the Pod IP directly, works fine; Cilium's native
+  routing makes the Pod IP directly reachable from the host anyway, so this didn't block anything).
 - **Bugs/gaps this caught, not by re-reading but by running real infra**:
   1. `bridge-server.ts`'s first draft resolved the adapter binary via a path fixed relative to its
      own file location (`../node_modules/.bin/claude-agent-acp`) — works in a standalone npm
@@ -214,10 +239,47 @@ Claude Max subscription, no fakes/mocks anywhere in this list.
      its value produced a double-scheme proxy URL that resolved to a literal `"http"` hostname when
      parsed. Not this plan's own bug (P08's live-verification manifests), but found and fixed while
      re-verifying the credential path P09 depends on; recorded in `plans/08`'s own Evidence.
+  5. **The actual live-Pod blocker, found chasing what first looked like an idle-exit timing bug**:
+     `defaultAgentCommand()` resolved the bare package specifier
+     (`import.meta.resolve('@agentclientprotocol/claude-agent-acp')`), which lands on the package's
+     `"main"` entry (`dist/lib.js`) — a library module that only re-exports helpers, with no
+     top-level side effects. Run as a script, it does nothing; Node's event loop drains once its
+     async imports settle and the process exits cleanly (`code=0`, no stderr) a moment later. This
+     was first misread as a real idle-without-input timeout (motivating a lazy per-connection spawn
+     redesign — see architecture notes above), and only traced to the real cause by adding
+     byte-level tracing to the bridge's stdio pipes plus a battery of manual `claude-agent-acp`
+     invocations inside the live Pod that isolated the one variable that actually mattered: which
+     file gets run, not timing, env, or stdio mode. Confirmed live: the correct entry
+     (`dist/index.js`, the package's own `"bin"` target, the one that calls `runAcp()` and
+     `process.stdin.resume()`) survives 12s of true idle with zero input. Fixed by resolving the
+     package's own `"bin"` field from its `package.json` instead of guessing a path.
+  6. Killing only the direct child on WS close left the native `claude` process it launches running
+     as an orphan — found live: two verification connections in a row left two full sets of orphaned
+     processes in the Pod. Fixed by spawning with `detached: true` and killing the whole process
+     group (`process.kill(-pid, 'SIGTERM')`) instead of just the direct child.
+  7. **Known, deliberately unfixed**: after that process-group kill, the native `claude` grandchild
+     becomes a zombie rather than being reaped, because `bridge-server.js` runs as the container's
+     PID 1 and (unlike a real init system) never reaps children it didn't spawn directly. Confirmed
+     harmless (a zombie holds no CPU/memory, only a process-table slot) and moot in production (the
+     whole Pod is deleted after one Session, reclaiming everything regardless). A proper fix would
+     add an init wrapper (`tini`/`dumb-init`) as the container's real entrypoint, or a manual
+     SIGCHLD reap loop — flagged as a legitimate small follow-up, not applied here.
+- **Operational incident during this pass, not a code bug**: a `kubectl exec` debugging command
+  printed the live-verification namespace's OneCLI relay bearer token into the session transcript.
+  Blast radius is bounded (the token only reaches `onecli.agora-onecli-test.svc.cluster.local`, a
+  ClusterIP address unreachable outside the cluster's own pod network) but the token authenticates
+  against the same OneCLI instance carrying the real Claude Max credential link. Flagged to the
+  operator immediately; rotation needs OneCLI's own admin API key, which (by the established
+  "never persist a decrypted secret" pattern) was never written anywhere durable and isn't currently
+  recoverable without either re-bootstrapping OneCLI admin access or direct `onecli-postgres`
+  surgery — operator's explicit call was to leave it for now rather than do either autonomously.
+  Still open; worth revisiting before this namespace is treated as anything other than disposable.
 - **Deliberately deferred, not silently dropped**: MCP-servers-via-Broker-descriptors (spike gate,
-  Implementation both untouched — no test in this plan ever passed a non-empty `mcpServers`); the
-  live Session Runtime Pod pass (materialize with `CLAUDE_CODE_DEFINITION`, real ACP handshake, real
-  capture/Pod-replacement/restore/resume, all on the actual k0s cluster) — everything up to that
-  point is proven either as a plain process (the spike) or as a correctly-smoke-tested built image;
-  the one thing not yet proven is those two combined; upgrade/rollback/Max-credential-renewal
-  documentation as a dedicated doc.
+  Implementation both untouched — no test in this plan, nor the live-Pod pass, ever passed a
+  non-empty `mcpServers`); a second real Pod delete/restore/resume cycle (proven only at the process
+  level in the spike; the live-Pod pass proved materialize -> handshake -> capture but did not
+  re-materialize a second Pod from that capture); routing production traffic through the full Broker
+  relay specifically rather than OneCLI's gateway directly (both live passes used a direct
+  proxy-with-embedded-bearer stand-in, not `relay.ts`'s real workload-identity path — that needs a
+  real mesh sidecar this environment doesn't have standing up); the zombie-reaping gap above (#7);
+  upgrade/rollback/Max-credential-renewal documentation as a dedicated doc.

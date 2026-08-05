@@ -3,10 +3,12 @@ import type { AgentRuntimeDefinition } from './types.js'
 /**
  * `agents/claude-code/SPIKE.md` (2026-08-05, real infra, real Claude Max subscription, no fakes):
  * `@agentclientprotocol/claude-agent-acp@0.64.2`, wrapped by `agents/claude-code/src/bridge-server.ts`
- * behind the ACP bridge WebSocket listener, image built+pushed and smoke-tested live (a real Pod
- * running this image answered `/healthz`; the full ACP+custody flow was proven against the same
- * OneCLI/adapter combination outside Kubernetes in the spike — a real Session Runtime Pod
- * end-to-end pass is tracked separately, not yet done, hence `rollout: 'internal'` below).
+ * behind the ACP bridge WebSocket listener. A real Pod running this image has now completed the
+ * full live pass inside Kubernetes itself (not just the spike's outside-K8s proof): `initialize` ->
+ * `session/new` -> `session/prompt` (a real Claude response, through the real self-hosted
+ * OneCLI/Claude Max credential path) -> `/custody` returning a real, checksummed transcript capture
+ * keyed to the right sessionId. `rollout: 'internal'` is kept regardless — general availability is
+ * a product call for a human to make, not something proven infra tests should flip on their own.
  */
 export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
   agentId: 'claude-code',
@@ -16,7 +18,7 @@ export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
   // The multi-arch index digest (`docker push`'s own reported digest for the `:latest` tag) —
   // containerd/k0s resolve this to the right platform manifest automatically, same as pulling by
   // tag would, but pinned so a later `:latest` push can never silently change what launches.
-  imageDigest: 'ghcr.io/arnaultbretagne/agora-claude-code@sha256:73c20e6ab7d93c32f7cb3f9daf2dd0d7715250bdc57d55ef09676be6086fe4b3',
+  imageDigest: 'ghcr.io/arnaultbretagne/agora-claude-code@sha256:06d22bf5a86a0c5c50c448e8107a778767ff72e9ab087cac66779c53b5d1af57',
   // Matches agents/claude-code/image/Dockerfile's actual layout: the whole monorepo is built in
   // place under /repo, and the entrypoint lives where that build put it (same pattern
   // fake-definition.ts's own comment already established for this repo's images).
@@ -49,8 +51,9 @@ export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
     limits: { cpu: '1000m', memory: '1Gi', ephemeralStorage: '512Mi' },
   },
   health: { path: '/healthz', initialDelaySeconds: 2, timeoutSeconds: 2 },
-  // Registered and launchable for staff/testing, not yet general availability: the full
-  // materialize -> real ACP handshake -> capture -> Pod replacement -> restore -> resume path has
-  // not been re-proven inside an actual Kubernetes Pod (the spike proved it as a plain process).
+  // Registered and launchable for staff/testing, not yet general availability — a live Pod pass has
+  // now proven the full materialize -> real ACP handshake -> capture path end to end (this file's
+  // own doc comment), but Pod replacement -> restore -> resume was only re-proven at the process
+  // level in the spike, not re-run against a second real Pod inside Kubernetes.
   rollout: 'internal',
 }
