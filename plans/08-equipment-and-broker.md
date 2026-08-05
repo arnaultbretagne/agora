@@ -227,6 +227,62 @@ reassigned.
 The adoption evidence is already recorded in
 [`apps/broker/ONECLI-SPIKE.md`](../apps/broker/ONECLI-SPIKE.md).
 
+### Follow-up: `onecli-real.ts` corrected against a real live self-hosted OneCLI (2026-08-05)
+
+Everything below the original commit (`ec21500`) was real infra this pass genuinely touched, done as
+P09 preparation once the operator authorized live-credential work. Deployed a real, PVC-persistent,
+single-user self-hosted OneCLI `1.43.3` (`apps/broker/live-verification/`, namespace
+`agora-onecli-test`, same pinned image `ONECLI-SPIKE.md` used) and linked the operator's existing
+static Claude Max token (the SOPS secret `claude-oauth-token` already deployed for the old
+agent-runtime platform, reused via `POST /v1/secrets {type:"anthropic", value:<token>}` — OneCLI
+auto-detected OAuth mode from the `sk-ant-oat` prefix). Never printed the token itself at any point
+(decrypted directly into a root-only script, piped straight into the API call, shredded).
+
+**Re-verified, live, better than the original spike:**
+- CA continuity across a Pod restart: byte-identical SHA-256 before/after (spike's `emptyDir` setup
+  showed this FAIL; PVC-backed `/app/data` fixes it).
+- Real Claude Max authentication through the *actual* `getContainerConfig` container-config path
+  (not just `onecli run`): the real `claude` CLI, with zero real credentials in its own process
+  environment, authenticated through the gateway and got a genuine Anthropic reply.
+- Route-policy enforcement: a published explicit-allow + terminal-block pair correctly let
+  `api.anthropic.com` through (reached the real service — HTTP 404 from Anthropic's own API root, not
+  a gateway rejection) while returning HTTP 403 for two unlisted hosts.
+
+**A real, previously-unknown gap found and fixed in `apps/broker/src/onecli-real.ts`** (not
+exercised by this plan's automated test suite, which correctly stays on the fake double — see below):
+1. `client.org.*` (the SDK surface `publishRoutePolicy`/`getPublishedGeneration` were built on)
+   404s on Community self-hosted OneCLI: `"Organization-level resources require OneCLI Cloud or a
+   self-hosted Enterprise instance"`. Found by testing it directly against the live instance, not by
+   inspection. The real, working mechanism — found by reading the self-hosted dashboard's own
+   compiled server bundle, since it isn't in the public API reference either — is a project-scoped
+   REST surface: `GET/POST/DELETE /v1/policy/rules` + `POST /v1/policy/publish` + `GET
+   /v1/policy/last-publish`. Rewrote both methods to call it directly via `fetch`, verified live:
+   publish → generation returned → `getPublishedGeneration()` reads back the identical value.
+   Bonus finding, not adopted this pass: the project-scoped schema's `identities` accepts
+   `{type:'agent', id}` (the org-scoped one explicitly cannot) — real per-Agent route scoping is
+   possible and wasn't previously known to be. `route-policy.ts` still compiles the project-wide
+   union documented since the original commit; adopting per-Agent scoping is future work.
+2. `rotateAgentAuthority`/`deleteAgent`'s inferred REST paths used the caller-supplied `identifier`
+   string; the real endpoints (`POST /v1/agents/{id}/regenerate-token`, `DELETE /v1/agents/{id}`)
+   require the internal `id` UUID instead — confirmed live (identifier: 404 "Agent not found"; id:
+   200/204). `ensureAgent`'s own response never returns that `id`, so the adapter now resolves
+   `identifier -> id` via `listAgents()` internally; the adapter's own public interface (still keyed
+   by `identifier`, matching everything `grant-service.ts` already stores) is unchanged.
+- Full live round-trip re-verified against the CORRECTED adapter end to end: ensureSelectiveAgent ->
+  publishRoutePolicy -> getPublishedGeneration (matches) -> getContainerConfig (real bearer present)
+  -> rotateAgentAuthority -> deleteAgent -> deleteAgent again (idempotent, no error) ->
+  getContainerConfig now fails closed. All 8 steps passed.
+- Scope boundary preserved deliberately: this adapter is still NOT exercised by `npm test` — the
+  automated suite remains runnable with zero live infra or credentials, per the plan's own standing
+  design decision. This live pass is recorded here as evidence, the same way P04's cluster
+  verification is recorded in its own plan file rather than folded into the unit-test suite.
+- Not re-investigated this pass (flagged, not solved): every freshly created Agent showed
+  `secretMode: "all"` in this Community instance's own listing, and the successful live Claude test
+  above used the DEFAULT Agent (no `agent` option passed), not a freshly created selective one — so
+  this pass did NOT re-prove Session-to-Session Agent *credential* isolation specifically (route
+  policy isolation was re-proven; credential isolation was already PASS in `ONECLI-SPIKE.md` and
+  is exactly one of P09's own mandatory spike gates, so it gets re-proven there instead of twice).
+
 - Commit: on branch `refactoring`, local at completion time (not yet pushed — same push rhythm as
   P01-P07: check in with the operator before pushing).
 - Standing design decision (stated up front, not re-litigated per file below): the entire
