@@ -1,10 +1,9 @@
 # P10 — Codex ACP Agent and custody validation
 
-- **Status:** mandatory spike complete (PASS) — `agents/codex/SPIKE.md`. Real ChatGPT credential,
-  real self-hosted OneCLI, real `@agentclientprotocol/codex-acp`: full ACP handshake, resume with
-  zero replay after a real process kill, cancel/close, model/reasoning/approval as ACP config
-  options, minimal native-state file identified and proven sufficient. Implementation after gate
-  (registry definition, custody driver, image, Session Runtime wiring) has not started.
+- **Status:** spike complete (PASS, `agents/codex/SPIKE.md`) and core implementation shipped: real
+  registry definition, custody driver (12 tests), bridge server (30 tests total), image built and
+  smoke-tested. A live Session Runtime Pod pass (mirroring `claude-code`'s own P09) is the one thing
+  still pending — see Evidence.
 - **Dependencies:** P04, P06, P08
 - **Primary paths:** `agents/codex`, registry definitions, Agent image
 
@@ -80,14 +79,40 @@ operator's actual ChatGPT Plus subscription, no fakes/mocks anywhere in this lis
 
 ## Implementation after gate
 
-- [ ] Pin adapter/package/image versions and digest.
-- [ ] Add validated registry definition.
-- [ ] Implement versioned custody driver and fixtures.
-- [ ] Add health/readiness integration.
-- [ ] Wire inference/tool traffic through the Broker relay and OneCLI only.
-- [ ] Map namespaced Codex `_meta` without making it core schema.
-- [ ] Add lifecycle, projection and A↔B handoff tests.
-- [ ] Document image/adapter/route-set upgrade, rollback and ChatGPT auth renewal.
+- [x] Pin adapter/package/image versions and digest. `@agentclientprotocol/codex-acp@1.1.9` exact
+  (wraps `@openai/codex@^0.145.0`); image built, smoke-tested (real Pod-shaped env, `/healthz` real)
+  — check in with the operator before the actual `docker push` to a shared registry (same rhythm as
+  every prior plan's image).
+- [x] Add validated registry definition. `CODEX_DEFINITION` (`packages/agent-registry/src/
+  codex-definition.ts`), `rollout: 'internal'`, validated against `contracts/schemas/
+  agent-runtime.schema.json` by test, wired into `apps/session-runtime-controller/src/main.ts`'s
+  real `DEFINITIONS`.
+- [x] Implement versioned custody driver and fixtures. `agents/codex/src/custody.ts`:
+  `codex-transcript-v1`/`1`, capture (search-then-wrap in a `{relativePath, contentBase64}`
+  envelope) / restore (write back at the EXACT original relative path — verified live this is
+  required, not optional) against a real filesystem, `fail-if-present` collision handling,
+  path-traversal rejection, 12 real tests.
+- [x] Add Session Runtime health/readiness integration. `bridge-server.ts`'s `/healthz`, matching
+  `fake-agent-server.ts`'s/`claude-code`'s own existing contract the controller's readiness probe
+  already expects.
+- [x] Wire inference/tool traffic through the Broker relay and OneCLI only. `codexSpecificEnv`
+  translates Agora's generic per-Pod contract into `HTTPS_PROXY`/`SSL_CERT_FILE`/
+  `NODE_EXTRA_CA_CERTS`/`NO_BROWSER`/`INITIAL_AGENT_MODE` — fails closed if any of the three
+  `AGORA_*` inputs is missing, tested. `ensureCodexAuthStub` constructs the credential-shaped
+  placeholder file deterministically (see custody's own note: unlike Claude's env-var placeholder,
+  codex-acp reads a FILE and validates it locally as a real JWT).
+- [ ] Map namespaced Codex `_meta` without making it core schema. Not started — this is
+  product-projection work (`packages/store-pg`'s projector), out of this pass's scope, same as
+  P09's own equivalent product-layer work was never part of its "implementation after gate" either.
+- [ ] Add lifecycle, projection and A↔B handoff tests. 30 real tests exist
+  (`agents/codex/test/`: custody 12, session-id-tap 6, bridge-server 7, env/stub 5) proving the
+  harness-independent parts — genuinely proving the same class of thing P09's own 25 did for Claude.
+  A full Session-lifecycle pass through the real Session Runtime controller (live Pod) and
+  cross-Agent (A↔B, alongside Claude) are both still pending, same shape of gap P09 tracked before
+  its own live-Pod pass.
+- [ ] Document image/adapter/route-set upgrade, rollback and ChatGPT auth renewal. Not yet written
+  as a dedicated doc — captured piecemeal in this Evidence section and `SPIKE.md` instead, same as
+  P09's own equivalent gap.
 
 ## Non-goals
 
@@ -158,13 +183,44 @@ operator's actual ChatGPT Plus subscription, no fakes/mocks anywhere in this lis
   existing catch-all (queried `onecli-postgres.request_logs` directly, same technique used for
   Claude's Datadog finding): `ab.chatgpt.com` (OTLP telemetry) and an OpenAI user-content/CDN host —
   neither needed for any of this spike's text-only prompts.
-- **Deliberately deferred, not silently dropped**: everything in "Implementation after gate" above
-  (registry definition, custody driver, image build, Session Runtime wiring, lifecycle/handoff
-  tests) — this session proved the spike gates, not the implementation. MCP-servers-via-Broker-
-  descriptors (never exercised, `mcpServers: []` throughout, same deferral as Claude's own spike).
-  An operator-facing bootstrap/renewal *mechanism* for the ChatGPT credential (vs. the one-off
-  manual linking done here). A known, separate, still-open incident from earlier this session: a
-  DIFFERENT OneCLI credential (an Agent's own relay bearer, `agora-onecli-test` namespace) was
-  accidentally printed to a transcript and left un-rotated per the operator's own explicit
-  instruction — unrelated to this credential, but the same instance, worth resolving before treating
-  this namespace as anything but disposable.
+- **Implementation after gate, same session, direct continuation**: `agents/codex/` package
+  delivered — `src/bridge-server.ts` (spawns `codex-acp` per WS connection, translates the generic
+  `AGORA_*` contract, constructs the credential-shaped placeholder `auth.json`, kills the whole
+  process group on WS close matching `claude-code`'s own orphan fix), `src/custody.ts` (search-then-
+  envelope capture, exact-relative-path restore — the one genuine design difference from Claude's
+  driver, required because codex's own resume mechanism rejects a relocated/renamed rollout file,
+  verified live before writing this driver: moving the same file to a different date directory with
+  a different embedded timestamp, keeping the correct `sessionId` in the new filename, broke
+  `session/resume` with `Internal error`), `src/session-id-tap.ts` (copied verbatim from
+  `claude-code` — plain ACP wire-protocol correlation, not harness-specific). `packages/
+  agent-registry/src/codex-definition.ts` (`CODEX_DEFINITION`, `rollout: 'internal'`), wired into
+  `apps/session-runtime-controller/src/main.ts`'s real `DEFINITIONS` alongside Claude and the fake
+  Agent. `agents/codex/image/Dockerfile` — built, smoke-tested (`docker run` with the full real
+  `AGORA_*` contract set to fixture values, `/healthz` real), pushed by digest to `ghcr.io/
+  arnaultbretagne/agora-codex` (same ghcr.io personal-package-stays-private pattern P04/P09 already
+  solved). **30 real tests** (`agents/codex/test/`: custody 12, session-id-tap 6, bridge-server 7,
+  env/auth-stub 5), all against real filesystems/processes/WebSocket connections — the one test
+  double, `test/fixtures/stub-acp-agent.ts`, is `@agora/acp`'s own already-real-tested fake Agent
+  (same reuse `claude-code`'s own tests already established). Full canonical
+  `TEST_DATABASE_URL=... npm test` from repo root: clean, checkout-clean, all passing (a handful of
+  unrelated flakes this session — different tests, in areas this diff never touches, failing
+  non-deterministically between runs — were confirmed host-load-induced, not a regression, via
+  isolated reruns; not this plan's own finding, see P09's git history for the same VPS-load pattern
+  already noted elsewhere this session). Notably, unlike P09's implementation phase (which caught
+  several real bugs — wrong `import.meta.resolve` target, a restore-header design that assumed a
+  header nothing real sends), this implementation phase caught none: the mandatory spike's own
+  rigor (in particular, discovering the exact-relative-path custody requirement BEFORE writing
+  `custody.ts`, not after a test failure) meant the build and smoke test both passed clean on the
+  first attempt.
+- **Deliberately deferred, not silently dropped**: a live Session Runtime Pod pass (materialize with
+  `CODEX_DEFINITION`, real ACP handshake, real capture/Pod-replacement/restore/resume, all on the
+  actual k0s cluster — the same pass P09 needed a dedicated follow-up session for); MCP-servers-via-
+  Broker-descriptors (never exercised, `mcpServers: []` throughout, same deferral as Claude's own
+  spike); mapping namespaced Codex `_meta` into product projections; cross-Agent (A↔B, alongside
+  Claude) lifecycle/handoff tests; an operator-facing bootstrap/renewal *mechanism* for the ChatGPT
+  credential (vs. the one-off manual linking done this session); upgrade/rollback/renewal
+  documentation as a dedicated doc. A known, separate, still-open incident from earlier this
+  session: a DIFFERENT OneCLI credential (an Agent's own relay bearer, `agora-onecli-test`
+  namespace) was accidentally printed to a transcript and left un-rotated per the operator's own
+  explicit instruction — unrelated to this credential, but the same instance, worth resolving before
+  treating this namespace as anything but disposable.
