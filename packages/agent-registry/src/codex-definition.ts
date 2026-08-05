@@ -17,7 +17,7 @@ export const CODEX_DEFINITION: AgentRuntimeDefinition = {
   // The multi-arch index digest (`docker push`'s own reported digest for the `:latest` tag) —
   // containerd/k0s resolve this to the right platform manifest automatically, same as pulling by
   // tag would, but pinned so a later `:latest` push can never silently change what launches.
-  imageDigest: 'ghcr.io/arnaultbretagne/agora-codex@sha256:51d690e890a71d711926f8d7035d4e29781ce3545eec9f4738b96a79053df831',
+  imageDigest: 'ghcr.io/arnaultbretagne/agora-codex@sha256:9fab3cbb5a1af528ce37e3ec28d8cd76e86027cee2e2b57b5789cc6ad6001326',
   // Matches agents/codex/image/Dockerfile's actual layout: the whole monorepo is built in place
   // under /repo, and the entrypoint lives where that build put it (same pattern claude-code's own
   // definition already established for this repo's images).

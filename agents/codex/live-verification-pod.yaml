@@ -1,0 +1,74 @@
+# Manual live-verification Pod for the codex Agent runtime image — mirrors
+# apps/session-runtime-controller/src/pod-spec.ts's real contract by hand (this bypasses the
+# controller itself; it exists only to prove the IMAGE against a real cluster + real OneCLI + real
+# ChatGPT credential, matching packages/agent-registry/src/codex-definition.ts).
+#
+# Prerequisite: same as agents/claude-code/live-verification-pod.yaml's own — the
+# apps/broker/live-verification/ namespace/OneCLI/Postgres stack, plus the ghcr-pull, onecli-ca-test,
+# onecli-relay-endpoint-test secrets/configmaps from that session's setup (deliberately not
+# committed — "no credential in a committed file"). PLUS a `codex-auth-json` key in
+# onecli-stub-test carrying the REAL linked account's {idToken, accountId} (non-bearer identity
+# claims, not the bearer itself — see ensureCodexAuthStub's own doc for why a fully-synthetic
+# placeholder does not work, found live chasing a real "Authentication required" failure).
+#
+# sudo k0s kubectl apply -f agents/codex/live-verification-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: codex-live-test
+  namespace: agora-onecli-test
+  labels:
+    app: codex-live-test
+spec:
+  restartPolicy: Never
+  runtimeClassName: sandboxed
+  automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: ghcr-pull
+  securityContext:
+    fsGroup: 1000
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: agent
+      image: ghcr.io/arnaultbretagne/agora-codex@sha256:9fab3cbb5a1af528ce37e3ec28d8cd76e86027cee2e2b57b5789cc6ad6001326
+      command: ["node", "/repo/agents/codex/dist/src/bridge-server.js"]
+      ports:
+        - containerPort: 8080
+      env:
+        - name: AGORA_BROKER_RELAY_ENDPOINT
+          valueFrom:
+            secretKeyRef: { name: onecli-relay-endpoint-test, key: url }
+        - name: AGORA_ONECLI_CA_PATH
+          value: /etc/agora/onecli-ca.pem
+        - name: AGORA_ONECLI_STUBS_DIR
+          value: /etc/agora/onecli-stubs
+        - name: AGORA_WORKSPACE_ROOT
+          value: /home/node/work
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        readOnlyRootFilesystem: false
+        runAsNonRoot: true
+        runAsUser: 1000
+      resources:
+        requests: { cpu: 250m, memory: 256Mi }
+        limits: { cpu: 1000m, memory: 1Gi, ephemeral-storage: 512Mi }
+      readinessProbe:
+        httpGet: { path: /healthz, port: 8080 }
+        initialDelaySeconds: 2
+        timeoutSeconds: 2
+      volumeMounts:
+        - { name: workspace, mountPath: /home/node/work }
+        - { name: onecli-ca, mountPath: /etc/agora/onecli-ca.pem, subPath: ca.pem, readOnly: true }
+        - { name: onecli-stubs, mountPath: /etc/agora/onecli-stubs, readOnly: true }
+  volumes:
+    - name: workspace
+      emptyDir: {}
+    - name: onecli-ca
+      configMap: { name: onecli-ca-test, items: [{ key: ca.pem, path: ca.pem }] }
+    - name: onecli-stubs
+      projected:
+        sources:
+          - configMap: { name: onecli-stub-test, items: [{ key: codex-auth-json, path: codex-auth-json }] }

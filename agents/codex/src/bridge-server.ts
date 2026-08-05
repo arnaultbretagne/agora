@@ -30,11 +30,14 @@ import { watchForSessionId } from './session-id-tap.js'
  * needs is this image's own job (`childEnv` below).
  *
  * Unlike Claude Code (a placeholder OAuth token in an ENV VAR), codex-acp reads its credential from
- * a FILE (`$HOME/.codex/auth.json`), and — found live in the spike — validates its `id_token` as a
- * real JWT locally before ever touching the network. `ensureCodexAuthStub` below writes a fixed,
- * non-secret, structurally-valid-but-never-functional placeholder there before every spawn — the
- * harness image's own deterministic construction, not something an operator populates (unlike
- * Claude's simple string marker, this one has real internal shape requirements codex validates).
+ * a FILE (`$HOME/.codex/auth.json`), and — found live inside an actual Pod, not the spike — its
+ * `id_token` must genuinely identify the linked account, not just parse as a JWT: a first version
+ * of `ensureCodexAuthStub` constructed a wholly-synthetic one and `session/new` failed
+ * "Authentication required" every time. The id_token/account_id (real, non-bearer identity claims
+ * — never the actual access/refresh bearer, which stays a fixed placeholder OneCLI substitutes
+ * server-side) are read from the same `AGORA_ONECLI_STUBS_DIR` mechanism every other harness's stub
+ * content comes from (see `ensureCodexAuthStub`'s own doc for the full story and the security
+ * nuance it flags).
  */
 export interface BridgeServerOptions {
   readonly port?: number
@@ -85,10 +88,9 @@ const AUTH_STUBS_DIR_ENV = 'AGORA_ONECLI_STUBS_DIR'
  * across every harness) into exactly what `codex-acp`/the real `codex` binary read. Never touches
  * an upstream OneCLI bearer or a real provider credential — the relay endpoint carries no embedded
  * bearer (workload identity authenticates it, not a URL userinfo — `relay.ts`'s own design).
- * `AUTH_STUBS_DIR_ENV` is still required (fails closed if missing, matching every other harness's
- * contract) even though nothing is read FROM it here — `ensureCodexAuthStub` writes the actual
- * credential-shaped placeholder straight to `$HOME/.codex/auth.json`, deterministically, needing no
- * externally-supplied stub content (see this module's own doc comment for why).
+ * `AUTH_STUBS_DIR_ENV` is required (fails closed if missing) but nothing is read FROM it in THIS
+ * function specifically — `ensureCodexAuthStub` (called separately, see its own doc) reads the
+ * actual stub content from the same directory to build `$HOME/.codex/auth.json`.
  */
 export function codexSpecificEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const relayEndpoint = env[RELAY_ENDPOINT_ENV]
@@ -116,24 +118,51 @@ export function codexSpecificEnv(env: NodeJS.ProcessEnv): Record<string, string>
   }
 }
 
-/** codex-acp validates its credential file's `id_token` as a real JWT locally before ever touching
- * the network (found live in the spike: a bare placeholder string fails this check before any
- * request is attempted). This constructs a structurally-valid-but-inert one (`alg: "none"`, no real
- * signature) the exact same way the spike's own verification script did — fixed, non-secret,
- * deterministic, never functional on its own; the real credential substitution happens entirely at
- * the OneCLI gateway, keyed off the linked account, not off anything in this file's content. */
-export async function ensureCodexAuthStub(homeDir: string): Promise<void> {
-  const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url')
-  const payload = Buffer.from(JSON.stringify({ sub: 'onecli-managed', email: 'onecli-managed@example.invalid' })).toString('base64url')
-  const placeholderIdToken = `${header}.${payload}.`
+const CODEX_AUTH_STUB_FILENAME = 'codex-auth-json'
+
+/**
+ * codex-acp validates its credential file's `id_token` as a real JWT locally, and — found live,
+ * chasing a real "Authentication required" failure on `session/new` that a fully-synthetic
+ * placeholder id_token (structurally valid but with fabricated claims) never surfaced until an
+ * actual Pod run — the id_token's own claims must genuinely identify the linked ChatGPT account,
+ * not just parse as a JWT. A first version of this function constructed a wholly-synthetic
+ * placeholder (matching what the SPIKE's own verification script used, WHICH REUSED THE REAL
+ * id_token — a distinction this function's first draft missed). So the id_token/account_id are
+ * real, non-bearer identity claims this harness must be GIVEN (same `AGORA_ONECLI_STUBS_DIR`
+ * mechanism every harness reads its stub content from — `claudeSpecificEnv`'s own precedent), not
+ * something this image can construct from nothing. Only `access_token`/`refresh_token` stay fixed,
+ * non-secret, never-functional placeholders — the real bearer substitution happens entirely at the
+ * OneCLI gateway, keyed off the account identity these claims name.
+ *
+ * The id_token is NOT a bearer credential on its own (useless for API calls without a matching
+ * access/refresh token, which OneCLI never hands out) but it DOES genuinely identify a real
+ * account — real enough that OneCLI's own dashboard redacts it in secret-value previews. Reusing
+ * the same ConfigMap-backed `authStubs` mechanism every other harness's stub already uses is a
+ * judgment call, not a settled one — flagged here, not silently accepted, in case a
+ * higher-sensitivity (Secret-backed) stub channel is worth adding later.
+ */
+export async function ensureCodexAuthStub(homeDir: string, stubsDir: string): Promise<void> {
+  const stubPath = join(stubsDir, CODEX_AUTH_STUB_FILENAME)
+  let identity: { idToken: string; accountId: string }
+  try {
+    const raw = await readFile(stubPath, 'utf8')
+    const parsed = JSON.parse(raw) as { idToken?: unknown; accountId?: unknown }
+    if (typeof parsed.idToken !== 'string' || typeof parsed.accountId !== 'string' || !parsed.idToken || !parsed.accountId) {
+      throw new Error('stub is missing idToken/accountId string fields')
+    }
+    identity = { idToken: parsed.idToken, accountId: parsed.accountId }
+  } catch (error) {
+    throw new Error(`could not read the OneCLI codex auth stub at ${stubPath}: ${String(error)}`)
+  }
+
   const authJson = {
     auth_mode: 'chatgpt',
     OPENAI_API_KEY: null,
     tokens: {
-      id_token: placeholderIdToken,
+      id_token: identity.idToken,
       access_token: 'onecli-managed',
       refresh_token: 'onecli-managed',
-      account_id: '00000000-0000-0000-0000-000000000000',
+      account_id: identity.accountId,
     },
     last_refresh: new Date(0).toISOString(),
   }
@@ -267,7 +296,11 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   const agentCommand = options.agentCommand ?? (await defaultAgentCommand())
   const childEnv = options.childEnv ?? { ...process.env, ...codexSpecificEnv(process.env) }
   const childCwd = options.cwd ?? process.env.AGORA_WORKSPACE_ROOT
-  if (!options.childEnv) await ensureCodexAuthStub(homeDir)
+  if (!options.childEnv) {
+    const stubsDir = process.env[AUTH_STUBS_DIR_ENV]
+    if (!stubsDir) throw new Error(`missing ${AUTH_STUBS_DIR_ENV} in the Pod's own environment`)
+    await ensureCodexAuthStub(homeDir, stubsDir)
+  }
 
   const httpServer = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/healthz') {

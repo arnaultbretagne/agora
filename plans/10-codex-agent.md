@@ -1,9 +1,11 @@
 # P10 — Codex ACP Agent and custody validation
 
-- **Status:** spike complete (PASS, `agents/codex/SPIKE.md`) and core implementation shipped: real
-  registry definition, custody driver (12 tests), bridge server (30 tests total), image built and
-  smoke-tested. A live Session Runtime Pod pass (mirroring `claude-code`'s own P09) is the one thing
-  still pending — see Evidence.
+- **Status:** implementation complete and live-Pod verification passed (real k0s cluster, real
+  self-hosted OneCLI, real ChatGPT credential): `initialize` -> `session/new` -> `session/prompt`
+  with a real model response -> `/custody` returning a real checksummed rollout capture, all inside
+  an actual Pod, repeated twice cleanly. A real bug was found and fixed in the process — see
+  Evidence. Remaining gaps are the same shape P09 left for Claude: MCP servers, second-Pod
+  delete/restore/resume, cross-Agent handoff, upgrade/rollback docs.
 - **Dependencies:** P04, P06, P08
 - **Primary paths:** `agents/codex`, registry definitions, Agent image
 
@@ -132,7 +134,8 @@ operator's actual ChatGPT Plus subscription, no fakes/mocks anywhere in this lis
 
 ## Evidence
 
-- Commit: on branch `refactoring`, checked in with the operator before pushing.
+- Commit: on branch `refactoring`, pushed to `origin/refactoring` (checked in with the operator
+  first, same rhythm as every prior plan).
 - Real credential linking, 2026-08-05 (both `dev` and `root` local `codex login` sessions on this
   VPS were already authenticated as the operator's real ChatGPT Plus account — no fresh interactive
   login was actually needed this pass): the `dev` copy (more recently refreshed) was POSTed to the
@@ -224,3 +227,29 @@ operator's actual ChatGPT Plus subscription, no fakes/mocks anywhere in this lis
   namespace) was accidentally printed to a transcript and left un-rotated per the operator's own
   explicit instruction — unrelated to this credential, but the same instance, worth resolving before
   treating this namespace as anything but disposable.
+- **Live Session Runtime Pod pass, same session, direct continuation (mirrors P09's own follow-up
+  session for Claude, done here immediately instead)**: `agents/codex/live-verification-pod.yaml`
+  deployed against `agora-onecli-test`. First attempt failed live: `session/new` rejected with
+  `RequestError: Authentication required`, right after a real `initialize` succeeded — a genuinely
+  new finding this plan's own spike never hit, because the spike's OWN verification script reused
+  the real linked account's `id_token` (identity claims, not the bearer) alongside fake access/
+  refresh tokens, while `ensureCodexAuthStub`'s first implementation constructed a WHOLLY SYNTHETIC
+  id_token (fabricated `sub`/`email` claims). Debugged live inside the Pod (careful, redacted
+  `kubectl exec` inspection plus a controlled `kubectl cp` test carrying the real id_token, never
+  printed): confirmed the real id_token — genuinely identifying the linked account, still never the
+  bearer itself, which OneCLI substitutes server-side regardless — is required; a fully-synthetic
+  one fails no matter how structurally valid its JWT shape is. **Fixed**: `ensureCodexAuthStub` now
+  reads `{idToken, accountId}` from a `codex-auth-json` stub file (same `AGORA_ONECLI_STUBS_DIR`
+  mechanism every harness already uses) instead of fabricating them, keeping only
+  `access_token`/`refresh_token` as fixed, non-secret, never-functional placeholders it constructs
+  itself. Flagged, not silently decided: the existing `authStubs` mechanism is ConfigMap-backed
+  (`pod-spec.ts`'s own projected volume), and an id_token — while not a bearer credential on its
+  own — is real, account-identifying content (OneCLI's own dashboard redacts it in previews); worth
+  reconsidering a higher-sensitivity Secret-backed stub channel later, not blocking this pass.
+  Rebuilt (32 tests now, +2 fail-closed cases for the new stub contract), image rebuilt+pushed+
+  redeployed with the fix, **re-verified clean twice in a row** with the corrected code path (no
+  manual patching): real `initialize`/`session/new`/`session/prompt` (real "42" response) ->
+  `/custody` (real checksummed envelope, correct `relativePath`). Logs clean, zero unexpected exits.
+  One process-group kill leaves the same class of harmless zombie `claude-code` already found and
+  accepted (PID 1 doesn't reap grandchildren it didn't spawn directly; zero resource cost, moot at
+  Pod teardown) — not re-litigated, same finding, same acceptance.
