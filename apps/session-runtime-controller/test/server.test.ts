@@ -8,8 +8,11 @@ import { principalId, workstreamId as toWorkstreamId } from '@agora/domain'
 import { createWorkstreamWithFirstSession } from '@agora/store-pg'
 import { BridgeCredentialIssuer } from '../src/bridge-credentials.js'
 import { FAKE_NATIVE_FORMAT_ID, startFakeAgentServer } from '../src/fake-agent-server.js'
+import { serviceAccountName } from '../src/labels.js'
+import { fakeRelayBundle } from '../src/relay-bundle.js'
 import { CustodyStreamIssuer } from '../src/restore-credentials.js'
 import { createServer } from '../src/server.js'
+import { FakeBrokerActivationClient } from './support/fake-broker-activation-client.js'
 import { FakeK8s } from './support/fake-k8s.js'
 import { openTestDatabase, type TestDatabaseHandle } from './support.js'
 
@@ -17,6 +20,7 @@ let baseUrl: string
 let k8s: FakeK8s
 let bridgeIssuer: BridgeCredentialIssuer
 let restoreIssuer: CustodyStreamIssuer
+let brokerActivationClient: FakeBrokerActivationClient
 let db: TestDatabaseHandle
 let server: ReturnType<typeof createServer>
 
@@ -36,6 +40,7 @@ before(async () => {
   k8s = new FakeK8s()
   bridgeIssuer = new BridgeCredentialIssuer()
   restoreIssuer = new CustodyStreamIssuer()
+  brokerActivationClient = new FakeBrokerActivationClient()
   // Self-referential: this same server serves both the controller API and the restore stream a
   // Pod pulls from — the port is only known once reserved, unlike production's fixed listen port.
   const port = await reserveFreePort()
@@ -49,6 +54,8 @@ before(async () => {
     custodyPool: db.pool,
     restoreIssuer,
     custodyControllerBaseUrl: baseUrl,
+    relayBundle: fakeRelayBundle(),
+    brokerActivationClient,
   })
   await new Promise<void>((resolve) => server.listen(port, resolve))
 })
@@ -157,6 +164,42 @@ test('full lifecycle: materialize -> get -> ready -> open ACP connection -> dema
 
   const getAfterDelete = await fetch(`${baseUrl}/v1/sessions/${sessionId}/runtime`)
   assert.equal(getAfterDelete.status, 404)
+})
+
+test('required: materialize binds grant + session_id + agent_id + workload_identity via the Broker before any Pod exists', async () => {
+  const sessionId = randomUUID()
+  const requestId = randomUUID()
+  brokerActivationClient.calls.length = 0
+  const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/runtime`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-request-id': requestId },
+    body: JSON.stringify(materializeBody({ executionGrantRef: 'grant-ref-bind-test' })),
+  })
+  assert.equal(res.status, 202)
+  assert.equal(brokerActivationClient.calls.length, 1)
+  const call = brokerActivationClient.calls[0]
+  assert.equal(call?.grantRef, 'grant-ref-bind-test')
+  assert.equal(call?.sessionId, sessionId)
+  assert.equal(call?.agentId, FAKE_AGENT_DEFINITION.agentId)
+  assert.equal(call?.workloadIdentity, serviceAccountName(sessionId))
+  assert.equal(call?.requestId, requestId)
+})
+
+test('required: Broker denial of grant activation prevents Pod creation (fail closed)', async () => {
+  const sessionId = randomUUID()
+  brokerActivationClient.denyWithStatus = 403
+  try {
+    const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/runtime`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-request-id': randomUUID() },
+      body: JSON.stringify(materializeBody()),
+    })
+    assert.equal(res.status, 403)
+    const pods = await k8s.listPods(`agora.dev/session-id=${sessionId}`)
+    assert.equal(pods.length, 0, 'a grant the Broker refuses to activate must never produce a Pod')
+  } finally {
+    brokerActivationClient.denyWithStatus = undefined
+  }
 })
 
 test('required: DELETE for a non-materialized Session Runtime succeeds (204)', async () => {

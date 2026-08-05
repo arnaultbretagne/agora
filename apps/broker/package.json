@@ -2,5 +2,25 @@
   "name": "@agora/broker",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "start": "node dist/src/main.js",
+    "test": "npm run build && node --test $(find dist -name '*.test.js')"
+  },
+  "dependencies": {
+    "@agora/agent-registry": "0.0.0",
+    "@agora/domain": "0.0.0",
+    "@agora/equipment-policy": "0.0.0",
+    "@agora/store-pg": "0.0.0",
+    "@apidevtools/swagger-parser": "12.1.0",
+    "@onecli-sh/sdk": "3.0.0",
+    "ajv": "8.20.0",
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.11.10"
+  }
 }

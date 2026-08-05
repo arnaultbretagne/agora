@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 import { FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { BridgeCredentialIssuer } from './bridge-credentials.js'
+import { createHttpBrokerActivationClient } from './broker-activation-client.js'
 import { K8sClient } from './k8s-client.js'
+import type { RelayBundle } from './relay-bundle.js'
 import { CustodyStreamIssuer } from './restore-credentials.js'
 import { createServer } from './server.js'
 
@@ -27,6 +29,14 @@ const registryRevision = createHash('sha256').update(JSON.stringify(DEFINITIONS)
 // SEPARATE credential from any product/control-plane database user (docs/specs/07 "Access control").
 const custodyPool = createPool(requireDatabaseUrl({ DATABASE_URL: process.env.CUSTODY_DATABASE_URL }))
 const custodyControllerBaseUrl = requireEnv('CUSTODY_CONTROLLER_BASE_URL')
+// P08's own operator-managed values (relay-bundle.ts's own doc comment: "P08 supplies the real
+// VALUES ... through the identical RelayBundle shape"), never Session-specific, never secret.
+const relayBundle: RelayBundle = {
+  relayEndpoint: requireEnv('AGORA_BROKER_RELAY_ENDPOINT'),
+  oneCliCaPem: requireEnv('AGORA_ONECLI_CA_PEM'),
+  authStubs: JSON.parse(process.env.AGORA_ONECLI_AUTH_STUBS_JSON ?? '{}') as Record<string, string>,
+}
+const brokerActivationClient = createHttpBrokerActivationClient(requireEnv('BROKER_CONTROL_BASE_URL'))
 
 const server = createServer({
   k8s: new K8sClient({ namespace }),
@@ -37,6 +47,8 @@ const server = createServer({
   custodyPool,
   restoreIssuer: new CustodyStreamIssuer(),
   custodyControllerBaseUrl,
+  relayBundle,
+  brokerActivationClient,
   ...(runAsUser !== undefined ? { runAsUser } : {}),
   ...(runtimeClassName ? { runtimeClassName } : {}),
   ...(imagePullSecretName ? { imagePullSecretName } : {}),

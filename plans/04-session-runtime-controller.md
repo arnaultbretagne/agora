@@ -39,12 +39,12 @@ Record provenance for every reused module.
 - [x] Resolve only enabled, exact registry definitions.
 - [x] Expose public metadata/exact selected version without image, command or custody paths.
 - [x] Build Pods from immutable templates and safe references.
-- [ ] Create one Session-specific workload identity and bind the grant before Pod readiness.
-  **Partial**: the per-Session ServiceAccount (workload identity) is real — created before the Pod,
-  bound as `serviceAccountName` on it. "Bind the grant" is not: no real Broker/grant-activation
-  call exists (ADR 0010/P08 territory, this plan's non-goal "use a fake activation/relay contract
-  for P08"); `executionGrantRef` is only ever turned into a non-reversible label
-  (`executionGrantLabel`), never activated against the workload identity. P08 owns making this real.
+- [x] Create one Session-specific workload identity and bind the grant before Pod readiness.
+  The per-Session ServiceAccount (workload identity) was already real — created before the Pod,
+  bound as `serviceAccountName` on it. **Closed by P08**: `handleMaterialize` now calls the real
+  Broker's `POST /v1/execution-grant-activations` (via `broker-activation-client.ts`) with
+  `executionGrantRef`/`sessionId`/`agentId`/`serviceAccountName(sessionId)` before ever creating the
+  Pod, and fails closed (no Pod) on any denial — see plans/08-equipment-and-broker.md Evidence.
 - [x] Route Agent egress only to the workload-authenticated Broker relay; prohibit direct OneCLI
   gateway/control API and Internet access. Verified live (see Evidence) via an operator-applied
   `NetworkPolicy` selecting `agora.dev/app: session-runtime` Pods — same "operator-managed, not

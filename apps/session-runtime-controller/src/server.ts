@@ -4,11 +4,12 @@ import type { AgentRuntimeDefinition } from '@agora/agent-registry'
 import { restoreSnapshot } from '@agora/custody'
 import type pg from 'pg'
 import type { ACPBridgeEndpoint, MaterializeSessionRuntimeRequest, Problem, SessionRuntimeStatus } from '@agora/session-runtime-control'
+import { BrokerActivationDeniedError, type BrokerActivationClient } from './broker-activation-client.js'
 import type { BridgeCredentialIssuer } from './bridge-credentials.js'
 import { captureCustody, checkRestoreSource, CustodyCaptureError, isReadableFormat } from './custody.js'
 import type { KubernetesPods } from './k8s-client.js'
-import { podName } from './labels.js'
-import { fakeRelayBundle } from './relay-bundle.js'
+import { podName, serviceAccountName } from './labels.js'
+import type { RelayBundle } from './relay-bundle.js'
 import { dematerializeSessionRuntime, materializeSessionRuntime, reconcileSessionRuntime, type ReconciledStatus } from './reconciler.js'
 import { getMaterializeRequestValidator } from './request-schemas.js'
 import { CustodyStreamIssuer } from './restore-credentials.js'
@@ -38,6 +39,14 @@ export interface ServerDeps {
   readonly restoreIssuer: CustodyStreamIssuer
   /** Fixed, non-secret, cluster-internal DNS name this controller is reachable at — Pods pull their restore stream from here (docs/specs/07 "session-runtime: ... bytes enter through one-time restore/capture streams"), mirroring `relay-bundle.ts`'s fixed-endpoint pattern. */
   readonly custodyControllerBaseUrl: string
+  /** P08's own seam: the fixed, credential-free relay endpoint/CA/stub bundle every Session Runtime
+   * Pod receives (relay-bundle.ts's own doc comment). Operator-managed, never Session-specific — P04
+   * used `fakeRelayBundle()` inline here; P08 supplies the real values through this same shape. */
+  readonly relayBundle: RelayBundle
+  /** docs/specs/10 "Bind grant + session_id + agent_id + workload_identity exactly once" — called
+   * once per materialize, before any Pod is created, so a grant the Broker cannot activate never
+   * reaches Kubernetes. */
+  readonly brokerActivationClient: BrokerActivationClient
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -115,6 +124,28 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     throw error
   }
 
+  // docs/specs/10: a grant the Broker will not activate must never reach Kubernetes. The
+  // per-Session ServiceAccount name IS this Session Runtime's "Controller-created authenticated
+  // identity" (ActivateGrantRequest.workloadIdentity's own doc) — the same identity a real mesh
+  // sidecar authenticates via mTLS/SPIFFE before the Broker's access relay ever trusts it
+  // (relay.ts's own module doc). Idempotent: re-activating an already-bound grant on a retried
+  // materialize PUT is a safe no-op at the Broker.
+  const workloadIdentity = serviceAccountName(sessionId)
+  try {
+    await deps.brokerActivationClient.activate({
+      grantRef: materializeRequest.executionGrantRef,
+      sessionId,
+      agentId: definition.agentId,
+      workloadIdentity,
+      requestId,
+    })
+  } catch (error) {
+    if (error instanceof BrokerActivationDeniedError) {
+      return sendProblem(res, problem(error.status, error.code, 'Broker denied execution-grant activation for this Session Runtime', error.message))
+    }
+    throw error
+  }
+
   let restoreFrom: { readonly url: string; readonly credential: string } | undefined
   if (materializeRequest.restoreFrom) {
     const snapshotId = materializeRequest.restoreFrom
@@ -141,7 +172,7 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     definition,
     workspaceMountRef: materializeRequest.workspaceMountRef,
     executionGrantRef: materializeRequest.executionGrantRef,
-    relayBundle: fakeRelayBundle(),
+    relayBundle: deps.relayBundle,
     controllerRevision: deps.controllerRevision,
     ...(deps.runAsUser !== undefined ? { runAsUser: deps.runAsUser } : {}),
     ...(deps.runtimeClassName !== undefined ? { runtimeClassName: deps.runtimeClassName } : {}),

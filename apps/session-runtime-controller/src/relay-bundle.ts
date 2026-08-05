@@ -3,13 +3,13 @@
  * operator-managed OneCLI CA trust and non-secret harness auth stubs. The controller MUST NOT
  * receive or mount the OneCLI control key, dedicated Agent upstream bearer or provider credential."
  *
- * ADR 0014/P08 own the real Broker access relay and OneCLI CA. This plan's non-goal is explicit:
- * "No live OneCLI or capability-policy implementation; use a fake activation/relay contract for
- * P08" — this is that fixed, non-secret, fake-but-shape-correct bundle. P08 replaces the VALUES
- * (real CA, real relay DNS name) without changing where they are mounted or how the Pod refers to
- * them — that is the seam this plan promises the exit criteria ("P08 can replace the fake
- * activation/relay without changing Session Runtime lifecycle or accepting secret environment
- * values").
+ * ADR 0014/P08 own the real Broker access relay and OneCLI CA. `fakeRelayBundle()` below is this
+ * fixed, non-secret, fake-but-shape-correct bundle — kept as the dev/test fixture. P08 supplies the
+ * real VALUES (real operator-managed CA, real relay DNS name — see main.ts) through the identical
+ * `RelayBundle` shape via `ServerDeps.relayBundle` (server.ts), without changing where they are
+ * mounted or how the Pod refers to them — that is the seam this plan promised the exit criteria
+ * ("P08 can replace the fake activation/relay without changing Session Runtime lifecycle or
+ * accepting secret environment values").
  */
 export interface RelayBundle {
   /** Non-secret: the Broker access relay's fixed internal DNS name. Never a per-Session value. */
