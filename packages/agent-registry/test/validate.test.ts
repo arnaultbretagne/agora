@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { CLAUDE_CODE_DEFINITION } from '../src/claude-code-definition.js'
 import { FAKE_AGENT_DEFINITION } from '../src/fake-definition.js'
 import { InvalidAgentRuntimeDefinitionError, validateAgentRuntimeDefinition, validateRegistry } from '../src/validate.js'
 
 test('the fake Agent definition validates against contracts/schemas/agent-runtime.schema.json', async () => {
   const validated = await validateAgentRuntimeDefinition(FAKE_AGENT_DEFINITION)
   assert.deepEqual(validated, FAKE_AGENT_DEFINITION)
+})
+
+test('required: the claude-code Agent definition validates against contracts/schemas/agent-runtime.schema.json', async () => {
+  const validated = await validateAgentRuntimeDefinition(CLAUDE_CODE_DEFINITION)
+  assert.deepEqual(validated, CLAUDE_CODE_DEFINITION)
 })
 
 test('required (task): arbitrary/malformed definitions are schema-rejected', async () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
+import { CLAUDE_CODE_DEFINITION, FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { BridgeCredentialIssuer } from './bridge-credentials.js'
 import { createHttpBrokerActivationClient } from './broker-activation-client.js'
@@ -8,9 +8,10 @@ import type { RelayBundle } from './relay-bundle.js'
 import { CustodyStreamIssuer } from './restore-credentials.js'
 import { createServer } from './server.js'
 
-// P09/P10 add real Claude/Codex `AgentRuntimeDefinition`s here; P04's non-goal is explicit
-// ("No real Claude/Codex integration") so only the fake Agent is wired for now.
-const DEFINITIONS = [FAKE_AGENT_DEFINITION]
+// P10 adds a real Codex `AgentRuntimeDefinition` here; P04's non-goal ("No real Claude/Codex
+// integration") no longer applies to Claude specifically — CLAUDE_CODE_DEFINITION is real
+// (agents/claude-code/SPIKE.md), registered `rollout: 'internal'` pending a live-Pod pass.
+const DEFINITIONS = [FAKE_AGENT_DEFINITION, CLAUDE_CODE_DEFINITION]
 
 function requireEnv(name: string): string {
   const value = process.env[name]

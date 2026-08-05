@@ -1,6 +1,6 @@
 # P08 — OneCLI-backed capability Broker
 
-- **Status:** pending; OneCLI adoption spike complete
+- **Status:** complete
 - **Dependencies:** P01, P04
 - **Primary paths:** `apps/broker`, `packages/equipment-policy`, `contracts/openapi`
 
