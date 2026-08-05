@@ -20,7 +20,12 @@ export interface PinnedAgentRouteSet {
  */
 export const PINNED_AGENT_ROUTE_SETS: readonly PinnedAgentRouteSet[] = [
   { agentId: 'claude-code', hosts: ['api.anthropic.com', 'statsig.anthropic.com'] },
-  { agentId: 'codex', hosts: ['api.openai.com', 'chatgpt.com'] },
+  // `auth.openai.com` found missing live (2026-08-05, P10 credential-linking spike): ChatGPT
+  // subscription auth periodically refreshes its access_token via `POST auth.openai.com/oauth/token`
+  // — without it in the allow list, the very first token refresh gets blocked by the catch-all,
+  // breaking a session that started working fine (the initial request succeeds on the token minted
+  // at link time; only the refresh path was missing).
+  { agentId: 'codex', hosts: ['api.openai.com', 'chatgpt.com', 'auth.openai.com'] },
   { agentId: 'fake-agent', hosts: ['fake-agent.internal.test'] },
   { agentId: 'fake-agent-b', hosts: ['fake-agent.internal.test'] },
 ]
