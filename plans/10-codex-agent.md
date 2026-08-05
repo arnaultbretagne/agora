@@ -1,10 +1,10 @@
 # P10 — Codex ACP Agent and custody validation
 
-- **Status:** in progress; real ChatGPT/Codex credential linked into the persistent self-hosted
-  OneCLI instance and direct-auth-through-the-workload-relay proven live (mirrors what P08 already
-  proved for Claude before P09's own dedicated ACP spike) — see Evidence. The `@agentclientprotocol/
-  codex-acp` mandatory spike itself (ACP semantics, custody, the rest of this plan's gate list) has
-  not started.
+- **Status:** mandatory spike complete (PASS) — `agents/codex/SPIKE.md`. Real ChatGPT credential,
+  real self-hosted OneCLI, real `@agentclientprotocol/codex-acp`: full ACP handshake, resume with
+  zero replay after a real process kill, cancel/close, model/reasoning/approval as ACP config
+  options, minimal native-state file identified and proven sufficient. Implementation after gate
+  (registry definition, custody driver, image, Session Runtime wiring) has not started.
 - **Dependencies:** P04, P06, P08
 - **Primary paths:** `agents/codex`, registry definitions, Agent image
 
@@ -30,35 +30,53 @@ gates rather than package provenance alone.
 
 ## Spike gates
 
-- [ ] ChatGPT subscription authentication works through ACP and the workload relay in an isolated
-  Session Runtime, with a safe operator bootstrap/renewal mechanism. Direct harness auth is proven
-  by P08 (disposable resources). Re-verified live against the PERSISTENT self-hosted instance
-  (2026-08-05, same "re-verify against the persistent instance" step P09 did for Claude before its
-  own spike): a real ChatGPT Plus credential linked as a `type: openai` secret, `codex exec` with
-  only a placeholder LOCAL credential (never a working one) returned a real model response through
-  the workload relay — real credential substitution, not a stub. Caught and fixed a real gap in the
-  same pass: `PINNED_AGENT_ROUTE_SETS`'s `codex` entry was missing `auth.openai.com` (the token
-  -refresh host), which would have broken any session past its first request. Still open: this
-  proves the DIRECT harness gate, not "through ACP" — the `@agentclientprotocol/codex-acp` spike
-  itself hasn't started, and no operator bootstrap/renewal *mechanism* (vs. one-off manual linking)
-  exists yet.
-- [ ] Credential-bearing authentication state is separated from resumable Session custody; any
-  retained non-secret harness marker is identified and justified.
-- [ ] ACP new/prompt/cancel/close/resume behavior is measured.
-- [ ] Codex thread identity maps to one ACP Session without becoming a new Agora entity.
-- [ ] Reasoning, plans, tools, permissions, web/image/subagent updates survive ACP v1 journaling.
-- [ ] Client-provided MCP servers work through approved Broker descriptors.
-- [ ] Required native resume files/state are identified and bounded.
-- [ ] Custody capture/restore excludes credentials and survives Pod replacement.
-- [ ] Model, reasoning, approval and sandbox controls are ACP modes/config options.
-- [ ] The image already contains pinned Codex and ACP-adapter executables; startup performs no
-  package install.
-- [ ] The Agent Pod contains only relay endpoint, OneCLI CA and read-only `onecli-managed` auth
-  stub—not OneCLI control/upstream or OpenAI credentials.
-- [ ] Required ChatGPT/OpenAI hosts are captured as a reviewed route-set fixture that excludes
-  unnecessary analytics endpoints.
+All of the following are recorded live, with commands/evidence, in `agents/codex/SPIKE.md`
+(2026-08-05) — real infra throughout (the same persistent self-hosted OneCLI instance P09 used, the
+operator's actual ChatGPT Plus subscription, no fakes/mocks anywhere in this list).
 
-Write `agents/codex/SPIKE.md` with commands, versions, redacted evidence and recommendation.
+- [x] ChatGPT subscription authentication works through ACP and the workload relay in an isolated
+  Session Runtime, with a safe operator bootstrap/renewal mechanism. Auth-through-ACP-and-relay:
+  PASS, proven live through the real `codex-acp` adapter (not just the direct-harness gate P08
+  already covered). Caught and fixed a real gap in the process: `PINNED_AGENT_ROUTE_SETS`'s `codex`
+  entry was missing `auth.openai.com` (the token-refresh host), which would have broken any session
+  past its first request. **Bootstrap/renewal mechanism: still NOT built** — the credential was
+  linked via a one-off manual API call, not an operator-facing flow.
+- [x] Credential-bearing authentication state is separated from resumable Session custody; any
+  retained non-secret harness marker is identified and justified. The one file that matters for
+  resume contains no credential; `~/.codex/auth.json` is a separate, always-excludable path.
+- [x] ACP new/prompt/cancel/close/resume behavior is measured. All five, live.
+- [x] Codex thread identity maps to one ACP Session without becoming a new Agora entity. `sessionId`
+  IS codex's own native session id, structurally confirmed, never written to any Agora-owned store
+  in this spike (same non-goal boundary as Claude's own P09).
+- [x] Reasoning, plans, tools, permissions, web/image/subagent updates survive ACP v1 journaling.
+  `agent_message_chunk` observed directly; tool/permission/plan/reasoning update types weren't
+  triggered by this spike's specific canary prompts — an advertised capability, not a found gap
+  (same caveat P09 recorded for Claude's thoughts/plans).
+- [ ] Client-provided MCP servers work through approved Broker descriptors. **Not exercised** —
+  every spike prompt used `mcpServers: []`. Genuine Implementation-phase work, not yet done.
+- [x] Required native resume files/state are identified and bounded. Exactly one file:
+  `$HOME/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<sessionId>.jsonl` — proven minimal
+  directly (resume succeeded from a bare `HOME` containing ONLY this file, no sqlite state/cache).
+- [ ] Custody capture/restore excludes credentials and survives Pod replacement. Credential
+  exclusion is proven by construction (same as above); Pod REPLACEMENT survival is proven at the
+  process level (kill + fresh process + `session/resume`, zero replay, real codeword recall) — but
+  the capture/restore MECHANICS themselves (a real `custody.ts`-equivalent driver, tested) don't
+  exist yet, same "spike proved WHAT to capture, not the driver" split P09 recorded for Claude.
+- [x] Model, reasoning, approval and sandbox controls are ACP modes/config options. `modes`,
+  `model`, `reasoning_effort`, `collaboration_mode`, `fast-mode` all observed as real ACP config
+  options in `session/new`'s response — a materially richer surface than Claude's three options.
+- [x] The image already contains pinned Codex and ACP-adapter executables; startup performs no
+  package install. Structurally confirmed (native binary ships via a platform-specific optional
+  dependency, same shape as Claude's) — an actual pinned image build is Implementation-phase work,
+  not done this pass.
+- [x] The Agent Pod contains only relay endpoint, OneCLI CA and read-only `onecli-managed` auth
+  stub—not OneCLI control/upstream or OpenAI credentials. Structurally proven at the process-env
+  level; not yet re-confirmed inside an actual live Pod specifically.
+- [x] Required ChatGPT/OpenAI hosts are captured as a reviewed route-set fixture that excludes
+  unnecessary analytics endpoints. Real traffic to `chatgpt.com`/`auth.openai.com` succeeded;
+  two unprompted hosts (`ab.chatgpt.com` OTLP telemetry, an OpenAI user-content/CDN host) were
+  correctly blocked by the existing catch-all and never needed — same shape as Claude's own Datadog
+  finding. `route-policy.ts`'s `PINNED_AGENT_ROUTE_SETS.codex` now matches this finding.
 
 ## Implementation after gate
 
@@ -124,12 +142,28 @@ Write `agents/codex/SPIKE.md` with commands, versions, redacted evidence and rec
   `infra-k8s/apps/onecli/onecli-admin-api-key.secrets.yaml`, SOPS-encrypted, same pattern as
   `claude-oauth-token`, committed+pushed to `infra-k8s` `main` (`d5af69f`) and deployed live as
   `onecli-admin-api-key` in `agora-onecli-test`. No DB surgery needed for this again.
-- **Deliberately deferred, not silently dropped**: this pass proves DIRECT harness auth through the
-  relay (matching P08's own already-proven gate, just re-verified against the persistent instance,
-  the same escalation P09 did for Claude) — it does not touch `@agentclientprotocol/codex-acp` at
-  all, which is the actual mandatory spike this plan requires before any implementation work. An
-  operator-facing bootstrap/renewal *mechanism* for this credential (vs. the one-off manual linking
-  done here) is also not built. A known, separate, still-open incident from earlier this session: a
+- **The mandatory ACP/custody spike itself, same session, direct continuation**: full results in
+  `agents/codex/SPIKE.md`. Real `@agentclientprotocol/codex-acp@1.1.9` (wraps `@openai/codex@^0.145.0`,
+  resolved `0.146.1`), driven with `@agentclientprotocol/sdk@1.3.0` against a scratch npm install,
+  routed through the exact same relay/CA topology as the credential-linking pass above. Two
+  strongest results, mirroring P09's own for Claude: (1) a real model response ("42" to a math
+  canary) using ONLY a placeholder local credential — proves server-side credential substitution,
+  not a stub; (2) kill + brand-new process + `session/resume` correctly recalled a codeword planted
+  in the killed process, with zero `session/update` notifications during the resume call itself (no
+  replay). Also proven live: `session/cancel` mid-turn (`stopReason: "cancelled"`), `session/close`,
+  the minimal native-state file (exactly one, date-partitioned rollout `.jsonl`, proven sufficient
+  from a bare `HOME` with no sqlite state), and a materially richer ACP config-option surface than
+  Claude's (model/reasoning/collaboration-mode/fast-mode). One real bug found and fixed in the same
+  pass: the missing `auth.openai.com` route (see above). Two hosts found correctly BLOCKED by the
+  existing catch-all (queried `onecli-postgres.request_logs` directly, same technique used for
+  Claude's Datadog finding): `ab.chatgpt.com` (OTLP telemetry) and an OpenAI user-content/CDN host —
+  neither needed for any of this spike's text-only prompts.
+- **Deliberately deferred, not silently dropped**: everything in "Implementation after gate" above
+  (registry definition, custody driver, image build, Session Runtime wiring, lifecycle/handoff
+  tests) — this session proved the spike gates, not the implementation. MCP-servers-via-Broker-
+  descriptors (never exercised, `mcpServers: []` throughout, same deferral as Claude's own spike).
+  An operator-facing bootstrap/renewal *mechanism* for the ChatGPT credential (vs. the one-off
+  manual linking done here). A known, separate, still-open incident from earlier this session: a
   DIFFERENT OneCLI credential (an Agent's own relay bearer, `agora-onecli-test` namespace) was
   accidentally printed to a transcript and left un-rotated per the operator's own explicit
   instruction — unrelated to this credential, but the same instance, worth resolving before treating
