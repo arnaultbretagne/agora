@@ -59,9 +59,28 @@ test('/custody is a clean 404 before any ACP session has ever opened on this Pod
   }
 })
 
-test('required: startup fails closed if the Agent process cannot start', async () => {
+test('required: a WS connection whose Agent process cannot start fails closed, never hangs', async () => {
+  // The Agent process is now spawned lazily, per connection (see bridge-server.ts's own doc
+  // comment for why) — `startBridgeServer` itself always succeeds; a broken `agentCommand` only
+  // ever surfaces when a real connection tries to use it, and must close cleanly, not hang.
   const homeDir = await scratchHome()
-  await assert.rejects(() => startBridgeServer({ homeDir, agentCommand: ['/no/such/binary'], childEnv: {} }))
+  const running = await startBridgeServer({ homeDir, agentCommand: ['/no/such/binary'], childEnv: {} })
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${running.port}/`)
+    // The WS handshake itself completes fine (it's the server's connection handler, spawning the
+    // Agent process afterwards, that fails) — so 'open' firing is expected here. What must hold is
+    // that the connection is then force-closed rather than left open with a dead child.
+    const closeEvent = await new Promise<{ code: number }>((resolve, reject) => {
+      ws.once('close', (code) => resolve({ code }))
+      ws.once('error', () => {
+        /* a raw socket error is an acceptable alternate signal here; 'close' still follows */
+      })
+      setTimeout(() => reject(new Error('connection never closed for a broken agentCommand')), 5000)
+    })
+    assert.ok(closeEvent.code)
+  } finally {
+    await running.close()
+  }
 })
 
 test('required: a real WS session/new round-trips through the bridge to the Agent process and back', async () => {

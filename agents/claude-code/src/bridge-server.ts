@@ -18,10 +18,18 @@ import { watchForSessionId } from './session-id-tap.js'
  * The container entrypoint `packages/agent-registry`'s `claude-code` runtime definition names —
  * same seam as `apps/session-runtime-controller/src/fake-agent-server.ts`, adapted for a REAL
  * external ACP Agent process (`@agentclientprotocol/claude-agent-acp`) instead of an in-process
- * fake. Spawns that process ONCE at startup (restore-before-ready, per docs/specs/07 step 7), then
- * bridges every WebSocket connection's duplex stream directly to its stdio — matching the fixed
- * "one Session Runtime Pod = one Agora Session = one Agent process for the Pod's whole life" model
- * (docs/specs/08), never a fresh child per connection.
+ * fake. Spawns a fresh child LAZILY on every WebSocket connection (same pattern
+ * `fake-agent-server.ts` already uses, `createFakeAgent()` per connection) — NOT eagerly at
+ * startup. Found live, on a real cluster: the real Agent process exits cleanly (`code=0`, no
+ * stderr) if it sits idle for even a few seconds without receiving its first real ACP request —
+ * spawning it at Pod startup and only later opening a WS connection (the real gap between
+ * readiness and the controller's own `openACPConnection` call) reliably lost the race. Spawning at
+ * connection time means its first bytes arrive within milliseconds, matching every case that
+ * worked in the original spike. This does not weaken "one Session Runtime Pod = one Agora Session"
+ * (docs/specs/08): in production exactly one real connection is ever opened per Pod; native state
+ * lives on disk (`custody.ts`), not in the process, so even a reconnect after credential expiry
+ * (docs/specs/04) is safe — a fresh child resuming from that same file is the exact same
+ * "kill + fresh process + session/resume" path already proven to preserve context.
  *
  * `agents/claude-code/SPIKE.md`: the child needs `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS`/
  * `CLAUDE_CODE_OAUTH_TOKEN` specifically, but `pod-spec.ts` mounts Agora's own GENERIC contract
@@ -41,6 +49,10 @@ export interface BridgeServerOptions {
    * `claude-agent-acp` needs (`claudeSpecificEnv`). Overridable so tests can spawn a stub agent
    * that doesn't need any of that translated. */
   readonly childEnv?: Record<string, string | undefined>
+  /** Defaults to `process.env.AGORA_WORKSPACE_ROOT` (`pod-spec.ts`'s own fixed, writable mount) —
+   * the real Agent needs a writable cwd to start at all (found live: it otherwise silently
+   * `exit(0)`s with no stderr). Overridable for tests. */
+  readonly cwd?: string
 }
 
 export interface RunningBridgeServer {
@@ -171,10 +183,28 @@ function bridgeChildStdio(
   return { readable, writable }
 }
 
+/** Spawns one fresh Agent process. Logs its exit for the life of the Pod (previously invisible:
+ * `/healthz` only ever checks the bridge itself, so a dead child left every subsequent request
+ * hanging silently — found live, on a real cluster, not by inspection). */
+function spawnAgent(agentCommand: readonly string[], childEnv: Record<string, string | undefined>, cwd: string | undefined): ChildProcessWithoutNullStreams {
+  const [command, ...args] = agentCommand
+  if (!command) throw new Error('agentCommand must name an executable')
+  const child = spawn(command, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) })
+  child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
+  child.on('error', (error) => {
+    process.stderr.write(`claude-code bridge-server: agent process failed to start: ${String(error)}\n`)
+  })
+  child.on('exit', (code, signal) => {
+    process.stderr.write(`claude-code bridge-server: agent process exited (code=${code}, signal=${signal})\n`)
+  })
+  return child
+}
+
 /**
  * Starts the bridge's HTTP+WS listener. Performs restore-before-ready and never opens the listener
- * (nor spawns the Agent) if that restore fails — same fail-closed contract as
- * `fake-agent-server.ts`'s own `startFakeAgentServer`.
+ * if that restore fails — same fail-closed contract as `fake-agent-server.ts`'s own
+ * `startFakeAgentServer`. The Agent process itself is NOT spawned here (see this module's own doc
+ * comment) — only on each WS connection, below.
  */
 export async function startBridgeServer(options: BridgeServerOptions = {}): Promise<RunningBridgeServer> {
   const homeDir = options.homeDir ?? DEFAULT_HOME
@@ -187,19 +217,13 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   }
 
   const agentCommand = options.agentCommand ?? defaultAgentCommand()
-  const [command, ...args] = agentCommand
-  if (!command) throw new Error('agentCommand must name an executable')
   const childEnv = options.childEnv ?? { ...process.env, ...(await claudeSpecificEnv(process.env)) }
-  const child = spawn(command, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] })
-  child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
-  const childExited = new Promise<never>((_resolve, reject) => {
-    child.once('exit', (code, signal) => reject(new Error(`agent process exited early (code=${code}, signal=${signal})`)))
-    child.once('error', reject)
-  })
-  // A crash before the WS listener ever opens must fail this call, not silently open unready.
-  await Promise.race([new Promise((resolve) => setTimeout(resolve, 200)), childExited]).catch((error: unknown) => {
-    throw error
-  })
+  // Found live, on a real cluster: without an explicit `cwd`, the child inherits THIS process's
+  // own — the image's build-time WORKDIR, root-owned and read-only to the non-root user every
+  // Session Runtime Pod actually runs as. The real Agent needs a writable directory to even start
+  // (silently `exit(0)`, no stderr, when it doesn't get one) — `AGORA_WORKSPACE_ROOT`
+  // (`pod-spec.ts`'s own fixed, PVC-backed mount) is exactly that.
+  const childCwd = options.cwd ?? process.env.AGORA_WORKSPACE_ROOT
 
   const httpServer = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/healthz') {
@@ -237,13 +261,43 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     res.end()
   })
 
+  const liveChildren = new Set<ChildProcessWithoutNullStreams>()
   const wss = new WebSocketServer({ server: httpServer })
   wss.on('connection', (ws) => {
+    // The WS protocol upgrade already completed by the time this handler runs — a spawn failure
+    // can only ever close the connection afterward, never prevent 'open' on the client side.
+    // `spawn()` itself never throws synchronously for a bad command (ENOENT surfaces async via
+    // 'error') — found live, chasing exactly this: a broken agentCommand silently left the
+    // connection open forever instead of closing it. `once` (not `on`) because either 'error' or
+    // 'exit' alone is enough to know the child is unusable; the other must not double-close `ws`.
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawnAgent(agentCommand, childEnv, childCwd)
+    } catch (error) {
+      ws.close(1011, error instanceof Error ? error.message : String(error))
+      return
+    }
+    liveChildren.add(child)
+    let bridged = false
+    const failClosed = (detail: string) => {
+      liveChildren.delete(child)
+      if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1011, detail)
+    }
+    child.once('error', (error) => failClosed(`agent process failed to start: ${String(error)}`))
+    child.once('exit', (code, signal) => {
+      liveChildren.delete(child)
+      // Once the pipes below are wired, an exit is ordinary connection teardown, not a startup
+      // failure to report — `bridged` is scoped to THIS connection's own child, unlike
+      // `sessionIdCell`, which is shared across the whole Pod's lifetime.
+      if (!bridged) failClosed(`agent process exited before it was ready (code=${code}, signal=${signal})`)
+    })
+
     const duplex = createWebSocketStream(ws)
     const { readable: clientReadable, writable: clientWritable } = Duplex.toWeb(duplex)
     const { readable: agentReadable, writable: agentWritable } = bridgeChildStdio(child, (sessionId) => {
       sessionIdCell.current = sessionId
     })
+    bridged = true
     void (clientReadable as ReadableStream<Uint8Array>).pipeTo(agentWritable).catch(() => {})
     void agentReadable.pipeTo(clientWritable as WritableStream<Uint8Array>).catch(() => {})
   })
@@ -257,7 +311,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     port,
     close: () =>
       new Promise<void>((resolve, reject) => {
-        child.kill()
+        for (const child of liveChildren) child.kill()
         wss.close(() => {})
         httpServer.close((err) => (err ? reject(err) : resolve()))
       }),
