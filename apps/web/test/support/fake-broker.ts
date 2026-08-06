@@ -17,6 +17,8 @@ export interface FakeBrokerHandle {
   readonly baseUrl: string
   readonly issueCalls: readonly { readonly sessionId: string; readonly agentId: string }[]
   readonly renewCalls: readonly string[]
+  /** grantIds this fake was asked to revoke — the real Broker deletes the Session's OneCLI Agent here. */
+  readonly revokeCalls: readonly string[]
   close(): Promise<void>
 }
 
@@ -63,6 +65,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
   const grantsById = new Map<string, FakeGrant>()
   const issueCalls: { readonly sessionId: string; readonly agentId: string }[] = []
   const renewCalls: string[] = []
+  const revokeCalls: string[] = []
 
   const httpServer: Server = createServer((req, res) => {
     void (async () => {
@@ -106,6 +109,20 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
         return
       }
 
+      const revokeMatch = /^\/v1\/execution-grants\/([^/]+)$/.exec(url.pathname)
+      if (req.method === 'DELETE' && revokeMatch?.[1]) {
+        // Idempotent like the real Broker: revoking an absent/already-revoked grant is a no-op 204.
+        revokeCalls.push(revokeMatch[1])
+        const grant = grantsById.get(revokeMatch[1])
+        if (grant) {
+          grantsById.delete(revokeMatch[1])
+          grantsBySession.delete(grant.sessionId)
+        }
+        res.writeHead(204)
+        res.end()
+        return
+      }
+
       res.writeHead(404)
       res.end()
     })()
@@ -117,6 +134,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
     baseUrl: `http://127.0.0.1:${port}`,
     issueCalls,
     renewCalls,
+    revokeCalls,
     async close() {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
     },

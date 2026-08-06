@@ -740,7 +740,7 @@ async function handleSuspendSession(deps: ServerDeps, principal: string, session
   if (!canMutate(loaded.role)) return sendProblem(res, problem(403, 'validation_failed', 'Viewers cannot suspend a Session'))
 
   const now = deps.now ?? (() => new Date())
-  void suspendSession({ pool: deps.pool, transport: deps.controllerTransport, connections: deps.connections, sessionId, idempotencyKey, now })
+  void suspendSession({ pool: deps.pool, transport: deps.controllerTransport, brokerGrantClient: deps.brokerGrantClient, connections: deps.connections, sessionId, idempotencyKey, now })
   sendJson(res, 202, { commandId: randomUUID(), state: 'accepted', acceptedAt: now().toISOString() })
 }
 
@@ -764,7 +764,7 @@ async function handleCloseSession(deps: ServerDeps, principal: string, sessionId
   if (!canMutate(loaded.role)) return sendProblem(res, problem(403, 'validation_failed', 'Viewers cannot close a Session'))
 
   const now = deps.now ?? (() => new Date())
-  void closeSession({ pool: deps.pool, transport: deps.controllerTransport, connections: deps.connections, sessionId, now })
+  void closeSession({ pool: deps.pool, transport: deps.controllerTransport, brokerGrantClient: deps.brokerGrantClient, connections: deps.connections, sessionId, now })
   sendJson(res, 202, { commandId: randomUUID(), state: 'accepted', acceptedAt: now().toISOString() })
 }
 

@@ -53,6 +53,15 @@ export class BrokerGrantDeniedError extends Error {
 export interface BrokerGrantClient {
   issue(request: IssueGrantRequest): Promise<IssuedGrant>
   renew(grantId: string, requestId: string): Promise<IssuedGrant>
+  /**
+   * docs/specs/10 "Terminal Session/Workstream cleanup deletes it after revocation". Idempotent on
+   * the Broker side (revoking an already-revoked or absent grant is a no-op success), so callers on
+   * a terminal path may fire it without first checking whether a grant was ever issued.
+   *
+   * Found live, P11: nothing in this codebase ever called it, so every terminal Session left its
+   * OneCLI Agent behind — 20 had accumulated on the real instance, one per Session, none reclaimed.
+   */
+  revoke(grantId: string, requestId: string): Promise<void>
 }
 
 async function toDeniedError(response: Response, fallbackCode: string): Promise<BrokerGrantDeniedError> {
@@ -96,6 +105,19 @@ export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient 
       }
       if (!response.ok) throw await toDeniedError(response, 'broker_grant_renew_failed')
       return (await response.json()) as IssuedGrant
+    },
+
+    async revoke(grantId: string, requestId: string): Promise<void> {
+      let response: Response
+      try {
+        response = await fetch(new URL(`/v1/execution-grants/${encodeURIComponent(grantId)}`, baseUrl), {
+          method: 'DELETE',
+          headers: { 'x-request-id': requestId },
+        })
+      } catch (error) {
+        throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
+      }
+      if (!response.ok) throw await toDeniedError(response, 'broker_grant_revoke_failed')
     },
   }
 }

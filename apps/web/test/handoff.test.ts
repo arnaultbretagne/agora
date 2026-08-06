@@ -164,7 +164,7 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       assert.ok(acpSessionIdA)
       assert.ok(acpConnectionA)
 
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionA, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionA, idempotencyKey: randomId() })
       assert.equal(await sessionPhase(pool, sessionA), 'suspended')
       assert.equal(connections.get(sessionA), undefined, 'suspend must drop the live connection')
       // The suspend's own session/cancel notification is itself a canonical event — catch the
@@ -221,7 +221,7 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       })
       await project(pool, wsId)
 
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionB, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionB, idempotencyKey: randomId() })
       assert.equal(await sessionPhase(pool, sessionB), 'suspended')
       await project(pool, wsId)
       const D = (await withClient(pool, (c) => getAnchor(c, wsId, 'fake-agent-b')))?.syncedThroughSeq
@@ -306,7 +306,7 @@ test('required: the same switch command cannot duplicate a Handoff (byte-identic
       })
       await waitForPhase(pool, sessionA, 'ready')
       await project(pool, wsId)
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionA, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionA, idempotencyKey: randomId() })
       await project(pool, wsId)
 
       const first = await switchAgent({
@@ -403,7 +403,7 @@ test('required: an echoed Handoff resource stays correlated to one Handoff card,
       })
       await waitForPhase(pool, sessionA, 'ready')
       await project(pool, wsId)
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionA, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionA, idempotencyKey: randomId() })
       await project(pool, wsId)
 
       const result = await switchAgent({
@@ -469,7 +469,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
       })
       await waitForPhase(pool, sessionA, 'ready')
       await project(pool, wsId)
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionA, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionA, idempotencyKey: randomId() })
       await project(pool, wsId)
 
       const switchToB = await switchAgent({
@@ -506,7 +506,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
         idempotencyKey: 'b-turn-1',
       })
       await project(pool, wsId)
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionB, idempotencyKey: 'suspend-b-1' })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionB, idempotencyKey: 'suspend-b-1' })
       assert.equal(await sessionPhase(pool, sessionB), 'suspended')
 
       const client = await pool.connect()
@@ -552,7 +552,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
       await project(pool, wsId)
 
       custodyController.failNextCapture()
-      await suspendSession({ pool, transport: custodyController, connections, sessionId: sessionB, idempotencyKey: 'suspend-b-2-fails' })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId: sessionB, idempotencyKey: 'suspend-b-2-fails' })
 
       // Capture failed -> suspend fails closed; the Session must NOT be cleanly 'suspended'.
       assert.equal(await sessionPhase(pool, sessionB), 'failed')

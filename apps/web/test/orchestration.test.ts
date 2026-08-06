@@ -186,7 +186,7 @@ test('suspendSession dematerializes the real Session Runtime and reaches suspend
         actor: { kind: 'human', id: 'alice' },
       })
 
-      await suspendSession({ pool, transport: custodyController, connections, sessionId, idempotencyKey: randomId() })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey: randomId() })
       assert.equal(await sessionPhase(pool, sessionId), 'suspended')
       assert.ok(custodyController.dematerializeCalls.includes(sessionId))
       assert.equal(connections.get(sessionId), undefined)
@@ -214,7 +214,7 @@ test('required: suspend commits a custody Anchor, and activateSession fails clos
       initialPrompt: [],
       actor: { kind: 'human', id: 'alice' },
     })
-    await suspendSession({ pool, transport: custodyController, connections, sessionId, idempotencyKey: randomId() })
+    await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey: randomId() })
     assert.equal(await sessionPhase(pool, sessionId), 'suspended')
 
     const client = await pool.connect()
@@ -264,7 +264,7 @@ test('required: a crash after capture but before the Anchor commits is recovered
       assert.equal(await sessionPhase(pool, sessionId), 'ready', 'the crash left the Session phase untouched')
 
       // The retry (same Idempotency-Key): must reuse the SAME snapshot, not allocate generation 2.
-      await suspendSession({ pool, transport: custodyController, connections, sessionId, idempotencyKey })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey })
       assert.equal(await sessionPhase(pool, sessionId), 'suspended')
 
       const afterClient = await pool.connect()
@@ -322,7 +322,7 @@ test('required: a crash after the Anchor commits but before dematerialize is rec
       assert.equal(custodyController.dematerializeCalls.includes(sessionId), false, 'the crash never reached dematerialize')
 
       // The retry (same Idempotency-Key): reuses the SAME Anchor/snapshot and completes dematerialize.
-      await suspendSession({ pool, transport: custodyController, connections, sessionId, idempotencyKey })
+      await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey })
       assert.equal(await sessionPhase(pool, sessionId), 'suspended')
       assert.ok(custodyController.dematerializeCalls.includes(sessionId))
 
@@ -373,7 +373,7 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
     const acpSessionIdBeforeSuspend = await acpSessionIdOf()
     assert.ok(acpSessionIdBeforeSuspend)
 
-    await suspendSession({ pool, transport: custodyController, connections, sessionId, idempotencyKey: randomId() })
+    await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey: randomId() })
     assert.equal(await sessionPhase(pool, sessionId), 'suspended')
     assert.equal(connections.get(sessionId), undefined)
 
@@ -447,7 +447,7 @@ test('closeSession cancels live work, dematerializes and reaches closed', async 
       actor: { kind: 'human', id: 'alice' },
     })
 
-    await closeSession({ pool, transport: controller, connections, sessionId })
+    await closeSession({ pool, transport: controller, brokerGrantClient, connections, sessionId })
     assert.equal(await sessionPhase(pool, sessionId), 'closed')
     assert.ok(controller.dematerializeCalls.includes(sessionId))
   })
@@ -475,5 +475,59 @@ test('cancelSessionCommand is a no-op without a live connection and succeeds wit
     })
     const withLive = await cancelSessionCommand({ connections, sessionId })
     assert.deepEqual(withLive, { ok: true })
+  })
+})
+
+test('required, P11: a closed Session revokes its execution grant — this is what reclaims its OneCLI Agent', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const connections = new SessionConnectionRegistry()
+    const before = broker.revokeCalls.length
+
+    await provisionSessionAndPrompt({
+      pool,
+      transport: controller,
+      brokerGrantClient,
+      connections,
+      workstreamId: wsId,
+      sessionId,
+      agentId: 'fake-agent',
+      runtimeDefinitionVersion: 'v1',
+      initialPrompt: [],
+      actor: { kind: 'human', id: 'alice' },
+    })
+    await closeSession({ pool, transport: controller, brokerGrantClient, connections, sessionId })
+
+    assert.equal(await sessionPhase(pool, sessionId), 'closed')
+    // Found live, P11: nothing ever called the Broker's revoke endpoint, so every terminal Session
+    // stranded its dedicated OneCLI Agent (20 had accumulated on the real instance).
+    assert.equal(broker.revokeCalls.length, before + 1, 'closing revokes exactly one grant')
+  })
+})
+
+test('required, P11: a Session that fails provisioning still revokes its grant — failures were the real source of orphaned Agents', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const connections = new SessionConnectionRegistry()
+    const before = broker.revokeCalls.length
+
+    // A transport that materializes nothing: provisioning fails AFTER the grant was issued, which
+    // is exactly the shape that leaked Agents in production.
+    const brokenTransport = { baseUrl: 'http://127.0.0.1:1', fetch: controller.fetch }
+    await provisionSessionAndPrompt({
+      pool,
+      transport: brokenTransport as never,
+      brokerGrantClient,
+      connections,
+      workstreamId: wsId,
+      sessionId,
+      agentId: 'fake-agent',
+      runtimeDefinitionVersion: 'v1',
+      initialPrompt: [],
+      actor: { kind: 'human', id: 'alice' },
+    })
+
+    assert.equal(await sessionPhase(pool, sessionId), 'failed')
+    assert.equal(broker.revokeCalls.length, before + 1, 'a failed Session releases its grant too')
   })
 })

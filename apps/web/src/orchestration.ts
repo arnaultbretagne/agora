@@ -113,7 +113,46 @@ async function waitForRuntimeReady(transport: SessionRuntimeControlTransport, se
   }
 }
 
-async function failClosed(pool: pg.Pool, sessionId: string, code: string, error: unknown): Promise<void> {
+/**
+ * docs/specs/10 "Terminal Session/Workstream cleanup deletes it after revocation": revoking the
+ * Session's grant is what makes the Broker delete its dedicated OneCLI Agent (grant-service.ts's
+ * `revokeExecutionGrant`). Found live, P11: NOTHING in this codebase ever called that endpoint, so
+ * every terminal Session leaked its Agent — 20 had piled up on the real instance.
+ *
+ * Best-effort by design, and always last: a Session that is already terminal in product truth must
+ * not be dragged back out of that state by a Broker hiccup, and the Broker's own revoke is
+ * idempotent (revoking an absent/already-revoked grant is a no-op success), so a retry from a later
+ * terminal path is safe. A Session that never got a grant simply has nothing to revoke.
+ */
+async function revokeSessionGrant(input: {
+  readonly pool: pg.Pool
+  readonly brokerGrantClient: BrokerGrantClient
+  readonly sessionId: string
+}): Promise<void> {
+  try {
+    const client = await input.pool.connect()
+    let grantRef: string | undefined
+    try {
+      grantRef = await getExecutionGrantRef(client, input.sessionId)
+    } finally {
+      client.release()
+    }
+    if (!grantRef) return
+    await input.brokerGrantClient.revoke(grantRef, randomUUID())
+  } catch {
+    // Never let cleanup failure surface as a Session-lifecycle failure. The grant expires on its
+    // own (30 min TTL) and the Agent is reclaimable by an operator sweep; losing the Session's
+    // terminal transition over it would be strictly worse.
+  }
+}
+
+async function failClosed(
+  pool: pg.Pool,
+  sessionId: string,
+  code: string,
+  error: unknown,
+  brokerGrantClient?: BrokerGrantClient,
+): Promise<void> {
   const client = await pool.connect()
   try {
     await transitionSessionPhase(client, sessionId, 'failed', {
@@ -126,6 +165,9 @@ async function failClosed(pool: pg.Pool, sessionId: string, code: string, error:
   } finally {
     client.release()
   }
+  // A failed Session is terminal: its grant and OneCLI Agent must not outlive it. This is where
+  // tonight's 20 orphaned Agents actually came from — provisioning failures, not clean closes.
+  if (brokerGrantClient) await revokeSessionGrant({ pool, brokerGrantClient, sessionId })
 }
 
 /** Fire-and-forget from the HTTP layer (docs/specs/14 "Provisioning continues asynchronously"). */
@@ -191,7 +233,7 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
       })
     }
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'provisioning_failed', error)
+    await failClosed(input.pool, input.sessionId, 'provisioning_failed', error, input.brokerGrantClient)
   }
 }
 
@@ -294,7 +336,7 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       })
     }
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'resume_failed', error)
+    await failClosed(input.pool, input.sessionId, 'resume_failed', error, input.brokerGrantClient)
   }
 }
 
@@ -601,6 +643,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
 export interface SessionLifecycleInput {
   readonly pool: pg.Pool
   readonly transport: SessionRuntimeControlTransport
+  readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
   readonly sessionId: string
 }
@@ -686,7 +729,7 @@ export async function suspendSession(input: SuspendSessionInput): Promise<void> 
       closeClient.release()
     }
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'suspend_failed', error)
+    await failClosed(input.pool, input.sessionId, 'suspend_failed', error, input.brokerGrantClient)
   }
 }
 
@@ -716,7 +759,10 @@ export async function closeSession(input: SessionLifecycleInput & { readonly now
     } finally {
       closeClient.release()
     }
+    // docs/specs/10 "Terminal Session/Workstream cleanup deletes it after revocation" — last, and
+    // only once the Session is durably 'closed', so a Broker hiccup can never strand the phase.
+    await revokeSessionGrant({ pool: input.pool, brokerGrantClient: input.brokerGrantClient, sessionId: input.sessionId })
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'close_failed', error)
+    await failClosed(input.pool, input.sessionId, 'close_failed', error, input.brokerGrantClient)
   }
 }
