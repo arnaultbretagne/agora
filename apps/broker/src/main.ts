@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto'
-import { FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
+import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION, FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { requireEncryptionKey } from './crypto.js'
 import { createOnecliSdkAdapter } from './onecli-real.js'
 import { createAccessRelay } from './relay.js'
 import { createBrokerServer } from './server.js'
 
-// P09/P10 add real Claude/Codex `AgentRuntimeDefinition`s (and their entries in
-// route-policy.ts's PINNED_AGENT_ROUTE_SETS) — this plan's non-goal is explicit ("No ACP
-// adapter/custody implementation; P09/P10 validate those on this fixed path").
-const DEFINITIONS = [FAKE_AGENT_DEFINITION]
+// P09/P10 shipped real Claude/Codex `AgentRuntimeDefinition`s — found live, P11, wiring the real
+// deployment: this list was never updated to include them (only
+// apps/session-runtime-controller/src/main.ts's own DEFINITIONS array was), so a real broker
+// deployed as-is would reject every real Claude/Codex launch request as unlaunchable. Both are
+// `rollout: 'internal'`, which `selectLaunchableAgents` already treats as launchable (staff/
+// testing), matching the controller's own DEFINITIONS list exactly.
+const DEFINITIONS = [FAKE_AGENT_DEFINITION, CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
 
 function requireEnv(name: string): string {
   const value = process.env[name]
