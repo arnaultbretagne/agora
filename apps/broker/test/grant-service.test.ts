@@ -523,6 +523,37 @@ test('activation is idempotent by request_id — a retried identical activation 
   })
 })
 
+test('required, P11 (resume): the SAME workload re-activating an already-activated grant with a DIFFERENT request_id succeeds idempotently and its expiry is refreshed', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      const first = await activateExecutionGrant(
+        client,
+        { grantRef: grant.id, sessionId: grant.sessionId, agentId: grant.agentId, workloadIdentity: 'workload-a', requestId: randomId() },
+        new Date('2026-01-01T00:00:00Z'),
+      )
+      // The controller mints a FRESH random requestId on every materialize call (apps/session-
+      // runtime-controller/src/server.ts) — including resume, where the workloadIdentity (derived
+      // deterministically from sessionId) is the SAME as the original activation. This must NOT
+      // throw ActivationConflictError, or every resume would fail closed.
+      const resumed = await activateExecutionGrant(
+        client,
+        { grantRef: grant.id, sessionId: grant.sessionId, agentId: grant.agentId, workloadIdentity: 'workload-a', requestId: randomId() },
+        new Date('2026-01-01T00:20:00Z'),
+      )
+      assert.equal(resumed.id, first.id, 'same activation row, not a new one')
+      assert.ok(resumed.expiresAt.getTime() > first.expiresAt.getTime(), 'expiry is refreshed, not left stale from the original activation')
+
+      const stillBound = await getActivationByGrant(client, grant.id)
+      assert.equal(stillBound?.id, first.id)
+    } finally {
+      client.release()
+    }
+  })
+})
+
 test('required: audit rows never carry a secret-shaped key, and record issue/activate/renew/revoke', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()

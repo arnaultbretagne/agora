@@ -58,8 +58,20 @@ const ACTIVATION_COLUMNS = 'id, grant_id, session_id, agent_id, workload_identit
 /**
  * docs/specs/10 "Activation": binds grant + session_id + agent_id + workload_identity EXACTLY
  * ONCE (required test: "a Controller cannot activate the same grant twice for different
- * workloads"). Idempotent retry by (grant_id, request_id); a request that names a DIFFERENT
- * workload_identity for an already-activated grant is rejected, never silently rebound.
+ * workloads"). Idempotent by workload_identity, not just by (grant_id, request_id): a request
+ * that names a DIFFERENT workload_identity for an already-activated grant is rejected, never
+ * silently rebound — but the SAME workload_identity re-activating is a legitimate, expected
+ * re-materialize, not a conflict.
+ *
+ * Found by inspection, P11 (apps/web's own real grant wiring): the controller calls activate()
+ * on EVERY materialize, including resume — same deterministic `workloadIdentity` (derived from
+ * sessionId, docs/specs/10 "One Session, one OneCLI Agent"), same `grantId` (renewed, never
+ * reissued — `execution_grants.session_id` is UNIQUE), but a FRESH random `requestId` each time
+ * (the controller has no way to replay the original one across a Pod restart). The old
+ * `request_id === requestId` idempotency check alone made every resume's activate() throw
+ * `ActivationConflictError`, which would have fail-closed every resume. `expires_at` is refreshed
+ * on this path (not just returned as-is) — relay.ts's own `activation.expiresAt <= now` check
+ * would otherwise deny real traffic against a stale timestamp computed at the ORIGINAL activation.
  */
 export async function activateGrant(client: PoolClient, input: ActivateGrantInput): Promise<GrantActivation> {
   const { rows: existingRows } = await client.query<ActivationRow>(`SELECT ${ACTIVATION_COLUMNS} FROM broker.grant_activations WHERE grant_id = $1 FOR UPDATE`, [
@@ -67,11 +79,14 @@ export async function activateGrant(client: PoolClient, input: ActivateGrantInpu
   ])
   const existing = existingRows[0]
   if (existing) {
-    if (existing.request_id === input.requestId) return hydrate(existing)
     if (existing.workload_identity !== input.workloadIdentity) {
       throw new ActivationConflictError(`grant ${input.grantId} is already activated for a different workload identity`)
     }
-    throw new ActivationConflictError(`grant ${input.grantId} is already activated (request_id mismatch)`)
+    const { rows: refreshed } = await client.query<ActivationRow>(
+      `UPDATE broker.grant_activations SET expires_at = $2 WHERE grant_id = $1 RETURNING ${ACTIVATION_COLUMNS}`,
+      [input.grantId, input.expiresAt],
+    )
+    return hydrate(refreshed[0]!)
   }
 
   const { rows } = await client.query<ActivationRow>(
@@ -89,8 +104,8 @@ export async function activateGrant(client: PoolClient, input: ActivateGrantInpu
   ])
   const row = retried[0]
   if (!row) throw new Error(`grant activation for ${input.grantId} vanished immediately after a conflicting concurrent insert`)
-  if (row.request_id !== input.requestId || row.workload_identity !== input.workloadIdentity) {
-    throw new ActivationConflictError(`grant ${input.grantId} is already activated for a different workload identity or request`)
+  if (row.workload_identity !== input.workloadIdentity) {
+    throw new ActivationConflictError(`grant ${input.grantId} is already activated for a different workload identity`)
   }
   return hydrate(row)
 }
