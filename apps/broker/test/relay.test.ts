@@ -28,6 +28,21 @@ function startEchoServer(): Promise<{ port: number; close: () => Promise<void> }
   })
 }
 
+/** Stands in for k8s-pod-lookup.ts's real source-IP resolution — real relay.ts callers no longer
+ * supply a workload identity claim directly (found live, P11: nothing ever set the old
+ * X-Workload-Identity header this used to be), so tests drive it through this same seam instead of
+ * a header. `setIdentity` must be called before each `connectThroughRelay` (the resolver ignores
+ * the real source IP entirely here — tests never run inside a real cluster). */
+function fakeWorkloadIdentityResolver(): { resolve: (sourceIp: string) => Promise<string | undefined>; setIdentity(id: string | undefined): void } {
+  let current: string | undefined
+  return {
+    resolve: async () => current,
+    setIdentity(id) {
+      current = id
+    },
+  }
+}
+
 /** `fake-agent`'s reviewed pinned route set (route-policy.ts) only allow-lists the hostname
  * `fake-agent.internal.test`, which does not actually resolve — so the fake gateway's dial target
  * ignores the CONNECT host and always dials `127.0.0.1`, where every test's real echo server (or
@@ -39,10 +54,21 @@ async function setup(pool: pg.Pool) {
   const gateway: FakeOnecliGatewayHandle = await startFakeOnecliGateway(onecli, (_host, port) => netConnect(port, '127.0.0.1'))
   onecli.gatewayUrl = gateway.url
   const deps: GrantServiceDeps = { onecli, encryptionKey: testEncryptionKey(), expectedRuntimeBundle: testExpectedRuntimeBundle() }
-  const relay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey })
+  const identityResolver = fakeWorkloadIdentityResolver()
+  const relay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey, resolveWorkloadIdentity: identityResolver.resolve })
   await new Promise<void>((resolve) => relay.listen(0, '127.0.0.1', resolve))
   const relayPort = (relay.address() as AddressInfo).port
-  return { onecli, gateway, deps, relay, relayPort }
+  return {
+    onecli,
+    gateway,
+    deps,
+    relay,
+    relayPort,
+    connectThroughRelay: (workloadIdentity: string, host: string, port: number) => {
+      identityResolver.setIdentity(workloadIdentity)
+      return rawConnectThroughRelay(relayPort, host, port)
+    },
+  }
 }
 
 async function issueAndActivate(pool: pg.Pool, deps: GrantServiceDeps, workloadIdentity: string, equipment: EquipmentRequest = VAULT_READ): Promise<ExecutionGrant> {
@@ -73,17 +99,19 @@ async function issueAndActivate(pool: pg.Pool, deps: GrantServiceDeps, workloadI
   }
 }
 
-/** Issues a raw CONNECT through the relay, targeting `host:port`, using `workloadIdentity` as the
- * trusted claim. Resolves once the tunnel is established and the echo round-trip confirms opacity,
- * or resolves with the denial status code if the relay refused before tunneling. */
-function connectThroughRelay(relayPort: number, workloadIdentity: string, host: string, port: number): Promise<{ status: number; echoed?: string }> {
+/** Issues a raw CONNECT through the relay, targeting `host:port` — the caller is responsible for
+ * having already primed whatever `resolveWorkloadIdentity` fake is wired into that relay instance
+ * (`setup()`'s own `connectThroughRelay` does this automatically; the relay-restart test below
+ * manages its own second resolver directly, since it stands up a SECOND relay instance). Resolves
+ * once the tunnel is established and the echo round-trip confirms opacity, or resolves with the
+ * denial status code if the relay refused before tunneling. */
+function rawConnectThroughRelay(relayPort: number, host: string, port: number): Promise<{ status: number; echoed?: string }> {
   return new Promise((resolve, reject) => {
     const req = httpRequest({
       host: '127.0.0.1',
       port: relayPort,
       method: 'CONNECT',
       path: `${host}:${port}`,
-      headers: { 'x-workload-identity': workloadIdentity },
     })
     req.on('connect', (res, socket: Socket) => {
       if (res.statusCode !== 200) {
@@ -115,11 +143,13 @@ test('required: a Broker/relay restart preserves correct state — a fresh relay
       // against nothing but the same Postgres pool (`onecli` here plays the role of real OneCLI's
       // own persisted control plane, which genuinely does survive a Broker restart).
       await new Promise<void>((resolve) => originalRelay.close(() => resolve()))
-      const restartedRelay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey })
+      const restartedIdentityResolver = fakeWorkloadIdentityResolver()
+      const restartedRelay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey, resolveWorkloadIdentity: restartedIdentityResolver.resolve })
       await new Promise<void>((resolve) => restartedRelay.listen(0, '127.0.0.1', resolve))
       const restartedPort = (restartedRelay.address() as { port: number }).port
       try {
-        const result = await connectThroughRelay(restartedPort, 'workload-a', 'fake-agent.internal.test', echo.port)
+        restartedIdentityResolver.setIdentity('workload-a')
+        const result = await rawConnectThroughRelay(restartedPort, 'fake-agent.internal.test', echo.port)
         assert.equal(result.status, 200, 'no Broker-process-memory state was required for this grant to remain usable')
         assert.match(result.echoed ?? '', /^probe-/)
       } finally {
@@ -135,12 +165,12 @@ test('required: a Broker/relay restart preserves correct state — a fresh relay
 
 test('required: an explicitly granted host succeeds end to end through the relay, opaquely', async () => {
   await withTestDatabase(async (pool) => {
-    const { onecli, gateway, deps, relay, relayPort } = await setup(pool)
+    const { onecli, gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
     try {
       const echo = await startEchoServer()
       try {
         await issueAndActivate(pool, deps, 'workload-a')
-        const result = await connectThroughRelay(relayPort, 'workload-a', 'fake-agent.internal.test', echo.port)
+        const result = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
         assert.equal(result.status, 200)
         assert.match(result.echoed ?? '', /^probe-/)
       } finally {
@@ -156,11 +186,11 @@ test('required: an explicitly granted host succeeds end to end through the relay
 
 test('required: an unlisted host is denied by OneCLI (via the fake gateway) even with a valid grant', async () => {
   await withTestDatabase(async (pool) => {
-    const { gateway, deps, relay, relayPort } = await setup(pool)
+    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
     try {
       await issueAndActivate(pool, deps, 'workload-a')
       // vault has no external route mapping — an attempt to reach a real-looking, non-allow-listed host is blocked at the fake gateway.
-      const result = await connectThroughRelay(relayPort, 'workload-a', 'unlisted.example.test', 443)
+      const result = await connectThroughRelay('workload-a', 'unlisted.example.test', 443)
       assert.equal(result.status, 403)
     } finally {
       relay.close()
@@ -171,10 +201,29 @@ test('required: an unlisted host is denied by OneCLI (via the fake gateway) even
 
 test('required: an unknown workload identity is denied by the relay before any OneCLI round trip', async () => {
   await withTestDatabase(async (pool) => {
+    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
+    try {
+      await issueAndActivate(pool, deps, 'workload-a')
+      const result = await connectThroughRelay('not-a-real-workload', '127.0.0.1', 1)
+      assert.equal(result.status, 403)
+    } finally {
+      relay.close()
+      await gateway.close()
+    }
+  })
+})
+
+test('required, P11: a source IP the identity resolver cannot map to any Pod is denied — no client-supplied claim is trusted', async () => {
+  await withTestDatabase(async (pool) => {
     const { gateway, deps, relay, relayPort } = await setup(pool)
     try {
       await issueAndActivate(pool, deps, 'workload-a')
-      const result = await connectThroughRelay(relayPort, 'not-a-real-workload', '127.0.0.1', 1)
+      // No connectThroughRelay call primes the fake resolver here (it defaults to undefined,
+      // standing in for "the Kubernetes API found no Pod with this source IP") — the OLD design
+      // (an X-Workload-Identity header) would have let a CONNECT through with no identity at all
+      // resolve to some default/missing value; this proves the relay never falls back to trusting
+      // anything the connecting socket itself claims.
+      const result = await rawConnectThroughRelay(relayPort, 'fake-agent.internal.test', 1)
       assert.equal(result.status, 403)
     } finally {
       relay.close()
@@ -185,7 +234,7 @@ test('required: an unknown workload identity is denied by the relay before any O
 
 test('required: Session A cannot use Session B relay binding — a different session\'s workload identity never reaches A\'s grant', async () => {
   await withTestDatabase(async (pool) => {
-    const { gateway, deps, relay, relayPort } = await setup(pool)
+    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
     try {
       const echo = await startEchoServer()
       try {
@@ -193,12 +242,12 @@ test('required: Session A cannot use Session B relay binding — a different ses
         const grantB = await issueAndActivate(pool, deps, 'workload-b')
         assert.notEqual(grantA.sessionId, grantB.sessionId)
 
-        const resultUsingB = await connectThroughRelay(relayPort, 'workload-b', 'fake-agent.internal.test', echo.port)
+        const resultUsingB = await connectThroughRelay('workload-b', 'fake-agent.internal.test', echo.port)
         assert.equal(resultUsingB.status, 200, "workload-b legitimately uses its OWN grant")
 
         // workload-a's own identity still only unlocks grant A's own upstream authority, never B's —
         // there is no shared/global credential a relay bug could leak across the two.
-        const resultUsingA = await connectThroughRelay(relayPort, 'workload-a', 'fake-agent.internal.test', echo.port)
+        const resultUsingA = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
         assert.equal(resultUsingA.status, 200)
       } finally {
         await echo.close()
@@ -212,12 +261,12 @@ test('required: Session A cannot use Session B relay binding — a different ses
 
 test('required: revocation immediately blocks the relay for a still-connecting workload', async () => {
   await withTestDatabase(async (pool) => {
-    const { gateway, deps, relay, relayPort } = await setup(pool)
+    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
     try {
       const echo = await startEchoServer()
       try {
         const grant = await issueAndActivate(pool, deps, 'workload-a')
-        const before = await connectThroughRelay(relayPort, 'workload-a', 'fake-agent.internal.test', echo.port)
+        const before = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
         assert.equal(before.status, 200)
 
         const client = await pool.connect()
@@ -227,7 +276,7 @@ test('required: revocation immediately blocks the relay for a still-connecting w
           client.release()
         }
 
-        const after = await connectThroughRelay(relayPort, 'workload-a', 'fake-agent.internal.test', echo.port)
+        const after = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
         assert.equal(after.status, 403)
       } finally {
         await echo.close()
@@ -241,13 +290,13 @@ test('required: revocation immediately blocks the relay for a still-connecting w
 
 test('required: audit and denial paths never carry the upstream bearer or a query string', async () => {
   await withTestDatabase(async (pool) => {
-    const { gateway, deps, relay, relayPort } = await setup(pool)
+    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
     try {
       const echo = await startEchoServer()
       try {
         await issueAndActivate(pool, deps, 'workload-a')
-        await connectThroughRelay(relayPort, 'workload-a', 'fake-agent.internal.test', echo.port)
-        await connectThroughRelay(relayPort, 'nonexistent-workload', 'fake-agent.internal.test', echo.port)
+        await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
+        await connectThroughRelay('nonexistent-workload', 'fake-agent.internal.test', echo.port)
 
         const client = await pool.connect()
         try {

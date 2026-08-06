@@ -15,14 +15,18 @@ import { readUpstreamAuthority } from './onecli-agents-repository.js'
  * encrypted state and attached ONLY to this relay's OWN authenticated hop to OneCLI, never
  * returned to the caller.
  *
- * `X-Workload-Identity` is trusted the same way `apps/session-runtime-controller/src/server.ts`
- * trusts its own transport ("this listener itself speaks plain HTTP... deployment-level policy
- * (cluster mesh/NetworkPolicy) terminates and enforces it"): a real deployment's mesh sidecar
- * authenticates the connecting Session Runtime Pod via mTLS/SPIFFE and injects this header only
- * after that succeeds, unforgeable by the Pod itself. This relay's OWN job is the binding check —
- * does the identity presented match what the Controller bound at activation — not re-implementing
- * mTLS validation, matching the one transport-trust convention already established in this
- * codebase.
+ * The connecting workload's identity used to be an `X-Workload-Identity` header, trusted on the
+ * assumption a real deployment's service mesh sidecar (mTLS/SPIFFE) would inject it after
+ * authenticating the Pod, unforgeable by the Pod itself. Found live, P11: this cluster has no such
+ * mesh — nothing ever set that header, so every real CONNECT failed closed
+ * (`407 missing_workload_identity`), surfaced by the real `claude` CLI's own proxy library as a
+ * misleadingly generic `UNKNOWN_CERTIFICATE_VERIFICATION_ERROR` (the CA/TLS chain to the gateway
+ * was always correct — verified directly). `resolveWorkloadIdentity` replaces the header: it
+ * derives identity from the connection's own real source IP (`k8s-pod-lookup.ts`'s real
+ * implementation — genuinely unforgeable by the Pod within this cluster's CNI, matching the "trust
+ * the transport" convention already used throughout this codebase), never a client-supplied claim.
+ * This relay's OWN job stays the binding check — does the resolved identity match what the
+ * Controller bound at activation — not re-implementing identity verification itself.
  *
  * CONNECT's target is host:port only — no path, no query string ever reaches this process or its
  * audit log (ONECLI-SPIKE.md "Gateway stdout leaks query-string secrets" is structurally
@@ -32,6 +36,8 @@ export interface RelayDeps {
   readonly pool: pg.Pool
   readonly encryptionKey: Buffer
   readonly dialGateway?: (gatewayUrl: string) => Socket
+  /** The connecting Session Runtime Pod's own real source IP -> its `serviceAccountName`, or `undefined` if unresolvable. Real implementation: `k8s-pod-lookup.ts`. */
+  readonly resolveWorkloadIdentity: (sourceIp: string) => Promise<string | undefined>
 }
 
 function defaultDialGateway(gatewayUrl: string): Socket {
@@ -40,9 +46,10 @@ function defaultDialGateway(gatewayUrl: string): Socket {
   return url.protocol === 'https:' ? tlsConnect({ host: url.hostname, port }) : netConnect(port, url.hostname)
 }
 
-function headerValue(req: IncomingMessage, name: string): string | undefined {
-  const value = req.headers[name]
-  return Array.isArray(value) ? value[0] : value
+/** Node reports an IPv4 connection over a dual-stack socket as `::ffff:x.x.x.x` — strip the prefix so it matches the plain IPv4 `status.podIP` the Kubernetes API reports. */
+function normalizeSourceIp(remoteAddress: string | undefined): string | undefined {
+  if (!remoteAddress) return undefined
+  return remoteAddress.startsWith('::ffff:') ? remoteAddress.slice('::ffff:'.length) : remoteAddress
 }
 
 export function createAccessRelay(deps: RelayDeps): Server {
@@ -79,14 +86,16 @@ async function deny(deps: RelayDeps, clientSocket: Socket, status: number, code:
 }
 
 async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket: Socket, head: Buffer): Promise<void> {
-  const workloadIdentity = headerValue(req, 'x-workload-identity')
   const target = req.url ?? ''
   const separatorIndex = target.lastIndexOf(':')
   const host = separatorIndex > 0 ? target.slice(0, separatorIndex) : ''
   const port = separatorIndex > 0 ? Number(target.slice(separatorIndex + 1)) : NaN
 
-  if (!workloadIdentity) return deny(deps, clientSocket, 407, 'missing_workload_identity')
   if (!host || !Number.isInteger(port)) return deny(deps, clientSocket, 400, 'invalid_target')
+
+  const sourceIp = normalizeSourceIp(clientSocket.remoteAddress)
+  const workloadIdentity = sourceIp ? await deps.resolveWorkloadIdentity(sourceIp) : undefined
+  if (!workloadIdentity) return deny(deps, clientSocket, 403, 'unresolvable_workload_identity')
 
   const client = await deps.pool.connect()
   let sessionId: string | undefined

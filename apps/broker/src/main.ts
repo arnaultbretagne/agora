@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION, FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { requireEncryptionKey } from './crypto.js'
+import { createK8sWorkloadIdentityResolver } from './k8s-pod-lookup.js'
 import { createOnecliSdkAdapter } from './onecli-real.js'
 import { createAccessRelay } from './relay.js'
 import { createBrokerServer } from './server.js'
@@ -44,7 +45,14 @@ controlServer.listen(controlPort, () => {
   process.stdout.write(`broker control API listening on :${controlPort}\n`)
 })
 
-const relayServer = createAccessRelay({ pool, encryptionKey })
+// Found live, P11: relay.ts's real workload-identity source — see k8s-pod-lookup.ts's own doc.
+// `agora.dev/app=session-runtime` matches apps/session-runtime-controller/src/labels.ts's own
+// constants exactly (deployables never import each other, so this is a narrow, literal copy).
+const resolveWorkloadIdentity = createK8sWorkloadIdentityResolver({
+  namespace: requireEnv('AGORA_NAMESPACE'), // matches apps/session-runtime-controller's own AGORA_NAMESPACE naming (agora-runs)
+  labelSelector: 'agora.dev/app=session-runtime',
+})
+const relayServer = createAccessRelay({ pool, encryptionKey, resolveWorkloadIdentity })
 relayServer.listen(relayPort, () => {
   process.stdout.write(`broker access relay listening on :${relayPort}\n`)
 })
