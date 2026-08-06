@@ -3,13 +3,16 @@ import { randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { after, before, test } from 'node:test'
+import { createHttpBrokerGrantClient } from '../src/broker-grant-client.js'
 import { SessionConnectionRegistry } from '../src/connections.js'
 import { startProjectorSweepLoop, type ProjectorSweepLoopHandle } from '../src/projector-loop.js'
 import { createServer } from '../src/server.js'
+import { startFakeBroker, type FakeBrokerHandle } from './support/fake-broker.js'
 import { startFakeController, type FakeControllerHandle } from './support/fake-controller.js'
 import { openTestDatabase, type TestDatabaseHandle } from './support.js'
 
 let controller: FakeControllerHandle
+let broker: FakeBrokerHandle
 let db: TestDatabaseHandle
 let server: ReturnType<typeof createServer>
 let sweepLoop: ProjectorSweepLoopHandle
@@ -17,8 +20,14 @@ let baseUrl: string
 
 before(async () => {
   controller = await startFakeController()
+  broker = await startFakeBroker()
   db = await openTestDatabase()
-  server = createServer({ pool: db.pool, controllerTransport: controller, connections: new SessionConnectionRegistry() })
+  server = createServer({
+    pool: db.pool,
+    controllerTransport: controller,
+    brokerGrantClient: createHttpBrokerGrantClient(broker.baseUrl),
+    connections: new SessionConnectionRegistry(),
+  })
   await new Promise<void>((resolve) => server.listen(0, resolve))
   const address = server.address() as AddressInfo
   baseUrl = `http://127.0.0.1:${address.port}`
@@ -37,6 +46,7 @@ after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
   await db.close()
   await controller.close()
+  await broker.close()
 })
 
 function auth(principal: string): HeadersInit {
@@ -155,8 +165,18 @@ test('full golden path: create -> ready -> items/turns list the real reply', asy
   }
   assert.ok(items.items.length > 0, 'the fake Agent reply eventually gets projected and listed')
 
-  const turnsRes = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}/turns`, { headers: auth('alice') })
-  const turns = (await turnsRes.json()) as { turns: { status: string }[] }
+  // A turn's own status flip to 'completed' is not synchronous with its reply item appearing in
+  // the projection above (found live, P11 — genuinely intermittent under load, not a fixed one-
+  // shot check anywhere else that polls a fire-and-forget chain in this file); poll like every
+  // other wait-for-async-settle helper in this codebase (e.g. orchestration.test.ts's
+  // `waitForPhase`) instead of asserting on a single snapshot.
+  let turns: { turns: { status: string }[] } = { turns: [] }
+  for (let i = 0; i < 40; i += 1) {
+    const turnsRes = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}/turns`, { headers: auth('alice') })
+    turns = (await turnsRes.json()) as typeof turns
+    if (turns.turns.some((t) => t.status === 'completed')) break
+    await sleep(250)
+  }
   assert.ok(turns.turns.some((t) => t.status === 'completed'))
 })
 

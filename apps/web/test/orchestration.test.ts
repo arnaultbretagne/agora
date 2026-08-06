@@ -6,6 +6,7 @@ import { promptSession } from '@agora/acp'
 import { nameBasedUuid, principalId, workstreamId } from '@agora/domain'
 import { captureCustody } from '@agora/session-runtime-control'
 import { createWorkstreamWithFirstSession, getAnchor, projectWorkstream, upsertAnchor } from '@agora/store-pg'
+import { createHttpBrokerGrantClient } from '../src/broker-grant-client.js'
 import { SessionConnectionRegistry } from '../src/connections.js'
 import {
   activateSession,
@@ -15,6 +16,7 @@ import {
   SUSPEND_CAPTURE_NAMESPACE,
   suspendSession,
 } from '../src/orchestration.js'
+import { startFakeBroker, type FakeBrokerHandle } from './support/fake-broker.js'
 import { startFakeController, type FakeControllerHandle } from './support/fake-controller.js'
 import { randomId, withTestDatabase } from './support.js'
 
@@ -64,12 +66,17 @@ async function waitForPhase(pool: pg.Pool, sessionId: string, phase: string, tim
 }
 
 let controller: FakeControllerHandle
+let broker: FakeBrokerHandle
+let brokerGrantClient: ReturnType<typeof createHttpBrokerGrantClient>
 
 test.before(async () => {
   controller = await startFakeController()
+  broker = await startFakeBroker()
+  brokerGrantClient = createHttpBrokerGrantClient(broker.baseUrl)
 })
 test.after(async () => {
   await controller.close()
+  await broker.close()
 })
 
 test('required exit criterion: provisioning a Session reaches ready and the initial prompt actually round-trips', async () => {
@@ -80,6 +87,7 @@ test('required exit criterion: provisioning a Session reaches ready and the init
     await provisionSessionAndPrompt({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -112,6 +120,7 @@ test('activateSession on a requested Session runs the real provisioning chain as
     const result = await activateSession({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -134,6 +143,7 @@ test('activateSession on an already-ready Session is a no-op', async () => {
     await provisionSessionAndPrompt({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -147,6 +157,7 @@ test('activateSession on an already-ready Session is a no-op', async () => {
     const result = await activateSession({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -169,6 +180,7 @@ test('suspendSession dematerializes the real Session Runtime and reaches suspend
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId,
@@ -198,6 +210,7 @@ test('required: suspend commits a custody Anchor, and activateSession fails clos
     await provisionSessionAndPrompt({
       pool,
       transport: custodyController,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -233,6 +246,7 @@ test('required: a crash after capture but before the Anchor commits is recovered
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId,
@@ -285,6 +299,7 @@ test('required: a crash after the Anchor commits but before dematerialize is rec
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId,
@@ -341,6 +356,7 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
     await provisionSessionAndPrompt({
       pool,
       transport: custodyController,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -373,6 +389,7 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
     const result = await activateSession({
       pool,
       transport: custodyController,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -430,6 +447,7 @@ test('closeSession cancels live work, dematerializes and reaches closed', async 
     await provisionSessionAndPrompt({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,
@@ -457,6 +475,7 @@ test('cancelSessionCommand is a no-op without a live connection and succeeds wit
     await provisionSessionAndPrompt({
       pool,
       transport: controller,
+      brokerGrantClient,
       connections,
       workstreamId: wsId,
       sessionId,

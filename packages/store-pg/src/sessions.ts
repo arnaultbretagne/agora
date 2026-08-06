@@ -51,6 +51,37 @@ export async function bindCapabilities(
 }
 
 /**
+ * Found live, P11: apps/web's own real Broker grant wiring — the grantRef obtained at issuance
+ * must survive to a later resume (`broker.execution_grants.session_id` is UNIQUE, so resume
+ * RENEWS this same grant rather than issuing a new one; see 005-add-session-execution-grant-ref
+ * .sql's own doc comment). Write-once, same shape as `bindCapabilities` above: both are bound
+ * once, from the same Broker issue response, before provisioning continues.
+ */
+export async function bindExecutionGrantRef(client: PoolClient, sessionId: string, executionGrantRef: string): Promise<void> {
+  // Tolerates a retry that re-binds the SAME grantRef (e.g. `activateSession`'s 'requested'-phase
+  // reattach path re-running `provisionSessionAndPrompt` after a crash between a successful Broker
+  // issue and this bind — the Broker's own issue is idempotent by (sessionId, requestId) and would
+  // return the identical grantRef) — only a DIFFERENT value already bound is a genuine conflict.
+  const result = await client.query(
+    `UPDATE product.sessions SET execution_grant_ref = $2
+     WHERE id = $1 AND (execution_grant_ref IS NULL OR execution_grant_ref = $2)`,
+    [sessionId, executionGrantRef],
+  )
+  if (result.rowCount === 0) {
+    throw new Error('execution_grant_ref_conflict: Session not found or already bound to a different grant')
+  }
+}
+
+/** Undefined for a Session whose grant was never persisted (e.g. pre-P11 data, or provisioning failed before this point) — the caller (resume) must fail closed rather than materialize with no grant. */
+export async function getExecutionGrantRef(client: PoolClient, sessionId: string): Promise<string | undefined> {
+  const { rows } = await client.query<{ execution_grant_ref: string | null }>(
+    'SELECT execution_grant_ref FROM product.sessions WHERE id = $1',
+    [sessionId],
+  )
+  return rows[0]?.execution_grant_ref ?? undefined
+}
+
+/**
  * No DB trigger enforces the Session phase transition table (unlike e.g. the ACP-binding
  * write-once guard) — @agora/domain's `canTransitionSessionPhase` is the only place that table
  * lives, so this repository function must call it before persisting, or an illegal transition

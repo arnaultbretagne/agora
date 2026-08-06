@@ -27,6 +27,7 @@ import { getEquipmentCatalogue } from '@agora/equipment-policy'
 import { promptSession } from '@agora/acp'
 import { HandoffNotReadyError } from '@agora/store-pg'
 import { getSessionRuntime, listLaunchableAgents, type SessionRuntimeControlTransport } from '@agora/session-runtime-control'
+import type { BrokerGrantClient } from './broker-grant-client.js'
 import {
   activateSession,
   cancelSessionCommand,
@@ -56,6 +57,7 @@ import { getValidators } from './request-schemas.js'
 export interface ServerDeps {
   readonly pool: pg.Pool
   readonly controllerTransport: SessionRuntimeControlTransport
+  readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
   readonly now?: () => Date
 }
@@ -281,6 +283,7 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
     void provisionSessionAndPrompt({
       pool: deps.pool,
       transport: deps.controllerTransport,
+      brokerGrantClient: deps.brokerGrantClient,
       connections: deps.connections,
       workstreamId,
       sessionId,
@@ -421,6 +424,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
     const result = await switchAgent({
       pool: deps.pool,
       transport: deps.controllerTransport,
+      brokerGrantClient: deps.brokerGrantClient,
       connections: deps.connections,
       workstreamId,
       agentId: request.agentId,
@@ -686,6 +690,7 @@ async function handleActivateSession(deps: ServerDeps, principal: string, sessio
   const result = await activateSession({
     pool: deps.pool,
     transport: deps.controllerTransport,
+    brokerGrantClient: deps.brokerGrantClient,
     connections: deps.connections,
     workstreamId: loaded.session.workstreamId,
     sessionId,

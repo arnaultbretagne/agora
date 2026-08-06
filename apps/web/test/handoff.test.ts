@@ -5,10 +5,23 @@ import type pg from 'pg'
 import { promptSession } from '@agora/acp'
 import { principalId, workstreamId } from '@agora/domain'
 import { createWorkstreamWithFirstSession, getAnchor, projectWorkstream } from '@agora/store-pg'
+import { createHttpBrokerGrantClient } from '../src/broker-grant-client.js'
 import { SessionConnectionRegistry } from '../src/connections.js'
 import { provisionSessionAndPrompt, suspendSession, switchAgent } from '../src/orchestration.js'
+import { startFakeBroker, type FakeBrokerHandle } from './support/fake-broker.js'
 import { startFakeController, type FakeControllerHandle } from './support/fake-controller.js'
 import { randomId, withTestDatabase } from './support.js'
+
+let broker: FakeBrokerHandle
+let brokerGrantClient: ReturnType<typeof createHttpBrokerGrantClient>
+
+test.before(async () => {
+  broker = await startFakeBroker()
+  brokerGrantClient = createHttpBrokerGrantClient(broker.baseUrl)
+})
+test.after(async () => {
+  await broker.close()
+})
 
 function launchEnvelope(agentId: string) {
   return {
@@ -135,6 +148,7 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId: sessionA,
@@ -164,6 +178,7 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       const switchToB = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',
@@ -217,6 +232,7 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       const switchToA = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent',
@@ -280,6 +296,7 @@ test('required: the same switch command cannot duplicate a Handoff (byte-identic
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId: sessionA,
@@ -297,6 +314,7 @@ test('required: the same switch command cannot duplicate a Handoff (byte-identic
       const first = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',
@@ -318,6 +336,7 @@ test('required: the same switch command cannot duplicate a Handoff (byte-identic
       const second = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',
@@ -375,6 +394,7 @@ test('required: an echoed Handoff resource stays correlated to one Handoff card,
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId: sessionA,
@@ -392,6 +412,7 @@ test('required: an echoed Handoff resource stays correlated to one Handoff card,
       const result = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',
@@ -440,6 +461,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
       await provisionSessionAndPrompt({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         sessionId: sessionA,
@@ -457,6 +479,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
       const switchToB = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',
@@ -504,6 +527,7 @@ test('required: a capture failure after a successful Handoff preserves the old d
       const reactivate = await switchAgent({
         pool,
         transport: custodyController,
+        brokerGrantClient,
         connections,
         workstreamId: wsId,
         agentId: 'fake-agent-b',

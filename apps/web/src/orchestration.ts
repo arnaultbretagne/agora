@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import * as acp from '@agentclientprotocol/sdk'
 import { bootstrapSession, cancelSession as acpCancelSession, promptSession, resumeAcpSession, type PromptSessionHandoffSource } from '@agora/acp'
-import { deriveCommandId, nameBasedUuid } from '@agora/domain'
+import { deriveCommandId, nameBasedUuid, type EquipmentRequest } from '@agora/domain'
 import {
+  bindExecutionGrantRef,
   buildHandoffContent,
   getAnchor,
+  getExecutionGrantRef,
   HANDOFF_SEED_POLICY_VERSION,
   openAdditionalSession,
   setCurrentSession,
@@ -21,7 +23,8 @@ import {
   type SessionRuntimeControlTransport,
 } from '@agora/session-runtime-control'
 import type pg from 'pg'
-import { connectAcpBridge, FAKE_CAPABILITY_POLICY_VERSION, FAKE_EXECUTION_GRANT_REF, fakeCapabilityDigest } from './bridge-client.js'
+import type { BrokerGrantClient } from './broker-grant-client.js'
+import { connectAcpBridge } from './bridge-client.js'
 import type { SessionConnectionRegistry } from './connections.js'
 
 /**
@@ -29,8 +32,14 @@ import type { SessionConnectionRegistry } from './connections.js'
  * new, bind) — this plan's real, working implementation of that chain, composing P04's controller
  * client and P03's coordinator over a genuine WebSocket ACP bridge connection (same construction
  * proven live in P04's cluster verification). Steps 1-4 (resolve Agent, create Session, resolve/
- * bind capabilities) already happen in the caller before this runs; there is no real Broker (P08)
- * to resolve capability intent, so a fixed fake policy/grant stands in — see bridge-client.ts.
+ * bind capabilities) already happen in the caller before this runs.
+ *
+ * Found live, P11: capability policy/grant used to be a fixed fake placeholder (bridge-client.ts)
+ * left over from before the Broker (P08) existed — never retrofitted once it shipped. Both
+ * `provisionSessionAndPrompt` and `resumeSessionRuntime` now call the real Broker
+ * (broker-grant-client.ts) before materializing: a genuinely NEW Session issues a grant, a resumed
+ * one renews its existing one (`broker.execution_grants.session_id` is UNIQUE — one grant per
+ * Session, ever; see 005-add-session-execution-grant-ref.sql).
  *
  * `bootstrapSession` (P03, already shipped and tested) transitions `requested` -> `provisioning`
  * itself, right after ACP `initialize` succeeds — NOT before Runtime materialization as the spec's
@@ -41,6 +50,7 @@ import type { SessionConnectionRegistry } from './connections.js'
 export interface ProvisionSessionInput {
   readonly pool: pg.Pool
   readonly transport: SessionRuntimeControlTransport
+  readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
   readonly workstreamId: string
   readonly sessionId: string
@@ -62,6 +72,36 @@ export const SUSPEND_CAPTURE_NAMESPACE = 'cbf5fa7c-3128-4e7e-b25a-3c4c7dd33084'
 
 /** `switchAgent`'s deterministic new-Session id, derived from (workstream, agent, Idempotency-Key) — never `randomUUID()`, so a retry before any Anchor exists resolves to the SAME Session. */
 export const SWITCH_AGENT_SESSION_NAMESPACE = 'c4f553e5-2238-4b7a-8bb7-f3d9ca2b4cfc'
+
+/**
+ * The Broker's own `issueExecutionGrant` is idempotent by (sessionId, requestId) — deriving this
+ * deterministically from `sessionId` (never `randomUUID()`) means a `provisionSessionAndPrompt`
+ * retry (e.g. `activateSession`'s 'requested'-phase reattach path, after a crash between a
+ * successful issue and the ACP bootstrap that follows it) replays onto the SAME grant instead of
+ * hitting the Broker's `GrantConflictError` (`execution_grants.session_id` is UNIQUE).
+ */
+export const EXECUTION_GRANT_REQUEST_NAMESPACE = '3f9d0b0a-6b39-4b62-9c9a-3e8b6b6b1c2f'
+
+interface SessionGrantContext {
+  readonly equipment: EquipmentRequest
+  readonly workstreamCategory: 'discussion' | 'invocation'
+}
+
+/** Both the issuing (`provisionSessionAndPrompt`) and renewing (`resumeSessionRuntime`) paths need this — read fresh from product schema rather than threaded through every caller's input shape. */
+async function loadSessionGrantContext(pool: pg.Pool, sessionId: string): Promise<SessionGrantContext> {
+  const client = await pool.connect()
+  try {
+    const { rows } = await client.query<{ equipment_request: EquipmentRequest; category: 'discussion' | 'invocation' }>(
+      `SELECT s.equipment_request, w.category FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id WHERE s.id = $1`,
+      [sessionId],
+    )
+    const row = rows[0]
+    if (!row) throw new Error(`session ${sessionId} not found`)
+    return { equipment: row.equipment_request, workstreamCategory: row.category }
+  } finally {
+    client.release()
+  }
+}
 
 async function waitForRuntimeReady(transport: SessionRuntimeControlTransport, sessionId: string, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -93,11 +133,27 @@ async function failClosed(pool: pg.Pool, sessionId: string, code: string, error:
 export async function provisionSessionAndPrompt(input: ProvisionSessionInput): Promise<void> {
   const now = input.now ?? (() => new Date())
   try {
+    const { equipment, workstreamCategory } = await loadSessionGrantContext(input.pool, input.sessionId)
+    const grant = await input.brokerGrantClient.issue({
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      principalId: input.actor.id,
+      workstreamCategory,
+      equipment,
+      requestId: nameBasedUuid(EXECUTION_GRANT_REQUEST_NAMESPACE, input.sessionId),
+    })
+    const grantClient = await input.pool.connect()
+    try {
+      await bindExecutionGrantRef(grantClient, input.sessionId, grant.grantRef)
+    } finally {
+      grantClient.release()
+    }
+
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
       workspaceMountRef: input.workspaceMountRef,
-      executionGrantRef: FAKE_EXECUTION_GRANT_REF,
+      executionGrantRef: grant.grantRef,
     })
     await waitForRuntimeReady(input.transport, input.sessionId)
 
@@ -110,8 +166,8 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
       sessionId: input.sessionId,
       stream,
       cwd: '/home/node/work',
-      capabilityPolicyVersion: FAKE_CAPABILITY_POLICY_VERSION,
-      capabilityDigest: fakeCapabilityDigest(),
+      capabilityPolicyVersion: grant.policyVersion,
+      capabilityDigest: Buffer.from(grant.capabilityDigest, 'hex'),
       now,
     })
     input.connections.set(input.sessionId, {
@@ -152,6 +208,7 @@ export interface ResumeSessionHandoffPrompt {
 export interface ResumeSessionRuntimeInput {
   readonly pool: pg.Pool
   readonly transport: SessionRuntimeControlTransport
+  readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
   readonly workstreamId: string
   readonly sessionId: string
@@ -184,11 +241,25 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       throw new Error(`no custody Anchor found for Session '${input.sessionId}' (workstream '${input.workstreamId}', agent '${input.agentId}')`)
     }
 
+    // `broker.execution_grants.session_id` is UNIQUE — a resume renews the Session's ONE grant
+    // (rotating its upstream OneCLI bearer, docs/specs/10 "Renew") rather than issuing a new one.
+    const grantRefClient = await input.pool.connect()
+    let existingGrantRef: string | undefined
+    try {
+      existingGrantRef = await getExecutionGrantRef(grantRefClient, input.sessionId)
+    } finally {
+      grantRefClient.release()
+    }
+    if (!existingGrantRef) {
+      throw new Error(`Session '${input.sessionId}' has no recorded execution grant reference to renew`)
+    }
+    const renewedGrant = await input.brokerGrantClient.renew(existingGrantRef, randomUUID())
+
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
       workspaceMountRef: input.workspaceMountRef,
-      executionGrantRef: FAKE_EXECUTION_GRANT_REF,
+      executionGrantRef: renewedGrant.grantRef,
       restoreFrom: anchor.custodySnapshotId,
     })
     await waitForRuntimeReady(input.transport, input.sessionId)
@@ -268,6 +339,7 @@ export async function activateSession(
     void resumeSessionRuntime({
       pool: input.pool,
       transport: input.transport,
+      brokerGrantClient: input.brokerGrantClient,
       connections: input.connections,
       workstreamId: row.workstream_id,
       sessionId: input.sessionId,
@@ -284,6 +356,7 @@ export async function activateSession(
 export interface SwitchAgentInput {
   readonly pool: pg.Pool
   readonly transport: SessionRuntimeControlTransport
+  readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
   readonly workstreamId: string
   readonly agentId: string
@@ -406,6 +479,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
     const result = await activateSession({
       pool: input.pool,
       transport: input.transport,
+      brokerGrantClient: input.brokerGrantClient,
       connections: input.connections,
       workstreamId: input.workstreamId,
       sessionId,
@@ -424,6 +498,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       void provisionSessionAndPrompt({
         pool: input.pool,
         transport: input.transport,
+        brokerGrantClient: input.brokerGrantClient,
         connections: input.connections,
         workstreamId: input.workstreamId,
         sessionId,
@@ -438,6 +513,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       const result = await activateSession({
         pool: input.pool,
         transport: input.transport,
+        brokerGrantClient: input.brokerGrantClient,
         connections: input.connections,
         workstreamId: input.workstreamId,
         sessionId,
@@ -484,6 +560,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
     void provisionSessionAndPrompt({
       pool: input.pool,
       transport: input.transport,
+      brokerGrantClient: input.brokerGrantClient,
       connections: input.connections,
       workstreamId: input.workstreamId,
       sessionId,
@@ -515,6 +592,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
   void resumeSessionRuntime({
     pool: input.pool,
     transport: input.transport,
+    brokerGrantClient: input.brokerGrantClient,
     connections: input.connections,
     workstreamId: input.workstreamId,
     sessionId,
@@ -622,8 +700,10 @@ export async function suspendSession(input: SuspendSessionInput): Promise<void> 
 
 /**
  * Narrowed close (docs/specs/03 "Close"): cancels active work, dematerializes the real Session
- * Runtime. No grant/relay/OneCLI revocation (P08 doesn't exist yet) — those never existed for
- * this Session in the first place (fixed fake placeholders, see bridge-client.ts).
+ * Runtime. Still no grant/relay/OneCLI revocation (`DELETE /v1/execution-grants/{id}` exists on
+ * the Broker, P08, since P11 — but wiring Close to call it is a deliberately separate follow-up,
+ * not bundled into this fix). A closed Session's grant and OneCLI Agent are left dangling until
+ * that follow-up lands.
  */
 export async function closeSession(input: SessionLifecycleInput & { readonly now?: () => Date }): Promise<void> {
   const now = input.now ?? (() => new Date())
