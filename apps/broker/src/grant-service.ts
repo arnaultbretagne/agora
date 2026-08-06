@@ -54,6 +54,18 @@ function normalizeJwtLike(value: string): string {
   return JWT_LIKE_RE.test(value) ? value.split('.').slice(0, 2).join('.') : value
 }
 
+/**
+ * Found live, P11, right after the JWT-signature fix alone still didn't stop the false-positive
+ * drift: `getContainerConfig`'s own JSON stub carries a `last_refresh` timestamp that changes on
+ * EVERY call, for the SAME Agent, not just across different Agents (verified live: two successive
+ * calls one second apart, same agent, two different `last_refresh` values). It's an operational
+ * bookkeeping field, not an identity claim — drop it wherever it appears, same best-effort spirit
+ * as stripping a JWT signature. `access_token`/`refresh_token`/`account_id` were checked live too
+ * and are genuinely stable per Agent, so they're deliberately left alone (real drift there should
+ * still trip this check).
+ */
+const VOLATILE_STUB_KEYS = new Set(['last_refresh'])
+
 function normalizeStubContent(content: string): string {
   let parsed: unknown
   try {
@@ -64,7 +76,9 @@ function normalizeStubContent(content: string): string {
   const walk = (value: unknown): unknown => {
     if (typeof value === 'string') return normalizeJwtLike(value)
     if (Array.isArray(value)) return value.map(walk)
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v)]))
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).filter(([k]) => !VOLATILE_STUB_KEYS.has(k)).map(([k, v]) => [k, walk(v)]))
+    }
     return value
   }
   return JSON.stringify(walk(parsed))

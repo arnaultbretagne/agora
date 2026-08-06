@@ -128,19 +128,28 @@ const FAKE_ID_TOKEN_PAYLOAD = Buffer.from(
   JSON.stringify({ sub: 'fake-account', email: 'fake@example.test', exp: 4102444800, iat: 1735689600 }),
 ).toString('base64url')
 
+let fakeRefreshCounter = 0
+
 /**
  * A faithful double of OneCLI's real per-Agent credential-stub behavior (this file's own module
  * doc): the SAME underlying account identity (fixed header+payload), a DIFFERENT signature per
  * Agent identifier — grant-service.ts's own drift check must treat two different Agents' stubs as
- * matching despite the raw bytes differing, exactly as the real product requires.
+ * matching despite the raw bytes differing, exactly as the real product requires. Also reproduces
+ * `last_refresh`, verified live to change on EVERY call (even for the same Agent) — a fresh
+ * counter value each call, deliberately never equal to a prior call's, same as the real product.
  */
 export function fakeCredentialStubs(identifier: string): { readonly containerPath: string; readonly content: string }[] {
   const signature = createHash('sha256').update(identifier).digest('base64url')
   const idToken = `${FAKE_ID_TOKEN_HEADER}.${FAKE_ID_TOKEN_PAYLOAD}.${signature}`
+  fakeRefreshCounter += 1
   return [
     {
       containerPath: '/home/node/.codex/auth.json',
-      content: JSON.stringify({ tokens: { id_token: idToken, access_token: 'onecli-managed', refresh_token: 'onecli-managed' } }),
+      content: JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: { id_token: idToken, access_token: 'onecli-managed', refresh_token: 'onecli-managed', account_id: 'onecli-managed' },
+        last_refresh: `fake-refresh-${fakeRefreshCounter}`,
+      }),
     },
   ]
 }
