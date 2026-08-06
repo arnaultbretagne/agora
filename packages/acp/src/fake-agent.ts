@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import * as acp from '@agentclientprotocol/sdk'
 
 /**
@@ -40,8 +41,22 @@ export interface FakeAgentNativeState {
 
 const MAX_REMEMBERED_MESSAGES = 5
 
+function newConfigState() {
+  // Per-agent, never module-level: several fake Agents live in one test process and must not share
+  // a session's chosen model/effort with each other.
+  const values = new Map<string, string>()
+  let currentModeId = 'default'
+  return {
+    setOption: (id: string, value: string) => values.set(id, value),
+    setMode: (id: string) => { currentModeId = id },
+    options: () => FAKE_CONFIG_OPTIONS.map((o) => ({ ...o, currentValue: values.get(o.id) ?? o.options[0]!.value })),
+    modes: () => ({ currentModeId, availableModes: FAKE_MODES }),
+  }
+}
+
 export function createFakeAgent(options: FakeAgentOptions = {}): acp.AgentApp {
   const stateCell = options.nativeState ?? { current: undefined }
+  const config = newConfigState()
 
   return acp
     .agent({ name: 'agora-fake-agent' })
@@ -51,9 +66,38 @@ export function createFakeAgent(options: FakeAgentOptions = {}): acp.AgentApp {
     }))
     .onRequest(acp.methods.agent.session.new, async (context) => {
       if (options.onSessionNew) return options.onSessionNew(context.params, context)
-      const sessionId = options.acpSessionId ?? 'fake-acp-session'
+      // A UNIQUE id per session/new, like every real Agent — a fixed constant collided on
+      // `sessions_agent_acp_session_id_unique` as soon as one test file opened two Sessions
+      // against the same Agent identity (found live, P11). Tests that need a deterministic id
+      // still pass `acpSessionId` explicitly.
+      const sessionId = options.acpSessionId ?? `fake-acp-session-${randomUUID()}`
       stateCell.current = { acpSessionId: sessionId, promptsSeen: 0, lastMessages: [] }
-      return { sessionId }
+      // Real harnesses (verified live against both claude-agent-acp and codex) advertise their
+      // modes and config options here — the product's model/effort choice is exactly these. A
+      // double that omitted them let the product side "pass" against a shape the real Agent never
+      // sends, so it carries them too, with the same ids the real ones use.
+      return { sessionId, modes: config.modes(), configOptions: config.options() }
+    })
+    .onRequest(acp.methods.agent.session.setConfigOption, async (context) => {
+      const { sessionId, configId, value } = context.params as unknown as { sessionId: string; configId: string; value: string }
+      if (!stateCell.current || stateCell.current.acpSessionId !== sessionId) throw acp.RequestError.resourceNotFound(sessionId)
+      const option = FAKE_CONFIG_OPTIONS.find((o) => o.id === configId)
+      // The Agent is authoritative on what exists — an unknown option or value is refused, so the
+      // product surface's own error path is exercised against a real refusal rather than a mock.
+      if (!option) throw acp.RequestError.invalidParams(`unknown config option '${configId}'`)
+      if (!option.options.some((o) => o.value === value)) throw acp.RequestError.invalidParams(`invalid value '${value}' for '${configId}'`)
+      config.setOption(configId, value)
+      // The full set comes back, because changing one option may change the others (real behaviour).
+      return { configOptions: config.options() }
+    })
+    .onRequest(acp.methods.agent.session.setMode, async (context) => {
+      const { sessionId, modeId } = context.params as { sessionId: string; modeId: string }
+      if (!stateCell.current || stateCell.current.acpSessionId !== sessionId) throw acp.RequestError.resourceNotFound(sessionId)
+      if (!FAKE_MODES.some((m) => m.id === modeId)) throw acp.RequestError.invalidParams(`unknown mode '${modeId}'`)
+      config.setMode(modeId)
+      // ACP's set_mode returns nothing (unlike set_config_option, which returns the full option
+      // set) — the new mode is observable via session/update, not the response.
+      return {}
     })
     .onRequest(acp.methods.agent.session.resume, async (context) => {
       const { sessionId } = context.params
@@ -86,3 +130,38 @@ export function createFakeAgent(options: FakeAgentOptions = {}): acp.AgentApp {
       if (options.onCancel) await options.onCancel(context.params, context)
     })
 }
+
+/** Mirrors the shape both real harnesses advertise (ids verified live: `model` and `effort` on claude-agent-acp). */
+const FAKE_CONFIG_OPTIONS = [
+  {
+    id: 'model',
+    name: 'Model',
+    type: 'select' as const,
+    category: 'model',
+    options: [
+      { name: 'Default (recommended)', value: 'default' },
+      { name: 'Sonnet', value: 'sonnet' },
+      { name: 'Opus', value: 'opus' },
+    ],
+  },
+  {
+    id: 'effort',
+    name: 'Effort',
+    type: 'select' as const,
+    category: 'thought_level',
+    // The OLD system's effort rail, same levels.
+    options: [
+      { name: 'Low', value: 'low' },
+      { name: 'Medium', value: 'medium' },
+      { name: 'High', value: 'high' },
+      { name: 'Xhigh', value: 'xhigh' },
+      { name: 'Max', value: 'max' },
+    ],
+  },
+]
+
+const FAKE_MODES = [
+  { id: 'default', name: 'Manual', description: 'Standard behavior' },
+  { id: 'plan', name: 'Plan Mode', description: 'Planning mode, no actual tool execution' },
+]
+

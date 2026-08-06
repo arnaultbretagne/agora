@@ -23,7 +23,7 @@ import {
 } from '@agora/store-pg'
 import { nameBasedUuid, principalId, type PrincipalId, DomainError } from '@agora/domain'
 import { getEquipmentCatalogue } from '@agora/equipment-policy'
-import { promptSession } from '@agora/acp'
+import { promptSession, setSessionConfigOption, setSessionMode } from '@agora/acp'
 import { HandoffNotReadyError } from '@agora/store-pg'
 import { getSessionRuntime, listLaunchableAgents, type SessionRuntimeControlTransport } from '@agora/session-runtime-control'
 import type { BrokerGrantClient } from './broker-grant-client.js'
@@ -47,11 +47,14 @@ import { getValidators } from './request-schemas.js'
  * only from that pod. No per-workstream authorization model beyond membership exists yet (no
  * ADR/spec describes one) — single-operator in practice today.
  *
- * `PUT /sessions/{id}/mode`, `PUT /sessions/{id}/config-options/{id}`,
+ * `PUT /sessions/{id}/mode` and `PUT /sessions/{id}/config-options/{id}` ARE bound since P11: the
+ * OLD channels-era system offered the model and the reasoning effort as first-class choices, so the
+ * replacement surface has to. Both are pass-through to the Agent's own ACP methods — this server
+ * curates no model list, because the harness is authoritative on what exists.
+ *
  * `POST /sessions/{id}/permission-requests/{id}/decision` and
- * `POST /sessions/{id}/elicitation-requests/{id}/response` are intentionally unbound (404) — P03
- * already deferred ACP mode/config methods and no required test here exercises them; a durable
- * pending-request/decision model would be new, speculative scope.
+ * `POST /sessions/{id}/elicitation-requests/{id}/response` remain intentionally unbound (404) — a
+ * durable pending-request/decision model would be new, speculative scope.
  */
 export interface ServerDeps {
   readonly pool: pg.Pool
@@ -758,6 +761,71 @@ async function handlePromptSession(deps: ServerDeps, principal: string, sessionI
   sendJson(res, 202, { commandId: randomUUID(), state: 'accepted', acceptedAt: now().toISOString() })
 }
 
+/**
+ * The OLD channels-era system offered the model and the reasoning effort as first-class product
+ * choices. Both are ACP session config options, advertised by the Agent itself in its `session/new`
+ * response — this route hands the user's choice straight back to the harness rather than curating
+ * a model list here, which would go stale the moment the harness ships a new one.
+ *
+ * Requires a live ACP connection for the same reason prompting does: config options live on the
+ * running session, not in product truth. The Agent's response carries the FULL option set back
+ * (changing one may change what the others accept), and is returned as-is.
+ */
+async function handleSetConfigOption(deps: ServerDeps, principal: string, sessionId: string, optionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const loaded = await loadSessionAndRole(deps, principal, sessionId)
+  if (!loaded) return sendProblem(res, problem(404, 'session_not_found', 'Session not found'))
+  if (!canMutate(loaded.role)) return sendProblem(res, problem(403, 'validation_failed', 'Viewers cannot change a Session configuration'))
+
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch {
+    return sendProblem(res, problem(400, 'validation_failed', 'request body is not valid JSON'))
+  }
+  const value = (body as { value?: unknown } | undefined)?.value
+  if (typeof value !== 'string' || value.length === 0) {
+    return sendProblem(res, problem(400, 'validation_failed', 'body must be {"value": "<non-empty string>"}'))
+  }
+
+  const live = deps.connections.get(sessionId)
+  if (!live) return sendProblem(res, problem(409, 'runtime_unavailable', 'Session has no live ACP connection'))
+  try {
+    const result = await setSessionConfigOption({ connection: live.connection, acpSessionId: live.acpSessionId, optionId, value })
+    sendJson(res, 200, result ?? {})
+  } catch (error) {
+    // The Agent is authoritative on which options and values exist — surface its refusal as a
+    // typed 409 rather than pretending this server could have validated it.
+    return sendProblem(res, problem(409, 'config_option_rejected', 'Agent rejected the configuration change', error instanceof Error ? error.message : String(error)))
+  }
+}
+
+/** ACP's separate session-mode channel (`session/set_mode`) — same shape and same reasoning as the config options above. */
+async function handleSetMode(deps: ServerDeps, principal: string, sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const loaded = await loadSessionAndRole(deps, principal, sessionId)
+  if (!loaded) return sendProblem(res, problem(404, 'session_not_found', 'Session not found'))
+  if (!canMutate(loaded.role)) return sendProblem(res, problem(403, 'validation_failed', 'Viewers cannot change a Session mode'))
+
+  let body: unknown
+  try {
+    body = await readJsonBody(req)
+  } catch {
+    return sendProblem(res, problem(400, 'validation_failed', 'request body is not valid JSON'))
+  }
+  const modeId = (body as { modeId?: unknown } | undefined)?.modeId
+  if (typeof modeId !== 'string' || modeId.length === 0) {
+    return sendProblem(res, problem(400, 'validation_failed', 'body must be {"modeId": "<non-empty string>"}'))
+  }
+
+  const live = deps.connections.get(sessionId)
+  if (!live) return sendProblem(res, problem(409, 'runtime_unavailable', 'Session has no live ACP connection'))
+  try {
+    const result = await setSessionMode({ connection: live.connection, acpSessionId: live.acpSessionId, modeId })
+    sendJson(res, 200, result ?? {})
+  } catch (error) {
+    return sendProblem(res, problem(409, 'mode_rejected', 'Agent rejected the mode change', error instanceof Error ? error.message : String(error)))
+  }
+}
+
 async function handleSuspendSession(deps: ServerDeps, principal: string, sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const idempotencyKey = requireIdempotencyKey(req)
   if (!idempotencyKey) return sendProblem(res, problem(400, 'validation_failed', 'Idempotency-Key header is required (8-200 chars)'))
@@ -914,6 +982,8 @@ const SESSION_PATH = /^\/v1\/sessions\/([^/]+)$/
 const SESSION_ACTIVATE_PATH = /^\/v1\/sessions\/([^/]+)\/activate$/
 const SESSION_PROMPTS_PATH = /^\/v1\/sessions\/([^/]+)\/prompts$/
 const SESSION_SUSPEND_PATH = /^\/v1\/sessions\/([^/]+)\/suspend$/
+const SESSION_MODE_PATH = /^\/v1\/sessions\/([^/]+)\/mode$/
+const SESSION_CONFIG_OPTION_PATH = /^\/v1\/sessions\/([^/]+)\/config-options\/([^/]+)$/
 const SESSION_CANCEL_PATH = /^\/v1\/sessions\/([^/]+)\/cancel$/
 const SESSION_CLOSE_PATH = /^\/v1\/sessions\/([^/]+)\/close$/
 
@@ -973,6 +1043,14 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
 
   const activateMatch = SESSION_ACTIVATE_PATH.exec(path)
   if (activateMatch?.[1] && method === 'POST') return handleActivateSession(deps, principal, activateMatch[1], req, res)
+
+  const configOptionMatch = SESSION_CONFIG_OPTION_PATH.exec(path)
+  if (configOptionMatch?.[1] && configOptionMatch[2] && method === 'PUT') {
+    return handleSetConfigOption(deps, principal, configOptionMatch[1], decodeURIComponent(configOptionMatch[2]), req, res)
+  }
+
+  const modeMatch = SESSION_MODE_PATH.exec(path)
+  if (modeMatch?.[1] && method === 'PUT') return handleSetMode(deps, principal, modeMatch[1], req, res)
 
   const promptsMatch = SESSION_PROMPTS_PATH.exec(path)
   if (promptsMatch?.[1] && method === 'POST') return handlePromptSession(deps, principal, promptsMatch[1], req, res)

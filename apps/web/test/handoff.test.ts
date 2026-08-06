@@ -201,9 +201,9 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
 
       const liveB = connections.get(sessionB)
       assert.ok(liveB)
-      // The fake driver's own default ACP session id ('fake-acp-session') is a per-connection
-      // constant, so it can coincide across two independent Agent identities in this harness —
-      // the real signal is that B got a genuinely SEPARATE connection object, never A's.
+      // The fake driver now mints a unique ACP session id per session/new, like a real Agent —
+      // but the signal that matters here is unchanged: B got a genuinely SEPARATE connection
+      // object, never A's.
       assert.notEqual(liveB.connection, acpConnectionA, "B must never reuse A's live ACP connection/authority")
 
       // B does its own work — head advances from C to D.

@@ -340,3 +340,55 @@ test('required, P11: a persona the Agent does not review is refused before anyth
   const { rows } = await db.pool.query<{ n: string }>("SELECT count(*)::text AS n FROM product.sessions WHERE persona = 'reviewer' AND agent_id = 'fake-agent-b'")
   assert.equal(rows[0]?.n, '0')
 })
+
+test('required, P11: model/effort are settable on a live Session, and the Agent\'s own refusal surfaces as a typed error', async () => {
+  const created = await createWorkstream('alice')
+
+  // The config options live on the RUNNING session, so wait for the ACP connection rather than
+  // assuming it exists the moment the API returned 202.
+  // Generous budget on purpose: this polls a fire-and-forget provisioning chain, and the whole
+  // suite runs these concurrently against one shared fake controller — 10s was enough in isolation
+  // and not under full-suite load. Report the phase actually reached, so a real failure is
+  // diagnosable instead of a bare `false`.
+  let phase = 'unknown'
+  for (let i = 0; i < 60 && phase !== 'ready'; i += 1) {
+    const res = await fetch(`${baseUrl}/v1/sessions/${created.session.id}`, { headers: auth('alice') })
+    const session = (await res.json()) as { phase: string; failure?: { code: string; detail?: string } | null }
+    phase = session.phase
+    if (phase === 'failed') {
+      phase = `failed: ${session.failure?.code} — ${session.failure?.detail ?? ''}`
+      break
+    }
+    if (phase !== 'ready') await sleep(500)
+  }
+  assert.equal(phase, 'ready', `Session never reached ready (stuck at '${phase}')`)
+
+  const ok = await fetch(`${baseUrl}/v1/sessions/${created.session.id}/config-options/effort`, {
+    method: 'PUT',
+    headers: { ...auth('alice'), 'content-type': 'application/json' },
+    body: JSON.stringify({ value: 'high' }),
+  })
+  // Read the body ONCE: `await ok.text()` as an assertion message would consume it before .json().
+  const body = (await ok.json()) as { configOptions?: { id: string; currentValue: string }[] }
+  assert.equal(ok.status, 200, JSON.stringify(body))
+  const effort = body.configOptions?.find((o) => o.id === 'effort')
+  assert.equal(effort?.currentValue, 'high', 'the Agent reports the new value back in the FULL option set')
+
+  // The Agent is authoritative on what exists — this server curates no model list, so a bad value
+  // must come back as the Agent's refusal, not as a 200 this server invented.
+  const refused = await fetch(`${baseUrl}/v1/sessions/${created.session.id}/config-options/effort`, {
+    method: 'PUT',
+    headers: { ...auth('alice'), 'content-type': 'application/json' },
+    body: JSON.stringify({ value: 'not-a-level' }),
+  })
+  assert.equal(refused.status, 409)
+  assert.equal(((await refused.json()) as { code: string }).code, 'config_option_rejected')
+
+  const mode = await fetch(`${baseUrl}/v1/sessions/${created.session.id}/mode`, {
+    method: 'PUT',
+    headers: { ...auth('alice'), 'content-type': 'application/json' },
+    body: JSON.stringify({ modeId: 'plan' }),
+  })
+  const modeBody = await mode.text()
+  assert.equal(mode.status, 200, modeBody)
+})

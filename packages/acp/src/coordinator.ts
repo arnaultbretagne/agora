@@ -402,3 +402,51 @@ export interface CancelSessionInput {
 export async function cancelSession(input: CancelSessionInput): Promise<void> {
   await input.connection.agent.notify(acp.methods.agent.session.cancel, { sessionId: input.acpSessionId })
 }
+
+export interface SetSessionConfigOptionInput {
+  readonly connection: acp.ClientConnection
+  readonly acpSessionId: string
+  /** The option's own id as the Agent advertised it (e.g. `model`, `effort`) — never a value this codebase invents. */
+  readonly optionId: string
+  readonly value: string
+}
+
+/**
+ * docs/specs/04 leaves ACP mode/config methods to the harness: which options exist, what values
+ * they accept, and how one affects another are the Agent's own facts, not ours. The OLD
+ * channels-era system offered exactly two of them as first-class product choices — the model and
+ * the reasoning effort — so the replacement surface needs a way to set them.
+ *
+ * Deliberately pass-through: this takes the option id and value the Agent itself advertised in its
+ * `session/new` response and hands them straight back. It does NOT curate a model list, because a
+ * curated list goes stale the moment the harness ships a new one — the old system had the same
+ * shape (its model catalogue came from the runtime's own capabilities endpoint, never a constant).
+ *
+ * The response carries the FULL option set back, because changing one option may change what the
+ * others accept — callers should replace their whole view of the options with what comes back
+ * rather than patching the one they set.
+ */
+export async function setSessionConfigOption(input: SetSessionConfigOptionInput): Promise<unknown> {
+  return input.connection.agent.request(acp.methods.agent.session.setConfigOption, {
+    sessionId: input.acpSessionId,
+    // ACP calls this `configId` (the SDK's own typed request shape) — the product surface says
+    // "config option", so the mapping is made here once rather than leaking the protocol's name.
+    configId: input.optionId,
+    value: input.value,
+  })
+}
+
+export interface SetSessionModeInput {
+  readonly connection: acp.ClientConnection
+  readonly acpSessionId: string
+  /** One of the mode ids the Agent advertised (e.g. `default`, `plan`, `acceptEdits`). */
+  readonly modeId: string
+}
+
+/** Companion to `setSessionConfigOption` for ACP's separate session-mode channel (`session/set_mode`). */
+export async function setSessionMode(input: SetSessionModeInput): Promise<unknown> {
+  return input.connection.agent.request(acp.methods.agent.session.setMode, {
+    sessionId: input.acpSessionId,
+    modeId: input.modeId,
+  })
+}
