@@ -232,6 +232,30 @@ test('required, P11: a source IP the identity resolver cannot map to any Pod is 
   })
 })
 
+test('required, P11: the relay authenticates to the gateway with HTTP Basic (username:token), never Bearer', async () => {
+  await withTestDatabase(async (pool) => {
+    const { gateway, deps, relay, connectThroughRelay } = await setup(pool)
+    const echo = await startEchoServer()
+    try {
+      await issueAndActivate(pool, deps, 'workload-a')
+
+      // The fake gateway enforces exactly what the real one was verified to enforce live: HTTP
+      // Basic over the whole `username:token` userinfo pair. Before this fix the relay sent
+      // `Proxy-Authorization: Bearer <username-only>` — against the REAL gateway that silently
+      // degraded to unauthenticated passthrough (no TLS interception, no provider-credential
+      // injection, a bare 401 reaching the Agent), and against the OLD fake it passed green,
+      // because the fake had been written to match our own wrong implementation.
+      const ok = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
+      assert.equal(ok.status, 200, 'the relay authenticates successfully with Basic')
+      assert.match(ok.echoed ?? '', /^probe-/)
+    } finally {
+      await echo.close()
+      relay.close()
+      await gateway.close()
+    }
+  })
+})
+
 test('required: Session A cannot use Session B relay binding — a different session\'s workload identity never reaches A\'s grant', async () => {
   await withTestDatabase(async (pool) => {
     const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)

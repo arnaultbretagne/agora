@@ -22,11 +22,23 @@ export interface OneCliContainerConfig {
   readonly caCertificateContainerPath: string
   readonly credentialStubs: readonly OneCliCredentialStub[]
   /**
-   * The upstream OneCLI proxy bearer extracted from `env` by the adapter itself — the ONLY place
-   * in this codebase that is allowed to see it as plaintext outside `broker.upstream_authority`'s
-   * ciphertext. Callers must move it into encrypted storage immediately and never log it.
+   * The upstream OneCLI proxy credential extracted from `env` by the adapter itself — the ONLY
+   * place in this codebase that is allowed to see it as plaintext outside
+   * `broker.upstream_authority`'s ciphertext. Callers must move it into encrypted storage
+   * immediately and never log it.
+   *
+   * Deliberately NOT called a "bearer" (found live, P11 — that name caused a real, long-lived
+   * bug): OneCLI's gateway speaks HTTP **Basic** proxy auth, and this value is the whole
+   * `username:password` userinfo pair from the proxy URL OneCLI hands out
+   * (`http://x:aoc_…@gateway`). The real `aoc_…` token is the PASSWORD half; the username is a
+   * fixed dummy (`x`). Reading only the username, or sending the token as
+   * `Proxy-Authorization: Bearer`, both make the gateway fall back to unauthenticated passthrough:
+   * it stops intercepting TLS, never injects the provider credential, and the Agent gets a bare
+   * 401 from the provider — which is exactly what happened in production. Verified live against
+   * the real gateway: `Bearer <token>` -> passthrough (real provider cert); `Basic base64(x:token)`
+   * -> intercepted (cert issued by "OneCLI Local Gateway CA", the operator-pinned CA).
    */
-  readonly upstreamBearer: string
+  readonly upstreamProxyCredential: string
   readonly gatewayUrl: string
 }
 

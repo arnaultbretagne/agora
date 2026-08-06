@@ -73,7 +73,7 @@ test('required: unknown/contradictory equipment intent is denied before any OneC
       client.release()
     }
     // No OneCLI Agent was ever created for the denied attempt.
-    assert.equal(d.onecli.findIdentifierForBearerForTest('anything'), undefined)
+    assert.equal(d.onecli.findIdentifierForProxyCredentialForTest('x:anything'), undefined)
   })
 })
 
@@ -354,7 +354,7 @@ test('required: Session A and B receive distinct selective OneCLI Agents and pol
       const authorityA = await readUpstreamAuthority(client, d.encryptionKey, a.sessionId)
       const authorityB = await readUpstreamAuthority(client, d.encryptionKey, b.sessionId)
       assert.ok(authorityA && authorityB)
-      assert.notEqual(authorityA.bearer, authorityB.bearer, 'no cross-Session upstream bearer reuse')
+      assert.notEqual(authorityA.proxyCredential, authorityB.proxyCredential, 'no cross-Session upstream bearer reuse')
     } finally {
       client.release()
     }
@@ -400,7 +400,7 @@ test('required: renewal preserves capability digest/Agent/OneCLI mapping and rot
       assert.ok(renewed.expiresAt.getTime() > grant.expiresAt.getTime())
       const after = await readUpstreamAuthority(client, d.encryptionKey, grant.sessionId)
       assert.ok(before && after)
-      assert.notEqual(after.bearer, before.bearer, 'renewal must rotate the upstream bearer, not reuse the one from issue')
+      assert.notEqual(after.proxyCredential, before.proxyCredential, 'renewal must rotate the upstream bearer, not reuse the one from issue')
     } finally {
       client.release()
     }

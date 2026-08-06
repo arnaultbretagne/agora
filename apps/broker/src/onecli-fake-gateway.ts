@@ -46,9 +46,15 @@ export function startFakeOnecliGateway(adapter: FakeOneCliControlAdapter, dialTa
 function handleConnect(adapter: FakeOneCliControlAdapter, dialTarget: DialTarget, req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
   clientSocket.on('error', () => {})
 
+  // HTTP Basic, exactly like the real gateway — NOT Bearer. Found live, P11: this double used to
+  // accept `Bearer`, matching the (wrong) relay implementation instead of the real product, so the
+  // entire relay test suite passed green while every real CONNECT authenticated as anonymous and
+  // silently lost TLS interception. A double that only mirrors our own code cannot catch our own
+  // code being wrong; this one now enforces what was verified live against the real gateway.
   const authHeader = req.headers['proxy-authorization']
-  const bearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : undefined
-  const identifier = bearer ? adapter.findIdentifierForBearerForTest(bearer) : undefined
+  const encoded = typeof authHeader === 'string' && authHeader.startsWith('Basic ') ? authHeader.slice('Basic '.length) : undefined
+  const credential = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : undefined
+  const identifier = credential ? adapter.findIdentifierForProxyCredentialForTest(credential) : undefined
   if (!identifier) {
     clientSocket.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n')
     return

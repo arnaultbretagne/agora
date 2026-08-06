@@ -70,22 +70,26 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
     if (!agent || agent.deleted) {
       throw new OneCliUnavailableError(`onecli agent ${identifier} does not exist`)
     }
+    // `x:<token>` — the real OneCLI hands out `http://x:aoc_…@gateway` and its gateway authenticates
+    // the whole userinfo pair via HTTP Basic (verified live, P11). This double previously exposed a
+    // bare token, which let the real adapter's own username-vs-password extraction bug pass tests.
+    const proxyCredential = `${FAKE_PROXY_USERNAME}:${agent.bearer}`
     return {
-      env: { ONECLI_AGENT_TOKEN: agent.bearer, ONECLI_GATEWAY_URL: this.gatewayUrl },
+      env: { HTTPS_PROXY: `${this.gatewayUrl.replace('://', `://${FAKE_PROXY_USERNAME}:${encodeURIComponent(agent.bearer)}@`)}` },
       caCertificate: FAKE_CA_CERTIFICATE,
       caCertificateContainerPath: '/etc/onecli/ca.pem',
       credentialStubs: fakeCredentialStubs(identifier),
-      upstreamBearer: agent.bearer,
+      upstreamProxyCredential: proxyCredential,
       gatewayUrl: this.gatewayUrl,
     }
   }
 
   /** Used only by `FakeOnecliGateway` (apps/broker/src/onecli-fake-gateway.ts) to authenticate an
-   * incoming CONNECT's bearer — mirrors what OneCLI's real gateway does internally, which Agora's
-   * own code never has visibility into. */
-  findIdentifierForBearerForTest(bearer: string): string | undefined {
+   * incoming CONNECT's Basic credential — mirrors what OneCLI's real gateway does internally, which
+   * Agora's own code never has visibility into. Takes the decoded `username:token` pair. */
+  findIdentifierForProxyCredentialForTest(credential: string): string | undefined {
     for (const [identifier, agent] of this.agents) {
-      if (!agent.deleted && agent.bearer === bearer) return identifier
+      if (!agent.deleted && `${FAKE_PROXY_USERNAME}:${agent.bearer}` === credential) return identifier
     }
     return undefined
   }
@@ -119,6 +123,9 @@ function freshBearer(identifier: string): string {
 /** Exported for tests to build a matching `ExpectedRuntimeBundle` (grant-service.ts) — this fake's
  * own `getContainerConfig` always returns exactly this CA and `fakeCredentialStubs`' own stub. */
 export const FAKE_CA_CERTIFICATE = '-----BEGIN CERTIFICATE-----\nFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n'
+
+/** The fixed dummy proxy username OneCLI itself uses in the `http://x:aoc_…@gateway` URL it hands out (verified live, P11). */
+const FAKE_PROXY_USERNAME = 'x'
 
 // Fixed across every Agent — only the signature (3rd segment) varies below, reproducing what
 // OneCLI's own real id_token does (verified live, P11): identical header+payload, re-signed per

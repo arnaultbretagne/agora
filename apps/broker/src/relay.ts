@@ -120,7 +120,7 @@ async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket
       clientSocket.destroy()
     })
     upstream.once('connect', () => {
-      void bridgeThroughGateway(upstream, clientSocket, head, `${host}:${port}`, authority.bearer)
+      void bridgeThroughGateway(upstream, clientSocket, head, `${host}:${port}`, authority.proxyCredential)
         .then(() =>
           recordApprovedConnect(deps, activation.sessionId, activation.agentId, grant.policyVersion, host).catch(() => {
             /* audit failure must not tear down an already-bridged tunnel */
@@ -171,7 +171,7 @@ class GatewayRejectedError extends Error {
 }
 
 /** Speaks the CONNECT handshake to OneCLI's gateway, then pipes raw bytes both ways with zero inspection. */
-function bridgeThroughGateway(upstream: Socket, clientSocket: Socket, head: Buffer, target: string, upstreamBearer: string): Promise<void> {
+function bridgeThroughGateway(upstream: Socket, clientSocket: Socket, head: Buffer, target: string, upstreamProxyCredential: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let buffered = Buffer.alloc(0)
     const onData = (chunk: Buffer): void => {
@@ -196,6 +196,13 @@ function bridgeThroughGateway(upstream: Socket, clientSocket: Socket, head: Buff
     }
     upstream.on('data', onData)
     upstream.once('error', reject)
-    upstream.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\nProxy-Authorization: Bearer ${upstreamBearer}\r\n\r\n`)
+    // Basic, not Bearer (found live, P11): OneCLI's gateway speaks HTTP Basic proxy auth. Sent as
+    // `Bearer`, the gateway does not recognize the credential, silently falls back to
+    // unauthenticated passthrough — no TLS interception, no provider-credential injection — and
+    // the Agent receives a bare 401 from the provider. Proven live against the real gateway by
+    // comparing the peer certificate: `Bearer` -> the provider's own public cert (passthrough);
+    // `Basic` -> a cert issued by "OneCLI Local Gateway CA" (intercepting, injecting).
+    const basic = Buffer.from(upstreamProxyCredential).toString('base64')
+    upstream.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\nProxy-Authorization: Basic ${basic}\r\n\r\n`)
   })
 }

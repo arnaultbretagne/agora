@@ -196,7 +196,7 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
       `OneCLI Agent ${onecliIdentifier}'s container config does not match the operator-pinned runtime bundle — refusing to issue`,
     )
   }
-  await storeUpstreamAuthority(client, deps.encryptionKey, request.sessionId, containerConfig.upstreamBearer, containerConfig.gatewayUrl, now)
+  await storeUpstreamAuthority(client, deps.encryptionKey, request.sessionId, containerConfig.upstreamProxyCredential, containerConfig.gatewayUrl, now)
 
   const grantId = randomUUID()
   const activeGrants = await listActiveGrants(client, now)
@@ -342,7 +342,7 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
   ) {
     throw new RuntimeBundleDriftError(`OneCLI Agent ${renewed.onecliIdentifier}'s container config does not match the operator-pinned runtime bundle — refusing to renew`)
   }
-  await storeUpstreamAuthority(client, deps.encryptionKey, renewed.sessionId, containerConfig.upstreamBearer, containerConfig.gatewayUrl, now)
+  await storeUpstreamAuthority(client, deps.encryptionKey, renewed.sessionId, containerConfig.upstreamProxyCredential, containerConfig.gatewayUrl, now)
 
   await recordAudit(client, {
     id: randomUUID(),

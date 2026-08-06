@@ -143,15 +143,22 @@ export function createOnecliSdkAdapter(options: OnecliSdkAdapterOptions): OneCli
           throw new Error('container config carried no HTTPS_PROXY entry to extract the upstream bearer from')
         }
         const parsed = new URL(proxyUrl)
-        if (!parsed.username) {
-          throw new Error('HTTPS_PROXY carried no embedded bearer (expected userinfo, per ONECLI-SPIKE.md)')
+        // Found live, P11: the real credential is the PASSWORD half. OneCLI hands out
+        // `http://x:aoc_…@gateway` — username is a fixed dummy (`x`), and this code used to take
+        // ONLY that username as "the bearer", so the relay authenticated with the literal string
+        // "x". The gateway then silently fell back to unauthenticated passthrough (no TLS
+        // interception, no credential injection) and every real prompt died on a bare 401 from the
+        // provider. Both halves are kept here, as the userinfo pair the gateway's HTTP Basic auth
+        // actually expects — see `OneCliContainerConfig.upstreamProxyCredential`'s own doc.
+        if (!parsed.password) {
+          throw new Error('HTTPS_PROXY carried no embedded proxy password (expected user:token userinfo, per ONECLI-SPIKE.md)')
         }
         return {
           env: config.env,
           caCertificate: config.caCertificate,
           caCertificateContainerPath: config.caCertificateContainerPath,
           credentialStubs: config.credentialStubs ?? [],
-          upstreamBearer: decodeURIComponent(parsed.username),
+          upstreamProxyCredential: `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
           gatewayUrl: `${parsed.protocol}//${parsed.host}`,
         }
       } catch (error) {

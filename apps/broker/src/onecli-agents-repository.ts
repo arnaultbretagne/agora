@@ -95,11 +95,12 @@ export async function storeUpstreamAuthority(
 }
 
 export interface UpstreamAuthority {
-  readonly bearer: string
+  /** The `username:token` proxy userinfo pair OneCLI's gateway authenticates via HTTP Basic — see `OneCliContainerConfig.upstreamProxyCredential`'s own doc for why this is deliberately not called a "bearer". (The DB column keeps its `encrypted_bearer` name: renaming a live column would need a migration for zero functional gain.) */
+  readonly proxyCredential: string
   readonly gatewayUrl: string
 }
 
-/** Only the access relay (apps/broker/src/relay.ts) may call this — nothing else needs the plaintext bearer. */
+/** Only the access relay (apps/broker/src/relay.ts) may call this — nothing else needs the plaintext credential. */
 export async function readUpstreamAuthority(client: PoolClient, encryptionKey: Buffer, sessionId: string): Promise<UpstreamAuthority | undefined> {
   const { rows } = await client.query<{ encrypted_bearer: Buffer; encryption_nonce: Buffer; gateway_url: string }>(
     'SELECT encrypted_bearer, encryption_nonce, gateway_url FROM broker.upstream_authority WHERE session_id = $1',
@@ -107,5 +108,5 @@ export async function readUpstreamAuthority(client: PoolClient, encryptionKey: B
   )
   const row = rows[0]
   if (!row) return undefined
-  return { bearer: decryptUpstreamBearer(encryptionKey, { ciphertext: row.encrypted_bearer, nonce: row.encryption_nonce }), gatewayUrl: row.gateway_url }
+  return { proxyCredential: decryptUpstreamBearer(encryptionKey, { ciphertext: row.encrypted_bearer, nonce: row.encryption_nonce }), gatewayUrl: row.gateway_url }
 }
