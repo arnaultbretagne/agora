@@ -84,6 +84,17 @@ function normalizeStubContent(content: string): string {
   return JSON.stringify(walk(parsed))
 }
 
+/**
+ * Found live, P11: a YAML `|` literal block scalar (how the operator-pinned CA is stored,
+ * infra-k8s ConfigMaps) always appends a trailing newline; OneCLI's own JSON API response for the
+ * live CA does not — 639 vs 638 bytes, verified live, otherwise byte-identical. An exact `!==`
+ * treats that as drift on every single grant. Whitespace at the edges was never the security
+ * property this check protects; trim it.
+ */
+function normalizeCa(ca: string): string {
+  return ca.trim()
+}
+
 function stubsMatch(actual: readonly OneCliCredentialStub[], expected: readonly OneCliCredentialStub[]): boolean {
   if (actual.length !== expected.length) return false
   const normalize = (stubs: readonly OneCliCredentialStub[]) =>
@@ -178,7 +189,7 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
   // this call's ONLY job is to confirm OneCLI has not silently drifted from it before this Session's
   // upstream bearer is trusted at all.
   if (
-    containerConfig.caCertificate !== deps.expectedRuntimeBundle.caCertificate ||
+    normalizeCa(containerConfig.caCertificate) !== normalizeCa(deps.expectedRuntimeBundle.caCertificate) ||
     !stubsMatch(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
   ) {
     throw new RuntimeBundleDriftError(
@@ -326,7 +337,7 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
   await deps.onecli.rotateAgentAuthority(renewed.onecliIdentifier)
   const containerConfig = await deps.onecli.getContainerConfig(renewed.onecliIdentifier)
   if (
-    containerConfig.caCertificate !== deps.expectedRuntimeBundle.caCertificate ||
+    normalizeCa(containerConfig.caCertificate) !== normalizeCa(deps.expectedRuntimeBundle.caCertificate) ||
     !stubsMatch(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
   ) {
     throw new RuntimeBundleDriftError(`OneCLI Agent ${renewed.onecliIdentifier}'s container config does not match the operator-pinned runtime bundle — refusing to renew`)

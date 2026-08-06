@@ -281,6 +281,18 @@ test('a matching runtime bundle (the normal case) issues successfully — confir
   })
 })
 
+test('required: a trailing-newline-only CA difference is not treated as drift (a YAML `|` block scalar always appends one; OneCLI\'s own API response does not)', async () => {
+  await withTestDatabase(async (pool) => {
+    const d: GrantServiceDeps = {
+      onecli: new FakeOneCliControlAdapter(),
+      encryptionKey: testEncryptionKey(),
+      expectedRuntimeBundle: { caCertificate: `${FAKE_CA_CERTIFICATE}\n\n`, credentialStubs: fakeCredentialStubs('some-other-agent-entirely') },
+    }
+    const grant = await issue(pool, d)
+    assert.ok(grant.id)
+  })
+})
+
 test('required: a genuinely different credential stub (not just a different signature) still trips drift', async () => {
   await withTestDatabase(async (pool) => {
     const d: GrantServiceDeps = {
