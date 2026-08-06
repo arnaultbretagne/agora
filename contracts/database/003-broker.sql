@@ -104,7 +104,12 @@ CREATE INDEX security_audit_session ON broker.security_audit(session_id, created
 
 GRANT USAGE ON SCHEMA broker TO agora_broker;
 GRANT SELECT, INSERT, UPDATE ON broker.execution_grants TO agora_broker;
-GRANT SELECT, INSERT ON broker.grant_activations TO agora_broker;
+-- UPDATE, not just SELECT/INSERT: activations-repository.ts's own idempotency check does
+-- `SELECT ... FOR UPDATE` before inserting — Postgres requires the UPDATE privilege to acquire a
+-- row lock, even though no UPDATE statement is ever actually issued against this table (found
+-- live, P11 — see 004-fix-broker-grant-activations-update-privilege.sql for the already-migrated-
+-- database follow-up).
+GRANT SELECT, INSERT, UPDATE ON broker.grant_activations TO agora_broker;
 GRANT SELECT, INSERT, UPDATE ON broker.onecli_agents TO agora_broker;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broker.upstream_authority TO agora_broker;
 GRANT SELECT, INSERT ON broker.security_audit TO agora_broker;
