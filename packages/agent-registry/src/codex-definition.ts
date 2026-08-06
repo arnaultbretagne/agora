@@ -3,11 +3,14 @@ import type { AgentRuntimeDefinition } from './types.js'
 /**
  * `agents/codex/SPIKE.md` (2026-08-05, real infra, real ChatGPT Plus subscription, no fakes):
  * `@agentclientprotocol/codex-acp@1.1.9`, wrapped by `agents/codex/src/bridge-server.ts` behind the
- * ACP bridge WebSocket listener — same shape as `claude-code-definition.ts`. The spike proved every
- * gate it could without a built Agent image or a live Kubernetes Pod (full ACP handshake, resume
- * with zero replay after a real process kill, cancel/close, custody's one required file). A live
- * Pod pass (mirroring `claude-code`'s own) has NOT been run yet — `rollout: 'internal'` reflects
- * that, not a product decision either way.
+ * ACP bridge WebSocket listener — same shape as `claude-code-definition.ts`. A live Kubernetes Pod
+ * pass (mirroring `claude-code`'s own) was completed the same day: real `initialize` ->
+ * `session/new` -> `session/prompt` -> `/custody` capture, a real auth-stub bug found and fixed
+ * along the way (a fabricated id_token failed codex-acp's own local identity validation; fixed by
+ * reading the real linked account's id_token from a stub file instead). `rollout` stayed
+ * `'internal'` through all of that on purpose — general availability is a product call for a human
+ * to make. That call was made 2026-08-06 (the operator, after hitting the gate live trying to
+ * create a real Workstream through the real product UI): `rollout: 'enabled'`.
  */
 export const CODEX_DEFINITION: AgentRuntimeDefinition = {
   agentId: 'codex',
@@ -57,9 +60,7 @@ export const CODEX_DEFINITION: AgentRuntimeDefinition = {
     limits: { cpu: '1000m', memory: '1Gi', ephemeralStorage: '512Mi' },
   },
   health: { path: '/healthz', initialDelaySeconds: 2, timeoutSeconds: 2 },
-  // Registered and launchable for staff/testing, not yet general availability: the spike proved ACP
-  // semantics and custody content on real infra, but the full materialize -> real ACP handshake ->
-  // capture -> Pod replacement -> restore -> resume path has not been re-proven inside an actual
-  // Kubernetes Pod (same gap `claude-code-definition.ts` had before its own live-Pod pass).
-  rollout: 'internal',
+  // General availability, decided 2026-08-06 (module doc comment) — new Sessions may launch this
+  // agent through the normal product flow now, not just resume/staff-testing paths.
+  rollout: 'enabled',
 }

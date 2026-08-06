@@ -7,8 +7,10 @@ import type { AgentRuntimeDefinition } from './types.js'
  * full live pass inside Kubernetes itself (not just the spike's outside-K8s proof): `initialize` ->
  * `session/new` -> `session/prompt` (a real Claude response, through the real self-hosted
  * OneCLI/Claude Max credential path) -> `/custody` returning a real, checksummed transcript capture
- * keyed to the right sessionId. `rollout: 'internal'` is kept regardless — general availability is
- * a product call for a human to make, not something proven infra tests should flip on their own.
+ * keyed to the right sessionId. `rollout` stayed `'internal'` through all of that on purpose —
+ * general availability is a product call for a human to make, not something proven infra tests
+ * should flip on their own. That call was made 2026-08-06 (the operator, after hitting the gate
+ * live trying to create a real Workstream through the real product UI): `rollout: 'enabled'`.
  */
 export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
   agentId: 'claude-code',
@@ -51,9 +53,7 @@ export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
     limits: { cpu: '1000m', memory: '1Gi', ephemeralStorage: '512Mi' },
   },
   health: { path: '/healthz', initialDelaySeconds: 2, timeoutSeconds: 2 },
-  // Registered and launchable for staff/testing, not yet general availability — a live Pod pass has
-  // now proven the full materialize -> real ACP handshake -> capture path end to end (this file's
-  // own doc comment), but Pod replacement -> restore -> resume was only re-proven at the process
-  // level in the spike, not re-run against a second real Pod inside Kubernetes.
-  rollout: 'internal',
+  // General availability, decided 2026-08-06 (module doc comment) — new Sessions may launch this
+  // agent through the normal product flow now, not just resume/staff-testing paths.
+  rollout: 'enabled',
 }
