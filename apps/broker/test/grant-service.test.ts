@@ -14,7 +14,7 @@ import {
 import { getGrant, GrantConflictError, GrantDigestChangedError } from '../src/grants-repository.js'
 import { OneCliUnavailableError } from '../src/onecli-adapter.js'
 import { getOnecliAgentMapping, readUpstreamAuthority } from '../src/onecli-agents-repository.js'
-import { FAKE_CA_CERTIFICATE, FakeOneCliControlAdapter } from '../src/onecli-fake.js'
+import { FAKE_CA_CERTIFICATE, FakeOneCliControlAdapter, fakeCredentialStubs } from '../src/onecli-fake.js'
 import { randomId, testEncryptionKey, testExpectedRuntimeBundle, withTestDatabase } from './support.js'
 
 function deps(): GrantServiceDeps & { onecli: FakeOneCliControlAdapter } {
@@ -268,13 +268,52 @@ test('required: OneCLI CA/stub drift from the operator-pinned runtime bundle pre
 
 test('a matching runtime bundle (the normal case) issues successfully — confirms the drift check is not just always-fail', async () => {
   await withTestDatabase(async (pool) => {
+    // Built from a DIFFERENT identifier than the Agent this issue() call will actually create —
+    // the real live P11 scenario: two different per-Session Agents, same underlying account,
+    // different id_token signature. Proves the comparison tolerates that, not just literal equality.
     const d: GrantServiceDeps = {
       onecli: new FakeOneCliControlAdapter(),
       encryptionKey: testEncryptionKey(),
-      expectedRuntimeBundle: { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: [] },
+      expectedRuntimeBundle: { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: fakeCredentialStubs('some-other-agent-entirely') },
     }
     const grant = await issue(pool, d)
     assert.ok(grant.id)
+  })
+})
+
+test('required: a genuinely different credential stub (not just a different signature) still trips drift', async () => {
+  await withTestDatabase(async (pool) => {
+    const d: GrantServiceDeps = {
+      onecli: new FakeOneCliControlAdapter(),
+      encryptionKey: testEncryptionKey(),
+      expectedRuntimeBundle: {
+        caCertificate: FAKE_CA_CERTIFICATE,
+        credentialStubs: [{ containerPath: '/home/node/.codex/auth.json', content: JSON.stringify({ tokens: { id_token: 'not-even-jwt-shaped' } }) }],
+      },
+    }
+    const client = await pool.connect()
+    try {
+      await assert.rejects(
+        () =>
+          issueExecutionGrant(
+            client,
+            d,
+            {
+              sessionId: randomId(),
+              agentId: 'fake-agent',
+              principalId: 'alice',
+              workstreamCategory: 'discussion',
+              runtimeDefinitionVersion: 'v1',
+              equipment: VAULT_READ,
+              requestId: randomId(),
+            },
+            new Date(),
+          ),
+        (error: unknown) => error instanceof Error && error.name === 'RuntimeBundleDriftError',
+      )
+    } finally {
+      client.release()
+    }
   })
 })
 

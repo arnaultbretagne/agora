@@ -1,6 +1,6 @@
 import pg from 'pg'
 import { migrate } from '@agora/store-pg'
-import { FAKE_CA_CERTIFICATE } from '../src/onecli-fake.js'
+import { FAKE_CA_CERTIFICATE, fakeCredentialStubs } from '../src/onecli-fake.js'
 import type { ExpectedRuntimeBundle } from '../src/grant-service.js'
 
 function maintenanceUrl(): string {
@@ -44,8 +44,12 @@ export function testEncryptionKey(): Buffer {
   return Buffer.from('0'.repeat(64), 'hex').fill(7)
 }
 
-/** Matches exactly what `FakeOneCliControlAdapter.getContainerConfig` always returns — every test
- * that issues a grant against the fake adapter needs this to avoid a spurious drift rejection. */
+/**
+ * Deliberately built from a DIFFERENT identifier ('operator-pinned-reference') than any real
+ * test's own Agent identifier — proves grant-service.ts's own drift check treats two different
+ * Agents' stubs as matching (same underlying account, different signature), the exact live P11
+ * finding, rather than accidentally passing only because both sides happen to be the same object.
+ */
 export function testExpectedRuntimeBundle(): ExpectedRuntimeBundle {
-  return { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: [] }
+  return { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: fakeCredentialStubs('operator-pinned-reference') }
 }

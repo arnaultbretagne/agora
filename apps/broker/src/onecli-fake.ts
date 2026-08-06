@@ -74,7 +74,7 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
       env: { ONECLI_AGENT_TOKEN: agent.bearer, ONECLI_GATEWAY_URL: this.gatewayUrl },
       caCertificate: FAKE_CA_CERTIFICATE,
       caCertificateContainerPath: '/etc/onecli/ca.pem',
-      credentialStubs: [],
+      credentialStubs: fakeCredentialStubs(identifier),
       upstreamBearer: agent.bearer,
       gatewayUrl: this.gatewayUrl,
     }
@@ -117,5 +117,30 @@ function freshBearer(identifier: string): string {
 }
 
 /** Exported for tests to build a matching `ExpectedRuntimeBundle` (grant-service.ts) — this fake's
- * own `getContainerConfig` always returns exactly this CA and an empty stub list. */
+ * own `getContainerConfig` always returns exactly this CA and `fakeCredentialStubs`' own stub. */
 export const FAKE_CA_CERTIFICATE = '-----BEGIN CERTIFICATE-----\nFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n'
+
+// Fixed across every Agent — only the signature (3rd segment) varies below, reproducing what
+// OneCLI's own real id_token does (verified live, P11): identical header+payload, re-signed per
+// Agent. Never a real credential — the claims are fake, the "signature" is just a hash.
+const FAKE_ID_TOKEN_HEADER = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url')
+const FAKE_ID_TOKEN_PAYLOAD = Buffer.from(
+  JSON.stringify({ sub: 'fake-account', email: 'fake@example.test', exp: 4102444800, iat: 1735689600 }),
+).toString('base64url')
+
+/**
+ * A faithful double of OneCLI's real per-Agent credential-stub behavior (this file's own module
+ * doc): the SAME underlying account identity (fixed header+payload), a DIFFERENT signature per
+ * Agent identifier — grant-service.ts's own drift check must treat two different Agents' stubs as
+ * matching despite the raw bytes differing, exactly as the real product requires.
+ */
+export function fakeCredentialStubs(identifier: string): { readonly containerPath: string; readonly content: string }[] {
+  const signature = createHash('sha256').update(identifier).digest('base64url')
+  const idToken = `${FAKE_ID_TOKEN_HEADER}.${FAKE_ID_TOKEN_PAYLOAD}.${signature}`
+  return [
+    {
+      containerPath: '/home/node/.codex/auth.json',
+      content: JSON.stringify({ tokens: { id_token: idToken, access_token: 'onecli-managed', refresh_token: 'onecli-managed' } }),
+    },
+  ]
+}

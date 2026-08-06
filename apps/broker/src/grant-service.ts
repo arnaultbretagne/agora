@@ -39,10 +39,41 @@ export class RuntimeBundleDriftError extends Error {
   }
 }
 
+const JWT_LIKE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/
+
+/**
+ * Found live, P11: OneCLI re-signs an otherwise byte-identical id_token per Agent — verified live
+ * that two different OneCLI Agents' own `codex-auth-json` stub decode to the EXACT same claims
+ * (sub/email/exp/iat/the whole openai.auth block), only the JWT's signature segment differs. A
+ * raw byte compare can therefore never match two different, freshly-created per-session Agents
+ * even when they carry the identical underlying account identity — drop just the signature
+ * (header.payload survives) before comparing, so genuine drift (a different account, a tampered
+ * claim) still trips this, but expected per-Agent re-signing no longer does.
+ */
+function normalizeJwtLike(value: string): string {
+  return JWT_LIKE_RE.test(value) ? value.split('.').slice(0, 2).join('.') : value
+}
+
+function normalizeStubContent(content: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return normalizeJwtLike(content)
+  }
+  const walk = (value: unknown): unknown => {
+    if (typeof value === 'string') return normalizeJwtLike(value)
+    if (Array.isArray(value)) return value.map(walk)
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v)]))
+    return value
+  }
+  return JSON.stringify(walk(parsed))
+}
+
 function stubsMatch(actual: readonly OneCliCredentialStub[], expected: readonly OneCliCredentialStub[]): boolean {
   if (actual.length !== expected.length) return false
   const normalize = (stubs: readonly OneCliCredentialStub[]) =>
-    [...stubs].map((s) => `${s.containerPath} ${s.content}`).sort()
+    [...stubs].map((s) => `${s.containerPath} ${normalizeStubContent(s.content)}`).sort()
   const a = normalize(actual)
   const b = normalize(expected)
   return a.every((value, index) => value === b[index])
