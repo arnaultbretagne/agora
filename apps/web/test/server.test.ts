@@ -299,3 +299,44 @@ test('required: a gapped/invalid cursor triggers a reset with refetch', async ()
   assert.equal(event.payload['reason'], 'retention_gap')
   assert.equal(event.payload['refetch'], true)
 })
+
+test('required, P11: a persona the Agent actually reviews is accepted and frozen on the Session', async () => {
+  const res = await fetch(`${baseUrl}/v1/workstreams`, {
+    method: 'POST',
+    headers: { ...auth('alice'), ...idem(), 'content-type': 'application/json' },
+    body: JSON.stringify({
+      category: 'discussion',
+      agentId: 'fake-agent',
+      persona: 'reviewer',
+      workspace: { workspaceRef: 'scratch' },
+      equipment: { catalogueVersion: 'equipment-v1', resources: [] },
+      prompt: [{ type: 'text', text: 'hi' }],
+    }),
+  })
+  assert.equal(res.status, 202)
+  const created = (await res.json()) as { session: { id: string } }
+
+  const { rows } = await db.pool.query<{ persona: string | null }>('SELECT persona FROM product.sessions WHERE id = $1', [created.session.id])
+  assert.equal(rows[0]?.persona, 'reviewer', 'the persona is durable Session truth, not a transient request field')
+})
+
+test('required, P11: a persona the Agent does not review is refused before anything is created', async () => {
+  const res = await fetch(`${baseUrl}/v1/workstreams`, {
+    method: 'POST',
+    headers: { ...auth('alice'), ...idem(), 'content-type': 'application/json' },
+    body: JSON.stringify({
+      category: 'discussion',
+      agentId: 'fake-agent-b', // reviews no personas at all
+      persona: 'reviewer',
+      workspace: { workspaceRef: 'scratch' },
+      equipment: { catalogueVersion: 'equipment-v1', resources: [] },
+      prompt: [{ type: 'text', text: 'hi' }],
+    }),
+  })
+  assert.equal(res.status, 409)
+  assert.equal(((await res.json()) as { code: string }).code, 'persona_unavailable')
+
+  // "Before anything is created" is the actual claim — assert it rather than trusting the status.
+  const { rows } = await db.pool.query<{ n: string }>("SELECT count(*)::text AS n FROM product.sessions WHERE persona = 'reviewer' AND agent_id = 'fake-agent-b'")
+  assert.equal(rows[0]?.n, '0')
+})

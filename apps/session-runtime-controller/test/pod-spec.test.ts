@@ -98,3 +98,17 @@ test('required, P11: the workspace is an ephemeral per-Pod emptyDir — no Sessi
     assert.equal(volume.persistentVolumeClaim, undefined, `volume '${volume.name}' must not be backed by a PVC`)
   }
 })
+
+test('required: a reviewed persona reaches the Pod as AGORA_PERSONA, and a Session without one carries no such variable', () => {
+  const withoutPersona = pod() as any
+  const envNames = (spec: any) => spec.spec.containers[0].env.map((e: { name: string }) => e.name)
+  assert.equal(
+    envNames(withoutPersona).includes('AGORA_PERSONA'),
+    false,
+    'no persona means no variable at all — never an empty one the harness could misread as a name',
+  )
+
+  const withPersona = pod({ persona: 'reviewer' }) as any
+  const personaEnv = withPersona.spec.containers[0].env.find((e: { name: string }) => e.name === 'AGORA_PERSONA')
+  assert.deepEqual(personaEnv, { name: 'AGORA_PERSONA', value: 'reviewer' })
+})

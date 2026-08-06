@@ -172,10 +172,15 @@ async function handleListWorkstreams(deps: ServerDeps, principal: string, url: U
  * an unknown/disabled agentId fail fast (`agent_unavailable`) instead of creating a Workstream
  * that can only fail asynchronously later.
  */
-async function resolveLaunchableAgent(deps: ServerDeps, agentId: string): Promise<{ readonly runtimeDefinitionVersion: string } | undefined> {
+async function resolveLaunchableAgent(
+  deps: ServerDeps,
+  agentId: string,
+): Promise<{ readonly runtimeDefinitionVersion: string; readonly personas: readonly string[] } | undefined> {
   const definitions = await listLaunchableAgents(deps.controllerTransport)
   const agent = definitions.items.find((a) => a.agentId === agentId && a.availability === 'enabled')
-  return agent ? { runtimeDefinitionVersion: agent.runtimeDefinitionVersion } : undefined
+  // `personas` is what this Agent may be launched as; the caller checks a requested persona against
+  // it before creating anything (the controller enforces the same rule again at materialize time).
+  return agent ? { runtimeDefinitionVersion: agent.runtimeDefinitionVersion, personas: agent.personas ?? [] } : undefined
 }
 
 async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -195,6 +200,7 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
   const request = body as {
     category: 'discussion' | 'invocation'
     agentId: string
+    persona?: string
     workspace: { workspaceRef: string }
     equipment: { catalogueVersion: string; resources: readonly unknown[] }
     prompt: readonly { type: string; text?: string }[]
@@ -202,6 +208,13 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
 
   const agent = await resolveLaunchableAgent(deps, request.agentId)
   if (!agent) return sendProblem(res, problem(409, 'agent_unavailable', `Agent '${request.agentId}' is not launchable`))
+  // A persona is what the harness impersonates, so it is checked against what the operator actually
+  // reviewed for THIS Agent — before anything is created, like `agent_unavailable` above. The
+  // controller re-checks it at materialize time too; this one exists so the user gets a synchronous
+  // error instead of a Workstream that can only fail asynchronously later.
+  if (request.persona !== undefined && !agent.personas.includes(request.persona)) {
+    return sendProblem(res, problem(409, 'persona_unavailable', `Agent '${request.agentId}' does not offer persona '${request.persona}'`))
+  }
 
   const now = deps.now ?? (() => new Date())
   // `product.commands.workstream_id` is a foreign key — a CreateWorkstream command can only be
@@ -238,6 +251,7 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
             workspaceSpec: { workspaceRef: request.workspace.workspaceRef },
             equipmentRequest: request.equipment as never,
             runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
+            ...(request.persona !== undefined ? { persona: request.persona } : {}),
           },
         },
         runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
@@ -391,10 +405,21 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
   if (!validators.openSession(body)) {
     return sendProblem(res, problem(400, 'validation_failed', 'request body failed schema validation', JSON.stringify(validators.openSession.errors)))
   }
-  const request = body as { agentId: string; workspace: { workspaceRef: string }; equipment: Record<string, unknown>; activate: boolean }
+  const request = body as {
+    agentId: string
+    persona?: string
+    workspace: { workspaceRef: string }
+    equipment: Record<string, unknown>
+    activate: boolean
+  }
 
   const agent = await resolveLaunchableAgent(deps, request.agentId)
   if (!agent) return sendProblem(res, problem(409, 'agent_unavailable', `Agent '${request.agentId}' is not launchable`))
+  // Same rule as POST /v1/workstreams: a persona must be one this Agent actually reviews. Both
+  // entry points enforce it, so neither is a way around the other.
+  if (request.persona !== undefined && !agent.personas.includes(request.persona)) {
+    return sendProblem(res, problem(409, 'persona_unavailable', `Agent '${request.agentId}' does not offer persona '${request.persona}'`))
+  }
 
   const now = deps.now ?? (() => new Date())
   const client = await deps.pool.connect()
@@ -447,6 +472,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
           workspaceSpec: { workspaceRef: request.workspace.workspaceRef },
           equipmentRequest: request.equipment as never,
           runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
+          ...(request.persona !== undefined ? { persona: request.persona } : {}),
         },
         runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
         createdAt: now(),

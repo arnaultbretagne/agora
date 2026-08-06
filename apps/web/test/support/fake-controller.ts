@@ -110,6 +110,9 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
                 label: 'Fake Agent (tests)',
                 description: 'Deterministic in-process fake ACP Agent for tests.',
                 availability: 'enabled',
+                // Always present in the real contract; this one reviews two personas so tests can
+                // exercise both an accepted and a refused choice against a real server.
+                personas: ['reviewer', 'writer'],
               },
               {
                 // plans/07: a second, independent Agent identity for A-to-B-to-A cross-Agent tests —
@@ -120,6 +123,8 @@ export async function startFakeController(agentOptions: FakeAgentOptions = {}, p
                 label: 'Fake Agent B (tests)',
                 description: 'A second deterministic in-process fake ACP Agent identity for cross-Agent tests.',
                 availability: 'enabled',
+                // Deliberately none — proves an Agent that offers no persona refuses any request for one.
+                personas: [],
               },
             ],
           }),

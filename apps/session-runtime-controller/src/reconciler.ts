@@ -117,6 +117,8 @@ export async function reconcileSessionRuntime(k8s: KubernetesPods, sessionId: st
 export interface MaterializeInput {
   readonly sessionId: string
   readonly definition: AgentRuntimeDefinition
+  /** Reviewed persona name, validated against `definition.personas` by the server before it gets here. */
+  readonly persona?: string
   readonly executionGrantRef: string
   readonly relayBundle: RelayBundle
   readonly controllerRevision: string

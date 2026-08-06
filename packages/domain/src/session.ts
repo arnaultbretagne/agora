@@ -59,6 +59,16 @@ export interface SessionLaunchEnvelope {
   readonly workspaceSpec: Readonly<Record<string, unknown>>
   readonly equipmentRequest: EquipmentRequest
   readonly runtimeDefinitionVersion: string
+  /**
+   * The harness persona this Session runs as (`--agent <name>` in the OLD channels-era system's
+   * vocabulary). Frozen here with the rest of the envelope for the same reason `agentId` is: it is
+   * a launch argument, so changing it means a different process, which means a different Session.
+   * Absent = no persona, the default the old system expressed as an empty `--agent`.
+   *
+   * Only a name reviewed on the Agent's own registry definition (`AgentRuntimeDefinition.personas`)
+   * is accepted — validated by the caller before this envelope is built, never by the Pod.
+   */
+  readonly persona?: string
 }
 
 export interface AcpBinding {

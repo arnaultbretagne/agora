@@ -12,6 +12,8 @@ export interface LaunchableAgent {
   readonly label: string
   readonly description: string
   readonly availability: SessionRuntimeAvailability
+  /** Reviewed persona names this Agent may be launched with (`--agent <name>`). Empty = the product surface offers no persona choice. */
+  readonly personas: readonly string[]
 }
 
 export interface ListLaunchableAgentsResult {
@@ -26,6 +28,8 @@ export interface ListLaunchableAgentsResult {
 export interface MaterializeSessionRuntimeRequest {
   readonly agentId: string
   readonly runtimeDefinitionVersion: string
+  /** The reviewed harness persona this Session runs as (`--agent <name>`); absent = none. Frozen at Session creation. */
+  readonly persona?: string
   readonly executionGrantRef: string
   readonly restoreFrom?: string | null
   readonly traceparent?: string

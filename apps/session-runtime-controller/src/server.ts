@@ -124,6 +124,20 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
     throw error
   }
 
+  // A persona is what the harness impersonates (`--agent <name>`), so it is an authorization-shaped
+  // input, not a preference: only a name the operator reviewed onto this Agent's own registry
+  // definition may reach a Pod. Rejected here, before any grant activation or Pod creation, so an
+  // unreviewed persona can never be materialized even if a caller asks for one.
+  if (materializeRequest.persona !== undefined) {
+    const reviewed = definition.personas ?? []
+    if (!reviewed.includes(materializeRequest.persona)) {
+      return sendProblem(
+        res,
+        problem(409, 'persona_not_reviewed', `persona '${materializeRequest.persona}' is not reviewed for agent '${definition.agentId}'`),
+      )
+    }
+  }
+
   // docs/specs/10: a grant the Broker will not activate must never reach Kubernetes. The
   // per-Session ServiceAccount name IS this Session Runtime's "Controller-created authenticated
   // identity" (ActivateGrantRequest.workloadIdentity's own doc) — the same identity a real mesh
@@ -170,6 +184,7 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
   const result = await materializeSessionRuntime(deps.k8s, {
     sessionId,
     definition,
+    ...(materializeRequest.persona !== undefined ? { persona: materializeRequest.persona } : {}),
     executionGrantRef: materializeRequest.executionGrantRef,
     relayBundle: deps.relayBundle,
     controllerRevision: deps.controllerRevision,

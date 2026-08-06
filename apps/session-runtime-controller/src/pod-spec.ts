@@ -6,6 +6,8 @@ import type { RelayBundle } from './relay-bundle.js'
 export interface BuildPodSpecInput {
   readonly sessionId: string
   readonly definition: AgentRuntimeDefinition
+  /** Reviewed persona name, validated against `definition.personas` by the server before it gets here. */
+  readonly persona?: string
   readonly executionGrantRef: string
   readonly relayBundle: RelayBundle
   readonly controllerRevision: string
@@ -85,6 +87,11 @@ export function buildPodSpec(input: BuildPodSpecInput): K8sObject {
                   { name: 'AGORA_CUSTODY_RESTORE_CREDENTIAL', value: input.restoreFrom.credential },
                 ]
               : []),
+            // The reviewed harness persona (the OLD system's `--agent <name>`). Emitted ONLY when
+            // the Session actually has one, so a Pod with no persona carries no empty variable to
+            // misread. The Agent's own bridge-server turns it into the harness argument; it is a
+            // plain non-secret name, never a credential.
+            ...(input.persona ? [{ name: 'AGORA_PERSONA', value: input.persona }] : []),
           ],
           securityContext: {
             allowPrivilegeEscalation: false,

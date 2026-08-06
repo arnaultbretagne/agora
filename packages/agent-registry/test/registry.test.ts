@@ -18,6 +18,10 @@ test('selectLaunchableAgents exposes only safe public fields, never image/comman
       label: 'Fake Agent (tests)',
       description: 'Deterministic in-process fake ACP Agent, wrapped for Session Runtime controller tests.',
       availability: 'enabled',
+      // Reviewed personas are a safe public field (a name the operator approved, never a credential
+      // or an image detail) and are ALWAYS present — an Agent with none yields [], which the product
+      // surface reads as "offer no persona choice".
+      personas: [],
     },
   ])
   const serialized = JSON.stringify(result)

@@ -225,6 +225,16 @@
         "deprecated",
         "retired"
       ]
+    },
+    "personas": {
+      "type": "array",
+      "description": "Reviewed persona names this Agent may be launched with (the harness's own `--agent <name>`). Optional: an Agent with no reviewed personas simply offers none, and the product surface hides the choice. Curated here rather than discovered by scanning the running Pod's filesystem \u2014 the Session Runtime is untrusted compute, so what it may impersonate is an operator-reviewed fact, not something the Pod gets to tell us.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "uniqueItems": true
     }
   },
   "definitions": {

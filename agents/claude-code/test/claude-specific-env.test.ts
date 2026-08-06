@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { claudeSpecificEnv } from '../src/bridge-server.js'
+import { claudeSpecificEnv, defaultAgentCommand } from '../src/bridge-server.js'
 
 async function seedStub(content: string): Promise<{ stubsDir: string; caPath: string }> {
   const stubsDir = await mkdtemp(join(tmpdir(), 'onecli-stubs-'))
@@ -53,4 +53,27 @@ test('required: fails closed if the stub directory exists but the expected stub 
       AGORA_ONECLI_STUBS_DIR: emptyDir,
     }),
   )
+})
+
+test('required: a reviewed persona becomes the harness\'s own --agent flag, and no persona means no flag at all', async () => {
+  const previous = process.env['AGORA_PERSONA']
+  try {
+    delete process.env['AGORA_PERSONA']
+    const withoutPersona = await defaultAgentCommand()
+    assert.equal(withoutPersona.includes('--agent'), false, "omitting the flag is not the same request as `--agent ''`")
+
+    process.env['AGORA_PERSONA'] = 'reviewer'
+    const withPersona = await defaultAgentCommand()
+    const at = withPersona.indexOf('--agent')
+    assert.ok(at > 0, 'the flag is present')
+    assert.equal(withPersona[at + 1], 'reviewer', 'and carries the persona name as its own argument, never concatenated')
+
+    // Empty/whitespace must behave like absent: the controller already refuses an unreviewed
+    // persona, but a Pod handed an empty variable must not degrade into `--agent ''`.
+    process.env['AGORA_PERSONA'] = ''
+    assert.equal((await defaultAgentCommand()).includes('--agent'), false)
+  } finally {
+    if (previous === undefined) delete process.env['AGORA_PERSONA']
+    else process.env['AGORA_PERSONA'] = previous
+  }
 })

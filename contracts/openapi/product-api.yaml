@@ -693,6 +693,14 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        persona:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: >-
+            Optional harness persona this Session runs as (the OLD system's `--agent <name>`).
+            Must be one the chosen Agent actually offers (`personas` on GET /v1/agents); frozen at
+            Session creation because it is a launch argument, so changing it means a new Session.
         workspace:
           $ref: '#/components/schemas/WorkspaceIntent'
         equipment:
@@ -711,6 +719,14 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        persona:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: >-
+            Optional harness persona this Session runs as (the OLD system's `--agent <name>`).
+            Must be one the chosen Agent actually offers (`personas` on GET /v1/agents); frozen at
+            Session creation because it is a launch argument, so changing it means a new Session.
         workspace:
           $ref: '#/components/schemas/WorkspaceIntent'
         equipment:

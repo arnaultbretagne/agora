@@ -84,19 +84,21 @@ export const EXECUTION_GRANT_REQUEST_NAMESPACE = '3f9d0b0a-6b39-4b62-9c9a-3e8b6b
 interface SessionGrantContext {
   readonly equipment: EquipmentRequest
   readonly workstreamCategory: 'discussion' | 'invocation'
+  /** Frozen at Session creation; the harness's own `--agent <name>`. Read here rather than threaded through every caller, same as the equipment above. */
+  readonly persona: string | undefined
 }
 
 /** Both the issuing (`provisionSessionAndPrompt`) and renewing (`resumeSessionRuntime`) paths need this — read fresh from product schema rather than threaded through every caller's input shape. */
 async function loadSessionGrantContext(pool: pg.Pool, sessionId: string): Promise<SessionGrantContext> {
   const client = await pool.connect()
   try {
-    const { rows } = await client.query<{ equipment_request: EquipmentRequest; category: 'discussion' | 'invocation' }>(
-      `SELECT s.equipment_request, w.category FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id WHERE s.id = $1`,
+    const { rows } = await client.query<{ equipment_request: EquipmentRequest; category: 'discussion' | 'invocation'; persona: string | null }>(
+      `SELECT s.equipment_request, s.persona, w.category FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id WHERE s.id = $1`,
       [sessionId],
     )
     const row = rows[0]
     if (!row) throw new Error(`session ${sessionId} not found`)
-    return { equipment: row.equipment_request, workstreamCategory: row.category }
+    return { equipment: row.equipment_request, workstreamCategory: row.category, persona: row.persona ?? undefined }
   } finally {
     client.release()
   }
@@ -174,7 +176,7 @@ async function failClosed(
 export async function provisionSessionAndPrompt(input: ProvisionSessionInput): Promise<void> {
   const now = input.now ?? (() => new Date())
   try {
-    const { equipment, workstreamCategory } = await loadSessionGrantContext(input.pool, input.sessionId)
+    const { equipment, workstreamCategory, persona } = await loadSessionGrantContext(input.pool, input.sessionId)
     const grant = await input.brokerGrantClient.issue({
       sessionId: input.sessionId,
       agentId: input.agentId,
@@ -193,6 +195,7 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      ...(persona !== undefined ? { persona } : {}),
       executionGrantRef: grant.grantRef,
     })
     await waitForRuntimeReady(input.transport, input.sessionId)
@@ -294,9 +297,14 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
     }
     const renewedGrant = await input.brokerGrantClient.renew(existingGrantRef, randomUUID())
 
+    // Same Session, so the SAME persona — it is frozen at creation and re-read here rather than
+    // remembered in memory, so a resume after a process restart still relaunches the right harness.
+    const { persona } = await loadSessionGrantContext(input.pool, input.sessionId)
+
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      ...(persona !== undefined ? { persona } : {}),
       executionGrantRef: renewedGrant.grantRef,
       restoreFrom: anchor.custodySnapshotId,
     })

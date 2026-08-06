@@ -50,8 +50,8 @@ export async function createWorkstreamWithFirstSession(
     await client.query(
       `INSERT INTO product.sessions
          (id, workstream_id, ordinal, agent_id, phase, is_current, workspace_spec, equipment_request,
-          runtime_definition_version, last_event_seq, created_at)
-       VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 0, $9)`,
+          runtime_definition_version, persona, last_event_seq, created_at)
+       VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, 0, $10)`,
       [
         session.id,
         workstream.id,
@@ -61,6 +61,7 @@ export async function createWorkstreamWithFirstSession(
         JSON.stringify(session.launchEnvelope.workspaceSpec),
         JSON.stringify(session.launchEnvelope.equipmentRequest),
         input.runtimeDefinitionVersion,
+        session.launchEnvelope.persona ?? null,
         input.workstream.createdAt,
       ],
     )
@@ -244,8 +245,8 @@ export async function openAdditionalSession(client: PoolClient, input: OpenAddit
     await client.query(
       `INSERT INTO product.sessions
          (id, workstream_id, ordinal, agent_id, phase, is_current, workspace_spec, equipment_request,
-          runtime_definition_version, last_event_seq, created_at)
-       VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, 0, $9)`,
+          runtime_definition_version, persona, last_event_seq, created_at)
+       VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, 0, $10)`,
       [
         session.id,
         input.workstreamId,
@@ -255,6 +256,7 @@ export async function openAdditionalSession(client: PoolClient, input: OpenAddit
         JSON.stringify(session.launchEnvelope.workspaceSpec),
         JSON.stringify(session.launchEnvelope.equipmentRequest),
         input.runtimeDefinitionVersion,
+        session.launchEnvelope.persona ?? null,
         input.createdAt,
       ],
     )

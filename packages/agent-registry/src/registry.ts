@@ -33,6 +33,10 @@ export function selectLaunchableAgents(
       label: d.label,
       description: d.description,
       availability: toAvailability(d.rollout),
+      // Reviewed personas, so the product surface can offer the same choice the OLD system did.
+      // Always an array — an Agent with none yields [], which the UI reads as "hide the selector",
+      // exactly the old behaviour when its own discovery came back empty.
+      personas: d.personas ?? [],
     }))
   return { registryRevision, items }
 }

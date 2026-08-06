@@ -163,7 +163,7 @@ components:
     LaunchableAgent:
       type: object
       additionalProperties: false
-      required: [agentId, runtimeDefinitionVersion, label, description, availability]
+      required: [agentId, runtimeDefinitionVersion, label, description, availability, personas]
       properties:
         agentId:
           type: string
@@ -176,6 +176,14 @@ components:
         availability:
           type: string
           enum: [enabled, unavailable, deprecated]
+        personas:
+          type: array
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 120 }
+          description: >-
+            Reviewed persona names this Agent may be launched with (the harness's own
+            `--agent <name>`). Empty means the product surface offers no persona choice — the same
+            behaviour the OLD system had whenever its own discovery returned nothing.
     MaterializeSessionRuntimeRequest:
       type: object
       additionalProperties: false
@@ -191,6 +199,13 @@ components:
         runtimeDefinitionVersion:
           type: string
           minLength: 1
+        persona:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: >-
+            Reviewed harness persona this Session runs as (the harness's own `--agent <name>`).
+            Must be one of the Agent registry definition's own `personas`; absent means none.
         executionGrantRef:
           type: string
           minLength: 1

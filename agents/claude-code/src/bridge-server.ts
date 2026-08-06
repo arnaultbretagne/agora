@@ -72,8 +72,11 @@ export interface RunningBridgeServer {
 }
 
 const DEFAULT_HOME = process.env.HOME ?? '/home/node'
+/** pod-spec.ts's own variable name — set only when the Session actually has a reviewed persona. */
+const PERSONA_ENV = 'AGORA_PERSONA'
 
-async function defaultAgentCommand(): Promise<readonly string[]> {
+/** Exported for tests: the persona -> `--agent` translation is a real behaviour worth asserting, not an implementation detail. */
+export async function defaultAgentCommand(): Promise<readonly string[]> {
   // Real Node module resolution (not a hardcoded relative path) — npm workspaces hoist this
   // package to the monorepo root's node_modules in normal installs, so a path fixed relative to
   // this file's own directory is wrong there (verified live: the image build's smoke-test caught
@@ -94,7 +97,13 @@ async function defaultAgentCommand(): Promise<readonly string[]> {
   const binRelative = typeof packageJson.bin === 'string' ? packageJson.bin : packageJson.bin['claude-agent-acp']
   if (!binRelative) throw new Error("@agentclientprotocol/claude-agent-acp's package.json names no 'claude-agent-acp' bin entry")
   const entry = join(dirname(packageJsonPath), binRelative)
-  return [process.execPath, entry, '--dangerously-skip-permissions']
+  // The reviewed persona (pod-spec.ts's AGORA_PERSONA) becomes the harness's own `--agent <name>`,
+  // exactly as the OLD channels-era system spawned it. Absent = no flag at all, never an empty one:
+  // `--agent ''` is not the same request as omitting it. The value is operator-reviewed upstream
+  // (the controller refuses any persona missing from the Agent's registry definition), so this Pod
+  // does not re-validate a name it has no authority over — it just forwards it.
+  const persona = process.env[PERSONA_ENV]
+  return [process.execPath, entry, '--dangerously-skip-permissions', ...(persona ? ['--agent', persona] : [])]
 }
 
 // Matches `pod-spec.ts`'s own constants exactly — this file does not invent these paths, only
