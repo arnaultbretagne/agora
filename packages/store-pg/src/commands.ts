@@ -84,7 +84,16 @@ export async function createOrReuseCommand(
         idempotency_scope, idempotency_key, request, state, accepted_at, updated_at,
         source_from_seq, source_through_seq, seed_policy_version, content_sha256)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15, $16)
-     ON CONFLICT (id) DO NOTHING`,
+     -- No conflict arbiter on purpose. product.commands carries TWO redundant unique constraints:
+     -- the PRIMARY KEY on id, and UNIQUE (workstream_id, idempotency_scope, idempotency_key) — and
+     -- id is DERIVED from exactly that triple (deriveCommandId), so both describe the same identity.
+     -- \`ON CONFLICT (id)\` only suppresses conflicts on the index it names; a concurrent insert that
+     -- happens to trip the TRIPLE's index first raises 23505 instead of taking the DO-NOTHING path.
+     -- Found live, P11: that is a real production race on any retried API call, not a test artifact
+     -- — it surfaced as an intermittent failure of this file's own "concurrent identical retries"
+     -- test under full-suite load. Bare DO NOTHING suppresses a conflict on ANY unique index, which
+     -- is what this function actually wants: it re-reads the winning row by the triple below.
+     ON CONFLICT DO NOTHING`,
     [
       command.id,
       command.workstreamId,
