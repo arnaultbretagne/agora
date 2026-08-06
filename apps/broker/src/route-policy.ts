@@ -4,6 +4,32 @@ import type { ActiveGrantSummary } from './grants-repository.js'
 
 export const ROUTE_SET_VERSION = 'routes-v1'
 
+/**
+ * HOW ONECLI ACTUALLY ENFORCES WHAT THIS FILE COMPILES (verified live against a real self-hosted
+ * OneCLI 1.43.3, P11 — worth reading before ever concluding "the allowlist is broken"):
+ *
+ * The gateway ALWAYS answers `HTTP/1.1 200 OK` to a CONNECT, for every host, allow-listed or not.
+ * It then MITMs the TLS (the peer certificate is issued by "OneCLI Local Gateway CA" — the
+ * operator-pinned CA mounted into every Session Runtime Pod is what makes that acceptable to the
+ * Agent) and evaluates these rules against the HTTP REQUEST INSIDE the tunnel. OneCLI's own docs
+ * say it plainly: "a transparent proxy that intercepts outgoing HTTP requests, checks them against
+ * your rules". A blocked host therefore looks like:
+ *
+ *     CONNECT evil.example.com:443  ->  200 OK        (tunnel established, tells you NOTHING)
+ *     GET / (inside the tunnel)     ->  403 Forbidden (this is the enforcement point)
+ *
+ * Measured live, same Agent, same credential:
+ *     api.anthropic.com                   -> 404 from the real upstream (allow-listed, reached it)
+ *     http-intake.logs.us5.datadoghq.com  -> 403 (blocked by the terminal `block *`)
+ *     example.com                         -> 403 (blocked by the terminal `block *`)
+ *
+ * Consequence for debugging: a probe that stops at the CONNECT status line cannot distinguish
+ * "allowed" from "blocked", and `broker.security_audit`'s own `relay.connect`/`approved` rows mean
+ * only that the TUNNEL was bridged — never that the traffic was permitted. P11 briefly and wrongly
+ * concluded from exactly that signal that egress enforcement had never worked at all. Any future
+ * check must send a real request through the established tunnel.
+ */
+
 export interface PinnedAgentRouteSet {
   readonly agentId: string
   readonly hosts: readonly string[]

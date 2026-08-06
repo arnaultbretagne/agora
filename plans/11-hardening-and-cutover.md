@@ -187,6 +187,35 @@ part held up), but a spike that bypasses the component we are writing does not v
 component. Future spikes should be scoped against the real seam, or say loudly which seam they are
 standing in for.
 
+**Egress enforcement: verified working, and a documented trap.** A P11 probe briefly concluded the
+route allowlist had never been enforced — that conclusion was WRONG and is recorded here because
+the trap is easy to fall into twice (it is the same layer-mismatch mistake as the relay-scheme bug
+above, made again within the same session).
+
+OneCLI's gateway answers `200 OK` to EVERY CONNECT regardless of the allowlist, MITMs the TLS (peer
+certificate issued by "OneCLI Local Gateway CA" — which is what the operator-pinned CA mounted into
+every Pod exists to trust), and enforces the rules against the HTTP request INSIDE the tunnel.
+Measured live, same Agent, same credential, real request sent through the established tunnel:
+
+| host | CONNECT | request inside tunnel |
+| --- | --- | --- |
+| `api.anthropic.com` (allow-listed) | 200 | 404 from the real upstream — reached it |
+| `http-intake.logs.us5.datadoghq.com` | 200 | **403** — blocked by the terminal `block *` |
+| `example.com` | 200 | **403** — blocked by the terminal `block *` |
+
+So `route-policy.ts`'s compiled allow/`block *` set IS effective, and the real `claude` binary's
+own telemetry call to Datadog was in fact blocked in production. Two durable consequences:
+`broker.security_audit`'s `relay.connect`/`approved` rows record tunnel establishment ONLY and must
+never be read as an egress audit trail; and any future egress check must send a real request
+through the tunnel rather than stopping at the CONNECT status line. Both are now documented at the
+code sites (`route-policy.ts`, `relay.ts`).
+
+Operator decision (2026-08-06): tightening egress further is deliberately DEFERRED — the current
+containment (Cilium restricts the Pod to the relay; the gateway enforces the host allowlist) is
+judged adequate for now, and the platform's own Cilium primitives are the preferred fallback if
+OneCLI-side enforcement ever proves insufficient, rather than reimplementing filtering in
+`relay.ts` against `docs/specs/10`'s delegation.
+
 Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback, old
 system decommission) are NOT yet met — most of this plan's task list is still open. Status stays
 `pending`; this Evidence section will keep growing as P11 continues.

@@ -142,6 +142,13 @@ async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket
   }
 }
 
+/**
+ * "approved" here means the TUNNEL was bridged — NOT that the traffic was permitted. OneCLI's
+ * gateway answers 200 to every CONNECT and enforces the route allowlist against the HTTP request
+ * inside the tunnel (see route-policy.ts's own doc for the measured behavior). A blocked host still
+ * produces an `approved` row here and a 403 the Agent sees. Do not read these rows as an egress
+ * audit trail; they are a tunnel-establishment trail.
+ */
 async function recordApprovedConnect(deps: RelayDeps, sessionId: string, agentId: string, policyVersion: string, host: string): Promise<void> {
   const client = await deps.pool.connect()
   try {
