@@ -111,6 +111,16 @@ test('POST /v1/workstreams requires Authorization', async () => {
   assert.equal(res.status, 401)
 })
 
+test('required: X-Forwarded-Email (the oauth2-proxy/Pocket-ID SSO path) authenticates a request the same as Authorization: Bearer', async () => {
+  // Mirrors 'POST /v1/workstreams requires Idempotency-Key' exactly, swapping the auth header —
+  // deliberately does NOT create a real Workstream (which would provision a Session against the
+  // shared fake controller and could interact with other tests' own timing-sensitive polling).
+  // Reaching the SAME downstream validation error (400, not 401) proves requirePrincipal()
+  // accepted this header — that's the only thing this test needs to establish.
+  const res = await fetch(`${baseUrl}/v1/workstreams`, { method: 'POST', headers: { 'x-forwarded-email': 'operator@bretagne.dev' }, body: '{}' })
+  assert.equal(res.status, 400)
+})
+
 test('POST /v1/workstreams requires Idempotency-Key', async () => {
   const res = await fetch(`${baseUrl}/v1/workstreams`, { method: 'POST', headers: { ...auth('alice') }, body: '{}' })
   assert.equal(res.status, 400)

@@ -38,11 +38,13 @@ import type { SessionConnectionRegistry } from './connections.js'
 import { getValidators } from './request-schemas.js'
 
 /**
- * Internal server conforming to `contracts/openapi/product-api.yaml`. No real authentication
- * exists anywhere in this repo yet (no ADR/spec describes one) — `Authorization: Bearer
- * <principalId>` is a fixed, honest placeholder (the bearer token IS the principal id, no
- * signature), matching this plan's other "real seam, fake value" boundaries (P04's fake relay/
- * grant). A real scheme (OIDC/JWT) is a follow-up with no owner yet.
+ * Internal server conforming to `contracts/openapi/product-api.yaml`. Two principal sources
+ * (`requirePrincipal`): `Authorization: Bearer <principalId>`, a fixed, honest placeholder for
+ * dev/test (the bearer token IS the principal id, no signature) — and, since P11, the real
+ * SSO path: oauth2-proxy (Pocket-ID) sits in front of this Service in production and forwards
+ * the verified identity as `X-Forwarded-Email`, trusted because the NetworkPolicy admits ingress
+ * only from that pod. No per-workstream authorization model beyond membership exists yet (no
+ * ADR/spec describes one) — single-operator in practice today.
  *
  * `PUT /sessions/{id}/mode`, `PUT /sessions/{id}/config-options/{id}`,
  * `POST /sessions/{id}/permission-requests/{id}/decision` and
@@ -92,14 +94,35 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 function requirePrincipal(req: IncomingMessage): PrincipalId | undefined {
   const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) return undefined
-  const token = header.slice('Bearer '.length).trim()
-  if (!token) return undefined
-  try {
-    return principalId(token)
-  } catch {
-    return undefined
+  if (header?.startsWith('Bearer ')) {
+    const token = header.slice('Bearer '.length).trim()
+    if (token) {
+      try {
+        return principalId(token)
+      } catch {
+        // fall through to the SSO path below
+      }
+    }
   }
+  // P11: the real gate in front of this server (oauth2-proxy, Pocket-ID SSO) forwards the
+  // already-verified identity as X-Forwarded-Email (oauth2-proxy's own default with
+  // pass-user-headers, on unless disabled) — the Authorization: Bearer <principalId> placeholder
+  // above predates any real SSO gate (this file's own module doc: "no owner yet"). This is that
+  // follow-up, scoped minimally: trust the header because the NetworkPolicy in front of this
+  // Service admits ingress ONLY from the oauth2-proxy pod (apps/agora/networkpolicy.yaml) — same
+  // "trust the transport" convention this repo already uses for its mTLS-gated internal servers
+  // (apps/broker/src/server.ts's own module doc). A header forged by anything else can never
+  // reach this process.
+  const forwardedEmail = req.headers['x-forwarded-email']
+  const email = Array.isArray(forwardedEmail) ? forwardedEmail[0] : forwardedEmail
+  if (email) {
+    try {
+      return principalId(email)
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 function requireIdempotencyKey(req: IncomingMessage): string | undefined {
