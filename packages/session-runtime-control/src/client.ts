@@ -21,7 +21,11 @@ export class SessionRuntimeControlError extends Error {
   readonly problem: Problem
 
   constructor(problem: Problem) {
-    super(problem.title)
+    // Found live, P11: orchestration.ts's own failClosed only persists `error.message` (never the
+    // full `.problem` object) as the Session's durable failure_detail — a bare `problem.title`
+    // (e.g. "unexpected controller error") on its own told a live debugging session nothing about
+    // WHAT was unexpected. `problem.detail` (when present) carries the real underlying message.
+    super(problem.detail ? `${problem.title}: ${problem.detail}` : problem.title)
     this.name = 'SessionRuntimeControlError'
     this.problem = problem
   }

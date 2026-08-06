@@ -54,8 +54,11 @@ export function createHttpBrokerActivationClient(baseUrl: string): BrokerActivat
         throw new BrokerActivationDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
       }
       if (!response.ok) {
-        const problem = (await response.json().catch(() => undefined)) as { code?: string; title?: string } | undefined
-        throw new BrokerActivationDeniedError(response.status, problem?.code ?? 'broker_activation_failed', problem?.title ?? `broker activation failed: HTTP ${response.status}`)
+        const problem = (await response.json().catch(() => undefined)) as { code?: string; title?: string; detail?: string } | undefined
+        // Found live, P11: `.title` alone ("activation_denied") told a live debugging session
+        // nothing about WHY — `.detail` carries the Broker's own real underlying message.
+        const message = problem?.title ?? `broker activation failed: HTTP ${response.status}`
+        throw new BrokerActivationDeniedError(response.status, problem?.code ?? 'broker_activation_failed', problem?.detail ? `${message}: ${problem.detail}` : message)
       }
       return (await response.json()) as ActivationResult
     },

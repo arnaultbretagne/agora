@@ -56,8 +56,9 @@ export interface BrokerGrantClient {
 }
 
 async function toDeniedError(response: Response, fallbackCode: string): Promise<BrokerGrantDeniedError> {
-  const problem = (await response.json().catch(() => undefined)) as { code?: string; title?: string } | undefined
-  return new BrokerGrantDeniedError(response.status, problem?.code ?? fallbackCode, problem?.title ?? `broker request failed: HTTP ${response.status}`)
+  const problem = (await response.json().catch(() => undefined)) as { code?: string; title?: string; detail?: string } | undefined
+  const message = problem?.title ?? `broker request failed: HTTP ${response.status}`
+  return new BrokerGrantDeniedError(response.status, problem?.code ?? fallbackCode, problem?.detail ? `${message}: ${problem.detail}` : message)
 }
 
 export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient {
