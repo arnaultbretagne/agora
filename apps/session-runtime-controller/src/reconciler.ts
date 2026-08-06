@@ -117,7 +117,6 @@ export async function reconcileSessionRuntime(k8s: KubernetesPods, sessionId: st
 export interface MaterializeInput {
   readonly sessionId: string
   readonly definition: AgentRuntimeDefinition
-  readonly workspaceMountRef: string
   readonly executionGrantRef: string
   readonly relayBundle: RelayBundle
   readonly controllerRevision: string

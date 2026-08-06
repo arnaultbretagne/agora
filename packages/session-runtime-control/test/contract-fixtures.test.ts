@@ -37,7 +37,6 @@ test('required: a materialize request cannot carry an aoc_ bearer, OneCLI contro
   const valid = {
     agentId: 'claude-code',
     runtimeDefinitionVersion: 'v3',
-    workspaceMountRef: 'pvc-1',
     executionGrantRef: 'grant-ref-opaque',
   }
   assert.equal(validate(valid), true, JSON.stringify(validate.errors))

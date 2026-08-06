@@ -26,7 +26,6 @@ export interface ListLaunchableAgentsResult {
 export interface MaterializeSessionRuntimeRequest {
   readonly agentId: string
   readonly runtimeDefinitionVersion: string
-  readonly workspaceMountRef: string
   readonly executionGrantRef: string
   readonly restoreFrom?: string | null
   readonly traceparent?: string

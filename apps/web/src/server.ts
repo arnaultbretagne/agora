@@ -7,7 +7,6 @@ import {
   getCommand,
   getMembershipRole,
   getSession,
-  getSessionWorkspaceMountRef,
   getWorkstreamDetail,
   listWorkstreamItemsPage,
   listWorkstreamMembershipsWire,
@@ -289,7 +288,6 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
       sessionId,
       agentId: request.agentId,
       runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
-      workspaceMountRef: request.workspace.workspaceRef,
       initialPrompt: request.prompt as never,
       actor: { kind: 'human', id: principal },
     })
@@ -429,7 +427,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
       workstreamId,
       agentId: request.agentId,
       runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
-      workspaceMountRef: request.workspace.workspaceRef,
+      workspaceRef: request.workspace.workspaceRef,
       equipmentRequest: request.equipment,
       actor: { kind: 'human', id: principal },
       idempotencyKey,
@@ -677,16 +675,9 @@ async function handleActivateSession(deps: ServerDeps, principal: string, sessio
   // Session's own recorded `runtimeDefinitionVersion`, never silently upgrade to whatever the
   // registry currently resolves to (that would launch a Pod the Session was never bound to).
   const now = deps.now ?? (() => new Date())
-  const workspaceClient = await deps.pool.connect()
-  let workspaceMountRef: string | undefined
-  try {
-    workspaceMountRef = await getSessionWorkspaceMountRef(workspaceClient, sessionId)
-  } finally {
-    workspaceClient.release()
-  }
-  if (!workspaceMountRef) {
-    return sendProblem(res, problem(500, 'validation_failed', 'Session has no recorded workspace reference'))
-  }
+  // The Session's recorded workspace reference is NOT read here any more: since P11 the Session
+  // Runtime's workspace is always an ephemeral per-Pod `emptyDir` (pod-spec.ts), so there is
+  // nothing to resolve and no reason to refuse activation over a missing reference.
   const result = await activateSession({
     pool: deps.pool,
     transport: deps.controllerTransport,
@@ -696,7 +687,6 @@ async function handleActivateSession(deps: ServerDeps, principal: string, sessio
     sessionId,
     agentId: loaded.session.agentId,
     runtimeDefinitionVersion: loaded.session.runtimeDefinitionVersion,
-    workspaceMountRef,
     actor: { kind: 'human', id: principal },
   })
   if (!result.ok) return sendProblem(res, problem(409, result.code, 'Session cannot be activated', result.detail))

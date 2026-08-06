@@ -170,7 +170,6 @@ async function handleMaterialize(deps: ServerDeps, sessionId: string, req: Incom
   const result = await materializeSessionRuntime(deps.k8s, {
     sessionId,
     definition,
-    workspaceMountRef: materializeRequest.workspaceMountRef,
     executionGrantRef: materializeRequest.executionGrantRef,
     relayBundle: deps.relayBundle,
     controllerRevision: deps.controllerRevision,

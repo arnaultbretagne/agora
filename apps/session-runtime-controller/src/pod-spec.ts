@@ -6,7 +6,6 @@ import type { RelayBundle } from './relay-bundle.js'
 export interface BuildPodSpecInput {
   readonly sessionId: string
   readonly definition: AgentRuntimeDefinition
-  readonly workspaceMountRef: string
   readonly executionGrantRef: string
   readonly relayBundle: RelayBundle
   readonly controllerRevision: string
@@ -115,7 +114,21 @@ export function buildPodSpec(input: BuildPodSpecInput): K8sObject {
         },
       ],
       volumes: [
-        { name: 'workspace', persistentVolumeClaim: { claimName: input.workspaceMountRef } },
+        // Operator decision, P11 (2026-08-06): the workspace is ALWAYS an ephemeral per-Pod
+        // `emptyDir`, and this file deliberately exposes no way to mount a PersistentVolumeClaim —
+        // there is no claim-name input to pass, so a PVC cannot be attached to a Session Runtime by
+        // construction, not merely by convention.
+        //
+        // Why this is safe: durable Session state is custody (the Agent's own native transcript,
+        // captured/restored around Pod replacement) plus the Workstream journal — never the working
+        // directory. The workspace is scratch by design.
+        //
+        // Why the previous shape was actively wrong: a claim name is a cluster-wide handle, so every
+        // Session materialized with the same reference mounted the SAME volume. That is exactly what
+        // happened live — every Session mounted a shared `pvc-default` — which violates
+        // docs/specs/08 "cannot access another Session's workspace/custody". An `emptyDir` is
+        // per-Pod by definition and cannot be pointed at another Session's data.
+        { name: 'workspace', emptyDir: {} },
         { name: 'onecli-ca', configMap: { name: 'agora-onecli-ca', items: [{ key: 'ca.pem', path: 'ca.pem' }] } },
         // Secret, not ConfigMap: unlike the CA above (a public trust cert, no confidentiality
         // need), a harness stub can carry real account-identifying content — e.g. Codex's own

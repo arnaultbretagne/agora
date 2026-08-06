@@ -93,7 +93,6 @@ test('required exit criterion: provisioning a Session reaches ready and the init
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [{ type: 'text', text: 'hello there' }],
       actor: { kind: 'human', id: 'alice' },
     })
@@ -126,7 +125,6 @@ test('activateSession on a requested Session runs the real provisioning chain as
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       actor: { kind: 'human', id: 'alice' },
     })
     assert.deepEqual(result, { ok: true })
@@ -149,7 +147,6 @@ test('activateSession on an already-ready Session is a no-op', async () => {
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [],
       actor: { kind: 'human', id: 'alice' },
     })
@@ -163,7 +160,6 @@ test('activateSession on an already-ready Session is a no-op', async () => {
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       actor: { kind: 'human', id: 'alice' },
     })
     assert.deepEqual(result, { ok: true })
@@ -186,7 +182,6 @@ test('suspendSession dematerializes the real Session Runtime and reaches suspend
         sessionId,
         agentId: 'fake-agent',
         runtimeDefinitionVersion: 'v1',
-        workspaceMountRef: 'pvc-1',
         initialPrompt: [],
         actor: { kind: 'human', id: 'alice' },
       })
@@ -216,7 +211,6 @@ test('required: suspend commits a custody Anchor, and activateSession fails clos
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [],
       actor: { kind: 'human', id: 'alice' },
     })
@@ -252,7 +246,6 @@ test('required: a crash after capture but before the Anchor commits is recovered
         sessionId,
         agentId: 'fake-agent',
         runtimeDefinitionVersion: 'v1',
-        workspaceMountRef: 'pvc-1',
         initialPrompt: [],
         actor: { kind: 'human', id: 'alice' },
       })
@@ -305,7 +298,6 @@ test('required: a crash after the Anchor commits but before dematerialize is rec
         sessionId,
         agentId: 'fake-agent',
         runtimeDefinitionVersion: 'v1',
-        workspaceMountRef: 'pvc-1',
         initialPrompt: [],
         actor: { kind: 'human', id: 'alice' },
       })
@@ -362,7 +354,6 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [{ type: 'text', text: 'before suspend' }],
       actor: { kind: 'human', id: 'alice' },
     })
@@ -395,7 +386,6 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       actor: { kind: 'human', id: 'alice' },
     })
     assert.deepEqual(result, { ok: true })
@@ -453,7 +443,6 @@ test('closeSession cancels live work, dematerializes and reaches closed', async 
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [],
       actor: { kind: 'human', id: 'alice' },
     })
@@ -481,7 +470,6 @@ test('cancelSessionCommand is a no-op without a live connection and succeeds wit
       sessionId,
       agentId: 'fake-agent',
       runtimeDefinitionVersion: 'v1',
-      workspaceMountRef: 'pvc-1',
       initialPrompt: [],
       actor: { kind: 'human', id: 'alice' },
     })

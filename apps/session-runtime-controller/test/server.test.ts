@@ -69,7 +69,6 @@ function materializeBody(overrides: Record<string, unknown> = {}) {
   return {
     agentId: FAKE_AGENT_DEFINITION.agentId,
     runtimeDefinitionVersion: FAKE_AGENT_DEFINITION.version,
-    workspaceMountRef: 'pvc-workspace-1',
     executionGrantRef: 'grant-ref-opaque',
     ...overrides,
   }

@@ -182,7 +182,6 @@ components:
       required:
         - agentId
         - runtimeDefinitionVersion
-        - workspaceMountRef
         - executionGrantRef
       properties:
         agentId:
@@ -192,10 +191,6 @@ components:
         runtimeDefinitionVersion:
           type: string
           minLength: 1
-        workspaceMountRef:
-          type: string
-          minLength: 1
-          maxLength: 300
         executionGrantRef:
           type: string
           minLength: 1

@@ -56,7 +56,6 @@ export interface ProvisionSessionInput {
   readonly sessionId: string
   readonly agentId: string
   readonly runtimeDefinitionVersion: string
-  readonly workspaceMountRef: string
   readonly initialPrompt: readonly acp.ContentBlock[]
   /** docs/specs/06: a brand-new Agent joining a Workstream with prior history gets its first prompt as a Handoff, not a plain user prompt. Defaults to 'user' (P05's original behavior). */
   readonly initialPromptPurpose?: 'user' | 'handoff'
@@ -152,7 +151,6 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-      workspaceMountRef: input.workspaceMountRef,
       executionGrantRef: grant.grantRef,
     })
     await waitForRuntimeReady(input.transport, input.sessionId)
@@ -215,7 +213,6 @@ export interface ResumeSessionRuntimeInput {
   readonly agentId: string
   readonly runtimeDefinitionVersion: string
   readonly acpSessionId: string
-  readonly workspaceMountRef: string
   /** docs/specs/06 "Choosing a target Session": resuming an anchored Agent still needs the missing `(watermark, head]` range delivered as a Handoff, same as a brand-new Session would. */
   readonly handoffPrompt?: ResumeSessionHandoffPrompt
   readonly now?: () => Date
@@ -258,7 +255,6 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-      workspaceMountRef: input.workspaceMountRef,
       executionGrantRef: renewedGrant.grantRef,
       restoreFrom: anchor.custodySnapshotId,
     })
@@ -346,7 +342,6 @@ export async function activateSession(
       agentId: row.agent_id,
       runtimeDefinitionVersion: row.runtime_definition_version,
       acpSessionId: row.acp_session_id,
-      workspaceMountRef: input.workspaceMountRef,
     })
     return { ok: true }
   }
@@ -361,7 +356,9 @@ export interface SwitchAgentInput {
   readonly workstreamId: string
   readonly agentId: string
   readonly runtimeDefinitionVersion: string
-  readonly workspaceMountRef: string
+  /** Product intent recorded on the Session's launch envelope. NOT a volume reference: since P11 the
+   * Runtime workspace is always an ephemeral per-Pod emptyDir and nothing is ever mounted from this. */
+  readonly workspaceRef: string
   readonly equipmentRequest: Record<string, unknown>
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
   /** The caller's own Idempotency-Key (from `POST .../sessions`) — the Handoff's own idempotency key is deterministically derived from it, never a fresh random one, so a retry never duplicates the Handoff. */
@@ -453,7 +450,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
           workstreamId: input.workstreamId,
           launchEnvelope: {
             agentId: input.agentId,
-            workspaceSpec: { workspaceRef: input.workspaceMountRef },
+            workspaceSpec: { workspaceRef: input.workspaceRef },
             equipmentRequest: input.equipmentRequest as never,
             runtimeDefinitionVersion: input.runtimeDefinitionVersion,
           },
@@ -485,7 +482,6 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       sessionId,
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-      workspaceMountRef: input.workspaceMountRef,
       actor: input.actor,
       now,
     })
@@ -504,7 +500,6 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
         sessionId,
         agentId: input.agentId,
         runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-        workspaceMountRef: input.workspaceMountRef,
         initialPrompt: [],
         actor: input.actor,
         now,
@@ -519,7 +514,6 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
         sessionId,
         agentId: input.agentId,
         runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-        workspaceMountRef: input.workspaceMountRef,
         actor: input.actor,
         now,
       })
@@ -566,7 +560,6 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       sessionId,
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
-      workspaceMountRef: input.workspaceMountRef,
       initialPrompt: content,
       initialPromptPurpose: 'handoff',
       handoffSource,
@@ -599,7 +592,6 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
     agentId: input.agentId,
     runtimeDefinitionVersion: input.runtimeDefinitionVersion,
     acpSessionId,
-    workspaceMountRef: input.workspaceMountRef,
     handoffPrompt: { content, handoffSource, idempotencyKey: promptIdempotencyKey },
     now,
   })

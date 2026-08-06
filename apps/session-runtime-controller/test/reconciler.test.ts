@@ -10,7 +10,6 @@ function input(sessionId: string, overrides: Partial<Parameters<typeof materiali
   return {
     sessionId,
     definition: FAKE_AGENT_DEFINITION,
-    workspaceMountRef: 'pvc-workspace-1',
     executionGrantRef: 'super-secret-grant-reference-value',
     relayBundle: fakeRelayBundle(),
     controllerRevision: 'rev-1',

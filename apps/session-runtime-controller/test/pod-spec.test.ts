@@ -9,7 +9,6 @@ function pod(overrides: Partial<Parameters<typeof buildPodSpec>[0]> = {}) {
   return buildPodSpec({
     sessionId: '11111111-1111-1111-1111-111111111111',
     definition: FAKE_AGENT_DEFINITION,
-    workspaceMountRef: 'pvc-workspace-1',
     executionGrantRef: 'super-secret-grant-reference-value',
     relayBundle: fakeRelayBundle(),
     controllerRevision: 'rev-1',
@@ -79,4 +78,23 @@ test('required labels are present, and the execution grant label is a non-revers
 
 test('the same materialize input always builds the identical PodSpec (deterministic)', () => {
   assert.deepEqual(pod(), pod())
+})
+
+test('required, P11: the workspace is an ephemeral per-Pod emptyDir — no Session Runtime can ever mount a PersistentVolumeClaim', () => {
+  const spec = pod() as any
+  const volumes: { name: string; emptyDir?: unknown; persistentVolumeClaim?: unknown }[] = spec.spec.volumes
+
+  const workspace = volumes.find((v) => v.name === 'workspace')
+  assert.ok(workspace, 'the Agent still gets a writable working directory')
+  assert.deepEqual(workspace.emptyDir, {}, 'and it is an emptyDir, scoped to this Pod alone')
+
+  // The operator decision is "PVCs are out, by construction" — durable Session state is custody
+  // plus the Workstream journal, never the working directory. Enforced here rather than trusted:
+  // a claim name is a cluster-wide handle, so re-introducing one would let two Sessions mount the
+  // SAME volume (exactly what a shared `pvc-default` did live, violating docs/specs/08 "cannot
+  // access another Session's workspace/custody"). `BuildPodSpecInput` also exposes no field to put
+  // a claim name in, so this assertion guards the remaining path: a hardcoded one.
+  for (const volume of volumes) {
+    assert.equal(volume.persistentVolumeClaim, undefined, `volume '${volume.name}' must not be backed by a PVC`)
+  }
 })
