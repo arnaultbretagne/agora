@@ -121,6 +121,10 @@ export function listAgents(): Promise<{ items: readonly PublicAgent[] }> {
   return request('/v1/agents')
 }
 
+export function getEquipmentCatalogue(): Promise<{ version: string; resources: readonly unknown[] }> {
+  return request('/v1/equipment-catalogue')
+}
+
 export interface CreateWorkstreamRequest {
   readonly category: 'discussion' | 'invocation'
   readonly agentId: string

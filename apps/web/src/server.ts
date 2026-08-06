@@ -23,6 +23,7 @@ import {
   type WorkstreamRole,
 } from '@agora/store-pg'
 import { nameBasedUuid, principalId, type PrincipalId, DomainError } from '@agora/domain'
+import { getEquipmentCatalogue } from '@agora/equipment-policy'
 import { promptSession } from '@agora/acp'
 import { HandoffNotReadyError } from '@agora/store-pg'
 import { getSessionRuntime, listLaunchableAgents, type SessionRuntimeControlTransport } from '@agora/session-runtime-control'
@@ -604,9 +605,16 @@ async function handleListAgents(deps: ServerDeps, res: ServerResponse): Promise<
   sendJson(res, 200, { items: result.items.map((a) => ({ agentId: a.agentId, runtimeDefinitionVersion: a.runtimeDefinitionVersion, label: a.label, description: a.description, availability: a.availability })) })
 }
 
-/** No Broker/OneCLI exists yet (ADR 0010/P08) to publish a real resource-intent vocabulary. */
+/**
+ * P11: was a hard-coded `{ version: 'fake-no-broker-v1', resources: [] }` predating the Broker
+ * (ADR 0010/P08 shipped it long ago; this stub was never updated) — a real Workstream create,
+ * whose own `equipment.catalogueVersion` this response is supposed to inform, then fails Broker
+ * grant issuance's own strict version check (`@agora/equipment-policy`'s `resolveEquipmentPolicy`)
+ * against whatever the CLIENT happened to hard-code. Same package the Broker itself already uses
+ * — this response is now the SAME catalogue the Broker will actually check against.
+ */
 function handleEquipmentCatalogue(res: ServerResponse): void {
-  sendJson(res, 200, { version: 'fake-no-broker-v1', resources: [] })
+  sendJson(res, 200, getEquipmentCatalogue())
 }
 
 // ---------- Sessions ----------

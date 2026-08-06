@@ -1,6 +1,7 @@
 import {
   ApiError,
   createWorkstream,
+  getEquipmentCatalogue,
   getWorkstream,
   listAgents,
   listItems,
@@ -73,11 +74,17 @@ async function renderNewWorkstreamForm(): Promise<HTMLElement> {
   container.append(el('h1', {}, ['New Workstream']))
 
   const agentSelect = el('select', { id: 'agent-select', required: 'required' })
+  // The Broker's own grant-issuance strictly rejects a stale catalogueVersion (real bug hit live:
+  // a hard-coded client-side literal drifted from @agora/equipment-policy's real current version,
+  // and the server's own /v1/equipment-catalogue was ALSO a hard-coded stub predating the Broker —
+  // both fixed in this same pass). Fetched once here, same lifecycle as the agent list below.
+  let catalogueVersion = ''
   try {
     const { items } = await listAgents()
     for (const agent of items.filter((a) => a.availability === 'enabled')) {
       agentSelect.append(el('option', { value: agent.agentId }, [agent.label]))
     }
+    catalogueVersion = (await getEquipmentCatalogue()).version
   } catch (error) {
     container.append(renderError(errorToProblem(error)))
   }
@@ -104,7 +111,7 @@ async function renderNewWorkstreamForm(): Promise<HTMLElement> {
       category: 'discussion',
       agentId: agentSelect.value,
       workspace: { workspaceRef: workspaceInput.value },
-      equipment: { catalogueVersion: '2026-08-01', resources: [] },
+      equipment: { catalogueVersion, resources: [] },
       prompt: promptInput.value.trim() ? [{ type: 'text', text: promptInput.value.trim() }] : [],
     })
       .then((result) => {
