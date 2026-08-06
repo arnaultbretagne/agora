@@ -142,15 +142,50 @@ After all of the above: a real grant is issued, a real `claude-code` Pod materia
 ACP `initialize`/`session/new` handshake completes (genuine `agentInfo`/`availableCommands` from
 the real Claude Agent, not a fake test double).
 
-**Not yet resolved, current blocker**: the actual prompt round-trip fails with `API Error: Unable
-to connect to API (UNKNOWN_CERTIFICATE_VERIFICATION_ERROR)` inside the Pod. `relay.ts` is a plain
-`node:http` CONNECT tunnel with zero TLS inspection (confirmed by reading it directly) — the
-verification failure is almost certainly one hop further, at the OneCLI gateway's own certificate.
-The operator-pinned CA in both `agora-onecli-ca` ConfigMaps (`apps/agora`, `apps/agora-runs`) is
-identical in both places and matches the value verified earlier this session; the Broker's own
-drift check (which compares against this exact same pinned value) passes, since grant issuance
-succeeded. Not yet diagnosed further — deliberate checkpoint before going into OneCLI gateway TLS
-internals, a different subsystem than the grant-wiring gap this arc was chasing.
+**The remaining blocker turned out to be three more real bugs, all now fixed — the flow works
+end to end.** The `UNKNOWN_CERTIFICATE_VERIFICATION_ERROR` was never a CA problem at all:
+
+12. `relay.ts` required an `X-Workload-Identity` header its own module doc assumed a service mesh
+    sidecar would inject. This cluster has no mesh, so nothing ever set it and every real CONNECT
+    failed closed. Replaced with source-IP-derived identity resolved against the Kubernetes API
+    (`k8s-pod-lookup.ts`, read-only `get`/`list` pods) — unforgeable by the Pod itself, chosen over
+    Pod self-assertion after an explicit operator decision.
+13. `AGORA_BROKER_RELAY_ENDPOINT` was declared `https://` while `relay.ts` serves a plain
+    `node:http` CONNECT listener (the control API on 8443 beside it was already correctly
+    `http://`). Every Agent attempted a TLS handshake against a plaintext port.
+14. The gateway credential was extracted from the wrong half of OneCLI's proxy URL
+    (`http://x:aoc_…@gateway` — username is a dummy, the token is the password), AND sent as
+    `Proxy-Authorization: Bearer` where OneCLI's gateway speaks HTTP **Basic**. Critically, the
+    gateway does not reject unrecognized auth — it silently degrades to unauthenticated
+    passthrough: no TLS interception, no provider-credential injection, and a bare `401` reaches
+    the Agent. Proven by peer certificate: `Bearer` -> the provider's own public cert;
+    `Basic base64(x:token)` -> a cert issued by "OneCLI Local Gateway CA". That is also what
+    finally justifies the operator-pinned CA mounted into every Pod.
+
+**Verified live, full user path**: `POST /v1/workstreams` through the real SSO gate -> real Broker
+grant -> real Pod in `agora-runs` -> ACP handshake -> relay -> OneCLI gateway (injecting the real
+Claude Max credential) -> Anthropic -> a real reply ("Hello! Hope you're having a good day."),
+turn `completed`.
+
+**Two methodological lessons, both of which cost real hours here and generalize:**
+- *A manual reproduction that does not travel the same path as the real client proves nothing.*
+  Every probe written while chasing this used a raw TCP socket plus a hand-written CONNECT, which
+  bypassed precisely the broken step — so the CA chain kept "proving" correct while the real binary
+  kept failing. `curl` had been reporting `wrong version number` (the textbook TLS-to-plaintext-port
+  error) the entire time.
+- *A test double written to match our own implementation cannot catch our own implementation being
+  wrong.* `onecli-fake-gateway.ts` accepted `Bearer` because that is what our relay sent; 50 relay
+  tests passed green against code that could never work in production. Both fakes now enforce what
+  was verified against the real product.
+
+**On the spike gap** (worth recording plainly): `agents/claude-code/SPIKE.md` states in its own
+gates (lines 65-67) that it was NOT re-proven inside a real Kubernetes Pod, and its topology
+(lines 42-55) points `HTTPS_PROXY` directly at the OneCLI gateway with the bearer embedded in the
+URL. It therefore never exercised `relay.ts` at all — not the scheme, not the credential
+extraction, not the auth scheme. The spike validated OneCLI + Claude Max + CA (genuinely, and that
+part held up), but a spike that bypasses the component we are writing does not validate that
+component. Future spikes should be scoped against the real seam, or say loudly which seam they are
+standing in for.
 
 Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback, old
 system decommission) are NOT yet met — most of this plan's task list is still open. Status stays
