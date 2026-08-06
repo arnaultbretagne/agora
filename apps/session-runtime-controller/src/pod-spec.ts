@@ -117,12 +117,18 @@ export function buildPodSpec(input: BuildPodSpecInput): K8sObject {
       volumes: [
         { name: 'workspace', persistentVolumeClaim: { claimName: input.workspaceMountRef } },
         { name: 'onecli-ca', configMap: { name: 'agora-onecli-ca', items: [{ key: 'ca.pem', path: 'ca.pem' }] } },
+        // Secret, not ConfigMap: unlike the CA above (a public trust cert, no confidentiality
+        // need), a harness stub can carry real account-identifying content — e.g. Codex's own
+        // `codex-auth-json` stub must hold the real linked account's id_token, not a fabricated
+        // one, or codex-acp's own local identity validation rejects it (agents/codex/SPIKE.md).
+        // Found live, P11: the original ConfigMap-backed design was flagged in P10's own Evidence
+        // as "worth reconsidering a higher-sensitivity channel later" — this is that fix.
         {
           name: 'onecli-stubs',
           projected: {
             sources: [
               {
-                configMap: {
+                secret: {
                   name: 'agora-onecli-stubs',
                   items: authStubEntries.map(([key]) => ({ key, path: key })),
                 },

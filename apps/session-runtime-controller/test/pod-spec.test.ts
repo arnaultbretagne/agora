@@ -49,6 +49,25 @@ test('required: Pod environment/files contain no OneCLI organization key, upstre
   assert.equal(serialized.toLowerCase().includes('upstream-bearer'), false)
 })
 
+test('the onecli-stubs volume projects from a Secret, not a ConfigMap — a stub can carry real account-identifying content (e.g. Codex\'s id_token)', () => {
+  const spec = pod() as any
+  const volumes = spec.spec.volumes as any[]
+  const stubsVolume = volumes.find((v) => v.name === 'onecli-stubs')
+  assert.ok(stubsVolume, 'onecli-stubs volume must exist')
+  const source = stubsVolume.projected.sources[0]
+  assert.ok(source.secret, 'must project from a secret source')
+  assert.equal(source.secret.name, 'agora-onecli-stubs')
+  assert.equal(source.configMap, undefined)
+})
+
+test('the onecli-ca volume still projects from a ConfigMap — a public trust cert has no confidentiality need', () => {
+  const spec = pod() as any
+  const volumes = spec.spec.volumes as any[]
+  const caVolume = volumes.find((v) => v.name === 'onecli-ca')
+  assert.ok(caVolume, 'onecli-ca volume must exist')
+  assert.equal(caVolume.configMap.name, 'agora-onecli-ca')
+})
+
 test('required labels are present, and the execution grant label is a non-reversible hash, never the raw ref', () => {
   const spec = pod() as any
   const labels = spec.metadata.labels
