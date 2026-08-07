@@ -24,28 +24,45 @@
 
 ## Tasks
 
-- [ ] Deploy Web, control plane, controller, Broker/relay, OneCLI and Session Runtimes with separate
+- [x] Deploy Web, control plane, controller, Broker/relay, OneCLI and Session Runtimes with separate
   identities.
 - [ ] Prove least privilege with negative authorization tests.
-- [ ] Pin and attest images/dependencies.
-- [ ] Pin the OneCLI image by digest and verify its release/source provenance.
+- [ ] Pin and attest images/dependencies. *(our own images are pinned by digest; nothing is
+  attested — no provenance verification, no signature check.)*
+- [ ] Pin the OneCLI image by digest and verify its release/source provenance. *(pinned to
+  `ghcr.io/onecli/onecli@sha256:7a4fef94…`; provenance never verified.)*
 - [ ] Persist OneCLI PostgreSQL and `/app/data`; manage `SECRET_ENCRYPTION_KEY` outside both.
-- [ ] Prove a compatible backup/restore of OneCLI DB + CA/private key + encryption key.
+  *(both persist — CNPG cluster and a PVC. But the key is NOT outside them: OneCLI generates it at
+  `/app/data/secret-encryption-key` and offers no way to supply it externally, so it sits on the
+  same volume as the CA it protects. Captured out-of-band instead, see Evidence 2026-08-07.)*
+- [ ] Prove a compatible backup/restore of OneCLI DB + CA/private key + encryption key. *(the DB
+  half is exercised daily and passes; the CA/key/encryption-key half is now captured and
+  hash-verified against live, but the restore path itself has never been rehearsed.)*
 - [ ] Enforce Session Runtime Pod → relay → OneCLI gateway as the only provider egress path.
-- [ ] Verify every published route set ends in explicit `block *`.
+  *(deferred by operator decision 2026-08-06 — see Evidence.)*
+- [x] Verify every published route set ends in explicit `block *`.
 - [ ] Prove gateway stdout is query-free and manual approval is disabled on content-bearing routes.
 - [ ] Exercise OneCLI control/gateway/relay outage, CA rotation and policy-cache invalidation.
 - [ ] Exercise Claude Max and ChatGPT token expiry/renewal without changing custody.
-- [ ] Configure resource limits, quotas and admission policy.
+- [ ] Configure resource limits, quotas and admission policy. *(limits set on every workload;
+  `agora-runs` has quota + LimitRange + the untrusted-compute admission policy. `agora` and
+  `agora-onecli` have neither quota nor LimitRange.)*
 - [ ] Implement dashboards/alerts from `12-observability.md`.
 - [ ] Exercise every crash boundary and timeout.
-- [ ] Prove product+custody backup/restore consistency.
+- [x] Prove product+custody backup/restore consistency. *(one CNPG backup carries `product.*`,
+  `projection.*`, `custody.*` and `broker.*` in a single consistent snapshot; the daily drill
+  restores it from R2 and queries the real product schema — 26 workstreams, 26 sessions.)*
 - [ ] Load-test journal, projector, feed, custody and Session Runtime materialization churn.
 - [ ] Perform security review and close critical/high findings.
-- [ ] Choose fresh database versus separately specified legacy archive/import.
-- [ ] Shadow real workloads without dual product truth.
-- [ ] Execute staged cutover and rollback rehearsal.
-- [ ] Revoke/delete old workloads, credentials and repositories only after acceptance.
+- [x] Choose fresh database versus separately specified legacy archive/import. *(operator chose
+  fresh, 2026-08-07: the legacy `agora` database was dropped un-archived.)*
+- [ ] Shadow real workloads without dual product truth. *(not done — the cutover went straight
+  across rather than shadowing, at operator pace.)*
+- [ ] Execute staged cutover and rollback rehearsal. *(the cutover was executed; no rollback
+  rehearsal was performed, and after the decommission there is nothing left to roll back TO.)*
+- [x] Revoke/delete old workloads, credentials and repositories only after acceptance. *(workloads
+  deleted 2026-08-07 on explicit operator acceptance. Credentials: 2 of 4 rotated as a side effect
+  of the new cluster; 2 outstanding. Repositories: untouched.)*
 
 ## Required tests
 
@@ -216,6 +233,57 @@ judged adequate for now, and the platform's own Cilium primitives are the prefer
 OneCLI-side enforcement ever proves insufficient, rather than reimplementing filtering in
 `relay.ts` against `docs/specs/10`'s delegation.
 
-Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback, old
-system decommission) are NOT yet met — most of this plan's task list is still open. Status stays
-`pending`; this Evidence section will keep growing as P11 continues.
+**2026-08-07 — database convergence, decommission, and a backup that was not one.**
+
+*Convergence.* The new engine had been running as a guest database called `agora_next` inside the
+OLD hub's Postgres cluster, in the OLD hub's namespace. The operator rejected both halves ("c'est
+inentendable que `agora_next` soit la nouvelle baseline: on converge tout sur `agora`") and chose a
+fresh cluster over an in-place rename, because the `agent` namespace was being deleted and a rename
+would have stranded the Postgres in a dead namespace. `agora-pg` now lives in `agora`, database
+`agora`, owner `agora_owner`; the ~10 MB moved by logical dump. Every table's exact row count
+matches source-to-target (the only difference is `schema_migrations` 6 → 7, because migration
+`007-add-session-persona.sql` had never been applied to `agora_next`). All sequences match.
+
+The barman `serverName` is set explicitly to `agora-product`. The retired cluster was ALSO named
+`agora-pg` and ALSO wrote under `s3://bretagne-pg-backups/agora`; two clusters sharing one
+serverName would have interleaved base backups and WAL from unrelated timelines into a single
+barman server, corrupting the store for both.
+
+*Decommission.* Namespaces `agent`, `agent-runs` and `agora-onecli-test` are gone, along with the
+`https-agent` Gateway listener and the `agent-broker-vault` ingress rules that pocket-id and
+obsidian still carried. Those two were removed rather than repointed at the new Broker: the
+platform's vault equipment is not wired yet, and pre-opening a path for a caller that does not
+exist is how a stale allowance survives a decommission. Verified after: `agent.bretagne.dev` no
+longer answers, the six other vhosts are untouched, no orphaned PersistentVolumes remain, and a
+real prompt still returns a real reply through the full chain.
+
+*A backup that was not one.* Auditing this plan's own task list surfaced a genuine gap in
+yesterday's OneCLI CNPG work. The database backup protects the CIPHERTEXT of every linked provider
+credential — but `secret-encryption-key`, which decrypts it, and `gateway/ca.key`+`ca.pem`, which
+every Session Runtime Pod pins, all live on an unbacked node-local `local-path` PVC. Losing that
+disk would have meant a database that restores perfectly and decrypts to nothing, plus a CA that no
+Pod trusts. **Backing up ciphertext without its key is not a backup.** All three are now captured
+into a SOPS-encrypted DR file (`apps/agora-onecli/onecli-data-dr.secrets.yaml`), each verified by
+SHA-256 against the live file, and the captured `ca.pem` verified equal to the `agora-onecli-ca`
+ConfigMap that Session Runtimes actually pin. Deliberately NOT deployed as a Secret: its purpose is
+to exist encrypted in git under the off-site-backed age key, and a second live copy of the
+encryption key in etcd would widen exposure while buying nothing.
+
+Also fixed here: the OneCLI restore drill shipped yesterday had never actually passed. Its first
+real run failed on `role "pocketid" does not exist`, a health query left over from the pocket-id
+drill it was copied from. The restore itself worked throughout — WAL replayed from R2, consistent
+state reached — so a healthy backup was being reported as a failed drill. Both drills now assert a
+NON-ZERO row count against their real schema, because a restored-but-empty database passes
+`SELECT 1` exactly as happily as a good one, and that is the failure a restore drill exists to
+catch.
+
+*One real defect found while verifying, predating this work:* `CreateWorkstream` commands never
+reach a terminal state. All 27 rows are `accepted`, including ones created after the cutover, while
+`PromptSession` settles correctly. The functional path is unaffected — Session reaches `ready`, the
+grant is issued, the Pod materializes, the turn completes with a real reply — but any client
+polling `GET /v1/commands/{id}` to learn that creation finished will wait forever.
+
+Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback) are
+still NOT met, and note that decommissioning ahead of a rollback rehearsal means there is no longer
+anything to roll back TO — a consequence of the operator's chosen pace, recorded here plainly.
+Status stays `pending`.
