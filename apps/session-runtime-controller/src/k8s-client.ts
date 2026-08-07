@@ -15,6 +15,25 @@ const CA_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
 const API_HOST = 'kubernetes.default.svc'
 const API_PORT = 443
 
+/**
+ * Builds the message an API refusal travels under. The API's own `Status.message` says WHY, and it
+ * is the only thing that does — it was being captured on `err.body` and then dropped, because only
+ * the message survives the trip up through the controller's Problem response into the Session's
+ * `failure_detail`.
+ *
+ * Found live 2026-08-07: a Session failed with "unexpected controller error: k8s API POST
+ * /api/v1/namespaces/agora-runs/pods -> 403" and nothing else. Chasing it went through RBAC and
+ * admission policy before a hand-built dry-run finally revealed the real cause — "exceeded quota:
+ * agora-runs-quota" — which the API had said all along. A bare status code turns a
+ * self-explanatory refusal into an investigation.
+ */
+export function describeK8sError(method: string, path: string, status: number, body: unknown): string {
+  const message = typeof body === 'object' && body !== null && typeof (body as { message?: unknown }).message === 'string'
+    ? (body as { message: string }).message
+    : undefined
+  return `k8s API ${method} ${path} -> ${status}${message ? `: ${message}` : ''}`
+}
+
 export interface HttpError extends Error {
   status: number
   body?: unknown
@@ -148,7 +167,7 @@ export class K8sClient implements KubernetesPods {
               json = text
             }
             if (status >= 200 && status < 300) return resolve(json as K8sObject)
-            const err = new Error(`k8s API ${method} ${path} -> ${status}`) as HttpError
+            const err = new Error(describeK8sError(method, path, status, json)) as HttpError
             err.status = status
             err.body = json
             reject(err)
