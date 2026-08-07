@@ -42,6 +42,9 @@
   *(deferred by operator decision 2026-08-06 — see Evidence.)*
 - [x] Verify every published route set ends in explicit `block *`.
 - [ ] Prove gateway stdout is query-free and manual approval is disabled on content-bearing routes.
+  *(manual approval: PASSES — every published rule carries `requireApproval: false`, checked against
+  the live instance. Query-free: FAILS — see Evidence. Not a box to tick either way until the
+  logging question is decided.)*
 - [ ] Exercise OneCLI control/gateway/relay outage, CA rotation and policy-cache invalidation.
   *(the control-plane outage is exercised and passes — see Evidence. CA rotation and policy-cache
   invalidation are not.)*
@@ -330,6 +333,24 @@ commit-precedes-handling guarantee), and a scan that resumes where the last one 
 unbounded pattern in both agent bridges' session-id taps is bounded too. Verified by falsification
 in both directions: removing the ceiling fails the growth test, and shifting the scan offset by one
 byte fails the reassembly test.
+
+*Gateway stdout and manual approval, checked against the live instance.* Half passes, half does
+not, and the failing half is recorded here rather than rounded off.
+
+Manual approval is genuinely disabled: every rule the Broker publishes comes back from
+`GET /v1/policy/rules` with `requireApproval: false`. (Worth noting the field is `requireApproval`,
+not the `approval`/`manualApproval` a first probe guessed — a check written against a field that
+does not exist reports `undefined` and reads as a pass.)
+
+Stdout is NOT query-free. OneCLI logs full request URLs, including:
+`…/api/claude_cli/bootstrap?entrypoint=…&model=…`,
+`…/mcp-registry/v0/servers?version=…&limit=…&visibility=…&cursor=…`, `…/v1/messages?beta=…`.
+Nothing observed in 400 lines carries a credential or any conversation content — the parameters are
+structural, and a scan for `aoc_`/`sk-`/`Bearer`/`authorization` shapes returned nothing. So the
+exposure today is request metadata, not secrets. But the criterion asks for query-free, and the
+channel is not: anything a harness ever puts in a query string lands in stdout and therefore in
+Loki. The available lever is OneCLI's own `LOG_LEVEL` (currently `info`), which trades this
+visibility away wholesale — an operator decision, not a code fix, and deliberately left open.
 
 Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback) are
 still NOT met, and note that decommissioning ahead of a rollback rehearsal means there is no longer
