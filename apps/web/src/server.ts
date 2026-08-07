@@ -827,9 +827,11 @@ async function handleSetConfigOption(deps: ServerDeps, principal: string, sessio
   } catch {
     return sendProblem(res, problem(400, 'validation_failed', 'request body is not valid JSON'))
   }
+  // ACP models a config option as a union: a `select` takes a value id, a `boolean` takes a state.
+  // Accepting only strings made every boolean option unsettable — and Codex advertises several.
   const value = (body as { value?: unknown } | undefined)?.value
-  if (typeof value !== 'string' || value.length === 0) {
-    return sendProblem(res, problem(400, 'validation_failed', 'body must be {"value": "<non-empty string>"}'))
+  if (typeof value !== 'boolean' && (typeof value !== 'string' || value.length === 0)) {
+    return sendProblem(res, problem(400, 'validation_failed', 'body must be {"value": "<non-empty string>"} or {"value": <boolean>}'))
   }
 
   const live = deps.connections.get(sessionId)

@@ -33,7 +33,14 @@ test('required: never invents a value — an upstream OneCLI bearer or real prov
     AGORA_ONECLI_CA_PATH: caPath,
     AGORA_ONECLI_STUBS_DIR: stubsDir,
   })
-  assert.deepEqual(Object.keys(env).sort(), ['CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'HTTP_PROXY', 'NODE_EXTRA_CA_CERTS'].sort())
+  // An exact allowlist on purpose: this test's job is that nothing sneaks into the harness's
+  // environment unnoticed, so a new key must be added here deliberately and be visibly non-secret.
+  // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 turns off the harness's bubblewrap sandbox, which cannot
+  // create its network namespace inside gVisor — see the reasoning at the assignment site.
+  assert.deepEqual(
+    Object.keys(env).sort(),
+    ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HTTPS_PROXY', 'HTTP_PROXY', 'NODE_EXTRA_CA_CERTS'].sort(),
+  )
   assert.doesNotMatch(JSON.stringify(env), /aoc_/, 'no OneCLI proxy bearer shape ever appears')
 })
 

@@ -344,3 +344,58 @@ test('required: asking the same question twice keeps both on screen while only o
   assert.equal(surviving.length, 1, 'the second question must stay visible until its own projection arrives')
   assert.equal(surviving[0]?.id, 'e2')
 })
+
+/**
+ * ACP's `SessionConfigSelectOptions` is `Array<SessionConfigSelectOption> | Array<
+ * SessionConfigSelectGroup>`. Claude Code sends the grouped form for models, where entries carry
+ * `group`/`options` and NO `value` — so reading only the flat form listed group headings as models
+ * and sent `{"value": undefined}`, which JSON.stringify drops, producing a body of `{}` and the
+ * server's "body must be {"value": "<non-empty string>"}".
+ */
+test('required: a grouped model list is flattened to its real values', () => {
+  const items = [
+    {
+      id: 'i1',
+      kind: 'unknown',
+      latestWorkstreamSeq: 5,
+      value: {
+        envelope: {
+          result: {
+            configOptions: [
+              {
+                id: 'model',
+                name: 'Model',
+                type: 'select',
+                currentValue: 'opus',
+                options: [
+                  { group: 'recommended', name: 'Recommended', options: [{ value: 'opus', name: 'Opus' }] },
+                  { group: 'other', name: 'Other', options: [{ value: 'haiku', name: 'Haiku' }] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    },
+  ] as never
+  const options = configOptionsFromItems(items)
+  const model = options?.[0]
+  assert.deepEqual(
+    model?.options?.map((v) => v.value),
+    ['opus', 'haiku'],
+    'the values a user can actually pick, not the headings they sit under',
+  )
+  assert.ok(model?.options?.every((v) => typeof v.value === 'string' && v.value.length > 0), 'every rendered value must be a settable string')
+})
+
+test('a flat option list is left exactly as it is', () => {
+  const items = [
+    {
+      id: 'i1',
+      kind: 'unknown',
+      latestWorkstreamSeq: 5,
+      value: { envelope: { result: { configOptions: [{ id: 'effort', name: 'Effort', options: [{ value: 'low', name: 'Low' }] }] } } },
+    },
+  ] as never
+  assert.deepEqual(configOptionsFromItems(items)?.[0]?.options?.map((v) => v.value), ['low'])
+})

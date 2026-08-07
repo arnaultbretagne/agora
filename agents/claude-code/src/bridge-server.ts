@@ -71,6 +71,20 @@ export interface RunningBridgeServer {
   close(): Promise<void>
 }
 
+/**
+ * The Pod's environment minus anything the harness has no business seeing.
+ *
+ * `AGORA_CUSTODY_RESTORE_CREDENTIAL` is a one-time bearer for this Session's custody stream,
+ * consumed by this bridge at startup before the harness exists. Passing it on would hand every
+ * command the harness runs a credential it never needs — and it is the ONLY secret this Pod's
+ * environment carries, which is what makes disabling the harness's own env-scrubbing sandbox a
+ * non-event rather than a trade.
+ */
+export function harnessEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { AGORA_CUSTODY_RESTORE_CREDENTIAL: _credential, AGORA_CUSTODY_RESTORE_URL: _url, ...rest } = env
+  return rest
+}
+
 const DEFAULT_HOME = process.env.HOME ?? '/home/node'
 /** pod-spec.ts's own variable name — set only when the Session actually has a reviewed persona. */
 const PERSONA_ENV = 'AGORA_PERSONA'
@@ -140,6 +154,18 @@ export async function claudeSpecificEnv(env: NodeJS.ProcessEnv): Promise<Record<
     HTTP_PROXY: relayEndpoint,
     NODE_EXTRA_CA_CERTS: caPath,
     CLAUDE_CODE_OAUTH_TOKEN: oauthPlaceholder,
+    // The harness sandboxes each command it runs in bubblewrap, to scrub the environment its
+    // subprocesses inherit. Bubblewrap needs its own network namespace, and inside gVisor it
+    // cannot make one: every command died on `bwrap: loopback: Failed RTM_NEWADDR: No child
+    // process` (found live 2026-08-07 — a plain `echo` slipped through, `command -v gh` did not).
+    //
+    // Turning it off costs nothing HERE because the thing it protects is already gone: the only
+    // secret this Pod's environment ever held was the one-time custody restore credential, and
+    // that is now removed before the harness is spawned (see `harnessEnv`). What is left is three
+    // paths and a relay endpoint. Meanwhile the isolation that actually matters is the Pod itself
+    // — gVisor, non-root, no Kubernetes token, ephemeral workspace, no egress but the relay — and
+    // nesting a second sandbox inside the first buys nothing even when it works.
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0',
   }
 }
 
@@ -270,7 +296,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   }
 
   const agentCommand = options.agentCommand ?? (await defaultAgentCommand())
-  const childEnv = options.childEnv ?? { ...process.env, ...(await claudeSpecificEnv(process.env)) }
+  const childEnv = options.childEnv ?? { ...harnessEnv(process.env), ...(await claudeSpecificEnv(process.env)) }
   // Found live, on a real cluster: without an explicit `cwd`, the child inherits THIS process's
   // own — the image's build-time WORKDIR, root-owned and read-only to the non-root user every
   // Session Runtime Pod actually runs as. The real Agent needs a writable directory to even start

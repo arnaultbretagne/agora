@@ -92,6 +92,16 @@ const AUTH_STUBS_DIR_ENV = 'AGORA_ONECLI_STUBS_DIR'
  * function specifically — `ensureCodexAuthStub` (called separately, see its own doc) reads the
  * actual stub content from the same directory to build `$HOME/.codex/auth.json`.
  */
+/**
+ * The Pod's environment minus the one-time custody restore bearer, which this bridge consumes at
+ * startup and the harness never needs. Same reasoning as the claude-code bridge: a credential that
+ * reaches no subprocess needs no sandbox to hide it.
+ */
+export function harnessEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { AGORA_CUSTODY_RESTORE_CREDENTIAL: _credential, AGORA_CUSTODY_RESTORE_URL: _url, ...rest } = env
+  return rest
+}
+
 export function codexSpecificEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const relayEndpoint = env[RELAY_ENDPOINT_ENV]
   const caPath = env[ONECLI_CA_PATH_ENV]
@@ -294,7 +304,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   }
 
   const agentCommand = options.agentCommand ?? (await defaultAgentCommand())
-  const childEnv = options.childEnv ?? { ...process.env, ...codexSpecificEnv(process.env) }
+  const childEnv = options.childEnv ?? { ...harnessEnv(process.env), ...codexSpecificEnv(process.env) }
   const childCwd = options.cwd ?? process.env.AGORA_WORKSPACE_ROOT
   if (!options.childEnv) {
     const stubsDir = process.env[AUTH_STUBS_DIR_ENV]

@@ -439,7 +439,8 @@ export interface SetSessionConfigOptionInput {
   readonly acpSessionId: string
   /** The option's own id as the Agent advertised it (e.g. `model`, `effort`) — never a value this codebase invents. */
   readonly optionId: string
-  readonly value: string
+  /** A select option's value id, or a boolean option's state — ACP's request is a union over the two. */
+  readonly value: string | boolean
 }
 
 /**
@@ -463,7 +464,11 @@ export async function setSessionConfigOption(input: SetSessionConfigOptionInput)
     // ACP calls this `configId` (the SDK's own typed request shape) — the product surface says
     // "config option", so the mapping is made here once rather than leaking the protocol's name.
     configId: input.optionId,
-    value: input.value,
+    // A discriminated union, not a plain field: `SetSessionConfigOptionRequest` is
+    // `{value: boolean, type: 'boolean'} | {value: SessionConfigValueId}`. A boolean option set
+    // without its `type` discriminator is a select-shaped request carrying the wrong kind of value,
+    // which the Agent is entitled to reject — so the discriminator travels with the value.
+    ...(typeof input.value === 'boolean' ? { value: input.value, type: 'boolean' as const } : { value: input.value }),
   })
 }
 

@@ -254,7 +254,35 @@ export function configOptionsFromItems(items: readonly WorkstreamItem[]): readon
     if (!latest || item.latestWorkstreamSeq > latest.latestWorkstreamSeq) latest = item
   }
   if (!latest) return undefined
-  return (latest.value as UnknownItemValue).envelope?.result?.configOptions as readonly ConfigOption[]
+  const raw = (latest.value as UnknownItemValue).envelope?.result?.configOptions as readonly ConfigOption[]
+  return raw.map(flattenSelectGroups)
+}
+
+/**
+ * ACP lets a select advertise its values EITHER flat (`{value, name}`) OR grouped
+ * (`{group, name, options:[{value, name}]}`) — `SessionConfigSelectOptions` is
+ * `Array<SessionConfigSelectOption> | Array<SessionConfigSelectGroup>`, and nothing says which you
+ * will get.
+ *
+ * Reading only the flat form is not a cosmetic bug. Claude Code groups its models, so every entry
+ * had a `group` and no `value` at all: the menu listed group headings as if they were models, and
+ * choosing one sent `{"value": undefined}` — which `JSON.stringify` drops entirely, so the request
+ * body arrived as `{}` and the server answered "body must be {"value": "<non-empty string>"}".
+ * Reported live 2026-08-07 as "j'ai tenté de changer de modèle et ça m'a mis un message d'erreur
+ * comme quoi la string était pas bonne".
+ *
+ * Flattened rather than rendered as sections: the grouping is presentation the OLD UI never had,
+ * and a flat list of real values is both correct and closer to what it did.
+ */
+function flattenSelectGroups(option: ConfigOption): ConfigOption {
+  const values = option.options
+  if (!Array.isArray(values) || values.length === 0) return option
+  const grouped = values as readonly (ConfigOptionValue & { readonly group?: string; readonly options?: readonly ConfigOptionValue[] })[]
+  if (!grouped.some((entry) => entry.group !== undefined || Array.isArray(entry.options))) return option
+  const flattened = grouped.flatMap((entry) =>
+    Array.isArray(entry.options) ? entry.options : entry.value !== undefined ? [entry as ConfigOptionValue] : [],
+  )
+  return { ...option, options: flattened }
 }
 
 // ---------- Effort rail ----------

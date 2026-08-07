@@ -10,7 +10,7 @@ import { Duplex } from 'node:stream'
 import { test } from 'node:test'
 import * as acp from '@agentclientprotocol/sdk'
 import { WebSocket, createWebSocketStream } from 'ws'
-import { startBridgeServer } from '../src/bridge-server.js'
+import { harnessEnv, startBridgeServer } from '../src/bridge-server.js'
 import { nativeTranscriptPath } from '../src/custody.js'
 
 const stubAgentPath = fileURLToPath(new URL('./fixtures/stub-acp-agent.js', import.meta.url))
@@ -192,4 +192,17 @@ test('required: a checksum mismatch on the restore stream fails the whole startu
   } finally {
     await new Promise<void>((resolve) => restoreServer.close(() => resolve()))
   }
+})
+
+test('required: the one-time custody restore credential never reaches the harness', () => {
+  const scrubbed = harnessEnv({
+    PATH: '/usr/bin',
+    AGORA_WORKSPACE_ROOT: '/home/node/work',
+    AGORA_CUSTODY_RESTORE_URL: 'https://controller/custody/stream',
+    AGORA_CUSTODY_RESTORE_CREDENTIAL: 'one-time-bearer-value',
+  })
+  assert.equal(scrubbed['AGORA_CUSTODY_RESTORE_CREDENTIAL'], undefined, 'a bearer the harness never needs must not be in its environment')
+  assert.equal(scrubbed['AGORA_CUSTODY_RESTORE_URL'], undefined)
+  assert.equal(scrubbed['AGORA_WORKSPACE_ROOT'], '/home/node/work', 'everything the harness does need survives')
+  assert.equal(scrubbed['PATH'], '/usr/bin')
 })
