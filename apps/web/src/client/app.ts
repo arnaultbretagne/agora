@@ -47,6 +47,7 @@ import {
   promptSession,
   setConfigOption,
   subscribeFeed,
+  suspendSession,
   type EquipmentCatalogue,
   type EquipmentResourceRequest,
   type FeedEvent,
@@ -359,11 +360,17 @@ function renderTopbar(): void {
     <div class="topbar-right">
       ${workstream ? stateChip(workstream.id) : ''}
       ${workstream ? selectorsCluster() : ''}
+      ${
+        workstream && runtimeStateOf(workstream.id) !== 'dormant'
+          ? `<button class="icon-btn muted" id="stop-session" title="Arrêter la session (l’historique est conservé, la conversation reprend au prochain message)">${icons.power(17)}</button>`
+          : ''
+      }
       ${workstream ? `<button class="icon-btn muted" id="delete-conv" title="Supprimer la conversation">${icons.trash(17)}</button>` : ''}
       ${isMobile() ? `<button class="icon-btn" id="mobile-new" aria-label="Nouvelle conversation">${icons.plus(19)}</button>` : ''}
     </div>`
   bar.querySelector<HTMLElement>('#menu-btn')?.addEventListener('click', () => setSidebar(true))
   bar.querySelector<HTMLElement>('#mobile-new')?.addEventListener('click', newChat)
+  bar.querySelector<HTMLElement>('#stop-session')?.addEventListener('click', () => void stopSession(state.activeId))
   bar.querySelector<HTMLElement>('#delete-conv')?.addEventListener('click', () => void removeWorkstream(state.activeId))
   bar.querySelector<HTMLElement>('#topbar-title')?.addEventListener('dblclick', () => void renameWorkstream(state.activeId))
   if (workstream) wireSelectors(bar)
@@ -1171,6 +1178,30 @@ async function renameWorkstream(workstreamId: string | null): Promise<void> {
     state.workstreams.set(workstreamId, updated)
     renderSidebar()
     renderTopbar()
+  } catch (error) {
+    toast(errorText(error), true)
+  }
+}
+
+/**
+ * The manual twin of the engine's idle reaper: both end in the same durable suspension, so this is
+ * "give the Runtime back", not "throw the conversation away". Custody is captured and the Anchor
+ * committed before the Pod goes, so the next message resumes exactly where this left off — which is
+ * why the confirm text promises the history stays and why this is a separate button from delete.
+ *
+ * It exists because waiting for the idle timeout is not always acceptable: Session Runtimes are
+ * capped per namespace, and on 2026-08-07 four abandoned Sessions held every slot and made the
+ * platform refuse all new work. An operator needs a way to hand a slot back immediately.
+ */
+async function stopSession(workstreamId: string | null): Promise<void> {
+  if (!workstreamId) return
+  const session = currentSession(state.sessions.get(workstreamId) ?? [])
+  if (!session) return
+  if (!confirm('Arrêter la session ? L’historique est conservé et la conversation reprendra au prochain message.')) return
+  try {
+    await suspendSession(session.id)
+    toast('Session arrêtée — elle reprendra au prochain message.')
+    await loadWorkstream(workstreamId)
   } catch (error) {
     toast(errorText(error), true)
   }

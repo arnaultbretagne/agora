@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION, FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
+import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { requireEncryptionKey } from './crypto.js'
 import { createK8sWorkloadIdentityResolver } from './k8s-pod-lookup.js'
@@ -13,7 +13,11 @@ import { createBrokerServer } from './server.js'
 // deployed as-is would reject every real Claude/Codex launch request as unlaunchable. Both are
 // `rollout: 'internal'`, which `selectLaunchableAgents` already treats as launchable (staff/
 // testing), matching the controller's own DEFINITIONS list exactly.
-const DEFINITIONS = [FAKE_AGENT_DEFINITION, CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
+// `FAKE_AGENT_DEFINITION` is deliberately ABSENT: it is a test double, and listing it here put
+// "Fake Agent (tests)" in the operator's harness menu on the public site as if it were something
+// you could reasonably pick. It stays in @agora/agent-registry because the test suites across four
+// packages are built on it — it just has no business being launchable in production.
+const DEFINITIONS = [CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
 
 function requireEnv(name: string): string {
   const value = process.env[name]

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION, FAKE_AGENT_DEFINITION } from '@agora/agent-registry'
+import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { BridgeCredentialIssuer } from './bridge-credentials.js'
 import { createHttpBrokerActivationClient } from './broker-activation-client.js'
@@ -11,7 +11,11 @@ import { createServer } from './server.js'
 // P04's non-goal ("No real Claude/Codex integration") no longer applies to either: both
 // CLAUDE_CODE_DEFINITION (agents/claude-code/SPIKE.md) and CODEX_DEFINITION (agents/codex/SPIKE.md)
 // are real, both registered `rollout: 'internal'` pending their own live-Pod pass.
-const DEFINITIONS = [FAKE_AGENT_DEFINITION, CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
+// `FAKE_AGENT_DEFINITION` is deliberately ABSENT: it is a test double, and listing it here put
+// "Fake Agent (tests)" in the operator's harness menu on the public site as if it were something
+// you could reasonably pick. It stays in @agora/agent-registry because the test suites across four
+// packages are built on it — it just has no business being launchable in production.
+const DEFINITIONS = [CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
 
 function requireEnv(name: string): string {
   const value = process.env[name]

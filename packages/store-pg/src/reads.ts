@@ -381,3 +381,57 @@ export async function listWorkstreamTurnsPage(
     throw error
   }
 }
+
+export interface IdleSession {
+  readonly sessionId: string
+  readonly workstreamId: string
+  readonly agentId: string
+  /** The moment this Session last did anything — a completed turn, or its own creation if it never ran one. */
+  readonly lastActivityAt: Date
+}
+
+/**
+ * Sessions holding a materialized Runtime with nothing left to do.
+ *
+ * The OLD system's own reaper (agora ADR 0008, "State authority: the hub reads a composed state;
+ * the reaper lives in the supervisor") kept this clock in memory and was rewritten precisely
+ * because of it: the hub lost `lastTurnAt` on every restart, re-claimed the runtime, and handed it
+ * a fresh full TTL — the "fresh-1h" bug. That ADR solved it by moving the clock next to the
+ * process.
+ *
+ * This engine does not need that move, because the thing the clock measures is already durable:
+ * turns are journaled, so "when did this Session last finish work" is a query, not a remembered
+ * value. It therefore survives restarts of everything by construction, and a reconnect cannot
+ * reset it — which was the ADR's own "the one place the bug can return" discipline, here enforced
+ * by there being no in-memory value to reset.
+ *
+ * Two exclusions carry the safety:
+ * - a Session with a turn still `running` is never idle, however long that turn has been going;
+ * - only `ready` is swept. `busy`, `provisioning`, `suspending` and every terminal phase are
+ *   somebody else's business, and suspending mid-transition would race that owner.
+ */
+export async function listIdleSessions(client: PoolClient, idleSince: Date): Promise<readonly IdleSession[]> {
+  const { rows } = await client.query<{
+    id: string
+    workstream_id: string
+    agent_id: string
+    last_activity_at: Date
+  }>(
+    `SELECT s.id, s.workstream_id, s.agent_id,
+            GREATEST(s.created_at, COALESCE(MAX(t.ended_at), s.created_at)) AS last_activity_at
+       FROM product.sessions s
+       LEFT JOIN projection.turns t ON t.session_id = s.id AND t.ended_at IS NOT NULL
+      WHERE s.phase = 'ready'
+        AND NOT EXISTS (SELECT 1 FROM projection.turns r WHERE r.session_id = s.id AND r.ended_at IS NULL)
+      GROUP BY s.id, s.workstream_id, s.agent_id, s.created_at
+     HAVING GREATEST(s.created_at, COALESCE(MAX(t.ended_at), s.created_at)) < $1
+      ORDER BY 4 ASC`,
+    [idleSince],
+  )
+  return rows.map((r) => ({
+    sessionId: r.id,
+    workstreamId: r.workstream_id,
+    agentId: r.agent_id,
+    lastActivityAt: r.last_activity_at,
+  }))
+}
