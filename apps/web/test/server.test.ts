@@ -610,3 +610,44 @@ test('required: an OpenSession command that opens WITHOUT activating completes i
   const body = (await detail.json()) as { state: string }
   assert.equal(body.state, 'completed', 'no provisioning happens on this branch, so nothing else could ever settle it')
 })
+
+/**
+ * Found live 2026-08-07, in a real browser: the edge 5xx-ratio alert fired because every SSE
+ * connection to a QUIET Workstream came back 502 after exactly 30s, oauth2-proxy reporting
+ * "timeout awaiting response headers", and EventSource then reconnected into the same wall.
+ *
+ * `res.writeHead()` only stages headers in Node; they reach the wire with the first body write.
+ * A Workstream with nothing new to say writes nothing, so the headers never left. Every existing
+ * feed test connects straight to this server with no proxy in between and asks for events that
+ * exist, so none of them could observe it.
+ *
+ * The invariant is therefore about TIME-TO-HEADERS on a stream with no pending events, which is
+ * what `fetch` resolving is: it settles when the response headers arrive, not when the body does.
+ */
+test('required: the feed sends its response headers immediately, before any event exists to send', async () => {
+  const created = await createWorkstream('alice')
+
+  // Drain to the current head first, so the reconnect below genuinely has nothing to deliver.
+  const drained = await collectFeedEvents(`${baseUrl}/v1/workstreams/${created.workstream.id}/feed?after=0`, 'alice', 3, 4000)
+  const head = drained.length > 0 ? Math.max(...drained.map((e) => e.position)) : 0
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  try {
+    const started = Date.now()
+    const res = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}/feed?after=${head}`, {
+      headers: auth('alice'),
+      signal: controller.signal,
+    })
+    const elapsed = Date.now() - started
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('content-type'), 'text/event-stream')
+    // Generous on purpose: the defect held headers back indefinitely, so anything that resolves at
+    // all is the fixed behaviour. A proxy in front would have given up at 30s.
+    assert.ok(elapsed < 4000, `headers took ${elapsed}ms — a proxy in front of this would 502`)
+    await res.body?.cancel()
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+  }
+})

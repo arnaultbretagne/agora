@@ -910,6 +910,8 @@ async function handleCloseSession(deps: ServerDeps, principal: string, sessionId
 // ---------- Feed (resumable SSE) ----------
 
 const FEED_POLL_INTERVAL_MS = 300
+/** Comfortably under oauth2-proxy's own 30s upstream timeout, so an idle stream is never mistaken for a dead one. */
+const FEED_HEARTBEAT_MS = 10_000
 
 async function handleFeed(deps: ServerDeps, principal: string, workstreamId: string, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const role = await requireMembership(deps.pool, workstreamId, principal)
@@ -922,7 +924,20 @@ async function handleFeed(deps: ServerDeps, principal: string, workstreamId: str
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
+    // Nothing between here and the browser may buffer an event stream: a proxy that waits for a
+    // full body defeats the point of streaming.
+    'x-accel-buffering': 'no',
   })
+  // `writeHead` only STAGES the headers — Node puts them on the wire with the first body write.
+  // A quiet Workstream writes nothing, so the response headers never left, and oauth2-proxy gave
+  // up after 30s with "timeout awaiting response headers" -> 502. The browser reconnects, fails
+  // again, and the retry loop is what set the edge 5xx-ratio alert off (found live 2026-08-07,
+  // on a real browser session — the automated tests connect directly, with no proxy in between,
+  // so none of them could ever have caught this).
+  res.flushHeaders()
+  // A comment line: valid SSE, ignored by EventSource, and it carries the headers out immediately.
+  res.write(': open\n\n')
+  let lastWriteAt = Date.now()
 
   let closed = false
   req.on('close', () => {
@@ -965,8 +980,16 @@ async function handleFeed(deps: ServerDeps, principal: string, workstreamId: str
           })}\n\n`,
         )
         cursor = row.position
+        lastWriteAt = Date.now()
       }
       if (closed) break
+      // An idle stream must still say something periodically, or every hop in front of it is free
+      // to conclude the connection is dead — oauth2-proxy's own upstream timeout is 30s, and a
+      // Workstream waiting on an Agent is silent for far longer than that.
+      if (Date.now() - lastWriteAt >= FEED_HEARTBEAT_MS) {
+        res.write(': keepalive\n\n')
+        lastWriteAt = Date.now()
+      }
       await sleep(FEED_POLL_INTERVAL_MS)
     }
   } finally {
