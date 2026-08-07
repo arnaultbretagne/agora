@@ -753,3 +753,90 @@ test('required: an unknown harness is refused on open-session, before a Session 
   ])
   assert.equal(after.rows[0]?.n, before.rows[0]?.n, 'a refused choice must leave nothing behind')
 })
+
+/* ------------------------------------------------------------------ *
+ *  P11 "Prove least privilege with negative authorization tests"      *
+ *  — the HTTP half. The database half lives in                        *
+ *  packages/store-pg/test/constraints-and-roles.test.ts.              *
+ * ------------------------------------------------------------------ */
+
+test('required: a non-member is told the Workstream does not exist, not that they may not have it', async () => {
+  const created = await createWorkstream('alice')
+  // 404 and not 403 on purpose: a 403 confirms the id is real, which is an existence oracle for
+  // anyone who can guess or harvest ids. Every read path must answer the same way.
+  for (const path of [
+    `/v1/workstreams/${created.workstream.id}`,
+    `/v1/workstreams/${created.workstream.id}/items`,
+    `/v1/workstreams/${created.workstream.id}/turns`,
+    `/v1/workstreams/${created.workstream.id}/memberships`,
+  ]) {
+    const res = await fetch(`${baseUrl}${path}`, { headers: auth('mallory') })
+    assert.equal(res.status, 404, `${path} must not confirm the id exists`)
+  }
+})
+
+test('required: a non-member cannot change anything on a Workstream they cannot see', async () => {
+  const created = await createWorkstream('alice')
+  const attempts: readonly [string, RequestInit][] = [
+    [`/v1/workstreams/${created.workstream.id}`, { method: 'PATCH', body: JSON.stringify({ title: 'stolen' }) }],
+    [`/v1/workstreams/${created.workstream.id}`, { method: 'DELETE' }],
+    [
+      `/v1/workstreams/${created.workstream.id}/sessions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ agentId: 'fake-agent', activate: false, workspace: { workspaceRef: 'x' }, equipment: { catalogueVersion: 'equipment-v1', resources: [] } }),
+      },
+    ],
+    [`/v1/workstreams/${created.workstream.id}/memberships/mallory`, { method: 'PUT', body: JSON.stringify({ role: 'owner' }) }],
+  ]
+  for (const [path, init] of attempts) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: { ...auth('mallory'), ...idem(), 'content-type': 'application/json' },
+    })
+    assert.equal(res.status, 404, `${init.method} ${path} must be refused`)
+  }
+
+  // And nothing moved: the refusals are real, not cosmetic.
+  const { rows } = await db.pool.query<{ title: string; deleting_at: Date | null }>(
+    'SELECT title, deleting_at FROM product.workstreams WHERE id = $1',
+    [created.workstream.id],
+  )
+  assert.notEqual(rows[0]?.title, 'stolen')
+  assert.equal(rows[0]?.deleting_at, null)
+})
+
+test('required: a non-member cannot drive another user\'s Session, even knowing its id', async () => {
+  const created = await createWorkstream('alice')
+  const sessionId = created.session.id
+  for (const [path, body] of [
+    [`/v1/sessions/${sessionId}/prompts`, { content: [{ type: 'text', text: 'do my bidding' }] }],
+    [`/v1/sessions/${sessionId}/suspend`, {}],
+    [`/v1/sessions/${sessionId}/close`, {}],
+    [`/v1/sessions/${sessionId}/config-options/model`, { value: 'opus' }],
+    [`/v1/sessions/${sessionId}/mode`, { modeId: 'plan' }],
+  ] as const) {
+    const method = path.endsWith('/model') || path.endsWith('/mode') ? 'PUT' : 'POST'
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: { ...auth('mallory'), ...idem(), 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    assert.equal(res.status, 404, `${method} ${path} must be refused for a stranger`)
+  }
+})
+
+test('required: every mutating route refuses an unauthenticated caller', async () => {
+  const created = await createWorkstream('alice')
+  for (const [method, path] of [
+    ['POST', '/v1/workstreams'],
+    ['PATCH', `/v1/workstreams/${created.workstream.id}`],
+    ['DELETE', `/v1/workstreams/${created.workstream.id}`],
+    ['POST', `/v1/workstreams/${created.workstream.id}/sessions`],
+    ['POST', `/v1/sessions/${created.session.id}/prompts`],
+    ['POST', `/v1/sessions/${created.session.id}/suspend`],
+  ] as const) {
+    const res = await fetch(`${baseUrl}${path}`, { method, headers: { ...idem(), 'content-type': 'application/json' }, body: '{}' })
+    assert.equal(res.status, 401, `${method} ${path} must demand an identity`)
+  }
+})

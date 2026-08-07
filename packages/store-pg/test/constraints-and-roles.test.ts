@@ -398,3 +398,130 @@ test('required: store-pg repository source never references live Session Runtime
     }
   }
 })
+
+// ---------------------------------------------------------------------------
+// P11 "Prove least privilege with negative authorization tests"
+//
+// Each of these executes SQL that MUST be refused. They are not paranoia: three
+// separate design decisions rest on these boundaries holding, and a boundary
+// nobody has tried to cross is a boundary nobody knows exists.
+// ---------------------------------------------------------------------------
+
+test('required: the controller role can see a Session\'s identity and phase, but never its turns — which is what decides where the idle reaper lives', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const client = await pool.connect()
+    try {
+      // 002-access.sql grants agora_custody_runtime a FIVE-COLUMN view of product.sessions
+      // (id, workstream_id, agent_id, runtime_definition_version, phase) and nothing else in
+      // product. The distinction matters and was gotten wrong once: the controller is not blind to
+      // product truth, it is blind to the part that defines idleness. "Has this Session stopped
+      // working" is answered by turns, and turns are exactly what it cannot see — which is why the
+      // idle reaper cannot live beside the Pod however much agora ADR 0008 preferred that.
+      await asRole(client, 'agora_custody_runtime', async () => {
+        const { rows } = await client.query('SELECT id, phase FROM product.sessions WHERE id = $1', [sessionId])
+        assert.equal(rows.length, 1, 'the controller legitimately reconciles against a Session\'s own phase')
+
+        await assert.rejects(
+          () => client.query('SELECT id FROM projection.turns'),
+          /permission denied/i,
+          'but idleness is defined by turns, and it cannot see one',
+        )
+        await assert.rejects(() => client.query('SELECT id FROM product.workstreams WHERE id = $1', [wsId]), /permission denied/i)
+        await assert.rejects(() => client.query('SELECT id FROM product.workstream_events'), /permission denied/i)
+        await assert.rejects(
+          () => client.query('SELECT equipment_request FROM product.sessions WHERE id = $1', [sessionId]),
+          /permission denied/i,
+          'and even on the one table it can read, the grant is column-scoped',
+        )
+      })
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: the Broker role cannot read or write product truth — its schema is its whole world', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const client = await pool.connect()
+    try {
+      // docs/adr/0011: the Broker decides on broker-local signals only. That is a design rule until
+      // the database enforces it, at which point it is a fact.
+      await asRole(client, 'agora_broker', async () => {
+        await assert.rejects(() => client.query('SELECT id FROM product.sessions WHERE id = $1', [sessionId]), /permission denied/i)
+        await assert.rejects(() => client.query('SELECT id FROM product.workstreams WHERE id = $1', [wsId]), /permission denied/i)
+        await assert.rejects(
+          () => client.query("UPDATE product.sessions SET phase = 'failed' WHERE id = $1", [sessionId]),
+          /permission denied/i,
+          'and it certainly must not be able to move a Session between phases',
+        )
+      })
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: the product roles cannot read the Broker schema, where the encrypted upstream credential lives', async () => {
+  await withTestDatabase(async (pool) => {
+    const client = await pool.connect()
+    try {
+      // broker.upstream_authority holds each Session's encrypted OneCLI bearer. apps/web talks to
+      // the Broker over HTTP for a reason; being able to read the ciphertext directly would make
+      // that boundary decorative.
+      for (const role of ['agora_product', 'agora_projector', 'agora_custody_meta', 'agora_custody_runtime']) {
+        await asRole(client, role, async () => {
+          await assert.rejects(
+            () => client.query('SELECT session_id FROM broker.upstream_authority'),
+            /permission denied/i,
+            `${role} must not reach the Broker's own schema`,
+          )
+          await assert.rejects(() => client.query('SELECT id FROM broker.execution_grants'), /permission denied/i)
+        })
+      }
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: no role but the Broker can read a stored upstream credential, and even it cannot forge a grant for another Session', async () => {
+  await withTestDatabase(async (pool) => {
+    const client = await pool.connect()
+    try {
+      // The positive half, so the negatives above mean something: the Broker CAN reach its own
+      // tables. A test that only ever asserts refusals would pass just as well against a database
+      // where every one of these tables was missing.
+      await asRole(client, 'agora_broker', async () => {
+        await client.query('SELECT session_id FROM broker.upstream_authority')
+        await client.query('SELECT id FROM broker.execution_grants')
+      })
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: the projector cannot write the journal it reads — a read model can never rewrite its own source', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const client = await pool.connect()
+    try {
+      await asRole(client, 'agora_projector', async () => {
+        await assert.rejects(
+          () =>
+            client.query(
+              `INSERT INTO product.workstream_events (id, workstream_id, session_id, workstream_seq, direction, rpc_kind, envelope, observed_at)
+               VALUES ($1, $2, $3, 99999, 'client_to_agent', 'request', '{}'::jsonb, now())`,
+              [randomId(), wsId, sessionId],
+            ),
+          /permission denied/i,
+          'the journal is the source of truth; a projection that could append to it could invent history',
+        )
+      })
+    } finally {
+      client.release()
+    }
+  })
+})

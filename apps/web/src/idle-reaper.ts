@@ -22,9 +22,14 @@ import type { SessionRuntimeControlTransport } from '@agora/session-runtime-cont
  * resumes later with its history intact. A user cannot tell a reaped Session from one they left.
  *
  * WHY THE CONTROL PLANE OWNS IT, when ADR 0008 argued for putting the reaper next to the process:
- * the controller's database role is a member of `agora_custody_runtime` only (002-access.sql) and
- * cannot read product truth at all, so it cannot see turns and therefore cannot know what is idle.
- * The spec's own "ask the control plane" phrasing points the same way.
+ * the controller's database role is a member of `agora_custody_runtime` only, which 002-access.sql
+ * grants a FIVE-COLUMN view of `product.sessions` (id, workstream_id, agent_id,
+ * runtime_definition_version, phase) and nothing else in product. So it is not blind to product
+ * truth — an earlier version of this comment overstated that — it is blind to the part that defines
+ * idleness: "has this Session stopped working" is answered by turns, and turns are precisely what
+ * it cannot see. Proven by a negative authorization test rather than asserted here
+ * (packages/store-pg/test/constraints-and-roles.test.ts). The spec's own "ask the control plane"
+ * phrasing points the same way.
  */
 export interface IdleReaperOptions {
   readonly pool: pg.Pool
