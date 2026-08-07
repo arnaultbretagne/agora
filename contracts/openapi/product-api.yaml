@@ -366,6 +366,62 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/PublicAgent'
+  /agents/{agentId}/config-options:
+    parameters:
+      - name: agentId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    get:
+      operationId: getAgentConfigOptions
+      description: >-
+        What this Agent last advertised it can be configured with, readable with nothing running.
+        The product caches the Agent's own `session/new` advertisement for selection (docs/specs/04
+        "The product MAY cache them for selection"); it curates no list of its own. `unknown` means
+        this Agent has never been launched at this runtime-definition version — the caller may ask
+        for an empty run below.
+      responses:
+        '200':
+          description: The cached advertisement, or the reason there is none.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfigOptions'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /agents/{agentId}/config-options/probe:
+    parameters:
+      - name: agentId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+    post:
+      operationId: probeAgentConfigOptions
+      description: >-
+        Runs this Agent empty — materialize, `initialize` + `session/new`, record what it advertises,
+        dematerialize — because ACP exposes config options in that response and nowhere else. No
+        prompt is sent and no Workstream, Session or journal entry is created. Answers 202 while the
+        run is under way (a cold Runtime takes ~10 s); the caller re-reads the endpoint above.
+        Concurrent requests for the same Agent join the same run.
+      responses:
+        '200':
+          description: Already known — no empty run was needed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfigOptions'
+        '202':
+          description: An empty run is under way.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfigOptions'
+        '409':
+          $ref: '#/components/responses/Problem'
   /equipment-catalogue:
     get:
       operationId: getEquipmentCatalogue
@@ -517,6 +573,12 @@ paths:
           minLength: 1
     put:
       operationId: setSessionConfigOption
+      description: >-
+        Records the choice durably, then delivers it to the Agent if a Runtime is live. A Session
+        whose Runtime has been reclaimed (idle reaper, suspend) accepts the change all the same and
+        applies it on its next resume — configuration outlives a Pod, and answering
+        `runtime_unavailable` made the selector unusable for the whole idle half of a conversation's
+        life (P12). The value itself is only ever validated by the Agent.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -531,12 +593,38 @@ paths:
                 value:
                   description: Value validated against the Agent-advertised ACP config option.
       responses:
-        '202':
-          description: ACP config-option change accepted.
+        '200':
+          description: >-
+            Delivered to a live Agent, which answers with its FULL option set (changing one option
+            may change what the others accept). Returned verbatim.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommandAccepted'
+                type: object
+        '202':
+          description: >-
+            Recorded with no live Runtime to deliver it to; it is applied when the Session next
+            resumes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [pending, optionId, value]
+                properties:
+                  pending:
+                    type: boolean
+                    const: true
+                  optionId:
+                    type: string
+                  value:
+                    oneOf:
+                      - type: string
+                      - type: boolean
+                  detail:
+                    type: string
+        '409':
+          $ref: '#/components/responses/Problem'
         '422':
           $ref: '#/components/responses/Problem'
   /sessions/{sessionId}/permission-requests/{requestId}/decision:
@@ -710,6 +798,8 @@ components:
           minItems: 1
           items:
             $ref: '#/components/schemas/ACPContentBlock'
+        configOptions:
+          $ref: '#/components/schemas/RequestedConfigOptions'
     OpenSessionRequest:
       type: object
       additionalProperties: false
@@ -733,6 +823,33 @@ components:
           $ref: '#/components/schemas/EquipmentRequest'
         activate:
           type: boolean
+        configOptions:
+          $ref: '#/components/schemas/RequestedConfigOptions'
+    RequestedConfigOptions:
+      type: array
+      maxItems: 20
+      description: >-
+        ACP session config options to apply to the Session as soon as one is running — the operator's
+        choices made in a composer that has no live Agent to ask yet (P12). Ids and values are the
+        Agent's OWN, taken from what it advertised (`GET /v1/agents/{agentId}/config-options` or a
+        previous `session/new`); this API validates neither, because only the Agent can. They are
+        recorded durably and delivered by a real `session/set_config_option` before the first prompt,
+        and re-asserted on every resume — never stored as `model`/`effort` columns (docs/specs/04).
+      items:
+        type: object
+        additionalProperties: false
+        required: [optionId, value]
+        properties:
+          optionId:
+            type: string
+            minLength: 1
+            maxLength: 200
+          value:
+            description: A select option's value id, or a boolean option's state — ACP's own union.
+            oneOf:
+              - type: string
+                minLength: 1
+              - type: boolean
     PromptRequest:
       type: object
       additionalProperties: false
@@ -969,6 +1086,35 @@ components:
             field the rest of the contract assumed was there.
           items:
             type: string
+    AgentConfigOptions:
+      type: object
+      additionalProperties: false
+      required: [agentId, runtimeDefinitionVersion, state, options]
+      properties:
+        agentId:
+          type: string
+        runtimeDefinitionVersion:
+          type: string
+        state:
+          type: string
+          enum: [known, probing, unknown, unavailable]
+          description: >-
+            `known`: the Agent advertised these. `probing`: an empty run is under way. `unknown`: no
+            advertisement has ever been observed for this Agent at this version. `unavailable`: the
+            last empty run failed or the Agent offers no configuration at all — `detail` says which.
+        options:
+          type: array
+          description: >-
+            ACP `SessionConfigOption` objects exactly as the Agent published them, minus
+            `currentValue` — that is one Session's live state, not a catalogue entry, and what a
+            fresh Session starts on is the Agent's own answer in its `session/new` response.
+          items:
+            type: object
+        observedAt:
+          type: string
+          format: date-time
+        detail:
+          type: string
     EquipmentCatalogue:
       $ref: ../schemas/equipment-catalogue.schema.json
     CreateWorkstreamAccepted:

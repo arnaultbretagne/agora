@@ -285,6 +285,39 @@ function flattenSelectGroups(option: ConfigOption): ConfigOption {
   return { ...option, options: flattened }
 }
 
+/**
+ * The option set the selectors actually render, and where it came from.
+ *
+ * `live` is a running Agent's own advertisement, read from the journal (`configOptionsFromItems`) —
+ * authoritative, and the only source that carries real `currentValue`s. `catalogue` is what that
+ * Agent advertised the last time ANY Session ran it (`GET /v1/agents/{id}/config-options`), which is
+ * how a conversation that has not started yet can offer a model choice at all; before P12 it could
+ * not, and the button was rendered disabled.
+ *
+ * In catalogue mode the only values shown as chosen are the operator's own draft picks. The memo
+ * deliberately carries no `currentValue` (it would be some other Session's state), and guessing one
+ * would put a model on screen that nothing has agreed to run.
+ */
+export type ConfigSource = 'live' | 'catalogue' | 'none'
+
+export interface EffectiveConfig {
+  readonly source: ConfigSource
+  readonly options: readonly ConfigOption[]
+}
+
+export function effectiveConfig(
+  live: readonly ConfigOption[],
+  catalogue: readonly ConfigOption[] | undefined,
+  draft: Readonly<Record<string, string | boolean>>,
+): EffectiveConfig {
+  if (live.length > 0) return { source: 'live', options: live }
+  if (!catalogue || catalogue.length === 0) return { source: 'none', options: [] }
+  return {
+    source: 'catalogue',
+    options: catalogue.map((option) => (option.id in draft ? { ...option, currentValue: draft[option.id] } : option)),
+  }
+}
+
 // ---------- Effort rail ----------
 
 /**
@@ -299,6 +332,23 @@ export function railIndexAt(fraction: number, levelCount: number): number {
 
 export function clampIndex(index: number, levelCount: number): number {
   return Math.max(0, Math.min(levelCount - 1, index))
+}
+
+/**
+ * Where the knob sits. A level the Agent actually reports as current wins; with nothing chosen (the
+ * composer of a new conversation, whose catalogue carries no `currentValue`) the rail rests on the
+ * harness's own `default` level when it advertises one — Claude Code's effort list starts with
+ * exactly that — and only falls back to the first level when it does not.
+ *
+ * Resting on a level is not choosing one: nothing is sent unless the operator moves the rail, so an
+ * untouched conversation runs on whatever the harness itself defaults to.
+ */
+export function railIndexOf(levels: readonly ConfigOptionValue[], currentValue: unknown): number {
+  const current = currentValue === undefined || currentValue === null ? '' : String(currentValue)
+  const chosen = levels.findIndex((level) => level.value === current)
+  if (chosen >= 0) return chosen
+  const fallback = levels.findIndex((level) => level.value === 'default')
+  return fallback >= 0 ? fallback : 0
 }
 
 // ---------- Agents ----------

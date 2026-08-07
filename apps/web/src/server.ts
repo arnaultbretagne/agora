@@ -19,6 +19,8 @@ import {
   removeWorkstreamMembership,
   createOrReuseCommand,
   createWorkstreamWithFirstSession,
+  deleteSessionConfigIntent,
+  markSessionConfigIntentApplied,
   transitionCommandState,
   type WorkstreamRole,
 } from '@agora/store-pg'
@@ -37,7 +39,10 @@ import {
   switchAgent,
 } from './orchestration.js'
 import type { SessionConnectionRegistry } from './connections.js'
+import { ConfigCatalogueService } from './config-catalogue.js'
 import { getValidators } from './request-schemas.js'
+import { recordConfigIntent, rememberAdvertisedOptions, type RequestedConfigOption } from './session-config.js'
+import { placeholderTitleFromPrompt } from './title.js'
 
 /**
  * Internal server conforming to `contracts/openapi/product-api.yaml`. Two principal sources
@@ -62,6 +67,8 @@ export interface ServerDeps {
   readonly controllerTransport: SessionRuntimeControlTransport
   readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
+  /** P12's catalogue/empty-run service. Built by `createServer` from the deps above when a caller does not supply one (tests that want a shortened probe timeout do). */
+  readonly configCatalogue?: ConfigCatalogueService
   readonly now?: () => Date
 }
 
@@ -208,6 +215,7 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
     workspace: { workspaceRef: string }
     equipment: { catalogueVersion: string; resources: readonly unknown[] }
     prompt: readonly { type: string; text?: string }[]
+    configOptions?: readonly RequestedConfigOption[]
   }
 
   const agent = await resolveLaunchableAgent(deps, request.agentId)
@@ -246,7 +254,17 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
       sessionId = existingSessionRows[0]?.id ?? ''
     } else {
       const { session } = await createWorkstreamWithFirstSession(client, {
-        workstream: { id: workstreamId as never, category: request.category, title: 'Untitled', owner: principalId(principal), createdAt: now() },
+        // P12: the floor, not the name. `'Untitled'` was written here and never replaced, which is
+        // why every Workstream in production carried it; the Agent's own `session_info_update` takes
+        // over at the end of the first turn (packages/store-pg/src/reads.ts), and a manual rename
+        // outranks both.
+        workstream: {
+          id: workstreamId as never,
+          category: request.category,
+          title: placeholderTitleFromPrompt(request.prompt),
+          owner: principalId(principal),
+          createdAt: now(),
+        },
         session: {
           id: randomUUID() as never,
           ordinal: 1,
@@ -275,6 +293,12 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
     commandId = command.id as string
   } finally {
     client.release()
+  }
+
+  // P12: recorded BEFORE provisioning is dispatched, never after — provisioning applies whatever
+  // intent it finds at bootstrap, so a write racing behind it would silently miss the first turn.
+  if (isNewWorkstream && request.configOptions?.length) {
+    await recordConfigIntent(deps.pool, sessionId, request.configOptions, now())
   }
 
   const detailClient = await deps.pool.connect()
@@ -436,6 +460,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
     workspace: { workspaceRef: string }
     equipment: Record<string, unknown>
     activate: boolean
+    configOptions?: readonly RequestedConfigOption[]
   }
 
   const agent = await resolveLaunchableAgent(deps, request.agentId)
@@ -482,6 +507,10 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
       actor: { kind: 'human', id: principal },
       idempotencyKey,
       provisioningCommandId: commandId,
+      // Threaded in rather than written here afterwards: `switchAgent` resolves WHICH Session this
+      // becomes (a fresh one or the Agent's anchored one) and dispatches provisioning itself, so it
+      // is the only place that can record the operator's choices before they would be read.
+      ...(request.configOptions?.length ? { requestedConfigOptions: request.configOptions } : {}),
       now,
     })
     if (!result.ok) return sendProblem(res, problem(409, result.code, 'Agent could not be activated', result.detail))
@@ -512,6 +541,9 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
     } finally {
       openClient.release()
     }
+    // Nothing will provision this Session until it is activated, which is exactly the case P12
+    // exists for: the choice is recorded now and delivered whenever a Runtime first exists.
+    if (request.configOptions?.length) await recordConfigIntent(deps.pool, sessionId, request.configOptions, now())
   }
 
   const sessionClient = await deps.pool.connect()
@@ -682,6 +714,47 @@ async function handleListAgents(deps: ServerDeps, res: ServerResponse): Promise<
 }
 
 /**
+ * P12 — what an Agent can be configured with, answerable with nothing running.
+ *
+ * ACP publishes config options in the `session/new` response and nowhere else, so the composer of a
+ * brand-new conversation had nothing to show and rendered its model button `disabled` (reported live
+ * 2026-08-07). This reads the memo of what the harness itself last advertised — never a model list
+ * this server curates, which docs/specs/04 rules out and which would go stale on the next harness
+ * release.
+ *
+ * `state: 'unknown'` means no memo exists yet (an Agent never launched at this runtime definition
+ * version); the client then asks for the empty run below. Reading never starts one: a GET that
+ * materializes a Pod would turn every page render into a Runtime.
+ */
+async function handleGetAgentConfigOptions(deps: ServerDeps, agentId: string, res: ServerResponse): Promise<void> {
+  const agent = await resolveLaunchableAgent(deps, agentId)
+  if (!agent) return sendProblem(res, problem(409, 'agent_unavailable', `Agent '${agentId}' is not launchable`))
+  const view = await catalogueOf(deps).read(agentId, agent.runtimeDefinitionVersion)
+  sendJson(res, 200, { agentId, runtimeDefinitionVersion: agent.runtimeDefinitionVersion, ...view })
+}
+
+/**
+ * The empty run: materialize this Agent once, ask it `initialize` + `session/new`, record what it
+ * advertises, tear the Runtime down. No prompt is ever sent, so no provider call is made.
+ *
+ * Answers 202 rather than waiting: a cold Pod takes ~10 s to become ready (measured live), which is
+ * far too long to hold a request open, and the client re-reads the endpoint above. Concurrent asks
+ * for the same Agent join the one run rather than each starting a Pod — the run namespace's quota is
+ * small enough that the alternative could refuse real work.
+ */
+async function handleProbeAgentConfigOptions(deps: ServerDeps, principal: string, agentId: string, res: ServerResponse): Promise<void> {
+  const agent = await resolveLaunchableAgent(deps, agentId)
+  if (!agent) return sendProblem(res, problem(409, 'agent_unavailable', `Agent '${agentId}' is not launchable`))
+  const catalogue = catalogueOf(deps)
+  const known = await catalogue.read(agentId, agent.runtimeDefinitionVersion)
+  // Already answered by a real Session in the meantime — an empty run would cost a Pod to learn
+  // exactly what is already recorded.
+  if (known.state === 'known') return sendJson(res, 200, { agentId, runtimeDefinitionVersion: agent.runtimeDefinitionVersion, ...known })
+  void catalogue.probe(agentId, agent.runtimeDefinitionVersion, principal)
+  sendJson(res, 202, { agentId, runtimeDefinitionVersion: agent.runtimeDefinitionVersion, state: 'probing', options: [] })
+}
+
+/**
  * P11: was a hard-coded `{ version: 'fake-no-broker-v1', resources: [] }` predating the Broker
  * (ADR 0010/P08 shipped it long ago; this stub was never updated) — a real Workstream create,
  * whose own `equipment.catalogueVersion` this response is supposed to inform, then fails Broker
@@ -834,14 +907,53 @@ async function handleSetConfigOption(deps: ServerDeps, principal: string, sessio
     return sendProblem(res, problem(400, 'validation_failed', 'body must be {"value": "<non-empty string>"} or {"value": <boolean>}'))
   }
 
+  // P12: the choice is durable BEFORE any attempt to deliver it. A Session's configuration outlives
+  // its Runtime — the Pod is replaced on every resume — so the operator's intent has to be recorded
+  // whether or not there is something running to hear it right now.
+  const now = deps.now ?? (() => new Date())
+  await recordConfigIntent(deps.pool, sessionId, [{ optionId, value }], now())
+
   const live = deps.connections.get(sessionId)
-  if (!live) return sendProblem(res, problem(409, 'runtime_unavailable', 'Session has no live ACP connection'))
+  if (!live) {
+    // Not an error: a suspended Session has no ACP connection by design (the idle reaper gave its
+    // Pod back), and answering 409 `runtime_unavailable` made the model selector fail for the whole
+    // idle half of a conversation's life. The change is real and will be delivered by the resume
+    // that the next message triggers.
+    return sendJson(res, 202, {
+      pending: true,
+      optionId,
+      value,
+      detail: 'The Session has no live Runtime; the change is recorded and applied when it next resumes.',
+    })
+  }
   try {
     const result = await setSessionConfigOption({ connection: live.connection, acpSessionId: live.acpSessionId, optionId, value })
+    const applyClient = await deps.pool.connect()
+    try {
+      await markSessionConfigIntentApplied(applyClient, { sessionId, optionId, value, appliedAt: now() })
+    } finally {
+      applyClient.release()
+    }
+    // The Agent hands back its FULL option set here (changing one may change the others), which is
+    // the freshest advertisement this system will ever see — so it also refreshes the memo the next
+    // conversation's composer reads before any Runtime exists.
+    await rememberAdvertisedOptions(deps.pool, {
+      agentId: loaded.session.agentId,
+      runtimeDefinitionVersion: loaded.session.runtimeDefinitionVersion,
+      options: (result as { configOptions?: unknown } | undefined)?.configOptions,
+      observedAt: now(),
+    })
     sendJson(res, 200, result ?? {})
   } catch (error) {
     // The Agent is authoritative on which options and values exist — surface its refusal as a
-    // typed 409 rather than pretending this server could have validated it.
+    // typed 409 rather than pretending this server could have validated it. The recorded intent is
+    // dropped again: a value this Agent refused must not be re-asserted on every future resume.
+    const forgetClient = await deps.pool.connect()
+    try {
+      await deleteSessionConfigIntent(forgetClient, sessionId, optionId, value)
+    } finally {
+      forgetClient.release()
+    }
     return sendProblem(res, problem(409, 'config_option_rejected', 'Agent rejected the configuration change', error instanceof Error ? error.message : String(error)))
   }
 }
@@ -1054,6 +1166,8 @@ const WORKSTREAM_MEMBERSHIPS_PATH = /^\/v1\/workstreams\/([^/]+)\/memberships$/
 const WORKSTREAM_MEMBERSHIP_PATH = /^\/v1\/workstreams\/([^/]+)\/memberships\/([^/]+)$/
 const COMMAND_PATH = /^\/v1\/commands\/([^/]+)$/
 const AGENTS_PATH = /^\/v1\/agents$/
+const AGENT_CONFIG_OPTIONS_PATH = /^\/v1\/agents\/([^/]+)\/config-options$/
+const AGENT_CONFIG_OPTIONS_PROBE_PATH = /^\/v1\/agents\/([^/]+)\/config-options\/probe$/
 const EQUIPMENT_CATALOGUE_PATH = /^\/v1\/equipment-catalogue$/
 const SESSION_PATH = /^\/v1\/sessions\/([^/]+)$/
 const SESSION_ACTIVATE_PATH = /^\/v1\/sessions\/([^/]+)\/activate$/
@@ -1079,6 +1193,15 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
 
   const principal = requirePrincipal(req)
   if (!principal) return sendProblem(res, problem(401, 'validation_failed', 'a valid Authorization: Bearer <principal> header is required'))
+
+  // Authenticated, unlike `GET /v1/agents`: the probe below starts a real Session Runtime, so it is
+  // never reachable by an unidentified caller — and the grant it needs is issued in the asking
+  // principal's name, exactly like a conversation's would be.
+  const agentProbeMatch = AGENT_CONFIG_OPTIONS_PROBE_PATH.exec(path)
+  if (agentProbeMatch?.[1] && method === 'POST') return handleProbeAgentConfigOptions(deps, principal, decodeURIComponent(agentProbeMatch[1]), res)
+
+  const agentConfigMatch = AGENT_CONFIG_OPTIONS_PATH.exec(path)
+  if (agentConfigMatch?.[1] && method === 'GET') return handleGetAgentConfigOptions(deps, decodeURIComponent(agentConfigMatch[1]), res)
 
   if (WORKSTREAMS_PATH.test(path)) {
     if (method === 'GET') return handleListWorkstreams(deps, principal, url, res)
@@ -1147,9 +1270,31 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
   return sendProblem(res, problem(404, 'workstream_not_found', 'no such route'))
 }
 
+/**
+ * One service per server, built here when the caller did not supply one — it holds the single-flight
+ * map that stops two concurrent asks from materializing two Runtimes for the same question, so a
+ * fresh instance per request would defeat its whole purpose.
+ */
+function catalogueOf(deps: ServerDeps): ConfigCatalogueService {
+  if (deps.configCatalogue) return deps.configCatalogue
+  throw new Error('unreachable: createServer always supplies a ConfigCatalogueService')
+}
+
 export function createServer(deps: ServerDeps): Server {
+  const resolved: ServerDeps = {
+    ...deps,
+    configCatalogue:
+      deps.configCatalogue ??
+      new ConfigCatalogueService({
+        pool: deps.pool,
+        transport: deps.controllerTransport,
+        brokerGrantClient: deps.brokerGrantClient,
+        equipmentCatalogueVersion: () => getEquipmentCatalogue().version,
+        ...(deps.now ? { now: deps.now } : {}),
+      }),
+  }
   return createHttpServer((req, res) => {
-    void route(deps, req, res).catch((error: unknown) => {
+    void route(resolved, req, res).catch((error: unknown) => {
       if (error instanceof DomainError) return sendProblem(res, domainErrorToProblem(error))
       if (error instanceof HandoffNotReadyError) {
         return sendProblem(

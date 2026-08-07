@@ -16,6 +16,7 @@ import {
   clampIndex,
   configOptionsFromItems,
   currentSession,
+  effectiveConfig,
   findConfigOption,
   groupOf,
   groupWorkstreams,
@@ -24,6 +25,7 @@ import {
   launchableAgents,
   messagesFromItems,
   railIndexAt,
+  railIndexOf,
   runtimeStateOfPhase,
   STATE_LABELS,
 } from '../src/client/view-model.js'
@@ -398,4 +400,51 @@ test('a flat option list is left exactly as it is', () => {
     },
   ] as never
   assert.deepEqual(configOptionsFromItems(items)?.[0]?.options?.map((v) => v.value), ['low'])
+})
+
+/* ---------------------------------------------------------------- *
+ *  P12 — the options the selectors work on before anything is live  *
+ * ---------------------------------------------------------------- */
+
+const CATALOGUE = [
+  { id: 'model', name: 'Model', category: 'model', options: [{ value: 'default', name: 'Default' }, { value: 'opus', name: 'Opus' }] },
+  {
+    id: 'effort',
+    name: 'Effort',
+    category: 'thought_level',
+    options: [{ value: 'default', name: 'Default' }, { value: 'low', name: 'Low' }, { value: 'max', name: 'Max' }],
+  },
+]
+
+test('a live Agent outranks the catalogue: what is running is what is true', () => {
+  const live = [{ id: 'model', name: 'Model', currentValue: 'sonnet', options: [{ value: 'sonnet', name: 'Sonnet' }] }]
+  const result = effectiveConfig(live, CATALOGUE, { model: 'opus' })
+  assert.equal(result.source, 'live')
+  assert.equal(result.options[0]?.currentValue, 'sonnet', 'a draft must never overwrite what the Agent reports about itself')
+})
+
+test('with nothing running, the catalogue supplies the list and only the operator’s own picks appear as chosen', () => {
+  const result = effectiveConfig([], CATALOGUE, { model: 'opus' })
+  assert.equal(result.source, 'catalogue')
+  assert.equal(result.options.find((o) => o.id === 'model')?.currentValue, 'opus')
+  assert.equal(
+    result.options.find((o) => o.id === 'effort')?.currentValue,
+    undefined,
+    'an untouched option has no chosen value: the harness default is what will run, and naming one here would claim a decision nobody made',
+  )
+})
+
+test('no live options and no catalogue is honestly nothing — the selector has something to say rather than being silently grey', () => {
+  assert.deepEqual(effectiveConfig([], undefined, {}), { source: 'none', options: [] })
+  assert.deepEqual(effectiveConfig([], [], {}), { source: 'none', options: [] })
+})
+
+test('the effort rail rests on the harness’s own `default` level until something is chosen', () => {
+  const levels = [{ value: 'default', name: 'Default' }, { value: 'low', name: 'Low' }, { value: 'max', name: 'Max' }]
+  assert.equal(railIndexOf(levels, undefined), 0)
+  assert.equal(railIndexOf(levels, 'max'), 2)
+  // A harness that advertises no `default` level gets the first one rather than an invented value.
+  assert.equal(railIndexOf([{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }], undefined), 0)
+  // A value the harness no longer offers must not leave the knob off the rail.
+  assert.equal(railIndexOf(levels, 'a-level-that-no-longer-exists'), 0)
 })

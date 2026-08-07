@@ -174,6 +174,14 @@ export function deleteWorkstream(workstreamId: string): Promise<{ commandId: str
   return request(`/v1/workstreams/${workstreamId}`, { method: 'DELETE', headers: { 'idempotency-key': idempotencyKey() } })
 }
 
+/** ACP's own union: a select takes a value id, a boolean option takes a state. */
+export type ConfigValue = string | boolean
+
+export interface RequestedConfigOption {
+  readonly optionId: string
+  readonly value: ConfigValue
+}
+
 export interface CreateWorkstreamRequest {
   readonly category: 'discussion' | 'invocation'
   readonly agentId: string
@@ -181,6 +189,8 @@ export interface CreateWorkstreamRequest {
   readonly workspace: { readonly workspaceRef: string }
   readonly equipment: EquipmentRequest
   readonly prompt: readonly { readonly type: string; readonly text: string }[]
+  /** Choices made in the composer, where no Agent is running to be told directly — the engine delivers them before the first prompt. */
+  readonly configOptions?: readonly RequestedConfigOption[]
 }
 
 export interface OpenSessionRequest {
@@ -189,6 +199,31 @@ export interface OpenSessionRequest {
   readonly workspace: { readonly workspaceRef: string }
   readonly equipment: EquipmentRequest
   readonly activate: boolean
+  /** Carries the configuration across: a new Session for the same conversation would otherwise start on the harness default rather than what the operator is looking at. */
+  readonly configOptions?: readonly RequestedConfigOption[]
+}
+
+export interface AgentConfigOptions {
+  readonly agentId: string
+  readonly runtimeDefinitionVersion: string
+  readonly state: 'known' | 'probing' | 'unknown' | 'unavailable'
+  readonly options: readonly unknown[]
+  readonly observedAt?: string
+  readonly detail?: string
+}
+
+/**
+ * What an Agent last advertised it can be configured with — readable before any Session exists,
+ * which is the whole point: ACP only publishes config options in a `session/new` response, so
+ * without this the composer had nothing to offer and its model button was rendered disabled.
+ */
+export function getAgentConfigOptions(agentId: string): Promise<AgentConfigOptions> {
+  return request(`/v1/agents/${encodeURIComponent(agentId)}/config-options`)
+}
+
+/** Asks the engine to run this Agent empty once (materialize → `session/new` → read → tear down) because nothing has ever launched it at this version. */
+export function probeAgentConfigOptions(agentId: string): Promise<AgentConfigOptions> {
+  return request(`/v1/agents/${encodeURIComponent(agentId)}/config-options/probe`, { method: 'POST' })
 }
 
 /**
@@ -214,8 +249,16 @@ export function activateSession(sessionId: string): Promise<{ commandId: string 
  * The Agent answers with its FULL option set, not just the one that changed, because changing one
  * may change what the others accept — so the response replaces the client's copy wholesale rather
  * than patching a single entry. A refusal arrives as 409 `config_option_rejected`.
+ *
+ * A Session whose Runtime has been reclaimed answers `{pending: true}` instead: the choice is
+ * recorded and delivered when it next resumes. That is a success, not a failure — the caller shows
+ * the chosen value and says it takes effect on the next message.
  */
-export function setConfigOption(sessionId: string, optionId: string, value: string): Promise<{ configOptions?: readonly unknown[] }> {
+export function setConfigOption(
+  sessionId: string,
+  optionId: string,
+  value: ConfigValue,
+): Promise<{ configOptions?: readonly unknown[]; pending?: boolean; detail?: string }> {
   return request(`/v1/sessions/${sessionId}/config-options/${encodeURIComponent(optionId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },

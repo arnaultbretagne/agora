@@ -35,6 +35,7 @@ import {
   activateSession,
   createWorkstream,
   deleteWorkstream,
+  getAgentConfigOptions,
   getEquipmentCatalogue,
   getSession,
   getWorkstream,
@@ -44,14 +45,18 @@ import {
   listWorkstreams,
   openSession,
   patchWorkstream,
+  probeAgentConfigOptions,
   promptSession,
   setConfigOption,
   subscribeFeed,
   suspendSession,
+  type AgentConfigOptions,
+  type ConfigValue,
   type EquipmentCatalogue,
   type EquipmentResourceRequest,
   type FeedEvent,
   type PublicAgent,
+  type RequestedConfigOption,
   type Session,
   type Workstream,
   type WorkstreamItem,
@@ -63,6 +68,7 @@ import {
   clampIndex,
   configOptionsFromItems,
   currentSession,
+  effectiveConfig,
   findConfigOption,
   groupWorkstreams,
   hasRunningTurn,
@@ -70,10 +76,12 @@ import {
   launchableAgents,
   messagesFromItems,
   railIndexAt,
+  railIndexOf,
   runtimeStateOfPhase,
   STATE_LABELS,
   type ChatMessage,
   type ConfigOption,
+  type ConfigSource,
   type RuntimeState,
 } from './view-model.js'
 
@@ -128,11 +136,21 @@ const state = {
   sidebarOpen: localStorage.getItem('agora.sidebar') !== 'closed',
   openMenu: null as MenuKey | null,
   feedLive: false,
+  /**
+   * What each Agent last advertised it can be configured with, keyed by `agentId` — the composer's
+   * only possible source of a model list, since ACP publishes options in a `session/new` response
+   * and a conversation that has not started has no such response to read.
+   */
+  agentConfig: new Map<string, AgentConfigOptions>(),
+  /** Agents whose empty run this page has already asked for, so a failing one is not re-requested on every render. */
+  probeRequested: new Set<string>(),
   /** Draft selections for the NEXT Session — what the selectors offer before one exists, and what a persona/equipment change would launch. */
   draft: {
     agentId: '',
     persona: '',
     equipment: [] as EquipmentResourceRequest[],
+    /** Model/effort choices made before any Session exists; sent with the create so the FIRST turn already runs on them. */
+    config: {} as Record<string, ConfigValue>,
   },
   unsubscribeFeed: undefined as (() => void) | undefined,
 }
@@ -462,10 +480,15 @@ function renderMessages(): void {
  *  selectors                                                          *
  * ------------------------------------------------------------------ */
 
-function selectorButton(id: string, iconName: 'shield' | 'message' | null, label: string, options: { disabled?: boolean } = {}): string {
+function selectorButton(
+  id: string,
+  iconName: 'shield' | 'message' | null,
+  label: string,
+  options: { disabled?: boolean; title?: string } = {},
+): string {
   return `
     <div class="selector">
-      <button class="selector-btn" id="${id}" ${options.disabled ? 'disabled' : ''}>
+      <button class="selector-btn" id="${id}" ${options.disabled ? 'disabled' : ''}${options.title ? ` title="${escapeHtml(options.title)}"` : ''}>
         ${iconName ? `<span class="sel-icon">${icons[iconName](14)}</span>` : ''}
         <span id="${id}-label">${escapeHtml(label)}</span>
         <span class="sel-chevron">${icons.chevronDown(13)}</span>
@@ -474,17 +497,29 @@ function selectorButton(id: string, iconName: 'shield' | 'message' | null, label
     </div>`
 }
 
+/**
+ * The options the selectors work on: a live Agent's own advertisement when one is running, and
+ * otherwise the memo of what the selected harness last advertised (`state.agentConfig`), which is
+ * what makes the model choice reachable in a conversation that has not started yet.
+ */
+function currentConfig(): { readonly source: ConfigSource; readonly options: readonly ConfigOption[] } {
+  const catalogue = state.agentConfig.get(selectedAgentId())
+  return effectiveConfig(state.configOptions, (catalogue?.options as readonly ConfigOption[] | undefined) ?? undefined, state.draft.config)
+}
+
 function modelOption(): ConfigOption | undefined {
-  return findConfigOption(state.configOptions, 'model', 'model')
+  return findConfigOption(currentConfig().options, 'model', 'model')
 }
 
 function effortOption(): ConfigOption | undefined {
-  return findConfigOption(state.configOptions, 'thought_level', 'effort')
+  return findConfigOption(currentConfig().options, 'thought_level', 'effort')
 }
 
+/** `Défaut` rather than a guessed value: before anything is chosen the harness's own default is what will run, and naming a specific model here would claim a decision nobody made. */
 function configValueName(option: ConfigOption | undefined): string {
   if (!option) return '—'
-  const current = String(option.currentValue ?? '')
+  if (option.currentValue === undefined || option.currentValue === null) return 'Défaut'
+  const current = String(option.currentValue)
   return option.options?.find((value) => value.value === current)?.name ?? current
 }
 
@@ -504,20 +539,35 @@ function equipmentLabel(): string {
  * The harness/model/persona/equipment cluster. It lives in the COMPOSER while no Session exists and
  * MOVES to the topbar once one does, which is why it is one function called from both places.
  *
- * Harness and model lock the moment a Session exists, for two different reasons that happen to look
- * the same: the Agent is frozen on the Session (changing it means a new Session), while the model
- * and effort are ACP config options that only exist on a LIVE connection — before that there is no
- * harness to ask what it offers, so there is nothing truthful to show.
+ * The harness still locks once a Session exists — the Agent is frozen on it, and changing it means a
+ * new Session. The MODEL no longer does. It used to be disabled until a live ACP connection existed,
+ * on the reasoning that only a running harness can say what it offers; that is true of the values
+ * but not of the choice, and it left the selector dead exactly where an operator most wants it (a
+ * brand-new conversation) and again once the idle reaper took the Runtime back. The list now comes
+ * from what the harness itself last advertised, and the choice is durable until something is running
+ * to receive it (P12). It is only disabled when this client genuinely has nothing to show — an Agent
+ * never launched and not yet probed — and then it says so rather than being silently grey.
  */
 function selectorsCluster(): string {
   const session = activeSession()
   const agent = selectedAgent()
   const persona = selectedPersona()
-  const hasLiveConfig = state.configOptions.length > 0
+  const config = currentConfig()
+  const catalogue = state.agentConfig.get(selectedAgentId())
+  const noOptions = config.options.length === 0
+  const reason =
+    catalogue?.state === 'probing'
+      ? 'Démarrage à vide du harness pour lire ses options…'
+      : catalogue?.state === 'unavailable'
+        ? `Options indisponibles : ${catalogue.detail ?? 'le démarrage à vide a échoué'}`
+        : 'Options inconnues tant que ce harness n’a jamais démarré.'
   return `
     <div class="selectors">
       ${selectorButton('sel-harness', null, agentLabel(selectedAgentId()) || 'Harness', { disabled: Boolean(session) })}
-      ${selectorButton('sel-model', null, hasLiveConfig ? configValueName(modelOption()) : 'Modèle', { disabled: !hasLiveConfig })}
+      ${selectorButton('sel-model', null, noOptions ? 'Modèle' : configValueName(modelOption()), {
+        disabled: noOptions,
+        ...(noOptions ? { title: reason } : {}),
+      })}
       ${agent && agent.personas.length > 0 ? selectorButton('sel-agent', 'message', persona || 'Agent', {}) : ''}
       ${selectorButton('sel-equipment', 'shield', equipmentLabel(), {})}
     </div>`
@@ -539,10 +589,7 @@ function wireSelectors(root: ParentNode): void {
 function effortRail(option: ConfigOption): string {
   const levels = option.options ?? []
   const span = Math.max(1, levels.length - 1)
-  const index = Math.max(
-    0,
-    levels.findIndex((level) => level.value === String(option.currentValue ?? '')),
-  )
+  const index = railIndexOf(levels, option.currentValue)
   const at = (position: number): string => `${(position / span) * 100}%`
   const dots = levels
     .map((_level, position) =>
@@ -646,22 +693,36 @@ function renderHarnessMenu(host: HTMLElement): void {
       // is not a name the next one would accept (the server refuses it with `persona_unavailable`).
       state.draft.agentId = node.dataset['agentId'] ?? ''
       state.draft.persona = ''
+      // Config options are the new harness's own vocabulary — one harness's `effort` values are not
+      // another's, and carrying them over would offer a model this Agent does not have.
+      state.draft.config = {}
       state.openMenu = null
       renderComposer()
       renderTopbar()
       renderMenus()
+      void loadAgentConfig(state.draft.agentId)
     })
   }
 }
 
 function renderModelMenu(host: HTMLElement): void {
+  const config = currentConfig()
   const model = modelOption()
   const effort = effortOption()
-  const others = state.configOptions.filter((option) => option !== model && option !== effort && Array.isArray(option.options))
+  const others = config.options.filter((option) => option !== model && option !== effort && Array.isArray(option.options))
   host.innerHTML = `
     <div class="menu"><div class="menu-label">${escapeHtml(model?.name ?? 'Modèle')}</div>
+      ${
+        config.source === 'catalogue'
+          ? '<div class="menu-note">Ces options seront appliquées au démarrage de la session.</div>'
+          : ''
+      }
       ${(model?.options ?? [])
-        .map((value) => menuRow('data-config-value', value.value, value.name, { selected: value.value === String(model?.currentValue ?? '') }))
+        .map((value) =>
+          menuRow('data-config-value', value.value, value.name, {
+            selected: model?.currentValue !== undefined && model.currentValue !== null && value.value === String(model.currentValue),
+          }),
+        )
         .join('')}
       ${effort ? `<div class="menu-sep"></div>${effortRail(effort)}` : ''}
       ${others
@@ -697,10 +758,7 @@ function renderModelMenu(host: HTMLElement): void {
   const rail = host.querySelector<HTMLElement>('.effort__rail')
   if (rail && effort) {
     const levels = effort.options ?? []
-    const currentIndex = Math.max(
-      0,
-      levels.findIndex((level) => level.value === String(effort.currentValue ?? '')),
-    )
+    const currentIndex = railIndexOf(levels, effort.currentValue)
     const commit = (index: number): void => {
       const level = levels[clampIndex(index, levels.length)]
       if (level) void applyConfigOption(effort.id, level.value)
@@ -865,6 +923,9 @@ function newChat(): void {
   state.configOptions = []
   state.draft.persona = ''
   state.draft.equipment = []
+  // A draft belongs to the conversation it was typed into: carrying it across would silently
+  // reconfigure a Session the operator is no longer looking at.
+  state.draft.config = {}
   if (isMobile()) {
     state.sidebarOpen = false
     applySidebar()
@@ -892,6 +953,9 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
   state.configOptions = []
   state.draft.persona = ''
   state.draft.equipment = []
+  // A draft belongs to the conversation it was typed into: carrying it across would silently
+  // reconfigure a Session the operator is no longer looking at.
+  state.draft.config = {}
   if (isMobile()) {
     state.sidebarOpen = false
     applySidebar()
@@ -951,6 +1015,10 @@ function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
     // A `PUT config-options` response travels the same journaled connection as `session/new`, so the
     // freshest advertised option set arrives here too — the model panel needs no separate refresh.
     state.configOptions = configOptionsFromItems(state.items) ?? state.configOptions
+    // The Agent naming its own session arrives as a `session_info` item, and the displayed title is
+    // derived from it server-side — so this is the moment the conversation stops being called after
+    // its first message. Re-read it now rather than waiting up to 6 s for the sidebar poll.
+    if (item.kind === 'session_info') void refreshWorkstreamTitle(workstreamId)
     renderMessages()
     renderTopbar()
     renderMenus()
@@ -983,6 +1051,19 @@ function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
   }
 }
 
+/** A conversation renames itself once its Agent has a subject for it; only the title is re-read, so this cannot disturb the transcript being rendered. */
+async function refreshWorkstreamTitle(workstreamId: string): Promise<void> {
+  try {
+    const detail = await getWorkstream(workstreamId)
+    const { sessions: _sessions, projectionHead: _head, ...workstream } = detail
+    state.workstreams.set(workstreamId, workstream)
+    renderSidebar()
+    renderTopbar()
+  } catch {
+    // The next sidebar poll re-reads it anyway; a failed title refresh is not worth a toast.
+  }
+}
+
 /** A `status` frame for a Turn this page has never seen carries no start time or ordinal, so the turn list is refetched rather than half-invented from the frame. */
 async function refreshTurns(workstreamId: string): Promise<void> {
   try {
@@ -1011,6 +1092,29 @@ async function doSend(): Promise<void> {
   }
 }
 
+function draftConfigOptions(): readonly RequestedConfigOption[] {
+  return Object.entries(state.draft.config).map(([optionId, value]) => ({ optionId, value }))
+}
+
+/**
+ * What a new Session for THIS conversation should be launched with: whatever is on screen.
+ *
+ * A persona or equipment change opens a new Session (both are frozen launch arguments), and without
+ * this the conversation would silently drop back to the harness default model the moment the
+ * operator changed something unrelated to it.
+ */
+function carriedConfigOptions(): readonly RequestedConfigOption[] {
+  const config = currentConfig()
+  if (config.source === 'catalogue') return draftConfigOptions()
+  const carried: RequestedConfigOption[] = []
+  for (const option of [modelOption(), effortOption()]) {
+    if (!option || option.currentValue === undefined || option.currentValue === null) continue
+    const value = option.currentValue
+    if (typeof value === 'string' || typeof value === 'boolean') carried.push({ optionId: option.id, value })
+  }
+  return carried
+}
+
 async function startWorkstream(text: string): Promise<void> {
   const agentId = selectedAgentId()
   if (!agentId) {
@@ -1033,6 +1137,9 @@ async function startWorkstream(text: string): Promise<void> {
     // already been bitten by once.
     equipment: { catalogueVersion: catalogue.version, resources: state.draft.equipment },
     prompt: [{ type: 'text', text }],
+    // Only what the operator actually chose. An untouched selector sends nothing, so the harness's
+    // own default applies rather than a value this client picked for display.
+    ...(draftConfigOptions().length > 0 ? { configOptions: draftConfigOptions() } : {}),
   })
   state.workstreams.set(created.workstream.id, created.workstream)
   state.sessions.set(created.workstream.id, [created.session])
@@ -1085,9 +1192,17 @@ async function waitForReady(sessionId: string, timeoutMs = 90_000): Promise<void
   throw new Error('La session n’a pas démarré à temps.')
 }
 
+/**
+ * One click, three situations, all of which used to be "nothing happens" or "an error":
+ *
+ *  - no Session yet — the choice is a draft, sent with the create so the first turn already runs on
+ *    it (it used to `return` immediately, which is why the composer's selector did nothing);
+ *  - a live Session — a real `session/set_config_option`, whose full response is authoritative;
+ *  - a Session whose Runtime was reclaimed — the engine records it and applies it on the next
+ *    resume, answering `pending` instead of the `runtime_unavailable` 409 that used to surface as a
+ *    red toast.
+ */
 async function applyConfigOption(optionId: string, value: string): Promise<void> {
-  const session = activeSession()
-  if (!session) return
   // Every call site reads a `data-*` attribute with a `?? ''` fallback, so a row rendered without
   // its value sends an empty string and the server answers "body must be {"value": "<non-empty
   // string>"}" — which reaches the operator as a message about strings and says nothing about what
@@ -1098,11 +1213,29 @@ async function applyConfigOption(optionId: string, value: string): Promise<void>
     toast(`Option « ${optionId} » : aucune valeur à appliquer (le menu a été rendu sans valeur).`, true)
     return
   }
+
+  const session = activeSession()
+  if (!session) {
+    state.draft.config[optionId] = value
+    renderComposer()
+    renderTopbar()
+    renderMenus()
+    return
+  }
+
   try {
     const result = await setConfigOption(session.id, optionId, value)
-    // The Agent hands back its whole option set, which is authoritative — including any OTHER option
-    // its answer changed. Trusting it beats patching the one entry this client asked about.
-    if (Array.isArray(result.configOptions)) state.configOptions = result.configOptions as readonly ConfigOption[]
+    if (result.pending) {
+      // No Runtime to tell right now — but the choice IS durable, so it is shown as chosen rather
+      // than silently reverting to what the last live session happened to be on.
+      state.configOptions = state.configOptions.map((option) => (option.id === optionId ? { ...option, currentValue: value } : option))
+      toast('Réglage enregistré — il prendra effet au prochain message.')
+    } else if (Array.isArray(result.configOptions)) {
+      // The Agent hands back its whole option set, which is authoritative — including any OTHER
+      // option its answer changed. Trusting it beats patching the one entry this client asked about.
+      state.configOptions = result.configOptions as readonly ConfigOption[]
+    }
+    renderComposer()
     renderTopbar()
     renderMenus()
   } catch (error) {
@@ -1125,12 +1258,14 @@ async function relaunchSession(reason: string): Promise<void> {
   closeMenu()
   toast(reason)
   try {
+    const carried = carriedConfigOptions()
     await openSession(workstreamId, {
       agentId,
       ...(persona ? { persona } : {}),
       workspace: { workspaceRef: WORKSPACE_REF },
       equipment: { catalogueVersion: catalogue.version, resources: state.draft.equipment },
       activate: true,
+      ...(carried.length > 0 ? { configOptions: carried } : {}),
     })
     await loadWorkstream(workstreamId)
   } catch (error) {
@@ -1290,6 +1425,37 @@ async function refreshList(): Promise<void> {
   if (state.activeId) renderTopbar()
 }
 
+/**
+ * Loads what an Agent says it can be configured with, and — the first time nothing is known — asks
+ * the engine to run it empty once to find out (the operator's own decision: never a model list this
+ * client declares).
+ *
+ * The empty run is asked for AT MOST once per Agent per page: it materializes a real Runtime, and a
+ * render loop that kept asking would spend the run namespace's whole quota on a question. While it
+ * runs, the poll below picks the answer up.
+ */
+async function loadAgentConfig(agentId: string, allowProbe = true): Promise<void> {
+  if (!agentId) return
+  try {
+    let view = await getAgentConfigOptions(agentId)
+    if (view.state === 'unknown' && allowProbe && !state.probeRequested.has(agentId)) {
+      state.probeRequested.add(agentId)
+      view = await probeAgentConfigOptions(agentId)
+    }
+    state.agentConfig.set(agentId, view)
+    renderComposer()
+    renderTopbar()
+    renderMenus()
+    if (view.state === 'probing') {
+      // A cold Runtime takes ~10 s to answer; re-read rather than block the UI on it.
+      setTimeout(() => void loadAgentConfig(agentId, false), 4_000)
+    }
+  } catch {
+    // A missing catalogue costs the model selector, nothing else — the conversation still runs on
+    // the harness default, and a toast on every page load would be noise.
+  }
+}
+
 async function reload(): Promise<void> {
   try {
     const [agentsPage, catalogue] = await Promise.all([listAgents(), getEquipmentCatalogue()])
@@ -1300,6 +1466,7 @@ async function reload(): Promise<void> {
     state.catalogue = Array.isArray(catalogue?.resources) ? catalogue : undefined
     const available = launchableAgents(state.agents)
     if (!available.some((agent) => agent.agentId === state.draft.agentId)) state.draft.agentId = available[0]?.agentId ?? ''
+    void loadAgentConfig(selectedAgentId())
   } catch (error) {
     toast(errorText(error), true)
   }

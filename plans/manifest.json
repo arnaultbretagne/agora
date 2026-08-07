@@ -102,6 +102,18 @@
         "P10"
       ],
       "status": "pending"
+    },
+    {
+      "id": "P12",
+      "file": "12-session-configuration-and-titles.md",
+      "dependsOn": [
+        "P03",
+        "P05",
+        "P08",
+        "P09",
+        "P10"
+      ],
+      "status": "ready"
     }
   ]
 }

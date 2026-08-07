@@ -50,6 +50,16 @@ export interface BootstrapSessionResult {
   readonly protocolVersion: number
   /** Threaded into `promptSession`/`cancelSession` so inbound updates correlate to the right command. */
   readonly storePersist: StorePersist
+  /**
+   * What this Agent advertised it can be configured with, verbatim from its `session/new` response
+   * (`undefined` when it advertised nothing — the field is optional in ACP).
+   *
+   * Returned rather than left to be excavated from the journal because the caller needs it for two
+   * things the journal cannot serve in time: applying the operator's pending choices before the
+   * first prompt, and recording what this Agent offers so the NEXT conversation's composer can show
+   * a list before any Runtime exists (P12).
+   */
+  readonly configOptions?: readonly acp.SessionConfigOption[]
 }
 
 const DEFAULT_CLIENT_CAPABILITIES: acp.ClientCapabilities = {
@@ -208,6 +218,7 @@ export async function bootstrapSession(input: BootstrapSessionInput): Promise<Bo
     acpSessionId: newSessionResponse.sessionId,
     protocolVersion: initializeResponse.protocolVersion,
     storePersist,
+    ...(newSessionResponse.configOptions ? { configOptions: newSessionResponse.configOptions } : {}),
   }
 }
 
@@ -227,6 +238,8 @@ export interface ResumeAcpSessionResult {
   readonly connection: acp.ClientConnection
   readonly acpSessionId: string
   readonly storePersist: StorePersist
+  /** Same role as `BootstrapSessionResult.configOptions`: `session/resume` reports the resumed Session's option set, and a resumed Session is exactly where the operator's pending choices have to be re-asserted (P12). */
+  readonly configOptions?: readonly acp.SessionConfigOption[]
 }
 
 /**
@@ -260,8 +273,9 @@ export async function resumeAcpSession(input: ResumeAcpSessionInput): Promise<Re
     return failClosed('acp_resume_not_supported', new Error("Agent does not advertise the 'session.resume' capability"))
   }
 
+  let resumeResponse: acp.ResumeSessionResponse
   try {
-    await connection.agent.request(acp.methods.agent.session.resume, { sessionId: input.acpSessionId, cwd: input.cwd })
+    resumeResponse = await connection.agent.request(acp.methods.agent.session.resume, { sessionId: input.acpSessionId, cwd: input.cwd })
   } catch (error) {
     // docs/specs/13 "Compatibility": never pretend native resume succeeded — fail closed, typed,
     // no fallback to a new Session invented here (the caller decides whether to offer that).
@@ -275,7 +289,12 @@ export async function resumeAcpSession(input: ResumeAcpSessionInput): Promise<Re
     client.release()
   }
 
-  return { connection, acpSessionId: input.acpSessionId, storePersist }
+  return {
+    connection,
+    acpSessionId: input.acpSessionId,
+    storePersist,
+    ...(resumeResponse?.configOptions ? { configOptions: resumeResponse.configOptions } : {}),
+  }
 }
 
 export interface PromptSessionActor {

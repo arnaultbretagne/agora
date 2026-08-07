@@ -27,6 +27,7 @@ import type pg from 'pg'
 import type { BrokerGrantClient } from './broker-grant-client.js'
 import { connectAcpBridge } from './bridge-client.js'
 import type { SessionConnectionRegistry } from './connections.js'
+import { applyConfigIntent, recordConfigIntent, rememberAdvertisedOptions, type RequestedConfigOption } from './session-config.js'
 
 /**
  * docs/specs/03-session-lifecycle.md "New Session" steps 6-11 (materialize, ACP connect/initialize/
@@ -255,6 +256,25 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
       acpSessionId: bootstrapped.acpSessionId,
       storePersist: bootstrapped.storePersist,
     })
+
+    // P12: what this Agent advertised is what the NEXT conversation's composer offers before any
+    // Runtime exists, and the operator's own choices (made in that composer, on a Session that had
+    // nothing running yet) are delivered here — before the first prompt, so the very first turn
+    // already runs on the chosen model rather than the harness default.
+    await rememberAdvertisedOptions(input.pool, {
+      agentId: input.agentId,
+      runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      options: bootstrapped.configOptions,
+      observedAt: now(),
+    })
+    await applyConfigIntent({
+      pool: input.pool,
+      sessionId: input.sessionId,
+      connection: bootstrapped.connection,
+      acpSessionId: bootstrapped.acpSessionId,
+      now,
+    })
+
     // The Session is live and ACP-bound: everything this Command promised exists. The initial
     // prompt below dispatches its OWN PromptSession Command, which the coordinator settles
     // separately — so provisioning must not stay in flight waiting on someone else's turn.
@@ -402,6 +422,26 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       acpSessionId: resumed.acpSessionId,
       storePersist: resumed.storePersist,
     })
+
+    // P12: the Agent behind a resumed Session is a NEW process — it never saw the config options
+    // the previous one accepted, and `session/resume` restores native context, not the client's
+    // selections. So everything the operator has chosen is re-asserted here, including choices made
+    // while this Session was suspended and had no connection to deliver them through.
+    await rememberAdvertisedOptions(input.pool, {
+      agentId: input.agentId,
+      runtimeDefinitionVersion: input.runtimeDefinitionVersion,
+      options: resumed.configOptions,
+      observedAt: nowFn(),
+    })
+    await applyConfigIntent({
+      pool: input.pool,
+      sessionId: input.sessionId,
+      connection: resumed.connection,
+      acpSessionId: resumed.acpSessionId,
+      now: nowFn,
+      reassertApplied: true,
+    })
+
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', nowFn())
 
     if (input.handoffPrompt) {
@@ -508,6 +548,14 @@ export interface SwitchAgentInput {
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
   /** The caller's own Idempotency-Key (from `POST .../sessions`) — the Handoff's own idempotency key is deterministically derived from it, never a fresh random one, so a retry never duplicates the Handoff. */
   readonly idempotencyKey: string
+  /**
+   * P12: the operator's model/effort choices for whichever Session this switch resolves to.
+   *
+   * Recorded here rather than by the HTTP caller because only this function knows the answer to
+   * "which Session" — a fresh one, or the Agent's already-anchored one — and it dispatches the
+   * provisioning that reads the intent, so anything written after it returns could arrive too late.
+   */
+  readonly requestedConfigOptions?: readonly RequestedConfigOption[]
   /** The `OpenSession` Command this switch answers for, threaded down every branch so it settles wherever the switch actually lands — see ProvisionSessionInput.provisioningCommandId. */
   readonly provisioningCommandId?: string
   readonly now?: () => Date
@@ -617,6 +665,12 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
     } finally {
       c.release()
     }
+  }
+
+  // The Session this switch resolves to is now known, and nothing has been dispatched yet — the one
+  // window where the operator's choices can be recorded and still be found by the bootstrap below.
+  if (input.requestedConfigOptions?.length) {
+    await recordConfigIntent(input.pool, sessionId, input.requestedConfigOptions, now())
   }
 
   if (sessionMode === 'reattach') {

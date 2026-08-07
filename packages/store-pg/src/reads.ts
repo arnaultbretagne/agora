@@ -25,6 +25,8 @@ interface WorkstreamRow {
   readonly id: string
   readonly category: 'discussion' | 'invocation'
   readonly title: string
+  readonly title_source: string
+  readonly agent_title: string | null
   readonly pinned: boolean
   readonly role: WorkstreamRole
   readonly current_session_id: string | null
@@ -32,11 +34,42 @@ interface WorkstreamRow {
   readonly updated_at: Date
 }
 
+/**
+ * The title an Agent gave this Workstream itself, latest first — ACP's `session_info_update`, which
+ * the projector already folds into a `session_info` item (`{title, updatedAt}`).
+ *
+ * Both shipped Agents maintain one: the Claude adapter reads the harness's own generated session
+ * title at the end of every turn and notifies when it changed, and Codex forwards
+ * `thread/name/updated`. Nothing was reading it, which is why every Workstream in production was
+ * still called `Untitled` — the name existed, it just never left the projection.
+ *
+ * Ordered by `latest_workstream_seq` rather than by the item's `updated_at`: journal order is the
+ * only ordering this system treats as truth, and a conversation whose subject drifts gets renamed
+ * by its Agent, so "the newest one" has to mean newest event, not newest wall-clock write.
+ */
+const AGENT_TITLE_SUBQUERY = `(
+  SELECT nullif(btrim(i.current_value->>'title'), '')
+  FROM projection.workstream_items i
+  WHERE i.workstream_id = w.id
+    AND i.item_kind = 'session_info'
+    AND nullif(btrim(i.current_value->>'title'), '') IS NOT NULL
+  ORDER BY i.latest_workstream_seq DESC
+  LIMIT 1
+) AS agent_title`
+
+/**
+ * Manual rename wins, always. `title_source` is `'user'` only after `PATCH /v1/workstreams/{id}`,
+ * and an operator who named a conversation must not have the harness rename it on the next turn.
+ *
+ * Otherwise the Agent's own title wins over the stored one, which for an un-renamed Workstream is
+ * the floor written at creation (the first message, truncated) — a placeholder that exists so the
+ * sidebar says something true before the first turn ends, not a name anything chose.
+ */
 function toWireWorkstream(row: WorkstreamRow): WireWorkstream {
   return {
     id: row.id,
     category: row.category,
-    title: row.title,
+    title: row.title_source === 'user' ? row.title : (row.agent_title ?? row.title),
     pinned: row.pinned,
     role: row.role,
     currentSessionId: row.current_session_id,
@@ -69,7 +102,7 @@ export async function listWorkstreamsForPrincipal(
 ): Promise<ListWorkstreamsResult> {
   const cursor = options.cursor ? decodeCursor(options.cursor) : undefined
   const { rows } = await client.query<WorkstreamRow>(
-    `SELECT w.id, w.category, w.title, w.pinned, m.role, s.id AS current_session_id, w.created_at, w.updated_at
+    `SELECT w.id, w.category, w.title, w.title_source, ${AGENT_TITLE_SUBQUERY}, w.pinned, m.role, s.id AS current_session_id, w.created_at, w.updated_at
      FROM product.workstreams w
      JOIN product.workstream_memberships m ON m.workstream_id = w.id
      LEFT JOIN product.sessions s ON s.workstream_id = w.id AND s.is_current
@@ -167,6 +200,8 @@ interface WorkstreamDetailRow {
   readonly id: string
   readonly category: 'discussion' | 'invocation'
   readonly title: string
+  readonly title_source: string
+  readonly agent_title: string | null
   readonly pinned: boolean
   readonly current_session_id: string | null
   readonly created_at: Date
@@ -184,7 +219,7 @@ export async function getWorkstreamDetail(client: PoolClient, workstreamId: stri
   if (!membership) return undefined
 
   const { rows: workstreamRows } = await client.query<WorkstreamDetailRow>(
-    `SELECT w.id, w.category, w.title, w.pinned, s.id AS current_session_id, w.created_at, w.updated_at, w.last_event_seq
+    `SELECT w.id, w.category, w.title, w.title_source, ${AGENT_TITLE_SUBQUERY}, w.pinned, s.id AS current_session_id, w.created_at, w.updated_at, w.last_event_seq
      FROM product.workstreams w
      LEFT JOIN product.sessions s ON s.workstream_id = w.id AND s.is_current
      WHERE w.id = $1 AND w.deleted_at IS NULL`,
