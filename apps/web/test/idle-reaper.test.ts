@@ -227,3 +227,34 @@ test('required: repeating a sweep for the same idleness reuses one custody captu
     }
   })
 })
+
+test('required: a Session that fails to suspend is reported as such, never counted as reclaimed', async () => {
+  await withTestDatabase(async (pool) => {
+    const connections = new SessionConnectionRegistry()
+    const controller = await startFakeController({}, pool)
+    try {
+      const { sessionId } = await readySession(pool, controller, connections)
+
+      // `suspendSession` routes its own failures into `failClosed` and returns normally, so a
+      // reaper that trusts the return value reports success unconditionally — which is exactly what
+      // the first production sweep did, announcing six suspensions that were six failures.
+      controller.failNextCapture()
+
+      const later = new Date(Date.now() + 2 * 60 * 60_000)
+      const reaped = await reapIdleSessions({
+        pool,
+        transport: controller,
+        brokerGrantClient,
+        connections,
+        idleAfterMs: 60 * 60_000,
+        now: () => later,
+        log: () => {},
+      })
+
+      assert.deepEqual([...reaped], [], 'a Session that did not suspend must not be counted as reclaimed')
+      assert.match(await phaseOf(pool, sessionId), /^failed/, 'and its real outcome is what the row says')
+    } finally {
+      await controller.close()
+    }
+  })
+})

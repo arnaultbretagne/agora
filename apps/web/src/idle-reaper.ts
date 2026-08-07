@@ -84,8 +84,19 @@ export async function reapIdleSessions(options: IdleReaperOptions): Promise<read
         idempotencyKey: `idle-reap:${session.lastActivityAt.toISOString()}`,
         now,
       })
-      reaped.push(session.sessionId)
-      log(`idle-reaper: suspended session ${session.sessionId} (idle since ${session.lastActivityAt.toISOString()})`)
+      // `suspendSession` never throws — it routes its own failures into `failClosed`, which marks
+      // the Session `failed` and returns normally. Reporting success on return therefore reports
+      // success unconditionally, which is how the first production sweep announced six suspensions
+      // that were actually six failures (2026-08-07). Read the phase back and say what happened.
+      const outcome = await readSessionPhase(options.pool, session.sessionId)
+      if (outcome === 'suspended') {
+        reaped.push(session.sessionId)
+        log(`idle-reaper: suspended session ${session.sessionId} (idle since ${session.lastActivityAt.toISOString()})`)
+      } else {
+        process.stderr.write(
+          `idle-reaper: session ${session.sessionId} did not suspend — it is now '${outcome}' (a Session that cannot be suspended cannot give its Runtime slot back cleanly)\n`,
+        )
+      }
     } catch (error) {
       // One stuck Session must not stop the sweep from reclaiming the others — that would turn a
       // single bad Session into the same wedge this exists to prevent.
@@ -93,6 +104,16 @@ export async function reapIdleSessions(options: IdleReaperOptions): Promise<read
     }
   }
   return reaped
+}
+
+async function readSessionPhase(pool: pg.Pool, sessionId: string): Promise<string> {
+  const client = await pool.connect()
+  try {
+    const { rows } = await client.query<{ phase: string }>('SELECT phase FROM product.sessions WHERE id = $1', [sessionId])
+    return rows[0]?.phase ?? 'missing'
+  } finally {
+    client.release()
+  }
 }
 
 export function startIdleReaper(options: IdleReaperOptions): IdleReaperHandle {
