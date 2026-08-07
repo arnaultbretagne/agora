@@ -631,9 +631,26 @@ async function handleGetCommand(deps: ServerDeps, principal: string, commandId: 
   }
 }
 
+/**
+ * `personas` is projected here as well as consumed internally by `resolveLaunchableAgent`: both
+ * `CreateWorkstreamRequest.persona` and `OpenSessionRequest.persona` document their allowed set as
+ * "`personas` on GET /v1/agents", but this response was dropping the field, so the only client that
+ * could offer the choice had nowhere to read it from (found while porting the persona selector).
+ * Safe to expose — a reviewed persona name is an operator-approved label, never a credential
+ * (packages/agent-registry/src/registry.ts says the same where it fills the field in).
+ */
 async function handleListAgents(deps: ServerDeps, res: ServerResponse): Promise<void> {
   const result = await listLaunchableAgents(deps.controllerTransport)
-  sendJson(res, 200, { items: result.items.map((a) => ({ agentId: a.agentId, runtimeDefinitionVersion: a.runtimeDefinitionVersion, label: a.label, description: a.description, availability: a.availability })) })
+  sendJson(res, 200, {
+    items: result.items.map((a) => ({
+      agentId: a.agentId,
+      runtimeDefinitionVersion: a.runtimeDefinitionVersion,
+      label: a.label,
+      description: a.description,
+      availability: a.availability,
+      personas: a.personas ?? [],
+    })),
+  })
 }
 
 /**
@@ -941,6 +958,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
 }
 
 async function sendStaticFile(res: ServerResponse, base: URL, relativePath: string): Promise<boolean> {
@@ -958,10 +976,16 @@ async function sendStaticFile(res: ServerResponse, base: URL, relativePath: stri
   }
 }
 
+/**
+ * The shell grew past one stylesheet when the UI was ported (design tokens are their own file, as
+ * in the system they came from, plus a favicon), so `public/` is served by extension allow-list
+ * rather than by naming each file: `sendStaticFile` already refuses traversal and any extension
+ * outside CONTENT_TYPES, which is what actually bounds this — not the enumeration.
+ */
 async function handleStaticAsset(path: string, res: ServerResponse): Promise<boolean> {
   if (path === '/') return sendStaticFile(res, PUBLIC_DIR, 'index.html')
-  if (path === '/styles.css') return sendStaticFile(res, PUBLIC_DIR, 'styles.css')
   if (path.startsWith('/client/')) return sendStaticFile(res, CLIENT_DIR, path.slice('/client/'.length))
+  if (path.startsWith('/') && !path.includes('/', 1)) return sendStaticFile(res, PUBLIC_DIR, path.slice(1))
   return false
 }
 

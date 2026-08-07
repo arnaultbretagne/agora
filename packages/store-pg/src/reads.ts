@@ -92,6 +92,7 @@ export interface WireSession {
   readonly workstreamId: string
   readonly ordinal: number
   readonly agentId: string
+  readonly persona?: string
   readonly phase: string
   readonly current: boolean
   readonly runtimeDefinitionVersion: string
@@ -104,6 +105,7 @@ interface SessionRow {
   readonly workstream_id: string
   readonly ordinal: number
   readonly agent_id: string
+  readonly persona: string | null
   readonly phase: string
   readonly is_current: boolean
   readonly runtime_definition_version: string
@@ -112,7 +114,7 @@ interface SessionRow {
   readonly failure_detail: string | null
 }
 
-const SESSION_COLUMNS = `id, workstream_id, ordinal, agent_id, phase, is_current, runtime_definition_version, created_at, failure_code, failure_detail`
+const SESSION_COLUMNS = `id, workstream_id, ordinal, agent_id, persona, phase, is_current, runtime_definition_version, created_at, failure_code, failure_detail`
 
 function toWireSession(row: SessionRow): WireSession {
   return {
@@ -120,6 +122,11 @@ function toWireSession(row: SessionRow): WireSession {
     workstreamId: row.workstream_id,
     ordinal: row.ordinal,
     agentId: row.agent_id,
+    // Published because it is a launch argument frozen on this Session (product-api.yaml says as
+    // much where `persona` is requested): a client that can set a persona but can never read back
+    // the one in force cannot show what a Workstream is actually running as, and would offer to
+    // "change" it to the value it is already using — which costs a whole new Session.
+    ...(row.persona !== null ? { persona: row.persona } : {}),
     phase: row.phase,
     current: row.is_current,
     runtimeDefinitionVersion: row.runtime_definition_version,

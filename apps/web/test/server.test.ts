@@ -111,7 +111,7 @@ async function createWorkstream(principal = 'alice', prompt: { type: string; tex
       prompt,
     }),
   })
-  const body = (await res.json()) as { command: { commandId: string }; workstream: { id: string }; session: { id: string } }
+  const body = (await res.json()) as { command: { commandId: string }; workstream: { id: string }; session: { id: string; persona?: string } }
   assert.equal(res.status, 202, JSON.stringify(body))
   return body
 }
@@ -391,4 +391,161 @@ test('required, P11: model/effort are settable on a live Session, and the Agent\
   })
   const modeBody = await mode.text()
   assert.equal(mode.status, 200, modeBody)
+})
+
+/**
+ * Waits for a Session's ACP connection to exist. Same generous budget and same failure reporting as
+ * the model/effort test above, for the same reason: provisioning is a fire-and-forget chain and the
+ * whole suite runs concurrently against one shared fake controller.
+ */
+async function waitForReadySession(sessionId: string, principal = 'alice'): Promise<void> {
+  let phase = 'unknown'
+  for (let i = 0; i < 60 && phase !== 'ready'; i += 1) {
+    const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}`, { headers: auth(principal) })
+    const session = (await res.json()) as { phase: string; failure?: { code: string; detail?: string } | null }
+    phase = session.phase
+    if (phase === 'failed') {
+      phase = `failed: ${session.failure?.code} — ${session.failure?.detail ?? ''}`
+      break
+    }
+    if (phase !== 'ready') await sleep(500)
+  }
+  assert.equal(phase, 'ready', `Session never reached ready (stuck at '${phase}')`)
+}
+
+test('GET /v1/agents publishes each Agent\'s reviewed personas', async () => {
+  // Both `CreateWorkstreamRequest.persona` and `OpenSessionRequest.persona` document their allowed
+  // set as "`personas` on GET /v1/agents", but this response dropped the field, so a client could
+  // set a persona and never discover which ones exist. Found while building the persona selector.
+  const res = await fetch(`${baseUrl}/v1/agents`)
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as { items: { agentId: string; personas?: readonly string[] }[] }
+
+  const withPersonas = body.items.find((agent) => agent.agentId === 'fake-agent')
+  assert.deepEqual(withPersonas?.personas, ['reviewer', 'writer'])
+
+  // An Agent that reviews none must say so with an empty list, not by omitting the field — a client
+  // cannot tell "offers nothing" from "this build forgot to tell you" otherwise.
+  const withNone = body.items.find((agent) => agent.agentId === 'fake-agent-b')
+  assert.deepEqual(withNone?.personas, [])
+})
+
+test('the Session resource reports the persona it is actually running as', async () => {
+  const res = await fetch(`${baseUrl}/v1/workstreams`, {
+    method: 'POST',
+    headers: { ...auth('alice'), ...idem(), 'content-type': 'application/json' },
+    body: JSON.stringify({
+      category: 'discussion',
+      agentId: 'fake-agent',
+      persona: 'writer',
+      workspace: { workspaceRef: 'scratch' },
+      equipment: { catalogueVersion: 'equipment-v1', resources: [] },
+      prompt: [{ type: 'text', text: 'hi' }],
+    }),
+  })
+  assert.equal(res.status, 202)
+  const created = (await res.json()) as { workstream: { id: string }; session: { id: string; persona?: string } }
+  // Both on the create response and on a later read: a client that can only set a persona, never
+  // read the one in force, would offer to "change" a Workstream to the persona it already uses —
+  // which costs a whole new Session.
+  assert.equal(created.session.persona, 'writer')
+
+  const reread = await fetch(`${baseUrl}/v1/sessions/${created.session.id}`, { headers: auth('alice') })
+  assert.equal(((await reread.json()) as { persona?: string }).persona, 'writer')
+
+  const detail = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}`, { headers: auth('alice') })
+  const sessions = ((await detail.json()) as { sessions: { persona?: string }[] }).sessions
+  assert.equal(sessions[0]?.persona, 'writer')
+
+  // A Session launched as the harness default carries no persona at all, rather than an empty
+  // string the selector would have to special-case.
+  const plain = await createWorkstream('alice')
+  assert.equal(plain.session.persona, undefined)
+})
+
+test('the harness\'s own model/effort options are readable from the Workstream items — the Web UI has no other source', async () => {
+  // This is the load-bearing assumption behind the model selector and the effort rail. There is no
+  // "read the current session config" route (by design: the harness is authoritative, and this
+  // server curates no model list), but the projector folds every ACP frame it does not model
+  // first-class into an `unknown` item carrying the whole envelope — and `session/new`'s response is
+  // one of those. If that ever stops being true, the selectors go blank, so it is asserted here
+  // against a real Postgres, a real projector and a real ACP Agent rather than assumed.
+  const created = await createWorkstream('alice')
+  await waitForReadySession(created.session.id)
+
+  interface Item {
+    readonly kind: string
+    readonly latestWorkstreamSeq: number
+    readonly value: { readonly envelope?: { readonly result?: { readonly configOptions?: { id: string; currentValue: string; options: { value: string }[] }[] } } }
+  }
+  const readOptions = async (): Promise<{ id: string; currentValue: string; options: { value: string }[] }[] | undefined> => {
+    const res = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}/items?limit=200`, { headers: auth('alice') })
+    const { items } = (await res.json()) as { items: Item[] }
+    let latest: Item | undefined
+    for (const item of items) {
+      if (item.kind !== 'unknown') continue
+      if (!Array.isArray(item.value.envelope?.result?.configOptions)) continue
+      if (!latest || item.latestWorkstreamSeq > latest.latestWorkstreamSeq) latest = item
+    }
+    return latest?.value.envelope?.result?.configOptions
+  }
+
+  let advertised = await readOptions()
+  for (let i = 0; i < 40 && !advertised; i += 1) {
+    await sleep(250)
+    advertised = await readOptions()
+  }
+  assert.ok(advertised, 'session/new advertised config options but no item published them')
+  const model = advertised.find((option) => option.id === 'model')
+  assert.ok(model, `no model option in ${JSON.stringify(advertised)}`)
+  assert.ok(model.options.length > 0, 'a model selector with no values is an empty menu')
+  const effort = advertised.find((option) => option.id === 'effort')
+  assert.ok(effort, 'no effort option — the rail would have no levels')
+
+  // And the set stays CURRENT rather than merely initial: a config change travels the same journaled
+  // connection, so its response lands in the same bucket with a higher sequence.
+  const changed = await fetch(`${baseUrl}/v1/sessions/${created.session.id}/config-options/model`, {
+    method: 'PUT',
+    headers: { ...auth('alice'), 'content-type': 'application/json' },
+    body: JSON.stringify({ value: 'opus' }),
+  })
+  assert.equal(changed.status, 200, await changed.text())
+
+  let refreshed = await readOptions()
+  for (let i = 0; i < 40 && refreshed?.find((option) => option.id === 'model')?.currentValue !== 'opus'; i += 1) {
+    await sleep(250)
+    refreshed = await readOptions()
+  }
+  assert.equal(
+    refreshed?.find((option) => option.id === 'model')?.currentValue,
+    'opus',
+    'the newest journaled envelope must reflect the change, or the panel shows a stale selection',
+  )
+})
+
+test('the UI shell is served in full — every file index.html asks for, and nothing else', async () => {
+  // The shell outgrew the hard-coded `/` + `/styles.css` pair when the UI was ported, and a stylesheet
+  // that 404s is an unstyled page rather than a visible error — so assert each asset the shell
+  // actually references, not just that the page loads.
+  const page = await fetch(`${baseUrl}/`)
+  assert.equal(page.status, 200)
+  assert.match(page.headers.get('content-type') ?? '', /text\/html/)
+  const html = await page.text()
+  assert.match(html, /<html lang="fr">/, 'the ported UI is French')
+  assert.match(html, /id="app"/)
+
+  for (const [reference] of [...html.matchAll(/(?:href|src)="(\/[^"]+)"/g)].map((match) => [match[1]!])) {
+    const asset = await fetch(`${baseUrl}${reference}`)
+    assert.equal(asset.status, 200, `${reference} is referenced by index.html but not served`)
+    assert.ok((await asset.text()).length > 0, `${reference} served an empty body`)
+  }
+
+  // Serving public/ by extension allow-list must not become a way out of it. Each body is consumed
+  // even though it is not asserted on: an unread response holds its keep-alive connection open, and
+  // this file's own `after` hook has already been bitten by exactly that.
+  for (const hostile of ['/../package.json', '/client/../../package.json', '/server.ts', '/client/app.js.map/../../../package.json']) {
+    const res = await fetch(`${baseUrl}${hostile}`)
+    await res.text()
+    assert.notEqual(res.status, 200, `${hostile} must not be reachable`)
+  }
 })

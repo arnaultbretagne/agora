@@ -838,6 +838,12 @@ components:
           minimum: 1
         agentId:
           type: string
+        persona:
+          type: string
+          description: >-
+            The harness persona this Session was launched as, absent when it runs as the default.
+            Frozen at Session creation like every other launch argument, and published so a client
+            can show what a Workstream is actually running as rather than only being able to set it.
         phase:
           type: string
           enum:
@@ -938,7 +944,7 @@ components:
     PublicAgent:
       type: object
       additionalProperties: false
-      required: [agentId, runtimeDefinitionVersion, label, description, availability]
+      required: [agentId, runtimeDefinitionVersion, label, description, availability, personas]
       properties:
         agentId:
           type: string
@@ -952,6 +958,17 @@ components:
         availability:
           type: string
           enum: [enabled, unavailable, deprecated]
+        personas:
+          type: array
+          description: >-
+            Persona names the operator reviewed for this Agent, and therefore the only values
+            `persona` accepts on CreateWorkstreamRequest/OpenSessionRequest — both of which already
+            point here for their allowed set. Declared and returned since the Web UI's persona
+            selector, which has no other source for the list: it was described in those two
+            schemas but never actually carried on this one, so `GET /v1/agents` answered with a
+            field the rest of the contract assumed was there.
+          items:
+            type: string
     EquipmentCatalogue:
       $ref: ../schemas/equipment-catalogue.schema.json
     CreateWorkstreamAccepted:

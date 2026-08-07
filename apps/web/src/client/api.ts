@@ -52,6 +52,8 @@ export interface Session {
   readonly workstreamId: string
   readonly ordinal: number
   readonly agentId: string
+  /** Absent when the Session runs as the harness default — the persona selector reads this to show what is actually in force. */
+  readonly persona?: string
   readonly phase: string
   readonly current: boolean
   readonly runtimeDefinitionVersion: string
@@ -99,6 +101,36 @@ export interface PublicAgent {
   readonly label: string
   readonly description: string
   readonly availability: 'enabled' | 'unavailable' | 'deprecated'
+  /** The only persona values `POST /v1/workstreams` and `POST /v1/workstreams/{id}/sessions` accept for this Agent — anything else is refused with 409 `persona_unavailable`. */
+  readonly personas: readonly string[]
+}
+
+export interface CatalogueAccessLevel {
+  readonly access: string
+  readonly label: string
+  readonly description?: string
+}
+
+export interface CatalogueResource {
+  readonly resource: string
+  readonly label: string
+  readonly description: string
+  readonly accessLevels: readonly CatalogueAccessLevel[]
+}
+
+export interface EquipmentCatalogue {
+  readonly version: string
+  readonly resources: readonly CatalogueResource[]
+}
+
+export interface EquipmentResourceRequest {
+  readonly resource: string
+  readonly access: string
+}
+
+export interface EquipmentRequest {
+  readonly catalogueVersion: string
+  readonly resources: readonly EquipmentResourceRequest[]
 }
 
 export function listWorkstreams(): Promise<{ items: readonly Workstream[]; nextCursor: string | null }> {
@@ -121,16 +153,82 @@ export function listAgents(): Promise<{ items: readonly PublicAgent[] }> {
   return request('/v1/agents')
 }
 
-export function getEquipmentCatalogue(): Promise<{ version: string; resources: readonly unknown[] }> {
+export function getEquipmentCatalogue(): Promise<EquipmentCatalogue> {
   return request('/v1/equipment-catalogue')
+}
+
+export function getSession(sessionId: string): Promise<Session> {
+  return request(`/v1/sessions/${sessionId}`)
+}
+
+/** Title and pin — the only two Workstream fields a human owns directly; everything else about a Workstream is derived from what actually happened to it. */
+export function patchWorkstream(workstreamId: string, patch: { readonly title?: string; readonly pinned?: boolean }): Promise<Workstream> {
+  return request(`/v1/workstreams/${workstreamId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify(patch),
+  })
+}
+
+export function deleteWorkstream(workstreamId: string): Promise<{ commandId: string }> {
+  return request(`/v1/workstreams/${workstreamId}`, { method: 'DELETE', headers: { 'idempotency-key': idempotencyKey() } })
 }
 
 export interface CreateWorkstreamRequest {
   readonly category: 'discussion' | 'invocation'
   readonly agentId: string
+  readonly persona?: string
   readonly workspace: { readonly workspaceRef: string }
-  readonly equipment: { readonly catalogueVersion: string; readonly resources: readonly unknown[] }
+  readonly equipment: EquipmentRequest
   readonly prompt: readonly { readonly type: string; readonly text: string }[]
+}
+
+export interface OpenSessionRequest {
+  readonly agentId: string
+  readonly persona?: string
+  readonly workspace: { readonly workspaceRef: string }
+  readonly equipment: EquipmentRequest
+  readonly activate: boolean
+}
+
+/**
+ * Persona and equipment are both frozen on a Session's launch envelope, so changing either on a
+ * running Workstream is not a mutation — it is a new Session, which is exactly what this opens.
+ * With `activate: true` the engine also carries the history across (docs/specs/06), so the operator
+ * sees one continuous conversation rather than a restart.
+ */
+export function openSession(workstreamId: string, body: OpenSessionRequest): Promise<{ command: { commandId: string }; session: Session }> {
+  return request(`/v1/workstreams/${workstreamId}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify(body),
+  })
+}
+
+/** Re-materializes a suspended/idle Session's Runtime. Required before prompting one whose ACP connection is gone — see `promptSession`'s `runtime_unavailable`. */
+export function activateSession(sessionId: string): Promise<{ commandId: string }> {
+  return request(`/v1/sessions/${sessionId}/activate`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
+}
+
+/**
+ * The Agent answers with its FULL option set, not just the one that changed, because changing one
+ * may change what the others accept — so the response replaces the client's copy wholesale rather
+ * than patching a single entry. A refusal arrives as 409 `config_option_rejected`.
+ */
+export function setConfigOption(sessionId: string, optionId: string, value: string): Promise<{ configOptions?: readonly unknown[] }> {
+  return request(`/v1/sessions/${sessionId}/config-options/${encodeURIComponent(optionId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+}
+
+export function setMode(sessionId: string, modeId: string): Promise<unknown> {
+  return request(`/v1/sessions/${sessionId}/mode`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modeId }),
+  })
 }
 
 export function createWorkstream(
