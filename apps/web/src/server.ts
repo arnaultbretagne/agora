@@ -19,6 +19,7 @@ import {
   removeWorkstreamMembership,
   createOrReuseCommand,
   createWorkstreamWithFirstSession,
+  transitionCommandState,
   type WorkstreamRole,
 } from '@agora/store-pg'
 import { nameBasedUuid, principalId, type PrincipalId, DomainError } from '@agora/domain'
@@ -307,6 +308,10 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
       runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
       initialPrompt: request.prompt as never,
       actor: { kind: 'human', id: principal },
+      // The Command this 202 just answered with. Provisioning is what actually fulfils it, so
+      // provisioning is what has to settle it — nothing else was, and every CreateWorkstream row
+      // ever written sat in `accepted` for good (found live 2026-08-07).
+      provisioningCommandId: commandId,
     })
   }
 }
@@ -382,11 +387,28 @@ async function handleDeleteWorkstream(deps: ServerDeps, principal: string, works
       request: {},
     })
     commandId = command.id as string
+    // Same as the non-activating OpenSession above: no async worker picks this up, so the mark IS
+    // the deletion and the Command is done the moment it lands.
     await markWorkstreamDeleting(client, workstreamId, now())
+    await settleCommandNow(client, commandId, now())
   } finally {
     client.release()
   }
   sendJson(res, 202, { commandId, state: 'accepted', acceptedAt: now().toISOString() })
+}
+
+/**
+ * Walks a Command whose work is already durable straight to `completed`.
+ *
+ * docs/specs/13's machine is `accepted -> dispatching -> acknowledged -> completed`, with no
+ * shortcut to a terminal state, so even an operation with no remote side has to step through it
+ * rather than jump. Three writes for a local operation is the honest price of not inventing a
+ * transition the spec does not have.
+ */
+async function settleCommandNow(client: pg.PoolClient, commandId: string, at: Date): Promise<void> {
+  await transitionCommandState(client, commandId, 'dispatching', at)
+  await transitionCommandState(client, commandId, 'acknowledged', at)
+  await transitionCommandState(client, commandId, 'completed', at)
 }
 
 // ---------- Sessions (Workstream-scoped) ----------
@@ -459,6 +481,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
       equipmentRequest: request.equipment,
       actor: { kind: 'human', id: principal },
       idempotencyKey,
+      provisioningCommandId: commandId,
       now,
     })
     if (!result.ok) return sendProblem(res, problem(409, result.code, 'Agent could not be activated', result.detail))
@@ -481,6 +504,11 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
         createdAt: now(),
         activate: false,
       })
+      // Nothing is provisioned on this branch — the Session row is the entire effect, and it is
+      // already durable — so the Command is finished here. docs/specs/13 makes `accepted` mean
+      // "not yet dispatched", so leaving it there would misreport a completed operation as
+      // in-flight for ever (the same defect found live on CreateWorkstream, 2026-08-07).
+      await settleCommandNow(openClient, commandId, now())
     } finally {
       openClient.release()
     }

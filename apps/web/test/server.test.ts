@@ -549,3 +549,64 @@ test('the UI shell is served in full — every file index.html asks for, and not
     assert.notEqual(res.status, 200, `${hostile} must not be reachable`)
   }
 })
+
+/**
+ * docs/specs/13's Command machine makes `accepted` mean "not yet dispatched". Found live
+ * 2026-08-07: every `CreateWorkstream` row ever written was still `accepted` — 27 of them in the
+ * production database, including Sessions long since `ready` and answering prompts — because
+ * `transitionCommandState` was only ever reached from the ACP coordinator, which only sees
+ * commands that travel over ACP. `PromptSession` does; provisioning does not.
+ *
+ * Anything polling `GET /v1/commands/{id}` to learn that creation finished therefore waited for
+ * ever. These tests pin each command type that has no ACP leg of its own.
+ */
+test('required: a CreateWorkstream command reaches a terminal state once its Session is provisioned', async () => {
+  const created = await createWorkstream('alice')
+
+  const deadline = Date.now() + 15_000
+  let state = ''
+  for (;;) {
+    const res = await fetch(`${baseUrl}/v1/commands/${created.command.commandId}`, { headers: auth('alice') })
+    assert.equal(res.status, 200)
+    state = ((await res.json()) as { state: string }).state
+    if (state === 'completed' || state === 'failed') break
+    assert.ok(Date.now() < deadline, `command stuck in '${state}' — this is the 2026-08-07 defect`)
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  assert.equal(state, 'completed', 'provisioning succeeded against the fake controller, so the command must complete')
+})
+
+test('required: a DeleteWorkstream command completes — nothing async picks it up, so the mark IS the deletion', async () => {
+  const created = await createWorkstream('alice')
+  const res = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}`, {
+    method: 'DELETE',
+    headers: { ...auth('alice'), ...idem() },
+  })
+  assert.equal(res.status, 202)
+  const { commandId } = (await res.json()) as { commandId: string }
+
+  const detail = await fetch(`${baseUrl}/v1/commands/${commandId}`, { headers: auth('alice') })
+  assert.equal(detail.status, 200)
+  const body = (await detail.json()) as { state: string }
+  assert.equal(body.state, 'completed', 'a delete with no async worker behind it must not report as in-flight')
+})
+
+test('required: an OpenSession command that opens WITHOUT activating completes immediately', async () => {
+  const created = await createWorkstream('alice')
+  const res = await fetch(`${baseUrl}/v1/workstreams/${created.workstream.id}/sessions`, {
+    method: 'POST',
+    headers: { ...auth('alice'), ...idem(), 'content-type': 'application/json' },
+    body: JSON.stringify({
+      agentId: 'fake-agent',
+      activate: false,
+      workspace: { workspaceRef: 'pvc-1' },
+      equipment: { catalogueVersion: '2026-08-01', resources: [] },
+    }),
+  })
+  assert.equal(res.status, 202)
+  const { command } = (await res.json()) as { command: { commandId: string } }
+
+  const detail = await fetch(`${baseUrl}/v1/commands/${command.commandId}`, { headers: auth('alice') })
+  const body = (await detail.json()) as { state: string }
+  assert.equal(body.state, 'completed', 'no provisioning happens on this branch, so nothing else could ever settle it')
+})

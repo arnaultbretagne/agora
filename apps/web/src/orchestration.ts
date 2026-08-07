@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import * as acp from '@agentclientprotocol/sdk'
 import { bootstrapSession, cancelSession as acpCancelSession, promptSession, resumeAcpSession, type PromptSessionHandoffSource } from '@agora/acp'
-import { deriveCommandId, nameBasedUuid, type EquipmentRequest } from '@agora/domain'
+import { deriveCommandId, nameBasedUuid, type CommandState, type EquipmentRequest } from '@agora/domain'
 import {
   bindExecutionGrantRef,
   buildHandoffContent,
@@ -11,6 +11,7 @@ import {
   HANDOFF_SEED_POLICY_VERSION,
   openAdditionalSession,
   setCurrentSession,
+  transitionCommandState,
   transitionSessionPhase,
   upsertAnchor,
 } from '@agora/store-pg'
@@ -63,6 +64,18 @@ export interface ProvisionSessionInput {
   /** Defaults to the fixed `'initial-prompt'` key P05 always used; a Handoff needs its OWN deterministic key (docs/specs/06 "Dispatch exactly one Handoff command per idempotency key"). */
   readonly promptIdempotencyKey?: string
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
+  /**
+   * The durable Command this provisioning run answers for — the `CreateWorkstream` (or
+   * `OpenSession`) row the HTTP layer already inserted and answered 202 with.
+   *
+   * Without it the row stays `accepted` for ever: `transitionCommandState` is reached from exactly
+   * one place, the ACP coordinator, which only ever sees commands that travel over ACP.
+   * `PromptSession` does, so it settles; provisioning does not, so it never did. Found live
+   * 2026-08-07 with all 27 `CreateWorkstream` rows in the production database still `accepted`,
+   * including Sessions long since ready. docs/specs/13 makes `accepted` an in-flight state, so
+   * anything reading command state to decide "is it done yet" waits for ever.
+   */
+  readonly provisioningCommandId?: string
   readonly now?: () => Date
 }
 
@@ -176,6 +189,10 @@ async function failClosed(
 export async function provisionSessionAndPrompt(input: ProvisionSessionInput): Promise<void> {
   const now = input.now ?? (() => new Date())
   try {
+    // docs/specs/13's own state machine: `accepted` may only go to `dispatching` or `failed`, so
+    // provisioning walks the same accepted -> dispatching -> acknowledged -> completed path the ACP
+    // coordinator walks, rather than jumping straight to a terminal state.
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'dispatching', now())
     const { equipment, workstreamCategory, persona } = await loadSessionGrantContext(input.pool, input.sessionId)
     const grant = await input.brokerGrantClient.issue({
       sessionId: input.sessionId,
@@ -218,6 +235,10 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
       acpSessionId: bootstrapped.acpSessionId,
       storePersist: bootstrapped.storePersist,
     })
+    // The Session is live and ACP-bound: everything this Command promised exists. The initial
+    // prompt below dispatches its OWN PromptSession Command, which the coordinator settles
+    // separately — so provisioning must not stay in flight waiting on someone else's turn.
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', now())
 
     if (input.initialPrompt.length > 0) {
       await promptSession({
@@ -235,8 +256,39 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
         now,
       })
     }
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', now())
   } catch (error) {
     await failClosed(input.pool, input.sessionId, 'provisioning_failed', error, input.brokerGrantClient)
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'failed', now(), {
+      code: 'provisioning_failed',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Moves the provisioning Command along, or does nothing when the caller did not name one (resume,
+ * agent switch and the P05-era tests all provision without a Command of their own).
+ *
+ * Never throws: a Session that is genuinely live must not be reported as a failure because its
+ * bookkeeping row could not be updated, and — more sharply — this is also called from the `catch`
+ * above, where throwing would replace the real provisioning error with a bookkeeping one.
+ */
+async function settleProvisioningCommand(
+  pool: pg.Pool,
+  commandId: string | undefined,
+  to: CommandState,
+  at: Date,
+  error?: { readonly code: string; readonly detail?: string },
+): Promise<void> {
+  if (!commandId) return
+  const client = await pool.connect()
+  try {
+    await transitionCommandState(client, commandId, to, at, error)
+  } catch {
+    // Bookkeeping only — the Session's own phase is the truth a caller acts on.
+  } finally {
+    client.release()
   }
 }
 
@@ -260,6 +312,8 @@ export interface ResumeSessionRuntimeInput {
   readonly acpSessionId: string
   /** docs/specs/06 "Choosing a target Session": resuming an anchored Agent still needs the missing `(watermark, head]` range delivered as a Handoff, same as a brand-new Session would. */
   readonly handoffPrompt?: ResumeSessionHandoffPrompt
+  /** Same role as ProvisionSessionInput.provisioningCommandId — a resume is the other way an OpenSession Command gets fulfilled, so it has to be able to settle it too. */
+  readonly provisioningCommandId?: string
   readonly now?: () => Date
 }
 
@@ -271,7 +325,9 @@ export interface ResumeSessionRuntimeInput {
  * Fire-and-forget from the HTTP layer, matching `provisionSessionAndPrompt` (docs/specs/14).
  */
 export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Promise<void> {
+  const nowFn = input.now ?? (() => new Date())
   try {
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'dispatching', nowFn())
     const anchorClient = await input.pool.connect()
     let anchor
     try {
@@ -326,6 +382,7 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       acpSessionId: resumed.acpSessionId,
       storePersist: resumed.storePersist,
     })
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', nowFn())
 
     if (input.handoffPrompt) {
       await promptSession({
@@ -343,8 +400,13 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
         now: input.now ?? (() => new Date()),
       })
     }
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', nowFn())
   } catch (error) {
     await failClosed(input.pool, input.sessionId, 'resume_failed', error, input.brokerGrantClient)
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'failed', nowFn(), {
+      code: 'resume_failed',
+      detail: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -375,7 +437,15 @@ export async function activateSession(
   }
   const phase = row?.phase
 
-  if (phase === 'ready' || phase === 'busy') return { ok: true }
+  // Already live: there is nothing left to provision, so the Command it answers for is done. Not
+  // settling here is what would leave "activate an already-running Session" accepted for ever.
+  if (phase === 'ready' || phase === 'busy') {
+    const at = (input.now ?? (() => new Date()))()
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'dispatching', at)
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', at)
+    await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', at)
+    return { ok: true }
+  }
   if (phase === 'requested') {
     void provisionSessionAndPrompt({ ...input, initialPrompt: [] })
     return { ok: true }
@@ -392,9 +462,14 @@ export async function activateSession(
       agentId: row.agent_id,
       runtimeDefinitionVersion: row.runtime_definition_version,
       acpSessionId: row.acp_session_id,
+      ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
     })
     return { ok: true }
   }
+  await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'failed', (input.now ?? (() => new Date()))(), {
+    code: 'conflict',
+    detail: `Session phase '${phase ?? 'unknown'}' cannot be activated`,
+  })
   return { ok: false, code: 'conflict', detail: `Session phase '${phase ?? 'unknown'}' cannot be activated` }
 }
 
@@ -413,6 +488,8 @@ export interface SwitchAgentInput {
   readonly actor: { readonly kind: 'human' | 'service' | 'system'; readonly id: string }
   /** The caller's own Idempotency-Key (from `POST .../sessions`) — the Handoff's own idempotency key is deterministically derived from it, never a fresh random one, so a retry never duplicates the Handoff. */
   readonly idempotencyKey: string
+  /** The `OpenSession` Command this switch answers for, threaded down every branch so it settles wherever the switch actually lands — see ProvisionSessionInput.provisioningCommandId. */
+  readonly provisioningCommandId?: string
   readonly now?: () => Date
 }
 
@@ -533,6 +610,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       agentId: input.agentId,
       runtimeDefinitionVersion: input.runtimeDefinitionVersion,
       actor: input.actor,
+      ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
       now,
     })
     return result.ok ? { ok: true, sessionId } : result
@@ -552,6 +630,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
         runtimeDefinitionVersion: input.runtimeDefinitionVersion,
         initialPrompt: [],
         actor: input.actor,
+        ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
         now,
       })
     } else {
@@ -565,6 +644,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
         agentId: input.agentId,
         runtimeDefinitionVersion: input.runtimeDefinitionVersion,
         actor: input.actor,
+        ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
         now,
       })
       if (!result.ok) return result
@@ -615,6 +695,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
       handoffSource,
       promptIdempotencyKey,
       actor: input.actor,
+      ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
       now,
     })
     return { ok: true, sessionId }
@@ -643,6 +724,7 @@ export async function switchAgent(input: SwitchAgentInput): Promise<SwitchAgentR
     runtimeDefinitionVersion: input.runtimeDefinitionVersion,
     acpSessionId,
     handoffPrompt: { content, handoffSource, idempotencyKey: promptIdempotencyKey },
+    ...(input.provisioningCommandId ? { provisioningCommandId: input.provisioningCommandId } : {}),
     now,
   })
   return { ok: true, sessionId }
