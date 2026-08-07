@@ -14,13 +14,13 @@ import type { AgentRuntimeDefinition } from './types.js'
  */
 export const CODEX_DEFINITION: AgentRuntimeDefinition = {
   agentId: 'codex',
-  version: '2026-08-05',
+  version: '2026-08-07',
   label: 'Codex',
   description: 'OpenAI Codex via the official Agent Client Protocol adapter, credentialed through the Broker/OneCLI path.',
   // The multi-arch index digest (`docker push`'s own reported digest for the `:latest` tag) —
   // containerd/k0s resolve this to the right platform manifest automatically, same as pulling by
   // tag would, but pinned so a later `:latest` push can never silently change what launches.
-  imageDigest: 'ghcr.io/arnaultbretagne/agora-codex@sha256:9fab3cbb5a1af528ce37e3ec28d8cd76e86027cee2e2b57b5789cc6ad6001326',
+  imageDigest: 'ghcr.io/arnaultbretagne/agora-codex@sha256:9e804f94eea31cc71909f3775973da6651c77433ff9806a0c0ab8f0d6b22fccf',
   // Matches agents/codex/image/Dockerfile's actual layout: the whole monorepo is built in place
   // under /repo, and the entrypoint lives where that build put it (same pattern claude-code's own
   // definition already established for this repo's images).

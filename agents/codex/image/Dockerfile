@@ -28,6 +28,14 @@ COPY --from=build /repo /repo
 # gotcha `agents/claude-code`'s own Dockerfile already documents.
 RUN node /repo/node_modules/.bin/codex-acp --version && \
     test -x /repo/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
+# A POSIX shell, declared. `node:22-alpine` ships busybox `sh` but no `bash`, and leaves `SHELL`
+# unset — and the harness refuses to run any command without one: "No suitable shell found. Claude
+# CLI requires a Posix shell environment. Please ensure you have a valid shell installed and the
+# SHELL environment variable set." (found live 2026-08-07, after tool permissions were unblocked
+# and this turned out to be the next wall). busybox `sh` alone is not enough: the harness's own
+# tooling assumes bash, so install it rather than pointing SHELL at a shell that will surprise it.
+RUN apk add --no-cache bash
+ENV SHELL=/bin/bash
 USER node
 EXPOSE 8080
 WORKDIR /repo/agents/codex

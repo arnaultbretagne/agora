@@ -14,13 +14,13 @@ import type { AgentRuntimeDefinition } from './types.js'
  */
 export const CLAUDE_CODE_DEFINITION: AgentRuntimeDefinition = {
   agentId: 'claude-code',
-  version: '2026-08-05',
+  version: '2026-08-07',
   label: 'Claude Code',
   description: 'Claude Code via the official Agent Client Protocol adapter, credentialed through the Broker/OneCLI path.',
   // The multi-arch index digest (`docker push`'s own reported digest for the `:latest` tag) —
   // containerd/k0s resolve this to the right platform manifest automatically, same as pulling by
   // tag would, but pinned so a later `:latest` push can never silently change what launches.
-  imageDigest: 'ghcr.io/arnaultbretagne/agora-claude-code@sha256:06d22bf5a86a0c5c50c448e8107a778767ff72e9ab087cac66779c53b5d1af57',
+  imageDigest: 'ghcr.io/arnaultbretagne/agora-claude-code@sha256:d20284235125817541819d50623906f1d21f556dcf476581d780139d342ed8c5',
   // Matches agents/claude-code/image/Dockerfile's actual layout: the whole monorepo is built in
   // place under /repo, and the entrypoint lives where that build put it (same pattern
   // fake-definition.ts's own comment already established for this repo's images).
