@@ -92,15 +92,17 @@ const MOBILE_QUERY = '(max-width: 700px)'
 type MenuKey = 'harness' | 'model' | 'agent' | 'equipment'
 
 /**
- * A user turn the operator just sent, held only for this page's lifetime.
+ * A user turn the operator just sent, shown until the projector catches up with it.
  *
- * The engine journals the outgoing `session/prompt` but the projector does not fold it into a
- * transcript item — only an `agent_message_chunk` (or a `user_message_chunk` an Agent chooses to
- * echo) becomes a `message`. So a reload shows the agent's side of a conversation and not the
- * operator's. Echoing locally is what the OLD UI did too, but there the hub genuinely stored the
- * user's message and sent it back; here nothing does, so these are deliberately dropped whenever the
- * transcript is refetched rather than pretended to be durable. See the report/README note: closing
- * this properly is a projector change, not a client one.
+ * Purely optimistic now: since 2026-08-07 the projector folds `session/prompt` into a real `user`
+ * message (PROJECTOR_VERSION 2026-08-07), so an echo's whole life is the few hundred milliseconds
+ * between hitting send and the feed delivering the projected item, after which it is replaced by
+ * the durable one.
+ *
+ * Before that it was the ONLY way a user's own words appeared at all, and because nothing ever
+ * replaced them they accumulated at the bottom of the transcript while the Agent's replies ran
+ * together above — which is exactly how the conversation looked, and read, when it was reported
+ * broken.
  */
 interface PendingEcho {
   readonly id: string
@@ -381,16 +383,26 @@ function renderTopbar(): void {
  * ------------------------------------------------------------------ */
 
 /**
- * Projected turns plus this page's un-projected user echoes, in one ordering. An echo is dropped as
- * soon as a real `user` message with the same text is projected, so an Agent that DOES echo the
- * prompt back over ACP does not produce the turn twice.
+ * The projected transcript, plus any echo the projector has not caught up with yet.
+ *
+ * Retired echoes are matched by COUNT, not just by presence: asking the same question twice is
+ * ordinary, and a set membership test would have let one projected copy retire both echoes, making
+ * the second question vanish from the screen until a refetch brought it back.
  */
 function transcript(): ChatMessage[] {
   const projected = messagesFromItems(state.items)
-  const projectedUserText = new Set(projected.filter((message) => message.role === 'user').map((message) => message.text))
+  const remaining = new Map<string, number>()
+  for (const message of projected) {
+    if (message.role === 'user') remaining.set(message.text, (remaining.get(message.text) ?? 0) + 1)
+  }
   const maxSeq = state.items.reduce((max, item) => Math.max(max, item.firstWorkstreamSeq), 0)
   const echoes = state.echoes
-    .filter((echo) => !projectedUserText.has(echo.text))
+    .filter((echo) => {
+      const left = remaining.get(echo.text) ?? 0
+      if (left === 0) return true
+      remaining.set(echo.text, left - 1)
+      return false
+    })
     .map((echo) => ({ id: echo.id, role: 'user' as const, text: echo.text, completed: true, seq: echo.seq }))
   const ordered = [
     ...projected.map((message, index) => ({ ...message, seq: index })),

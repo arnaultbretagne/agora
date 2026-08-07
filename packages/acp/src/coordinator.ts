@@ -63,6 +63,37 @@ function methodNotSupported<Response>(method: string): () => Response {
   }
 }
 
+/**
+ * Answers the Agent's tool-permission requests without a human in the loop.
+ *
+ * There is nobody to ask. A Session Runtime runs unattended, so the previous behaviour — replying
+ * `cancelled` whenever no handler was supplied, which was always — aborted every single tool call
+ * the Agent ever attempted. Found live 2026-08-07: `claude-code` could not run so much as `bash`,
+ * reporting "Tool use aborted" for everything.
+ *
+ * Approving is the architecture's own answer, not a shortcut around it. agent-runtime ADR 0003 is
+ * "libre dedans, borné dehors": a Session Runtime Pod is gVisor-sandboxed, runs non-root, holds no
+ * Kubernetes token, has an ephemeral per-Pod `emptyDir` for a workspace, cannot reach providers or
+ * the Internet except through the Broker relay, and cannot see product Postgres or another
+ * Session's custody. The permission prompt is a harness affordance designed for a developer's own
+ * machine, where the blast radius is that machine. Here the blast radius is the sandbox, and the
+ * sandbox is the boundary — which is why the OLD system launched its runtimes with
+ * `--dangerously-skip-permissions` for the same reason, and why this one still passes that flag.
+ *
+ * `allow_always` is preferred over `allow_once` purely to save round trips; both mean the same
+ * thing here. `cancelled` survives as the answer when the Agent offers no allow option at all,
+ * because inventing one would be answering a question that was not asked.
+ *
+ * A caller that DOES have somewhere to put the question — a durable pending-request model and a UI
+ * to decide it — supplies `onPermissionRequest` and this is never reached.
+ */
+export function autoApprove(params: acp.RequestPermissionRequest): acp.RequestPermissionResponse {
+  const options = params.options ?? []
+  const chosen = options.find((option) => option.kind === 'allow_always') ?? options.find((option) => option.kind === 'allow_once')
+  if (!chosen) return { outcome: { outcome: 'cancelled' } }
+  return { outcome: { outcome: 'selected', optionId: chosen.optionId } }
+}
+
 interface ClientAppOptions {
   readonly onPermissionRequest?: ((params: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>) | undefined
 }
@@ -74,7 +105,7 @@ function buildClientApp(options: ClientAppOptions): acp.ClientApp {
     .onNotification(acp.methods.client.session.update, () => {})
     .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
       if (options.onPermissionRequest) return options.onPermissionRequest(params)
-      return { outcome: { outcome: 'cancelled' } }
+      return autoApprove(params)
     })
     .onRequest(acp.methods.client.fs.readTextFile, methodNotSupported(acp.methods.client.fs.readTextFile))
     .onRequest(acp.methods.client.fs.writeTextFile, methodNotSupported(acp.methods.client.fs.writeTextFile))

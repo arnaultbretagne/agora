@@ -460,3 +460,87 @@ test('required: projection truncate/rebuild yields identical item hashes', async
     }
   })
 })
+
+
+/**
+ * Found live 2026-08-07: the read model held only the Agent's half of the conversation. Replies
+ * rendered with nothing between them, and the only thing a client could do about it was paint local
+ * echoes that vanish on refetch — "les bulles s'empilent en bas, sa réponse continue dans un bloc
+ * unique". `session/prompt` opened a Turn and dropped its content on the floor.
+ */
+test('required: a user prompt is projected as a message — a transcript that omits the questions is not a transcript', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const turnId = await openTurnCommand(pool, wsId, sessionId, 'prompt-projection')
+
+    await append(pool, {
+      workstreamId: wsId,
+      sessionId,
+      direction: 'client_to_agent',
+      rpcKind: 'request',
+      method: 'session/prompt',
+      rpcId: 'req-1',
+      envelope: envelope({
+        id: 'req-1',
+        method: 'session/prompt',
+        params: { sessionId: 'acp-1', prompt: [{ type: 'text', text: 'ma question' }] },
+      }),
+      commandId: turnId,
+      purpose: 'user',
+      ingestMode: 'live',
+    })
+    await runProjector(pool, wsId)
+
+    const client = await pool.connect()
+    try {
+      const { rows } = await client.query<{ role: string; content: { text?: string }[]; turn_id: string | null }>(
+        `SELECT m.role, m.content, i.turn_id FROM projection.messages m
+           JOIN projection.workstream_items i ON i.id = m.item_id
+          WHERE i.workstream_id = $1 AND m.role = 'user'`,
+        [wsId],
+      )
+      assert.equal(rows.length, 1, 'the prompt the user actually sent must be in the read model')
+      assert.equal(rows[0]?.content?.[0]?.text, 'ma question')
+      assert.equal(rows[0]?.turn_id, turnId, 'and it belongs to the turn it opened, so it orders before the reply')
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('a handoff prompt is NOT rendered as something the user typed', async () => {
+  await withTestDatabase(async (pool) => {
+    const { workstreamId: wsId, sessionId } = await seedWorkstream(pool)
+    const turnId = await openTurnCommand(pool, wsId, sessionId, 'handoff-projection')
+
+    await append(pool, {
+      workstreamId: wsId,
+      sessionId,
+      direction: 'client_to_agent',
+      rpcKind: 'request',
+      method: 'session/prompt',
+      rpcId: 'req-1',
+      envelope: envelope({
+        id: 'req-1',
+        method: 'session/prompt',
+        params: { sessionId: 'acp-1', prompt: [{ type: 'text', text: 'machine-built seed content' }] },
+      }),
+      commandId: turnId,
+      purpose: 'handoff',
+      ingestMode: 'live',
+    })
+    await runProjector(pool, wsId)
+
+    const client = await pool.connect()
+    try {
+      const { rows } = await client.query(
+        `SELECT 1 FROM projection.messages m JOIN projection.workstream_items i ON i.id = m.item_id
+          WHERE i.workstream_id = $1 AND m.role = 'user'`,
+        [wsId],
+      )
+      assert.equal(rows.length, 0, 'a handoff carries seed content and has its own item — attributing it to the user would misreport who said it')
+    } finally {
+      client.release()
+    }
+  })
+})

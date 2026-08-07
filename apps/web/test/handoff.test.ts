@@ -264,8 +264,14 @@ test('required exit criterion: full A -> B -> A handoff — B (new Agent) gets (
       // carrying B's reply text.
       const client = await pool.connect()
       try {
+        // `role = 'agent'` since 2026-08-07: the projector folds the user's own prompt into a
+        // `message` as well, and "B turn 1" is one of those — counting both roles together would
+        // stop measuring what this assertion is about. A Handoff prompt is deliberately NOT
+        // projected as a user message, so it contributes nothing here either way.
         const { rows: bMessages } = await client.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM projection.workstream_items WHERE workstream_id = $1 AND session_id = $2 AND item_kind = 'message'`,
+          `SELECT count(*)::int AS n FROM projection.workstream_items i
+             JOIN projection.messages m ON m.item_id = i.id
+            WHERE i.workstream_id = $1 AND i.session_id = $2 AND i.item_kind = 'message' AND m.role = 'agent'`,
           [wsId, sessionB],
         )
         assert.equal(bMessages[0]!.n, 2, "B's own two replies (to the Handoff prompt, and to 'B turn 1'), never duplicated")

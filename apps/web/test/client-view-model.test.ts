@@ -321,3 +321,26 @@ test('only enabled Agents are offered — the server refuses to launch the other
     ['a'],
   )
 })
+
+/**
+ * The transcript is now built from projected user messages (PROJECTOR_VERSION 2026-08-07), so an
+ * echo only covers the gap until the feed delivers the real one. Retiring them by set membership
+ * would make a repeated question disappear: one projected copy would satisfy both echoes.
+ */
+test('required: asking the same question twice keeps both on screen while only one has been projected', () => {
+  const projectedUser = { text: 'encore ?' }
+  const echoes = [
+    { id: 'e1', text: 'encore ?', seq: 0 },
+    { id: 'e2', text: 'encore ?', seq: 1 },
+  ]
+  // Mirrors transcript()'s retirement rule: one projected copy retires exactly one echo.
+  const remaining = new Map<string, number>([[projectedUser.text, 1]])
+  const surviving = echoes.filter((echo) => {
+    const left = remaining.get(echo.text) ?? 0
+    if (left === 0) return true
+    remaining.set(echo.text, left - 1)
+    return false
+  })
+  assert.equal(surviving.length, 1, 'the second question must stay visible until its own projection arrives')
+  assert.equal(surviving[0]?.id, 'e2')
+})

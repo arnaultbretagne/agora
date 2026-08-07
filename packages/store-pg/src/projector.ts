@@ -17,7 +17,11 @@ import { advanceCheckpoint, appendFeedEvent, getCheckpoint } from './projections
  * A version bump here is "adopt a new ACP field, rebuild" (ADR 0004), never a canonical migration.
  */
 export const PROJECTOR_NAME = 'agora-web'
-export const PROJECTOR_VERSION = '2026-08-03'
+// 2026-08-07: user prompts are projected as `message` items. The read model now contains items a
+// previous run never produced, which is precisely what a version bump is for (ADR 0004, "adopt a
+// new ACP field, rebuild"). Conversations projected before this keep only the Agent's half until
+// they are rebuilt — nothing is lost, since the journal has always held the prompts.
+export const PROJECTOR_VERSION = '2026-08-07'
 
 /**
  * Fixed namespace for deriving an item's identity from (session, kind, entity key) — never reused
@@ -653,8 +657,9 @@ function toUsageValue(usage: Record<string, unknown> | undefined | null): Json {
   }
 }
 
-async function openTurn(client: PoolClient, event: RawEventRow, workstreamId: string, touched: TouchTracker): Promise<void> {
-  if (!event.command_id) return
+/** Returns the opened Turn's id (the Command id), so callers can attach items to it — a user's own prompt message needs it. */
+async function openTurn(client: PoolClient, event: RawEventRow, workstreamId: string, touched: TouchTracker): Promise<string | null> {
+  if (!event.command_id) return null
   const purpose = event.purpose === 'protocol' ? 'user' : event.purpose
   await client.query(
     `INSERT INTO projection.turns
@@ -664,6 +669,7 @@ async function openTurn(client: PoolClient, event: RawEventRow, workstreamId: st
     [event.command_id, workstreamId, event.session_id, purpose, event.workstream_seq, event.observed_at],
   )
   touched.turns.add(event.command_id)
+  return event.command_id
 }
 
 interface HandoffCommandRow {
@@ -838,9 +844,24 @@ async function applyNotification(client: PoolClient, event: RawEventRow, workstr
 
 async function applyRequest(client: PoolClient, event: RawEventRow, workstreamId: string, turnId: string | null, touched: TouchTracker): Promise<void> {
   if (event.method === 'session/prompt' && event.direction === 'client_to_agent') {
-    await openTurn(client, event, workstreamId, touched)
+    const openedTurnId = await openTurn(client, event, workstreamId, touched)
     if (event.purpose === 'handoff' && event.command_id) {
       await upsertHandoffItem(client, event, workstreamId, event.command_id, 'pending', touched)
+    } else {
+      // Project what the USER actually said. Without this the read model held only the Agent's half
+      // of the conversation: a reload showed replies with nothing between them, and a client could
+      // do no better than paint local echoes that vanish on refetch — which is exactly how it
+      // looked live on 2026-08-07 ("les bulles s'empilent en bas, sa réponse continue dans un bloc
+      // unique"). A transcript that omits the questions is not a transcript.
+      //
+      // Only `user` prompts. A handoff carries machine-built seed content and already has its own
+      // item above; rendering it as something the user typed would be a lie about who said it.
+      const prompt = (event.envelope['params'] as Record<string, unknown> | undefined)?.['prompt']
+      if (Array.isArray(prompt)) {
+        for (const block of prompt as ContentBlock[]) {
+          await upsertMessage(client, event, workstreamId, openedTurnId, 'user', { content: block }, touched)
+        }
+      }
     }
     return
   }

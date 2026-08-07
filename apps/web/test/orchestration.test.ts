@@ -413,14 +413,22 @@ test('required exit criterion: resume rematerializes and reconnects with the SAM
     const client = await pool.connect()
     try {
       await projectWorkstream(client, wsId, new Date())
-      const { rows } = await client.query<{ id: string; item_kind: string }>(
-        'SELECT id, item_kind FROM projection.workstream_items WHERE workstream_id = $1',
+      // Split by role since 2026-08-07: the projector now folds the user's own prompt into a
+      // `message` too, so an undifferentiated count would say 4 and mean nothing. What this test
+      // is actually about is the AGENT's side not being replayed on resume.
+      const { rows } = await client.query<{ id: string; item_kind: string; role: string | null }>(
+        `SELECT i.id, i.item_kind, m.role FROM projection.workstream_items i
+           LEFT JOIN projection.messages m ON m.item_id = i.id
+          WHERE i.workstream_id = $1`,
         [wsId],
       )
       const messageItems = rows.filter((r) => r.item_kind === 'message')
       const uniqueIds = new Set(messageItems.map((r) => r.id))
       assert.equal(uniqueIds.size, messageItems.length, 'no duplicated Workstream items after resume')
-      assert.equal(messageItems.length, 2, 'exactly one message per prompt (before suspend + after resume), no replay duplication')
+      const agentReplies = messageItems.filter((r) => r.role === 'agent')
+      const userPrompts = messageItems.filter((r) => r.role === 'user')
+      assert.equal(agentReplies.length, 2, 'exactly one agent reply per prompt (before suspend + after resume), no replay duplication')
+      assert.equal(userPrompts.length, 2, 'and both prompts the user sent are in the transcript, each exactly once')
     } finally {
       client.release()
     }
