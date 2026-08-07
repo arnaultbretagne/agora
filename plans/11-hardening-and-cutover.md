@@ -26,7 +26,7 @@
 
 - [x] Deploy Web, control plane, controller, Broker/relay, OneCLI and Session Runtimes with separate
   identities.
-- [ ] Prove least privilege with negative authorization tests.
+- [x] Prove least privilege with negative authorization tests.
 - [ ] Pin and attest images/dependencies. *(our own images are pinned by digest; nothing is
   attested — no provenance verification, no signature check.)*
 - [ ] Pin the OneCLI image by digest and verify its release/source provenance. *(pinned to
@@ -43,10 +43,10 @@
 - [x] Verify every published route set ends in explicit `block *`.
 - [ ] Prove gateway stdout is query-free and manual approval is disabled on content-bearing routes.
 - [ ] Exercise OneCLI control/gateway/relay outage, CA rotation and policy-cache invalidation.
+  *(the control-plane outage is exercised and passes — see Evidence. CA rotation and policy-cache
+  invalidation are not.)*
 - [ ] Exercise Claude Max and ChatGPT token expiry/renewal without changing custody.
-- [ ] Configure resource limits, quotas and admission policy. *(limits set on every workload;
-  `agora-runs` has quota + LimitRange + the untrusted-compute admission policy. `agora` and
-  `agora-onecli` have neither quota nor LimitRange.)*
+- [x] Configure resource limits, quotas and admission policy.
 - [ ] Implement dashboards/alerts from `12-observability.md`.
 - [ ] Exercise every crash boundary and timeout.
 - [x] Prove product+custody backup/restore consistency. *(one CNPG backup carries `product.*`,
@@ -282,6 +282,38 @@ reach a terminal state. All 27 rows are `accepted`, including ones created after
 `PromptSession` settles correctly. The functional path is unaffected — Session reaches `ready`, the
 grant is issued, the Pod materializes, the turn completes with a real reply — but any client
 polling `GET /v1/commands/{id}` to learn that creation finished will wait forever.
+
+**2026-08-07, later — least privilege proven, namespaces bounded, one outage exercised.**
+
+*Negative authorization.* The claim "least privilege" is now carried by SQL that is actually refused
+and requests that are actually rejected, in both halves. At the database: the Broker cannot read or
+write product truth (docs/adr/0011's broker-local rule, enforced rather than asserted); no product
+role can reach `broker.upstream_authority` where the encrypted upstream credential lives; the
+projector cannot append to the journal it reads. One positive assertion sits alongside them on
+purpose — a suite that only ever asserts refusals would pass against a database with no tables at
+all. Over HTTP: a non-member is told a Workstream does not exist rather than that they may not have
+it (403 is an existence oracle), cannot mutate it, and cannot drive its Session even knowing the id;
+every mutating route demands an identity. The refusals are checked by re-reading the rows, not by
+trusting status codes.
+
+That work corrected a claim this plan itself had relied on. The controller's role was described —
+here, in `idle-reaper.ts`, and out loud — as unable to read product truth *at all*. The test written
+to prove it failed: `002-access.sql` grants `agora_custody_runtime` a five-column view of
+`product.sessions`. The conclusion survives for a narrower reason (idleness is defined by turns, and
+turns are what it cannot see), and both the comment and the test now say the true thing. A boundary
+nobody has tried to cross is a boundary nobody knows the shape of.
+
+*Quotas.* `agora` and `agora-onecli` had no quota and no LimitRange; only `agora-runs` did. Both now
+have both. Memory is what is bounded and CPU deliberately is not: CPU is compressible, and a quota
+naming a resource forces every container to declare it — several here legitimately set no CPU
+ceiling, so naming it would convert the next rollout into a rejection for no safety gained.
+
+*OneCLI control-plane outage, exercised live.* `onecli` scaled to zero, a real Workstream created
+through the real API. The Session failed closed — no fallback, no silent degradation — with a named
+reason reaching the wire as `failure: {code: 'provisioning_failed', detail:
+'ensureSelectiveAgent(...) failed: OneCLIError: fetch failed'}`. OneCLI restored, and the next
+Workstream answered `RECOVERED` end to end. Gateway-level and relay-level outages, CA rotation and
+policy-cache invalidation remain unexercised.
 
 Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback) are
 still NOT met, and note that decommissioning ahead of a rollback rehearsal means there is no longer
