@@ -258,3 +258,40 @@ test('required: a Session that fails to suspend is reported as such, never count
     }
   })
 })
+
+/**
+ * The reason the run namespace filled up again after the reaper shipped: the reaper suspends, the
+ * suspension fails, `failClosed` marks the Session `failed` — and the Pod it was trying to reclaim
+ * stayed exactly where it was, holding its quota slot for good. A reclamation path that leaks on
+ * its own failure reclaims nothing. Found live 2026-08-07 with three orphaned Pods whose Sessions
+ * had all been terminal for over an hour.
+ */
+test('required: a Session that fails to suspend still gives its Pod back', async () => {
+  await withTestDatabase(async (pool) => {
+    const connections = new SessionConnectionRegistry()
+    const controller = await startFakeController({}, pool)
+    try {
+      const { sessionId } = await readySession(pool, controller, connections)
+      controller.failNextCapture()
+
+      const later = new Date(Date.now() + 2 * 60 * 60_000)
+      await reapIdleSessions({
+        pool,
+        transport: controller,
+        brokerGrantClient,
+        connections,
+        idleAfterMs: 60 * 60_000,
+        now: () => later,
+        log: () => {},
+      })
+
+      assert.match(await phaseOf(pool, sessionId), /^failed/, 'the capture genuinely failed')
+      assert.ok(
+        controller.dematerializeCalls.includes(sessionId),
+        'and the Runtime was torn down anyway — a terminal Session must never keep a Pod, whatever went wrong',
+      )
+    } finally {
+      await controller.close()
+    }
+  })
+})

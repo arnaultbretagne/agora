@@ -167,6 +167,7 @@ async function failClosed(
   code: string,
   error: unknown,
   brokerGrantClient?: BrokerGrantClient,
+  transport?: SessionRuntimeControlTransport,
 ): Promise<void> {
   const client = await pool.connect()
   try {
@@ -183,6 +184,25 @@ async function failClosed(
   // A failed Session is terminal: its grant and OneCLI Agent must not outlive it. This is where
   // tonight's 20 orphaned Agents actually came from — provisioning failures, not clean closes.
   if (brokerGrantClient) await revokeSessionGrant({ pool, brokerGrantClient, sessionId })
+
+  // Neither may its Pod. `closeSession` and `suspendSession` both tear the Runtime down; this path
+  // — which handles EVERY failure either of them can hit — did not, so a Session that failed kept
+  // its Pod, and its quota slot, for good.
+  //
+  // That is what made the run namespace fill up again after the idle reaper shipped: the reaper
+  // suspends, the suspension fails (a Runtime already gone, a Pod without an address yet), the
+  // Session goes `failed` — and the Pod it was trying to reclaim stays exactly where it was. A
+  // reclamation path that leaks on its own failure reclaims nothing.
+  //
+  // Best-effort by construction: the Session is already terminal and its phase is already durable,
+  // so a controller hiccup here must not throw over the top of the real failure that got us here.
+  if (transport) {
+    try {
+      await dematerializeSessionRuntime(transport, sessionId as never, randomUUID())
+    } catch (error) {
+      process.stderr.write(`failClosed: could not dematerialize ${sessionId}: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
 }
 
 /** Fire-and-forget from the HTTP layer (docs/specs/14 "Provisioning continues asynchronously"). */
@@ -258,7 +278,7 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
     }
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', now())
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'provisioning_failed', error, input.brokerGrantClient)
+    await failClosed(input.pool, input.sessionId, 'provisioning_failed', error, input.brokerGrantClient, input.transport)
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'failed', now(), {
       code: 'provisioning_failed',
       detail: error instanceof Error ? error.message : String(error),
@@ -402,7 +422,7 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
     }
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', nowFn())
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'resume_failed', error, input.brokerGrantClient)
+    await failClosed(input.pool, input.sessionId, 'resume_failed', error, input.brokerGrantClient, input.transport)
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'failed', nowFn(), {
       code: 'resume_failed',
       detail: error instanceof Error ? error.message : String(error),
@@ -819,7 +839,7 @@ export async function suspendSession(input: SuspendSessionInput): Promise<void> 
       closeClient.release()
     }
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'suspend_failed', error, input.brokerGrantClient)
+    await failClosed(input.pool, input.sessionId, 'suspend_failed', error, input.brokerGrantClient, input.transport)
   }
 }
 
@@ -853,6 +873,6 @@ export async function closeSession(input: SessionLifecycleInput & { readonly now
     // only once the Session is durably 'closed', so a Broker hiccup can never strand the phase.
     await revokeSessionGrant({ pool: input.pool, brokerGrantClient: input.brokerGrantClient, sessionId: input.sessionId })
   } catch (error) {
-    await failClosed(input.pool, input.sessionId, 'close_failed', error, input.brokerGrantClient)
+    await failClosed(input.pool, input.sessionId, 'close_failed', error, input.brokerGrantClient, input.transport)
   }
 }
