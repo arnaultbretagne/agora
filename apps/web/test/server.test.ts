@@ -651,3 +651,105 @@ test('required: the feed sends its response headers immediately, before any even
     controller.abort()
   }
 })
+
+/* ------------------------------------------------------------------ *
+ *  Selecting a harness, a persona, an equipment set                   *
+ *                                                                     *
+ *  The engine's answer to "change what this conversation runs as" is   *
+ *  the same for all three: a NEW Session on the same Workstream. They  *
+ *  are launch arguments, frozen at creation — so the interface cannot  *
+ *  offer them as in-place edits, and the tests below pin the behaviour *
+ *  that constraint is built on rather than the UI that expresses it.   *
+ * ------------------------------------------------------------------ */
+
+async function openSessionOn(
+  workstreamId: string,
+  body: Record<string, unknown>,
+  principal = 'alice',
+): Promise<{ status: number; session?: { id: string; agentId: string; persona?: string; ordinal: number; current: boolean } }> {
+  const res = await fetch(`${baseUrl}/v1/workstreams/${workstreamId}/sessions`, {
+    method: 'POST',
+    headers: { ...auth(principal), ...idem(), 'content-type': 'application/json' },
+    body: JSON.stringify({ workspace: { workspaceRef: 'scratch' }, equipment: { catalogueVersion: 'equipment-v1', resources: [] }, ...body }),
+  })
+  if (res.status !== 202) return { status: res.status }
+  const parsed = (await res.json()) as { session: { id: string; agentId: string; persona?: string; ordinal: number; current: boolean } }
+  return { status: res.status, session: parsed.session }
+}
+
+test('required: changing the persona opens a NEW Session rather than mutating the current one', async () => {
+  const created = await createWorkstream('alice')
+  const first = created.session.id
+
+  const opened = await openSessionOn(created.workstream.id, { agentId: 'fake-agent', persona: 'writer', activate: false })
+  assert.equal(opened.status, 202)
+  assert.notEqual(opened.session?.id, first, 'a persona change must not reuse the Session it is changing')
+  assert.equal(opened.session?.persona, 'writer')
+  assert.equal(opened.session?.ordinal, 2, 'and it is the next Session of the same Workstream, not a new Workstream')
+
+  // The original Session keeps the persona it was launched with: frozen means frozen.
+  const { rows } = await db.pool.query<{ persona: string | null }>('SELECT persona FROM product.sessions WHERE id = $1', [first])
+  assert.equal(rows[0]?.persona, null, 'the Session that already ran is untouched by a later choice')
+})
+
+test('required: a persona the target Agent does not review is refused on open-session too, not only at creation', async () => {
+  const created = await createWorkstream('alice')
+  const opened = await openSessionOn(created.workstream.id, { agentId: 'fake-agent-b', persona: 'writer', activate: false })
+  assert.equal(opened.status, 409, 'the same check must guard both entry points — one guarded door is no door')
+})
+
+test('required: switching harness opens a new Session for the new Agent, leaving the old one intact', async () => {
+  const created = await createWorkstream('alice')
+  const first = created.session.id
+
+  const opened = await openSessionOn(created.workstream.id, { agentId: 'fake-agent-b', activate: false })
+  assert.equal(opened.status, 202)
+  assert.equal(opened.session?.agentId, 'fake-agent-b')
+  assert.notEqual(opened.session?.id, first)
+
+  const { rows } = await db.pool.query<{ id: string; agent_id: string }>(
+    'SELECT id, agent_id FROM product.sessions WHERE workstream_id = $1 ORDER BY ordinal',
+    [created.workstream.id],
+  )
+  assert.deepEqual(
+    rows.map((r) => r.agent_id),
+    ['fake-agent', 'fake-agent-b'],
+    'both harnesses keep their own Session — this is what makes the handoff path possible at all',
+  )
+})
+
+test('required: the equipment a Session was launched with is frozen on it, so re-equipping is a new Session', async () => {
+  const created = await createWorkstream('alice')
+  const opened = await openSessionOn(created.workstream.id, {
+    agentId: 'fake-agent',
+    activate: false,
+    equipment: { catalogueVersion: 'equipment-v1', resources: [{ resource: 'vault', access: 'read' }] },
+  })
+  assert.equal(opened.status, 202)
+  assert.notEqual(opened.session?.id, created.session.id)
+
+  const { rows } = await db.pool.query<{ equipment_request: { resources?: unknown[] } }>(
+    'SELECT equipment_request FROM product.sessions WHERE id = $1',
+    [opened.session!.id],
+  )
+  assert.deepEqual(rows[0]?.equipment_request?.resources, [{ resource: 'vault', access: 'read' }], 'the new Session carries the new envelope')
+
+  const { rows: original } = await db.pool.query<{ equipment_request: { resources?: unknown[] } }>(
+    'SELECT equipment_request FROM product.sessions WHERE id = $1',
+    [created.session.id],
+  )
+  assert.deepEqual(original[0]?.equipment_request?.resources, [], 'and the Session that already ran keeps what it actually ran with')
+})
+
+test('required: an unknown harness is refused on open-session, before a Session row exists', async () => {
+  const created = await createWorkstream('alice')
+  const before = await db.pool.query<{ n: string }>('SELECT count(*)::text AS n FROM product.sessions WHERE workstream_id = $1', [
+    created.workstream.id,
+  ])
+  const opened = await openSessionOn(created.workstream.id, { agentId: 'no-such-agent', activate: false })
+  assert.equal(opened.status, 409)
+  const after = await db.pool.query<{ n: string }>('SELECT count(*)::text AS n FROM product.sessions WHERE workstream_id = $1', [
+    created.workstream.id,
+  ])
+  assert.equal(after.rows[0]?.n, before.rows[0]?.n, 'a refused choice must leave nothing behind')
+})
