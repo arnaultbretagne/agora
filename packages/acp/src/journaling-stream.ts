@@ -20,6 +20,29 @@ export interface DuplexByteStream {
 
 const decoder = new TextDecoder()
 
+/**
+ * The largest single NDJSON frame this will assemble before giving up.
+ *
+ * There has to be one. A peer that never emits a newline — a wedged harness, a runaway tool result,
+ * a frame that simply is enormous — otherwise grows `pending` without limit, and the control plane
+ * holds one of these buffers per direction per live Session. Nothing else in the path bounds it.
+ *
+ * 32 MiB is far above any real ACP frame (the largest observed are model replies and tool outputs,
+ * orders of magnitude smaller) and far below what would threaten this process. Exceeding it throws,
+ * which fails the connection closed — the right outcome, because a frame that cannot be journaled
+ * must never be forwarded: docs/specs/04's whole guarantee is that the commit precedes the handling.
+ */
+export const MAX_FRAME_BYTES = 32 * 1024 * 1024
+
+export class FrameTooLargeError extends Error {
+  readonly code = 'acp_frame_too_large'
+
+  constructor(bytes: number) {
+    super(`ACP frame exceeded ${MAX_FRAME_BYTES} bytes without a newline (${bytes} buffered) — refusing to keep growing`)
+    this.name = 'FrameTooLargeError'
+  }
+}
+
 class NdJsonFrameBuffer {
   private pending = new Uint8Array()
 
@@ -30,13 +53,18 @@ class NdJsonFrameBuffer {
 
     const frames: Uint8Array[] = []
     let frameStart = 0
-    for (let index = 0; index < merged.byteLength; index += 1) {
+    // Scanning starts where the previous scan stopped, not at zero. The old code rescanned the whole
+    // accumulated buffer on every chunk, which is quadratic in the size of a large frame — a 32 MiB
+    // reply arriving in 64 KiB chunks meant ~500 passes over an ever-growing array, on the hot path
+    // for every frame in both directions.
+    for (let index = this.pending.byteLength; index < merged.byteLength; index += 1) {
       if (merged[index] === 0x0a) {
         frames.push(merged.slice(frameStart, index + 1))
         frameStart = index + 1
       }
     }
     this.pending = merged.slice(frameStart)
+    if (this.pending.byteLength > MAX_FRAME_BYTES) throw new FrameTooLargeError(this.pending.byteLength)
     return frames
   }
 

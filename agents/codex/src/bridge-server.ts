@@ -200,6 +200,9 @@ async function pullRestoreBytes(restore: { readonly url: string; readonly creden
 
 /** Splits a byte stream into newline-delimited frames — same shape as `agents/claude-code`'s own,
  * minimal here since this tap only reads, it never needs to reassemble for replay. */
+/** Ceiling for the read-only session-id tap's partial frame — see the drop below. */
+const MAX_TAP_BUFFER_BYTES = 32 * 1024 * 1024
+
 function ndjsonFrames(onFrame: (frame: Uint8Array) => void): (chunk: Uint8Array) => void {
   let pending = new Uint8Array(0)
   return (chunk: Uint8Array) => {
@@ -207,13 +210,21 @@ function ndjsonFrames(onFrame: (frame: Uint8Array) => void): (chunk: Uint8Array)
     merged.set(pending)
     merged.set(chunk, pending.byteLength)
     let start = 0
-    for (let i = 0; i < merged.byteLength; i += 1) {
+    // From the end of the previous scan, not from zero: `pending` is by construction the tail after
+    // the last newline, so it can never contain one. Rescanning it made this quadratic in the size
+    // of a large frame.
+    for (let i = pending.byteLength; i < merged.byteLength; i += 1) {
       if (merged[i] === 0x0a) {
         onFrame(merged.slice(start, i + 1))
         start = i + 1
       }
     }
     pending = merged.slice(start)
+    // This tap only watches for the session id, so a frame it can never complete is worth nothing —
+    // but it still accumulates, and a harness that stops emitting newlines would grow it without
+    // limit inside the Pod. Dropping the partial costs a session-id detection that was never going
+    // to arrive; keeping it costs the Pod's memory. Same ceiling as packages/acp's own framing.
+    if (pending.byteLength > MAX_TAP_BUFFER_BYTES) pending = new Uint8Array(0)
   }
 }
 

@@ -48,7 +48,11 @@
 - [ ] Exercise Claude Max and ChatGPT token expiry/renewal without changing custody.
 - [x] Configure resource limits, quotas and admission policy.
 - [ ] Implement dashboards/alerts from `12-observability.md`.
-- [ ] Exercise every crash boundary and timeout.
+- [ ] Exercise every crash boundary and timeout. *(most of `Required tests` is covered — duplicate
+  Pod, stuck deletion, concurrent materialize, controller restart reconstruction, custody checksum
+  mismatch, projector truncate/rebuild determinism, Broker/relay restart, OneCLI control outage,
+  replayed cross-Session workload identity, unauthorized cross-user access, oversized ACP frame.
+  Not covered: database outage mid-transaction, adapter upgrade/rollback with retained custody.)*
 - [x] Prove product+custody backup/restore consistency. *(one CNPG backup carries `product.*`,
   `projection.*`, `custody.*` and `broker.*` in a single consistent snapshot; the daily drill
   restores it from R2 and queries the real product schema — 26 workstreams, 26 sessions.)*
@@ -314,6 +318,18 @@ reason reaching the wire as `failure: {code: 'provisioning_failed', detail:
 'ensureSelectiveAgent(...) failed: OneCLIError: fetch failed'}`. OneCLI restored, and the next
 Workstream answered `RECOVERED` end to end. Gateway-level and relay-level outages, CA rotation and
 policy-cache invalidation remain unexercised.
+
+*Oversized ACP frame, and the bug it found.* The NDJSON framing beneath the typed SDK buffered
+whatever arrived until it saw a newline, with no ceiling. A peer that never sent one — a wedged
+harness, a runaway tool result — grew that buffer without limit, and the control plane holds one per
+direction per live Session: a memory-exhaustion path reachable by an Agent simply misbehaving. It
+also rescanned the whole accumulated buffer on every chunk, quadratic in the size of a large frame,
+on the hot path for every frame in both directions. Both fixed: a 32 MiB ceiling that fails the
+connection closed (a frame that cannot be journaled must never be forwarded — docs/specs/04's
+commit-precedes-handling guarantee), and a scan that resumes where the last one stopped. The same
+unbounded pattern in both agent bridges' session-id taps is bounded too. Verified by falsification
+in both directions: removing the ceiling fails the growth test, and shifting the scan offset by one
+byte fails the reassembly test.
 
 Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback) are
 still NOT met, and note that decommissioning ahead of a rollback rehearsal means there is no longer
