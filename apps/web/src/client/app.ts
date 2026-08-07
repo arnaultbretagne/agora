@@ -1088,6 +1088,16 @@ async function waitForReady(sessionId: string, timeoutMs = 90_000): Promise<void
 async function applyConfigOption(optionId: string, value: string): Promise<void> {
   const session = activeSession()
   if (!session) return
+  // Every call site reads a `data-*` attribute with a `?? ''` fallback, so a row rendered without
+  // its value sends an empty string and the server answers "body must be {"value": "<non-empty
+  // string>"}" — which reaches the operator as a message about strings and says nothing about what
+  // actually went wrong. Reported live 2026-08-07 ("ça m'a mis un message d'erreur comme quoi la
+  // string était pas bonne"), and not reproducible afterwards, which is exactly why the failure
+  // needs to name itself rather than be inferred from the server's generic complaint.
+  if (!value) {
+    toast(`Option « ${optionId} » : aucune valeur à appliquer (le menu a été rendu sans valeur).`, true)
+    return
+  }
   try {
     const result = await setConfigOption(session.id, optionId, value)
     // The Agent hands back its whole option set, which is authoritative — including any OTHER option
