@@ -1,7 +1,10 @@
 /**
- * Markdown-lite for agent replies, ported unchanged in behaviour from the OLD UI
- * (`/srv/agora/website/public/app.js`). No library: the browser bundle takes no runtime
- * dependency (../../DECISION.md), and the subset an agent actually emits in chat is small.
+ * Markdown-lite for agent replies, ported from the OLD UI (`/srv/agora/website/public/app.js`). No
+ * library: the browser bundle takes no runtime dependency (../../DECISION.md), and the subset an
+ * agent actually emits in chat is small.
+ *
+ * Behaviour is the OLD UI's, with one deliberate addition: pipe tables (see `tableBlock`), which
+ * neither renderer ever supported and which agents on this engine emit constantly.
  *
  * The whole safety argument is the ORDER: fenced blocks are lifted out first, then the entire
  * remaining source is escaped ONCE, and every transform after that only ever wraps text that is
@@ -59,6 +62,8 @@ export function renderMarkdown(text: string): string {
     if (lines.every((line) => /^\s*&gt;\s?/.test(line))) {
       return `<blockquote>${inline(lines.map((line) => line.replace(/^\s*&gt;\s?/, '')).join('\n'))}</blockquote>`
     }
+    const table = tableBlock(lines, inline)
+    if (table !== undefined) return table
     // A block that is nothing but a fence placeholder is emitted bare. The OLD UI tested
     // `/^ F\d+ $/` against `block.trim()`, which strips the very spaces the pattern requires, so the
     // branch could never fire and every standalone code block came out as `<p><pre>…</pre></p>` —
@@ -70,4 +75,88 @@ export function renderMarkdown(text: string): string {
   })
 
   return blocks.join('').replace(/ F(\d+) /g, (_match, index: string) => fences[Number(index)] ?? '')
+}
+
+/* ------------------------------------------------------------------ *
+ *  Pipe tables                                                        *
+ * ------------------------------------------------------------------ */
+
+/**
+ * GitHub-style pipe tables, added 2026-08-08 after the operator reported agent tables arriving as
+ * literal `|---|---|` text.
+ *
+ * Not a regression of the port: the OLD UI had no table branch either, so a table has always fallen
+ * through to the paragraph fallback. It only became worth fixing now, because the harnesses on this
+ * engine answer with tables constantly and the OLD channels-era one rarely did.
+ *
+ * A table is recognised by its SEPARATOR line and never by the mere presence of pipes — prose
+ * containing a `|` stays prose. The separator must itself contain a pipe, which is what stops a
+ * paragraph followed by `---` (setext heading syntax this renderer does not support) from being read
+ * as a one-column table.
+ *
+ * Everything here runs on already-escaped text, like every other transform in this file: escaping
+ * leaves `|` alone, so the shape survives it intact, and each cell is passed through `inline` rather
+ * than re-inserted raw — the escape-once-then-only-wrap invariant is unchanged.
+ */
+
+/** One row's cells. Leading and trailing pipes are optional (GFM), and `\|` is a literal pipe inside a cell rather than a separator. */
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim().replace(/\\\|/g, '|'))
+}
+
+function isTableSeparator(line: string): boolean {
+  if (!line.includes('|')) return false
+  const cells = tableCells(line)
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell))
+}
+
+/** Only non-default alignments are emitted; left is what the stylesheet already does. */
+function alignmentOf(cell: string): string {
+  const left = cell.startsWith(':')
+  const right = cell.endsWith(':')
+  if (left && right) return ' style="text-align:center"'
+  if (right) return ' style="text-align:right"'
+  return ''
+}
+
+function tableBlock(lines: readonly string[], inline: (value: string) => string): string | undefined {
+  const separatorAt = lines.findIndex((line, index) => index >= 1 && isTableSeparator(line) && (lines[index - 1] ?? '').includes('|'))
+  if (separatorAt < 1) return undefined
+
+  const header = tableCells(lines[separatorAt - 1] ?? '')
+  const alignments = tableCells(lines[separatorAt] ?? '').map(alignmentOf)
+  // The table ends at the first line that is not a row, so an agent that writes its next sentence
+  // directly under the last row does not have it swallowed as a ragged one-cell row.
+  let end = separatorAt + 1
+  while (end < lines.length && (lines[end] ?? '').includes('|')) end += 1
+
+  const row = (tag: 'th' | 'td', cells: readonly string[]): string =>
+    `<tr>${cells.map((value, column) => `<${tag}${alignments[column] ?? ''}>${inline(value)}</${tag}>`).join('')}</tr>`
+
+  const body = lines
+    .slice(separatorAt + 1, end)
+    .map((line) => {
+      const cells = tableCells(line)
+      // A short row is padded, never dropped: one missing cell must not cost the row its other
+      // columns, and an agent streaming a table emits exactly that while the last row is half-written.
+      while (cells.length < header.length) cells.push('')
+      return row('td', cells)
+    })
+    .join('')
+
+  // What surrounds the table is still prose. GFM says a table cannot interrupt a paragraph, but
+  // agents put one directly under its introduction line with no blank line all the time, and
+  // rendering that introduction as a stray table row is worse than accepting it here.
+  const before = lines.slice(0, separatorAt - 1)
+  const after = lines.slice(end)
+  return [
+    before.length > 0 ? `<p>${inline(before.join('\n'))}</p>` : '',
+    `<div class="md-table"><table><thead>${row('th', header)}</thead><tbody>${body}</tbody></table></div>`,
+    after.length > 0 ? `<p>${inline(after.join('\n'))}</p>` : '',
+  ].join('')
 }

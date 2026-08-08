@@ -98,3 +98,72 @@ test('escapeHtml covers every character that can break out of markup or an attri
 test('empty input renders an empty paragraph rather than throwing', () => {
   assert.equal(renderMarkdown(''), '<p></p>')
 })
+
+/* ---------------------------------------------------------------- *
+ *  Pipe tables — reported live 2026-08-08 as raw `|---|---|` text    *
+ * ---------------------------------------------------------------- */
+
+test('a pipe table becomes a real table', () => {
+  const rendered = renderMarkdown('| Nom | Rôle |\n|---|---|\n| a | b |\n| c | d |')
+  assert.equal(
+    rendered,
+    '<div class="md-table"><table><thead><tr><th>Nom</th><th>Rôle</th></tr></thead>' +
+      '<tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></tbody></table></div>',
+  )
+  assert.ok(!rendered.includes('|'), `a pipe survived into the output: ${rendered}`)
+})
+
+test('a table without outer pipes is still a table', () => {
+  const rendered = renderMarkdown('Nom | Rôle\n--- | ---\na | b')
+  assert.match(rendered, /<td>a<\/td><td>b<\/td>/)
+})
+
+test('alignment is read from the separator row', () => {
+  const rendered = renderMarkdown('| g | c | d |\n|:---|:---:|---:|\n| 1 | 2 | 3 |')
+  // Left is the stylesheet's own default, so only the two that differ carry a style.
+  assert.match(rendered, /<th>g<\/th><th style="text-align:center">c<\/th><th style="text-align:right">d<\/th>/)
+  assert.match(rendered, /<td>1<\/td><td style="text-align:center">2<\/td><td style="text-align:right">3<\/td>/)
+})
+
+test('inline markdown works inside cells', () => {
+  const rendered = renderMarkdown('| a | b |\n|---|---|\n| **gras** | `code` |')
+  assert.match(rendered, /<td><strong>gras<\/strong><\/td><td><code>code<\/code><\/td>/)
+})
+
+test('a cell cannot smuggle markup past the escaping', () => {
+  const rendered = renderMarkdown('| a |\n|---|\n| <img src=x onerror="alert(1)"> |')
+  assert.ok(!rendered.includes('<img'), `raw tag survived a table cell: ${rendered}`)
+  assert.match(rendered, /&lt;img/)
+})
+
+test('a short row is padded, never dropped — a table streams in half-written', () => {
+  const rendered = renderMarkdown('| a | b | c |\n|---|---|---|\n| 1 |')
+  assert.match(rendered, /<tbody><tr><td>1<\/td><td><\/td><td><\/td><\/tr><\/tbody>/)
+})
+
+test('an escaped pipe stays inside its cell', () => {
+  const rendered = renderMarkdown('| a | b |\n|---|---|\n| x \\| y | z |')
+  assert.match(rendered, /<td>x \| y<\/td><td>z<\/td>/)
+})
+
+test('prose is not turned into a table by a stray pipe or a dashed line', () => {
+  // Both of these would become one-column tables under a rule that looked for dashes alone, and
+  // the second is setext heading syntax this renderer deliberately does not implement.
+  assert.match(renderMarkdown('a | b, and nothing else'), /^<p>/)
+  assert.match(renderMarkdown('Titre\n---'), /^<p>/)
+  assert.match(renderMarkdown('- un | deux\n- trois | quatre'), /^<ul>/)
+})
+
+test('the prose around a table stays prose', () => {
+  // A table written directly under its introduction line, with no blank line — which is what agents
+  // actually emit, and what GFM says is not a table at all.
+  const rendered = renderMarkdown('Voici le tableau :\n| a |\n|---|\n| 1 |\nEt la suite.')
+  assert.match(rendered, /^<p>Voici le tableau :<\/p><div class="md-table">/)
+  assert.match(rendered, /<\/table><\/div><p>Et la suite\.<\/p>$/)
+})
+
+test('a table keeps working next to a code fence', () => {
+  const rendered = renderMarkdown('```\ncode\n```\n\n| a |\n|---|\n| 1 |')
+  assert.match(rendered, /<pre><code>code<\/code><\/pre>/)
+  assert.match(rendered, /<div class="md-table">/)
+})
