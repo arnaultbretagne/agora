@@ -1,6 +1,6 @@
 # P12 — Session configuration before launch, and real Workstream titles
 
-- **Status:** ready
+- **Status:** implemented; live rollout pending the deployment merge
 - **Dependencies:** P03, P05, P08, P09, P10
 - **Primary paths:** `contracts/database`, `contracts/openapi/product-api.yaml`,
   `packages/store-pg`, `packages/acp`, `apps/web`
@@ -48,17 +48,19 @@ one is not.
 
 ## Tasks
 
-- [ ] Migration: catalogue + intent tables, role grants, and a backfill of the catalogue from the
+- [x] Migration: catalogue + intent tables, role grants, and a backfill of the catalogue from the
   existing journal so the shipped Agents need no probe.
-- [ ] `packages/store-pg`: catalogue and intent read/write, plus the effective-title read.
-- [ ] `packages/acp`: return the `session/new` option set from `bootstrapSession`; add a probe that
+- [x] `packages/store-pg`: catalogue and intent read/write, plus the effective-title read.
+- [x] `packages/acp`: return the `session/new` option set from `bootstrapSession`; add a probe that
   performs `initialize` + `session/new` on a raw (non-journaled) stream.
-- [ ] `apps/web`: catalogue service + probe runner (single-flight), intent application at bootstrap
+- [x] `apps/web`: catalogue service + probe runner (single-flight), intent application at bootstrap
   and resume, endpoints, and the client selector/draft work.
-- [ ] Title floor at creation, effective title in the read model.
-- [ ] Tests: real Postgres for the store, real HTTP + fake controller/agent for the web paths, and
+- [x] Title floor at creation, effective title in the read model.
+- [x] Tests: real Postgres for the store, real HTTP + fake controller/agent for the web paths, and
   view-model tests for the client derivations.
-- [ ] Live verification on the cluster: both defects reproduced, then shown fixed.
+- [ ] Live verification on the cluster: both defects reproduced, then shown fixed. *(the migration
+  is applied to the production database and the image is built and pushed; the rollout itself waits
+  on the deployment merge — infra-k8s#115, which the branch ruleset reserves to the operator.)*
 
 ## Required tests
 
@@ -86,4 +88,30 @@ one is not.
 
 ## Evidence
 
-(filled in as the work lands)
+**2026-08-07/08 — implementation, tests and a real browser.**
+
+- 413 tests green on a clean checkout (`npm test`), all against real Postgres, a real HTTP server
+  and a real fake ACP Agent over a real WebSocket. The new ones prove, among others: both choices
+  made in the composer reach the Agent BEFORE the first prompt (asserted on journal order, not on
+  a mock's call log); a change made while the Session is suspended answers 202 and is really
+  delivered by the resume; two concurrent empty runs start ONE Runtime and give its Pod back; a
+  refused value is not re-asserted for ever; the Agent's own title overrides the first-message
+  floor and a manual rename outranks both.
+- **Real Chromium against the real client bundle** (the one artefact nothing else loads), driving
+  the local build end to end: on a brand-new conversation the model button is enabled and offers
+  `Default (recommended) / Sonnet / Opus` — the harness's own list, with nothing running — the
+  effort rail moves with the arrow keys, the choice survives into the launched Session (`Opus`
+  reported by the live Agent afterwards), the conversation renames itself to its Agent's title in
+  both the sidebar and the topbar, and a mid-conversation switch to `Sonnet` works. Zero page
+  errors. Screenshots kept out of the repo (session scratchpad).
+- **Production database migrated**: `008-session-configuration.sql` applied to `agora`. Its
+  backfill found **5 real advertisements already in the journal** — `claude-code` at three
+  runtime-definition versions and `codex` at two — so neither shipped Agent needs an empty run to
+  offer a model list. The recorded `claude-code` set is its genuine one (`mode`, `model`, `effort`,
+  with Claude Code's own descriptions), `currentValue` stripped.
+- Image `ghcr.io/arnaultbretagne/agora-web@sha256:298ae4c56fe2b519a5c8a30b77f6ec63d5a79a48bc07266ba48ea07a42fa370f`
+  built and pushed; deployment change in infra-k8s#115.
+
+**Not yet done:** the rollout, and therefore the live proof against the real `claude-code` harness
+in the cluster. It waits on infra-k8s#115 being merged, which the `agents-propose-only` ruleset
+deliberately reserves to the operator.
