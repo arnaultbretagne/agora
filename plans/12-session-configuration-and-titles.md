@@ -1,6 +1,6 @@
 # P12 — Session configuration before launch, and real Workstream titles
 
-- **Status:** implemented; live rollout pending the deployment merge
+- **Status:** complete — deployed and verified live on the cluster
 - **Dependencies:** P03, P05, P08, P09, P10
 - **Primary paths:** `contracts/database`, `contracts/openapi/product-api.yaml`,
   `packages/store-pg`, `packages/acp`, `apps/web`
@@ -58,9 +58,7 @@ one is not.
 - [x] Title floor at creation, effective title in the read model.
 - [x] Tests: real Postgres for the store, real HTTP + fake controller/agent for the web paths, and
   view-model tests for the client derivations.
-- [ ] Live verification on the cluster: both defects reproduced, then shown fixed. *(the migration
-  is applied to the production database and the image is built and pushed; the rollout itself waits
-  on the deployment merge — infra-k8s#115, which the branch ruleset reserves to the operator.)*
+- [x] Live verification on the cluster: both defects reproduced, then shown fixed.
 
 ## Required tests
 
@@ -112,6 +110,33 @@ one is not.
 - Image `ghcr.io/arnaultbretagne/agora-web@sha256:298ae4c56fe2b519a5c8a30b77f6ec63d5a79a48bc07266ba48ea07a42fa370f`
   built and pushed; deployment change in infra-k8s#115.
 
-**Not yet done:** the rollout, and therefore the live proof against the real `claude-code` harness
-in the cluster. It waits on infra-k8s#115 being merged, which the `agents-propose-only` ruleset
-deliberately reserves to the operator.
+**2026-08-08 — deployed (infra-k8s#115) and verified live on the cluster.**
+
+- **A real Chromium against the real production Pod** (port-forwarded, which bypasses only the SSO
+  proxy — everything below it is production), talking to the real `claude-code` harness:
+  - on a brand-new conversation the model button is **enabled** and offers Claude Code's own list —
+    `Default (recommended) / Sonnet / Opus / Haiku` — with six effort levels, before anything is
+    running anywhere;
+  - `Opus` + one step of the effort rail chosen with no Session at all, then a real turn: the
+    harness answered `PROD-OK-P12`, and the **live Agent then reported `Opus` and `Low`** — the
+    pre-launch choices really reached the running harness;
+  - zero page errors.
+- **The production journal is the proof, not a flag** (workstream `e8979d10…`): seq 5 and 8 are real
+  `session/set_config_option` calls (`effort=low`, `model=opus`) and seq 10 is the first
+  `session/prompt` — the choices landed **before** the first turn. After a suspend, seq 25 is
+  `session/resume` and seq 28/30 re-assert both options on the new process, including the
+  `model=sonnet` chosen while the Session had **no Runtime at all** (that change answered `202
+  pending`, not the old `409 runtime_unavailable`).
+- **The empty run, live**: `codex` had no memo at the current runtime-definition version
+  (`2026-08-07b`) — the backfill only covered the two earlier ones — so it was the genuine cold
+  start. One `POST .../config-options/probe` materialized a real gVisor Pod
+  (`sr-6c8cb705…`), which became ready in ~19 s, answered, and was **gone within 5 s**. Codex's real
+  option set is now recorded (`gpt-5.6-sol/terra/luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
+  reasoning effort, collaboration mode, fast-mode), with `currentValue` stripped; `product.sessions`
+  and `product.workstream_events` hold **zero rows** for that probe id.
+- **Titles, retroactively**: conversations from the previous day now read `Exécuter commande bash
+  avec seq et tr` and `Recovered session` in the sidebar — their Agents had already published those
+  titles into the journal, and nothing had ever read them.
+
+One artefact left in the operator's hub on purpose rather than deleted without asking: the test
+conversation `Respond with PROD-OK-P12` (its Session is suspended, so it holds no Runtime).
