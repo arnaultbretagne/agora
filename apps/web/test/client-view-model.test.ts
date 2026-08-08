@@ -23,11 +23,15 @@ import {
   hasRunningTurn,
   invocationTurnSpent,
   launchableAgents,
+  itemCarriesConfigOptions,
   messagesFromItems,
+  planTranscript,
   railIndexAt,
   railIndexOf,
   runtimeStateOfPhase,
   STATE_LABELS,
+  type ChatMessage,
+  type RenderedRow,
 } from '../src/client/view-model.js'
 
 function item(overrides: Partial<WorkstreamItem> & { kind: string; value: Record<string, unknown> }): WorkstreamItem {
@@ -447,4 +451,87 @@ test('the effort rail rests on the harness’s own `default` level until somethi
   assert.equal(railIndexOf([{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }], undefined), 0)
   // A value the harness no longer offers must not leave the knob off the rail.
   assert.equal(railIndexOf(levels, 'a-level-that-no-longer-exists'), 0)
+})
+
+/* ---------------------------------------------------------------- *
+ *  Transcript reconciliation — "l'écran clignote" (2026-08-08)      *
+ * ---------------------------------------------------------------- */
+
+function chat(id: string, role: ChatMessage['role'], text: string): ChatMessage {
+  return { id, role, text, completed: false }
+}
+
+function onScreen(id: string, role: RenderedRow['role'], text: string): RenderedRow {
+  return { id, role, text }
+}
+
+test('required: a streamed chunk re-renders ONE row and recreates none', () => {
+  // The defect exactly: an agent's reply is upserted once per chunk, and every one of those frames
+  // used to rebuild the whole transcript — every row destroyed and recreated, so `.msg-row`'s
+  // 160 ms fade-in re-fired on all of them at once.
+  const rendered = [onScreen('u1', 'user', 'Salut'), onScreen('a1', 'agent', 'Bonj')]
+  const plan = planTranscript(rendered, [chat('u1', 'user', 'Salut'), chat('a1', 'agent', 'Bonjour')])
+
+  assert.deepEqual(plan.rows.map((row) => row.reuse), ['u1', 'a1'], 'every row must be reused, none created')
+  assert.deepEqual(plan.rows.map((row) => row.rerender), [false, true], 'only the row whose text moved is re-rendered')
+  assert.deepEqual(plan.removed, [])
+})
+
+test('a new message creates exactly one row and leaves the others alone', () => {
+  const plan = planTranscript([onScreen('u1', 'user', 'Salut')], [chat('u1', 'user', 'Salut'), chat('a1', 'agent', 'Bonjour')])
+  assert.deepEqual(plan.rows.map((row) => [row.reuse, row.rerender]), [['u1', false], [undefined, true]])
+})
+
+test('required: the echo of a message just sent is adopted by its projected twin, not swapped', () => {
+  // The optimistic echo and the projected `message` item carry different ids for the same bubble.
+  // Recreating it is a visible blink on the operator's OWN words a few hundred ms after they send.
+  const plan = planTranscript([onScreen('echo-17', 'user', 'Salut')], [chat('item-9', 'user', 'Salut')])
+  assert.deepEqual(plan.rows.map((row) => [row.reuse, row.rerender]), [['echo-17', false]])
+  assert.deepEqual(plan.removed, [], 'the echo row is reused, so nothing is left to remove')
+})
+
+test('adoption needs the same role AND the same words — it never grabs an unrelated row', () => {
+  const differentRole = planTranscript([onScreen('echo-1', 'user', 'Salut')], [chat('item-9', 'agent', 'Salut')])
+  assert.equal(differentRole.rows[0]?.reuse, undefined)
+  assert.deepEqual(differentRole.removed, ['echo-1'])
+
+  const differentText = planTranscript([onScreen('echo-1', 'user', 'Salut')], [chat('item-9', 'user', 'Autre chose')])
+  assert.equal(differentText.rows[0]?.reuse, undefined)
+  assert.deepEqual(differentText.removed, ['echo-1'])
+})
+
+test('two identical echoes are adopted one for one, never both by the same message', () => {
+  const plan = planTranscript(
+    [onScreen('echo-1', 'user', 'encore ?'), onScreen('echo-2', 'user', 'encore ?')],
+    [chat('item-1', 'user', 'encore ?'), chat('item-2', 'user', 'encore ?')],
+  )
+  const reused = plan.rows.map((row) => row.reuse)
+  assert.deepEqual(reused, ['echo-1', 'echo-2'])
+  assert.equal(new Set(reused).size, 2, 'one row cannot serve two messages')
+  assert.deepEqual(plan.removed, [])
+})
+
+test('rows that are gone are reported for removal, and order changes reuse rather than rebuild', () => {
+  const plan = planTranscript(
+    [onScreen('a', 'agent', 'A'), onScreen('b', 'user', 'B'), onScreen('c', 'agent', 'C')],
+    [chat('c', 'agent', 'C'), chat('a', 'agent', 'A')],
+  )
+  assert.deepEqual(plan.rows.map((row) => row.reuse), ['c', 'a'])
+  assert.deepEqual(plan.rows.map((row) => row.rerender), [false, false], 'moving a row is not a reason to render it again')
+  assert.deepEqual(plan.removed, ['b'])
+})
+
+test('an empty transcript clears everything, and an empty screen builds everything', () => {
+  assert.deepEqual(planTranscript([onScreen('a', 'agent', 'A')], []), { rows: [], removed: ['a'] })
+  const fresh = planTranscript([], [chat('a', 'agent', 'A')])
+  assert.deepEqual(fresh.rows.map((row) => [row.reuse, row.rerender]), [[undefined, true]])
+  assert.deepEqual(fresh.removed, [])
+})
+
+test('required: a feed frame that cannot have changed the selectors is recognisable on its own', () => {
+  // What lets the client skip rebuilding the topbar and the open menu on every streamed chunk.
+  assert.equal(itemCarriesConfigOptions(item({ kind: 'unknown', value: SESSION_NEW_ENVELOPE })), true)
+  assert.equal(itemCarriesConfigOptions(item({ kind: 'message', value: { role: 'agent', content: [] } })), false)
+  assert.equal(itemCarriesConfigOptions(item({ kind: 'unknown', value: { envelope: { result: { sessionId: 'x' } } } })), false)
+  assert.equal(itemCarriesConfigOptions(item({ kind: 'unknown', value: {} })), false)
 })

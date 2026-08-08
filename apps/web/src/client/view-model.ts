@@ -169,6 +169,61 @@ function contentBlocksToText(content: unknown): string {
 }
 
 /**
+ * What the transcript's DOM should become, expressed against what it currently is.
+ *
+ * This is the half of the flicker fix worth reasoning about, so it lives here rather than in the
+ * renderer: which rows survive a feed frame, which one actually needs its markdown produced again,
+ * and which pending echo is really the message that has just come back from the projector. `app.ts`
+ * only applies the result to elements.
+ *
+ * The rule that is not obvious: a row is identified by its id, EXCEPT that a message with no row of
+ * its own adopts a spare row of the same role already showing exactly the same text. That pair is
+ * always an optimistic echo and the projected message that replaces it — one bubble as far as the
+ * person who typed it is concerned, so recreating it would make their own words blink out and back
+ * in a few hundred milliseconds after they hit send.
+ */
+export interface RenderedRow {
+  readonly id: string
+  readonly role: 'user' | 'agent'
+  readonly text: string
+}
+
+export interface TranscriptRowPlan {
+  readonly message: ChatMessage
+  /** Key of the row to reuse; `undefined` means there is none and one must be created. */
+  readonly reuse: string | undefined
+  /** Whether the markdown has to be rendered again. Always true for a row being created, and false for a row whose text has not moved — which is every row but one while an answer streams in. */
+  readonly rerender: boolean
+}
+
+export interface TranscriptPlan {
+  readonly rows: readonly TranscriptRowPlan[]
+  readonly removed: readonly string[]
+}
+
+export function planTranscript(rendered: readonly RenderedRow[], messages: readonly ChatMessage[]): TranscriptPlan {
+  const spare = new Map(rendered.map((row) => [row.id, row]))
+  const rows: TranscriptRowPlan[] = messages.map((message) => {
+    const keyed = spare.get(message.id)
+    if (!keyed) return { message, reuse: undefined, rerender: true }
+    spare.delete(message.id)
+    return { message, reuse: keyed.id, rerender: keyed.text !== message.text }
+  })
+
+  for (const [index, plan] of rows.entries()) {
+    if (plan.reuse !== undefined) continue
+    for (const candidate of spare.values()) {
+      if (candidate.role !== plan.message.role || candidate.text !== plan.message.text) continue
+      spare.delete(candidate.id)
+      rows[index] = { message: plan.message, reuse: candidate.id, rerender: false }
+      break
+    }
+  }
+
+  return { rows, removed: [...spare.keys()] }
+}
+
+/**
  * The OLD server pushed an explicit `typing` event. The new engine has no such signal and needs
  * none: a Turn open with `status: 'running'` IS the agent working, and both the initial
  * `GET .../turns` and the feed's `status` frames report it.
@@ -244,13 +299,20 @@ interface UnknownItemValue {
  * The `agora-web` projector is pinned to stable ACP v1 (ADR 0003), so this bucket is where these
  * frames land by design and not by accident — but it is a generic bucket, so this reads defensively
  * and returns `undefined` rather than asserting a shape.
+ *
+ * `itemCarriesConfigOptions` is the same recognition applied to ONE item, exported so a client
+ * holding a single feed frame can tell in constant time whether the selectors can possibly have
+ * changed — which is almost never, and re-rendering them per streamed chunk is exactly the kind of
+ * churn that made the transcript flicker.
  */
+export function itemCarriesConfigOptions(item: WorkstreamItem): boolean {
+  return item.kind === 'unknown' && Array.isArray((item.value as UnknownItemValue).envelope?.result?.configOptions)
+}
+
 export function configOptionsFromItems(items: readonly WorkstreamItem[]): readonly ConfigOption[] | undefined {
   let latest: WorkstreamItem | undefined
   for (const item of items) {
-    if (item.kind !== 'unknown') continue
-    const configOptions = (item.value as UnknownItemValue).envelope?.result?.configOptions
-    if (!Array.isArray(configOptions)) continue
+    if (!itemCarriesConfigOptions(item)) continue
     if (!latest || item.latestWorkstreamSeq > latest.latestWorkstreamSeq) latest = item
   }
   if (!latest) return undefined
