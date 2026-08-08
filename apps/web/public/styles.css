@@ -361,6 +361,31 @@ button { font-family: var(--font-sans); }
   overflow-x: auto;
   white-space: pre;
 }
+/* Tables. The WRAPPER scrolls, never the page: a wide table must not widen the conversation
+   column, which on mobile would push the composer off screen. `width: max-content` with
+   `min-width: 100%` lets a narrow table stay narrow and a wide one keep its columns readable
+   instead of being crushed into the column width. */
+.msg-text .md-table {
+  margin: 12px 0;
+  overflow-x: auto;
+}
+.msg-text table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 14.5px;
+}
+.msg-text th, .msg-text td {
+  border: 1px solid var(--app-hairline);
+  padding: 7px 11px;
+  text-align: left;
+  vertical-align: top;
+}
+.msg-text th {
+  background: var(--app-card);
+  color: var(--app-ink);
+  font-weight: 600;
+}
 .msg-text code:not(pre code) {
   font-family: var(--font-mono);
   font-size: 0.88em;

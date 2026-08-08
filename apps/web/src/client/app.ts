@@ -73,8 +73,10 @@ import {
   groupWorkstreams,
   hasRunningTurn,
   invocationTurnSpent,
+  itemCarriesConfigOptions,
   launchableAgents,
   messagesFromItems,
+  planTranscript,
   railIndexAt,
   railIndexOf,
   runtimeStateOfPhase,
@@ -82,6 +84,7 @@ import {
   type ChatMessage,
   type ConfigOption,
   type ConfigSource,
+  type RenderedRow,
   type RuntimeState,
 } from './view-model.js'
 
@@ -431,6 +434,36 @@ function transcript(): ChatMessage[] {
   return ordered.sort((left, right) => left.seq - right.seq).map(({ seq: _seq, ...message }) => message)
 }
 
+/**
+ * The markdown each row currently shows. Keyed by the element itself, so a row that leaves the
+ * document takes its entry with it and nothing has to be cleaned up.
+ *
+ * It exists for two things: skipping the re-render of a row whose text has not moved, and
+ * recognising a pending echo as already displaying the words the projected message brings back
+ * under a different id.
+ */
+const renderedText = new WeakMap<HTMLElement, string>()
+
+/**
+ * Messaging-app paradigm, carried over verbatim: a bubble = the user speaking (no name, no avatar);
+ * the agent's answers sit bare on the conversation background.
+ *
+ * What the transcript deliberately does NOT show is what the agent DID to answer. The OLD hub had no
+ * record of tool calls at all; this engine projects every one of them, and showing them here is now
+ * a real option — but the reason they were left out has not changed, so neither has the rendering: a
+ * conversation reads as a conversation. Same for equipment, which is a permission held for a whole
+ * Session and never evidence that a given turn used it.
+ *
+ * Why this RECONCILES rather than assigning `innerHTML`, which is what everything else in this file
+ * does: a streaming reply arrives as one feed upsert PER CHUNK — the projector appends each
+ * `agent_message_chunk` to the same item (packages/store-pg/src/projector.ts) — so this function
+ * runs dozens of times a second while an answer is being written. Rebuilding the transcript each
+ * time destroyed and recreated every row in the conversation, which re-fired `.msg-row`'s 160 ms
+ * fade-in on all of them at once: reported live 2026-08-08 as "l'écran clignote lors d'une réponse".
+ * It also dropped any text selection and re-ran layout for the whole list on every chunk.
+ *
+ * So rows are keyed by message id, and only what actually changed is touched.
+ */
 function renderMessages(): void {
   const wrap = $main!.querySelector<HTMLElement>('.messages')
   if (!wrap) return
@@ -446,34 +479,92 @@ function renderMessages(): void {
     return
   }
 
-  // Messaging-app paradigm, carried over verbatim: a bubble = the user speaking (no name, no
-  // avatar); the agent's answers sit bare on the conversation background.
-  //
-  // What the transcript deliberately does NOT show is what the agent DID to answer. The OLD hub had
-  // no record of tool calls at all; this engine projects every one of them, and showing them here
-  // is now a real option — but the reason they were left out has not changed, so neither has the
-  // rendering: a conversation reads as a conversation. Same for equipment, which is a permission
-  // held for a whole Session and never evidence that a given turn used it.
-  wrap.innerHTML = `
-    <div class="messages-inner">
-      ${transcript()
-        .map(
-          (message) => `
-        <div class="msg-row ${message.role === 'user' ? 'user' : 'assistant'}">
-          <div class="msg-text">${renderMarkdown(message.text)}</div>
-        </div>`,
-        )
-        .join('')}
-      ${
-        hasRunningTurn(state.turns)
-          ? `
-        <div class="msg-row assistant typing">
-          <div class="typing-dots"><span></span><span></span><span></span></div>
-        </div>`
-          : ''
-      }
-    </div>`
+  let inner = wrap.querySelector<HTMLElement>('.messages-inner')
+  if (!inner) {
+    wrap.innerHTML = '<div class="messages-inner"></div>'
+    inner = wrap.querySelector<HTMLElement>('.messages-inner')
+    if (!inner) return
+  }
+  reconcileMessages(inner, transcript())
+  reconcileTypingRow(inner, hasRunningTurn(state.turns))
   if (nearBottom) wrap.scrollTop = wrap.scrollHeight
+}
+
+function messageRow(message: ChatMessage): HTMLElement {
+  const row = document.createElement('div')
+  row.className = `msg-row ${message.role === 'user' ? 'user' : 'assistant'}`
+  row.dataset['id'] = message.id
+  row.dataset['role'] = message.role
+  row.innerHTML = `<div class="msg-text">${renderMarkdown(message.text)}</div>`
+  renderedText.set(row, message.text)
+  return row
+}
+
+function reconcileMessages(inner: HTMLElement, messages: readonly ChatMessage[]): void {
+  const elements = new Map<string, HTMLElement>()
+  const rendered: RenderedRow[] = []
+  for (const row of Array.from(inner.querySelectorAll<HTMLElement>('.msg-row[data-id]'))) {
+    const id = row.dataset['id'] ?? ''
+    elements.set(id, row)
+    rendered.push({ id, role: row.dataset['role'] === 'user' ? 'user' : 'agent', text: renderedText.get(row) ?? '' })
+  }
+
+  const plan = planTranscript(rendered, messages)
+  let anchor: ChildNode | null = inner.firstChild
+  for (const step of plan.rows) {
+    const reused = step.reuse === undefined ? undefined : elements.get(step.reuse)
+    const row = reused ?? messageRow(step.message)
+    if (reused) {
+      // An adopted echo keeps its element and takes the projected message's id with it.
+      reused.dataset['id'] = step.message.id
+      if (step.rerender) {
+        const text = reused.querySelector<HTMLElement>('.msg-text')
+        if (text) text.innerHTML = renderMarkdown(step.message.text)
+        renderedText.set(reused, step.message.text)
+      }
+    }
+    if (anchor === row) anchor = row.nextSibling
+    else inner.insertBefore(row, anchor)
+  }
+
+  for (const id of plan.removed) elements.get(id)?.remove()
+}
+
+/** Kept out of the keyed pass because it carries no id and must always be last — it is the agent about to speak, not something it has said. */
+function reconcileTypingRow(inner: HTMLElement, running: boolean): void {
+  const existing = inner.querySelector<HTMLElement>('.msg-row.typing')
+  if (!running) {
+    existing?.remove()
+    return
+  }
+  if (existing) {
+    if (existing !== inner.lastChild) inner.append(existing)
+    return
+  }
+  const row = document.createElement('div')
+  row.className = 'msg-row assistant typing'
+  row.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>'
+  inner.append(row)
+}
+
+/**
+ * Feed frames arrive far faster than the screen refreshes, so renders triggered BY THE FEED are
+ * collapsed to at most one per frame. Anything the operator does themselves still renders
+ * synchronously — a click that waits for the next frame reads as a dropped click.
+ *
+ * The `typeof` guard is not decoration: this module is imported and evaluated under bare node by
+ * `test/client-boot.test.ts`, and a missing browser global at module scope is a blank page.
+ */
+const nextFrame: (run: () => void) => number =
+  typeof requestAnimationFrame === 'function' ? (run) => requestAnimationFrame(run) : (run) => setTimeout(run, 16) as unknown as number
+
+let queuedRender = 0
+function scheduleMessagesRender(): void {
+  if (queuedRender !== 0) return
+  queuedRender = nextFrame(() => {
+    queuedRender = 0
+    renderMessages()
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -1012,16 +1103,22 @@ function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
     const index = state.items.findIndex((existing) => existing.id === item.id)
     if (index >= 0) state.items[index] = item
     else state.items.push(item)
-    // A `PUT config-options` response travels the same journaled connection as `session/new`, so the
-    // freshest advertised option set arrives here too — the model panel needs no separate refresh.
-    state.configOptions = configOptionsFromItems(state.items) ?? state.configOptions
     // The Agent naming its own session arrives as a `session_info` item, and the displayed title is
     // derived from it server-side — so this is the moment the conversation stops being called after
     // its first message. Re-read it now rather than waiting up to 6 s for the sidebar poll.
     if (item.kind === 'session_info') void refreshWorkstreamTitle(workstreamId)
-    renderMessages()
-    renderTopbar()
-    renderMenus()
+    scheduleMessagesRender()
+    // A `PUT config-options` response travels the same journaled connection as `session/new`, so the
+    // freshest advertised option set arrives here too — the model panel needs no separate refresh.
+    //
+    // Gated on the frame actually carrying one: the topbar and the open menu depend on nothing else
+    // in a feed frame, and rebuilding that whole selector cluster on every streamed chunk was the
+    // second half of the flicker reported on 2026-08-08.
+    if (itemCarriesConfigOptions(item)) {
+      state.configOptions = configOptionsFromItems(state.items) ?? state.configOptions
+      renderTopbar()
+      renderMenus()
+    }
     return
   }
   if (event.operation === 'remove') {
