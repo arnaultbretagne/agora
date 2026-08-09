@@ -19,7 +19,7 @@ import { listLiveOnecliAgentIdentifiers } from './onecli-agents-repository.js'
  * This is NOT `apps/web/src/idle-reaper.ts`, which suspends idle Agora Sessions — a different
  * object with a different lifecycle. Nothing here ever touches a Session.
  *
- * Two safety rails, both deliberate:
+ * Three safety rails, all deliberate:
  *
  * 1. **Only `sagt-` Agents.** That prefix is `grant-service.ts`'s own derivation
  *    (`onecliIdentifierFor`). The operator's `default` Agent, and anything a human created in the
@@ -28,8 +28,21 @@ import { listLiveOnecliAgentIdentifiers } from './onecli-agents-repository.js'
  *    before `ensureOnecliAgentMapping` commits, so an Agent for an in-flight issue exists in
  *    OneCLI for a moment while the Broker has no row for it yet. Anything younger than the window
  *    is left alone, so a concurrent issue can never be reaped out from under itself.
+ * 3. **A full day past the last grant's expiry** before a non-revoked Session's Agent is touched
+ *    (`listLiveOnecliAgentIdentifiers`), so a suspended-and-resumable Session is never disturbed —
+ *    while a Session that was abandoned rather than closed, and which therefore nothing will ever
+ *    revoke, still gets cleaned up instead of leaking its credential authority forever.
  */
 export const ORPHAN_GRACE_MS = 15 * 60 * 1000
+
+/**
+ * How long after its last grant expired a Session's Agent is considered abandoned rather than
+ * suspended. Grants live 30 minutes and an expired grant can no longer be activated, so a Session
+ * quiet for a full day is not coming back — but the margin is deliberately enormous relative to
+ * the 30-minute grant TTL, because the cost of reaping too early (a Session loses its credential
+ * authority) is far worse than the cost of reaping late (an idle Agent lives one more day).
+ */
+export const ABANDONED_AFTER_MS = 24 * 60 * 60 * 1000
 
 /** `grant-service.ts#onecliIdentifierFor` — the only Agents Agora itself creates. */
 const AGORA_AGENT_PREFIX = 'sagt-'
@@ -53,7 +66,7 @@ export async function reapOrphanOnecliAgents(pool: pg.Pool, onecli: OneCliContro
   const client = await pool.connect()
   let live: readonly string[]
   try {
-    live = await listLiveOnecliAgentIdentifiers(client)
+    live = await listLiveOnecliAgentIdentifiers(client, new Date(now.getTime() - ABANDONED_AFTER_MS))
   } finally {
     client.release()
   }

@@ -71,16 +71,40 @@ export async function getOnecliAgentMapping(client: PoolClient, sessionId: strin
  * Every OneCLI Agent identifier this Broker still considers ITS OWN — the orphan reaper's
  * protection set (`onecli-agent-reaper.ts`).
  *
- * Deliberately keyed on the mapping row's state rather than on active execution grants. A
- * suspended Session legitimately outlives its grant (docs/specs/10: "While a Session is suspended,
- * the OneCLI Agent may remain as the same operational principal"), and grants expire after 30
- * minutes, so reaping "Agents with no active grant" would delete the Agent of every suspended but
- * perfectly resumable Session. `state <> 'deleted'` is exactly the set the Broker has not yet
- * given up on.
+ * A `deleted` mapping is never protected: revocation has already given the Agent up.
+ *
+ * A mapping that is NOT deleted is protected only while the Session it belongs to could still
+ * plausibly come back, which is a narrower window than "forever". A suspended Session legitimately
+ * outlives its 30-minute grant (docs/specs/10: "While a Session is suspended, the OneCLI Agent may
+ * remain as the same operational principal"), so recent expiry must not trigger a reap — but a
+ * Session that was abandoned rather than closed keeps its mapping `active` and its grant `issued`
+ * forever, since only `revokeExecutionGrant` ever marks a mapping deleted. Protecting on mapping
+ * state alone therefore leaked every abandoned Session's Agent permanently (measured on the real
+ * instance right after the 1.45.0 cutover: 15 such Agents, grants expired between 18 hours and 2.7
+ * days earlier, none reapable, none ever revocable).
+ *
+ * `abandonedBefore` is the cutoff: a Session whose newest grant expired before it cannot be
+ * resumed anyway — `doActivateExecutionGrant` refuses to activate an expired grant, and
+ * `issueGrant` refuses a second grant for the same Session — so its Agent is dead credential
+ * authority, not a resumable principal. A mapping with no grant row at all is protected until the
+ * same cutoff, covering the window between `ensureSelectiveAgent` and the grant insert.
  */
-export async function listLiveOnecliAgentIdentifiers(client: PoolClient): Promise<readonly string[]> {
+export async function listLiveOnecliAgentIdentifiers(client: PoolClient, abandonedBefore: Date): Promise<readonly string[]> {
   const { rows } = await client.query<{ onecli_identifier: string }>(
-    `SELECT onecli_identifier FROM broker.onecli_agents WHERE state <> 'deleted'`,
+    `SELECT a.onecli_identifier
+       FROM broker.onecli_agents a
+      WHERE a.state <> 'deleted'
+        AND (
+          EXISTS (
+            SELECT 1 FROM broker.execution_grants g
+             WHERE g.session_id = a.session_id AND g.state = 'issued' AND g.expires_at > $1
+          )
+          OR (
+            NOT EXISTS (SELECT 1 FROM broker.execution_grants g WHERE g.session_id = a.session_id)
+            AND a.created_at > $1
+          )
+        )`,
+    [abandonedBefore],
   )
   return rows.map((row) => row.onecli_identifier)
 }
