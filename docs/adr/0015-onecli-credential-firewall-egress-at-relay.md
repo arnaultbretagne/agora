@@ -1,6 +1,6 @@
 # ADR 0015 — OneCLI is a credential firewall; Agora owns network egress at the relay
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-09
 - **Amends:** ADR 0010, ADR 0011, ADR 0014 (the OneCLI-enforced-egress clauses only)
 
@@ -79,6 +79,31 @@ let OneCLI auto-upgrade: ≥1.44 breaks `publishRoutePolicy` outright.
   relay".
 - ADR 0014's "OneCLI ... enforce provider-route policy" clause is narrowed to credential injection
   and selection; route/egress policy is Agora's at the relay.
+- **OneCLI's container config becomes grants-dependent.** It resolves an Agent's accessible
+  credentials before deciding which auth stubs to emit, so once isolation is real a Claude Session's
+  Agent returns no Codex stub and a Codex Session's Agent does. The Broker's runtime-bundle drift
+  check therefore treats the operator-pinned stub list as a reviewed **superset** — every returned
+  stub must appear in it — rather than as an exact set, which per-Agent credentials would make
+  unsatisfiable for one Agent or the other. The property it protects ("OneCLI never returns stub
+  material the operator has not reviewed") is unchanged; the presence side is asserted more
+  precisely, against `effective-credentials`, by the new grants-effect verification.
+- Per-Session Agents must be reconciled. Under `secretMode: all` a forgotten Agent was clutter;
+  under grants it is a standing credential authority, so the Broker gains an orphan reaper.
+
+## Verification (2026-08-09, staging OneCLI 1.45.0)
+
+Every claim above was measured against a throwaway 1.45.0 instance before any Broker code changed:
+
+- `GET|POST /v1/policy/rules`, `POST /v1/policy/publish`, `GET /v1/policy/last-publish` and
+  `GET /v1/rules` all answer `410 Gone`, naming per-Agent grants as their replacement.
+- `PATCH /v1/agents/{id}/secret-mode` answers `410 Gone` ("agents are always selective now").
+- A freshly created Agent reports `{mode:"selective",secrets:[],connections:[]}` — zero access.
+- `PUT /v1/agents/{id}/grants/secrets/{secretId}` (no body) flips exactly that secret to
+  `status:"usable"`; a second Agent granted a different secret shows the inverse, and neither
+  Agent's set changes when the other's does.
+- `DELETE` of the same path returns `204` and the Agent's set returns to empty.
+- Connection grants validate their tool ids against OneCLI's own per-provider catalogue
+  (`422 Unknown tool id(s)` otherwise) and reject `allow`/`ask` naming zero tools.
 
 ## Alternatives rejected
 

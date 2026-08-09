@@ -1,3 +1,5 @@
+import type { DesiredCredentialGrants } from './credential-policy.js'
+
 /**
  * `apps/broker/ONECLI-SPIKE.md` + docs/specs/10-equipment-and-broker.md "Control plane": the ONLY
  * seam through which this deployable talks to OneCLI's control API. Deliberately Agora's OWN
@@ -9,6 +11,12 @@
 export interface OneCliAgentHandle {
   /** OneCLI's own non-public identifier for this Agent — never the Agora Session ID itself. */
   readonly identifier: string
+}
+
+export interface OneCliAgentSummary {
+  readonly identifier: string
+  /** OneCLI's own `createdAt`, used by the reaper's grace window — never Agora's clock. */
+  readonly createdAt: Date
 }
 
 export interface OneCliCredentialStub {
@@ -42,14 +50,26 @@ export interface OneCliContainerConfig {
   readonly gatewayUrl: string
 }
 
-export interface PublishedRoute {
-  readonly action: 'allow' | 'block'
-  /** `'*'` only for the mandatory terminal rule. */
-  readonly host: string
+/**
+ * What `syncCredentialGrants` actually attached, as OneCLI instance ids — the intended set, to be
+ * compared against `getEffectiveCredentials` before a grant is trusted. Ids, never names or
+ * values: nothing here may become a credential hint in an audit row.
+ */
+export interface AttachedCredentials {
+  readonly secretIds: readonly string[]
+  readonly connectionIds: readonly string[]
 }
 
-export interface RoutePolicyPublishResult {
-  readonly generation: number
+/**
+ * OneCLI's own ground truth for "can this Agent inject this credential"
+ * (`GET /v1/agents/{id}/effective-credentials`). `status` is OneCLI's:
+ * `usable` | `limited` | `blocked` | `none` | `unknown`. An Agent with no matching grant simply
+ * lists nothing (verified live on 1.45.0) — absence IS denial.
+ */
+export interface EffectiveCredentialSet {
+  readonly mode: string
+  readonly secrets: readonly { readonly id: string; readonly status: string }[]
+  readonly connections: readonly { readonly id: string; readonly status: string }[]
 }
 
 export class OneCliUnavailableError extends Error {
@@ -67,19 +87,28 @@ export class OneCliUnavailableError extends Error {
  */
 export interface OneCliControlAdapter {
   /** Idempotent: calling twice with the same identifier returns the same Agent, never a duplicate.
-   * A freshly created (non-default) OneCLI Agent is "selective" by construction — there is no
-   * separate "set mode" call (ONECLI-SPIKE.md "OneCLI Agent isolation": only the DEFAULT Agent's
-   * `all` mode is forbidden; this adapter never uses or returns the default Agent). */
+   * A freshly created (non-default) OneCLI Agent is selective and, on ≥1.44, holds ZERO credentials
+   * until grants are attached — verified live on 1.45.0, `effective-credentials` reads
+   * `{mode:"selective",secrets:[],connections:[]}`. There is no "set mode" call to make:
+   * `PATCH /v1/agents/{id}/secret-mode` answers `410 Gone` ("agents are always selective now"). */
   ensureSelectiveAgent(identifier: string, name: string): Promise<OneCliAgentHandle>
-  /** Publishes the COMPLETE ordered route set (explicit allows, then a final explicit `block *`)
-   * atomically — never a partial diff a caller must reconcile. */
-  publishRoutePolicy(routes: readonly PublishedRoute[]): Promise<RoutePolicyPublishResult>
-  /** Reads back the currently effective published generation, for the compiler's own
-   * publish-then-verify step (docs/specs/10 "verify post-publication ordering/effective state"). */
-  getPublishedGeneration(): Promise<number | undefined>
+  /**
+   * ADR 0015: converges this Agent's OneCLI credential grants onto exactly `desired` — attaching
+   * what is missing and DETACHING anything else the Agent holds, so a re-issue can never leave a
+   * stale credential behind. Resolves OneCLI's per-instance `secretId`/`connectionId` from the
+   * type/provider names in `desired` at call time (never hardcoded ids). Idempotent.
+   */
+  syncCredentialGrants(identifier: string, desired: DesiredCredentialGrants): Promise<AttachedCredentials>
+  /** OneCLI's own effective-credentials oracle, for the grants-effect verification that replaced
+   * the retired publish-then-verify step (docs/specs/10 "verify ... effective state"). */
+  getEffectiveCredentials(identifier: string): Promise<EffectiveCredentialSet>
   getContainerConfig(identifier: string): Promise<OneCliContainerConfig>
   /** Immediately invalidates the Agent's current upstream bearer and issues a new one — the SAME Agent identity, a NEW token. */
   rotateAgentAuthority(identifier: string): Promise<void>
   /** Terminal — the identifier is never reused for a later Session (docs/specs/10 "One Session, one OneCLI Agent"). */
   deleteAgent(identifier: string): Promise<void>
+  /** Every Agent OneCLI currently holds — the reaper's reconciliation input
+   * (`onecli-agent-reaper.ts`). Identifier and creation time only: `GET /v1/agents` rows also
+   * carry each Agent's `accessToken` in cleartext, which never leaves the adapter. */
+  listAgents(): Promise<readonly OneCliAgentSummary[]>
 }

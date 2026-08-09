@@ -122,7 +122,7 @@
         "P08",
         "P11"
       ],
-      "status": "pending",
+      "status": "in_progress",
       "decisionGates": [
         "ADR-0015"
       ]

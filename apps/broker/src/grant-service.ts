@@ -9,18 +9,27 @@ import {
   getGrantBySession,
   GrantConflictError,
   issueGrant as issueGrantRow,
-  listActiveGrants,
   renewGrant as renewGrantRow,
   revokeGrant as revokeGrantRow,
 } from './grants-repository.js'
 import { markOnecliAgentDeleted, ensureOnecliAgentMapping, storeUpstreamAuthority } from './onecli-agents-repository.js'
-import { OneCliUnavailableError, type OneCliControlAdapter, type OneCliCredentialStub } from './onecli-adapter.js'
-import { compileRoutePolicy } from './route-policy.js'
+import type { AttachedCredentials, OneCliControlAdapter, OneCliCredentialStub } from './onecli-adapter.js'
+import { compileSessionCredentialGrants } from './credential-policy.js'
+import { compileSessionEgressAllowList } from './route-policy.js'
 import type { ExecutionGrant } from './grants-repository.js'
 import type { GrantActivation } from './activations-repository.js'
 
-/** Operator-managed, fixed across every Session (relay-bundle.ts's identical concept on the
- * Session Runtime controller side) — what a healthy OneCLI Agent's container config MUST match. */
+/**
+ * Operator-managed, fixed across every Session (relay-bundle.ts's identical concept on the
+ * Session Runtime controller side) — what a healthy OneCLI Agent's container config is checked
+ * against.
+ *
+ * `caCertificate` is matched exactly: it is the trust anchor every Session Runtime Pod pins, and
+ * any change to it is drift by definition.
+ *
+ * `credentialStubs` is the reviewed **superset** of stub material OneCLI may return, not an exact
+ * expectation — see `stubsWithinPinnedSet`.
+ */
 export interface ExpectedRuntimeBundle {
   readonly caCertificate: string
   readonly credentialStubs: readonly OneCliCredentialStub[]
@@ -95,13 +104,27 @@ function normalizeCa(ca: string): string {
   return ca.trim()
 }
 
-function stubsMatch(actual: readonly OneCliCredentialStub[], expected: readonly OneCliCredentialStub[]): boolean {
-  if (actual.length !== expected.length) return false
-  const normalize = (stubs: readonly OneCliCredentialStub[]) =>
-    [...stubs].map((s) => `${s.containerPath} ${normalizeStubContent(s.content)}`).sort()
-  const a = normalize(actual)
-  const b = normalize(expected)
-  return a.every((value, index) => value === b[index])
+/**
+ * docs/specs/10: "verify returned CA/stub material against P04's operator-managed runtime bundle
+ * and fail closed on drift". The property that check protects is **"OneCLI never returns stub
+ * material the operator has not reviewed"**, and that is exactly what this enforces: every stub
+ * OneCLI returns must appear, byte-identical after normalization, in the operator-pinned set.
+ *
+ * It is a subset check rather than set equality since ADR 0015, for a reason grants created:
+ * OneCLI's container config is now grants-dependent (verified by reading the real 1.45.0 server
+ * bundle — it resolves the Agent's accessible credentials first, and only emits the Codex
+ * `auth.json` stub for an Agent that actually holds the OpenAI credential). Under the old
+ * `secretMode: all` world every Agent got every credential, so exact equality happened to hold;
+ * with real per-Session isolation a Claude Session's Agent legitimately returns NO Codex stub and
+ * a Codex Session's Agent returns one. Requiring equality would fail one of them by construction.
+ *
+ * Nothing is lost by dropping the "a pinned stub must be present" half: absence of a credential is
+ * fail-closed by nature, and the presence Agora actually depends on is asserted directly and more
+ * precisely against OneCLI's own oracle in `verifyGrantsEffective` below.
+ */
+function stubsWithinPinnedSet(actual: readonly OneCliCredentialStub[], pinned: readonly OneCliCredentialStub[]): boolean {
+  const reviewed = new Set(pinned.map((stub) => `${stub.containerPath} ${normalizeStubContent(stub.content)}`))
+  return actual.every((stub) => reviewed.has(`${stub.containerPath} ${normalizeStubContent(stub.content)}`))
 }
 
 export interface IssueGrantRequest {
@@ -156,14 +179,66 @@ export async function issueExecutionGrant(client: PoolClient, deps: GrantService
   }
 }
 
+export class GrantsNotEffectiveError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GrantsNotEffectiveError'
+  }
+}
+
 /**
- * docs/specs/10 "Execution grant" + "Route-policy compilation", end to end: resolve policy (pure,
- * no OneCLI dependency, throws PolicyDenialError before any mutation), THEN mutate OneCLI (ensure
- * the Session's dedicated selective Agent, pull its container config to capture the upstream
- * bearer into encrypted Broker-private state, recompile and republish the project-wide route
- * policy over ALL active grants), THEN persist the grant row. Idempotent by (sessionId,
- * requestId) — `issueGrantRow` itself enforces that; a retry after a partial OneCLI-side failure
- * re-runs the OneCLI steps (they are themselves idempotent) and then succeeds at the DB step.
+ * The grants-effect verification that replaced the retired route-policy publish-then-verify
+ * (docs/specs/10 "verify post-publication ordering/effective state"; ADR 0015). Grants take effect
+ * immediately on ≥1.44 — there is no generation to compare — so the check is against OneCLI's own
+ * ground-truth oracle, `GET /v1/agents/{id}/effective-credentials`, and it is exact in BOTH
+ * directions:
+ *
+ * - every credential Agora attached must come back `usable`, or the Session would start with a
+ *   credential it believes it has and does not;
+ * - nothing else may come back at all. That is the required upgrade check ("verify each Session
+ *   Agent ends with exactly its intended grants, not the whole pool"): the ≥1.44 boot converter
+ *   materializes an existing `secretMode: all` Agent's whole pool as explicit grants, and an Agent
+ *   that came through that conversion with more than it was issued must never be trusted.
+ */
+function verifyGrantsEffective(identifier: string, attached: AttachedCredentials, effective: { readonly secrets: readonly { readonly id: string; readonly status: string }[]; readonly connections: readonly { readonly id: string; readonly status: string }[] }): void {
+  const compare = (kind: string, intended: readonly string[], actual: readonly { readonly id: string; readonly status: string }[]): void => {
+    const usable = actual.filter((entry) => entry.status === 'usable').map((entry) => entry.id).sort()
+    const wanted = [...intended].sort()
+    const unusable = actual.filter((entry) => entry.status !== 'usable').map((entry) => entry.id)
+    if (unusable.length > 0) {
+      throw new GrantsNotEffectiveError(`onecli agent ${identifier} reports non-usable ${kind} grant(s) ${unusable.join(', ')} — refusing to issue against a credential set OneCLI will not honor`)
+    }
+    if (usable.length !== wanted.length || usable.some((id, index) => id !== wanted[index])) {
+      throw new GrantsNotEffectiveError(
+        `onecli agent ${identifier} effective ${kind} set [${usable.join(', ')}] does not match the intended grant set [${wanted.join(', ')}]`,
+      )
+    }
+  }
+  compare('secret', attached.secretIds, effective.secrets)
+  compare('connection', attached.connectionIds, effective.connections)
+}
+
+/**
+ * docs/specs/10 "Execution grant" + "Route-policy compilation" as amended by ADR 0015, end to end:
+ * resolve policy (pure, no OneCLI dependency, throws PolicyDenialError before any mutation), THEN
+ * mutate OneCLI — ensure the Session's dedicated Agent, attach exactly this Session's resolved
+ * credential grants, verify they took effect, and only then pull the container config to capture
+ * the upstream bearer into encrypted Broker-private state — THEN persist the grant row.
+ *
+ * The grant-attach step comes BEFORE `getContainerConfig` deliberately: OneCLI's container config
+ * is grants-dependent (an Agent with no OpenAI grant gets no Codex `auth.json` stub), so pulling
+ * it first would capture the config of a zero-credential Agent and check drift against the wrong
+ * thing.
+ *
+ * There is no project-wide route policy to compile or republish any more: network egress is
+ * enforced per Session at the relay, from an allow-list compiled on the fly from this same grant.
+ * Compiling it HERE too is not redundant — it fails the issue closed if this Session's
+ * Agent/capabilities have no reviewed egress mapping, rather than letting the Session start and
+ * discover it as a 403 on its first CONNECT.
+ *
+ * Idempotent by (sessionId, requestId) — `issueGrantRow` itself enforces that; a retry after a
+ * partial OneCLI-side failure re-runs the OneCLI steps (they are themselves idempotent) and then
+ * succeeds at the DB step.
  */
 async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps, request: IssueGrantRequest, now: Date): Promise<ExecutionGrant> {
   const context: PolicyContext = {
@@ -178,9 +253,17 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
   const existing = await getGrantBySession(client, request.sessionId)
   if (existing && existing.requestId === request.requestId) return existing
 
+  // Both compilers are pure and run before any OneCLI mutation: an Agent or capability/access
+  // level with no reviewed entry denies the issue here, not halfway through provisioning.
+  const desiredCredentials = compileSessionCredentialGrants({ agentId: request.agentId, capabilities: resolved.capabilities })
+  const egress = compileSessionEgressAllowList({ agentId: request.agentId, capabilities: resolved.capabilities })
+
   const onecliIdentifier = onecliIdentifierFor(request.sessionId)
   await deps.onecli.ensureSelectiveAgent(onecliIdentifier, `agora-session-${request.sessionId}`)
   await ensureOnecliAgentMapping(client, request.sessionId, onecliIdentifier, now)
+
+  const attached = await deps.onecli.syncCredentialGrants(onecliIdentifier, desiredCredentials)
+  verifyGrantsEffective(onecliIdentifier, attached, await deps.onecli.getEffectiveCredentials(onecliIdentifier))
 
   const containerConfig = await deps.onecli.getContainerConfig(onecliIdentifier)
   // docs/specs/10: "Verify returned CA/stub material against P04's operator-managed runtime bundle
@@ -190,7 +273,7 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
   // upstream bearer is trusted at all.
   if (
     normalizeCa(containerConfig.caCertificate) !== normalizeCa(deps.expectedRuntimeBundle.caCertificate) ||
-    !stubsMatch(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
+    !stubsWithinPinnedSet(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
   ) {
     throw new RuntimeBundleDriftError(
       `OneCLI Agent ${onecliIdentifier}'s container config does not match the operator-pinned runtime bundle — refusing to issue`,
@@ -198,23 +281,8 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
   }
   await storeUpstreamAuthority(client, deps.encryptionKey, request.sessionId, containerConfig.upstreamProxyCredential, containerConfig.gatewayUrl, now)
 
-  const grantId = randomUUID()
-  const activeGrants = await listActiveGrants(client, now)
-  const prospective = [...activeGrants, { id: grantId, agentId: request.agentId, onecliIdentifier, capabilities: resolved.capabilities }]
-  const compiled = compileRoutePolicy(prospective)
-  const published = await deps.onecli.publishRoutePolicy(compiled.routes)
-  // onecli-adapter.ts's own doc: "the compiler's own publish-then-verify step (docs/specs/10
-  // 'verify post-publication ordering/effective state')" — a publish this Broker cannot confirm
-  // took effect must not be trusted to protect a brand-new grant.
-  const effectiveGeneration = await deps.onecli.getPublishedGeneration()
-  if (effectiveGeneration !== published.generation) {
-    throw new OneCliUnavailableError(
-      `route policy publish for session ${request.sessionId} is ambiguous: published generation ${published.generation} but effective generation reads back as ${String(effectiveGeneration)}`,
-    )
-  }
-
   const grant = await issueGrantRow(client, {
-    id: grantId,
+    id: randomUUID(),
     sessionId: request.sessionId,
     agentId: request.agentId,
     principalId: request.principalId,
@@ -237,7 +305,17 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
     actionClass: 'execution_grant.issue',
     decision: 'approved',
     policyVersion: resolved.policyVersion,
-    detail: { grantId: grant.id, capabilityCount: resolved.capabilities.length, routeSetVersion: compiled.routeSetVersion },
+    detail: {
+      grantId: grant.id,
+      capabilityCount: resolved.capabilities.length,
+      egressSetVersion: egress.egressSetVersion,
+      egressHostCount: egress.hosts.length,
+      // Deliberately named without the word "credential": audit.ts rejects any detail key matching
+      // /token|bearer|secret|credential|…/, a structural backstop this call site must respect
+      // rather than work around. Counts and a version string only — never which credentials.
+      grantSetVersion: desiredCredentials.credentialSetVersion,
+      attachedGrantCount: attached.secretIds.length + attached.connectionIds.length,
+    },
     createdAt: now,
   })
 
@@ -338,7 +416,7 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
   const containerConfig = await deps.onecli.getContainerConfig(renewed.onecliIdentifier)
   if (
     normalizeCa(containerConfig.caCertificate) !== normalizeCa(deps.expectedRuntimeBundle.caCertificate) ||
-    !stubsMatch(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
+    !stubsWithinPinnedSet(containerConfig.credentialStubs, deps.expectedRuntimeBundle.credentialStubs)
   ) {
     throw new RuntimeBundleDriftError(`OneCLI Agent ${renewed.onecliIdentifier}'s container config does not match the operator-pinned runtime bundle — refusing to renew`)
   }
@@ -361,10 +439,14 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
 /**
  * docs/specs/10 "revocable" + "Terminal Session/Workstream cleanup deletes it after revocation":
  * revokes the DB row FIRST (so the relay stops trusting it immediately, before any OneCLI round
- * trip), then deletes the OneCLI Agent (terminal — never reused), then republishes the route
- * policy without this grant's contribution. If the OneCLI delete or republish fails, the grant is
- * already revoked and unusable either way — the relay's own revocation check does not depend on
- * OneCLI succeeding.
+ * trip), then deletes the OneCLI Agent, which is terminal and takes this Session's credential
+ * grants with it.
+ *
+ * There is nothing global left to republish (ADR 0015): egress is recompiled per CONNECT from the
+ * grant row, which is already revoked, and credentials were only ever attached to this Session's
+ * own Agent. Revoking one Session is therefore observably a no-op for every other Session —
+ * required test "No global state". If the OneCLI delete fails, the grant is already revoked and
+ * unusable either way; the relay's own revocation check does not depend on OneCLI succeeding.
  */
 export async function revokeExecutionGrant(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<void> {
   const grant = await getGrant(client, grantId)
@@ -372,10 +454,6 @@ export async function revokeExecutionGrant(client: PoolClient, deps: GrantServic
   await revokeGrantRow(client, grantId, now)
   await markOnecliAgentDeleted(client, grant.sessionId, now)
   await deps.onecli.deleteAgent(grant.onecliIdentifier)
-
-  const activeGrants = await listActiveGrants(client, now)
-  const compiled = compileRoutePolicy(activeGrants)
-  await deps.onecli.publishRoutePolicy(compiled.routes)
 
   await recordAudit(client, {
     id: randomUUID(),
