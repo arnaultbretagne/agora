@@ -1,6 +1,6 @@
 # ADR 0010 — Independent capability grants replace profiles
 
-- **Status:** Accepted (egress-enforcement clause amended)
+- **Status:** Accepted
 - **Date:** 2026-07-29
 
 > **Amended by [ADR 0015](0015-onecli-credential-firewall-egress-at-relay.md) (Proposed,
