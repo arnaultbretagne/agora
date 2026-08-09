@@ -14,6 +14,17 @@ import { startBridgeServer } from '../src/bridge-server.js'
 
 const stubAgentPath = fileURLToPath(new URL('./fixtures/stub-acp-agent.js', import.meta.url))
 
+/**
+ * `process.execPath`, never the bare name `'node'`: these tests deliberately spawn the stub Agent
+ * with `childEnv: {}` (proving the bridge passes only what it is told), and an empty child
+ * environment has no PATH, so `execvp` falls back to the system default `/bin:/usr/bin`. That
+ * happens to contain a developer's node and does NOT contain a GitHub runner's, which keeps node in
+ * the tool cache — so `spawn node` failed with ENOENT in CI while the same suite stayed green
+ * locally. Spawning this very interpreter by absolute path removes the PATH dependency entirely
+ * without weakening what the test asserts.
+ */
+const nodeBinary = process.execPath
+
 async function scratchHome(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'bridge-server-test-'))
   return dir
@@ -43,7 +54,7 @@ function rolloutLine(sessionId: string): string {
 }
 
 test('required: /healthz is reachable once the Agent process is up', async () => {
-  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: ['node', stubAgentPath], childEnv: {} })
+  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: [nodeBinary, stubAgentPath], childEnv: {} })
   try {
     const health = await fetchText(running.port, '/healthz')
     assert.equal(health.status, 200)
@@ -53,7 +64,7 @@ test('required: /healthz is reachable once the Agent process is up', async () =>
 })
 
 test('/custody is a clean 404 before any ACP session has ever opened on this Pod', async () => {
-  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: ['node', stubAgentPath], childEnv: {} })
+  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: [nodeBinary, stubAgentPath], childEnv: {} })
   try {
     const res = await fetchText(running.port, '/custody')
     assert.equal(res.status, 404)
@@ -81,7 +92,7 @@ test('required: a WS connection whose Agent process cannot start fails closed, n
 })
 
 test('required: a real WS session/new round-trips through the bridge to the Agent process and back', async () => {
-  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: ['node', stubAgentPath], childEnv: {} })
+  const running = await startBridgeServer({ homeDir: await scratchHome(), agentCommand: [nodeBinary, stubAgentPath], childEnv: {} })
   const client = await connectClient(running.port)
   try {
     const init = await client.agentConnection.agent.request(acp.methods.agent.initialize, {
@@ -99,7 +110,7 @@ test('required: a real WS session/new round-trips through the bridge to the Agen
 
 test('required: /custody becomes available after session/new, keyed to the real ACP sessionId observed over the wire', async () => {
   const homeDir = await scratchHome()
-  const running = await startBridgeServer({ homeDir, agentCommand: ['node', stubAgentPath], childEnv: {} })
+  const running = await startBridgeServer({ homeDir, agentCommand: [nodeBinary, stubAgentPath], childEnv: {} })
   const client = await connectClient(running.port)
   try {
     await client.agentConnection.agent.request(acp.methods.agent.initialize, {
@@ -156,7 +167,7 @@ test('required: restore-before-ready seeds the rollout file and binds /custody b
 
   const running = await startBridgeServer({
     homeDir,
-    agentCommand: ['node', stubAgentPath],
+    agentCommand: [nodeBinary, stubAgentPath],
     childEnv: {},
     restore: { url: `http://127.0.0.1:${restorePort}/`, credential: 'restore-cred-1' },
   })
@@ -188,7 +199,7 @@ test('required: a checksum mismatch on the restore stream fails the whole startu
     await assert.rejects(() =>
       startBridgeServer({
         homeDir,
-        agentCommand: ['node', stubAgentPath],
+        agentCommand: [nodeBinary, stubAgentPath],
         childEnv: {},
         restore: { url: `http://127.0.0.1:${restorePort}/`, credential: 'x' },
       }),
