@@ -117,7 +117,52 @@ test('required: Agents the operator created are never candidates — only Agora\
   })
 })
 
-test('a suspended Session\'s Agent survives even though its grant has expired', async () => {
+test('required: an abandoned Session\'s Agent is reaped — nothing ever revokes it, so mapping state alone would leak it forever', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      // The real post-cutover state, measured on the operator's instance: mapping still `active`,
+      // grant still `issued`, but expired days ago because the Session was abandoned rather than
+      // closed. Such a Session cannot be resumed (activation refuses an expired grant) and cannot
+      // be re-issued ("a Session cannot be upgraded in place"), so its Agent is dead credential
+      // authority that no revoke will ever come for.
+      await client.query(`UPDATE broker.execution_grants SET expires_at = now() - interval '2 days' WHERE id = $1`, [grant.id])
+    } finally {
+      client.release()
+    }
+    d.onecli.setAgentCreatedAtForTest(grant.onecliIdentifier, new Date(Date.now() - ORPHAN_GRACE_MS * 10))
+
+    const result = await reapOrphanOnecliAgents(pool, d.onecli, new Date())
+    assert.deepEqual(result.reaped, [grant.onecliIdentifier])
+  })
+})
+
+test('required: a mapping with no grant row yet is protected while it is young, and reaped once it is stale', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const identifier = `sagt-${'e'.repeat(40)}`
+    await seedOrphan(d.onecli, identifier, ORPHAN_GRACE_MS + 1000)
+    const client = await pool.connect()
+    try {
+      // The window between `ensureSelectiveAgent` and the grant insert.
+      await client.query(
+        `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, state, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, 'active', now(), now())`,
+        [identifier],
+      )
+      assert.deepEqual((await reapOrphanOnecliAgents(pool, d.onecli, new Date())).reaped, [], 'an in-flight issue is never reaped out from under itself')
+
+      await client.query(`UPDATE broker.onecli_agents SET created_at = now() - interval '2 days' WHERE onecli_identifier = $1`, [identifier])
+    } finally {
+      client.release()
+    }
+    assert.deepEqual((await reapOrphanOnecliAgents(pool, d.onecli, new Date())).reaped, [identifier], 'a grant insert that never landed must not leak the Agent forever')
+  })
+})
+
+test('a suspended Session\'s Agent survives a recently expired grant — the resume window is respected', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const grant = await issue(pool, d)
