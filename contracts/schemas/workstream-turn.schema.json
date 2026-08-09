@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agora.invalid/contracts/workstream-turn.schema.json",
+  "title": "WorkstreamTurn",
+  "description": "Rebuildable read model of one prompt turn. Its ID is the durable PromptSession command ID. Stop reason and the cumulative usage snapshot fold here from the ACP prompt response (v1) / idle state update (v2); context-window telemetry (usage_update: used/size/cost) stays on the Workstream `usage` item. Exact ACP facts, never billing guesses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "workstreamId",
+    "sessionId",
+    "turnOrdinal",
+    "purpose",
+    "status",
+    "stopReason",
+    "firstWorkstreamSeq",
+    "latestWorkstreamSeq",
+    "usage",
+    "startedAt",
+    "endedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "workstreamId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sessionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "turnOrdinal": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "purpose": {
+      "enum": ["user", "handoff"]
+    },
+    "status": {
+      "enum": ["running", "completed", "cancelled", "failed"]
+    },
+    "stopReason": {
+      "type": ["string", "null"],
+      "description": "ACP StopReason verbatim, open set; known values: end_turn, max_tokens, max_turn_requests, refusal, cancelled. Null while running or when the turn failed without a protocol stop reason."
+    },
+    "firstWorkstreamSeq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "latestWorkstreamSeq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "usage": {
+      "description": "Cumulative usage snapshot verbatim at turn close (v1 PromptResponse.usage; v2 idle state_update.usage). Counters are session-cumulative per the pinned SDK schema — per-turn deltas are derived at read time, never stored. Null while running or when the Agent reported none.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inputTokens": {
+              "type": ["integer", "null"]
+            },
+            "outputTokens": {
+              "type": ["integer", "null"]
+            },
+            "cachedReadTokens": {
+              "type": ["integer", "null"]
+            },
+            "cachedWriteTokens": {
+              "type": ["integer", "null"]
+            },
+            "thoughtTokens": {
+              "type": ["integer", "null"]
+            },
+            "totalTokens": {
+              "type": ["integer", "null"]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "endedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  }
+}

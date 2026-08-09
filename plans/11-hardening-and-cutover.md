@@ -1,0 +1,358 @@
+# P11 — Security hardening, operations and cutover
+
+- **Status:** pending
+- **Dependencies:** P05, P07, P08, P09, P10
+- **Primary paths:** all deployables, deployment repository/manifests, runbooks
+
+## Required reading
+
+- all normative specs;
+- all Accepted ADRs;
+- every prior plan's evidence section.
+
+## Deliverables
+
+- Production deployment manifests and independent identities.
+- NetworkPolicies/database roles/secrets configuration.
+- Production OneCLI, Broker relay and OneCLI operational-store deployment.
+- OTel/Loki dashboards, alerts and SLOs.
+- End-to-end fault-injection suite.
+- Backup/restore and disaster-recovery proof.
+- Operator runbooks.
+- Explicit legacy-data policy and cutover/rollback plan.
+- Decommission checklist for old Agora and `agent-runtime`.
+
+## Tasks
+
+- [x] Deploy Web, control plane, controller, Broker/relay, OneCLI and Session Runtimes with separate
+  identities.
+- [x] Prove least privilege with negative authorization tests.
+- [ ] Pin and attest images/dependencies. *(our own images are pinned by digest; nothing is
+  attested — no provenance verification, no signature check.)*
+- [ ] Pin the OneCLI image by digest and verify its release/source provenance. *(pinned to
+  `ghcr.io/onecli/onecli@sha256:7a4fef94…`; provenance never verified.)*
+- [ ] Persist OneCLI PostgreSQL and `/app/data`; manage `SECRET_ENCRYPTION_KEY` outside both.
+  *(both persist — CNPG cluster and a PVC. But the key is NOT outside them: OneCLI generates it at
+  `/app/data/secret-encryption-key` and offers no way to supply it externally, so it sits on the
+  same volume as the CA it protects. Captured out-of-band instead, see Evidence 2026-08-07.)*
+- [ ] Prove a compatible backup/restore of OneCLI DB + CA/private key + encryption key. *(the DB
+  half is exercised daily and passes; the CA/key/encryption-key half is now captured and
+  hash-verified against live, but the restore path itself has never been rehearsed.)*
+- [ ] Enforce Session Runtime Pod → relay → OneCLI gateway as the only provider egress path.
+  *(deferred by operator decision 2026-08-06 — see Evidence.)*
+- [x] Verify every published route set ends in explicit `block *`.
+- [ ] Prove gateway stdout is query-free and manual approval is disabled on content-bearing routes.
+  *(manual approval: PASSES — every published rule carries `requireApproval: false`, checked against
+  the live instance. Query-free: FAILS — see Evidence. Not a box to tick either way until the
+  logging question is decided.)*
+- [ ] Exercise OneCLI control/gateway/relay outage, CA rotation and policy-cache invalidation.
+  *(the control-plane outage is exercised and passes — see Evidence. CA rotation and policy-cache
+  invalidation are not.)*
+- [ ] Exercise Claude Max and ChatGPT token expiry/renewal without changing custody.
+- [x] Configure resource limits, quotas and admission policy.
+- [ ] Implement dashboards/alerts from `12-observability.md`.
+- [ ] Exercise every crash boundary and timeout. *(most of `Required tests` is covered — duplicate
+  Pod, stuck deletion, concurrent materialize, controller restart reconstruction, custody checksum
+  mismatch, projector truncate/rebuild determinism, Broker/relay restart, OneCLI control outage,
+  replayed cross-Session workload identity, unauthorized cross-user access, oversized ACP frame.
+  Not covered: database outage mid-transaction, adapter upgrade/rollback with retained custody.)*
+- [x] Prove product+custody backup/restore consistency. *(one CNPG backup carries `product.*`,
+  `projection.*`, `custody.*` and `broker.*` in a single consistent snapshot; the daily drill
+  restores it from R2 and queries the real product schema — 26 workstreams, 26 sessions.)*
+- [ ] Load-test journal, projector, feed, custody and Session Runtime materialization churn.
+- [ ] Perform security review and close critical/high findings.
+- [x] Choose fresh database versus separately specified legacy archive/import. *(operator chose
+  fresh, 2026-08-07: the legacy `agora` database was dropped un-archived.)*
+- [ ] Shadow real workloads without dual product truth. *(not done — the cutover went straight
+  across rather than shadowing, at operator pace.)*
+- [ ] Execute staged cutover and rollback rehearsal. *(the cutover was executed; no rollback
+  rehearsal was performed, and after the decommission there is nothing left to roll back TO.)*
+- [x] Revoke/delete old workloads, credentials and repositories only after acceptance. *(workloads
+  deleted 2026-08-07 on explicit operator acceptance. Credentials: 2 of 4 rotated as a side effect
+  of the new cluster; 2 outstanding. Repositories: untouched.)*
+
+## Required tests
+
+Every scenario in `docs/specs/15-acceptance-and-migration.md`, plus:
+
+- node/controller/database/Broker outage;
+- OneCLI API/gateway/database outage and Broker relay outage;
+- expired/compromised grant;
+- leaked/replayed upstream OneCLI bearer from an unrelated workload;
+- missing/reordered catch-all rule and direct-egress bypass attempt;
+- OneCLI CA/encryption-key loss and restore mismatch;
+- duplicate Pod and stuck deletion;
+- oversized ACP frame/update flood;
+- custody growth/timeout/checksum failure;
+- projector lag/rebuild during live ingestion;
+- unauthorized cross-user/Session access;
+- adapter upgrade and rollback with retained custody;
+- OneCLI and Agent route-set upgrade/rollback with secret-leak canaries.
+
+## Non-goals
+
+- No feature expansion during hardening.
+- No custom gateway fallback when OneCLI is degraded.
+- No silent legacy-data transformation.
+- No removal of rollback before the observation window completes.
+
+## Exit criteria
+
+- Operator signs go-live checklist.
+- All SLOs/alerts/runbooks are exercised.
+- Production rollback is proven.
+- OneCLI/relay security blockers from the spike are closed with exercised runbooks.
+- Old system decommission is separately approved after stable operation.
+
+## Evidence
+
+**2026-08-06, live production-cluster session (in progress, not yet exit-criteria-complete):**
+
+Deployed `agora-{web,controller,broker}` with separate ServiceAccounts/NetworkPolicies/database
+roles to the `agora` namespace, `agora-runs` for Session Runtimes, `agora-onecli` fresh (not a
+promotion of the P09/P10 test instance). SSO via oauth2-proxy/Pocket-ID in front of `agora-web`
+(`agora.bretagne.dev`), `X-Forwarded-Email` trusted because the NetworkPolicy admits ingress only
+from that pod.
+
+A real user-driven "+ New workstream" click (not a synthetic test) found no PVC provisioning path
+existed at all — unblocked with a manually-created `pvc-default` (per-Workstream auto-provisioning
+deliberately deferred, Arnault's own choice). That test then failed everything, triggering a long
+live-debugging arc that found and fixed, each verified against real infra (never just port-forward
+— see the NetworkPolicy lesson below), in order:
+
+1. `apps/web`'s `requirePrincipal` only accepted the P05 dev placeholder `Authorization: Bearer`,
+   never the real SSO path — added `X-Forwarded-Email` support.
+2. `agora-pg` CiliumNetworkPolicy never had ingress rules for the three new services — masked by
+   port-forward/kubelet-probe traffic not going through the same Cilium enforcement path as real
+   pod-to-pod traffic (methodological lesson, applies broadly).
+3. `claude-code`/`codex` registry definitions were `rollout: 'internal'` — flipped to `'enabled'`
+   (operator decision, both agents already live-verified in P09/P10).
+4. `apps/web`'s equipment-catalogue endpoint/client used hardcoded fake values instead of the real
+   `@agora/equipment-policy` catalogue.
+5. OneCLI Agent identifier used underscores; the real API requires hyphens only.
+6. A stray NUL byte in `grant-service.ts` made git/grep treat the file as binary.
+7. The Broker's runtime-bundle drift check compared raw credential-stub bytes, but OneCLI re-signs
+   each Agent's `id_token` with a distinct signature (same claims) — normalized before compare.
+8. The same drift check also tripped on `last_refresh`, a timestamp that changes on every
+   `getContainerConfig` call even for the same Agent — stripped as volatile.
+9. The same drift check again on the operator-pinned CA: a YAML `|` block scalar always appends a
+   trailing newline; OneCLI's own live response has none — trim before compare.
+10. `broker.grant_activations`' idempotency check does `SELECT ... FOR UPDATE`, which requires the
+    UPDATE privilege even though no UPDATE is ever issued — the role only had SELECT/INSERT.
+11. **The actual root cause of the original report**: `apps/web/src/orchestration.ts` never called
+    the Broker's real `POST /v1/execution-grants` — a fixed `FAKE_EXECUTION_GRANT_REF` placeholder
+    from before the Broker (P08) existed, never retrofitted. Real issue/renew wiring added
+    (`broker-grant-client.ts`, `execution_grant_ref` persisted on `product.sessions`, resume
+    renews the Session's one grant rather than reissuing). This alone surfaced five MORE real bugs
+    once end-to-end testing reached further than ever before, all found live (none of them
+    catchable by the automated suite, which runs against a maintenance/superuser DB role, not the
+    real restricted application role):
+    - Broker activation was idempotent by `(grant_id, request_id)` only — a resume's fresh
+      `request_id` against the same already-activated grant always threw, which would have
+      fail-closed every resume. Now idempotent by `workload_identity`, refreshing `expires_at`.
+    - `product.sessions`' column-scoped `GRANT UPDATE` never included the new
+      `execution_grant_ref` column — "permission denied for table sessions" live.
+    - `SessionRuntimeControlError`/`BrokerActivationDeniedError` only surfaced `Problem.title`,
+      discarding `.detail` — a bare "unexpected controller error" told nothing; fixing this is
+      what made the next two findings visible at all.
+    - `agora-controller`'s kube-apiserver egress rule allowed port 443 (the ClusterIP Service's
+      own exposed port) instead of 6443 (the real backend port Cilium's `toEntities:
+      [kube-apiserver]` actually enforces against) — every materialize silently timed out with no
+      Pod ever created. Found by comparing against the OLD system's own already-correct rule.
+    - `connectAcpBridge` (apps/web) dials the Session Runtime Pod's IP directly (never proxied
+      through the controller) — no NetworkPolicy admitted this on either side.
+
+After all of the above: a real grant is issued, a real `claude-code` Pod materializes, and a real
+ACP `initialize`/`session/new` handshake completes (genuine `agentInfo`/`availableCommands` from
+the real Claude Agent, not a fake test double).
+
+**The remaining blocker turned out to be three more real bugs, all now fixed — the flow works
+end to end.** The `UNKNOWN_CERTIFICATE_VERIFICATION_ERROR` was never a CA problem at all:
+
+12. `relay.ts` required an `X-Workload-Identity` header its own module doc assumed a service mesh
+    sidecar would inject. This cluster has no mesh, so nothing ever set it and every real CONNECT
+    failed closed. Replaced with source-IP-derived identity resolved against the Kubernetes API
+    (`k8s-pod-lookup.ts`, read-only `get`/`list` pods) — unforgeable by the Pod itself, chosen over
+    Pod self-assertion after an explicit operator decision.
+13. `AGORA_BROKER_RELAY_ENDPOINT` was declared `https://` while `relay.ts` serves a plain
+    `node:http` CONNECT listener (the control API on 8443 beside it was already correctly
+    `http://`). Every Agent attempted a TLS handshake against a plaintext port.
+14. The gateway credential was extracted from the wrong half of OneCLI's proxy URL
+    (`http://x:aoc_…@gateway` — username is a dummy, the token is the password), AND sent as
+    `Proxy-Authorization: Bearer` where OneCLI's gateway speaks HTTP **Basic**. Critically, the
+    gateway does not reject unrecognized auth — it silently degrades to unauthenticated
+    passthrough: no TLS interception, no provider-credential injection, and a bare `401` reaches
+    the Agent. Proven by peer certificate: `Bearer` -> the provider's own public cert;
+    `Basic base64(x:token)` -> a cert issued by "OneCLI Local Gateway CA". That is also what
+    finally justifies the operator-pinned CA mounted into every Pod.
+
+**Verified live, full user path**: `POST /v1/workstreams` through the real SSO gate -> real Broker
+grant -> real Pod in `agora-runs` -> ACP handshake -> relay -> OneCLI gateway (injecting the real
+Claude Max credential) -> Anthropic -> a real reply ("Hello! Hope you're having a good day."),
+turn `completed`.
+
+**Two methodological lessons, both of which cost real hours here and generalize:**
+- *A manual reproduction that does not travel the same path as the real client proves nothing.*
+  Every probe written while chasing this used a raw TCP socket plus a hand-written CONNECT, which
+  bypassed precisely the broken step — so the CA chain kept "proving" correct while the real binary
+  kept failing. `curl` had been reporting `wrong version number` (the textbook TLS-to-plaintext-port
+  error) the entire time.
+- *A test double written to match our own implementation cannot catch our own implementation being
+  wrong.* `onecli-fake-gateway.ts` accepted `Bearer` because that is what our relay sent; 50 relay
+  tests passed green against code that could never work in production. Both fakes now enforce what
+  was verified against the real product.
+
+**On the spike gap** (worth recording plainly): `agents/claude-code/SPIKE.md` states in its own
+gates (lines 65-67) that it was NOT re-proven inside a real Kubernetes Pod, and its topology
+(lines 42-55) points `HTTPS_PROXY` directly at the OneCLI gateway with the bearer embedded in the
+URL. It therefore never exercised `relay.ts` at all — not the scheme, not the credential
+extraction, not the auth scheme. The spike validated OneCLI + Claude Max + CA (genuinely, and that
+part held up), but a spike that bypasses the component we are writing does not validate that
+component. Future spikes should be scoped against the real seam, or say loudly which seam they are
+standing in for.
+
+**Egress enforcement: verified working, and a documented trap.** A P11 probe briefly concluded the
+route allowlist had never been enforced — that conclusion was WRONG and is recorded here because
+the trap is easy to fall into twice (it is the same layer-mismatch mistake as the relay-scheme bug
+above, made again within the same session).
+
+OneCLI's gateway answers `200 OK` to EVERY CONNECT regardless of the allowlist, MITMs the TLS (peer
+certificate issued by "OneCLI Local Gateway CA" — which is what the operator-pinned CA mounted into
+every Pod exists to trust), and enforces the rules against the HTTP request INSIDE the tunnel.
+Measured live, same Agent, same credential, real request sent through the established tunnel:
+
+| host | CONNECT | request inside tunnel |
+| --- | --- | --- |
+| `api.anthropic.com` (allow-listed) | 200 | 404 from the real upstream — reached it |
+| `http-intake.logs.us5.datadoghq.com` | 200 | **403** — blocked by the terminal `block *` |
+| `example.com` | 200 | **403** — blocked by the terminal `block *` |
+
+So `route-policy.ts`'s compiled allow/`block *` set IS effective, and the real `claude` binary's
+own telemetry call to Datadog was in fact blocked in production. Two durable consequences:
+`broker.security_audit`'s `relay.connect`/`approved` rows record tunnel establishment ONLY and must
+never be read as an egress audit trail; and any future egress check must send a real request
+through the tunnel rather than stopping at the CONNECT status line. Both are now documented at the
+code sites (`route-policy.ts`, `relay.ts`).
+
+Operator decision (2026-08-06): tightening egress further is deliberately DEFERRED — the current
+containment (Cilium restricts the Pod to the relay; the gateway enforces the host allowlist) is
+judged adequate for now, and the platform's own Cilium primitives are the preferred fallback if
+OneCLI-side enforcement ever proves insufficient, rather than reimplementing filtering in
+`relay.ts` against `docs/specs/10`'s delegation.
+
+**2026-08-07 — database convergence, decommission, and a backup that was not one.**
+
+*Convergence.* The new engine had been running as a guest database called `agora_next` inside the
+OLD hub's Postgres cluster, in the OLD hub's namespace. The operator rejected both halves ("c'est
+inentendable que `agora_next` soit la nouvelle baseline: on converge tout sur `agora`") and chose a
+fresh cluster over an in-place rename, because the `agent` namespace was being deleted and a rename
+would have stranded the Postgres in a dead namespace. `agora-pg` now lives in `agora`, database
+`agora`, owner `agora_owner`; the ~10 MB moved by logical dump. Every table's exact row count
+matches source-to-target (the only difference is `schema_migrations` 6 → 7, because migration
+`007-add-session-persona.sql` had never been applied to `agora_next`). All sequences match.
+
+The barman `serverName` is set explicitly to `agora-product`. The retired cluster was ALSO named
+`agora-pg` and ALSO wrote under `s3://bretagne-pg-backups/agora`; two clusters sharing one
+serverName would have interleaved base backups and WAL from unrelated timelines into a single
+barman server, corrupting the store for both.
+
+*Decommission.* Namespaces `agent`, `agent-runs` and `agora-onecli-test` are gone, along with the
+`https-agent` Gateway listener and the `agent-broker-vault` ingress rules that pocket-id and
+obsidian still carried. Those two were removed rather than repointed at the new Broker: the
+platform's vault equipment is not wired yet, and pre-opening a path for a caller that does not
+exist is how a stale allowance survives a decommission. Verified after: `agent.bretagne.dev` no
+longer answers, the six other vhosts are untouched, no orphaned PersistentVolumes remain, and a
+real prompt still returns a real reply through the full chain.
+
+*A backup that was not one.* Auditing this plan's own task list surfaced a genuine gap in
+yesterday's OneCLI CNPG work. The database backup protects the CIPHERTEXT of every linked provider
+credential — but `secret-encryption-key`, which decrypts it, and `gateway/ca.key`+`ca.pem`, which
+every Session Runtime Pod pins, all live on an unbacked node-local `local-path` PVC. Losing that
+disk would have meant a database that restores perfectly and decrypts to nothing, plus a CA that no
+Pod trusts. **Backing up ciphertext without its key is not a backup.** All three are now captured
+into a SOPS-encrypted DR file (`apps/agora-onecli/onecli-data-dr.secrets.yaml`), each verified by
+SHA-256 against the live file, and the captured `ca.pem` verified equal to the `agora-onecli-ca`
+ConfigMap that Session Runtimes actually pin. Deliberately NOT deployed as a Secret: its purpose is
+to exist encrypted in git under the off-site-backed age key, and a second live copy of the
+encryption key in etcd would widen exposure while buying nothing.
+
+Also fixed here: the OneCLI restore drill shipped yesterday had never actually passed. Its first
+real run failed on `role "pocketid" does not exist`, a health query left over from the pocket-id
+drill it was copied from. The restore itself worked throughout — WAL replayed from R2, consistent
+state reached — so a healthy backup was being reported as a failed drill. Both drills now assert a
+NON-ZERO row count against their real schema, because a restored-but-empty database passes
+`SELECT 1` exactly as happily as a good one, and that is the failure a restore drill exists to
+catch.
+
+*One real defect found while verifying, predating this work:* `CreateWorkstream` commands never
+reach a terminal state. All 27 rows are `accepted`, including ones created after the cutover, while
+`PromptSession` settles correctly. The functional path is unaffected — Session reaches `ready`, the
+grant is issued, the Pod materializes, the turn completes with a real reply — but any client
+polling `GET /v1/commands/{id}` to learn that creation finished will wait forever.
+
+**2026-08-07, later — least privilege proven, namespaces bounded, one outage exercised.**
+
+*Negative authorization.* The claim "least privilege" is now carried by SQL that is actually refused
+and requests that are actually rejected, in both halves. At the database: the Broker cannot read or
+write product truth (docs/adr/0011's broker-local rule, enforced rather than asserted); no product
+role can reach `broker.upstream_authority` where the encrypted upstream credential lives; the
+projector cannot append to the journal it reads. One positive assertion sits alongside them on
+purpose — a suite that only ever asserts refusals would pass against a database with no tables at
+all. Over HTTP: a non-member is told a Workstream does not exist rather than that they may not have
+it (403 is an existence oracle), cannot mutate it, and cannot drive its Session even knowing the id;
+every mutating route demands an identity. The refusals are checked by re-reading the rows, not by
+trusting status codes.
+
+That work corrected a claim this plan itself had relied on. The controller's role was described —
+here, in `idle-reaper.ts`, and out loud — as unable to read product truth *at all*. The test written
+to prove it failed: `002-access.sql` grants `agora_custody_runtime` a five-column view of
+`product.sessions`. The conclusion survives for a narrower reason (idleness is defined by turns, and
+turns are what it cannot see), and both the comment and the test now say the true thing. A boundary
+nobody has tried to cross is a boundary nobody knows the shape of.
+
+*Quotas.* `agora` and `agora-onecli` had no quota and no LimitRange; only `agora-runs` did. Both now
+have both. Memory is what is bounded and CPU deliberately is not: CPU is compressible, and a quota
+naming a resource forces every container to declare it — several here legitimately set no CPU
+ceiling, so naming it would convert the next rollout into a rejection for no safety gained.
+
+*OneCLI control-plane outage, exercised live.* `onecli` scaled to zero, a real Workstream created
+through the real API. The Session failed closed — no fallback, no silent degradation — with a named
+reason reaching the wire as `failure: {code: 'provisioning_failed', detail:
+'ensureSelectiveAgent(...) failed: OneCLIError: fetch failed'}`. OneCLI restored, and the next
+Workstream answered `RECOVERED` end to end. Gateway-level and relay-level outages, CA rotation and
+policy-cache invalidation remain unexercised.
+
+*Oversized ACP frame, and the bug it found.* The NDJSON framing beneath the typed SDK buffered
+whatever arrived until it saw a newline, with no ceiling. A peer that never sent one — a wedged
+harness, a runaway tool result — grew that buffer without limit, and the control plane holds one per
+direction per live Session: a memory-exhaustion path reachable by an Agent simply misbehaving. It
+also rescanned the whole accumulated buffer on every chunk, quadratic in the size of a large frame,
+on the hot path for every frame in both directions. Both fixed: a 32 MiB ceiling that fails the
+connection closed (a frame that cannot be journaled must never be forwarded — docs/specs/04's
+commit-precedes-handling guarantee), and a scan that resumes where the last one stopped. The same
+unbounded pattern in both agent bridges' session-id taps is bounded too. Verified by falsification
+in both directions: removing the ceiling fails the growth test, and shifting the scan offset by one
+byte fails the reassembly test.
+
+*Gateway stdout and manual approval, checked against the live instance.* Half passes, half does
+not, and the failing half is recorded here rather than rounded off.
+
+Manual approval is genuinely disabled: every rule the Broker publishes comes back from
+`GET /v1/policy/rules` with `requireApproval: false`. (Worth noting the field is `requireApproval`,
+not the `approval`/`manualApproval` a first probe guessed — a check written against a field that
+does not exist reports `undefined` and reads as a pass.)
+
+Stdout is NOT query-free. OneCLI logs full request URLs, including:
+`…/api/claude_cli/bootstrap?entrypoint=…&model=…`,
+`…/mcp-registry/v0/servers?version=…&limit=…&visibility=…&cursor=…`, `…/v1/messages?beta=…`.
+Nothing observed in 400 lines carries a credential or any conversation content — the parameters are
+structural, and a scan for `aoc_`/`sk-`/`Bearer`/`authorization` shapes returned nothing. So the
+exposure today is request metadata, not secrets. But the criterion asks for query-free, and the
+channel is not: anything a harness ever puts in a query string lands in stdout and therefore in
+Loki. The available lever is OneCLI's own `LOG_LEVEL` (currently `info`), which trades this
+visibility away wholesale — an operator decision, not a code fix, and deliberately left open.
+
+Exit criteria (operator go-live signoff, full SLO/alert/runbook exercise, proven rollback) are
+still NOT met, and note that decommissioning ahead of a rollback rehearsal means there is no longer
+anything to roll back TO — a consequence of the operator's chosen pace, recorded here plainly.
+Status stays `pending`.

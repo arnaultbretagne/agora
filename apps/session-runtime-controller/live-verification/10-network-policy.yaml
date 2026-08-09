@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: session-runtime-egress
+  namespace: agora-p04-test
+spec:
+  podSelector:
+    matchLabels:
+      agora.dev/app: session-runtime
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: fake-relay
+      ports:
+        - protocol: TCP
+          port: 8443
+    # plans/06-custody-and-resume.md: the Pod pulls its restore stream from the controller using a
+    # one-time credential the controller itself minted — same trust level as the relay endpoint
+    # above, never an attacker-reachable destination (AGORA_CUSTODY_RESTORE_URL is controller-set).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: session-runtime-controller
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

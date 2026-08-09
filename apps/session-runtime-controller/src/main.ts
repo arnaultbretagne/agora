@@ -1,0 +1,64 @@
+import { createHash } from 'node:crypto'
+import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION } from '@agora/agent-registry'
+import { createPool, requireDatabaseUrl } from '@agora/store-pg'
+import { BridgeCredentialIssuer } from './bridge-credentials.js'
+import { createHttpBrokerActivationClient } from './broker-activation-client.js'
+import { K8sClient } from './k8s-client.js'
+import type { RelayBundle } from './relay-bundle.js'
+import { CustodyStreamIssuer } from './restore-credentials.js'
+import { createServer } from './server.js'
+
+// P04's non-goal ("No real Claude/Codex integration") no longer applies to either: both
+// CLAUDE_CODE_DEFINITION (agents/claude-code/SPIKE.md) and CODEX_DEFINITION (agents/codex/SPIKE.md)
+// are real, both registered `rollout: 'internal'` pending their own live-Pod pass.
+// `FAKE_AGENT_DEFINITION` is deliberately ABSENT: it is a test double, and listing it here put
+// "Fake Agent (tests)" in the operator's harness menu on the public site as if it were something
+// you could reasonably pick. It stays in @agora/agent-registry because the test suites across four
+// packages are built on it — it just has no business being launchable in production.
+const DEFINITIONS = [CLAUDE_CODE_DEFINITION, CODEX_DEFINITION]
+
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`${name} is required`)
+  return value
+}
+
+const namespace = requireEnv('AGORA_NAMESPACE')
+const controllerRevision = requireEnv('CONTROLLER_REVISION')
+const port = Number(process.env.PORT ?? 8443)
+const runtimeClassName = process.env.RUNTIME_CLASS_NAME
+const runAsUser = process.env.RUN_AS_USER ? Number(process.env.RUN_AS_USER) : undefined
+const imagePullSecretName = process.env.IMAGE_PULL_SECRET_NAME
+const registryRevision = createHash('sha256').update(JSON.stringify(DEFINITIONS)).digest('hex').slice(0, 16)
+// `agora_custody_runtime`-role connection (contracts/database/002-access.sql) — deliberately a
+// SEPARATE credential from any product/control-plane database user (docs/specs/07 "Access control").
+const custodyPool = createPool(requireDatabaseUrl({ DATABASE_URL: process.env.CUSTODY_DATABASE_URL }))
+const custodyControllerBaseUrl = requireEnv('CUSTODY_CONTROLLER_BASE_URL')
+// P08's own operator-managed values (relay-bundle.ts's own doc comment: "P08 supplies the real
+// VALUES ... through the identical RelayBundle shape"), never Session-specific, never secret.
+const relayBundle: RelayBundle = {
+  relayEndpoint: requireEnv('AGORA_BROKER_RELAY_ENDPOINT'),
+  oneCliCaPem: requireEnv('AGORA_ONECLI_CA_PEM'),
+  authStubs: JSON.parse(process.env.AGORA_ONECLI_AUTH_STUBS_JSON ?? '{}') as Record<string, string>,
+}
+const brokerActivationClient = createHttpBrokerActivationClient(requireEnv('BROKER_CONTROL_BASE_URL'))
+
+const server = createServer({
+  k8s: new K8sClient({ namespace }),
+  definitions: DEFINITIONS,
+  registryRevision,
+  bridgeIssuer: new BridgeCredentialIssuer(),
+  controllerRevision,
+  custodyPool,
+  restoreIssuer: new CustodyStreamIssuer(),
+  custodyControllerBaseUrl,
+  relayBundle,
+  brokerActivationClient,
+  ...(runAsUser !== undefined ? { runAsUser } : {}),
+  ...(runtimeClassName ? { runtimeClassName } : {}),
+  ...(imagePullSecretName ? { imagePullSecretName } : {}),
+})
+
+server.listen(port, () => {
+  process.stdout.write(`session-runtime-controller listening on :${port} (namespace=${namespace})\n`)
+})

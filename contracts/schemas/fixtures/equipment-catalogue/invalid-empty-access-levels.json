@@ -1,0 +1,11 @@
+{
+  "version": "2026-08-01",
+  "resources": [
+    {
+      "resource": "vault",
+      "label": "Vault",
+      "description": "Secrets vault access.",
+      "accessLevels": []
+    }
+  ]
+}

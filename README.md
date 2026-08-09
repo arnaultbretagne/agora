@@ -1,76 +1,79 @@
-# agora
+# Agora
 
-> The agora: the public square where you talk to your agents.
+Agora is an ACP-native product for running durable human/agent workstreams in isolated
+**Session Runtimes**.
 
-The platform **product**: a **site** that pilots remote Claude **runtimes**
-through **pipes** (Claude Code's native `channels`) — though from the site's point of view there are
-only **conversations and their pipes**, not runtimes (ADR 0001).
+This repository is a clean architectural baseline. It intentionally contains contracts,
+specifications and implementation plans before production code. Agents implementing the system must
+follow [AGENTS.md](AGENTS.md) and the plan dependency graph in [plans/README.md](plans/README.md).
 
-```
-┌─ pod agent-runtime (infra) ───────────────┐     ┌─ pod website (agora) ────┐
-│  thin supervisor (spawn/kill/list)         │◄───►│  multi-conversation hub   │◄─ browser / iOS / Discord…
-│    ├─ runtime#1 (claude) ─spawn→ channel#1 ─┼─WS─►│  routes to channel#i      │
-│    └─ runtime#N ─────────spawn→ channel#N  ─┼─WS─►│  aggregates conversations │
-└─────────────────────────────────────────────┘     └───────────────────────────┘
-            ▲ channel = plugin (agora code, delivered onto the PVC)
-```
+## Five core terms
 
-## The artefacts
+1. A **Workstream** is the non-null business object shown by the product.
+2. A **Session** is one ACP execution context attached to one Workstream and one Agent.
+3. A **Session Runtime** is the singleton infrastructure subresource through which exactly one
+   Session is materialized, not another domain entity.
+4. An **Anchor** records how much of a Workstream is durably known by one Agent.
+5. A **Custody snapshot** is opaque harness state used to resume one Session.
 
-| Folder | Build → | Role |
-|---|---|---|
-| **`website/`** | image | The hub. You talk to your agents here; it aggregates N conversations, drives the supervisor API, routes messages. |
-| **`channel/`** | Claude Code plugin | The pipe between a runtime and the site. **stdio** MCP server that `claude` spawns itself; relays over **WS** to the website. |
-| **`shared/`** | — | The WS protocol common to both. |
+There is no `Conversation`, `Run`, `Loge`, reusable Session Runtime, generic runtime profile or
+custom Agent message protocol.
 
-## Boundary with the infra
+## Repository shape
 
-The image, the supervisor, auth, pod security = the **`agent-runtime`** repo (infra
-brick, **product-agnostic**). agora is the product that *plugs* into it:
+```text
+apps/
+  web/               Human-facing web application
+  control-plane/     Workstream API, Session coordinator and ACP Client
+  session-runtime-controller/
+                     Kubernetes lifecycle for Session Runtimes
+  broker/            Capability policy, OneCLI lifecycle and opaque workload relay
 
-- the **channel** is co-located with the runtime (the primitive's `stdio` constraint) but it's
-  **product code**, delivered as a **plugin** installed onto the PVC — **not** baked into the image;
-- the **website** runs in its own pod.
+packages/
+  domain/            Domain types and invariants
+  acp/               ACP connection and journaling integration
+  store-pg/          Product journal and projections
+  session-runtime-control/   Session Runtime control client/server contracts
+  custody/           Opaque custody persistence
+  equipment-policy/ Capability request and grant resolution
+  agent-registry/    Trusted Agent runtime definitions
+  observability/     Correlation helpers only
 
-The site talks to **two** contracts: the **supervisor API** (runtime lifecycle)
-and the **channels** (messages). That's the entire product ↔ infra surface.
+agents/
+  claude-code/       Claude ACP runtime definition and custody driver
+  codex/             Codex ACP runtime definition and custody driver
 
-## Layout (as built)
-
-```
-agora/
-├─ shared/protocol.js     WS protocol: channel⟷hub frames + hub→client events + validators
-├─ channel/               the plugin (Claude Code channel)
-│  ├─ .claude-plugin/plugin.json   manifest — declares `channels: [{ server: "agora" }]`
-│  ├─ .mcp.json                    the stdio MCP server (node server.js)
-│  ├─ server.js                    stdio MCP (claude side) ⟷ WS (hub side) bridge
-│  └─ protocol.js                  generated copy of ../shared (self-contained on install)
-├─ website/               the hub
-│  ├─ server.js           HTTP+REST façade, WS /ws/client (browsers), WS /ws/channel (pipes)
-│  ├─ lib/store.js        neutral conversation store — the sole source of truth (ADR 0005)
-│  ├─ lib/supervisor.js   agent-runtime supervisor client + per-kind spawn recipe
-│  ├─ lib/seed.js         re-seed builder (flattened role-tagged history replay)
-│  ├─ lib/hub.js          routing, lifecycle, re-seed, restart reconcile
-│  ├─ public/             claude.ai-like UI (vanilla ESM, light/dark, mobile)
-│  └─ test/               node:test — protocol / store / seed / hub (18 cases)
-├─ .claude-plugin/marketplace.json   local marketplace exposing the channel plugin
-└─ scripts/sync-shared.mjs           copies shared/ → channel/ (self-contained plugin)
+contracts/           Machine-readable HTTP, event, registry and SQL contracts
+docs/specs/          Normative system specifications
+docs/adr/            One consolidated ADR series and index
+plans/               Ordered implementation plans for coding agents
 ```
 
-## Enablement (how claude loads the channel — spike-validated)
+The repository is a monorepo, not a monolith. `control-plane`, `session-runtime-controller`, and
+`broker` are separate deployables with separate identities and permissions.
 
-- `--channels plugin:agora@<marketplace>` activates the channel; the plugin's `plugin.json` **must**
-  declare `channels: [{ server: "agora" }]` (else claude loads the MCP server but skips the channel).
-- The reply tool is `mcp__plugin_agora_agora__reply` → pass it to `--allowedTools` for a headless run.
-- Managed policy must allow it: `/etc/claude-code/managed-settings.json` →
-  `channelsEnabled: true` + `allowedChannelPlugins: [{ marketplace, plugin: "agora" }]`.
-- Details + the startup-race mitigation: `/srv/spike/FINDINGS.md` §5 / §5b.
+Self-hosted OneCLI is the separately operated, pinned credential gateway. It alone stores/injects
+provider credentials and performs MITM; Agora does not contain a parallel gateway.
 
-## Run the POC
+## Read order
 
-`bash .poc/run.sh start` boots the supervisor (agent-runtime) + hub, then open `http://127.0.0.1:8600`.
-Requires the agent-runtime supervisor build and a Claude Max login on the runtime's HOME. `.poc/run.sh stop` to stop.
+1. [Glossary](docs/specs/00-glossary.md)
+2. [System architecture](docs/specs/01-system-architecture.md)
+3. [Domain model](docs/specs/02-domain-model.md)
+4. [ADR index](docs/adr/index.md)
+5. [Implementation program](plans/00-program.md)
 
-## Design
+## Contract checks
 
-See [`docs/adr/`](docs/adr/README.md) — the architecture decisions, in reading order.
+```bash
+npm ci
+npm test
+```
+
+The local checker validates repository indexes/links, JSON Schemas, OpenAPI documents and the agent
+plan graph. CI additionally applies both SQL contracts to a disposable PostgreSQL 17 service.
+
+## Status
+
+Architecture baseline accepted on 2026-07-29 after the OneCLI spike. P01 is ready; every later
+package remains gated by the dependency graph and its plan exit criteria.

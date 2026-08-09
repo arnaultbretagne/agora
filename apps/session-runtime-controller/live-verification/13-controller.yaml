@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: session-runtime-controller
+  namespace: agora-p04-test
+  labels:
+    app: session-runtime-controller
+spec:
+  serviceAccountName: session-runtime-controller
+  containers:
+    - name: controller
+      image: ghcr.io/arnaultbretagne/agora-session-runtime-controller:p06
+      env:
+        - name: AGORA_NAMESPACE
+          value: agora-p04-test
+        - name: CONTROLLER_REVISION
+          value: p06-live-verification
+        - name: PORT
+          value: "8443"
+        - name: RUNTIME_CLASS_NAME
+          value: sandboxed
+        - name: RUN_AS_USER
+          value: "1000"
+        - name: IMAGE_PULL_SECRET_NAME
+          value: ghcr-pull
+        - name: CUSTODY_DATABASE_URL
+          value: postgres://postgres:custody-test-only@custody-postgres.agora-p04-test.svc.cluster.local:5432/postgres
+        - name: CUSTODY_CONTROLLER_BASE_URL
+          value: http://session-runtime-controller.agora-p04-test.svc.cluster.local:8443
+      ports:
+        - containerPort: 8443
+  imagePullSecrets:
+    - name: ghcr-pull

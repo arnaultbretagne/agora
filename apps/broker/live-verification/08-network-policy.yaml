@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: agora-onecli-test
+spec:
+  # docs/specs/11 "Broker admin plane from Session Runtime Pods" isolation, applied here at
+  # namespace scope: nothing outside `agora-onecli-test` may initiate a connection into it. OneCLI's
+  # own OUTBOUND egress is intentionally left unrestricted by this policy — unlike a Session Runtime
+  # Pod, OneCLI itself is the ONE component this architecture expects to reach providers directly
+  # (ADR 0014).
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}

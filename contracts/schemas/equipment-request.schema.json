@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agora.invalid/contracts/equipment-request.schema.json",
+  "title": "EquipmentRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "catalogueVersion",
+    "resources"
+  ],
+  "properties": {
+    "catalogueVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "x-uniqueBy": "resource",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource",
+          "access"
+        ],
+        "properties": {
+          "resource": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,79}$"
+          },
+          "access": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,79}$"
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

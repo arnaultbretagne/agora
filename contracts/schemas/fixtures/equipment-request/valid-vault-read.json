@@ -1,0 +1,7 @@
+{
+  "catalogueVersion": "2026-08-01",
+  "resources": [
+    { "resource": "vault", "access": "read" },
+    { "resource": "github", "access": "propose", "scope": { "repo": "arnaultbretagne/agora" } }
+  ]
+}

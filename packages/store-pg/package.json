@@ -1,0 +1,21 @@
+{
+  "name": "@agora/store-pg",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "migrate": "node dist/src/migrate.js",
+    "custody-retention-sweep": "node dist/src/retention.js",
+    "test": "npm run build && node --test $(find dist -name '*.test.js')"
+  },
+  "dependencies": {
+    "@agora/domain": "0.0.0",
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.11.10"
+  }
+}

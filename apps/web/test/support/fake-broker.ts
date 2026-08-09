@@ -1,0 +1,142 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { createServer, type Server } from 'node:http'
+
+/**
+ * Stands in for the real Broker (apps/broker) purely over HTTP — apps/web (a deployable) must
+ * never import that Broker's source directly (scripts/check-architecture.mjs: "no deployable
+ * imports another deployable"), so this test harness re-implements just enough of
+ * `POST /v1/execution-grants` and `POST /v1/execution-grants/{id}/renew`'s wire contract to
+ * exercise apps/web's own real broker-grant-client.ts against a REAL server, matching
+ * fake-controller.ts's own convention for the Session Runtime controller.
+ *
+ * Idempotent by sessionId (loosely — enough for these tests, not a full re-implementation of the
+ * real Broker's (sessionId, requestId) idempotency): a second issue for the same sessionId
+ * returns the SAME grant, matching `broker.execution_grants.session_id` being UNIQUE.
+ */
+export interface FakeBrokerHandle {
+  readonly baseUrl: string
+  readonly issueCalls: readonly { readonly sessionId: string; readonly agentId: string }[]
+  readonly renewCalls: readonly string[]
+  /** grantIds this fake was asked to revoke — the real Broker deletes the Session's OneCLI Agent here. */
+  readonly revokeCalls: readonly string[]
+  close(): Promise<void>
+}
+
+interface FakeGrant {
+  readonly grantId: string
+  readonly sessionId: string
+  readonly agentId: string
+  readonly policyVersion: string
+  readonly capabilityDigest: string
+  expiresAt: string
+}
+
+function readJson(req: import('node:http').IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  return new Promise((resolve, reject) => {
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      try {
+        resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {})
+      } catch (error) {
+        reject(error)
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+function wireGrant(grant: FakeGrant) {
+  return {
+    grantId: grant.grantId,
+    grantRef: grant.grantId,
+    sessionId: grant.sessionId,
+    agentId: grant.agentId,
+    policyVersion: grant.policyVersion,
+    capabilityDigest: grant.capabilityDigest,
+    capabilities: [],
+    mcpServers: [],
+    expiresAt: grant.expiresAt,
+  }
+}
+
+export async function startFakeBroker(): Promise<FakeBrokerHandle> {
+  const grantsBySession = new Map<string, FakeGrant>()
+  const grantsById = new Map<string, FakeGrant>()
+  const issueCalls: { readonly sessionId: string; readonly agentId: string }[] = []
+  const renewCalls: string[] = []
+  const revokeCalls: string[] = []
+
+  const httpServer: Server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? '/', 'http://internal')
+
+      if (req.method === 'POST' && url.pathname === '/v1/execution-grants') {
+        const body = await readJson(req)
+        const sessionId = String(body['sessionId'] ?? '')
+        const agentId = String(body['agentId'] ?? '')
+        issueCalls.push({ sessionId, agentId })
+        let grant = grantsBySession.get(sessionId)
+        if (!grant) {
+          grant = {
+            grantId: randomUUID(),
+            sessionId,
+            agentId,
+            policyVersion: 'fake-test-policy-v1',
+            capabilityDigest: createHash('sha256').update(sessionId).digest('hex'),
+            expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+          }
+          grantsBySession.set(sessionId, grant)
+          grantsById.set(grant.grantId, grant)
+        }
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(wireGrant(grant)))
+        return
+      }
+
+      const renewMatch = /^\/v1\/execution-grants\/([^/]+)\/renew$/.exec(url.pathname)
+      if (req.method === 'POST' && renewMatch?.[1]) {
+        renewCalls.push(renewMatch[1])
+        const grant = grantsById.get(renewMatch[1])
+        if (!grant) {
+          res.writeHead(409, { 'content-type': 'application/problem+json' })
+          res.end(JSON.stringify({ type: 'about:blank', title: 'unknown grant', status: 409, code: 'grant_not_renewable' }))
+          return
+        }
+        grant.expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(wireGrant(grant)))
+        return
+      }
+
+      const revokeMatch = /^\/v1\/execution-grants\/([^/]+)$/.exec(url.pathname)
+      if (req.method === 'DELETE' && revokeMatch?.[1]) {
+        // Idempotent like the real Broker: revoking an absent/already-revoked grant is a no-op 204.
+        revokeCalls.push(revokeMatch[1])
+        const grant = grantsById.get(revokeMatch[1])
+        if (grant) {
+          grantsById.delete(revokeMatch[1])
+          grantsBySession.delete(grant.sessionId)
+        }
+        res.writeHead(204)
+        res.end()
+        return
+      }
+
+      res.writeHead(404)
+      res.end()
+    })()
+  })
+  await new Promise<void>((resolve) => httpServer.listen(0, resolve))
+  const port = (httpServer.address() as { port: number }).port
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    issueCalls,
+    renewCalls,
+    revokeCalls,
+    async close() {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    },
+  }
+}

@@ -1,0 +1,260 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agora.invalid/contracts/agent-runtime.schema.json",
+  "title": "AgentRuntimeDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agentId",
+    "version",
+    "label",
+    "description",
+    "imageDigest",
+    "acpCommand",
+    "bridge",
+    "stableAcpVersions",
+    "custody",
+    "resources",
+    "health",
+    "rollout"
+  ],
+  "properties": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,79}$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "imageDigest": {
+      "type": "string",
+      "pattern": "^.+@sha256:[a-f0-9]{64}$"
+    },
+    "acpCommand": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "listenPort"
+      ],
+      "properties": {
+        "transport": {
+          "enum": [
+            "websocket",
+            "streamable-http"
+          ]
+        },
+        "listenPort": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        }
+      }
+    },
+    "stableAcpVersions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "custody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "driverId",
+        "readFormats",
+        "writeFormat",
+        "captureRoots",
+        "credentialExclusions",
+        "consistency",
+        "restoreCollision",
+        "maxBytes"
+      ],
+      "properties": {
+        "driverId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readFormats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/custodyFormat"
+          }
+        },
+        "writeFormat": {
+          "$ref": "#/definitions/custodyFormat"
+        },
+        "captureRoots": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^/"
+          }
+        },
+        "credentialExclusions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^/"
+          }
+        },
+        "consistency": {
+          "enum": [
+            "process-quiescence",
+            "native-export",
+            "snapshot-safe-files"
+          ]
+        },
+        "restoreCollision": {
+          "enum": [
+            "fail-if-present",
+            "require-empty-root"
+          ]
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "type": "string"
+            },
+            "memory": {
+              "type": "string"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory",
+            "ephemeralStorage"
+          ],
+          "properties": {
+            "cpu": {
+              "type": "string"
+            },
+            "memory": {
+              "type": "string"
+            },
+            "ephemeralStorage": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "initialDelaySeconds",
+        "timeoutSeconds"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "initialDelaySeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "rollout": {
+      "enum": [
+        "disabled",
+        "internal",
+        "enabled",
+        "deprecated",
+        "retired"
+      ]
+    },
+    "personas": {
+      "type": "array",
+      "description": "Reviewed persona names this Agent may be launched with (the harness's own `--agent <name>`). Optional: an Agent with no reviewed personas simply offers none, and the product surface hides the choice. Curated here rather than discovered by scanning the running Pod's filesystem \u2014 the Session Runtime is untrusted compute, so what it may impersonate is an operator-reviewed fact, not something the Pod gets to tell us.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "uniqueItems": true
+    }
+  },
+  "definitions": {
+    "custodyFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formatId",
+        "formatVersion"
+      ],
+      "properties": {
+        "formatId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "formatVersion": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
