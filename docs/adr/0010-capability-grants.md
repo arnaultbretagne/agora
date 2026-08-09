@@ -1,7 +1,15 @@
 # ADR 0010 — Independent capability grants replace profiles
 
-- **Status:** Accepted
+- **Status:** Accepted (egress-enforcement clause amended)
 - **Date:** 2026-07-29
+
+> **Amended by [ADR 0015](0015-onecli-credential-firewall-egress-at-relay.md) (Proposed,
+> 2026-08-09).** The capability-grant model, the one-Agent-per-Session mapping and the relay stand.
+> What 0015 reverses: OneCLI ≥1.44 removed project-policy authoring and has no network egress deny,
+> so the "publishes deterministic first-match rules ... one final explicit `block *`" mechanism below
+> does not exist on the supported product. Under 0015, OneCLI selects credentials via **grants** and
+> the **relay** is the deny-by-default egress point. Read the two numbered rule items and "OneCLI's
+> Default Rule is not used as a general egress deny" as superseded by 0015.
 
 ## Context
 

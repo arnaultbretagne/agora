@@ -21,6 +21,8 @@ P01 Domain/contracts
            └── P10 Codex Agent  ◄── P06
 
 P11 Hardening/cutover ◄── P05/P07/P08/P09/P10
+P12 Session config/titles ◄── P03/P05/P08/P09/P10
+P13 OneCLI egress/grants ◄── P08/P11
 ```
 
 ## Plans
@@ -39,6 +41,8 @@ P11 Hardening/cutover ◄── P05/P07/P08/P09/P10
 | P09 | [Claude Agent](09-claude-agent.md) | P04, P06, P08 |
 | P10 | [Codex Agent](10-codex-agent.md) | P04, P06, P08 |
 | P11 | [Hardening and cutover](11-hardening-and-cutover.md) | all vertical slices |
+| P12 | [Session configuration and titles](12-session-configuration-and-titles.md) | P03, P05, P08, P09, P10 |
+| P13 | [OneCLI egress and grants](13-onecli-egress-relay-and-grants.md) | P08, P11 |
 
 `manifest.json` is the machine-readable dependency/status view.
 

@@ -1,7 +1,15 @@
 # ADR 0014 — OneCLI is the only credential gateway
 
-- **Status:** Accepted
+- **Status:** Accepted (route-policy clause amended)
 - **Date:** 2026-07-29
+
+> **Amended by [ADR 0015](0015-onecli-credential-firewall-egress-at-relay.md) (Proposed,
+> 2026-08-09).** OneCLI remains the *only* credential MITM, provider-secret store and injection
+> gateway — that decision is unchanged and is why this ADR stands. What 0015 narrows: the Decision's
+> bullet "enforce provider-route policy and record gateway request decisions" and the deliverable
+> "deterministic OneCLI rule publication with explicit allows followed by `block *`". Route/network
+> egress policy is **not** OneCLI's on the supported ≥1.44 product; it is Agora's, enforced at the
+> relay. OneCLI's policy role is reduced to per-Agent **credential grants**.
 
 ## Context
 

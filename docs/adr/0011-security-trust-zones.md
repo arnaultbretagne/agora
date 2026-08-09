@@ -1,7 +1,14 @@
 # ADR 0011 — Session Runtimes are untrusted; trust zones remain separate
 
-- **Status:** Accepted
+- **Status:** Accepted (egress-enforcement clause amended)
 - **Date:** 2026-07-29
+
+> **Amended by [ADR 0015](0015-onecli-credential-firewall-egress-at-relay.md) (Proposed,
+> 2026-08-09).** Every trust-zone boundary here stands, including "Session Runtime egress is forced
+> through the workload-authenticated relay". What 0015 reverses: the sentence "OneCLI policy contains
+> explicit allows followed by `block *`; its built-in Default Rule is not accepted as deny-by-default"
+> — OneCLI ≥1.44 OSS cannot express that. Deny-by-default egress is enforced **at the relay**, which
+> this ADR already makes the sole egress path.
 
 ## Context
 
