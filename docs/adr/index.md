@@ -17,11 +17,11 @@ ADRs record decisions and rationale. Current behavior is specified under `docs/s
 | [0007](0007-opaque-custody.md) | Accepted | Versioned, opaque custody snapshots are stored separately from product meaning |
 | [0008](0008-anchor-delta-handoffs.md) | Accepted | Per-Agent durable anchors drive delta handoffs across Sessions |
 | [0009](0009-postgres-storage-boundaries.md) | Accepted | Postgres stores product facts, projections and opaque custody, not infrastructure logs |
-| [0010](0010-capability-grants.md) | Accepted (amended by 0015) | Independent grants map one Session to one selective OneCLI Agent and bound relay |
-| [0011](0011-security-trust-zones.md) | Accepted (amended by 0015) | Session Runtimes are untrusted; controller, Broker and product use separate identities |
+| [0010](0010-capability-grants.md) | Accepted | Independent grants map one Session to one selective OneCLI Agent and bound relay (egress clause amended by 0015) |
+| [0011](0011-security-trust-zones.md) | Accepted | Session Runtimes are untrusted; controller, Broker and product use separate identities (egress clause amended by 0015) |
 | [0012](0012-state-authority-and-observability.md) | Accepted | Product, runtime and telemetry state keep distinct owners |
 | [0013](0013-greenfield-replacement.md) | Accepted | Replace the old implementation with contract-first greenfield vertical slices |
-| [0014](0014-adopt-credential-gateway.md) | Accepted (amended by 0015) | OneCLI is the only MITM, provider-secret store and credential-injection gateway |
+| [0014](0014-adopt-credential-gateway.md) | Accepted | OneCLI is the only MITM, provider-secret store and credential-injection gateway (route-policy clause amended by 0015) |
 | [0015](0015-onecli-credential-firewall-egress-at-relay.md) | Proposed | OneCLI is a credential firewall (per-Agent grants); Agora enforces network egress at the relay |
 
 ## Retired vocabulary

@@ -1,6 +1,6 @@
 # ADR 0014 — OneCLI is the only credential gateway
 
-- **Status:** Accepted (route-policy clause amended)
+- **Status:** Accepted
 - **Date:** 2026-07-29
 
 > **Amended by [ADR 0015](0015-onecli-credential-firewall-egress-at-relay.md) (Proposed,
