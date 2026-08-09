@@ -114,6 +114,15 @@
         "P10"
       ],
       "status": "complete"
+    },
+    {
+      "id": "P13",
+      "file": "13-onecli-egress-relay-and-grants.md",
+      "dependsOn": [
+        "P08",
+        "P11"
+      ],
+      "status": "pending"
     }
   ]
 }
