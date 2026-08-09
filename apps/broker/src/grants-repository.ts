@@ -89,6 +89,19 @@ const GRANT_COLUMNS = `id, session_id, agent_id, principal_id, workstream_catego
  * by (session_id, request_id) — a retried issue call with the SAME request_id returns the SAME
  * grant. A DIFFERENT request_id for a Session that already holds a grant is a `GrantConflictError`
  * (docs/specs/10 "Equipment change" opens a new Session instead), not a silent overwrite.
+ *
+ * The read-then-insert below is racy by nature, so the insert is written to lose that race safely.
+ * Two details matter, both found in CI under P13 (8 genuinely concurrent identical issues for one
+ * Session; reproduced locally at 11 failures in 12 rounds):
+ *
+ * - the conflict target must be UNTARGETED. This table has three unique constraints — `id`,
+ *   `session_id`, and `(session_id, request_id)` — and concurrent callers each mint their own
+ *   random `id`, so they never collide on it. They collide on `session_id`, which
+ *   `ON CONFLICT (id)` does not cover, and the raw 23505 escaped to the caller as an unhandled
+ *   database error instead of resolving idempotently.
+ * - the recovery read must be BY SESSION. The winner committed under its own random id, so
+ *   re-reading by ours finds nothing and reports a phantom "vanished immediately" error for what is
+ *   really the normal, expected outcome of losing the race.
  */
 export async function issueGrant(client: PoolClient, input: IssueGrantInput): Promise<ExecutionGrant> {
   const existingBySession = await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} FROM broker.execution_grants WHERE session_id = $1`, [
@@ -105,7 +118,7 @@ export async function issueGrant(client: PoolClient, input: IssueGrantInput): Pr
        (id, session_id, agent_id, principal_id, workstream_category, policy_version, capability_digest,
         capabilities, mcp_servers, onecli_identifier, request_id, state, issued_at, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'issued', $12, $13)
-     ON CONFLICT (id) DO NOTHING
+     ON CONFLICT DO NOTHING
      RETURNING ${GRANT_COLUMNS}`,
     [
       input.id,
@@ -126,10 +139,12 @@ export async function issueGrant(client: PoolClient, input: IssueGrantInput): Pr
   const inserted = rows[0]
   if (inserted) return hydrate(inserted)
 
-  // Lost the race to a concurrent identical insert — re-read and apply the same idempotency check.
-  const { rows: retried } = await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} FROM broker.execution_grants WHERE id = $1`, [input.id])
+  // Lost the race to a concurrent insert — re-read and apply the same idempotency check. Re-read by
+  // SESSION, not by id: the winner is a different concurrent call, so it committed under ITS own
+  // random id and a lookup by ours would find nothing and report a phantom "vanished" error.
+  const { rows: retried } = await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} FROM broker.execution_grants WHERE session_id = $1`, [input.sessionId])
   const row = retried[0]
-  if (!row) throw new Error(`execution grant ${input.id} vanished immediately after a conflicting concurrent insert`)
+  if (!row) throw new Error(`execution grant for session ${input.sessionId} vanished immediately after a conflicting concurrent insert`)
   if (row.request_id !== input.requestId) {
     throw new GrantConflictError(`session ${input.sessionId} already holds execution grant ${row.id} — a Session cannot be upgraded in place`)
   }
