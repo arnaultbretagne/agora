@@ -1,6 +1,7 @@
 # P13 — OneCLI credential-grant migration and relay-owned egress
 
-- **Status:** pending
+- **Status:** in_progress (code, tests, specs and ADR complete; production digest bump awaiting the
+  operator's merge of the coupled infra-k8s change — see "Cutover state" below)
 - **Dependencies:** P08 (Broker), P11 (hardening/deploy)
 - **Primary paths:** `apps/broker/src/{route-policy,relay,onecli-real,onecli-adapter,grant-service}.ts`,
   `docs/specs/{10,11}-*.md`, `infra-k8s/apps/agora-onecli/onecli.yaml`
@@ -128,35 +129,99 @@ Broker grant issue ─▶ ensure per-Session OneCLI Agent ─▶ attach ONLY res
 
 ## Tasks
 
-- [ ] **Prove the grants path on a staging ≥1.45 instance** before touching Broker code: create an
-  Agent, attach one secret grant, confirm `effective-credentials` flips that secret to `usable` while
-  a second secret stays `blocked`; detach → `blocked`. Record the transcript as evidence.
-- [ ] **Retarget `route-policy.ts`** to emit a per-Session host allow-list (drop the terminal
-  `block *` "route" concept; the relay is deny-by-default intrinsically). Consume `fact.constraints`
-  and `accessLevel`. Add `github.com` alongside `api.github.com` for the `github` capability. Keep it
-  a pure function of active grants (deterministic, sorted, deduped). Update `route-policy.test.ts`.
-- [ ] **Add the relay egress gate** in `relay.ts`: after host parse (`:89-123`), look up the
-  Session's allow-list and `deny(…, 403, 'egress_not_allowed')` if the host is absent, before
-  `bridgeThroughGateway`. Wire the allow-list source (compiled at grant activation, keyed by
-  Session/activation). Add unit tests: allowed host bridges, unlisted host 403s and never dials
-  upstream.
-- [ ] **Add a grants credential adapter** to `onecli-adapter.ts` / `onecli-real.ts`: methods to
-  attach/detach secret and connection grants by (agentId, credential) via raw `restJson`. Resolve
-  credential ids by name/provider (`GET /v1/secrets`, `GET /v1/connections`).
-- [ ] **Rewire `grant-service.ts`**: on issue, ensure Agent + attach resolved grants (replace the
-  `compileRoutePolicy`+`publishRoutePolicy` call at `~:204` with grant attach + relay allow-list
-  compile); on revoke, detach/delete (replace `~:377`). Remove the project-policy publish-then-verify;
-  add a grants-effect verification via `effective-credentials`.
-- [ ] **Orphan-Agent reaper**: reconcile `GET /v1/agents` against active grants; `deleteAgent` the
-  unmatched `sagt-*`. Run on a schedule and at Broker startup. (There are 15 orphans live today; this
-  is NOT the `apps/web/src/idle-reaper.ts`, which suspends Agora Sessions, a different object.)
-- [ ] **Amend specs 10 & 11**: replace "explicit allows + `block *` in OneCLI" with "credential
-  grants in OneCLI; deny-by-default host egress at the relay". Cross-reference ADR 0015.
-- [ ] **Upgrade OneCLI** to a pinned ≥1.45 digest in `infra-k8s/apps/agora-onecli/onecli.yaml`;
-  verify its release/source provenance (this also closes the open P11 provenance task). The boot
-  converter will materialize existing `all`-mode Agents' pools as explicit grants — verify each
-  Session Agent ends with exactly its intended grants, not the whole pool.
-- [ ] **Flip ADR 0015 to Accepted** once the above lands and specs are amended.
+- [x] **Prove the grants path on a staging ≥1.45 instance** before touching Broker code. Done
+  2026-08-09 against a throwaway `agora-onecli-staging` deployment of **1.45.0**
+  (`sha256:d0177458b1f9ecece4abbe9abb6c5f925475357c1734f50a675d83a2ef9c8687`, the newest tag
+  published). Transcript summarized in ADR 0015 "Verification": a fresh Agent is
+  `{mode:"selective",secrets:[],connections:[]}`; `PUT …/grants/secrets/{id}` flips exactly that
+  secret to `usable`; a second Agent granted the other secret shows the inverse and neither moves
+  when the other changes; `DELETE` → `204` → empty. `/v1/policy/{rules,publish,last-publish}`,
+  `/v1/rules` and `PATCH …/secret-mode` all answer `410 Gone`.
+- [x] **Retarget `route-policy.ts`** — `compileSessionEgressAllowList(grant)` now emits a sorted,
+  deduplicated per-Session host set with no `block *` concept. Keyed by `capabilityId/accessLevel`
+  so an unreviewed access level cannot inherit another's hosts, and `fact.constraints` is genuinely
+  consumed: an unreviewed constraint key now fails closed instead of being silently discarded (it
+  used to be resolved, persisted, then dropped — granting UNSCOPED access to a scoped request).
+  `github/*` allow-lists `github.com` and `raw.githubusercontent.com` alongside `api.github.com`,
+  taken from the host patterns of OneCLI's own `github-app` tool catalogue.
+- [x] **Add the relay egress gate** — `relay.ts` recompiles the allow-list from the grant row it has
+  already loaded and denies `403 egress_not_allowed` before `readUpstreamAuthority`, so no upstream
+  socket exists for a denied CONNECT. Recompiling per CONNECT rather than caching at activation was
+  a deliberate change from the plan's sketch: the compiler is a pure function of (Agent,
+  capabilities), so there is nothing to cache, no invalidation to get wrong, and no compiled list
+  that can outlive the grant that produced it. Tests assert the 403, the audit code, and that the
+  dial spy recorded zero upstream dials.
+- [x] **Add a grants credential adapter** — `syncCredentialGrants` / `getEffectiveCredentials` /
+  `listAgents` on `OneCliControlAdapter`, implemented over raw `restJson` in `onecli-real.ts` and
+  faithfully doubled in `onecli-fake.ts`. Credentials are named by OneCLI **type/provider** and
+  resolved to instance ids at call time. The sync CONVERGES (detaches anything unwanted), so a
+  re-issue can never leave a stale credential attached. New `credential-policy.ts` holds the
+  reviewed mapping.
+- [x] **Rewire `grant-service.ts`** — issue now ensures the Agent, attaches grants, verifies them,
+  and only then pulls the container config; revoke just deletes the Agent. Both `publishRoutePolicy`
+  and `getPublishedGeneration` are gone from the adapter entirely. `verifyGrantsEffective` compares
+  `effective-credentials` against the intended set in BOTH directions — missing or extra is a
+  refusal.
+- [x] **Orphan-Agent reaper** — `onecli-agent-reaper.ts`, at Broker startup and hourly. Reconciles
+  against `broker.onecli_agents` rows rather than active grants: a suspended Session legitimately
+  outlives its 30-minute grant (docs/specs/10), so reaping on "no active grant" would delete every
+  suspended-but-resumable Session's Agent. Only `sagt-` Agents outside a 15-minute grace window are
+  candidates, so the operator's own Agents and in-flight issues are never touched.
+- [x] **Amend specs 10 & 11** — "Route-policy compilation" is replaced by "Egress-policy
+  compilation" (relay, deny-by-default) plus "Credential-grant compilation" (OneCLI, per Agent);
+  spec 11's `block *` clause is rewritten, including the requirement that a negative egress test
+  assert the refusal at the relay.
+- [ ] **Upgrade OneCLI** to the pinned 1.45.0 digest in `infra-k8s/apps/agora-onecli/onecli.yaml`.
+  Prepared, not merged — see "Cutover state".
+- [x] **Flip ADR 0015 to Accepted.**
+
+## Evidence
+
+**Real adapter against live OneCLI 1.45.0** (2026-08-09) — `createOnecliSdkAdapter` itself, not the
+test double, driven against the staging instance through a port-forward. A faithful double can only
+assert the contract; this asserts the wire format:
+
+```
+fresh agent effective-credentials: {"mode":"selective","secrets":[],"connections":[]}
+compiled desired (claude-code):    {"credentialSetVersion":"credentials-v1","secretTypes":["anthropic"],…}
+compiled desired (codex):          {"credentialSetVersion":"credentials-v1","secretTypes":["openai"],…}
+effective (claude): {"secrets":[{"id":"2f682b5e-…","status":"usable"}],"connections":[]}
+effective (codex):  {"secrets":[{"id":"1ade8733-…","status":"usable"}],"connections":[]}
+ISOLATION OK: each Agent holds exactly its own provider credential
+after re-sync onto a different desired set: {"secrets":[{"id":"1ade8733-…","status":"usable"}]}
+CONVERGENCE OK: the previous credential was detached, not left behind
+after detach-all: {"mode":"selective","secrets":[],"connections":[]}
+listAgents returns identifier+createdAt only; no `aoc_` token in its output
+```
+
+`ensureSelectiveAgent` (SDK `ensureAgent`) still works unchanged on 1.45.0, so the vendored
+1.43.x-era `@onecli-sh/sdk@3.0.0` does not have to be bumped for this cutover — only the grant calls
+needed raw REST.
+
+**Automated suite:** `npm test` green, including 75 Broker tests. New/rewritten coverage:
+`route-policy.test.ts` (per-Session allow-list, exact host matching, constraint fail-closed),
+`credential-policy.test.ts` (per-Agent isolation, read/propose tool split, no `ask`),
+`onecli-agent-reaper.test.ts` (orphan reaped, live and suspended Sessions never reaped, grace
+window, list failure is hard), plus grants-effect, extra-credential and egress-gate cases in
+`grant-service.test.ts` / `relay.test.ts`.
+
+## Cutover state (2026-08-09)
+
+The OneCLI upgrade and the Broker deploy are **one coupled cutover**, and neither half works with
+the other's old half — measured, not assumed:
+
+- old Broker + OneCLI ≥1.44: `publishRoutePolicy` gets `410 Gone`, every issue fails;
+- new Broker + OneCLI 1.43.3: `GET /v1/agents/{id}/grants` is `404` on 1.43.3 (verified live against
+  the operator's own instance), so `syncCredentialGrants` fails and every issue fails.
+
+They must therefore land in a single infra-k8s change, which is prepared as a PR rather than pushed:
+the digest bump only takes effect when the operator merges it, and flux deploys from `main`.
+
+The `[grant-conversion]` boot converter runs on first start of the upgraded instance. The Broker
+does not trust its outcome: `verifyGrantsEffective` refuses to issue for any Agent whose effective
+credential set is larger than what Agora attached, which is exactly the "materialized the whole
+pool" failure mode the converter could produce — and the reaper deletes the 15 live orphan Agents
+that would otherwise carry converted grants forward.
 
 ## Required tests / evidence gates
 

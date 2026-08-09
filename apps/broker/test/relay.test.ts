@@ -14,6 +14,7 @@ import { createAccessRelay } from '../src/relay.js'
 import { randomId, testEncryptionKey, testExpectedRuntimeBundle, withTestDatabase } from './support.js'
 
 const VAULT_READ: EquipmentRequest = { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'vault', access: 'read' }] }
+const GITHUB_READ: EquipmentRequest = { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'github', access: 'read' }] }
 
 /** Stands in for "the provider" behind OneCLI's gateway — a plain TCP echo server. Proves the
  * relay+fake-gateway path carries bytes opaquely: whatever the "workload" writes comes back
@@ -55,7 +56,15 @@ async function setup(pool: pg.Pool) {
   onecli.gatewayUrl = gateway.url
   const deps: GrantServiceDeps = { onecli, encryptionKey: testEncryptionKey(), expectedRuntimeBundle: testExpectedRuntimeBundle() }
   const identityResolver = fakeWorkloadIdentityResolver()
-  const relay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey, resolveWorkloadIdentity: identityResolver.resolve })
+  // Counting wrapper around the real dial: the egress-gate tests must prove not merely that the
+  // caller got a 403, but that NO upstream socket to OneCLI's gateway was ever opened for it.
+  const dialed: string[] = []
+  const dialGateway = (gatewayUrl: string): Socket => {
+    dialed.push(gatewayUrl)
+    const url = new URL(gatewayUrl)
+    return netConnect(Number(url.port), url.hostname)
+  }
+  const relay = createAccessRelay({ pool, encryptionKey: deps.encryptionKey, resolveWorkloadIdentity: identityResolver.resolve, dialGateway })
   await new Promise<void>((resolve) => relay.listen(0, '127.0.0.1', resolve))
   const relayPort = (relay.address() as AddressInfo).port
   return {
@@ -64,6 +73,7 @@ async function setup(pool: pg.Pool) {
     deps,
     relay,
     relayPort,
+    dialed,
     connectThroughRelay: (workloadIdentity: string, host: string, port: number) => {
       identityResolver.setIdentity(workloadIdentity)
       return rawConnectThroughRelay(relayPort, host, port)
@@ -184,14 +194,68 @@ test('required: an explicitly granted host succeeds end to end through the relay
   })
 })
 
-test('required: an unlisted host is denied by OneCLI (via the fake gateway) even with a valid grant', async () => {
+test('required (ADR 0015): an unlisted host is denied BY THE RELAY with 403, and no upstream socket is ever opened', async () => {
   await withTestDatabase(async (pool) => {
-    const { gateway, deps, relay, relayPort, connectThroughRelay } = await setup(pool)
+    const { gateway, deps, relay, connectThroughRelay, dialed } = await setup(pool)
     try {
       await issueAndActivate(pool, deps, 'workload-a')
-      // vault has no external route mapping — an attempt to reach a real-looking, non-allow-listed host is blocked at the fake gateway.
+      // `vault` derives no external host, so this Session's allow-list is its Agent's pinned set
+      // alone. Before P13 this same 403 came from OneCLI's gateway AFTER the tunnel was bridged;
+      // now the request dies at Agora's own boundary.
       const result = await connectThroughRelay('workload-a', 'unlisted.example.test', 443)
       assert.equal(result.status, 403)
+      assert.deepEqual(dialed, [], 'a denied CONNECT must never reach OneCLI\'s gateway, let alone a provider')
+
+      const client = await pool.connect()
+      try {
+        const { rows } = await client.query<{ detail: { code?: string } }>(
+          "SELECT detail FROM broker.security_audit WHERE action_class = 'relay.connect' AND decision = 'denied'",
+        )
+        assert.ok(rows.some((row) => row.detail.code === 'egress_not_allowed'), 'the denial is recorded as an egress decision, not a generic failure')
+      } finally {
+        client.release()
+      }
+    } finally {
+      relay.close()
+      await gateway.close()
+    }
+  })
+})
+
+test('required (ADR 0015): a listed host still bridges — the gate is a filter, not a blanket denial', async () => {
+  await withTestDatabase(async (pool) => {
+    const { gateway, deps, relay, connectThroughRelay, dialed } = await setup(pool)
+    const echo = await startEchoServer()
+    try {
+      await issueAndActivate(pool, deps, 'workload-a')
+      const result = await connectThroughRelay('workload-a', 'fake-agent.internal.test', echo.port)
+      assert.equal(result.status, 200)
+      assert.match(result.echoed ?? '', /^probe-/)
+      assert.equal(dialed.length, 1, 'exactly one upstream dial, for the allowed host')
+    } finally {
+      await echo.close()
+      relay.close()
+      await gateway.close()
+    }
+  })
+})
+
+test('required: equipment widens egress for THAT Session only — a `github` Session reaches github.com, a `vault` Session does not', async () => {
+  await withTestDatabase(async (pool) => {
+    const { gateway, deps, relay, connectThroughRelay } = await setup(pool)
+    try {
+      await issueAndActivate(pool, deps, 'workload-github', GITHUB_READ)
+      await issueAndActivate(pool, deps, 'workload-vault', VAULT_READ)
+
+      // `fake-agent`'s pinned host does not resolve, and the fake gateway ignores the CONNECT host
+      // and always dials 127.0.0.1 — so a 502 here means the relay ALLOWED the host and the dial
+      // failed downstream, which is exactly the distinction being asserted: 403 = refused by
+      // Agora, anything else = allowed through.
+      const allowed = await connectThroughRelay('workload-github', 'github.com', 1)
+      assert.notEqual(allowed.status, 403, 'a Session holding github equipment may reach github.com (this is what makes git clone work)')
+
+      const denied = await connectThroughRelay('workload-vault', 'github.com', 1)
+      assert.equal(denied.status, 403, 'a Session without github equipment may not — one Session\'s equipment never widens another\'s egress')
     } finally {
       relay.close()
       await gateway.close()

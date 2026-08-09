@@ -22,7 +22,7 @@ ADRs record decisions and rationale. Current behavior is specified under `docs/s
 | [0012](0012-state-authority-and-observability.md) | Accepted | Product, runtime and telemetry state keep distinct owners |
 | [0013](0013-greenfield-replacement.md) | Accepted | Replace the old implementation with contract-first greenfield vertical slices |
 | [0014](0014-adopt-credential-gateway.md) | Accepted | OneCLI is the only MITM, provider-secret store and credential-injection gateway (route-policy clause amended by 0015) |
-| [0015](0015-onecli-credential-firewall-egress-at-relay.md) | Proposed | OneCLI is a credential firewall (per-Agent grants); Agora enforces network egress at the relay |
+| [0015](0015-onecli-credential-firewall-egress-at-relay.md) | Accepted | OneCLI is a credential firewall (per-Agent grants); Agora enforces network egress at the relay |
 
 ## Retired vocabulary
 

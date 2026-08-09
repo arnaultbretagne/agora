@@ -42,7 +42,8 @@ trust.
 - Workstream authorization is checked against durable `owner | editor | viewer` membership.
 - Service-to-service calls use workload identity and authenticated TLS.
 - Session Runtime materialization requires an execution grant bound to Session and Agent.
-- One dedicated selective OneCLI Agent is mapped to exactly one Agora Session.
+- One dedicated selective OneCLI Agent is mapped to exactly one Agora Session, holding only the
+  credential grants that Session resolved — a new Agent holds none.
 - ACP bridge credentials are one-time or short-lived and Session-bound.
 - Database access uses distinct roles per deployable.
 - Authorization is checked at every resource boundary, not only in the UI.
@@ -87,9 +88,16 @@ Session Runtime Pods may reach the authenticated Broker access relay, ACP bridge
 required internal services. They MUST NOT reach providers, the public Internet, OneCLI control API
 or OneCLI gateway directly.
 
-The relay may reach only the OneCLI gateway. OneCLI policy MUST contain reviewed explicit allows
-followed by a final explicit `block *`; its Default Rule is not sufficient. Agent/runtime upgrades
-require a route-set diff and negative tests for unlisted ordinary and LLM hosts.
+The relay may reach only the OneCLI gateway.
+
+Provider egress is deny-by-default **at the relay**, per Session
+([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)): the relay refuses to bridge
+a CONNECT whose host is absent from that Session's compiled, reviewed allow-list, before any
+upstream socket exists. OneCLI's own Default Rule is neither sufficient nor relied upon — its OSS
+project scope cannot express a terminal `block *` at all. Agent/runtime upgrades require an
+egress-set diff and negative tests for unlisted ordinary and LLM hosts; a negative test MUST assert
+the refusal at the relay, since OneCLI's gateway answers `200` to every CONNECT and a probe that
+stops at the status line proves nothing.
 
 ## Secrets
 

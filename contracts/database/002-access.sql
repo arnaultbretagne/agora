@@ -2,23 +2,34 @@ BEGIN;
 
 -- Deployment creates these NOLOGIN roles and grants them to workload login roles.
 -- They are declared here to make the intended database boundary executable.
+--
+-- Roles are CLUSTER-global, not per-database, so two connections migrating two different fresh
+-- databases on the same server race each other here. A check-then-create (`IF NOT EXISTS ... THEN
+-- CREATE ROLE`) is not atomic across sessions: both can pass the check, and the loser gets
+-- `duplicate key value violates unique constraint "pg_authid_rolname_index"` and fails the whole
+-- migration. Found in CI, P13 — every package's test support creates a uniquely named disposable
+-- database and migrates it, and `node --test` runs test FILES concurrently, so this fires whenever
+-- the roles do not already exist on the server (a fresh CI Postgres; never a developer's long-lived
+-- one, which is why it hid for so long).
+--
+-- Catching the conflict is the standard concurrency-safe idiom. Each CREATE gets its own
+-- BEGIN/EXCEPTION block: a handler makes that block a subtransaction, so swallowing one conflict
+-- leaves the outer migration transaction intact. Both SQLSTATEs are caught because the race surfaces
+-- as `unique_violation` on the catalog index, while a plain sequential re-run raises
+-- `duplicate_object`.
 DO $$
+DECLARE
+  role_name text;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_product') THEN
-    CREATE ROLE agora_product NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_projector') THEN
-    CREATE ROLE agora_projector NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_custody_meta') THEN
-    CREATE ROLE agora_custody_meta NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_custody_runtime') THEN
-    CREATE ROLE agora_custody_runtime NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_migrator') THEN
-    CREATE ROLE agora_migrator NOLOGIN;
-  END IF;
+  FOREACH role_name IN ARRAY ARRAY['agora_product', 'agora_projector', 'agora_custody_meta', 'agora_custody_runtime', 'agora_migrator']
+  LOOP
+    BEGIN
+      EXECUTE format('CREATE ROLE %I NOLOGIN', role_name);
+    EXCEPTION
+      WHEN duplicate_object OR unique_violation THEN
+        NULL; -- another session created it first, or it already existed; either way it now exists
+    END;
+  END LOOP;
 END;
 $$;
 

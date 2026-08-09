@@ -6,11 +6,14 @@ BEGIN;
 -- deployable other than apps/broker is granted access to it.
 CREATE SCHEMA IF NOT EXISTS broker;
 
+-- Concurrency-safe for the same reason 002-access.sql's block is — see its comment: roles are
+-- cluster-global, so concurrent migrations of two fresh databases race a check-then-create.
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agora_broker') THEN
-    CREATE ROLE agora_broker NOLOGIN;
-  END IF;
+  CREATE ROLE agora_broker NOLOGIN;
+EXCEPTION
+  WHEN duplicate_object OR unique_violation THEN
+    NULL;
 END;
 $$;
 

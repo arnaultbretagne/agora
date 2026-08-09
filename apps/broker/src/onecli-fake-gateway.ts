@@ -7,9 +7,15 @@ import type { FakeOneCliControlAdapter } from './onecli-fake.js'
  * A faithful double of OneCLI's own gateway (NOT of Agora's relay — that is real code in
  * `relay.ts`). Test-only: real automated tests dial THIS to prove the relay's CONNECT tunnel is
  * genuinely opaque end to end (workload -> relay -> "OneCLI gateway" -> "provider"), without ever
- * touching the real self-hosted OneCLI product. Reproduces exactly the two checks ONECLI-SPIKE.md
- * proved the real gateway performs: reject an unrecognized/rotated Agent bearer, and enforce the
- * currently published first-match allow/`block *` route policy.
+ * touching the real self-hosted OneCLI product. Reproduces the one check the real gateway still
+ * performs for Agora after ADR 0015: reject an unrecognized/rotated Agent bearer.
+ *
+ * It deliberately does NOT filter hosts any more. On OneCLI ≥1.44 there is no project `block *`
+ * left to publish — the project Default Rule is seeded `allow` and documented as "not a posture
+ * dial", network rules being Enterprise-only — so a double that still returned 403 for an
+ * unlisted host would be modelling a product behavior that no longer exists, and would mask the
+ * only thing the relay egress tests are trying to prove: that **Agora's own relay** refuses the
+ * host, before any byte reaches this gateway.
  *
  * Plain HTTP CONNECT over a plain TCP socket, not wrapped in an outer TLS listener — the outer
  * transport is a deployment-level concern this program does not re-implement anywhere (same
@@ -66,14 +72,6 @@ function handleConnect(adapter: FakeOneCliControlAdapter, dialTarget: DialTarget
   const port = separatorIndex > 0 ? Number(target.slice(separatorIndex + 1)) : NaN
   if (!host || !Number.isInteger(port)) {
     clientSocket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
-    return
-  }
-
-  // First-match, in published order — `compileRoutePolicy` guarantees the array always ends '*'/block.
-  const routes = adapter.getPublishedRoutesForTest()
-  const decision = routes.find((route) => route.host === host || route.host === '*')
-  if (!decision || decision.action !== 'allow') {
-    clientSocket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
     return
   }
 

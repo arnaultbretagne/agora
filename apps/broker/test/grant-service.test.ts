@@ -14,7 +14,7 @@ import {
 import { getGrant, GrantConflictError, GrantDigestChangedError } from '../src/grants-repository.js'
 import { OneCliUnavailableError } from '../src/onecli-adapter.js'
 import { getOnecliAgentMapping, readUpstreamAuthority } from '../src/onecli-agents-repository.js'
-import { FAKE_CA_CERTIFICATE, FakeOneCliControlAdapter, fakeCredentialStubs } from '../src/onecli-fake.js'
+import { FAKE_CA_CERTIFICATE, FAKE_CONNECTIONS, FAKE_SECRETS, FakeOneCliControlAdapter, fakeCredentialStubs } from '../src/onecli-fake.js'
 import { randomId, testEncryptionKey, testExpectedRuntimeBundle, withTestDatabase } from './support.js'
 
 function deps(): GrantServiceDeps & { onecli: FakeOneCliControlAdapter } {
@@ -185,14 +185,10 @@ test('required: OneCLI control-plane outage prevents issue — Session Runtime n
   })
 })
 
-test('required: an ambiguous route-policy publish (effective generation does not match) prevents issue', async () => {
+test('required: credential grants that did not take effect prevent issue (the ADR 0015 replacement for publish-then-verify)', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
-    // First grant establishes generation 1 cleanly, so the SECOND publish (during the second
-    // issue, below) is the one whose readback we make ambiguous — isolating the check to exactly
-    // the publish this issue attempt performed, not some earlier one.
-    await issue(pool, d, { sessionId: randomId() })
-    d.onecli.simulateStaleGenerationOnce = true
+    d.onecli.simulateIneffectiveGrantsOnce = true
     const client = await pool.connect()
     try {
       const sessionId = randomId()
@@ -203,7 +199,7 @@ test('required: an ambiguous route-policy publish (effective generation does not
             d,
             {
               sessionId,
-              agentId: 'fake-agent',
+              agentId: 'claude-code',
               principalId: 'alice',
               workstreamCategory: 'discussion',
               runtimeDefinitionVersion: 'v1',
@@ -212,21 +208,138 @@ test('required: an ambiguous route-policy publish (effective generation does not
             },
             new Date(),
           ),
-        (error: unknown) => error instanceof OneCliUnavailableError,
+        (error: unknown) => error instanceof Error && error.name === 'GrantsNotEffectiveError',
       )
       const { rows } = await client.query('SELECT count(*)::int AS n FROM broker.execution_grants WHERE session_id = $1', [sessionId])
-      assert.equal(rows[0].n, 0, 'a grant must never be trusted while its own route-policy publish is ambiguous')
+      assert.equal(rows[0].n, 0, 'a grant must never be trusted while OneCLI does not report its credentials as usable')
     } finally {
       client.release()
     }
   })
 })
 
-test('required: route policy publication rejects a malformed list missing the terminal block *', async () => {
-  const onecli = new FakeOneCliControlAdapter()
-  await assert.rejects(() => onecli.publishRoutePolicy([{ action: 'allow', host: 'example.test' }]))
-  await assert.rejects(() => onecli.publishRoutePolicy([]))
-  await assert.rejects(() => onecli.publishRoutePolicy([{ action: 'block', host: '*' }, { action: 'allow', host: 'too-late.test' }]))
+test('required (upgrade gate): an Agent that ends up with MORE than its intended grants prevents issue — "exactly its intended grants, not the whole pool"', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    // The ≥1.44 boot converter materializes an existing `secretMode: all` Agent's whole credential
+    // pool as explicit grants. An Agent that came through that conversion holding more than Agora
+    // issued it is exactly the case this check exists for.
+    d.onecli.simulateExtraCredentialOnce = true
+    const client = await pool.connect()
+    try {
+      const sessionId = randomId()
+      await assert.rejects(
+        () =>
+          issueExecutionGrant(
+            client,
+            d,
+            {
+              sessionId,
+              agentId: 'claude-code',
+              principalId: 'alice',
+              workstreamCategory: 'discussion',
+              runtimeDefinitionVersion: 'v1',
+              equipment: VAULT_READ,
+              requestId: randomId(),
+            },
+            new Date(),
+          ),
+        (error: unknown) => error instanceof Error && error.name === 'GrantsNotEffectiveError',
+      )
+      const { rows } = await client.query('SELECT count(*)::int AS n FROM broker.execution_grants WHERE session_id = $1', [sessionId])
+      assert.equal(rows[0].n, 0)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: grant isolation — a Claude Session Agent can inject Anthropic and NOT OpenAI; a Codex Session Agent the inverse', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const claude = await issue(pool, d, { sessionId: randomId(), agentId: 'claude-code' })
+    const codex = await issue(pool, d, { sessionId: randomId(), agentId: 'codex' })
+
+    const anthropic = FAKE_SECRETS.find((secret) => secret.type === 'anthropic')!.id
+    const openai = FAKE_SECRETS.find((secret) => secret.type === 'openai')!.id
+
+    const claudeEffective = await d.onecli.getEffectiveCredentials(claude.onecliIdentifier)
+    const codexEffective = await d.onecli.getEffectiveCredentials(codex.onecliIdentifier)
+
+    assert.deepEqual(claudeEffective.secrets, [{ id: anthropic, status: 'usable' }])
+    assert.deepEqual(codexEffective.secrets, [{ id: openai, status: 'usable' }])
+  })
+})
+
+test('required: issuing one Session\'s grant changes nothing observable for another Session\'s Agent (no shared republish)', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const first = await issue(pool, d, { sessionId: randomId(), agentId: 'claude-code' })
+    const before = await d.onecli.getEffectiveCredentials(first.onecliIdentifier)
+
+    const second = await issue(pool, d, {
+      sessionId: randomId(),
+      agentId: 'codex',
+      equipment: { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'github', access: 'read' }] },
+    })
+    const afterIssue = await d.onecli.getEffectiveCredentials(first.onecliIdentifier)
+    assert.deepEqual(afterIssue, before, 'a second Session\'s issue must not touch the first Session\'s credential set')
+
+    const client = await pool.connect()
+    try {
+      await revokeExecutionGrant(client, d, second.id, new Date())
+    } finally {
+      client.release()
+    }
+    const afterRevoke = await d.onecli.getEffectiveCredentials(first.onecliIdentifier)
+    assert.deepEqual(afterRevoke, before, 'nor must its revoke')
+  })
+})
+
+test('required: equipment maps to a connection grant with exactly the reviewed tool ids', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d, {
+      sessionId: randomId(),
+      agentId: 'claude-code',
+      equipment: { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'github', access: 'read' }] },
+    })
+    const githubConnection = FAKE_CONNECTIONS.find((connection) => connection.provider === 'github-app')!.id
+    const tools = d.onecli.getGrantedToolIdsForTest(grant.onecliIdentifier, githubConnection)
+    assert.ok(tools, 'the github-app connection is attached to this Session\'s Agent')
+    assert.ok(tools.includes('git_clone'))
+    assert.ok(!tools.includes('git_push'), 'read access must not carry a write tool')
+  })
+})
+
+test('required: an equipment/Agent combination with no reviewed credential mapping is denied before any OneCLI mutation', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const client = await pool.connect()
+    try {
+      await assert.rejects(
+        () =>
+          issueExecutionGrant(
+            client,
+            d,
+            {
+              sessionId: randomId(),
+              agentId: 'an-agent-nobody-reviewed',
+              principalId: 'alice',
+              workstreamCategory: 'discussion',
+              runtimeDefinitionVersion: 'v1',
+              equipment: VAULT_READ,
+              requestId: randomId(),
+            },
+            new Date(),
+          ),
+        (error: unknown) => error instanceof Error && error.name === 'CredentialPolicyError',
+      )
+      assert.deepEqual(await d.onecli.listAgents(), [], 'no OneCLI Agent was created for an unreviewable request')
+    } finally {
+      client.release()
+    }
+  })
 })
 
 test('required: OneCLI CA/stub drift from the operator-pinned runtime bundle prevents issue (fail closed)', async () => {
@@ -276,8 +389,28 @@ test('a matching runtime bundle (the normal case) issues successfully — confir
       encryptionKey: testEncryptionKey(),
       expectedRuntimeBundle: { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: fakeCredentialStubs('some-other-agent-entirely') },
     }
-    const grant = await issue(pool, d)
+    // `codex` so the Agent is actually granted the OpenAI credential and OneCLI therefore returns
+    // the Codex stub — a `fake-agent` Session holds no credential and would return none, which
+    // would pass the check without ever comparing a stub.
+    const grant = await issue(pool, d, { agentId: 'codex' })
     assert.ok(grant.id)
+  })
+})
+
+test('required (ADR 0015): a Session Agent that legitimately holds no Codex credential returns no Codex stub, and still issues', async () => {
+  await withTestDatabase(async (pool) => {
+    // The exact case exact-set-equality would have failed by construction once grants made
+    // credentials per-Agent: a Claude Session's Agent has no OpenAI grant, so OneCLI emits no
+    // Codex `auth.json` stub at all. The operator-pinned list is a reviewed SUPERSET.
+    const d: GrantServiceDeps = {
+      onecli: new FakeOneCliControlAdapter(),
+      encryptionKey: testEncryptionKey(),
+      expectedRuntimeBundle: { caCertificate: FAKE_CA_CERTIFICATE, credentialStubs: fakeCredentialStubs('operator-pinned-reference') },
+    }
+    const grant = await issue(pool, d, { agentId: 'claude-code' })
+    assert.ok(grant.id)
+    const config = await d.onecli.getContainerConfig(grant.onecliIdentifier)
+    assert.deepEqual(config.credentialStubs, [], 'no OpenAI grant, no Codex stub — isolation is visible in the container config itself')
   })
 })
 
@@ -312,7 +445,9 @@ test('required: a genuinely different credential stub (not just a different sign
             d,
             {
               sessionId: randomId(),
-              agentId: 'fake-agent',
+              // `codex`: the Agent must actually be granted the OpenAI credential for OneCLI to
+              // return a stub at all, otherwise there is nothing for the drift check to compare.
+              agentId: 'codex',
               principalId: 'alice',
               workstreamCategory: 'discussion',
               runtimeDefinitionVersion: 'v1',

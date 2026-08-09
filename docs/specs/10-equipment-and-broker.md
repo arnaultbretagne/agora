@@ -56,7 +56,7 @@ Policy evaluates:
 It returns either a typed denial or:
 
 - normalized capability-grant facts;
-- policy and Agent route-set versions;
+- policy, egress-set and credential-set versions;
 - one deterministic capability digest;
 - safe ACP MCP server descriptors;
 - an opaque execution-grant reference.
@@ -79,47 +79,84 @@ Before a grant becomes issuable, the Broker control adapter:
 
 1. derives a unique operational identifier from the Agora Session ID without exposing it publicly;
 2. creates or reconciles exactly one OneCLI Agent for that Session;
-3. forces selective mode;
-4. associates only the provider credentials required for Agent invocation and approved equipment;
-5. publishes the complete ordered policy;
-6. verifies the effective credentials and rules before activation.
+3. attaches, as per-Agent credential grants, only the provider credentials required for Agent
+   invocation and approved equipment — and detaches anything else that Agent holds;
+4. verifies against OneCLI's effective-credentials view that the Agent ends with exactly those
+   credentials, usable, and nothing more, before activation.
 
-The OneCLI default Agent and `all` credential mode are forbidden for Session Runtime Pods. A OneCLI
-Agent is never shared or reassigned across Sessions.
+A freshly created OneCLI Agent holds no credential at all, so isolation is fail-closed by
+construction: an Agent is only ever as capable as the grants Agora attached to it. The OneCLI
+default Agent and `all` credential mode are forbidden for Session Runtime Pods. A OneCLI Agent is
+never shared or reassigned across Sessions.
+
+Credential grants take effect immediately and are scoped to one Agent: issuing, changing or
+revoking one Session's credentials MUST NOT be observable from another Session's Agent. The Broker
+MUST NOT author project-scope OneCLI policy (see [ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)).
+
+OneCLI Agents Agora no longer owns MUST be reconciled away: the Broker deletes its own
+(`sagt-`-prefixed) Agents that no live Session mapping accounts for, at startup and on a schedule.
+An orphaned Agent is a standing credential authority, not clutter.
 
 While a Session is suspended, the OneCLI Agent may remain as the same operational principal, but its
 relay binding is disabled and upstream bearer is rotated. Terminal Session/Workstream cleanup
 deletes it after revocation.
 
-## Route-policy compilation
+## Egress-policy compilation
 
-OneCLI policy uses first-match ordering:
+Network egress is Agora's own decision, enforced at the Broker access relay, not in OneCLI
+([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)). The relay is
+deny-by-default: a host absent from the Session's compiled allow-list is refused.
 
-1. explicit allow rules for the pinned Agent route set;
-2. explicit allow rules derived from approved capability facts and constraints;
-3. one final explicit network `block *` rule.
+Per Session, the allow-list is the union of:
 
-OneCLI's built-in Default Rule MUST remain decision-neutral for Agora. It is not a general
-deny-by-default because it may allow uncredentialed traffic and recognized LLM hosts.
+1. the hosts of the reviewed pinned route set for that Session's Agora Agent;
+2. the hosts derived from that Session's own approved capability facts, access levels and
+   constraints.
+
+There is no terminal `block *` to express and no rule ordering to get wrong: the list is a set, and
+everything outside it is already denied. Deny-by-default belongs to Agora's relay; OneCLI's own
+Default Rule is not relied on for any Agora decision.
 
 The compiler MUST:
 
-- be deterministic from policy version, route-set version and capability facts;
-- reject empty/malformed targets and duplicate or shadowed terminal rules;
-- publish atomically or leave the grant unusable;
-- verify post-publication ordering/effective state;
-- fail activation when cache invalidation/publish outcome is unknown;
-- narrow OpenAI/ChatGPT hosts to the endpoints required by the pinned Codex runtime.
+- be a pure function of the grant (Agora Agent plus capability facts), so no compiled state can
+  outlive or drift from the grant that produced it, and no Session's egress can be widened by
+  another Session's activity;
+- be deterministic — deduplicated and ordered — from policy version, egress-set version and
+  capability facts;
+- reject an Agent, capability, access level or constraint with no reviewed mapping, rather than
+  compile a list that silently omits or silently widens access;
+- reject empty or wildcard hosts;
+- narrow OpenAI/ChatGPT hosts to the endpoints required by the pinned Codex runtime;
+- include the git-over-HTTPS host, not only the API host, for any capability whose approved tools
+  use git.
+
+Host (CONNECT authority) is the enforcement granularity, matched exactly and case-insensitively —
+never by suffix or wildcard. Path- and method-level egress is out of scope.
 
 Agent upgrades require a reviewed route diff. An analytics or newly observed endpoint is denied until
 explicitly approved.
+
+## Credential-grant compilation
+
+Which provider credential OneCLI may inject for a Session is a separate, per-Agent decision,
+compiled from the same grant:
+
+1. the Agent's own provider credential, resolved from `agent_id` and its runtime definition, never
+   from an equipment request;
+2. the credentials and per-tool access derived from approved capability facts and access levels.
+
+The compiler MUST be deterministic, MUST refuse an Agent or capability/access level with no
+reviewed credential mapping, and MUST name credentials by OneCLI type/provider rather than by
+instance identifier. It MUST NOT grant a tool whose use would require an approval this deployment
+cannot answer.
 
 ## Execution grant
 
 An execution grant:
 
 - is bound to one Session ID and Agora Agent ID;
-- resolves only the persisted capability digest and route-set version;
+- resolves only the persisted capability digest and egress/credential-set versions;
 - maps to the Session's dedicated OneCLI Agent;
 - expires independently from OneCLI's upstream Agent token;
 - is revocable;
@@ -141,8 +178,9 @@ The Broker control adapter is the only Agora component allowed to use the OneCLI
 organization/project key. It uses pinned `@onecli-sh/sdk` and:
 
 - creates/configures/deletes dedicated OneCLI Agents;
-- publishes and verifies policy;
-- calls `getContainerConfig`;
+- attaches, detaches and verifies per-Agent credential grants;
+- reconciles away OneCLI Agents no live Session mapping accounts for;
+- calls `getContainerConfig` after credentials are attached, since what it returns depends on them;
 - extracts the upstream OneCLI proxy bearer into Broker-private encrypted state;
 - verifies returned CA/stub material against the operator-managed runtime bundle expected by the
   Session Runtime controller;
@@ -159,9 +197,14 @@ The Broker access relay:
 - authenticates platform workload identity outside the Agent container;
 - resolves exactly one active grant and private OneCLI upstream bearer;
 - checks Session, Agent, expiry and revocation;
-- accepts only traffic permitted to reach the OneCLI gateway;
+- enforces the Session's compiled host allow-list, deny-by-default, refusing a non-listed CONNECT
+  before any upstream socket is opened;
 - attaches upstream proxy authentication;
 - tunnels CONNECT traffic opaquely.
+
+Enforcing egress here does not make it a second credential gateway: it decides only whether to open
+a tunnel, and still never terminates provider TLS, reads a tunneled byte or holds a provider
+credential. Its allow/deny decisions are auditable per Session.
 
 It MUST NOT:
 
@@ -183,8 +226,11 @@ OneCLI alone owns:
 - gateway CA/private key;
 - MITM and credential injection;
 - provider-specific auth stubs/host matching;
-- gateway policy enforcement;
+- per-Agent credential-grant enforcement (which credential may be injected for which Agent);
 - request decision telemetry.
+
+OneCLI does NOT own Agora's network egress policy. Its OSS project scope has no network rule and no
+terminal `block *` to express one with ([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)).
 
 Its image is pinned by digest. Agora treats its public API/SDK as an external contract and never
 imports OneCLI database tables into product code.
@@ -264,7 +310,8 @@ Production backup/restore MUST preserve those three OneCLI assets as a compatibl
 
 ## Lifecycle
 
-- **Issue:** create/reconcile selective OneCLI Agent and full policy before returning `grantRef`.
+- **Issue:** create/reconcile the Session's OneCLI Agent, attach and verify its credential grants,
+  and compile its egress allow-list, before returning `grantRef`.
 - **Activate:** bind the controller-created workload identity and enable the relay mapping.
 - **Suspend:** disable relay mapping and rotate upstream authority; retain only same-Session
   operational mapping needed for resume.
@@ -279,7 +326,8 @@ Every transition is audited without prompt/tool content, URLs with query strings
 ## Failure behavior
 
 - OneCLI control API unavailable: no issue/renew/materialize succeeds.
-- Policy publication uncertain: grant remains inactive.
+- Credential grants not verifiably effective, or effective beyond what was intended: no grant is
+  issued.
 - Broker relay unavailable: no provider traffic bypasses it.
 - OneCLI gateway unavailable: the Agent call fails; no direct provider fallback exists.
 - Upstream bearer suspected leaked: disable relay mapping, rotate OneCLI Agent token and reconcile.

@@ -67,6 +67,24 @@ export async function getOnecliAgentMapping(client: PoolClient, sessionId: strin
   return rows[0] ? hydrate(rows[0]) : undefined
 }
 
+/**
+ * Every OneCLI Agent identifier this Broker still considers ITS OWN — the orphan reaper's
+ * protection set (`onecli-agent-reaper.ts`).
+ *
+ * Deliberately keyed on the mapping row's state rather than on active execution grants. A
+ * suspended Session legitimately outlives its grant (docs/specs/10: "While a Session is suspended,
+ * the OneCLI Agent may remain as the same operational principal"), and grants expire after 30
+ * minutes, so reaping "Agents with no active grant" would delete the Agent of every suspended but
+ * perfectly resumable Session. `state <> 'deleted'` is exactly the set the Broker has not yet
+ * given up on.
+ */
+export async function listLiveOnecliAgentIdentifiers(client: PoolClient): Promise<readonly string[]> {
+  const { rows } = await client.query<{ onecli_identifier: string }>(
+    `SELECT onecli_identifier FROM broker.onecli_agents WHERE state <> 'deleted'`,
+  )
+  return rows.map((row) => row.onecli_identifier)
+}
+
 /** Terminal — docs/specs/10 "One Session, one OneCLI Agent": a deleted mapping is never reactivated. */
 export async function markOnecliAgentDeleted(client: PoolClient, sessionId: string, now: Date): Promise<void> {
   await client.query(`UPDATE broker.onecli_agents SET state = 'deleted', updated_at = $2 WHERE session_id = $1`, [sessionId, now])

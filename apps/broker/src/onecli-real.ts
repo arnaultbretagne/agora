@@ -1,10 +1,12 @@
 import { OneCLI } from '@onecli-sh/sdk'
+import type { DesiredCredentialGrants } from './credential-policy.js'
 import type {
+  AttachedCredentials,
+  EffectiveCredentialSet,
   OneCliAgentHandle,
+  OneCliAgentSummary,
   OneCliContainerConfig,
   OneCliControlAdapter,
-  PublishedRoute,
-  RoutePolicyPublishResult,
 } from './onecli-adapter.js'
 import { OneCliUnavailableError } from './onecli-adapter.js'
 
@@ -16,22 +18,20 @@ import { OneCliUnavailableError } from './onecli-adapter.js'
  * Max token linked; not yet a multi-user/HA production topology). Three points are genuine,
  * corrected-after-verification design decisions, each called out at its call site below:
  *
- * 1. `client.org.*` (createPolicyRule/publishPolicy/reorderPolicyRules/getPolicyLastPublish) is an
- *    Enterprise/Cloud-only surface — verified live: every `/v1/org/...` call 404s on a Community
- *    self-hosted instance with `{"error":"Organization-level resources require OneCLI Cloud or a
- *    self-hosted Enterprise instance"}`. The SDK does not expose the Community equivalent at all;
- *    it was found by reading the self-hosted dashboard's own compiled server bundle and confirmed
- *    live: a PROJECT-scoped REST surface (`/v1/policy/rules`, `/v1/policy/publish`,
- *    `/v1/policy/last-publish` — undocumented in the public API reference, which only documents the
- *    org-scoped variant, but functionally proven: an explicit allow + terminal block published this
- *    way was verified to let `api.anthropic.com` through while returning HTTP 403 for unlisted
- *    hosts). This adapter uses that surface directly via `fetch`, never `client.org`.
- * 2. The project-scoped rule schema's `identities` array DOES accept `{type: 'agent', id}` (unlike
- *    `OrgPolicyRuleIdentityInput`, which excludes it) — genuine per-Agent route scoping is possible
- *    here and was not previously known to be available. NOT adopted in this pass: `route-policy.ts`
- *    still compiles and publishes the project-wide union documented since P08 (a real, tested,
- *    correct behavior, just not the most precise one now available) — adopting per-Agent scoping is
- *    future work, not a correctness fix this pass makes.
+ * 1. **The project-policy surface this adapter used until P13 is gone upstream.** `client.org.*`
+ *    (createPolicyRule/publishPolicy/…) is Enterprise/Cloud-only — verified live, every
+ *    `/v1/org/...` call 404s on Community self-hosted — and the project-scoped REST twin this
+ *    adapter used instead (`/v1/policy/rules`, `/v1/policy/publish`, `/v1/policy/last-publish`)
+ *    was retired in OneCLI 1.44.0. Measured on a staging 1.45.0 instance, 2026-08-09: all of them,
+ *    plus `/v1/rules`, answer `410 Gone` with "project rules are compiled from agent credential
+ *    grants, not authored directly". Per ADR 0015 this adapter no longer authors project policy at
+ *    all: credential selection moved to per-Agent grants (below), and network egress moved to
+ *    Agora's own relay (`route-policy.ts` + `relay.ts`).
+ * 2. **Grants are the credential surface** (`PUT|DELETE /v1/agents/{id}/grants/{secrets|
+ *    connections}/{id}`), reached by raw `restJson` because `@onecli-sh/sdk@3.0.0` (a 1.43.x-era
+ *    build) exposes no grant-attach method — re-check that surface if the SDK is ever bumped. They
+ *    take effect immediately: there is no publish step and no generation to read back, so the old
+ *    publish-then-verify is replaced by reading OneCLI's own `effective-credentials` oracle.
  * 3. The SDK's `ensureAgent`/`EnsureAgentResponse` returns no internal `id`, but the REST endpoints
  *    for `rotate`/`delete` require that internal `id`, NOT the caller-supplied `identifier` string
  *    (verified live: calling either endpoint with `identifier` 404s "Agent not found"; the same call
@@ -48,15 +48,27 @@ export interface OnecliSdkAdapterOptions {
   readonly timeout?: number
 }
 
-const AGORA_RULE_NAME_PREFIX = 'agora-route-'
-
-interface PolicyRuleRow {
+interface SecretRow {
   readonly id: string
   readonly name: string
+  readonly type: string
 }
 
-interface PublishResult {
-  readonly generation: number
+interface ConnectionRow {
+  readonly id: string
+  readonly provider: string
+}
+
+/** `GET /v1/agents/{id}/grants` — what the Agent currently holds. */
+interface AgentGrantsRow {
+  readonly secrets?: readonly { readonly secretId: string }[]
+  readonly connections?: readonly { readonly connectionId: string }[]
+}
+
+interface EffectiveCredentialsRow {
+  readonly mode: string
+  readonly secrets?: readonly { readonly id: string; readonly status: string }[]
+  readonly connections?: readonly { readonly id: string; readonly status: string }[]
 }
 
 export function createOnecliSdkAdapter(options: OnecliSdkAdapterOptions): OneCliControlAdapter {
@@ -94,44 +106,84 @@ export function createOnecliSdkAdapter(options: OnecliSdkAdapterOptions): OneCli
       }
     },
 
-    // See class doc point 1: project-scoped REST (`/v1/policy/rules` + `/v1/policy/publish`), never
-    // `client.org.*` — that surface 404s on Community self-hosted OneCLI.
-    async publishRoutePolicy(routes: readonly PublishedRoute[]): Promise<RoutePolicyPublishResult> {
-      const last = routes[routes.length - 1]
-      if (!last || last.host !== '*' || last.action !== 'block') {
-        throw new Error('route policy must end with an explicit terminal block *')
-      }
-      try {
-        const existing = await restJson<PolicyRuleRow[]>('/v1/policy/rules', 'GET')
-        for (const rule of existing) {
-          if (rule.name.startsWith(AGORA_RULE_NAME_PREFIX)) {
-            await restJson(`/v1/policy/rules/${encodeURIComponent(rule.id)}`, 'DELETE')
-          }
+    /**
+     * See class doc points 1 and 2. Converges the Agent onto exactly `desired`:
+     *
+     * - resolves each wanted secret `type` and connection `provider` to OneCLI's per-instance id
+     *   (`GET /v1/secrets` / `GET /v1/connections`) — nothing is hardcoded, so re-creating a secret
+     *   in the OneCLI dashboard cannot silently un-grant a Session;
+     * - attaches what is missing and DETACHES everything else the Agent currently holds, so a
+     *   re-issue can never leave a credential from a previous equipment set behind;
+     * - refuses to guess: a type/provider the operator has not configured is a hard failure, never
+     *   a silently smaller grant set.
+     *
+     * Secret grants are assign-only (no body, all-or-nothing). Connection grants carry
+     * `{"access":"custom","allow":[…],"ask":[]}` — `ask` is deliberately always empty, see
+     * `credential-policy.ts` for why a headless Session must never be given an approval-gated tool.
+     */
+    async syncCredentialGrants(identifier: string, desired: DesiredCredentialGrants): Promise<AttachedCredentials> {
+      const agentId = await resolveInternalAgentId(identifier)
+      const [secrets, connections] = await Promise.all([
+        restJson<SecretRow[]>('/v1/secrets', 'GET'),
+        restJson<ConnectionRow[]>('/v1/connections', 'GET'),
+      ])
+
+      const wantedSecretIds: string[] = []
+      for (const type of desired.secretTypes) {
+        const match = secrets.find((secret) => secret.type === type)
+        if (!match) {
+          throw new OneCliUnavailableError(`onecli holds no secret of type '${type}', required by Agent ${identifier} — refusing to issue a grant that cannot inject its provider credential`)
         }
-        // Priority is assigned by creation order (verified live) — recreating the complete set in
-        // the caller's exact order reproduces first-match semantics without a separate reorder call.
-        for (const [index, route] of routes.entries()) {
-          await restJson('/v1/policy/rules', 'POST', {
-            name: `${AGORA_RULE_NAME_PREFIX}${String(index).padStart(4, '0')}-${route.action}-${route.host}`,
-            action: route.action,
-            enabled: true,
-            targets: [{ kind: 'network', hostPattern: route.host }],
-          })
-        }
-        const published = await restJson<PublishResult>('/v1/policy/publish', 'POST')
-        return { generation: published.generation }
-      } catch (error) {
-        if (error instanceof OneCliUnavailableError) throw error
-        throw new OneCliUnavailableError(`publishRoutePolicy failed: ${String(error)}`)
+        wantedSecretIds.push(match.id)
       }
+
+      const wantedConnections = desired.connections.map((wanted) => {
+        const match = connections.find((connection) => connection.provider === wanted.provider)
+        if (!match) {
+          throw new OneCliUnavailableError(`onecli holds no connection for provider '${wanted.provider}', required by Agent ${identifier} — refusing to issue a grant that cannot reach its equipment`)
+        }
+        return { id: match.id, allowedToolIds: wanted.allowedToolIds }
+      })
+
+      const held = await restJson<AgentGrantsRow>(`/v1/agents/${encodeURIComponent(agentId)}/grants`, 'GET')
+      const heldSecretIds = (held.secrets ?? []).map((entry) => entry.secretId)
+      const heldConnectionIds = (held.connections ?? []).map((entry) => entry.connectionId)
+
+      for (const secretId of heldSecretIds) {
+        if (!wantedSecretIds.includes(secretId)) {
+          await restJson(`/v1/agents/${encodeURIComponent(agentId)}/grants/secrets/${encodeURIComponent(secretId)}`, 'DELETE')
+        }
+      }
+      for (const connectionId of heldConnectionIds) {
+        if (!wantedConnections.some((wanted) => wanted.id === connectionId)) {
+          await restJson(`/v1/agents/${encodeURIComponent(agentId)}/grants/connections/${encodeURIComponent(connectionId)}`, 'DELETE')
+        }
+      }
+
+      // Attach unconditionally rather than only when missing: `PUT` is idempotent (OneCLI reports
+      // `changed:false` for a no-op) and re-asserting the tool list is what makes an equipment
+      // re-resolution actually take effect on an Agent that already holds the connection.
+      for (const secretId of wantedSecretIds) {
+        await restJson(`/v1/agents/${encodeURIComponent(agentId)}/grants/secrets/${encodeURIComponent(secretId)}`, 'PUT')
+      }
+      for (const connection of wantedConnections) {
+        await restJson(`/v1/agents/${encodeURIComponent(agentId)}/grants/connections/${encodeURIComponent(connection.id)}`, 'PUT', {
+          access: 'custom',
+          allow: connection.allowedToolIds,
+          ask: [],
+        })
+      }
+
+      return { secretIds: wantedSecretIds, connectionIds: wantedConnections.map((connection) => connection.id) }
     },
 
-    async getPublishedGeneration(): Promise<number | undefined> {
-      try {
-        const last = await restJson<PublishResult | null>('/v1/policy/last-publish', 'GET')
-        return last?.generation
-      } catch (error) {
-        throw new OneCliUnavailableError(`getPublishedGeneration failed: ${String(error)}`)
+    async getEffectiveCredentials(identifier: string): Promise<EffectiveCredentialSet> {
+      const agentId = await resolveInternalAgentId(identifier)
+      const effective = await restJson<EffectiveCredentialsRow>(`/v1/agents/${encodeURIComponent(agentId)}/effective-credentials`, 'GET')
+      return {
+        mode: effective.mode,
+        secrets: (effective.secrets ?? []).map((entry) => ({ id: entry.id, status: entry.status })),
+        connections: (effective.connections ?? []).map((entry) => ({ id: entry.id, status: entry.status })),
       }
     },
 
@@ -178,6 +230,17 @@ export function createOnecliSdkAdapter(options: OnecliSdkAdapterOptions): OneCli
       const match = agents.find((agent) => agent.identifier === identifier)
       if (!match) return // already gone — deleteAgent is documented idempotent by its own interface
       await restJson(`/v1/agents/${encodeURIComponent(match.id)}`, 'DELETE')
+    },
+
+    /** Identifier + creation time only. `GET /v1/agents` rows carry each Agent's `accessToken` in
+     * cleartext; this adapter never returns, logs or stores that field. */
+    async listAgents(): Promise<readonly OneCliAgentSummary[]> {
+      try {
+        const agents = await client.listAgents()
+        return agents.map((agent) => ({ identifier: agent.identifier, createdAt: new Date(agent.createdAt) }))
+      } catch (error) {
+        throw new OneCliUnavailableError(`listAgents failed: ${String(error)}`)
+      }
     },
   }
 }

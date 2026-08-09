@@ -3,9 +3,12 @@ import { CLAUDE_CODE_DEFINITION, CODEX_DEFINITION } from '@agora/agent-registry'
 import { createPool, requireDatabaseUrl } from '@agora/store-pg'
 import { requireEncryptionKey } from './crypto.js'
 import { createK8sWorkloadIdentityResolver } from './k8s-pod-lookup.js'
+import { startOrphanAgentReaper } from './onecli-agent-reaper.js'
 import { createOnecliSdkAdapter } from './onecli-real.js'
 import { createAccessRelay } from './relay.js'
 import { createBrokerServer } from './server.js'
+
+const ORPHAN_REAP_INTERVAL_MS = 60 * 60 * 1000
 
 // P09/P10 shipped real Claude/Codex `AgentRuntimeDefinition`s — found live, P11, wiring the real
 // deployment: this list was never updated to include them (only
@@ -60,3 +63,17 @@ const relayServer = createAccessRelay({ pool, encryptionKey, resolveWorkloadIden
 relayServer.listen(relayPort, () => {
   process.stdout.write(`broker access relay listening on :${relayPort}\n`)
 })
+
+// P13/ADR 0015: OneCLI Agents now carry per-Agent credential grants, so an Agent this Broker has
+// forgotten is a standing credential authority, not just clutter. Reconciles at startup (orphans
+// from a crashed predecessor are exactly what a fresh process should clean up) and hourly after
+// that. Only ever deletes `sagt-` Agents outside its grace window — never the operator's own.
+const reaper = startOrphanAgentReaper(pool, onecli, ORPHAN_REAP_INTERVAL_MS, (error) => {
+  process.stderr.write(`onecli orphan-agent reap cycle failed: ${error instanceof Error ? error.name : 'unknown_error'}\n`)
+})
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    reaper.stop()
+  })
+}

@@ -1,31 +1,67 @@
 import { createHash, randomBytes } from 'node:crypto'
+import type { DesiredCredentialGrants } from './credential-policy.js'
 import type {
+  AttachedCredentials,
+  EffectiveCredentialSet,
   OneCliAgentHandle,
+  OneCliAgentSummary,
   OneCliContainerConfig,
   OneCliControlAdapter,
-  PublishedRoute,
-  RoutePolicyPublishResult,
 } from './onecli-adapter.js'
 import { OneCliUnavailableError } from './onecli-adapter.js'
 
 /**
  * A faithful double of OneCLI's control plane behavior, used by every automated Broker test in
  * this plan (per the standing "real infra we own, faithful double for what we don't" pattern).
- * Deliberately reproduces the invariants `ONECLI-SPIKE.md` proved against the real product:
- * Agent creation is idempotent by identifier, `getContainerConfig` fails until an Agent exists,
- * route publication is atomic and versioned, deleted Agents can never be materialized again.
+ * Deliberately reproduces the invariants proved against the real product — `ONECLI-SPIKE.md` for
+ * the 1.43.3 era, plus a staging **1.45.0** instance probed live on 2026-08-09 for everything
+ * P13 changed:
+ *
+ * - Agent creation is idempotent by identifier; deleted Agents can never be materialized again.
+ * - A freshly created Agent holds ZERO credentials (`{mode:"selective",secrets:[],connections:[]}`)
+ *   — grants are the only way in, so isolation is correct by construction and fail-closed.
+ * - Grants take effect immediately: no publish, no generation, no ordering.
+ * - Detaching a grant returns the Agent to the empty set, and touching one Agent's grants changes
+ *   nothing for another Agent (there is no shared/global policy left to republish).
+ * - `getContainerConfig`'s credential stubs depend on WHICH credentials the Agent has been granted
+ *   — read from the real 1.45.0 server bundle, which resolves the Agent's accessible credentials
+ *   first and only then emits the Codex `auth.json` stub. This is why `grant-service.ts` attaches
+ *   grants BEFORE it pulls the container config, and why the operator-pinned stub expectation is a
+ *   reviewed SUPERSET rather than an exact set.
  */
+
+/** The project-level credential catalogue this double stands in for. Ids are stable and fake;
+ * `type`/`provider` match the real ones the operator's instance holds (verified live). */
+export const FAKE_SECRETS: readonly { readonly id: string; readonly type: string }[] = [
+  { id: 'fake-secret-anthropic', type: 'anthropic' },
+  { id: 'fake-secret-openai', type: 'openai' },
+]
+
+export const FAKE_CONNECTIONS: readonly { readonly id: string; readonly provider: string }[] = [
+  { id: 'fake-connection-github-app', provider: 'github-app' },
+]
+
+interface FakeAgent {
+  deleted: boolean
+  bearer: string
+  createdAt: Date
+  secretIds: Set<string>
+  connections: Map<string, readonly string[]>
+}
+
 export class FakeOneCliControlAdapter implements OneCliControlAdapter {
-  private readonly agents = new Map<string, { deleted: boolean; bearer: string }>()
-  private routeGeneration: number | undefined
-  private publishedRoutes: readonly PublishedRoute[] = []
+  private readonly agents = new Map<string, FakeAgent>()
   unavailable = false
   /** Overridable so relay E2E tests can point it at a real, locally listening `FakeOnecliGateway` instance. */
   gatewayUrl = 'https://fake-onecli-gateway.internal:8443'
-  /** Test-only: makes the NEXT `getPublishedGeneration()` call return a stale value once, simulating
-   * OneCLI-side publish/cache-invalidation ambiguity (docs/specs/10's own "verify post-publication
-   * ordering/effective state"), then reverts to reporting the true generation. */
-  simulateStaleGenerationOnce = false
+  /** Test-only: makes the NEXT `getEffectiveCredentials()` call report the Agent as holding
+   * nothing, simulating OneCLI accepting a grant write that did not actually take effect
+   * (docs/specs/10's own "verify ... effective state"), then reverts to the truth. */
+  simulateIneffectiveGrantsOnce = false
+  /** Test-only: makes the NEXT `getEffectiveCredentials()` call report an EXTRA credential the
+   * Broker never asked for — the "materialized the whole pool instead of the intended grants"
+   * failure the ≥1.44 boot converter could produce on an upgraded instance. */
+  simulateExtraCredentialOnce = false
 
   async ensureSelectiveAgent(identifier: string, _name: string): Promise<OneCliAgentHandle> {
     this.checkAvailable()
@@ -34,34 +70,57 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
       throw new OneCliUnavailableError(`onecli agent ${identifier} was deleted and cannot be reused`)
     }
     if (!existing) {
-      this.agents.set(identifier, { deleted: false, bearer: freshBearer(identifier) })
+      this.agents.set(identifier, { deleted: false, bearer: freshBearer(identifier), createdAt: new Date(), secretIds: new Set(), connections: new Map() })
     }
     return { identifier }
   }
 
-  async publishRoutePolicy(routes: readonly PublishedRoute[]): Promise<RoutePolicyPublishResult> {
+  async syncCredentialGrants(identifier: string, desired: DesiredCredentialGrants): Promise<AttachedCredentials> {
     this.checkAvailable()
-    const last = routes[routes.length - 1]
-    if (!last || last.host !== '*' || last.action !== 'block') {
-      throw new Error('route policy must end with an explicit terminal block *')
-    }
-    this.routeGeneration = (this.routeGeneration ?? 0) + 1
-    this.publishedRoutes = routes
-    return { generation: this.routeGeneration }
+    const agent = this.requireAgent(identifier)
+
+    const secretIds = desired.secretTypes.map((type) => {
+      const match = FAKE_SECRETS.find((secret) => secret.type === type)
+      if (!match) throw new OneCliUnavailableError(`onecli holds no secret of type '${type}'`)
+      return match.id
+    })
+    const connections = desired.connections.map((wanted) => {
+      const match = FAKE_CONNECTIONS.find((connection) => connection.provider === wanted.provider)
+      if (!match) throw new OneCliUnavailableError(`onecli holds no connection for provider '${wanted.provider}'`)
+      return { id: match.id, allowedToolIds: wanted.allowedToolIds }
+    })
+
+    // Converge, exactly like the real adapter: anything not wanted is detached, never left behind.
+    agent.secretIds = new Set(secretIds)
+    agent.connections = new Map(connections.map((connection) => [connection.id, connection.allowedToolIds]))
+
+    return { secretIds, connectionIds: connections.map((connection) => connection.id) }
   }
 
-  async getPublishedGeneration(): Promise<number | undefined> {
+  async getEffectiveCredentials(identifier: string): Promise<EffectiveCredentialSet> {
     this.checkAvailable()
-    if (this.simulateStaleGenerationOnce) {
-      this.simulateStaleGenerationOnce = false
-      return (this.routeGeneration ?? 1) - 1
+    const agent = this.requireAgent(identifier)
+    if (this.simulateIneffectiveGrantsOnce) {
+      this.simulateIneffectiveGrantsOnce = false
+      return { mode: 'selective', secrets: [], connections: [] }
     }
-    return this.routeGeneration
+    const secrets = [...agent.secretIds].map((id) => ({ id, status: 'usable' }))
+    if (this.simulateExtraCredentialOnce) {
+      this.simulateExtraCredentialOnce = false
+      const extra = FAKE_SECRETS.find((secret) => !agent.secretIds.has(secret.id))
+      if (extra) secrets.push({ id: extra.id, status: 'usable' })
+    }
+    return {
+      mode: 'selective',
+      secrets,
+      connections: [...agent.connections.keys()].map((id) => ({ id, status: 'usable' })),
+    }
   }
 
-  /** Exposed for tests asserting on what was actually published, not just that publish succeeded. */
-  getPublishedRoutesForTest(): readonly PublishedRoute[] {
-    return this.publishedRoutes
+  /** Exposed for tests asserting on what an Agent actually ended up holding, not just that the
+   * sync call returned. */
+  getGrantedToolIdsForTest(identifier: string, connectionId: string): readonly string[] | undefined {
+    return this.agents.get(identifier)?.connections.get(connectionId)
   }
 
   async getContainerConfig(identifier: string): Promise<OneCliContainerConfig> {
@@ -74,11 +133,15 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
     // the whole userinfo pair via HTTP Basic (verified live, P11). This double previously exposed a
     // bare token, which let the real adapter's own username-vs-password extraction bug pass tests.
     const proxyCredential = `${FAKE_PROXY_USERNAME}:${agent.bearer}`
+    // Grants-dependent, exactly like the real 1.45.0 product: the Codex `auth.json` stub exists
+    // only for an Agent that has actually been granted the OpenAI credential.
+    const openaiSecretId = FAKE_SECRETS.find((secret) => secret.type === 'openai')?.id
+    const credentialStubs = openaiSecretId && agent.secretIds.has(openaiSecretId) ? fakeCredentialStubs(identifier) : []
     return {
       env: { HTTPS_PROXY: `${this.gatewayUrl.replace('://', `://${FAKE_PROXY_USERNAME}:${encodeURIComponent(agent.bearer)}@`)}` },
       caCertificate: FAKE_CA_CERTIFICATE,
       caCertificateContainerPath: '/etc/onecli/ca.pem',
-      credentialStubs: fakeCredentialStubs(identifier),
+      credentialStubs,
       upstreamProxyCredential: proxyCredential,
       gatewayUrl: this.gatewayUrl,
     }
@@ -109,6 +172,29 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
     if (!agent) return
     agent.deleted = true
     agent.bearer = ''
+    // Deleting the Agent deletes its grants with it — the credential authority is gone, not orphaned.
+    agent.secretIds.clear()
+    agent.connections.clear()
+  }
+
+  async listAgents(): Promise<readonly OneCliAgentSummary[]> {
+    this.checkAvailable()
+    return [...this.agents.entries()]
+      .filter(([, agent]) => !agent.deleted)
+      .map(([identifier, agent]) => ({ identifier, createdAt: agent.createdAt }))
+  }
+
+  /** Test-only: back-date an Agent's OneCLI-side creation time so a reaper grace-window test does
+   * not have to sleep. */
+  setAgentCreatedAtForTest(identifier: string, createdAt: Date): void {
+    const agent = this.agents.get(identifier)
+    if (agent) agent.createdAt = createdAt
+  }
+
+  private requireAgent(identifier: string): FakeAgent {
+    const agent = this.agents.get(identifier)
+    if (!agent || agent.deleted) throw new OneCliUnavailableError(`onecli agent ${identifier} does not exist`)
+    return agent
   }
 
   private checkAvailable(): void {
@@ -121,7 +207,8 @@ function freshBearer(identifier: string): string {
 }
 
 /** Exported for tests to build a matching `ExpectedRuntimeBundle` (grant-service.ts) — this fake's
- * own `getContainerConfig` always returns exactly this CA and `fakeCredentialStubs`' own stub. */
+ * own `getContainerConfig` always returns exactly this CA, and `fakeCredentialStubs`' own stub
+ * whenever the Agent holds the OpenAI credential grant. */
 export const FAKE_CA_CERTIFICATE = '-----BEGIN CERTIFICATE-----\nFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n'
 
 /** The fixed dummy proxy username OneCLI itself uses in the `http://x:aoc_…@gateway` URL it hands out (verified live, P11). */
@@ -141,7 +228,8 @@ let fakeRefreshCounter = 0
  * A faithful double of OneCLI's real per-Agent credential-stub behavior (this file's own module
  * doc): the SAME underlying account identity (fixed header+payload), a DIFFERENT signature per
  * Agent identifier — grant-service.ts's own drift check must treat two different Agents' stubs as
- * matching despite the raw bytes differing, exactly as the real product requires. Also reproduces
+ * matching (same underlying account, different signature), the exact live P11 finding, rather than
+ * accidentally passing only because both sides happen to be the same object. Also reproduces
  * `last_refresh`, verified live to change on EVERY call (even for the same Agent) — a fresh
  * counter value each call, deliberately never equal to a prior call's, same as the real product.
  */

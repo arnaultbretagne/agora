@@ -7,6 +7,7 @@ import { getActivationByWorkloadIdentity } from './activations-repository.js'
 import { recordAudit } from './audit.js'
 import { getGrant } from './grants-repository.js'
 import { readUpstreamAuthority } from './onecli-agents-repository.js'
+import { compileSessionEgressAllowList, isEgressHostAllowed, type CompiledEgressAllowList } from './route-policy.js'
 
 /**
  * docs/specs/10 "access relay": workload-authenticated, opaque CONNECT tunnel to OneCLI's own
@@ -111,6 +112,24 @@ async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket
     // place that enforcement happens, evaluated fresh on every CONNECT, never cached.
     if (grant.state !== 'issued' || grant.expiresAt <= new Date()) return deny(deps, clientSocket, 403, 'grant_not_active', sessionId)
 
+    // ADR 0015, egress half: THIS is Agora's deny-by-default network egress point. The allow-list
+    // is recompiled here, on every CONNECT, from the grant row already loaded above — a pure
+    // function of (Agent, capabilities), so there is no cached list to go stale, and no shared
+    // state that another Session's issue/revoke could move. A host that is not on it is refused
+    // before `readUpstreamAuthority`, before any upstream socket exists: a denied CONNECT never
+    // reaches OneCLI's gateway, let alone a provider.
+    //
+    // A compile failure (an Agent or capability/access level with no reviewed entry) is a denial,
+    // never a bypass — `compileSessionEgressAllowList` throws rather than returning a permissive
+    // list, and this catch turns that into the same 403.
+    let allowList: CompiledEgressAllowList
+    try {
+      allowList = compileSessionEgressAllowList(grant)
+    } catch {
+      return deny(deps, clientSocket, 403, 'egress_policy_uncompilable', sessionId)
+    }
+    if (!isEgressHostAllowed(allowList, host)) return deny(deps, clientSocket, 403, 'egress_not_allowed', sessionId)
+
     const authority = await readUpstreamAuthority(client, deps.encryptionKey, activation.sessionId)
     if (!authority) return deny(deps, clientSocket, 502, 'upstream_authority_unavailable', sessionId)
 
@@ -128,8 +147,9 @@ async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket
         )
         .catch((error) => {
           upstream.destroy()
-          // The gateway itself rejected the CONNECT (e.g. route not allow-listed) — this is a clean
-          // denial, not a transport failure, so the caller gets a real status line, not ECONNRESET.
+          // The gateway itself rejected the CONNECT (e.g. it no longer recognizes this Agent's
+          // rotated bearer) — a clean denial, not a transport failure, so the caller gets a real
+          // status line rather than ECONNRESET. Host-level egress is decided above, before dialing.
           if (error instanceof GatewayRejectedError) {
             void deny(deps, clientSocket, error.status, 'gateway_rejected', activation.sessionId)
           } else {
@@ -143,11 +163,14 @@ async function handleConnect(deps: RelayDeps, req: IncomingMessage, clientSocket
 }
 
 /**
- * "approved" here means the TUNNEL was bridged — NOT that the traffic was permitted. OneCLI's
- * gateway answers 200 to every CONNECT and enforces the route allowlist against the HTTP request
- * inside the tunnel (see route-policy.ts's own doc for the measured behavior). A blocked host still
- * produces an `approved` row here and a 403 the Agent sees. Do not read these rows as an egress
- * audit trail; they are a tunnel-establishment trail.
+ * Since ADR 0015 an `approved` row means the host genuinely passed THIS relay's egress allow-list
+ * and the tunnel was bridged — together with the `denied`/`egress_not_allowed` rows, these are a
+ * real per-Session egress decision trail.
+ *
+ * They were not, before: OneCLI's gateway answers 200 to every CONNECT and used to enforce the
+ * route allowlist against the HTTP request INSIDE the tunnel, so a blocked host still produced an
+ * `approved` row here plus a 403 only the Agent ever saw. Anything reading these rows across the
+ * P13 cutover must not treat pre-cutover `approved` as "traffic permitted".
  */
 async function recordApprovedConnect(deps: RelayDeps, sessionId: string, agentId: string, policyVersion: string, host: string): Promise<void> {
   const client = await deps.pool.connect()
