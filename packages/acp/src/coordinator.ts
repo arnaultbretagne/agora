@@ -332,13 +332,42 @@ export type PromptSessionResult =
   | { readonly outcome: 'already_dispatched'; readonly state: CommandState }
   | { readonly outcome: 'unknown' }
 
+/** What `acceptPrompt` durably recorded, and whether there is still anything to dispatch. */
+export type AcceptPromptResult =
+  | { readonly outcome: 'accepted'; readonly command: DurableCommand }
+  /** The Command carries the id a retry needs to follow the ORIGINAL attempt rather than a new one. */
+  | { readonly outcome: 'already_dispatched'; readonly state: CommandState; readonly command: DurableCommand }
+
+/** The half of `PromptSessionInput` that does not need a live ACP connection. */
+export type AcceptPromptInput = Omit<PromptSessionInput, 'connection' | 'storePersist' | 'acpSessionId'>
+
+/** The half that does, plus the Command that `acceptPrompt` already recorded. */
+export interface DispatchPromptInput {
+  readonly pool: pg.Pool
+  readonly sessionId: string
+  readonly connection: acp.ClientConnection
+  readonly storePersist: StorePersist
+  readonly acpSessionId: string
+  readonly prompt: readonly acp.ContentBlock[]
+  readonly purpose: 'user' | 'handoff'
+  readonly command: DurableCommand
+  readonly now?: () => Date
+}
+
 /**
- * The durable command dispatcher (docs/specs/13-failure-and-idempotency.md "Command states" +
- * "ACP session/prompt: no blind retry after possible acceptance; preserve command as unknown").
+ * Durably records the intent to prompt, WITHOUT talking to the Agent.
+ *
+ * Split out of `promptSession` so the caller can answer its own client the moment the Command is
+ * safe in Postgres, and let `dispatchPrompt` run later, in turn order. That ordering is the whole
+ * point: docs/specs/03 allows only one prompt turn in flight per Session, and measuring the four
+ * ACP Agents we can actually launch showed that NONE of them refuses a concurrent one — they each
+ * mishandle it differently instead (2026-08-10, `docs/acp-concurrent-prompt-behaviour.md`). The
+ * only portable behaviour is therefore to never send the second one until the first has answered.
+ *
  * A "duplicate dispatcher wakeup" (same idempotency key, command already past `accepted`) never
  * resends — it is detected here and returned as `already_dispatched` without calling the Agent.
  */
-export async function promptSession(input: PromptSessionInput): Promise<PromptSessionResult> {
+export async function acceptPrompt(input: AcceptPromptInput): Promise<AcceptPromptResult> {
   const now = input.now ?? (() => new Date())
 
   const setupClient = await input.pool.connect()
@@ -393,12 +422,28 @@ export async function promptSession(input: PromptSessionInput): Promise<PromptSe
   }
 
   if (command.state !== 'accepted') {
-    return { outcome: 'already_dispatched', state: command.state }
+    return { outcome: 'already_dispatched', state: command.state, command }
   }
+  return { outcome: 'accepted', command }
+}
+
+/**
+ * Sends one accepted prompt to the Agent and settles its Command.
+ *
+ * MUST NOT run concurrently with another `dispatchPrompt` for the same Session — see
+ * `acceptPrompt`'s doc for the measurements, and `apps/web/src/prompt-queue.ts` for the thing
+ * that actually serializes it. The Session phase moves `ready -> busy` here and back on the way
+ * out, which is docs/specs/03's own steps 5 and 8: they were specified from the start and simply
+ * never implemented, which is why nothing in this codebase could tell that a turn was in flight.
+ */
+export async function dispatchPrompt(input: DispatchPromptInput): Promise<PromptSessionResult> {
+  const now = input.now ?? (() => new Date())
+  const command = input.command
 
   const dispatchClient = await input.pool.connect()
   try {
     await transitionCommandState(dispatchClient, command.id, 'dispatching', now())
+    await transitionSessionPhase(dispatchClient, input.sessionId, 'busy')
   } finally {
     dispatchClient.release()
   }
@@ -428,6 +473,7 @@ export async function promptSession(input: PromptSessionInput): Promise<PromptSe
       client.release()
       input.storePersist.setInFlightCommand(undefined, undefined)
     }
+    await returnToReady(input.pool, input.sessionId)
     return { outcome: 'unknown' }
   }
   input.storePersist.setInFlightCommand(undefined, undefined)
@@ -439,8 +485,49 @@ export async function promptSession(input: PromptSessionInput): Promise<PromptSe
   } finally {
     client.release()
   }
+  await returnToReady(input.pool, input.sessionId)
 
   return { outcome: 'completed', stopReason: response.stopReason }
+}
+
+/**
+ * Step 8 of docs/specs/03: back to `ready` "unless closing or failed".
+ *
+ * Deliberately tolerant, and this is the important part: a turn can end AFTER something else has
+ * already moved the Session on (a suspend racing the last chunk, a `failClosed` from another
+ * path). Throwing there would replace a finished turn with an error, and — worse — leave the
+ * Session parked in `busy`, which is exactly the "stuck forever" shape this whole change exists to
+ * remove. The phase we failed to restore is not lost: whoever moved the Session owns it now.
+ */
+async function returnToReady(pool: pg.Pool, sessionId: string): Promise<void> {
+  const client = await pool.connect()
+  try {
+    const { rows } = await client.query<{ phase: string }>('SELECT phase FROM product.sessions WHERE id = $1', [sessionId])
+    if (rows[0]?.phase !== 'busy') return
+    await transitionSessionPhase(client, sessionId, 'ready')
+  } catch {
+    // Same reasoning as above: never let phase bookkeeping fail a completed turn.
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Accept then dispatch, in one call.
+ *
+ * Kept for the callers that genuinely own the Session at that instant and have nothing to
+ * serialize against — provisioning's initial prompt and resume's Handoff, which run before the
+ * Session is reachable by any other prompt. Everything user-facing goes through `acceptPrompt` +
+ * the queue instead, so it can answer immediately and dispatch in order.
+ */
+export async function promptSession(input: PromptSessionInput): Promise<PromptSessionResult> {
+  const accepted = await acceptPrompt(input)
+  // Narrowed back to exactly the historical shape: `acceptPrompt` also hands back the Command
+  // (the HTTP layer needs its id to answer with), but this function's contract predates that and
+  // its callers do not use it — widening it here would leak an implementation detail into a
+  // result other code compares whole.
+  if (accepted.outcome === 'already_dispatched') return { outcome: 'already_dispatched', state: accepted.state }
+  return dispatchPrompt({ ...input, command: accepted.command })
 }
 
 export interface CancelSessionInput {

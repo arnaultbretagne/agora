@@ -27,6 +27,7 @@ import type pg from 'pg'
 import type { BrokerGrantClient } from './broker-grant-client.js'
 import { connectAcpBridge } from './bridge-client.js'
 import type { SessionConnectionRegistry } from './connections.js'
+import type { SessionPromptQueue } from './prompt-queue.js'
 import { applyConfigIntent, recordConfigIntent, rememberAdvertisedOptions, type RequestedConfigOption } from './session-config.js'
 
 /**
@@ -49,11 +50,29 @@ import { applyConfigIntent, recordConfigIntent, rememberAdvertisedOptions, type 
  * stays `requested` for the seconds materialize/ACP-connect take, which is honestly narrower than
  * the spec's numbered list but consistent with what P03 actually built and tested.
  */
+/**
+ * Runs `task` behind the Session's prompt queue when there is one, inline when there is not.
+ *
+ * The inline branch is for tests that build these flows directly; production always passes a queue,
+ * because "one prompt turn in flight per Session" has to hold for the flows that prompt on the
+ * user's behalf too, not only for the ones the user triggers.
+ */
+function runSerialized<T>(queue: SessionPromptQueue | undefined, sessionId: string, task: () => Promise<T>): Promise<T> {
+  return queue ? queue.run(sessionId, task) : task()
+}
+
 export interface ProvisionSessionInput {
   readonly pool: pg.Pool
   readonly transport: SessionRuntimeControlTransport
   readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
+  /**
+   * Serializes this flow's own prompt against user prompts. Not paranoia: `connections.set` below
+   * makes the Session reachable by `POST /prompts` BEFORE the initial prompt/Handoff has been sent,
+   * so without this the very first turn can race a user's first message. Optional so the many
+   * lifecycle tests that never prompt do not have to build one.
+   */
+  readonly promptQueue?: SessionPromptQueue
   readonly workstreamId: string
   readonly sessionId: string
   readonly agentId: string
@@ -281,20 +300,22 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', now())
 
     if (input.initialPrompt.length > 0) {
-      await promptSession({
-        pool: input.pool,
-        workstreamId: input.workstreamId,
-        sessionId: input.sessionId,
-        connection: bootstrapped.connection,
-        storePersist: bootstrapped.storePersist,
-        acpSessionId: bootstrapped.acpSessionId,
-        prompt: input.initialPrompt,
-        purpose: input.initialPromptPurpose ?? 'user',
-        actor: input.actor,
-        idempotencyKey: input.promptIdempotencyKey ?? 'initial-prompt',
-        ...(input.handoffSource ? { handoffSource: input.handoffSource } : {}),
-        now,
-      })
+      await runSerialized(input.promptQueue, input.sessionId, () =>
+        promptSession({
+          pool: input.pool,
+          workstreamId: input.workstreamId,
+          sessionId: input.sessionId,
+          connection: bootstrapped.connection,
+          storePersist: bootstrapped.storePersist,
+          acpSessionId: bootstrapped.acpSessionId,
+          prompt: input.initialPrompt,
+          purpose: input.initialPromptPurpose ?? 'user',
+          actor: input.actor,
+          idempotencyKey: input.promptIdempotencyKey ?? 'initial-prompt',
+          ...(input.handoffSource ? { handoffSource: input.handoffSource } : {}),
+          now,
+        }),
+      )
     }
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', now())
   } catch (error) {
@@ -345,6 +366,13 @@ export interface ResumeSessionRuntimeInput {
   readonly transport: SessionRuntimeControlTransport
   readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
+  /**
+   * Serializes this flow's own prompt against user prompts. Not paranoia: `connections.set` below
+   * makes the Session reachable by `POST /prompts` BEFORE the initial prompt/Handoff has been sent,
+   * so without this the very first turn can race a user's first message. Optional so the many
+   * lifecycle tests that never prompt do not have to build one.
+   */
+  readonly promptQueue?: SessionPromptQueue
   readonly workstreamId: string
   readonly sessionId: string
   readonly agentId: string
@@ -444,21 +472,24 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
 
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'acknowledged', nowFn())
 
-    if (input.handoffPrompt) {
-      await promptSession({
-        pool: input.pool,
-        workstreamId: input.workstreamId,
-        sessionId: input.sessionId,
-        connection: resumed.connection,
-        storePersist: resumed.storePersist,
-        acpSessionId: resumed.acpSessionId,
-        prompt: input.handoffPrompt.content,
-        purpose: 'handoff',
-        actor: { kind: 'system', id: 'agora' },
-        idempotencyKey: input.handoffPrompt.idempotencyKey,
-        handoffSource: input.handoffPrompt.handoffSource,
-        now: input.now ?? (() => new Date()),
-      })
+    const handoffPrompt = input.handoffPrompt
+    if (handoffPrompt) {
+      await runSerialized(input.promptQueue, input.sessionId, () =>
+        promptSession({
+          pool: input.pool,
+          workstreamId: input.workstreamId,
+          sessionId: input.sessionId,
+          connection: resumed.connection,
+          storePersist: resumed.storePersist,
+          acpSessionId: resumed.acpSessionId,
+          prompt: handoffPrompt.content,
+          purpose: 'handoff',
+          actor: { kind: 'system', id: 'agora' },
+          idempotencyKey: handoffPrompt.idempotencyKey,
+          handoffSource: handoffPrompt.handoffSource,
+          now: input.now ?? (() => new Date()),
+        }),
+      )
     }
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'completed', nowFn())
   } catch (error) {
@@ -517,6 +548,7 @@ export async function activateSession(
       transport: input.transport,
       brokerGrantClient: input.brokerGrantClient,
       connections: input.connections,
+      ...(input.promptQueue ? { promptQueue: input.promptQueue } : {}),
       workstreamId: row.workstream_id,
       sessionId: input.sessionId,
       agentId: row.agent_id,
@@ -538,6 +570,13 @@ export interface SwitchAgentInput {
   readonly transport: SessionRuntimeControlTransport
   readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
+  /**
+   * Serializes this flow's own prompt against user prompts. Not paranoia: `connections.set` below
+   * makes the Session reachable by `POST /prompts` BEFORE the initial prompt/Handoff has been sent,
+   * so without this the very first turn can race a user's first message. Optional so the many
+   * lifecycle tests that never prompt do not have to build one.
+   */
+  readonly promptQueue?: SessionPromptQueue
   readonly workstreamId: string
   readonly agentId: string
   readonly runtimeDefinitionVersion: string

@@ -26,7 +26,7 @@ import {
 } from '@agora/store-pg'
 import { nameBasedUuid, principalId, type PrincipalId, DomainError } from '@agora/domain'
 import { getEquipmentCatalogue } from '@agora/equipment-policy'
-import { promptSession, setSessionConfigOption, setSessionMode } from '@agora/acp'
+import { acceptPrompt, dispatchPrompt, setSessionConfigOption, setSessionMode } from '@agora/acp'
 import { HandoffNotReadyError } from '@agora/store-pg'
 import { getSessionRuntime, listLaunchableAgents, type SessionRuntimeControlTransport } from '@agora/session-runtime-control'
 import type { BrokerGrantClient } from './broker-grant-client.js'
@@ -39,6 +39,7 @@ import {
   switchAgent,
 } from './orchestration.js'
 import type { SessionConnectionRegistry } from './connections.js'
+import { SessionPromptQueue } from './prompt-queue.js'
 import { ConfigCatalogueService } from './config-catalogue.js'
 import { getValidators } from './request-schemas.js'
 import { recordConfigIntent, rememberAdvertisedOptions, type RequestedConfigOption } from './session-config.js'
@@ -67,6 +68,12 @@ export interface ServerDeps {
   readonly controllerTransport: SessionRuntimeControlTransport
   readonly brokerGrantClient: BrokerGrantClient
   readonly connections: SessionConnectionRegistry
+  /**
+   * Serializes prompt dispatch per Session. Optional so the many tests that never prompt do not
+   * have to build one, but a server that answers `POST /prompts` without it would put two turns in
+   * flight at once — the exact defect this exists to prevent — so `createServer` always supplies one.
+   */
+  readonly promptQueue?: SessionPromptQueue
   /** P12's catalogue/empty-run service. Built by `createServer` from the deps above when a caller does not supply one (tests that want a shortened probe timeout do). */
   readonly configCatalogue?: ConfigCatalogueService
   readonly now?: () => Date
@@ -326,6 +333,7 @@ async function handleCreateWorkstream(deps: ServerDeps, principal: string, req: 
       transport: deps.controllerTransport,
       brokerGrantClient: deps.brokerGrantClient,
       connections: deps.connections,
+      ...(deps.promptQueue ? { promptQueue: deps.promptQueue } : {}),
       workstreamId,
       sessionId,
       agentId: request.agentId,
@@ -499,6 +507,7 @@ async function handleOpenSession(deps: ServerDeps, principal: string, workstream
       transport: deps.controllerTransport,
       brokerGrantClient: deps.brokerGrantClient,
       connections: deps.connections,
+      ...(deps.promptQueue ? { promptQueue: deps.promptQueue } : {}),
       workstreamId,
       agentId: request.agentId,
       runtimeDefinitionVersion: agent.runtimeDefinitionVersion,
@@ -830,6 +839,7 @@ async function handleActivateSession(deps: ServerDeps, principal: string, sessio
     transport: deps.controllerTransport,
     brokerGrantClient: deps.brokerGrantClient,
     connections: deps.connections,
+    ...(deps.promptQueue ? { promptQueue: deps.promptQueue } : {}),
     workstreamId: loaded.session.workstreamId,
     sessionId,
     agentId: loaded.session.agentId,
@@ -862,21 +872,64 @@ async function handlePromptSession(deps: ServerDeps, principal: string, sessionI
   if (!live) return sendProblem(res, problem(409, 'runtime_unavailable', 'Session has no live ACP connection'))
 
   const now = deps.now ?? (() => new Date())
-  const result = await promptSession({
+
+  // Accept durably FIRST, answer, and only then dispatch — in turn order, behind the queue.
+  //
+  // This used to await the whole turn before replying, which is why nothing here could notice a
+  // second prompt: each one arrived on its own HTTP request, with its own await, and went straight
+  // to the Agent. Answering on acceptance is what lets the queue exist at all; the Command row is
+  // already in Postgres when the client is told `accepted`, so a queued prompt is durable and
+  // observable (`GET /v1/commands/{id}`) rather than something held in a socket.
+  const accepted = await acceptPrompt({
     pool: deps.pool,
     workstreamId: loaded.session.workstreamId,
     sessionId,
-    connection: live.connection,
-    storePersist: live.storePersist,
-    acpSessionId: live.acpSessionId,
     prompt: (body as { content: never[] }).content,
     purpose: 'user',
     actor: { kind: 'human', id: principal },
     idempotencyKey,
     now,
   })
-  if (result.outcome === 'unknown') return sendProblem(res, problem(202, 'prompt_delivery_unknown', 'Prompt delivery is unknown'))
-  sendJson(res, 202, { commandId: randomUUID(), state: 'accepted', acceptedAt: now().toISOString() })
+  if (accepted.outcome === 'already_dispatched') {
+    // Same idempotency key as an earlier prompt: answer with the ORIGINAL Command, never a second
+    // dispatch of the same message (docs/specs/13 "no blind retry after possible acceptance").
+    return sendJson(res, 202, { commandId: accepted.command.id, state: accepted.state, acceptedAt: now().toISOString() })
+  }
+
+  const queue = deps.promptQueue ?? new SessionPromptQueue()
+  const queuedBehind = queue.depth(sessionId)
+  queue.runDetached(
+    sessionId,
+    () =>
+      dispatchPrompt({
+        pool: deps.pool,
+        sessionId,
+        connection: live.connection,
+        storePersist: live.storePersist,
+        acpSessionId: live.acpSessionId,
+        prompt: (body as { content: never[] }).content,
+        purpose: 'user',
+        command: accepted.command,
+        now,
+      }),
+    (error: unknown) => {
+      // The HTTP response is long gone, so this is the only place a dispatch failure can surface.
+      // The Command itself is settled by `dispatchPrompt`'s own error handling; this is the
+      // operator-visible trace of it.
+      process.stderr.write(
+        `prompt dispatch failed for session ${sessionId} command ${accepted.command.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+      )
+    },
+  )
+
+  sendJson(res, 202, {
+    commandId: accepted.command.id,
+    state: 'accepted',
+    acceptedAt: now().toISOString(),
+    // How many turns must finish before this one starts. 0 = dispatching now. The UI shows the
+    // difference between "the Agent is answering you" and "your message is waiting its turn".
+    queuedBehind,
+  })
 }
 
 /**
@@ -1283,6 +1336,7 @@ function catalogueOf(deps: ServerDeps): ConfigCatalogueService {
 export function createServer(deps: ServerDeps): Server {
   const resolved: ServerDeps = {
     ...deps,
+    promptQueue: deps.promptQueue ?? new SessionPromptQueue(),
     configCatalogue:
       deps.configCatalogue ??
       new ConfigCatalogueService({

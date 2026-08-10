@@ -144,3 +144,63 @@ export async function transitionCommandState(
     [id, to, updatedAt, error?.code ?? null, error?.detail ?? null, completedAt],
   )
 }
+
+/**
+ * Settles `PromptSession` Commands that no process can ever finish, and returns how many.
+ *
+ * A prompt only makes progress through a live ACP connection, and connections do not survive the
+ * process that opened them (`apps/web/src/connections.ts`, ADR 0012). So a `PromptSession` left in
+ * `accepted` (queued, never dispatched) or `dispatching` (sent, never answered) at startup is not
+ * pending — it is abandoned, and no later event will ever move it. Left alone it stays non-terminal
+ * forever, which is precisely what happened on 2026-08-09: three prompts sent into a running turn
+ * were still `dispatching` the next day, and a client polling `GET /v1/commands/{id}` would have
+ * waited for an answer that could not come.
+ *
+ * Deliberately narrow: only `PromptSession`, only these two states. Other command types settle
+ * through paths that do not depend on a live connection, and are none of this function's business.
+ */
+export async function failStrandedPromptCommands(client: PoolClient, at: Date): Promise<StrandedPromptSweep> {
+  const { rows } = await client.query<{ id: string }>(
+    `UPDATE product.commands
+        SET state = 'failed', updated_at = $1, completed_at = $1,
+            error_code = 'runtime_connection_lost',
+            error_detail = 'The Session Runtime connection this prompt needed no longer exists (process restart). The prompt was never delivered, or its outcome was never observed.'
+      WHERE command_type = 'PromptSession'
+        AND state IN ('accepted', 'dispatching')
+      RETURNING id`,
+    [at],
+  )
+
+  // Settling the Command alone would be cosmetic. `projection.turns.id` IS the Command id (FK to
+  // product.commands), and a turn with a NULL `ended_at` makes its whole Session ineligible for
+  // idle collection — `listIdleSessions` excludes any Session with an unfinished turn, on purpose,
+  // because a Session that is working must not be reaped. An abandoned turn is indistinguishable
+  // from a working one to that query, so leaving it open is what kept a dead Session holding a Pod
+  // for eleven hours. The turn is abandoned for exactly the same reason its Command is; settle both
+  // or neither.
+  const { rowCount: turnCount } = await client.query(
+    `UPDATE projection.turns
+        SET status = 'failed', stop_reason = 'runtime_connection_lost', ended_at = $1
+      WHERE ended_at IS NULL
+        AND id = ANY($2::uuid[])`,
+    [at, rows.map((r) => r.id)],
+  )
+
+  // And hand the Sessions back. `busy` is set for the duration of a turn (docs/specs/03 step 5),
+  // so a Session still `busy` at startup was mid-turn in a process that no longer exists. Left
+  // alone it is stuck twice over: the idle reaper only sweeps `ready`, and `activateSession` reads
+  // `busy` as "already live" and does nothing — so the Session could never be reclaimed NOR woken.
+  // This is a hole introduced by making `busy` real, and closing it is part of that change.
+  const { rowCount: sessionCount } = await client.query(
+    "UPDATE product.sessions SET phase = 'ready' WHERE phase = 'busy'",
+  )
+
+  return { commands: rows.length, turns: turnCount ?? 0, sessions: sessionCount ?? 0 }
+}
+
+export interface StrandedPromptSweep {
+  readonly commands: number
+  readonly turns: number
+  /** Sessions released from `busy` back to `ready` because their turn died with the last process. */
+  readonly sessions: number
+}
