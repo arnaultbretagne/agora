@@ -131,6 +131,14 @@ test('activateSession on a requested Session runs the real provisioning chain as
 
     const finalPhase = await waitForPhase(pool, sessionId, 'ready')
     assert.equal(finalPhase, 'ready')
+
+    // `activateSession` is fire-and-forget by design, and `bootstrapSession` reaches `ready`
+    // BEFORE the rest of the provisioning chain has run — so returning here tears the test
+    // database down underneath work that is still going, and the chain's own error handling then
+    // fails trying to connect to a pool that has ended. Same reason, and same remedy, as the
+    // `after` hook in server.test.ts. There is no completion signal to await instead: this path
+    // passes no `provisioningCommandId`, so nothing durable settles at the end of it.
+    await sleep(500)
   })
 })
 
