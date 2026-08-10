@@ -102,10 +102,12 @@ before(async () => {
       promptConcurrency.peak = Math.max(promptConcurrency.peak, promptConcurrency.current)
       const text = params.prompt.map((block) => ('text' in block ? block.text : '')).join('')
       promptConcurrency.seen.push(text)
-      // Long enough that every prompt below is sent while a turn is genuinely still running:
-      // the failure this guards against was three prompts sent inside 2 seconds of a turn that
-      // ran for 19 minutes.
-      await sleep(400)
+      // The first turn is deliberately long so the prompts sent after it are certain to arrive
+      // while it is STILL RUNNING, on a fast laptop and on a slow CI runner alike — the failure
+      // this guards against was three prompts sent inside 2 seconds of a 19-minute turn. Timing
+      // this with a fixed sleep for every turn made the test racy: on CI the first turn finished
+      // before the test noticed it had started.
+      await sleep(text === 'premier tour' ? 1_500 : 50)
       promptConcurrency.current -= 1
       return { stopReason: 'end_turn' }
     },
@@ -176,8 +178,16 @@ function sendPrompt(sessionId: string, text: string): Promise<Response> {
 
 test('three prompts fired at once reach the Agent one turn at a time', async () => {
   const { sessionId } = await createReadyWorkstream()
+
+  // Wait until the Agent is demonstrably INSIDE the first turn before sending anything else —
+  // "the Session says ready-or-busy" is not the same fact, and on a slow runner the first turn can
+  // begin and end inside that gap. Only once it is running does `peak` mean anything: a second
+  // turn entered now would make it 2.
+  const startDeadline = Date.now() + 20_000
+  while (Date.now() < startDeadline && !promptConcurrency.seen.includes('premier tour')) await sleep(20)
+  assert.ok(promptConcurrency.seen.includes('premier tour'), 'the first turn never reached the Agent')
+  assert.equal(promptConcurrency.current, 1, 'the first turn should still be running at this point')
   promptConcurrency.peak = 0
-  promptConcurrency.seen.length = 0
 
   // Exactly the 2026-08-09 incident: an operator typing again while the Agent is still working.
   // Sent one after another, the way a person and a browser actually send them — each POST returns
@@ -195,13 +205,13 @@ test('three prompts fired at once reach the Agent one turn at a time', async () 
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline && promptConcurrency.seen.length < 4) await sleep(50)
 
+  // Measured from a point where the Agent was known to be busy, so this is a real reading: an
+  // unserialized dispatch puts the next turn in while the first is still running.
   assert.equal(promptConcurrency.peak, 1, `the Agent saw ${promptConcurrency.peak} prompt turns in flight at once`)
 
-  // The load-bearing assertion. `peak` alone is weaker than it looks: with dispatch unserialized
-  // the second turn's `ready -> busy` transition throws, so the prompt never reaches the Agent at
-  // all and `peak` stays 1 while the message is silently lost. Order is what distinguishes
-  // "delivered one at a time" from "delivered once and then dropped" — checked by running this
-  // test with serialization disabled, where it is this line that goes red.
+  // And the other half — one at a time is worthless if the extra messages are dropped rather than
+  // delivered. Without serialization the second turn's `ready -> busy` transition throws, the
+  // prompt never reaches the Agent, and it is this line that goes red.
   assert.deepEqual(
     promptConcurrency.seen,
     ['premier tour', 'deuxieme', 'troisieme', 'quatrieme'],
@@ -251,9 +261,18 @@ test('a queued prompt is durable and terminal, and its turn is closed', async ()
     }
     assert.equal(open, 0, 'a finished turn was left with a NULL ended_at')
 
-    // Step 8 of docs/specs/03: the Session is handed back, not parked in `busy`.
-    const { rows: session } = await client.query<{ phase: string }>('SELECT phase FROM product.sessions WHERE id = $1', [sessionId])
-    assert.equal(session[0]?.phase, 'ready')
+    // Step 8 of docs/specs/03: the Session is handed back, not parked in `busy`. Polled, because
+    // the Command is marked `completed` a moment BEFORE the phase is released — reading the phase
+    // straight after the Command settles is a race, not an assertion.
+    let phase = ''
+    const phaseDeadline = Date.now() + 20_000
+    while (Date.now() < phaseDeadline) {
+      const { rows } = await client.query<{ phase: string }>('SELECT phase FROM product.sessions WHERE id = $1', [sessionId])
+      phase = rows[0]?.phase ?? ''
+      if (phase === 'ready') break
+      await sleep(50)
+    }
+    assert.equal(phase, 'ready', 'the Session was left in busy after its last turn finished')
   } finally {
     client.release()
   }
