@@ -7,6 +7,7 @@ import { getActivationByGrant } from '../src/activations-repository.js'
 import {
   activateExecutionGrant,
   issueExecutionGrant,
+  releaseSessionAgent,
   renewExecutionGrant,
   revokeExecutionGrant,
   type GrantServiceDeps,
@@ -719,6 +720,115 @@ test('required: audit rows never carry a secret-shaped key, and record issue/act
         const serialized = JSON.stringify(row.detail)
         assert.doesNotMatch(serialized, /aoc_|bearer|token|secret/i)
       }
+    } finally {
+      client.release()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// The Agent's life follows the Session Runtime's: released on suspend, provisioned again on resume.
+// ---------------------------------------------------------------------------------------------
+
+test('required: release gives the Agent up but leaves the grant renewable', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      await releaseSessionAgent(client, d, grant.id, new Date())
+
+      // Gone from OneCLI — a dematerialised Runtime must not leave a standing Agent access token
+      // attached to real provider credentials behind it.
+      assert.equal(
+        (await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier),
+        false,
+      )
+      // `suspended`, not `deleted`: the Session is coming back.
+      assert.equal((await getOnecliAgentMapping(client, grant.sessionId))?.state, 'suspended')
+      // The grant itself is untouched, which is what keeps `renew` available.
+      assert.equal((await getGrant(client, grant.id))?.state, 'issued')
+      // The upstream authority went with the Agent — it authenticates against something that no
+      // longer exists.
+      assert.equal(await readUpstreamAuthority(client, d.encryptionKey, grant.sessionId), undefined)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: renewing a released grant provisions the Agent again, under the same identifier', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      const credentialsWhenIssued = await d.onecli.getEffectiveCredentials(grant.onecliIdentifier)
+      await releaseSessionAgent(client, d, grant.id, new Date())
+
+      // This is the whole resume path: renew is what `resumeSessionRuntime` calls. Before this
+      // change it threw `no onecli agent found` here and took the Session to `failed` — the
+      // 2026-08-11 outage, 14 Sessions out of 14.
+      const renewed = await renewExecutionGrant(client, d, grant.id, new Date())
+
+      assert.equal(renewed.onecliIdentifier, grant.onecliIdentifier, 'the Agent must come back under the identifier the grant records')
+      assert.ok((await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier))
+      assert.equal((await getOnecliAgentMapping(client, grant.sessionId))?.state, 'active')
+
+      // Same authority as a fresh Session gets — a resumed Session must not come back weaker,
+      // which is why both paths provision through one function.
+      assert.deepEqual(await d.onecli.getEffectiveCredentials(grant.onecliIdentifier), credentialsWhenIssued)
+
+      // docs/specs/10: a renewal preserves the capability digest. Re-provisioning must not have
+      // changed what this grant authorises.
+      assert.equal(renewed.capabilityDigest, grant.capabilityDigest)
+
+      // And the Pod can authenticate again: a fresh upstream bearer was stored.
+      assert.notEqual(await readUpstreamAuthority(client, d.encryptionKey, grant.sessionId), undefined)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('required: a suspend/resume cycle can repeat — the Agent is not a one-shot resource', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        await releaseSessionAgent(client, d, grant.id, new Date())
+        await renewExecutionGrant(client, d, grant.id, new Date())
+        assert.ok(
+          (await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier),
+          `Agent missing after cycle ${cycle}`,
+        )
+      }
+      // Exactly one Agent, not one per cycle: `ensureSelectiveAgent` converges rather than appends.
+      assert.equal((await d.onecli.listAgents()).filter((agent) => agent.identifier === grant.onecliIdentifier).length, 1)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('release is idempotent, and refuses to downgrade a revoked grant', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      await releaseSessionAgent(client, d, grant.id, new Date())
+      await releaseSessionAgent(client, d, grant.id, new Date())
+      assert.equal((await getOnecliAgentMapping(client, grant.sessionId))?.state, 'suspended')
+
+      const other = await issue(pool, d)
+      await revokeExecutionGrant(client, d, other.id, new Date())
+      await releaseSessionAgent(client, d, other.id, new Date())
+      // `deleted` is terminal — releasing must never walk a Session back out of it.
+      assert.equal((await getOnecliAgentMapping(client, other.sessionId))?.state, 'deleted')
+      assert.equal((await getGrant(client, other.id))?.state, 'revoked')
     } finally {
       client.release()
     }

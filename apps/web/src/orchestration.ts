@@ -181,6 +181,36 @@ async function revokeSessionGrant(input: {
   }
 }
 
+/**
+ * Suspend's counterpart to `revokeSessionGrant`: the Session keeps its grant, gives up its Agent.
+ *
+ * Swallows its own failures for the same reason revocation does — a Session that is durably
+ * `suspended` must not be dragged back out of that state because the Broker was briefly unhappy —
+ * but the consequence differs and is worth naming: a release that silently fails leaves a live
+ * Agent for a Session with no Pod, which the Broker's own orphan reaper no longer cleans up (it
+ * protects every `active` mapping now). The mapping is still `active`, so the next resume simply
+ * finds the Agent already there and re-converges it. Untidy, not broken.
+ */
+async function releaseSessionAgent(input: {
+  readonly pool: pg.Pool
+  readonly brokerGrantClient: BrokerGrantClient
+  readonly sessionId: string
+}): Promise<void> {
+  try {
+    const client = await input.pool.connect()
+    let grantRef: string | undefined
+    try {
+      grantRef = await getExecutionGrantRef(client, input.sessionId)
+    } finally {
+      client.release()
+    }
+    if (!grantRef) return
+    await input.brokerGrantClient.release(grantRef, randomUUID())
+  } catch {
+    // See this function's own doc comment.
+  }
+}
+
 async function failClosed(
   pool: pg.Pool,
   sessionId: string,
@@ -931,6 +961,15 @@ export async function suspendSession(input: SuspendSessionInput): Promise<void> 
     } finally {
       closeClient.release()
     }
+
+    // The Pod is gone, so the OneCLI Agent goes with it: same lifecycle, same gesture, decided
+    // here rather than by a sweeper guessing from timestamps. `resumeSessionRuntime`'s renewal
+    // provisions a new one under the same identifier, which is the other half of this.
+    //
+    // Last, and only once the Session is durably `suspended`, for the same reason `closeSession`
+    // revokes last: a Broker hiccup must never strand the phase. It is also why this is `release`
+    // and not `revoke` — the Session is coming back, and revocation is terminal.
+    await releaseSessionAgent({ pool: input.pool, brokerGrantClient: input.brokerGrantClient, sessionId: input.sessionId })
   } catch (error) {
     await failClosed(input.pool, input.sessionId, 'suspend_failed', error, input.brokerGrantClient, input.transport)
   }

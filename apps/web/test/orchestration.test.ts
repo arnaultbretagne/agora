@@ -194,10 +194,19 @@ test('suspendSession dematerializes the real Session Runtime and reaches suspend
         actor: { kind: 'human', id: 'alice' },
       })
 
+      const releasedBefore = broker.releaseCalls.length
+      const revokedBefore = broker.revokeCalls.length
       await suspendSession({ pool, transport: custodyController, brokerGrantClient, connections, sessionId, idempotencyKey: randomId() })
       assert.equal(await sessionPhase(pool, sessionId), 'suspended')
       assert.ok(custodyController.dematerializeCalls.includes(sessionId))
       assert.equal(connections.get(sessionId), undefined)
+
+      // Same lifecycle, same gesture: the Pod is gone, so the OneCLI Agent goes with it. Before
+      // this, a suspended Session kept a standing Agent access token that only a sweeper's
+      // timers would eventually (and wrongly) reclaim.
+      assert.equal(broker.releaseCalls.length, releasedBefore + 1, 'suspend must release the Session\'s OneCLI Agent')
+      // ...and RELEASE, never REVOKE: revocation is terminal, and this Session is coming back.
+      assert.equal(broker.revokeCalls.length, revokedBefore, 'suspend must not revoke — the Session must stay resumable')
     } finally {
       await custodyController.close()
     }

@@ -19,6 +19,8 @@ export interface FakeBrokerHandle {
   readonly renewCalls: readonly string[]
   /** grantIds this fake was asked to revoke — the real Broker deletes the Session's OneCLI Agent here. */
   readonly revokeCalls: readonly string[]
+  /** grantIds this fake was asked to release — a suspend gives the Agent up without ending the grant. */
+  readonly releaseCalls: readonly string[]
   close(): Promise<void>
 }
 
@@ -66,6 +68,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
   const issueCalls: { readonly sessionId: string; readonly agentId: string }[] = []
   const renewCalls: string[] = []
   const revokeCalls: string[] = []
+  const releaseCalls: string[] = []
 
   const httpServer: Server = createServer((req, res) => {
     void (async () => {
@@ -109,6 +112,15 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
         return
       }
 
+      const releaseMatch = /^\/v1\/execution-grants\/([^/]+)\/release$/.exec(url.pathname)
+      if (req.method === 'POST' && releaseMatch?.[1]) {
+        // The real Broker deletes the OneCLI Agent and marks the mapping `suspended`, but leaves
+        // the grant `issued` so a later renew can provision a new Agent — so this fake keeps the
+        // grant, unlike its revoke branch. Idempotent 204 either way.
+        releaseCalls.push(releaseMatch[1])
+        res.writeHead(204).end()
+        return
+      }
       const revokeMatch = /^\/v1\/execution-grants\/([^/]+)$/.exec(url.pathname)
       if (req.method === 'DELETE' && revokeMatch?.[1]) {
         // Idempotent like the real Broker: revoking an absent/already-revoked grant is a no-op 204.
@@ -135,6 +147,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
     issueCalls,
     renewCalls,
     revokeCalls,
+    releaseCalls,
     async close() {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
     },
