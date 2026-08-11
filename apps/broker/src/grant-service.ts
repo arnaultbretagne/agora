@@ -427,8 +427,16 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
   // caller: docs/specs/10 requires a renewal to preserve the capability digest, and the only way
   // to guarantee the Agent comes back with exactly the authority the digest describes is to derive
   // it from the same stored facts the digest was computed over.
+  //
+  // The condition asks ONECLI, not just our own bookkeeping, and that distinction cost a Session to
+  // learn: the first version trusted `mapping.state === 'active'` alone and skipped re-provisioning
+  // for every Session the OLD reaper had deleted out from under — it removed the Agent without ever
+  // touching the mapping, so our record said `active` while reality said gone. A resume then failed
+  // exactly as before. Anything can delete an Agent behind our back (that reaper, an operator in
+  // the OneCLI dashboard); the only trustworthy answer to "is it there" is OneCLI's own inventory.
   const mapping = await getOnecliAgentMapping(client, renewed.sessionId)
-  if (!mapping || mapping.state !== 'active') {
+  const presentInOnecli = (await deps.onecli.listAgents()).some((agent) => agent.identifier === renewed.onecliIdentifier)
+  if (!presentInOnecli || !mapping || mapping.state !== 'active') {
     const desiredCredentials = compileSessionCredentialGrants({ agentId: renewed.agentId, capabilities: renewed.capabilities })
     await provisionSessionAgent(
       client,
