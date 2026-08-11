@@ -834,3 +834,31 @@ test('release is idempotent, and refuses to downgrade a revoked grant', async ()
     }
   })
 })
+
+test('required: renew re-provisions when the Agent is gone but our mapping still says active', async () => {
+  await withTestDatabase(async (pool) => {
+    const d = deps()
+    const grant = await issue(pool, d)
+    const client = await pool.connect()
+    try {
+      // The real production shape, and the one the first version of this fix missed: the OLD
+      // orphan reaper deleted Agents directly in OneCLI and never touched the mapping, so every
+      // Session it hit reads `active` while its Agent is gone. Trusting the mapping alone made
+      // renew skip re-provisioning and fail on `rotateAgentAuthority` exactly as before — verified
+      // live, at the cost of a Session driven to terminal `failed`.
+      await d.onecli.deleteAgent(grant.onecliIdentifier)
+      assert.equal((await getOnecliAgentMapping(client, grant.sessionId))?.state, 'active', 'precondition: our record is stale, not corrected')
+
+      const renewed = await renewExecutionGrant(client, d, grant.id, new Date())
+
+      assert.equal(renewed.onecliIdentifier, grant.onecliIdentifier)
+      assert.ok(
+        (await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier),
+        'renew must ask OneCLI whether the Agent exists, not believe our own mapping',
+      )
+      assert.notEqual(await readUpstreamAuthority(client, d.encryptionKey, grant.sessionId), undefined)
+    } finally {
+      client.release()
+    }
+  })
+})
