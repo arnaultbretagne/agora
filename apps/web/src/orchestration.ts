@@ -183,15 +183,16 @@ async function revokeSessionGrant(input: {
 
 /**
  * Suspend's counterpart to `revokeSessionGrant`: the Session keeps its grant, gives up its Agent.
+ * A later resume provisions one again through `renew` — the same gesture, unconditionally.
  *
  * Swallows its own failures for the same reason revocation does — a Session that is durably
  * `suspended` must not be dragged back out of that state because the Broker was briefly unhappy —
- * but the consequence differs and is worth naming: a release that silently fails leaves a live
- * Agent for a Session with no Pod, which the Broker's own orphan reaper no longer cleans up (it
- * protects every `active` mapping now). The mapping is still `active`, so the next resume simply
- * finds the Agent already there and re-converges it. Untidy, not broken.
+ * but the consequence differs and is worth naming: a decommission that silently fails leaves a
+ * live Agent for a Session with no Pod, and its mapping row still present, so the Broker's orphan
+ * reaper will not reclaim it either. The next resume provisions unconditionally and simply
+ * re-converges the Agent that is already there. Untidy, not broken.
  */
-async function releaseSessionAgent(input: {
+async function decommissionSessionAgent(input: {
   readonly pool: pg.Pool
   readonly brokerGrantClient: BrokerGrantClient
   readonly sessionId: string
@@ -205,7 +206,7 @@ async function releaseSessionAgent(input: {
       client.release()
     }
     if (!grantRef) return
-    await input.brokerGrantClient.release(grantRef, randomUUID())
+    await input.brokerGrantClient.decommissionAgent(grantRef, randomUUID())
   } catch {
     // See this function's own doc comment.
   }
@@ -967,9 +968,10 @@ export async function suspendSession(input: SuspendSessionInput): Promise<void> 
     // provisions a new one under the same identifier, which is the other half of this.
     //
     // Last, and only once the Session is durably `suspended`, for the same reason `closeSession`
-    // revokes last: a Broker hiccup must never strand the phase. It is also why this is `release`
-    // and not `revoke` — the Session is coming back, and revocation is terminal.
-    await releaseSessionAgent({ pool: input.pool, brokerGrantClient: input.brokerGrantClient, sessionId: input.sessionId })
+    // revokes last: a Broker hiccup must never strand the phase. It is also why this decommissions
+    // the Agent rather than revoking the grant — the grant is the Session's standing entitlement,
+    // and revocation is what makes that terminal.
+    await decommissionSessionAgent({ pool: input.pool, brokerGrantClient: input.brokerGrantClient, sessionId: input.sessionId })
   } catch (error) {
     await failClosed(input.pool, input.sessionId, 'suspend_failed', error, input.brokerGrantClient, input.transport)
   }

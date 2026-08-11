@@ -12,14 +12,7 @@ import {
   renewGrant as renewGrantRow,
   revokeGrant as revokeGrantRow,
 } from './grants-repository.js'
-import {
-  ensureOnecliAgentMapping,
-  getOnecliAgentMapping,
-  markOnecliAgentActive,
-  markOnecliAgentDeleted,
-  markOnecliAgentReleased,
-  storeUpstreamAuthority,
-} from './onecli-agents-repository.js'
+import { deleteOnecliAgentMapping, ensureOnecliAgentMapping, storeUpstreamAuthority } from './onecli-agents-repository.js'
 import type { AttachedCredentials, OneCliControlAdapter, OneCliCredentialStub } from './onecli-adapter.js'
 import { compileSessionCredentialGrants, type DesiredCredentialGrants } from './credential-policy.js'
 import { compileSessionEgressAllowList } from './route-policy.js'
@@ -427,24 +420,21 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
   // caller: docs/specs/10 requires a renewal to preserve the capability digest, and the only way
   // to guarantee the Agent comes back with exactly the authority the digest describes is to derive
   // it from the same stored facts the digest was computed over.
+  // Unconditionally. Provisioning is idempotent and derived from the grant — the durable statement
+  // of what this Session is owed — so there is nothing to test and nothing that can be out of date.
   //
-  // The condition asks ONECLI, not just our own bookkeeping, and that distinction cost a Session to
-  // learn: the first version trusted `mapping.state === 'active'` alone and skipped re-provisioning
-  // for every Session the OLD reaper had deleted out from under — it removed the Agent without ever
-  // touching the mapping, so our record said `active` while reality said gone. A resume then failed
-  // exactly as before. Anything can delete an Agent behind our back (that reaper, an operator in
-  // the OneCLI dashboard); the only trustworthy answer to "is it there" is OneCLI's own inventory.
-  const mapping = await getOnecliAgentMapping(client, renewed.sessionId)
-  const presentInOnecli = (await deps.onecli.listAgents()).some((agent) => agent.identifier === renewed.onecliIdentifier)
-  if (!presentInOnecli || !mapping || mapping.state !== 'active') {
-    const desiredCredentials = compileSessionCredentialGrants({ agentId: renewed.agentId, capabilities: renewed.capabilities })
-    await provisionSessionAgent(
-      client,
-      deps,
-      { sessionId: renewed.sessionId, onecliIdentifier: renewed.onecliIdentifier, desiredCredentials },
-      now,
-    )
-  }
+  // Both earlier versions of this asked a question first, and both got it wrong. The first asked
+  // our own mapping state and skipped provisioning for every Session whose Agent had been deleted
+  // behind our back. The second asked OneCLI's inventory, which was correct but still treated
+  // "does it exist" as a decision worth making. It is not: the answer is "make it so", and the
+  // cheapest way to be right about external state is to stop caching claims about it.
+  const desiredCredentials = compileSessionCredentialGrants({ agentId: renewed.agentId, capabilities: renewed.capabilities })
+  await provisionSessionAgent(
+    client,
+    deps,
+    { sessionId: renewed.sessionId, onecliIdentifier: renewed.onecliIdentifier, desiredCredentials },
+    now,
+  )
 
   await deps.onecli.rotateAgentAuthority(renewed.onecliIdentifier)
   const containerConfig = await deps.onecli.getContainerConfig(renewed.onecliIdentifier)
@@ -507,9 +497,6 @@ async function provisionSessionAgent(
 ): Promise<AttachedCredentials> {
   await deps.onecli.ensureSelectiveAgent(input.onecliIdentifier, `agora-session-${input.sessionId}`)
   await ensureOnecliAgentMapping(client, input.sessionId, input.onecliIdentifier, now)
-  // No-op on a first issue (the mapping is already `active`); the state change that matters is
-  // `suspended` -> `active` when a resume brings a released Agent back.
-  await markOnecliAgentActive(client, input.sessionId, now)
 
   const attached = await deps.onecli.syncCredentialGrants(input.onecliIdentifier, input.desiredCredentials)
   verifyGrantsEffective(input.onecliIdentifier, attached, await deps.onecli.getEffectiveCredentials(input.onecliIdentifier))
@@ -517,7 +504,7 @@ async function provisionSessionAgent(
 }
 
 /**
- * Gives up this Session's OneCLI Agent without ending its grant — what a suspend does.
+ * Decommissions this Session's OneCLI Agent without ending its grant — what a suspend does.
  *
  * A Session Runtime that has been dematerialised must not leave a standing Agent access token
  * attached to real provider credentials behind it: same lifecycle, same gesture. The grant itself
@@ -528,26 +515,29 @@ async function provisionSessionAgent(
  * Session never returns from. Releasing is reversible, and the schema had a state for it
  * (`suspended`) from the start that nothing had ever written.
  *
- * Idempotent, and ordered so it cannot half-happen in the direction that hurts: OneCLI is told
- * first, the mapping is updated second. The reverse would leave a row saying "released" while a
- * live Agent still held credentials.
+ * Idempotent, and ordered so it cannot half-happen in the direction that hurts: the row goes
+ * FIRST, then OneCLI is told.
+ *
+ * That ordering is the opposite of what it looks like it should be, and the reason is the reaper.
+ * A row is a claim of ownership, and the reaper only reclaims Agents nothing claims. If OneCLI is
+ * unreachable and we have already dropped the row, the Agent is unclaimed and the backstop deletes
+ * it on a later pass. Do it the other way round and a failed OneCLI call leaves a fully
+ * credentialed Agent that we still claim — so nothing ever cleans it up. Dropping the row first
+ * costs nothing when OneCLI succeeds, because provisioning is idempotent and re-creates it.
  */
-export async function releaseSessionAgent(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<void> {
+export async function decommissionSessionAgent(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<void> {
   const grant = await getGrant(client, grantId)
   if (!grant) return
-  // A revoked grant has already given the Agent up for good; releasing it again would be a
-  // downgrade from a terminal state.
-  if (grant.state !== 'issued') return
 
+  await deleteOnecliAgentMapping(client, grant.sessionId)
   await deps.onecli.deleteAgent(grant.onecliIdentifier)
-  await markOnecliAgentReleased(client, grant.sessionId, now)
 
   await recordAudit(client, {
     id: randomUUID(),
     actorKind: 'service',
     actorId: grant.principalId,
     sessionId: grant.sessionId,
-    actionClass: 'onecli_agent.release',
+    actionClass: 'onecli_agent.decommission',
     decision: 'approved',
     policyVersion: grant.policyVersion,
     detail: { grantId: grant.id, onecliIdentifier: grant.onecliIdentifier },
@@ -559,7 +549,12 @@ export async function revokeExecutionGrant(client: PoolClient, deps: GrantServic
   const grant = await getGrant(client, grantId)
   if (!grant) return
   await revokeGrantRow(client, grantId, now)
-  await markOnecliAgentDeleted(client, grant.sessionId, now)
+  // Same decommissioning as a suspend, same ordering and for the same reason: revocation
+  // deliberately does not depend on OneCLI succeeding, so the row must go first or an unreachable
+  // OneCLI leaves a credentialed Agent that we still claim and nothing ever reclaims. What makes
+  // revocation terminal is the GRANT moving to `revoked`, which refuses any later renew — the
+  // Agent side needs no tombstone of its own.
+  await deleteOnecliAgentMapping(client, grant.sessionId)
   await deps.onecli.deleteAgent(grant.onecliIdentifier)
 
   await recordAudit(client, {

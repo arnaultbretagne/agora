@@ -63,14 +63,14 @@ export interface BrokerGrantClient {
    */
   revoke(grantId: string, requestId: string): Promise<void>
   /**
-   * Suspend's counterpart to `revoke`: gives the Session's OneCLI Agent up while leaving the grant
-   * renewable, so `renew` can provision a new one under the same identifier when the Session comes
-   * back. A dematerialised Runtime must not leave a standing Agent access token behind it.
+   * Suspend's counterpart to `revoke`: decommissions the Session's OneCLI Agent while leaving the
+   * grant renewable, so a later `renew` provisions one again — the same gesture that created it.
+   * A dematerialised Runtime must not leave a standing Agent access token behind it.
    *
-   * Idempotent on the Broker side (releasing an already-released or absent grant is a no-op
-   * success), so a suspend may fire it without first checking anything.
+   * Idempotent on the Broker side (decommissioning an absent Agent is a no-op success), so a
+   * suspend may fire it without first checking anything.
    */
-  release(grantId: string, requestId: string): Promise<void>
+  decommissionAgent(grantId: string, requestId: string): Promise<void>
 }
 
 async function toDeniedError(response: Response, fallbackCode: string): Promise<BrokerGrantDeniedError> {
@@ -129,17 +129,17 @@ export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient 
       if (!response.ok) throw await toDeniedError(response, 'broker_grant_revoke_failed')
     },
 
-    async release(grantId: string, requestId: string): Promise<void> {
+    async decommissionAgent(grantId: string, requestId: string): Promise<void> {
       let response: Response
       try {
-        response = await fetch(new URL(`/v1/execution-grants/${encodeURIComponent(grantId)}/release`, baseUrl), {
-          method: 'POST',
+        response = await fetch(new URL(`/v1/execution-grants/${encodeURIComponent(grantId)}/agent`, baseUrl), {
+          method: 'DELETE',
           headers: { 'x-request-id': requestId },
         })
       } catch (error) {
         throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
       }
-      if (!response.ok) throw await toDeniedError(response, 'broker_grant_release_failed')
+      if (!response.ok) throw await toDeniedError(response, 'broker_agent_decommission_failed')
     },
   }
 }

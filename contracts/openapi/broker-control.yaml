@@ -81,23 +81,24 @@ paths:
                 $ref: '#/components/schemas/IssuedGrant'
         '409':
           $ref: '#/components/responses/Problem'
-  /execution-grants/{grantId}/release:
+  /execution-grants/{grantId}/agent:
     parameters:
       - $ref: '#/components/parameters/GrantId'
-    post:
-      operationId: releaseExecutionGrantAgent
-      summary: Give up this Session's OneCLI Agent without ending its grant.
+    delete:
+      operationId: decommissionExecutionGrantAgent
+      summary: Decommission this Session's OneCLI Agent without ending its grant.
       description: >-
         Called when the Session Runtime is dematerialised but the Session can still come back
-        (suspend). The OneCLI Agent is deleted — a Session with no Pod must not leave standing
-        credential authority behind — while the grant stays `issued` so `renew` can re-provision an
-        Agent under the same identifier when the Session resumes. Distinct from `revoke`, which is
-        terminal. Idempotent: releasing an already-released grant is a no-op success.
+        (suspend). The Agent is deleted and its mapping row removed — a Session with no Pod must not
+        leave standing credential authority behind. The grant stays `issued`, so a later `renew`
+        provisions an Agent again, unconditionally and idempotently, from the same recorded need.
+        Distinct from revoking the grant, which is what makes the entitlement itself terminal.
+        Idempotent: decommissioning when there is nothing there is a no-op success.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '204':
-          description: Agent released, or already released.
+          description: Agent decommissioned, or already absent.
         '409':
           $ref: '#/components/responses/Problem'
   /execution-grants/{grantId}:

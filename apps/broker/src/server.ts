@@ -9,7 +9,7 @@ import {
   activateExecutionGrant,
   type GrantServiceDeps,
   issueExecutionGrant,
-  releaseSessionAgent,
+  decommissionSessionAgent,
   renewExecutionGrant,
   revokeExecutionGrant,
   RuntimeBundleDriftError,
@@ -41,7 +41,7 @@ interface Problem {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const RENEW_PATH_RE = /^\/v1\/execution-grants\/([^/]+)\/renew$/
-const RELEASE_PATH_RE = /^\/v1\/execution-grants\/([^/]+)\/release$/
+const AGENT_PATH_RE = /^\/v1\/execution-grants\/([^/]+)\/agent$/
 const GRANT_PATH_RE = /^\/v1\/execution-grants\/([^/]+)$/
 
 function sendJson(res: ServerResponse, status: number, body: unknown, contentType = 'application/json'): void {
@@ -178,20 +178,20 @@ async function handleActivateGrant(deps: BrokerServerDeps, req: IncomingMessage,
 }
 
 /**
- * Suspend's half of the Agent lifecycle: give the OneCLI Agent up, keep the grant renewable.
+ * Suspend's half of the Agent lifecycle: decommission the Agent, keep the grant renewable.
  *
- * Answers 204 for "released" and for "there was nothing to release" alike — the caller is a
+ * Answers 204 for "decommissioned" and for "there was nothing there" alike — the caller is a
  * Session tear-down that must not be derailed by the Broker's bookkeeping, and re-releasing has
  * no effect worth reporting differently.
  */
-async function handleReleaseGrantAgent(deps: BrokerServerDeps, grantId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleDecommissionGrantAgent(deps: BrokerServerDeps, grantId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const requestId = requireRequestId(req)
   if (!requestId) return sendProblem(res, problem(400, 'missing_request_id', 'X-Request-Id header is required and must be a UUID'))
   if (!UUID_RE.test(grantId)) return sendProblem(res, problem(400, 'invalid_grant_id', 'grantId must be a UUID'))
 
   const client = await deps.pool.connect()
   try {
-    await releaseSessionAgent(client, deps, grantId, new Date())
+    await decommissionSessionAgent(client, deps, grantId, new Date())
     res.writeHead(204).end()
   } catch (error) {
     if (error instanceof OneCliUnavailableError) return sendProblem(res, problem(503, 'onecli_unavailable', error.message))
@@ -258,9 +258,9 @@ async function route(deps: BrokerServerDeps, req: IncomingMessage, res: ServerRe
   if (method === 'POST' && renewMatch) {
     return handleRenewGrant(deps, renewMatch[1]!, req, res)
   }
-  const releaseMatch = RELEASE_PATH_RE.exec(url)
-  if (method === 'POST' && releaseMatch) {
-    return handleReleaseGrantAgent(deps, releaseMatch[1]!, req, res)
+  const agentMatch = AGENT_PATH_RE.exec(url)
+  if (method === 'DELETE' && agentMatch) {
+    return handleDecommissionGrantAgent(deps, agentMatch[1]!, req, res)
   }
   const grantMatch = GRANT_PATH_RE.exec(url)
   if (method === 'DELETE' && grantMatch) {
