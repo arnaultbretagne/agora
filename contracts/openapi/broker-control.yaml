@@ -81,6 +81,25 @@ paths:
                 $ref: '#/components/schemas/IssuedGrant'
         '409':
           $ref: '#/components/responses/Problem'
+  /execution-grants/{grantId}/release:
+    parameters:
+      - $ref: '#/components/parameters/GrantId'
+    post:
+      operationId: releaseExecutionGrantAgent
+      summary: Give up this Session's OneCLI Agent without ending its grant.
+      description: >-
+        Called when the Session Runtime is dematerialised but the Session can still come back
+        (suspend). The OneCLI Agent is deleted — a Session with no Pod must not leave standing
+        credential authority behind — while the grant stays `issued` so `renew` can re-provision an
+        Agent under the same identifier when the Session resumes. Distinct from `revoke`, which is
+        terminal. Idempotent: releasing an already-released grant is a no-op success.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Agent released, or already released.
+        '409':
+          $ref: '#/components/responses/Problem'
   /execution-grants/{grantId}:
     parameters:
       - $ref: '#/components/parameters/GrantId'

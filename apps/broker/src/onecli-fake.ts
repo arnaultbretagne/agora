@@ -63,13 +63,25 @@ export class FakeOneCliControlAdapter implements OneCliControlAdapter {
    * failure the ≥1.44 boot converter could produce on an upgraded instance. */
   simulateExtraCredentialOnce = false
 
+  /**
+   * Re-creating a previously deleted identifier SUCCEEDS, and returns a fresh Agent.
+   *
+   * This double used to refuse it, on the strength of `deleteAgent`'s "terminal — the identifier is
+   * never reused for a later Session" contract. That contract is about not handing one Session's
+   * identifier to a DIFFERENT Session; it says nothing about the same Session getting its own
+   * identifier back, which is what a resume does (the identifier is derived from the Session id).
+   *
+   * The difference matters enough that it was measured rather than reasoned about: against the real
+   * OneCLI on 2026-08-11, creating `sagt-…`, deleting it, and creating it again returned 201 with
+   * the same identifier and a NEW internal id. A double that is stricter than the system it stands
+   * in for does not make tests safer — it makes correct designs look impossible.
+   */
   async ensureSelectiveAgent(identifier: string, _name: string): Promise<OneCliAgentHandle> {
     this.checkAvailable()
     const existing = this.agents.get(identifier)
-    if (existing?.deleted) {
-      throw new OneCliUnavailableError(`onecli agent ${identifier} was deleted and cannot be reused`)
-    }
-    if (!existing) {
+    if (!existing || existing.deleted) {
+      // A fresh bearer and a fresh createdAt, exactly as the real one returns a new internal id:
+      // nothing of the deleted Agent's authority survives its re-creation.
       this.agents.set(identifier, { deleted: false, bearer: freshBearer(identifier), createdAt: new Date(), secretIds: new Set(), connections: new Map() })
     }
     return { identifier }

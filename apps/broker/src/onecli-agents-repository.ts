@@ -71,42 +71,73 @@ export async function getOnecliAgentMapping(client: PoolClient, sessionId: strin
  * Every OneCLI Agent identifier this Broker still considers ITS OWN — the orphan reaper's
  * protection set (`onecli-agent-reaper.ts`).
  *
- * A `deleted` mapping is never protected: revocation has already given the Agent up.
+ * It is exactly the `active` mappings, and deliberately nothing cleverer.
  *
- * A mapping that is NOT deleted is protected only while the Session it belongs to could still
- * plausibly come back, which is a narrower window than "forever". A suspended Session legitimately
- * outlives its 30-minute grant (docs/specs/10: "While a Session is suspended, the OneCLI Agent may
- * remain as the same operational principal"), so recent expiry must not trigger a reap — but a
- * Session that was abandoned rather than closed keeps its mapping `active` and its grant `issued`
- * forever, since only `revokeExecutionGrant` ever marks a mapping deleted. Protecting on mapping
- * state alone therefore leaked every abandoned Session's Agent permanently (measured on the real
- * instance right after the 1.45.0 cutover: 15 such Agents, grants expired between 18 hours and 2.7
- * days earlier, none reapable, none ever revocable).
+ * WHAT THIS REPLACED, AND WHY. This used to protect an Agent only while its grant was unexpired
+ * (plus a 24h slack), reasoning that "a Session whose newest grant expired cannot be resumed
+ * anyway". **That reasoning was wrong.** `renewGrant` checks the grant's STATE and policy version,
+ * never its expiry, so resuming a long-suspended Session renews its grant perfectly happily — and
+ * then fails on `rotateAgentAuthority` because this reaper had already deleted the Agent
+ * underneath it. Measured on the real instance 2026-08-11: 17 Agents reaped, and ALL 14 suspended
+ * Sessions left unresumable, each failing resume with `no onecli agent found`.
  *
- * `abandonedBefore` is the cutoff: a Session whose newest grant expired before it cannot be
- * resumed anyway — `doActivateExecutionGrant` refuses to activate an expired grant, and
- * `issueGrant` refuses a second grant for the same Session — so its Agent is dead credential
- * authority, not a resumable principal. A mapping with no grant row at all is protected until the
- * same cutoff, covering the window between `ensureSelectiveAgent` and the grant insert.
+ * The fix is not a better heuristic here. An Agent's life is now bound to its Session Runtime's:
+ * `issue`/`renew` provision one, `release` (suspend) gives it up, `revoke` (close/fail) ends it —
+ * the same component that decides a Runtime's fate decides its Agent's. This function therefore
+ * only has to answer "does a Session currently believe it owns a live Agent", which is one column.
+ *
+ * That leaves the reaper the job it was actually built for: Agents stranded by a Broker crash
+ * mid-provision. There are two shapes of that, and `active` alone only covers one of them —
+ *
+ * - the mapping insert never landed: no row here at all, so unprotected from the start, and the
+ *   reaper's creation-time grace window is what keeps a concurrent issue safe;
+ * - the mapping landed but the grant insert did not: an `active` row that no Session lifecycle
+ *   will ever move, because no grant reference exists for anything to release or revoke. Those are
+ *   protected only while young (`ungrantedStaleBefore`), or they would leak forever.
+ *
+ * A mapping WITH a grant is never reaped on age, whatever that grant's expiry says. That is the
+ * whole correction: expiry describes a credential's freshness, not a Session's mortality.
  */
-export async function listLiveOnecliAgentIdentifiers(client: PoolClient, abandonedBefore: Date): Promise<readonly string[]> {
+export async function listLiveOnecliAgentIdentifiers(client: PoolClient, ungrantedStaleBefore: Date): Promise<readonly string[]> {
   const { rows } = await client.query<{ onecli_identifier: string }>(
     `SELECT a.onecli_identifier
        FROM broker.onecli_agents a
-      WHERE a.state <> 'deleted'
+      WHERE a.state = 'active'
         AND (
-          EXISTS (
-            SELECT 1 FROM broker.execution_grants g
-             WHERE g.session_id = a.session_id AND g.state = 'issued' AND g.expires_at > $1
-          )
-          OR (
-            NOT EXISTS (SELECT 1 FROM broker.execution_grants g WHERE g.session_id = a.session_id)
-            AND a.created_at > $1
-          )
+          EXISTS (SELECT 1 FROM broker.execution_grants g WHERE g.session_id = a.session_id)
+          OR a.created_at > $1
         )`,
-    [abandonedBefore],
+    [ungrantedStaleBefore],
   )
   return rows.map((row) => row.onecli_identifier)
+}
+
+/**
+ * `released`, in the schema's `suspended` state: the OneCLI Agent is gone, but this Session can
+ * come back and will be given one again under the SAME identifier.
+ *
+ * This is the state the schema always had (`CHECK (state IN ('active','suspended','deleted'))`) and
+ * that nothing ever wrote. It exists because "the Agent is absent" and "this Session is finished"
+ * are different facts: `deleted` is terminal, `suspended` is a Runtime that was dematerialised.
+ *
+ * The upstream authority is dropped with it — it authenticates against an Agent that no longer
+ * exists, so keeping it would only preserve a dead secret. `renew` stores a fresh one when it
+ * re-provisions.
+ */
+export async function markOnecliAgentReleased(client: PoolClient, sessionId: string, now: Date): Promise<void> {
+  await client.query(`UPDATE broker.onecli_agents SET state = 'suspended', updated_at = $2 WHERE session_id = $1 AND state <> 'deleted'`, [
+    sessionId,
+    now,
+  ])
+  await client.query('DELETE FROM broker.upstream_authority WHERE session_id = $1', [sessionId])
+}
+
+/** Back from `suspended` after a resume re-provisioned the Agent. Never resurrects a `deleted` mapping. */
+export async function markOnecliAgentActive(client: PoolClient, sessionId: string, now: Date): Promise<void> {
+  await client.query(`UPDATE broker.onecli_agents SET state = 'active', updated_at = $2 WHERE session_id = $1 AND state = 'suspended'`, [
+    sessionId,
+    now,
+  ])
 }
 
 /** Terminal — docs/specs/10 "One Session, one OneCLI Agent": a deleted mapping is never reactivated. */

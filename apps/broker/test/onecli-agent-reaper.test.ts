@@ -117,17 +117,17 @@ test('required: Agents the operator created are never candidates — only Agora\
   })
 })
 
-test('required: an abandoned Session\'s Agent is reaped — nothing ever revokes it, so mapping state alone would leak it forever', async () => {
+test('required: a Session\'s Agent is NEVER reaped for having an expired grant — the Session lifecycle decides, not this reaper', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const grant = await issue(pool, d)
     const client = await pool.connect()
     try {
-      // The real post-cutover state, measured on the operator's instance: mapping still `active`,
-      // grant still `issued`, but expired days ago because the Session was abandoned rather than
-      // closed. Such a Session cannot be resumed (activation refuses an expired grant) and cannot
-      // be re-issued ("a Session cannot be upgraded in place"), so its Agent is dead credential
-      // authority that no revoke will ever come for.
+      // The exact state that caused the 2026-08-11 outage: mapping `active`, grant `issued` but
+      // expired days ago. The old rule read that as "abandoned, dead credential authority" and
+      // deleted the Agent. It was wrong: `renewGrant` never checks expiry, so such a Session
+      // resumes perfectly happily — and then died on `rotateAgentAuthority` because its Agent was
+      // gone. All 14 suspended Sessions on the real instance were unresumable this way.
       await client.query(`UPDATE broker.execution_grants SET expires_at = now() - interval '2 days' WHERE id = $1`, [grant.id])
     } finally {
       client.release()
@@ -135,7 +135,8 @@ test('required: an abandoned Session\'s Agent is reaped — nothing ever revokes
     d.onecli.setAgentCreatedAtForTest(grant.onecliIdentifier, new Date(Date.now() - ORPHAN_GRACE_MS * 10))
 
     const result = await reapOrphanOnecliAgents(pool, d.onecli, new Date())
-    assert.deepEqual(result.reaped, [grant.onecliIdentifier])
+    assert.deepEqual(result.reaped, [], 'an expired grant is a stale credential, not a dead Session')
+    assert.ok((await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier))
   })
 })
 
@@ -162,16 +163,16 @@ test('required: a mapping with no grant row yet is protected while it is young, 
   })
 })
 
-test('a suspended Session\'s Agent survives a recently expired grant — the resume window is respected', async () => {
+test('a released mapping is not protected — suspend already gave the Agent up, so one still present is an orphan', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const grant = await issue(pool, d)
     const client = await pool.connect()
     try {
-      // docs/specs/10: "While a Session is suspended, the OneCLI Agent may remain as the same
-      // operational principal". Grants expire after 30 minutes, so reaping on "no active grant"
-      // rather than on the mapping row would delete every suspended-but-resumable Session's Agent.
-      await client.query(`UPDATE broker.execution_grants SET expires_at = now() - interval '1 hour' WHERE id = $1`, [grant.id])
+      // `suspended` is written by `releaseSessionAgent`, which deletes the Agent first. So this
+      // shape — released mapping, Agent still there — means the delete did not take (or a human
+      // re-created it), and reclaiming it is right. Resumability is guaranteed by `renew`
+      // re-provisioning the Agent, NOT by protecting one that suspend already disowned.
       await client.query(`UPDATE broker.onecli_agents SET state = 'suspended' WHERE session_id = $1`, [grant.sessionId])
     } finally {
       client.release()
@@ -179,7 +180,7 @@ test('a suspended Session\'s Agent survives a recently expired grant — the res
     d.onecli.setAgentCreatedAtForTest(grant.onecliIdentifier, new Date(Date.now() - ORPHAN_GRACE_MS * 10))
 
     const result = await reapOrphanOnecliAgents(pool, d.onecli, new Date())
-    assert.deepEqual(result.reaped, [])
+    assert.deepEqual(result.reaped, [grant.onecliIdentifier])
   })
 })
 

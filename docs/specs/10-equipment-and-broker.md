@@ -97,9 +97,23 @@ OneCLI Agents Agora no longer owns MUST be reconciled away: the Broker deletes i
 (`sagt-`-prefixed) Agents that no live Session mapping accounts for, at startup and on a schedule.
 An orphaned Agent is a standing credential authority, not clutter.
 
-While a Session is suspended, the OneCLI Agent may remain as the same operational principal, but its
-relay binding is disabled and upstream bearer is rotated. Terminal Session/Workstream cleanup
-deletes it after revocation.
+A Session's OneCLI Agent has the same lifecycle as its Session Runtime, and the component that
+decides the Runtime's fate is the component that decides the Agent's:
+
+- **issue** provisions the Agent and attaches exactly the credentials the capability digest covers;
+- **release** (suspend) deletes it while leaving the grant `issued`, so the mapping goes to
+  `suspended` and the upstream authority is dropped;
+- **renew** (resume) provisions it again under the same derived identifier, recompiling the
+  credential set from the grant's own recorded agent id and capabilities so the digest still
+  describes what the Agent holds;
+- **revoke** (close/fail) deletes it terminally, mapping `deleted`.
+
+A suspended Session therefore keeps NO standing Agent: a Runtime that no longer exists must not
+leave credential authority behind it. This replaces the earlier "the Agent may remain as the same
+operational principal while suspended", which in practice meant a background reconciler had to guess
+from grant expiry when a suspended Session was never coming back — and got it wrong, leaving every
+suspended Session unresumable (2026-08-11). Reconciliation MUST NOT decide a Session's Agent is
+forfeit; it reconciles only Agents that no Session mapping claims at all.
 
 ## Egress-policy compilation
 

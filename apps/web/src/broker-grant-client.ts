@@ -62,6 +62,15 @@ export interface BrokerGrantClient {
    * OneCLI Agent behind — 20 had accumulated on the real instance, one per Session, none reclaimed.
    */
   revoke(grantId: string, requestId: string): Promise<void>
+  /**
+   * Suspend's counterpart to `revoke`: gives the Session's OneCLI Agent up while leaving the grant
+   * renewable, so `renew` can provision a new one under the same identifier when the Session comes
+   * back. A dematerialised Runtime must not leave a standing Agent access token behind it.
+   *
+   * Idempotent on the Broker side (releasing an already-released or absent grant is a no-op
+   * success), so a suspend may fire it without first checking anything.
+   */
+  release(grantId: string, requestId: string): Promise<void>
 }
 
 async function toDeniedError(response: Response, fallbackCode: string): Promise<BrokerGrantDeniedError> {
@@ -118,6 +127,19 @@ export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient 
         throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
       }
       if (!response.ok) throw await toDeniedError(response, 'broker_grant_revoke_failed')
+    },
+
+    async release(grantId: string, requestId: string): Promise<void> {
+      let response: Response
+      try {
+        response = await fetch(new URL(`/v1/execution-grants/${encodeURIComponent(grantId)}/release`, baseUrl), {
+          method: 'POST',
+          headers: { 'x-request-id': requestId },
+        })
+      } catch (error) {
+        throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
+      }
+      if (!response.ok) throw await toDeniedError(response, 'broker_grant_release_failed')
     },
   }
 }

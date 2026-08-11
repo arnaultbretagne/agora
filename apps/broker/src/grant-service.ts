@@ -12,9 +12,16 @@ import {
   renewGrant as renewGrantRow,
   revokeGrant as revokeGrantRow,
 } from './grants-repository.js'
-import { markOnecliAgentDeleted, ensureOnecliAgentMapping, storeUpstreamAuthority } from './onecli-agents-repository.js'
+import {
+  ensureOnecliAgentMapping,
+  getOnecliAgentMapping,
+  markOnecliAgentActive,
+  markOnecliAgentDeleted,
+  markOnecliAgentReleased,
+  storeUpstreamAuthority,
+} from './onecli-agents-repository.js'
 import type { AttachedCredentials, OneCliControlAdapter, OneCliCredentialStub } from './onecli-adapter.js'
-import { compileSessionCredentialGrants } from './credential-policy.js'
+import { compileSessionCredentialGrants, type DesiredCredentialGrants } from './credential-policy.js'
 import { compileSessionEgressAllowList } from './route-policy.js'
 import type { ExecutionGrant } from './grants-repository.js'
 import type { GrantActivation } from './activations-repository.js'
@@ -259,11 +266,7 @@ async function doIssueExecutionGrant(client: PoolClient, deps: GrantServiceDeps,
   const egress = compileSessionEgressAllowList({ agentId: request.agentId, capabilities: resolved.capabilities })
 
   const onecliIdentifier = onecliIdentifierFor(request.sessionId)
-  await deps.onecli.ensureSelectiveAgent(onecliIdentifier, `agora-session-${request.sessionId}`)
-  await ensureOnecliAgentMapping(client, request.sessionId, onecliIdentifier, now)
-
-  const attached = await deps.onecli.syncCredentialGrants(onecliIdentifier, desiredCredentials)
-  verifyGrantsEffective(onecliIdentifier, attached, await deps.onecli.getEffectiveCredentials(onecliIdentifier))
+  const attached = await provisionSessionAgent(client, deps, { sessionId: request.sessionId, onecliIdentifier, desiredCredentials }, now)
 
   const containerConfig = await deps.onecli.getContainerConfig(onecliIdentifier)
   // docs/specs/10: "Verify returned CA/stub material against P04's operator-managed runtime bundle
@@ -412,6 +415,29 @@ export async function getActivationForGrant(client: PoolClient, grantId: string)
 export async function renewExecutionGrant(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<ExecutionGrant> {
   const renewed = await renewGrantRow(client, grantId, EQUIPMENT_POLICY_VERSION, new Date(now.getTime() + GRANT_TTL_MS))
 
+  // A renewal is what a resume runs, and a suspended Session has no Agent: `releaseSessionAgent`
+  // gave it up when the Runtime was dematerialised. Re-provisioning here is the other half of that
+  // gesture, and it is what makes "the Agent follows the Runtime" a cycle rather than a one-way
+  // door. The identifier is derived from the Session id, so the Agent comes back under the SAME
+  // identifier the grant already records — verified against the real OneCLI (2026-08-11) that a
+  // deleted identifier can be re-created, since `deleteAgent` is documented terminal and that had
+  // to be a measured fact rather than an assumption.
+  //
+  // The credential set is recompiled from the grant's OWN agent id and capabilities, never from a
+  // caller: docs/specs/10 requires a renewal to preserve the capability digest, and the only way
+  // to guarantee the Agent comes back with exactly the authority the digest describes is to derive
+  // it from the same stored facts the digest was computed over.
+  const mapping = await getOnecliAgentMapping(client, renewed.sessionId)
+  if (!mapping || mapping.state !== 'active') {
+    const desiredCredentials = compileSessionCredentialGrants({ agentId: renewed.agentId, capabilities: renewed.capabilities })
+    await provisionSessionAgent(
+      client,
+      deps,
+      { sessionId: renewed.sessionId, onecliIdentifier: renewed.onecliIdentifier, desiredCredentials },
+      now,
+    )
+  }
+
   await deps.onecli.rotateAgentAuthority(renewed.onecliIdentifier)
   const containerConfig = await deps.onecli.getContainerConfig(renewed.onecliIdentifier)
   if (
@@ -448,6 +474,79 @@ export async function renewExecutionGrant(client: PoolClient, deps: GrantService
  * required test "No global state". If the OneCLI delete fails, the grant is already revoked and
  * unusable either way; the relay's own revocation check does not depend on OneCLI succeeding.
  */
+interface ProvisionSessionAgentInput {
+  readonly sessionId: string
+  readonly onecliIdentifier: string
+  readonly desiredCredentials: DesiredCredentialGrants
+}
+
+/**
+ * Brings this Session's OneCLI Agent into existence holding exactly the credentials it is owed.
+ *
+ * Shared by `issue` (first time) and `renew` (after a suspend released it) precisely so the two
+ * cannot drift: a resumed Session must come back with the same authority a fresh one gets, and the
+ * surest way to guarantee that is for there to be one implementation of "provisioned".
+ *
+ * Every step is idempotent — `ensureSelectiveAgent` returns the existing Agent, the mapping insert
+ * is a no-op on conflict, and `syncCredentialGrants` converges rather than appends — so calling
+ * this on an Agent that is already correct changes nothing.
+ */
+async function provisionSessionAgent(
+  client: PoolClient,
+  deps: GrantServiceDeps,
+  input: ProvisionSessionAgentInput,
+  now: Date,
+): Promise<AttachedCredentials> {
+  await deps.onecli.ensureSelectiveAgent(input.onecliIdentifier, `agora-session-${input.sessionId}`)
+  await ensureOnecliAgentMapping(client, input.sessionId, input.onecliIdentifier, now)
+  // No-op on a first issue (the mapping is already `active`); the state change that matters is
+  // `suspended` -> `active` when a resume brings a released Agent back.
+  await markOnecliAgentActive(client, input.sessionId, now)
+
+  const attached = await deps.onecli.syncCredentialGrants(input.onecliIdentifier, input.desiredCredentials)
+  verifyGrantsEffective(input.onecliIdentifier, attached, await deps.onecli.getEffectiveCredentials(input.onecliIdentifier))
+  return attached
+}
+
+/**
+ * Gives up this Session's OneCLI Agent without ending its grant — what a suspend does.
+ *
+ * A Session Runtime that has been dematerialised must not leave a standing Agent access token
+ * attached to real provider credentials behind it: same lifecycle, same gesture. The grant itself
+ * survives as `issued`, which is what lets `renew` provision a new Agent under the same identifier
+ * when the Session comes back.
+ *
+ * Deliberately NOT `revoke`: revocation is terminal and marks the mapping `deleted`, a state a
+ * Session never returns from. Releasing is reversible, and the schema had a state for it
+ * (`suspended`) from the start that nothing had ever written.
+ *
+ * Idempotent, and ordered so it cannot half-happen in the direction that hurts: OneCLI is told
+ * first, the mapping is updated second. The reverse would leave a row saying "released" while a
+ * live Agent still held credentials.
+ */
+export async function releaseSessionAgent(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<void> {
+  const grant = await getGrant(client, grantId)
+  if (!grant) return
+  // A revoked grant has already given the Agent up for good; releasing it again would be a
+  // downgrade from a terminal state.
+  if (grant.state !== 'issued') return
+
+  await deps.onecli.deleteAgent(grant.onecliIdentifier)
+  await markOnecliAgentReleased(client, grant.sessionId, now)
+
+  await recordAudit(client, {
+    id: randomUUID(),
+    actorKind: 'service',
+    actorId: grant.principalId,
+    sessionId: grant.sessionId,
+    actionClass: 'onecli_agent.release',
+    decision: 'approved',
+    policyVersion: grant.policyVersion,
+    detail: { grantId: grant.id, onecliIdentifier: grant.onecliIdentifier },
+    createdAt: now,
+  })
+}
+
 export async function revokeExecutionGrant(client: PoolClient, deps: GrantServiceDeps, grantId: string, now: Date): Promise<void> {
   const grant = await getGrant(client, grantId)
   if (!grant) return
