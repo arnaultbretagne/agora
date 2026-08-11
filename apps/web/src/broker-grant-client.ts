@@ -2,7 +2,7 @@ import type { EquipmentRequest } from '@agora/domain'
 
 /**
  * docs/specs/10-equipment-and-broker.md "Execution grant" — apps/web's own seam to the Broker's
- * `POST /v1/execution-grants` (issue) and `POST /v1/execution-grants/{id}/renew` (docs/specs/10
+ * `POST /v1/execution-grants` (ensure — idempotent, provisions and opens-or-extends the lease; docs/specs/10
  * "Renew: preserve capability digest and rotate/extend private authority"). Deployables never
  * import each other, even in test code (see test/support/fake-broker.ts) — same convention as
  * apps/session-runtime-controller/src/broker-activation-client.ts's own narrow HTTP client for
@@ -25,7 +25,7 @@ export interface IssueGrantRequest {
   readonly requestId: string
 }
 
-/** Same wire shape for issue and renew responses (apps/broker/src/server.ts's own `wireGrant`). */
+/** apps/broker/src/server.ts's own `wireGrant`. */
 export interface IssuedGrant {
   readonly grantId: string
   readonly grantRef: string
@@ -51,8 +51,12 @@ export class BrokerGrantDeniedError extends Error {
 }
 
 export interface BrokerGrantClient {
-  issue(request: IssueGrantRequest): Promise<IssuedGrant>
-  renew(grantId: string, requestId: string): Promise<IssuedGrant>
+  /**
+   * The one provisioning call: opens this Session's lease or extends it, provisions its OneCLI
+   * Agent, rotates its upstream authority. Safe to call on every start AND every resume — there is
+   * no separate renew, because from the provisioning side the two were always the same gesture.
+   */
+  ensure(request: IssueGrantRequest): Promise<IssuedGrant>
   /**
    * docs/specs/10 "Terminal Session/Workstream cleanup deletes it after revocation". Idempotent on
    * the Broker side (revoking an already-revoked or absent grant is a no-op success), so callers on
@@ -64,7 +68,7 @@ export interface BrokerGrantClient {
   revoke(grantId: string, requestId: string): Promise<void>
   /**
    * Suspend's counterpart to `revoke`: decommissions the Session's OneCLI Agent while leaving the
-   * grant renewable, so a later `renew` provisions one again — the same gesture that created it.
+   * grant open, so a later `ensure` provisions one again — the same gesture that created it.
    * A dematerialised Runtime must not leave a standing Agent access token behind it.
    *
    * Idempotent on the Broker side (decommissioning an absent Agent is a no-op success), so a
@@ -81,7 +85,7 @@ async function toDeniedError(response: Response, fallbackCode: string): Promise<
 
 export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient {
   return {
-    async issue(request: IssueGrantRequest): Promise<IssuedGrant> {
+    async ensure(request: IssueGrantRequest): Promise<IssuedGrant> {
       let response: Response
       try {
         response = await fetch(new URL('/v1/execution-grants', baseUrl), {
@@ -98,21 +102,7 @@ export function createHttpBrokerGrantClient(baseUrl: string): BrokerGrantClient 
       } catch (error) {
         throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
       }
-      if (!response.ok) throw await toDeniedError(response, 'broker_grant_issue_failed')
-      return (await response.json()) as IssuedGrant
-    },
-
-    async renew(grantId: string, requestId: string): Promise<IssuedGrant> {
-      let response: Response
-      try {
-        response = await fetch(new URL(`/v1/execution-grants/${encodeURIComponent(grantId)}/renew`, baseUrl), {
-          method: 'POST',
-          headers: { 'x-request-id': requestId },
-        })
-      } catch (error) {
-        throw new BrokerGrantDeniedError(503, 'broker_unavailable', `could not reach Broker control API: ${String(error)}`)
-      }
-      if (!response.ok) throw await toDeniedError(response, 'broker_grant_renew_failed')
+      if (!response.ok) throw await toDeniedError(response, 'broker_grant_ensure_failed')
       return (await response.json()) as IssuedGrant
     },
 

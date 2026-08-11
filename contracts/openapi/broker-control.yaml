@@ -20,7 +20,15 @@ paths:
                 $ref: ../schemas/equipment-catalogue.schema.json
   /execution-grants:
     post:
-      operationId: issueExecutionGrant
+      operationId: ensureExecutionGrant
+      summary: Ensure this Session holds its execution grant and a provisioned OneCLI Agent.
+      description: >-
+        Idempotent, and the only provisioning operation there is. Opens the Session's lease if it
+        has none and extends it if it has one, provisions the OneCLI Agent either way, and rotates
+        the upstream authority. There is no separate renew: create-versus-extend is a fact about the
+        lease, not about provisioning, so it is a branch inside this operation rather than a second
+        route. Refuses when the request would change the Session's capability digest, and when its
+        grant has been revoked.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -63,22 +71,6 @@ paths:
                 $ref: '#/components/schemas/GrantActivation'
         '403':
           $ref: '#/components/responses/Problem'
-        '409':
-          $ref: '#/components/responses/Problem'
-  /execution-grants/{grantId}/renew:
-    parameters:
-      - $ref: '#/components/parameters/GrantId'
-    post:
-      operationId: renewExecutionGrant
-      parameters:
-        - $ref: '#/components/parameters/RequestId'
-      responses:
-        '200':
-          description: Same capability digest renewed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/IssuedGrant'
         '409':
           $ref: '#/components/responses/Problem'
   /execution-grants/{grantId}/agent:

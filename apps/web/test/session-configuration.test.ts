@@ -300,7 +300,7 @@ test('an Agent nobody has ever launched is run empty once, and its Runtime is gi
   )
 
   assert.equal(
-    broker.issueCalls.filter((call) => call.sessionId === probeSessionId).length,
+    broker.ensureCalls.filter((call) => call.sessionId === probeSessionId).length,
     1,
     'two concurrent asks must join one empty run, not start two Runtimes',
   )

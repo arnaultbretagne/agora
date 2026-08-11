@@ -100,17 +100,21 @@ An orphaned Agent is a standing credential authority, not clutter.
 A Session's OneCLI Agent has the same lifecycle as its Session Runtime, and the component that
 decides the Runtime's fate decides the Agent's. There are exactly two operations:
 
-- **provision** — idempotent, derived from the grant, which is the durable statement of what the
-  Session is owed. `issue` and `renew` both call it, unconditionally: ensure the Agent exists under
-  the identifier derived from the Session id, and converge its credentials onto exactly what the
-  grant's recorded agent id and capabilities compile to. Provisioning something already correct
-  changes nothing.
+- **ensure** — one idempotent operation, called identically when a Session starts and when it
+  resumes. It opens the Session's lease or extends it, provisions the Agent under the identifier
+  derived from the Session id, converges its credentials onto exactly what the resolved capabilities
+  compile to, and rotates the upstream authority. There is deliberately no separate renew: whether
+  a lease is being opened or extended is a fact about the lease, and from the provisioning side both
+  are the same gesture. Ensuring something already correct changes nothing.
 - **decommission** — delete the Agent and the row recording it. A suspend decommissions and leaves
   the grant `issued`; revocation decommissions and moves the grant to `revoked`, which is what
   makes the entitlement terminal.
 
-A resume therefore does not "restore" anything: it provisions again, the same gesture that
-provisioned the first time, from the same recorded need.
+Ensure MUST refuse when the request would change the Session's capability digest — that, not the
+request id, is the "a Session cannot be upgraded in place" guard — and when the grant is revoked.
+
+A resume therefore does not "restore" anything, and does not have a verb of its own: it ensures
+again, the same call a first start makes, from the same recorded need.
 
 The Broker MUST NOT keep a lifecycle state for the Agent mirroring the Session's. Whether an Agent
 exists is OneCLI's fact, not the Broker's, and a stored mirror of it will be wrong: measured

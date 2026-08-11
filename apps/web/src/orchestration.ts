@@ -119,19 +119,30 @@ interface SessionGrantContext {
   readonly workstreamCategory: 'discussion' | 'invocation'
   /** Frozen at Session creation; the harness's own `--agent <name>`. Read here rather than threaded through every caller, same as the equipment above. */
   readonly persona: string | undefined
+  /**
+   * The Workstream owner — the principal a grant is issued to. Resume needs it to make the same
+   * call a first start makes. Ownership lives in `workstream_memberships`, not on the Workstream
+   * row; a Workstream always has exactly one owner (docs/specs/02 locks the row before counting
+   * owners on any membership change), and the oldest is taken so the value is stable.
+   */
+  readonly owner: string
 }
 
 /** Both the issuing (`provisionSessionAndPrompt`) and renewing (`resumeSessionRuntime`) paths need this — read fresh from product schema rather than threaded through every caller's input shape. */
 async function loadSessionGrantContext(pool: pg.Pool, sessionId: string): Promise<SessionGrantContext> {
   const client = await pool.connect()
   try {
-    const { rows } = await client.query<{ equipment_request: EquipmentRequest; category: 'discussion' | 'invocation'; persona: string | null }>(
-      `SELECT s.equipment_request, s.persona, w.category FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id WHERE s.id = $1`,
+    const { rows } = await client.query<{ equipment_request: EquipmentRequest; category: 'discussion' | 'invocation'; persona: string | null; owner: string }>(
+      `SELECT s.equipment_request, s.persona, w.category,
+              (SELECT m.principal_id FROM product.workstream_memberships m
+                WHERE m.workstream_id = w.id AND m.role = 'owner' ORDER BY m.added_at LIMIT 1) AS owner
+         FROM product.sessions s JOIN product.workstreams w ON w.id = s.workstream_id
+        WHERE s.id = $1`,
       [sessionId],
     )
     const row = rows[0]
     if (!row) throw new Error(`session ${sessionId} not found`)
-    return { equipment: row.equipment_request, workstreamCategory: row.category, persona: row.persona ?? undefined }
+    return { equipment: row.equipment_request, workstreamCategory: row.category, persona: row.persona ?? undefined, owner: row.owner }
   } finally {
     client.release()
   }
@@ -265,7 +276,7 @@ export async function provisionSessionAndPrompt(input: ProvisionSessionInput): P
     // coordinator walks, rather than jumping straight to a terminal state.
     await settleProvisioningCommand(input.pool, input.provisioningCommandId, 'dispatching', now())
     const { equipment, workstreamCategory, persona } = await loadSessionGrantContext(input.pool, input.sessionId)
-    const grant = await input.brokerGrantClient.issue({
+    const grant = await input.brokerGrantClient.ensure({
       sessionId: input.sessionId,
       agentId: input.agentId,
       principalId: input.actor.id,
@@ -438,23 +449,20 @@ export async function resumeSessionRuntime(input: ResumeSessionRuntimeInput): Pr
       throw new Error(`no custody Anchor found for Session '${input.sessionId}' (workstream '${input.workstreamId}', agent '${input.agentId}')`)
     }
 
-    // `broker.execution_grants.session_id` is UNIQUE — a resume renews the Session's ONE grant
-    // (rotating its upstream OneCLI bearer, docs/specs/10 "Renew") rather than issuing a new one.
-    const grantRefClient = await input.pool.connect()
-    let existingGrantRef: string | undefined
-    try {
-      existingGrantRef = await getExecutionGrantRef(grantRefClient, input.sessionId)
-    } finally {
-      grantRefClient.release()
-    }
-    if (!existingGrantRef) {
-      throw new Error(`Session '${input.sessionId}' has no recorded execution grant reference to renew`)
-    }
-    const renewedGrant = await input.brokerGrantClient.renew(existingGrantRef, randomUUID())
-
-    // Same Session, so the SAME persona — it is frozen at creation and re-read here rather than
-    // remembered in memory, so a resume after a process restart still relaunches the right harness.
-    const { persona } = await loadSessionGrantContext(input.pool, input.sessionId)
+    // Exactly the call a first start makes. A resume does not need its own verb: `ensure` opens the
+    // lease or extends it, provisions the Agent either way, and rotates the upstream authority —
+    // and `broker.execution_grants.session_id` being UNIQUE is what makes "extend" the branch this
+    // hits. Same Session, so the same persona/equipment, re-read here rather than remembered in
+    // memory so a resume after a process restart still relaunches the right harness.
+    const { equipment, workstreamCategory, persona, owner } = await loadSessionGrantContext(input.pool, input.sessionId)
+    const renewedGrant = await input.brokerGrantClient.ensure({
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      principalId: owner,
+      workstreamCategory,
+      equipment,
+      requestId: randomUUID(),
+    })
 
     await materializeSessionRuntime(input.transport, input.sessionId as never, randomUUID(), {
       agentId: input.agentId,

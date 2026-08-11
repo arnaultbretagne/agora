@@ -6,9 +6,8 @@ import type pg from 'pg'
 import { getActivationByGrant } from '../src/activations-repository.js'
 import {
   activateExecutionGrant,
-  issueExecutionGrant,
+  ensureExecutionGrant,
   decommissionSessionAgent,
-  renewExecutionGrant,
   revokeExecutionGrant,
   type GrantServiceDeps,
 } from '../src/grant-service.js'
@@ -22,12 +21,25 @@ function deps(): GrantServiceDeps & { onecli: FakeOneCliControlAdapter } {
   return { onecli: new FakeOneCliControlAdapter(), encryptionKey: testEncryptionKey(), expectedRuntimeBundle: testExpectedRuntimeBundle() }
 }
 
+/** The same request a first start makes, rebuilt from a grant — what a resume now sends. */
+function issueRequest(grant: { sessionId: string; agentId: string; principalId: string }) {
+  return {
+    sessionId: grant.sessionId,
+    agentId: grant.agentId,
+    principalId: grant.principalId,
+    workstreamCategory: 'discussion' as const,
+    runtimeDefinitionVersion: 'v1',
+    equipment: VAULT_READ,
+    requestId: randomId(),
+  }
+}
+
 const VAULT_READ: EquipmentRequest = { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'vault', access: 'read' }] }
 
-async function issue(pool: pg.Pool, d: GrantServiceDeps, overrides: Partial<Parameters<typeof issueExecutionGrant>[2]> = {}) {
+async function issue(pool: pg.Pool, d: GrantServiceDeps, overrides: Partial<Parameters<typeof ensureExecutionGrant>[2]> = {}) {
   const client = await pool.connect()
   try {
-    return await issueExecutionGrant(
+    return await ensureExecutionGrant(
       client,
       d,
       {
@@ -54,7 +66,7 @@ test('required: unknown/contradictory equipment intent is denied before any OneC
     try {
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -85,7 +97,7 @@ test('required: a denied issue is itself audited as denied (docs/specs/12 "grant
     const client = await pool.connect()
     try {
       await assert.rejects(() =>
-        issueExecutionGrant(
+        ensureExecutionGrant(
           client,
           d,
           {
@@ -114,19 +126,29 @@ test('required: a denied issue is itself audited as denied (docs/specs/12 "grant
   })
 })
 
-test('a GrantConflictError is not itself audited as a denial — it is the idempotency invariant working as designed', async () => {
+test('ensuring again is an extension, not a conflict — and it is audited as the renewal it is', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const sessionId = randomId()
-    await issue(pool, d, { sessionId })
-    await assert.rejects(() => issue(pool, d, { sessionId }), (error: unknown) => error instanceof GrantConflictError)
+    const first = await issue(pool, d, { sessionId })
+    // A distinct requestId for the same Session used to be refused as "upgrading in place". It is
+    // what a resume looks like, so it must succeed: same entitlement, extended lease.
+    const second = await issue(pool, d, { sessionId })
+    assert.equal(second.id, first.id, 'a Session has exactly one grant; ensuring extends it')
+    assert.equal(second.capabilityDigest, first.capabilityDigest)
+    assert.ok(second.expiresAt.getTime() >= first.expiresAt.getTime())
+
     const client = await pool.connect()
     try {
-      const { rows } = await client.query<{ decision: string }>(
-        "SELECT decision FROM broker.security_audit WHERE session_id = $1 AND action_class = 'execution_grant.issue'",
+      const { rows } = await client.query<{ action_class: string; decision: string }>(
+        "SELECT action_class, decision FROM broker.security_audit WHERE session_id = $1 AND action_class LIKE 'execution_grant.%' ORDER BY created_at",
         [sessionId],
       )
-      assert.deepEqual(rows.map((r) => r.decision), ['approved'], 'only the original successful issue is audited, not the conflicting retry')
+      // The lease's own vocabulary is where create-vs-extend still means something.
+      assert.deepEqual(rows, [
+        { action_class: 'execution_grant.issue', decision: 'approved' },
+        { action_class: 'execution_grant.renew', decision: 'approved' },
+      ])
     } finally {
       client.release()
     }
@@ -162,7 +184,7 @@ test('required: OneCLI control-plane outage prevents issue — Session Runtime n
     try {
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -195,7 +217,7 @@ test('required: credential grants that did not take effect prevent issue (the AD
       const sessionId = randomId()
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -231,7 +253,7 @@ test('required (upgrade gate): an Agent that ends up with MORE than its intended
       const sessionId = randomId()
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -320,7 +342,7 @@ test('required: an equipment/Agent combination with no reviewed credential mappi
     try {
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -354,7 +376,7 @@ test('required: OneCLI CA/stub drift from the operator-pinned runtime bundle pre
     try {
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -441,7 +463,7 @@ test('required: a genuinely different credential stub (not just a different sign
     try {
       await assert.rejects(
         () =>
-          issueExecutionGrant(
+          ensureExecutionGrant(
             client,
             d,
             {
@@ -465,12 +487,22 @@ test('required: a genuinely different credential stub (not just a different sign
   })
 })
 
-test('a session cannot be upgraded in place — a second distinct request_id for the same session is a conflict', async () => {
+test('required: a Session cannot be upgraded in place — ensuring with different equipment is refused', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const sessionId = randomId()
     await issue(pool, d, { sessionId })
-    await assert.rejects(() => issue(pool, d, { sessionId }), (error: unknown) => error instanceof GrantConflictError)
+    // The guard that matters is the capability digest, not the request id: a request id merely
+    // correlates an attempt, while the digest is what the Session is entitled to. Asking for more
+    // equipment on an existing Session must never quietly widen it.
+    await assert.rejects(
+      () =>
+        issue(pool, d, {
+          sessionId,
+          equipment: { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'github', access: 'read' }] },
+        }),
+      (error: unknown) => error instanceof GrantDigestChangedError,
+    )
   })
 })
 
@@ -516,7 +548,7 @@ test('required: renewal with a changed capability digest (policy version moved o
       // Simulate a policy-version bump between issue and renew by mutating the stored row directly
       // (there is no real second EQUIPMENT_POLICY_VERSION constant to deploy in-process).
       await client.query(`UPDATE broker.execution_grants SET policy_version = 'equipment-policy-v0-retired' WHERE id = $1`, [grant.id])
-      await assert.rejects(() => renewExecutionGrant(client, d, grant.id, new Date()), (error: unknown) => error instanceof GrantDigestChangedError)
+      await assert.rejects(() => ensureExecutionGrant(client, d, issueRequest(grant), new Date()), (error: unknown) => error instanceof GrantDigestChangedError)
     } finally {
       client.release()
     }
@@ -530,7 +562,7 @@ test('required: renewal preserves capability digest/Agent/OneCLI mapping and rot
     const client = await pool.connect()
     try {
       const before = await readUpstreamAuthority(client, d.encryptionKey, grant.sessionId)
-      const renewed = await renewExecutionGrant(client, d, grant.id, new Date(grant.issuedAt.getTime() + 1000))
+      const renewed = await ensureExecutionGrant(client, d, issueRequest(grant), new Date(grant.issuedAt.getTime() + 1000))
       assert.equal(renewed.capabilityDigest, grant.capabilityDigest)
       assert.equal(renewed.onecliIdentifier, grant.onecliIdentifier)
       assert.ok(renewed.expiresAt.getTime() > grant.expiresAt.getTime())
@@ -703,7 +735,7 @@ test('required: audit rows never carry a secret-shaped key, and record issue/act
         { grantRef: grant.id, sessionId: grant.sessionId, agentId: grant.agentId, workloadIdentity: 'workload-a', requestId: randomId() },
         new Date(),
       )
-      await renewExecutionGrant(client, d, grant.id, new Date())
+      await ensureExecutionGrant(client, d, issueRequest(grant), new Date())
       await revokeExecutionGrant(client, d, grant.id, new Date())
 
       const { rows } = await client.query<{ action_class: string; decision: string; detail: unknown }>(
@@ -772,7 +804,7 @@ test('required: renewing a decommissioned grant provisions the Agent again, unde
       // This is the whole resume path: renew is what `resumeSessionRuntime` calls. Before this
       // change it threw `no onecli agent found` here and took the Session to `failed` — the
       // 2026-08-11 outage, 14 Sessions out of 14.
-      const renewed = await renewExecutionGrant(client, d, grant.id, new Date())
+      const renewed = await ensureExecutionGrant(client, d, issueRequest(grant), new Date())
 
       assert.equal(renewed.onecliIdentifier, grant.onecliIdentifier, 'the Agent must come back under the identifier the grant records')
       assert.ok((await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier))
@@ -802,7 +834,7 @@ test('required: a suspend/resume cycle can repeat — the Agent is not a one-sho
     try {
       for (let cycle = 0; cycle < 3; cycle += 1) {
         await decommissionSessionAgent(client, d, grant.id, new Date())
-        await renewExecutionGrant(client, d, grant.id, new Date())
+        await ensureExecutionGrant(client, d, issueRequest(grant), new Date())
         assert.ok(
           (await d.onecli.listAgents()).some((agent) => agent.identifier === grant.onecliIdentifier),
           `Agent missing after cycle ${cycle}`,
@@ -832,7 +864,7 @@ test('decommissioning is idempotent, and revoking decommissions too', async () =
       // What makes revocation terminal is the GRANT, not an Agent-side tombstone: a later renew is
       // refused because the grant is `revoked`, whatever the Agent tables say.
       assert.equal((await getGrant(client, other.id))?.state, 'revoked')
-      await assert.rejects(() => renewExecutionGrant(client, d, other.id, new Date()), /not renewable/)
+      await assert.rejects(() => ensureExecutionGrant(client, d, issueRequest(other), new Date()), /revoked/)
     } finally {
       client.release()
     }
@@ -853,7 +885,7 @@ test('required: renew re-provisions when the Agent is gone but a stale mapping r
       await d.onecli.deleteAgent(grant.onecliIdentifier)
       assert.notEqual(await getOnecliAgentMapping(client, grant.sessionId), undefined, 'precondition: our record is stale, not corrected')
 
-      const renewed = await renewExecutionGrant(client, d, grant.id, new Date())
+      const renewed = await ensureExecutionGrant(client, d, issueRequest(grant), new Date())
 
       assert.equal(renewed.onecliIdentifier, grant.onecliIdentifier)
       assert.ok(

@@ -134,7 +134,7 @@ test('POST /v1/execution-grants for an unresolvable equipment intent is denied w
   })
 })
 
-test('required: full issue -> activate -> renew -> revoke lifecycle over real HTTP', async () => {
+test('required: full ensure -> activate -> ensure-again -> revoke lifecycle over real HTTP', async () => {
   await withTestDatabase(async (pool) => {
     const { server, port } = await startServer(pool)
     try {
@@ -155,9 +155,11 @@ test('required: full issue -> activate -> renew -> revoke lifecycle over real HT
       assert.equal(activated.status, 201)
       assert.equal((activated.body as { workloadIdentity: string }).workloadIdentity, 'workload-http-1')
 
-      const renewed = await call(port, 'POST', `/v1/execution-grants/${grant.grantId}/renew`, undefined, { 'x-request-id': randomUUID() })
-      assert.equal(renewed.status, 200)
-      const renewedGrant = renewed.body as { capabilityDigest: string; expiresAt: string }
+      // The same route, again — there is no renew verb. Ensuring an existing lease extends it.
+      const renewed = await call(port, 'POST', '/v1/execution-grants', issueBody({ sessionId: grant.sessionId }), { 'x-request-id': randomUUID() })
+      assert.equal(renewed.status, 201)
+      const renewedGrant = renewed.body as { grantId: string; capabilityDigest: string; expiresAt: string }
+      assert.equal(renewedGrant.grantId, grant.grantId, 'one grant per Session — ensuring never opens a second')
       assert.equal(renewedGrant.capabilityDigest, grant.capabilityDigest)
       assert.ok(new Date(renewedGrant.expiresAt).getTime() >= new Date(grant.expiresAt).getTime())
 
@@ -194,28 +196,38 @@ test('POST /v1/execution-grant-activations with a schema-invalid body (missing w
   })
 })
 
-test('a second issue with a distinct requestId for a session that already holds a grant is a conflict', async () => {
+test('required: ensuring the same Session with DIFFERENT equipment is refused over HTTP', async () => {
   await withTestDatabase(async (pool) => {
     const { server, port } = await startServer(pool)
     try {
       const sessionId = randomId()
       const first = await call(port, 'POST', '/v1/execution-grants', issueBody({ sessionId }), { 'x-request-id': randomUUID() })
       assert.equal(first.status, 201)
-      const second = await call(port, 'POST', '/v1/execution-grants', issueBody({ sessionId }), { 'x-request-id': randomUUID() })
-      assert.equal(second.status, 409)
-      assert.equal((second.body as { code: string }).code, 'grant_conflict')
+      // Repeating the SAME request is a resume and must succeed...
+      const again = await call(port, 'POST', '/v1/execution-grants', issueBody({ sessionId }), { 'x-request-id': randomUUID() })
+      assert.equal(again.status, 201)
+      // ...but asking for different equipment would change what the Session is entitled to.
+      const widened = await call(
+        port,
+        'POST',
+        '/v1/execution-grants',
+        issueBody({ sessionId, equipment: { catalogueVersion: EQUIPMENT_CATALOGUE_VERSION, resources: [{ resource: 'github', access: 'read' }] } }),
+        { 'x-request-id': randomUUID() },
+      )
+      assert.equal(widened.status, 409)
+      assert.equal((widened.body as { code: string }).code, 'capability_digest_changed')
     } finally {
       server.close()
     }
   })
 })
 
-test('renewing an unknown grantId is a clean Problem, not a crash', async () => {
+test('decommissioning an unknown grantId is a clean 204, not a crash', async () => {
   await withTestDatabase(async (pool) => {
     const { server, port } = await startServer(pool)
     try {
-      const result = await call(port, 'POST', `/v1/execution-grants/${randomUUID()}/renew`, undefined, { 'x-request-id': randomUUID() })
-      assert.equal(result.status, 409)
+      const result = await call(port, 'DELETE', `/v1/execution-grants/${randomUUID()}/agent`, undefined, { 'x-request-id': randomUUID() })
+      assert.equal(result.status, 204)
     } finally {
       server.close()
     }

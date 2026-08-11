@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import type { EquipmentRequest } from '@agora/domain'
 import { EQUIPMENT_CATALOGUE_VERSION } from '@agora/equipment-policy'
 import type pg from 'pg'
-import { issueExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
+import { ensureExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
 import { ORPHAN_GRACE_MS, reapOrphanOnecliAgents } from '../src/onecli-agent-reaper.js'
 import { FakeOneCliControlAdapter } from '../src/onecli-fake.js'
 import { randomId, testEncryptionKey, testExpectedRuntimeBundle, withTestDatabase } from './support.js'
@@ -17,7 +17,7 @@ function deps(): GrantServiceDeps & { onecli: FakeOneCliControlAdapter } {
 async function issue(pool: pg.Pool, d: GrantServiceDeps) {
   const client = await pool.connect()
   try {
-    return await issueExecutionGrant(
+    return await ensureExecutionGrant(
       client,
       d,
       {

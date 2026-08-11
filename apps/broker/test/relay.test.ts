@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import type { EquipmentRequest } from '@agora/domain'
 import { EQUIPMENT_CATALOGUE_VERSION } from '@agora/equipment-policy'
 import type pg from 'pg'
-import { activateExecutionGrant, issueExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
+import { activateExecutionGrant, ensureExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
 import type { ExecutionGrant } from '../src/grants-repository.js'
 import { startFakeOnecliGateway, type FakeOnecliGatewayHandle } from '../src/onecli-fake-gateway.js'
 import { FakeOneCliControlAdapter } from '../src/onecli-fake.js'
@@ -84,7 +84,7 @@ async function setup(pool: pg.Pool) {
 async function issueAndActivate(pool: pg.Pool, deps: GrantServiceDeps, workloadIdentity: string, equipment: EquipmentRequest = VAULT_READ): Promise<ExecutionGrant> {
   const client = await pool.connect()
   try {
-    const grant = await issueExecutionGrant(
+    const grant = await ensureExecutionGrant(
       client,
       deps,
       {

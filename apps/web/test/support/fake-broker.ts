@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http'
  * Stands in for the real Broker (apps/broker) purely over HTTP — apps/web (a deployable) must
  * never import that Broker's source directly (scripts/check-architecture.mjs: "no deployable
  * imports another deployable"), so this test harness re-implements just enough of
- * `POST /v1/execution-grants` and `POST /v1/execution-grants/{id}/renew`'s wire contract to
+ * `POST /v1/execution-grants`'s wire contract (one idempotent ensure) to
  * exercise apps/web's own real broker-grant-client.ts against a REAL server, matching
  * fake-controller.ts's own convention for the Session Runtime controller.
  *
@@ -15,8 +15,8 @@ import { createServer, type Server } from 'node:http'
  */
 export interface FakeBrokerHandle {
   readonly baseUrl: string
-  readonly issueCalls: readonly { readonly sessionId: string; readonly agentId: string }[]
-  readonly renewCalls: readonly string[]
+  /** Every ensure — a first start and a resume make the same call, so both land here. */
+  readonly ensureCalls: readonly { readonly sessionId: string; readonly agentId: string }[]
   /** grantIds this fake was asked to revoke — the real Broker deletes the Session's OneCLI Agent here. */
   readonly revokeCalls: readonly string[]
   /** grantIds whose Agent this fake was asked to decommission — a suspend does that without ending the grant. */
@@ -65,8 +65,7 @@ function wireGrant(grant: FakeGrant) {
 export async function startFakeBroker(): Promise<FakeBrokerHandle> {
   const grantsBySession = new Map<string, FakeGrant>()
   const grantsById = new Map<string, FakeGrant>()
-  const issueCalls: { readonly sessionId: string; readonly agentId: string }[] = []
-  const renewCalls: string[] = []
+  const ensureCalls: { readonly sessionId: string; readonly agentId: string }[] = []
   const revokeCalls: string[] = []
   const decommissionCalls: string[] = []
 
@@ -78,7 +77,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
         const body = await readJson(req)
         const sessionId = String(body['sessionId'] ?? '')
         const agentId = String(body['agentId'] ?? '')
-        issueCalls.push({ sessionId, agentId })
+        ensureCalls.push({ sessionId, agentId })
         let grant = grantsBySession.get(sessionId)
         if (!grant) {
           grant = {
@@ -93,21 +92,6 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
           grantsById.set(grant.grantId, grant)
         }
         res.writeHead(201, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(wireGrant(grant)))
-        return
-      }
-
-      const renewMatch = /^\/v1\/execution-grants\/([^/]+)\/renew$/.exec(url.pathname)
-      if (req.method === 'POST' && renewMatch?.[1]) {
-        renewCalls.push(renewMatch[1])
-        const grant = grantsById.get(renewMatch[1])
-        if (!grant) {
-          res.writeHead(409, { 'content-type': 'application/problem+json' })
-          res.end(JSON.stringify({ type: 'about:blank', title: 'unknown grant', status: 409, code: 'grant_not_renewable' }))
-          return
-        }
-        grant.expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
-        res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(wireGrant(grant)))
         return
       }
@@ -144,8 +128,7 @@ export async function startFakeBroker(): Promise<FakeBrokerHandle> {
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    issueCalls,
-    renewCalls,
+    ensureCalls,
     revokeCalls,
     decommissionCalls,
     async close() {

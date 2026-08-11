@@ -8,9 +8,8 @@ import type pg from 'pg'
 import {
   activateExecutionGrant,
   type GrantServiceDeps,
-  issueExecutionGrant,
+  ensureExecutionGrant,
   decommissionSessionAgent,
-  renewExecutionGrant,
   revokeExecutionGrant,
   RuntimeBundleDriftError,
 } from './grant-service.js'
@@ -40,7 +39,6 @@ interface Problem {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const RENEW_PATH_RE = /^\/v1\/execution-grants\/([^/]+)\/renew$/
 const AGENT_PATH_RE = /^\/v1\/execution-grants\/([^/]+)\/agent$/
 const GRANT_PATH_RE = /^\/v1\/execution-grants\/([^/]+)$/
 
@@ -70,7 +68,7 @@ function requireRequestId(req: IncomingMessage): string | undefined {
   return value && UUID_RE.test(value) ? value : undefined
 }
 
-function wireGrant(grant: Awaited<ReturnType<typeof issueExecutionGrant>>) {
+function wireGrant(grant: Awaited<ReturnType<typeof ensureExecutionGrant>>) {
   return {
     grantId: grant.id,
     grantRef: grant.id,
@@ -84,7 +82,7 @@ function wireGrant(grant: Awaited<ReturnType<typeof issueExecutionGrant>>) {
   }
 }
 
-async function handleIssueGrant(deps: BrokerServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleEnsureGrant(deps: BrokerServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const requestId = requireRequestId(req)
   if (!requestId) return sendProblem(res, problem(400, 'missing_request_id', 'X-Request-Id header is required and must be a UUID'))
 
@@ -111,7 +109,7 @@ async function handleIssueGrant(deps: BrokerServerDeps, req: IncomingMessage, re
 
   const client = await deps.pool.connect()
   try {
-    const grant = await issueExecutionGrant(
+    const grant = await ensureExecutionGrant(
       client,
       deps,
       {
@@ -128,6 +126,10 @@ async function handleIssueGrant(deps: BrokerServerDeps, req: IncomingMessage, re
     sendJson(res, 201, wireGrant(grant))
   } catch (error) {
     if (error instanceof PolicyDenialError) return sendProblem(res, problem(403, error.code, error.message))
+    // Ensuring a Session that already holds a grant with a DIFFERENT digest is the "cannot be
+    // upgraded in place" refusal. It used to only be reachable through the renew route; with one
+    // operation it is reachable here, and must stay a 409 rather than an unhandled 500.
+    if (error instanceof GrantDigestChangedError) return sendProblem(res, problem(409, 'capability_digest_changed', error.message))
     if (error instanceof GrantConflictError) return sendProblem(res, problem(409, 'grant_conflict', error.message))
     if (error instanceof RuntimeBundleDriftError) return sendProblem(res, problem(503, 'runtime_bundle_drift', error.message))
     if (error instanceof OneCliUnavailableError) return sendProblem(res, problem(503, 'onecli_unavailable', error.message))
@@ -201,27 +203,6 @@ async function handleDecommissionGrantAgent(deps: BrokerServerDeps, grantId: str
   }
 }
 
-async function handleRenewGrant(deps: BrokerServerDeps, grantId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const requestId = requireRequestId(req)
-  if (!requestId) return sendProblem(res, problem(400, 'missing_request_id', 'X-Request-Id header is required and must be a UUID'))
-  if (!UUID_RE.test(grantId)) return sendProblem(res, problem(400, 'invalid_grant_id', 'grantId must be a UUID'))
-
-  const client = await deps.pool.connect()
-  try {
-    const renewed = await renewExecutionGrant(client, deps, grantId, new Date())
-    sendJson(res, 200, wireGrant(renewed))
-  } catch (error) {
-    if (error instanceof GrantDigestChangedError) return sendProblem(res, problem(409, 'capability_digest_changed', error.message))
-    if (error instanceof GrantConflictError) return sendProblem(res, problem(409, 'grant_conflict', error.message))
-    if (error instanceof RuntimeBundleDriftError) return sendProblem(res, problem(503, 'runtime_bundle_drift', error.message))
-    if (error instanceof OneCliUnavailableError) return sendProblem(res, problem(503, 'onecli_unavailable', error.message))
-    if (error instanceof Error) return sendProblem(res, problem(409, 'grant_not_renewable', error.message))
-    throw error
-  } finally {
-    client.release()
-  }
-}
-
 async function handleRevokeGrant(deps: BrokerServerDeps, grantId: string, res: ServerResponse): Promise<void> {
   if (!UUID_RE.test(grantId)) return sendProblem(res, problem(400, 'invalid_grant_id', 'grantId must be a UUID'))
   const client = await deps.pool.connect()
@@ -249,14 +230,10 @@ async function route(deps: BrokerServerDeps, req: IncomingMessage, res: ServerRe
     return sendJson(res, 200, getEquipmentCatalogue())
   }
   if (method === 'POST' && url === '/v1/execution-grants') {
-    return handleIssueGrant(deps, req, res)
+    return handleEnsureGrant(deps, req, res)
   }
   if (method === 'POST' && url === '/v1/execution-grant-activations') {
     return handleActivateGrant(deps, req, res)
-  }
-  const renewMatch = RENEW_PATH_RE.exec(url)
-  if (method === 'POST' && renewMatch) {
-    return handleRenewGrant(deps, renewMatch[1]!, req, res)
   }
   const agentMatch = AGENT_PATH_RE.exec(url)
   if (method === 'DELETE' && agentMatch) {

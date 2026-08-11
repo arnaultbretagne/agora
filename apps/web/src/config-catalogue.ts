@@ -156,7 +156,7 @@ export class ConfigCatalogueService {
     const equipment: EquipmentRequest = { catalogueVersion: this.deps.equipmentCatalogueVersion(), resources: [] } as unknown as EquipmentRequest
     let grantRef: string | undefined
     try {
-      const grant = await this.deps.brokerGrantClient.issue({
+      const grant = await this.deps.brokerGrantClient.ensure({
         sessionId,
         agentId,
         principalId,
