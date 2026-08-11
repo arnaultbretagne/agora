@@ -525,3 +525,31 @@ test('required: the projector cannot write the journal it reads — a read model
     }
   })
 })
+
+/**
+ * The Broker decommissions an Agent by deleting its mapping row (migration 009). Its role held
+ * SELECT/INSERT/UPDATE only, which was right while decommissioning meant writing a `deleted` state.
+ *
+ * Nothing caught the gap: every other test runs as the owner, so the whole suite stayed green while
+ * a real suspend answered `permission denied for table onecli_agents` — and answered it silently,
+ * because the caller deliberately swallows cleanup failures rather than fail a Session's lifecycle.
+ * This pins the privilege the current design actually needs.
+ */
+test('required: agora_broker can delete an onecli_agents row — decommissioning removes it, never tombstones it', async () => {
+  await withTestDatabase(async (pool) => {
+    const { sessionId } = await seedWorkstream(pool)
+    const client = await pool.connect()
+    try {
+      await client.query(
+        `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, created_at, updated_at)
+         VALUES ($1, $2, now(), now())`,
+        [sessionId, `sagt-${'d'.repeat(40)}`],
+      )
+      await asRole(client, 'agora_broker', () => client.query('DELETE FROM broker.onecli_agents WHERE session_id = $1', [sessionId]))
+      const { rows } = await client.query('SELECT 1 FROM broker.onecli_agents WHERE session_id = $1', [sessionId])
+      assert.equal(rows.length, 0)
+    } finally {
+      client.release()
+    }
+  })
+})
