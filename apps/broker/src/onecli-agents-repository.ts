@@ -1,10 +1,14 @@
 import type { PoolClient } from 'pg'
 import { decryptUpstreamBearer, encryptUpstreamBearer } from './crypto.js'
 
+/**
+ * A row means exactly one thing: an Agent has been provisioned for this Session and not
+ * decommissioned. There is no state, because there is no state worth keeping — see
+ * `contracts/database/009-onecli-agent-mapping-presence-only.sql`.
+ */
 export interface OnecliAgentRecord {
   readonly sessionId: string
   readonly onecliIdentifier: string
-  readonly state: 'active' | 'suspended' | 'deleted'
   readonly createdAt: Date
   readonly updatedAt: Date
 }
@@ -12,14 +16,12 @@ export interface OnecliAgentRecord {
 interface AgentRow {
   session_id: string
   onecli_identifier: string
-  onecli_agent_id: string | null
-  state: 'active' | 'suspended' | 'deleted'
   created_at: Date
   updated_at: Date
 }
 
 function hydrate(row: AgentRow): OnecliAgentRecord {
-  return { sessionId: row.session_id, onecliIdentifier: row.onecli_identifier, state: row.state, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { sessionId: row.session_id, onecliIdentifier: row.onecli_identifier, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 
 export class OnecliAgentConflictError extends Error {
@@ -38,17 +40,17 @@ export class OnecliAgentConflictError extends Error {
  */
 export async function ensureOnecliAgentMapping(client: PoolClient, sessionId: string, onecliIdentifier: string, now: Date): Promise<OnecliAgentRecord> {
   const { rows } = await client.query<AgentRow>(
-    `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, state, created_at, updated_at)
-     VALUES ($1, $2, 'active', $3, $3)
+    `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, created_at, updated_at)
+     VALUES ($1, $2, $3, $3)
      ON CONFLICT (session_id) DO NOTHING
-     RETURNING session_id, onecli_identifier, onecli_agent_id, state, created_at, updated_at`,
+     RETURNING session_id, onecli_identifier, created_at, updated_at`,
     [sessionId, onecliIdentifier, now],
   )
   const inserted = rows[0]
   if (inserted) return hydrate(inserted)
 
   const { rows: existingRows } = await client.query<AgentRow>(
-    'SELECT session_id, onecli_identifier, onecli_agent_id, state, created_at, updated_at FROM broker.onecli_agents WHERE session_id = $1',
+    'SELECT session_id, onecli_identifier, created_at, updated_at FROM broker.onecli_agents WHERE session_id = $1',
     [sessionId],
   )
   const existing = existingRows[0]
@@ -61,7 +63,7 @@ export async function ensureOnecliAgentMapping(client: PoolClient, sessionId: st
 
 export async function getOnecliAgentMapping(client: PoolClient, sessionId: string): Promise<OnecliAgentRecord | undefined> {
   const { rows } = await client.query<AgentRow>(
-    'SELECT session_id, onecli_identifier, onecli_agent_id, state, created_at, updated_at FROM broker.onecli_agents WHERE session_id = $1',
+    'SELECT session_id, onecli_identifier, created_at, updated_at FROM broker.onecli_agents WHERE session_id = $1',
     [sessionId],
   )
   return rows[0] ? hydrate(rows[0]) : undefined
@@ -83,66 +85,45 @@ export async function getOnecliAgentMapping(client: PoolClient, sessionId: strin
  *
  * The fix is not a better heuristic here. An Agent's life is now bound to its Session Runtime's:
  * `issue`/`renew` provision one, `release` (suspend) gives it up, `revoke` (close/fail) ends it —
- * the same component that decides a Runtime's fate decides its Agent's. This function therefore
- * only has to answer "does a Session currently believe it owns a live Agent", which is one column.
+ * the same component that decides a Runtime's fate decides its Agent's.
  *
- * That leaves the reaper the job it was actually built for: Agents stranded by a Broker crash
- * mid-provision. There are two shapes of that, and `active` alone only covers one of them —
+ * So the question this answers is just "is there a row" — presence, not state. What is left for the
+ * reaper is the job it was actually built for: Agents stranded by a Broker crash mid-provision, in
+ * two shapes —
  *
- * - the mapping insert never landed: no row here at all, so unprotected from the start, and the
- *   reaper's creation-time grace window is what keeps a concurrent issue safe;
- * - the mapping landed but the grant insert did not: an `active` row that no Session lifecycle
- *   will ever move, because no grant reference exists for anything to release or revoke. Those are
- *   protected only while young (`ungrantedStaleBefore`), or they would leak forever.
+ * - the mapping insert never landed: no row at all, unprotected from the start, and the reaper's
+ *   creation-time grace window is what keeps a concurrent issue safe;
+ * - the mapping landed but the grant insert did not: a row no Session lifecycle will ever remove,
+ *   because there is no grant reference for anything to decommission through. Those are protected
+ *   only while young (`ungrantedStaleBefore`), or they would leak forever.
  *
- * A mapping WITH a grant is never reaped on age, whatever that grant's expiry says. That is the
- * whole correction: expiry describes a credential's freshness, not a Session's mortality.
+ * A mapping WITH a grant is never reaped on age, whatever that grant's expiry says: expiry
+ * describes a credential's freshness, not a Session's mortality.
  */
 export async function listLiveOnecliAgentIdentifiers(client: PoolClient, ungrantedStaleBefore: Date): Promise<readonly string[]> {
   const { rows } = await client.query<{ onecli_identifier: string }>(
     `SELECT a.onecli_identifier
        FROM broker.onecli_agents a
-      WHERE a.state = 'active'
-        AND (
-          EXISTS (SELECT 1 FROM broker.execution_grants g WHERE g.session_id = a.session_id)
-          OR a.created_at > $1
-        )`,
+      WHERE EXISTS (SELECT 1 FROM broker.execution_grants g WHERE g.session_id = a.session_id)
+         OR a.created_at > $1`,
     [ungrantedStaleBefore],
   )
   return rows.map((row) => row.onecli_identifier)
 }
 
 /**
- * `released`, in the schema's `suspended` state: the OneCLI Agent is gone, but this Session can
- * come back and will be given one again under the SAME identifier.
+ * Decommissioned: the Agent is gone, so its row goes with it.
  *
- * This is the state the schema always had (`CHECK (state IN ('active','suspended','deleted'))`) and
- * that nothing ever wrote. It exists because "the Agent is absent" and "this Session is finished"
- * are different facts: `deleted` is terminal, `suspended` is a Runtime that was dematerialised.
+ * Deleting rather than tombstoning is the whole point. A tombstone would be a claim about OneCLI's
+ * contents that this database cannot keep true — the previous design kept three such claims and all
+ * of them were false in production. Absence of a row is not "we lost track"; it is the accurate
+ * statement that we have nothing provisioned, which is exactly what makes the next provisioning
+ * unconditional and idempotent.
  *
- * The upstream authority is dropped with it — it authenticates against an Agent that no longer
- * exists, so keeping it would only preserve a dead secret. `renew` stores a fresh one when it
- * re-provisions.
+ * The upstream authority goes too: it authenticates against an Agent that no longer exists.
  */
-export async function markOnecliAgentReleased(client: PoolClient, sessionId: string, now: Date): Promise<void> {
-  await client.query(`UPDATE broker.onecli_agents SET state = 'suspended', updated_at = $2 WHERE session_id = $1 AND state <> 'deleted'`, [
-    sessionId,
-    now,
-  ])
-  await client.query('DELETE FROM broker.upstream_authority WHERE session_id = $1', [sessionId])
-}
-
-/** Back from `suspended` after a resume re-provisioned the Agent. Never resurrects a `deleted` mapping. */
-export async function markOnecliAgentActive(client: PoolClient, sessionId: string, now: Date): Promise<void> {
-  await client.query(`UPDATE broker.onecli_agents SET state = 'active', updated_at = $2 WHERE session_id = $1 AND state = 'suspended'`, [
-    sessionId,
-    now,
-  ])
-}
-
-/** Terminal — docs/specs/10 "One Session, one OneCLI Agent": a deleted mapping is never reactivated. */
-export async function markOnecliAgentDeleted(client: PoolClient, sessionId: string, now: Date): Promise<void> {
-  await client.query(`UPDATE broker.onecli_agents SET state = 'deleted', updated_at = $2 WHERE session_id = $1`, [sessionId, now])
+export async function deleteOnecliAgentMapping(client: PoolClient, sessionId: string): Promise<void> {
+  await client.query('DELETE FROM broker.onecli_agents WHERE session_id = $1', [sessionId])
   await client.query('DELETE FROM broker.upstream_authority WHERE session_id = $1', [sessionId])
 }
 

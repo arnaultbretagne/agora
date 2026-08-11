@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import type { EquipmentRequest } from '@agora/domain'
 import { EQUIPMENT_CATALOGUE_VERSION } from '@agora/equipment-policy'
 import type pg from 'pg'
-import { issueExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
+import { ensureExecutionGrant, revokeExecutionGrant, type GrantServiceDeps } from '../src/grant-service.js'
 import { ORPHAN_GRACE_MS, reapOrphanOnecliAgents } from '../src/onecli-agent-reaper.js'
 import { FakeOneCliControlAdapter } from '../src/onecli-fake.js'
 import { randomId, testEncryptionKey, testExpectedRuntimeBundle, withTestDatabase } from './support.js'
@@ -17,7 +17,7 @@ function deps(): GrantServiceDeps & { onecli: FakeOneCliControlAdapter } {
 async function issue(pool: pg.Pool, d: GrantServiceDeps) {
   const client = await pool.connect()
   try {
-    return await issueExecutionGrant(
+    return await ensureExecutionGrant(
       client,
       d,
       {
@@ -75,8 +75,8 @@ test('required: after a Session is revoked, its Agent is gone within one reap cy
     const client = await pool.connect()
     try {
       await assert.rejects(() => revokeExecutionGrant(client, d, grant.id, new Date()))
-      const { rows } = await client.query<{ state: string }>('SELECT state FROM broker.onecli_agents WHERE session_id = $1', [grant.sessionId])
-      assert.equal(rows[0]?.state, 'deleted', 'the Broker has already given up on this Agent')
+      const { rows } = await client.query('SELECT 1 FROM broker.onecli_agents WHERE session_id = $1', [grant.sessionId])
+      assert.equal(rows.length, 0, 'the Broker has already given up on this Agent — no row, not a tombstone')
     } finally {
       client.release()
     }
@@ -149,8 +149,8 @@ test('required: a mapping with no grant row yet is protected while it is young, 
     try {
       // The window between `ensureSelectiveAgent` and the grant insert.
       await client.query(
-        `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, state, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1, 'active', now(), now())`,
+        `INSERT INTO broker.onecli_agents (session_id, onecli_identifier, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, now(), now())`,
         [identifier],
       )
       assert.deepEqual((await reapOrphanOnecliAgents(pool, d.onecli, new Date())).reaped, [], 'an in-flight issue is never reaped out from under itself')
@@ -163,17 +163,16 @@ test('required: a mapping with no grant row yet is protected while it is young, 
   })
 })
 
-test('a released mapping is not protected — suspend already gave the Agent up, so one still present is an orphan', async () => {
+test('a decommissioned Session has no row, so an Agent still present is an orphan', async () => {
   await withTestDatabase(async (pool) => {
     const d = deps()
     const grant = await issue(pool, d)
     const client = await pool.connect()
     try {
-      // `suspended` is written by `releaseSessionAgent`, which deletes the Agent first. So this
-      // shape — released mapping, Agent still there — means the delete did not take (or a human
-      // re-created it), and reclaiming it is right. Resumability is guaranteed by `renew`
-      // re-provisioning the Agent, NOT by protecting one that suspend already disowned.
-      await client.query(`UPDATE broker.onecli_agents SET state = 'suspended' WHERE session_id = $1`, [grant.sessionId])
+      // Decommissioning deletes the Agent first and its row second. This shape — no row, Agent
+      // still there — is what a half-finished decommission (or a human re-creating one in the
+      // OneCLI dashboard) leaves behind, and reclaiming it is exactly the reaper's job.
+      await client.query('DELETE FROM broker.onecli_agents WHERE session_id = $1', [grant.sessionId])
     } finally {
       client.release()
     }

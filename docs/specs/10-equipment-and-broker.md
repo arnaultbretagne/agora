@@ -98,22 +98,34 @@ OneCLI Agents Agora no longer owns MUST be reconciled away: the Broker deletes i
 An orphaned Agent is a standing credential authority, not clutter.
 
 A Session's OneCLI Agent has the same lifecycle as its Session Runtime, and the component that
-decides the Runtime's fate is the component that decides the Agent's:
+decides the Runtime's fate decides the Agent's. There are exactly two operations:
 
-- **issue** provisions the Agent and attaches exactly the credentials the capability digest covers;
-- **release** (suspend) deletes it while leaving the grant `issued`, so the mapping goes to
-  `suspended` and the upstream authority is dropped;
-- **renew** (resume) provisions it again under the same derived identifier, recompiling the
-  credential set from the grant's own recorded agent id and capabilities so the digest still
-  describes what the Agent holds;
-- **revoke** (close/fail) deletes it terminally, mapping `deleted`.
+- **ensure** — one idempotent operation, called identically when a Session starts and when it
+  resumes. It opens the Session's lease or extends it, provisions the Agent under the identifier
+  derived from the Session id, converges its credentials onto exactly what the resolved capabilities
+  compile to, and rotates the upstream authority. There is deliberately no separate renew: whether
+  a lease is being opened or extended is a fact about the lease, and from the provisioning side both
+  are the same gesture. Ensuring something already correct changes nothing.
+- **decommission** — delete the Agent and the row recording it. A suspend decommissions and leaves
+  the grant `issued`; revocation decommissions and moves the grant to `revoked`, which is what
+  makes the entitlement terminal.
+
+Ensure MUST refuse when the request would change the Session's capability digest — that, not the
+request id, is the "a Session cannot be upgraded in place" guard — and when the grant is revoked.
+
+A resume therefore does not "restore" anything, and does not have a verb of its own: it ensures
+again, the same call a first start makes, from the same recorded need.
+
+The Broker MUST NOT keep a lifecycle state for the Agent mirroring the Session's. Whether an Agent
+exists is OneCLI's fact, not the Broker's, and a stored mirror of it will be wrong: measured
+2026-08-11, the mirror said fourteen Agents were `active` while OneCLI held none. The Broker records
+one bit — that it has provisioned and not decommissioned — and that bit exists only so
+reconciliation can tell its own Agents from abandoned ones. Reconciliation MUST NOT decide that a
+Session's Agent is forfeit; it reclaims only Agents no Session claims.
 
 A suspended Session therefore keeps NO standing Agent: a Runtime that no longer exists must not
 leave credential authority behind it. This replaces the earlier "the Agent may remain as the same
-operational principal while suspended", which in practice meant a background reconciler had to guess
-from grant expiry when a suspended Session was never coming back — and got it wrong, leaving every
-suspended Session unresumable (2026-08-11). Reconciliation MUST NOT decide a Session's Agent is
-forfeit; it reconciles only Agents that no Session mapping claims at all.
+operational principal while suspended".
 
 ## Egress-policy compilation
 
