@@ -1,5 +1,8 @@
 # ADR 0012 — State authority and observability are separated
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -44,5 +47,5 @@ Session ID and trace context.
 
 ## Governing specs
 
-- [Observability](../specs/12-observability.md)
-- [Failure model](../specs/13-failure-and-idempotency.md)
+- [Observability](../../specs/12-observability.md)
+- [Failure model](../../specs/13-failure-and-idempotency.md)

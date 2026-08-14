@@ -1,5 +1,8 @@
 # ADR 0013 — Contract-first greenfield replacement
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -46,5 +49,5 @@ invariants and non-gateway provider behavior may be reconsidered through an expl
 
 ## Governing specs
 
-- [Acceptance and migration](../specs/15-acceptance-and-migration.md)
-- [Implementation program](../../plans/00-program.md)
+- [Acceptance and migration](../../specs/15-acceptance-and-migration.md)
+- [Implementation program](../../../plans/00-program.md)

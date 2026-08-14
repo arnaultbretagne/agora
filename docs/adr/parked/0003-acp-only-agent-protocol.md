@@ -1,5 +1,8 @@
 # ADR 0003 — ACP v1 is the only semantic Agent protocol
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and no longer governs the
+> active design; its relevant decisions are consolidated in [ADR 0004](../0004-acp-boundary-and-session-facts.md).
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -44,4 +47,4 @@ ACP v2 requires a future ADR.
 
 ## Governing specs
 
-- [ACP integration](../specs/04-acp-integration.md)
+- [ACP integration](../../specs/04-acp-integration.md)

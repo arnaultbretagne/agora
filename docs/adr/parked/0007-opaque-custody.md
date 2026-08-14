@@ -1,5 +1,8 @@
 # ADR 0007 — Custody is opaque, versioned Session state
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -40,4 +43,4 @@ runtime bundle; it is not restored from custody.
 
 ## Governing specs
 
-- [Custody](../specs/07-custody.md)
+- [Custody](../../specs/07-custody.md)

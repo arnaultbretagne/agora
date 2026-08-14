@@ -1,5 +1,8 @@
 # ADR 0011 — Session Runtimes are untrusted; trust zones remain separate
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -53,4 +56,4 @@ Gateway stdout MUST be query-free because signed URL parameters are credentials.
 
 ## Governing specs
 
-- [Security](../specs/11-security.md)
+- [Security](../../specs/11-security.md)

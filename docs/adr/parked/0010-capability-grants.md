@@ -1,5 +1,8 @@
 # ADR 0010 — Independent capability grants replace profiles
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -68,4 +71,4 @@ Changing the capability set creates a new Session.
 
 ## Governing specs
 
-- [Equipment and Broker](../specs/10-equipment-and-broker.md)
+- [Equipment and Broker](../../specs/10-equipment-and-broker.md)

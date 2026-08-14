@@ -1,5 +1,8 @@
 # ADR 0015 — OneCLI is a credential firewall; Agora owns network egress at the relay
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-08-09
 - **Amends:** ADR 0010, ADR 0011, ADR 0014 (the OneCLI-enforced-egress clauses only)
@@ -121,5 +124,5 @@ Every claim above was measured against a throwaway 1.45.0 instance before any Br
 
 ## Governing specs
 
-- [Equipment and Broker](../specs/10-equipment-and-broker.md)
-- [Security](../specs/11-security.md)
+- [Equipment and Broker](../../specs/10-equipment-and-broker.md)
+- [Security](../../specs/11-security.md)

@@ -4,7 +4,12 @@ Policy and OneCLI integration boundary. It resolves approved capability requests
 execution grants, provisions one OneCLI Agent per Session carrying only that Session's credential
 grants, and authenticates Session Runtime workloads through an opaque access relay.
 
-Two decisions, deliberately split ([ADR 0015](../../docs/adr/0015-onecli-credential-firewall-egress-at-relay.md)):
+> Remodel note: this paragraph describes the current implementation. ADR 0009 changes operational
+> OneCLI Agent ownership to one Pod incarnation, which may serve successive Sessions while that Pod
+> is retained. The implementation and normative specs have not yet been aligned to that boundary.
+
+The grant and relay boundary is defined by
+[ADR 0009](../../docs/adr/0009-onecli-grant-authority.md):
 
 - **which credential may be injected** is OneCLI's, per Agent — `credential-policy.ts` compiles the
   reviewed set, `onecli-real.ts#syncCredentialGrants` attaches it, and OneCLI's own

@@ -1,5 +1,8 @@
 # ADR 0009 — Postgres stores product facts and opaque custody
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -52,5 +55,5 @@ are backed up with that database. None of these stores or assets belong to Agora
 
 ## Governing specs
 
-- [Journal and projections](../specs/05-journal-and-projections.md)
-- [Custody](../specs/07-custody.md)
+- [Journal and projections](../../specs/05-journal-and-projections.md)
+- [Custody](../../specs/07-custody.md)

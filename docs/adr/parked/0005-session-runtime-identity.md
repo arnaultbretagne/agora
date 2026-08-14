@@ -1,5 +1,8 @@
 # ADR 0005 — Session Runtime has Session identity
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -55,5 +58,5 @@ Session Runtime is not materialized and is never reassigned.
 
 ## Governing specs
 
-- [Session lifecycle](../specs/03-session-lifecycle.md)
-- [Session Runtime control](../specs/08-session-runtime-control.md)
+- [Session lifecycle](../../specs/03-session-lifecycle.md)
+- [Session Runtime control](../../specs/08-session-runtime-control.md)

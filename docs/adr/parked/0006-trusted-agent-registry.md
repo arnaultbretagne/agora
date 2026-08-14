@@ -1,5 +1,8 @@
 # ADR 0006 — Trusted Agent registry and harness adapters
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -47,4 +50,4 @@ reviewed with the image and cannot be supplied by the Browser.
 
 ## Governing specs
 
-- [Agent registry](../specs/09-agent-registry.md)
+- [Agent registry](../../specs/09-agent-registry.md)

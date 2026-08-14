@@ -1,5 +1,8 @@
 # ADR 0004 — Canonical ACP journal and rebuildable projections
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and no longer governs the
+> active design; its relevant decisions are consolidated in [ADR 0004](../0004-acp-boundary-and-session-facts.md).
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -53,4 +56,4 @@ copied into the Workstream journal.
 
 ## Governing specs
 
-- [Journal and projections](../specs/05-journal-and-projections.md)
+- [Journal and projections](../../specs/05-journal-and-projections.md)

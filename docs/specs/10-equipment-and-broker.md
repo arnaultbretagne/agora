@@ -1,5 +1,9 @@
 # Equipment and OneCLI-backed Broker
 
+> Architecture-remodel notice: this specification describes the current implementation and still
+> uses its pre-remodel vocabulary and Session-grained runtime authority. It must be aligned to ADRs
+> 0002, 0007, 0009 and 0010 before the replacement architecture is implemented.
+
 ## Objective
 
 Users select useful resources without composing low-level security claims. Agora policy resolves that
@@ -91,7 +95,7 @@ never shared or reassigned across Sessions.
 
 Credential grants take effect immediately and are scoped to one Agent: issuing, changing or
 revoking one Session's credentials MUST NOT be observable from another Session's Agent. The Broker
-MUST NOT author project-scope OneCLI policy (see [ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)).
+MUST NOT author project-scope OneCLI policy (see [ADR 0009](../adr/0009-onecli-grant-authority.md)).
 
 OneCLI Agents Agora no longer owns MUST be reconciled away: the Broker deletes its own
 (`sagt-`-prefixed) Agents that no live Session mapping accounts for, at startup and on a schedule.
@@ -130,7 +134,7 @@ operational principal while suspended".
 ## Egress-policy compilation
 
 Network egress is Agora's own decision, enforced at the Broker access relay, not in OneCLI
-([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)). The relay is
+([ADR 0009](../adr/0009-onecli-grant-authority.md)). The relay is
 deny-by-default: a host absent from the Session's compiled allow-list is refused.
 
 Per Session, the allow-list is the union of:
@@ -256,7 +260,7 @@ OneCLI alone owns:
 - request decision telemetry.
 
 OneCLI does NOT own Agora's network egress policy. Its OSS project scope has no network rule and no
-terminal `block *` to express one with ([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)).
+terminal `block *` to express one with ([ADR 0009](../adr/0009-onecli-grant-authority.md)).
 
 Its image is pinned by digest. Agora treats its public API/SDK as an external contract and never
 imports OneCLI database tables into product code.

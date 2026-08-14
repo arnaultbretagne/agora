@@ -1,5 +1,8 @@
 # ADR 0008 — Durable Agent anchors and delta handoffs
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -41,4 +44,4 @@ Session-bound authority before restoring the anchored context.
 
 ## Governing specs
 
-- [Anchors and handoffs](../specs/06-anchors-and-handoffs.md)
+- [Anchors and handoffs](../../specs/06-anchors-and-handoffs.md)

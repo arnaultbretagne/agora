@@ -1,5 +1,8 @@
 # ADR 0014 — OneCLI is the only credential gateway
 
+> Parked on 2026-08-13 during the ADR remodel. This text is historical and does not govern the
+> active design.
+
 - **Status:** Accepted
 - **Date:** 2026-07-29
 
@@ -102,9 +105,9 @@ The following are release-blocking requirements, not reasons to build another ga
 
 ## Evidence
 
-- [OneCLI spike report](../../apps/broker/ONECLI-SPIKE.md)
+- [OneCLI spike report](../../../apps/broker/ONECLI-SPIKE.md)
 
 ## Governing specs
 
-- [Equipment and Broker](../specs/10-equipment-and-broker.md)
-- [Security](../specs/11-security.md)
+- [Equipment and Broker](../../specs/10-equipment-and-broker.md)
+- [Security](../../specs/11-security.md)

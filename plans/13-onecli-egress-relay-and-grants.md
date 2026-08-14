@@ -1,11 +1,15 @@
 # P13 — OneCLI credential-grant migration and relay-owned egress
 
+> Architecture-remodel notice: this completed implementation work uses the previous per-Session
+> runtime mapping. Its grant/relay split remains valid, but Pod-scoped OneCLI Agent ownership under
+> ADR 0009 requires a follow-up implementation plan.
+
 - **Status:** in_progress (code, tests, specs and ADR complete; production digest bump awaiting the
   operator's merge of the coupled infra-k8s change — see "Cutover state" below)
 - **Dependencies:** P08 (Broker), P11 (hardening/deploy)
 - **Primary paths:** `apps/broker/src/{route-policy,relay,onecli-real,onecli-adapter,grant-service}.ts`,
   `docs/specs/{10,11}-*.md`, `infra-k8s/apps/agora-onecli/onecli.yaml`
-- **Decision of record:** [ADR 0015](../docs/adr/0015-onecli-credential-firewall-egress-at-relay.md)
+- **Decision of record:** [ADR 0009](../docs/adr/0009-onecli-grant-authority.md)
 
 ## Why this plan exists (read first)
 
@@ -28,7 +32,7 @@ on a **removed API** and a model that **no longer supports egress deny**:
   secret. `ensureSelectiveAgent` cannot make an Agent selective (`CreateAgentInput` has no
   `secretMode`).
 
-Per ADR 0015: **OneCLI becomes a credential firewall** (per-Agent grants decide *which credential*
+Per ADR 0009: **OneCLI becomes a credential firewall** (per-Agent grants decide *which credential*
 is injected), and **Agora owns network egress at the Broker relay** (deny-by-default host allow-list
 enforced on CONNECT). This plan builds that, then upgrades OneCLI deliberately.
 
@@ -123,7 +127,7 @@ Broker grant issue ─▶ ensure per-Session OneCLI Agent ─▶ attach ONLY res
 - A relay egress gate enforcing the per-Session host allow-list before bridging.
 - `route-policy.ts` retargeted to compile the relay allow-list, honoring constraints + access level.
 - Orphan-Agent reaper (reconcile OneCLI Agents against active grants).
-- Specs 10 & 11 amended to the ADR 0015 model.
+- Specs 10 & 11 amended to the ADR 0009 model.
 - Deliberate OneCLI upgrade to a pinned ≥1.45 digest, after the above is proven on 1.43.3-compatible
   paths where possible and on a staging ≥1.45 instance for the grants paths.
 
@@ -132,7 +136,8 @@ Broker grant issue ─▶ ensure per-Session OneCLI Agent ─▶ attach ONLY res
 - [x] **Prove the grants path on a staging ≥1.45 instance** before touching Broker code. Done
   2026-08-09 against a throwaway `agora-onecli-staging` deployment of **1.45.0**
   (`sha256:d0177458b1f9ecece4abbe9abb6c5f925475357c1734f50a675d83a2ef9c8687`, the newest tag
-  published). Transcript summarized in ADR 0015 "Verification": a fresh Agent is
+  published). The transcript is retained in
+  [parked ADR 0015](../docs/adr/parked/0015-onecli-credential-firewall-egress-at-relay.md): a fresh Agent is
   `{mode:"selective",secrets:[],connections:[]}`; `PUT …/grants/secrets/{id}` flips exactly that
   secret to `usable`; a second Agent granted the other secret shows the inverse and neither moves
   when the other changes; `DELETE` → `204` → empty. `/v1/policy/{rules,publish,last-publish}`,
@@ -173,7 +178,7 @@ Broker grant issue ─▶ ensure per-Session OneCLI Agent ─▶ attach ONLY res
   assert the refusal at the relay.
 - [ ] **Upgrade OneCLI** to the pinned 1.45.0 digest in `infra-k8s/apps/agora-onecli/onecli.yaml`.
   Prepared, not merged — see "Cutover state".
-- [x] **Flip ADR 0015 to Accepted.**
+- [x] **Record the OneCLI grant and relay decision.** The replacement decision is ADR 0009.
 
 ## Evidence
 

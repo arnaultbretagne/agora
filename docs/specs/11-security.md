@@ -1,5 +1,9 @@
 # Security
 
+> Architecture-remodel notice: this specification describes the current implementation and still
+> uses its pre-remodel runtime and authority grains. It must be aligned to ADRs 0002, 0006, 0007 and
+> 0009 before the replacement architecture is implemented.
+
 ## Threat model
 
 The Agent and everything it executes inside a Session Runtime are untrusted. Prompt injection may
@@ -91,7 +95,7 @@ or OneCLI gateway directly.
 The relay may reach only the OneCLI gateway.
 
 Provider egress is deny-by-default **at the relay**, per Session
-([ADR 0015](../adr/0015-onecli-credential-firewall-egress-at-relay.md)): the relay refuses to bridge
+([ADR 0009](../adr/0009-onecli-grant-authority.md)): the relay refuses to bridge
 a CONNECT whose host is absent from that Session's compiled, reviewed allow-list, before any
 upstream socket exists. OneCLI's own Default Rule is neither sufficient nor relied upon — its OSS
 project scope cannot express a terminal `block *` at all. Agent/runtime upgrades require an

@@ -124,7 +124,7 @@
       ],
       "status": "in_progress",
       "decisionGates": [
-        "ADR-0015"
+        "ADR-0009"
       ]
     }
   ]
