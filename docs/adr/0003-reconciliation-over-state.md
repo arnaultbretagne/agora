@@ -66,15 +66,15 @@ Within one PostgreSQL transaction:
                               ▼
        read work → read Intent → observe → evaluate ordered rules
                                                    │
-                              ┌─────────────────┐
-                              │                   │
-                       first action          no action
-                              │                   │
-                              ▼                   ▼
-                             act     conditionally finalize work
-                              │
-                              ▼
-                    NOTIFY = next tick
+                    ┌──────────────────┼──────────────────┐
+                    │                  │                  │
+                  PASS              ACTION(verb)          CONVERGED
+                    │                  │                  │
+                    ▼                  ▼                  ▼
+              next rule              act       conditionally finalize
+              (same tick)             │
+                                      ▼
+                            NOTIFY = next tick
 ```
 
 `intent_seq` provides logical ordering within one Workstream. `created_at` records when an Intent
@@ -104,20 +104,19 @@ For each work row considered during one tick, the reconciler:
 
 1. loads the referenced complete Intent;
 2. obtains fresh Observations from the authoritative systems;
-3. evaluates the reconciliation rules in their deterministic order;
-4. continues past every rule that returns `CONVERGED` and executes the first action selected by a
-   rule, if any;
-5. after that action attempt completes, ends the current tick and emits an empty `NOTIFY` for the
-   next tick, which starts from fresh Observations;
-6. if every applicable rule is converged and therefore no action is selected, emits no further
-   tick and finalizes the work row only if both `intent_seq` and `work_generation` still match what
-   it claimed;
-7. logs the resulting execution through Session facts when execution occurs.
+3. evaluates the reconciliation rules from the beginning in their deterministic order;
+4. applies the result of each matching rule:
+   - `PASS` continues with the next ordered rule during the same tick;
+   - `ACTION(verb)` executes that action and ends the current tick; after the action attempt
+     completes, an empty `NOTIFY` emits the next tick;
+   - `CONVERGED` ends evaluation, emits no further tick, and conditionally finalizes the work row
+     only if both `intent_seq` and `work_generation` still match what it claimed;
+5. logs the resulting execution through Session facts when execution occurs.
 
-`CONVERGED` is not an action: it continues evaluation with the next ordered rule during the same
+Every new tick reevaluates from the first rule using fresh Observations. A `PASS` does not consume a
 tick. A continuation tick after an action modifies neither `intent_seq` nor `work_generation`; the
-durable work row remains until a no-action tick can conditionally finalize it. Action success is
-not treated as Observation: only the following tick determines what now exists.
+durable work row remains until a rule returns `CONVERGED`. Action success is not treated as
+Observation: only the following tick determines what now exists.
 
 If a newer Intent arrives during reconciliation, the older pass may finish its current safe action
 but may not remove the newer work. The Workstream is reconsidered from its latest complete Intent.
@@ -264,8 +263,9 @@ diagnostics. They do not determine present convergence.
 
 - External actions have at-least-once rather than exactly-once execution semantics.
 - Reconciliation primitives must be idempotent or safely repeatable.
-- One tick executes at most one action; that action emits the next tick.
-- A tick that finds no action conditionally finalizes its work and emits no successor tick.
+- A tick traverses any number of `PASS` results but executes at most one action.
+- An action emits the next tick; `CONVERGED` conditionally finalizes the work and emits no successor
+  tick.
 - Intermediate Intents may never affect execution and may produce no Session.
 - One Workstream has at most one coalesced desired-state work row.
 - Absence from `workstream_reconciliation_work` records no permanent truth about convergence.
