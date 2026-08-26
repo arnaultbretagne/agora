@@ -28,4 +28,5 @@ says nothing about whether the rest of the Intent is realized.
 
 After `POWER-003` executes `TURN_ON`, its successor tick reevaluates `POWER` from fresh evidence. If
 both values are then `on`, `POWER-004` returns `PASS` and the next rule is evaluated during that
-same tick.
+same tick. If Observation is still `off`, `POWER-003` selects `TURN_ON` again. `TURN_ON` itself
+returns neither outcome.

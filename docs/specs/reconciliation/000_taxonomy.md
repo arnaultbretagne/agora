@@ -51,6 +51,10 @@ PASS | ACTION(verb) | CONVERGED
 - `CONVERGED` ends evaluation of the complete Intent, conditionally finalizes the claimed work row
   and emits no successor tick.
 
+An action verb may change external systems, but it returns no reconciliation value. It produces
+neither `PASS`, `CONVERGED` nor an `observation.*` field. When its attempt ends, the reconciler emits
+the next `NOTIFY`; that tick rebuilds Observation and evaluates the rules again.
+
 Every new tick obtains fresh Observations and restarts each claimed work row at `004_power.md`. A
 `PASS` does not consume a tick. For one work row, a rule set that reaches its end after `PASS`
 without returning `ACTION(verb)` or `CONVERGED` is incomplete.
