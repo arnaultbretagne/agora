@@ -59,18 +59,22 @@ Within one PostgreSQL transaction:
 │    empty payload                                       │
 │                                                        │
 └─────────────────────────────┬──────────────────────────┘
-                              │ COMMIT → ping
+                              │ COMMIT
                               ▼
-                         Reconciler
+                     NOTIFY = one tick
                               │
                               ▼
-          read work → read Intent → observe → compare → act
-                                         ▲                  │
-                                         └── re-observe ───┘
+       read work → read Intent → observe → evaluate ordered rules
                                                    │
-                                              convergence
-                                                   ▼
-                               conditionally finalize work
+                              ┌─────────────────┐
+                              │                   │
+                       first action          no action
+                              │                   │
+                              ▼                   ▼
+                             act     conditionally finalize work
+                              │
+                              ▼
+                    NOTIFY = next tick
 ```
 
 `intent_seq` provides logical ordering within one Workstream. `created_at` records when an Intent
@@ -87,23 +91,33 @@ a resynchronization request re-enqueues the same `intent_seq`. It has no domain 
 an Intent revision or a convergence status. A worker may finalize only the exact generation it
 claimed, so an older pass cannot erase a later wake-up for the same Intent.
 
-A wake-up caused without a new Intent advances only `work_generation`, keeps the current
-`intent_seq`, and emits the same empty `NOTIFY` in one transaction.
+An external re-enqueue caused without a new Intent, such as drift detection or resynchronization,
+advances only `work_generation`, keeps the current `intent_seq`, and emits the same empty `NOTIFY`
+in one transaction.
 
-`NOTIFY` is an empty wake-up ping. Its payload carries no work identity or state. A received ping
-causes workers to reread the durable workset. Polling and resynchronization cover notifications
-that are lost or emitted while no worker is listening.
+`NOTIFY` is the tick of the reconciliation loop. Its empty payload carries no work identity or
+state: every tick causes workers to reread the durable workset. The transaction that records a new
+Intent emits its first tick. Polling and resynchronization produce recovery ticks when a
+notification is lost or emitted while no worker is listening.
 
-For each work row, the reconciler:
+For each work row considered during one tick, the reconciler:
 
 1. loads the referenced complete Intent;
 2. obtains fresh Observations from the authoritative systems;
-3. compares desired state with observed state;
-4. invokes idempotent actions where they differ;
-5. re-observes after those actions;
-6. logs the resulting execution through Session facts when execution occurs;
-7. finalizes the work row only if both `intent_seq` and `work_generation` still match what it
-   claimed.
+3. evaluates the reconciliation rules in their deterministic order;
+4. continues past every rule that returns `CONVERGED` and executes the first action selected by a
+   rule, if any;
+5. after that action attempt completes, ends the current tick and emits an empty `NOTIFY` for the
+   next tick, which starts from fresh Observations;
+6. if every applicable rule is converged and therefore no action is selected, emits no further
+   tick and finalizes the work row only if both `intent_seq` and `work_generation` still match what
+   it claimed;
+7. logs the resulting execution through Session facts when execution occurs.
+
+`CONVERGED` is not an action: it continues evaluation with the next ordered rule during the same
+tick. A continuation tick after an action modifies neither `intent_seq` nor `work_generation`; the
+durable work row remains until a no-action tick can conditionally finalize it. Action success is
+not treated as Observation: only the following tick determines what now exists.
 
 If a newer Intent arrives during reconciliation, the older pass may finish its current safe action
 but may not remove the newer work. The Workstream is reconsidered from its latest complete Intent.
@@ -132,7 +146,8 @@ This design provides the required properties together:
 
 - **Durable:** the complete Intent and the obligation to reconsider its Workstream commit
   atomically.
-- **Responsive:** `LISTEN/NOTIFY` avoids waiting for the next poll when a listener is available.
+- **Responsive:** the initial `NOTIFY` starts reconciliation immediately and every completed action
+  emits the tick that continues it.
 - **Loss-tolerant:** losing a notification loses neither the Intent nor its work.
 - **Coalescing:** rapid Intent changes retain their history while requiring only one current work
   row per Workstream.
@@ -210,7 +225,8 @@ small number requiring reconciliation.
 Rejected because PostgreSQL notifications are not durable. A worker disconnected at commit time
 does not receive the notification.
 
-`LISTEN/NOTIFY` remains a latency optimization above the durable workset.
+`LISTEN/NOTIFY` is the loop's tick mechanism, while the durable workset preserves the obligation to
+reconcile when a tick is lost.
 
 ### 6. Introduce a durable message broker
 
@@ -248,6 +264,8 @@ diagnostics. They do not determine present convergence.
 
 - External actions have at-least-once rather than exactly-once execution semantics.
 - Reconciliation primitives must be idempotent or safely repeatable.
+- One tick executes at most one action; that action emits the next tick.
+- A tick that finds no action conditionally finalizes its work and emits no successor tick.
 - Intermediate Intents may never affect execution and may produce no Session.
 - One Workstream has at most one coalesced desired-state work row.
 - Absence from `workstream_reconciliation_work` records no permanent truth about convergence.
