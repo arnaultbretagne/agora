@@ -107,16 +107,17 @@ For each work row considered during one tick, the reconciler:
 3. evaluates the reconciliation rules from the beginning in their deterministic order;
 4. applies the result of each matching rule:
    - `PASS` continues with the next ordered rule during the same tick;
-   - `ACTION(verb)` executes that action and ends the current tick; after the action attempt
-     completes, an empty `NOTIFY` emits the next tick;
+   - `ACTION(verb)` executes that action and ends evaluation of that work row for the current tick;
+     after the action attempt completes, an empty `NOTIFY` emits the next tick;
    - `CONVERGED` ends evaluation, emits no further tick, and conditionally finalizes the work row
      only if both `intent_seq` and `work_generation` still match what it claimed;
 5. logs the resulting execution through Session facts when execution occurs.
 
-Every new tick reevaluates from the first rule using fresh Observations. A `PASS` does not consume a
-tick. A continuation tick after an action modifies neither `intent_seq` nor `work_generation`; the
-durable work row remains until a rule returns `CONVERGED`. Action success is not treated as
-Observation: only the following tick determines what now exists.
+This evaluation applies independently to each claimed work row. Every new tick reevaluates that
+row from the first rule using fresh Observations. A `PASS` does not consume a tick. A continuation
+tick after an action modifies neither `intent_seq` nor `work_generation`; the durable work row
+remains until a rule returns `CONVERGED`. Action success is not treated as Observation: only the
+following tick determines what now exists.
 
 If a newer Intent arrives during reconciliation, the older pass may finish its current safe action
 but may not remove the newer work. The Workstream is reconsidered from its latest complete Intent.
@@ -263,7 +264,8 @@ diagnostics. They do not determine present convergence.
 
 - External actions have at-least-once rather than exactly-once execution semantics.
 - Reconciliation primitives must be idempotent or safely repeatable.
-- A tick traverses any number of `PASS` results but executes at most one action.
+- For each claimed work row, a tick traverses any number of `PASS` results but executes at most one
+  action.
 - An action emits the next tick; `CONVERGED` conditionally finalizes the work and emits no successor
   tick.
 - Intermediate Intents may never affect execution and may produce no Session.
@@ -283,4 +285,4 @@ diagnostics. They do not determine present convergence.
 
 - [Glossary](../specs/00-glossary.md)
 - [Domain model](../specs/02-domain-model.md)
-- Reconciliation specification to be written
+- [Reconciliation](../specs/reconciliation/README.md)
