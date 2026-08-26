@@ -1,19 +1,38 @@
-# Instructions for implementation agents
+# Instructions for agents
 
-This file is normative for every coding agent working in this repository.
+This file is normative for every agent working in this repository.
 
-## Required reading
+## Architecture and documentation gate
+
+Before reasoning about or changing architecture, vocabulary, ADRs, specifications or contracts,
+read `docs/AGENTS.md` completely and follow its progressive-disclosure routing. This applies to
+design answers in chat as well as file edits.
+
+Do not answer from conversation memory when a current repository document exists. Reopen the
+authoritative files for the topic and distinguish explicitly between:
+
+- documented decisions;
+- decisions discussed but not yet documented;
+- unresolved questions.
+
+Never fill an undocumented contract by inference. Name the gap and stop before building further
+rules on top of it.
+
+## Implementation required reading
 
 Before changing code, read:
 
-1. `docs/specs/00-glossary.md`
-2. `docs/specs/02-domain-model.md`
-3. the complete specification governing the package being changed;
-4. the ADRs referenced by that specification;
-5. the assigned file under `plans/`.
+1. `docs/AGENTS.md` and the sources it routes for the topic;
+2. the complete current specification and machine-readable contract governing the package being
+   changed;
+3. the accepted ADRs referenced by those sources;
+4. the assigned file under `plans/`.
 
-Do not infer architecture from an implementation stub. Specifications and machine-readable contracts
-take precedence over code. ADRs explain decisions but do not replace specifications.
+Do not infer architecture from an implementation stub. Specifications and machine-readable
+contracts take precedence over code only when they are aligned with the accepted remodeling
+baseline. ADRs explain decisions but do not replace specifications. If no aligned normative
+specification exists, or if one conflicts with an accepted remodeling ADR, stop and repair the
+documentation before implementation.
 
 ## Forbidden concept drift
 
@@ -22,17 +41,19 @@ Do not introduce:
 - `Conversation` as a domain aggregate;
 - a `Run` entity or `run_id`;
 - `Loge` or `loge_id`;
-- a persisted `SessionRuntime` entity or `runtime_id`;
-- a Session Runtime reusable by several Sessions;
+- a persisted or reusable `SessionRuntime` domain object or `runtime_id`;
 - `native_session_id`;
 - a harness `Thread` as an Agora aggregate;
-- `kind` as a synonym for Agent;
+- an Agora `Agent` or `agent_id` as the selected integration; use `harness` and `harness_id` while
+  reserving Agent for the ACP protocol role and OneCLI Agent for OneCLI;
 - fixed combination profiles such as `repo-dev-vault`;
 - a custom semantic protocol around ACP;
 - application-owned infrastructure logs;
-- parsed or normalized custody payloads.
+- parsed or normalized Save payloads.
 
-The only accepted terms and meanings are in the glossary.
+For remodeled architecture, accepted terms and meanings are routed by `docs/AGENTS.md`. Some flat
+specifications still describe the previous model; a conflict is a documentation defect, not
+permission to blend both models.
 
 ## Protocol rules
 
@@ -44,28 +65,29 @@ The only accepted terms and meanings are in the glossary.
 
 ## Persistence rules
 
-- `product.workstream_events` is the canonical product journal.
 - Projection tables must be disposable and rebuildable.
-- Custody bytes are opaque and may only be accessed by the custody/runtime role.
+- Core product code must treat Save bytes as opaque.
 - Infrastructure telemetry never belongs in the product journal.
 - Every externally retried command must have an idempotency key.
 
 ## Security rules
 
-- Browser input expresses resource intent, never raw capabilities or provider scopes.
-- Only the policy service resolves intent into grants.
-- Only the Session Runtime controller owns Kubernetes workload permissions.
-- Provider secrets live only in OneCLI; its control key and upstream Agent bearer never enter a
-  Session Runtime.
+- Browser Intent may select reviewed named capabilities, never raw provider scopes or OneCLI
+  identifiers.
+- Only the trusted policy compiler resolves named capabilities into grants.
+- Only the runtime controller owns Kubernetes workload permissions.
+- Provider secrets live only in OneCLI; its control key and upstream OneCLI Agent bearer never
+  enter a runtime Pod.
 - OneCLI is the only credential gateway. Never build/port a parallel MITM, secret store, injector or
   provider adapter.
 - Broker may implement only OneCLI control lifecycle and a workload-authenticated opaque relay; that
   relay must not terminate provider TLS, inspect provider content or inject credentials.
-- Every Session uses one dedicated selective OneCLI Agent and explicit allows followed by `block *`.
-- Agent images contain pinned harness/ACP binaries; Pods never install them at startup.
-- Never persist bearer tokens, one-time ACP tunnel tokens or provider credentials in product,
-  projection, custody or ACP data. The only exception is encrypted Broker-private upstream OneCLI
-  authority required by ADR 0010; provider credentials remain OneCLI-owned.
+- Every Pod incarnation uses one dedicated selective OneCLI Agent; that Agent may serve only
+  successive Sessions on that same Pod.
+- Harness images contain pinned harness/ACP binaries; Pods never install them at startup.
+- Never persist bearer tokens, one-time ACP tunnel tokens or provider credentials in product data,
+  projection data, Saves or ACP data. The only exception is encrypted Broker-private upstream
+  OneCLI authority required by ADR 0009; provider credentials remain OneCLI-owned.
 - The public runtime API must not accept arbitrary commands, argv, environment variables or images.
 - Gateway/process logs must omit URL query strings, headers, prompts, tool content and tokens.
 
