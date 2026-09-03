@@ -41,15 +41,24 @@ not rows, conditions or results in a rule table.
 The result grammar is closed:
 
 ```text
-PASS | ACTION(verb) | CONVERGED
+PASS | ACTION(verb) | HOLD | CONVERGED
 ```
 
 - `PASS` evaluates the next ordered rule for the same work row during the same tick.
 - `ACTION(verb)` executes that single action and ends evaluation of that work row for the current
   tick. When the action attempt completes, the reconciler emits the empty `NOTIFY` that triggers
   the next tick.
+- `HOLD` ends evaluation of that work row for the current tick without finalizing it: the Intent is
+  not yet realized, but no rule can act because the next change is owed by an external owner. It
+  changes nothing, selects no verb, returns no value and emits no successor tick. The work row stays
+  active; the engine re-evaluates it when a watched resource changes or a backoff elapses.
 - `CONVERGED` ends evaluation of the complete Intent, conditionally finalizes the claimed work row
   and emits no successor tick.
+
+`HOLD` and `CONVERGED` both emit no successor tick, but they mean opposite things: `CONVERGED`
+finalizes the row because the Intent is realized and only a later Intent or an observed drift
+revives it, while `HOLD` leaves the row unrealized and on the engine's watch and backoff schedule.
+Which resource wakes a `HOLD`, and after what backoff, is engine control flow, never rule state.
 
 An action verb may change external systems, but it returns no reconciliation value. It produces
 neither `PASS`, `CONVERGED` nor an `observation.*` field. When its attempt ends, the reconciler emits
@@ -57,7 +66,7 @@ the next `NOTIFY`; that tick rebuilds Observation and evaluates the rules again.
 
 Every new tick obtains fresh Observations and restarts each claimed work row at `004_power.md`. A
 `PASS` does not consume a tick. For one work row, a rule set that reaches its end after `PASS`
-without returning `ACTION(verb)` or `CONVERGED` is incomplete.
+without returning `ACTION(verb)`, `HOLD` or `CONVERGED` is incomplete.
 
 The next tick never trusts an action response as current state. It rebuilds Observation and
 reevaluates from the first rule.
