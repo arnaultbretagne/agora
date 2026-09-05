@@ -14,8 +14,8 @@
   },
   "scripts": {
     "check": "node scripts/check-dependency-direction.mjs && node scripts/check-forbidden-vocabulary.mjs && node scripts/run-schema-fixtures.mjs",
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @agora/domain && npm run build -w @agora/testkit && npm run build -w @agora/engine && npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck -w @agora/domain && npm run typecheck -w @agora/testkit && npm run typecheck -w @agora/engine && npm run typecheck --workspaces --if-present",
     "test": "npm run check && npm run build && npm run test --workspaces --if-present",
     "db:reset": "node scripts/db-reset.mjs"
   },
