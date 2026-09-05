@@ -71,17 +71,26 @@ Readiness, ACP connectivity and Session state are not part of it.
 
 ## `observation.session`
 
-`observation.session` is a scalar describing how far the Workstream's Pod has come toward a usable
-ACP session, with exactly three values:
+This scalar describes the current Pod/process/native context, not an Agora Session lifecycle phase:
 
-- `pending` — no Pod is `Running`, or its harness process is not yet reachable over ACP;
-- `openable` — the Pod is `Running` and its ACP endpoint answers, but no live session exists;
-- `live` — a live ACP session exists on the harness, able to accept prompts and configuration.
+- `pending`: the Pod/controlled launcher is still progressing within its startup deadline and has
+  no usable ACP context yet;
+- `openable`: the Pod is Running, its controlled launch seam can safely initialize the pinned
+  harness, and owner readback proves no live context is bound;
+- `live`: the current process owns a reachable, attributable ACP context able to accept controlled
+  configuration or prompts under the admission contract;
+- `unusable`: a terminal Pod/process, a lost or replaced context, expired startup deadline or
+  unrecoverable launch/context failure prevents reuse of this execution boundary.
 
-It is derived from two fresh reads for the Workstream: the Pod's Kubernetes phase, and the harness's
-ACP session state observed through the Broker relay that owns the connection. It reports usability
-only; which harness image runs is `observation.construction`, not this field. With no Pod at all it
-is `pending`.
+Sources are fresh Kubernetes status, the runtime controller's live launch/process evidence and the
+harness/driver reads specified by [ACP integration](../04-acp-integration.md) and
+[Harness conformance](../09-agent-registry.md). An unreachable owner that cannot distinguish a live
+context from absence produces no value; it does not prove `openable`. A historical Session row or
+an action error cannot by itself produce `unusable`.
+
+The controlled launch seam is operational runtime control, not a custom ACP method. It permits
+restore before starting the ACP context. The ACP bridge and Broker provider relay are distinct.
+With no Pod, this field is inapplicable: construction must act before the Session rule.
 
 ## `observation.anchor`
 
@@ -133,6 +142,11 @@ transcript, presence proves incorporation. An acknowledgement of delivery record
 not, and MUST NOT substitute for it: a Session restored from a Save captured before its Handoff
 shows the URI absent and is `stale`, whatever Agora recorded for an earlier incarnation.
 
+A hot Agora Session transition that retains the same verified live context retains its original
+opening descriptor and continuity proof ([Session boundaries](../03-session-lifecycle.md)). It
+creates no new opening Handoff. Replacement below means replacement of the native context
+incarnation, not merely a change of Agora attribution.
+
 The Handoff command record supplies only the range a `REFILL` committed to; it is the definition of
 the delivery, not evidence that it landed. Under the mono-active Workstream — one current Session,
 every prompt routed to it — no gap can open while a Session is live, so `current` holds until the
@@ -140,24 +154,19 @@ Session is replaced.
 
 ## `observation.model`
 
-`observation.model` is the model id the live Session actually runs: the `currentValue` of the
-session's `model` configuration option, read fresh from the harness through ACP
-(`SessionConfigSelect.currentValue`, refreshed by `ConfigOptionUpdate`). The owner is the live ACP
-session. It is defined when `observation.session = live`.
+The actual model id of the live context, read through the reviewed standard ACP model config option.
+It is defined when `observation.session = live`, under the fresh snapshot/continuous-stream contract
+in [ACP integration](../04-acp-integration.md#current-evidence-and-configuration).
 
-This readback is truthful across a Pod replacement: on session load the pinned adapter awaits the
-SDK's own report of the live model before answering, so a resumed session reports the model it
-really runs rather than a default. That is what makes model a reconcilable field. Persona is the
-contrast case — its reported value is reseeded from the client on load — and is therefore not
-observed here.
+A resumed context must report its actual model, not a default copied from the request. This is an
+enablement requirement on the pinned integration, not an assertion about an unverified adapter.
 
 ## `observation.effort`
 
-`observation.effort` is the effort level the live Session actually runs: the `currentValue` of its
-`effort` configuration option, read fresh the same way, and defined under the same condition. Its
-valid values depend on the running model: the adapter rebuilds the option when the model changes and
-clamps an unsupported level to `default`. The field is therefore only meaningful once
-`observation.model` is what the Intent wants, which is how the rule that reads it orders its work.
+The actual effort of that same live context, acquired under the same contract. Values and valid
+choices depend on the observed model. Model changes may rebuild the option and clamp unsupported
+values; the next tick must observe the resulting model/options before selecting an effort change.
+Missing required options or broken readback invalidate acquisition; they never imply `default`.
 
 ## `observation.grants.attached` and `observation.grants.effective`
 

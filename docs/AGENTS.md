@@ -27,8 +27,8 @@ After the baseline, read only the row required by the topic being discussed or c
 | Observation fields or source ownership | [Observation taxonomy](specs/reconciliation/002_observation.md), then the ADR for each authoritative source: [0007](adr/0007-kubernetes-runtime.md) for Kubernetes and [0009](adr/0009-onecli-grant-authority.md) for OneCLI/Broker |
 | Action verbs | [Verb taxonomy](specs/reconciliation/003_verbs.md) and every rule that selects the verb |
 | `POWER` | [`004_power.md`](specs/reconciliation/004_power.md) plus its linked Intent, Observation and verb entries |
-| Harness images or Pod lifecycle | ADR [0006](adr/0006-complete-harness-images.md) and [0007](adr/0007-kubernetes-runtime.md) |
-| ACP or Session facts | ADR [0004](adr/0004-acp-boundary-and-session-facts.md) and the Session sections of ADR [0002](adr/0002-workstream-session-model.md) and [0007](adr/0007-kubernetes-runtime.md) |
+| Harness images or Pod lifecycle | ADR [0006](adr/0006-complete-harness-images.md) and [0007](adr/0007-kubernetes-runtime.md), then [Harness conformance](specs/09-agent-registry.md) |
+| ACP or Session facts | ADR [0004](adr/0004-acp-boundary-and-session-facts.md), [0002](adr/0002-workstream-session-model.md) and [0007](adr/0007-kubernetes-runtime.md), then [Session boundaries](specs/03-session-lifecycle.md) and [ACP integration](specs/04-acp-integration.md) |
 | Saves, Anchors, restore, resume or refill | ADR [0008](adr/0008-saves-anchors-and-refill.md) |
 | Capabilities, grants or OneCLI | ADR [0009](adr/0009-onecli-grant-authority.md) and [0010](adr/0010-capabilities-are-onecli-grants.md), [Capabilities and OneCLI](specs/10-equipment-and-broker.md), then the grant Observations, verbs and `CAPABILITIES` rule |
 | PostgreSQL Intent history or workset | ADR [0003](adr/0003-reconciliation-over-state.md) and [0005](adr/0005-postgresql-durable-store.md) |
@@ -69,8 +69,8 @@ These are warnings, not decisions to complete by inference:
   Skills remain outside this iteration; do not infer additional Intent fields.
 - Exact attached/effective grants are specified in spec 10 and the reconciliation taxonomies.
   Other flat specifications still contain old lifecycle/authority contracts until explicitly aligned.
-- Session transition barriers, complete non-grant verb contracts and engine ownership/retry contracts
-  still require alignment before implementation.
+- Specs 03, 04 and 09 now define Session boundaries and integration conformance. Native
+  continuity/shutdown and engine ownership/retry contracts still require alignment before implementation.
 - ADR 0008 still makes healthy Pod deletion conditional on a successful Save or explicit forced
   loss, while the latest design discussion makes preservation best-effort and extinction mandatory.
   This conflict must be resolved before specifying `TURN_OFF`.

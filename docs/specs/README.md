@@ -10,7 +10,7 @@ the baseline is corrected; agents must not pick one silently.
 ## Remodeling authority
 
 Follow [docs/AGENTS.md](../AGENTS.md) first. Accepted ADRs and the reconciliation specification
-govern the remodeling baseline. Spec 10 and spec 15 have been realigned; other flat specs still
+govern the remodeling baseline. Specs 03, 04, 09, 10 and 15 have been realigned; other flat specs still
 require explicit alignment where they conflict. This revision does not validate existing schemas
 or implementation. Such conflicts must be repaired before dependent implementation.
 
@@ -20,13 +20,13 @@ or implementation. Such conflicts must be repaired before dependent implementati
 2. [System architecture](01-system-architecture.md)
 3. [Domain model](02-domain-model.md)
 4. [Reconciliation](reconciliation/README.md)
-5. [Session lifecycle](03-session-lifecycle.md)
+5. [Session boundaries and admission](03-session-lifecycle.md)
 6. [ACP integration](04-acp-integration.md)
 7. [Journal and projections](05-journal-and-projections.md)
 8. [Anchors and handoffs](06-anchors-and-handoffs.md)
 9. [Custody](07-custody.md)
 10. [Session Runtime control](08-session-runtime-control.md)
-11. [Agent registry](09-agent-registry.md)
+11. [Harness registry and conformance](09-agent-registry.md)
 12. [Capabilities and OneCLI](10-equipment-and-broker.md)
 13. [Security](11-security.md)
 14. [Observability](12-observability.md)

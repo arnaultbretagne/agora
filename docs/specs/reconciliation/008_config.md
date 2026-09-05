@@ -1,6 +1,6 @@
-# 009 — `CONFIG`
+# 008 — `CONFIG`
 
-`CONFIG` is evaluated after [`CAPABILITIES`](008_capabilities.md) passes, on a live Session. It
+`CONFIG` is evaluated after [`SESSION`](007_session.md) passes, on a live Session. It
 reconciles the sticky session configuration the harness exposes as ACP configuration options —
 today `model` and `effort` — toward the Intent. These options are set once per session and persist
 until changed, so a session opened fresh after a Pod replacement starts at the harness's defaults
@@ -26,17 +26,17 @@ and is brought back to Intent here: the "re-apply on wake" of earlier designs, a
 The conditions partition the input: model wrong; model right but effort wrong; both right. Exactly
 one matches.
 
-Model before effort is a rule ordering, not a sequence hidden inside a verb. The valid effort levels
-depend on the model, and the adapter rebuilds the `effort` option — clamping an unsupported level to
-`default` — whenever the model changes. Setting both in one action would bury that dependency and
-its re-validation inside the verb. Here `SET_EFFORT` fires only once `observation.model` is correct,
-so the level it sets is validated against the model that will actually run, and a clamp caused by
-`SET_MODEL` is simply observed and corrected on the next tick. Each verb does one thing with one
-postcondition.
+Model before effort is a rule ordering, not a sequence hidden inside a verb. Valid effort levels
+can depend on the model; changing model can reset the option or change its allowed values. The
+integration must report that new option state. Here `SET_EFFORT` fires only once
+`observation.model` is correct, so its target is validated against the model that will actually
+run. Any reset caused by `SET_MODEL` is observed and corrected on the next tick. An unavailable
+requested value is an incompatibility, never permission to accept a substituted default. Each
+verb has one objective with one verified postcondition.
 
-Both options are reconcilable because their readback is truthful: the pinned adapter recovers the
-live model on session load before reporting it. Persona is excluded for the opposite reason — its
-reported value is reseeded from the client on load — and stays frozen at `default` until a truthful
-readback exists.
+An enabled integration must demonstrate truthful model/effort readback under spec 04. Unsupported
+or stale readback leaves admission closed; no default is fabricated. Persona stays frozen until its
+application/readback contract exists. The transition barrier in spec 03 applies before changing an
+already-working context, including between the model and effort actions.
 
-`CONFIG-003` passes to [`CONVERGE`](010_converge.md).
+`CONFIG-003` passes to [`SYNC`](009_sync.md), so a Handoff never starts on unverified defaults.

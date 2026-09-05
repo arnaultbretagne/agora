@@ -1,117 +1,88 @@
-# Agent registry
+# Harness registry and conformance
 
-## Purpose
+This specification applies [ADR 0006](../adr/0006-complete-harness-images.md). The trusted registry
+contains reviewed, versioned repository definitions, selected by `harness_id`. It replaces the
+former product Agent/runtime-definition catalogue. Public API/schema alignment is still required
+before implementation; this document does not endorse the previous wire shapes.
 
-The Agent registry is the trusted, versioned catalogue that turns an `agent_id` into a safe runtime
-definition. It prevents the product API from becoming arbitrary remote execution.
+## Definition and authority
 
-## Authority
+A definition records:
 
-Registry definitions are code/operator configuration reviewed and deployed with the Session Runtime
-controller. The Browser and control plane may select enabled IDs but cannot submit or mutate
-definitions.
+- stable harness integration id and public label;
+- immutable harness image digest and common tool-bundle version;
+- pinned harness, ACP adapter and SDK/schema versions;
+- fixed launch and MCP registration configuration;
+- supported models, effort values and their standard ACP option ids;
+- reviewed named authority required for bootstrap/model invocation, resolved only by policy;
+- custody driver, readable/writable formats and compatibility constraints;
+- controlled launch, quiescence, process identity and health contracts;
+- workspace capture/exclusion policy and resource/size/deadline limits;
+- conformance evidence and rollout availability.
 
-The UI receives `GET /v1/agents`, a public projection containing labels and availability, never
-image digests, commands, custody paths or unverified runtime capabilities.
+Browser Intent selects public enabled ids; it never supplies definitions, argv, images, provider
+scopes or a preferred private/stale revision. The runtime controller owns workload materialization.
+The policy compiler owns exact grants. Harness definitions contain no independent provider relay
+policy and add no implicit credential access.
 
-The Session Runtime controller is the launch authority and exposes an internal safe selection
-projection:
+Every supported tool is present and registered in the same reviewed common bundle for every
+harness. Model/bootstrap prerequisites do not introduce a per-harness tool-capability matrix.
 
-```text
-GET /v1/agents -> registry revision + (agent_id, exact runtime-definition version, public metadata)
-```
+## Resolution and publication
 
-The product endpoint derives from that projection. A Session freezes the exact returned version;
-the Browser still submits only `agent_id` and cannot select a stale/private runtime definition.
+Trusted deployment configuration selects one immutable catalogue revision for all reconcilers and
+controllers. Workers with incompatible definitions refuse work instead of substituting their own
+bundled revision. One evaluation resolves a harness id, image and policy against one identified
+compatible revision set; each action binds that resolution immutably.
 
-## Runtime definition
+Publication includes the affected harness ids and wakes their Workstreams, including those absent
+from the workset. The construction rule currently replaces Pods on a superseded image digest.
+Rollout must retain old definitions for provenance, shutdown, Save compatibility and rollback.
+An old running digest must remain resolvable to its actual harness definition when capturing a Save.
+Digest-to-harness mapping is unambiguous; two different integration ids cannot share an ambiguous
+image identity in the admitted catalogue.
 
-Each versioned definition contains:
+Before an on Intent is accepted, validate its model/effort and required named provider authority.
+At runtime, validate the actual negotiated ACP capabilities/options again. A later incompatibility
+is surfaced as unrealizable desired execution; it never mutates the immutable Intent silently.
 
-- stable `agent_id`;
-- human label and description;
-- immutable image digest;
-- static ACP process command;
-- bridge mode;
-- supported stable ACP protocol range;
-- custody driver ID;
-- custody formats readable and writable;
-- workspace mount requirements;
-- resource defaults/limits;
-- health probe;
-- rollout state;
-- public availability metadata.
+## Required evidence
 
-The machine-readable shape is `contracts/schemas/agent-runtime.schema.json`.
+| Behavior | Required conformance evidence |
+|---|---|
+| Controlled launch | Pod can exist while harness work is gated; restore can precede ACP context opening. |
+| Identity | Live Pod UID, process generation and ACP context can be correlated; restart/reconnect cannot pass as the previous incarnation. |
+| Configuration | Actual model/effort readback after fresh start and restore; ordered dependent option changes; renewed evidence after connection loss. |
+| Bootstrap | Its required authority is declared; obtaining config/readiness starts no user turn or unrequested generation. |
+| Quiescence | Completion/cancellation, child processes, callbacks and external requests can be bounded and fenced before reuse. |
+| Native continuity | The registered driver can establish the opening Handoff proof for the live context, including compaction and restore, under specs 06/07. |
+| Delivery recovery | Unknown acceptance is distinguished from proof of non-acceptance; unsupported recovery remains explicit. |
+| Save compatibility | Capture, checksum/size, exclusions, restore collision behavior and compatible-version readback are demonstrated. |
+| Isolation | Direct provider/control/storage access is denied and OneCLI revocation remains effective independently of harness cooperation. |
 
-The immutable image MUST already contain the exact harness and ACP-adapter executables; readiness
-cannot install or download them. CI records their versions and smoke-tests both commands before the
-image digest becomes launchable.
-
-Broker policy maintains a reviewed route-set mapping keyed by the exact runtime-definition version.
-That mapping is privileged operator configuration, not Browser input or a combined capability
-profile.
-
-## Agent ID semantics
-
-`agent_id` identifies an ACP Agent distribution, not just a provider name. A materially different
-adapter with different custody semantics receives another definition version and, when incompatible,
-a distinct ID.
-
-Examples may include:
-
-- `claude-code`;
-- `codex`.
-
-Names such as `claude`, `sonnet`, `gpt-5`, `kind` or an arbitrary executable are not interchangeable
-with `agent_id`.
-
-## ACP capabilities
-
-The registry describes what can be launched. The Agent's `initialize` response remains authoritative
-for runtime capabilities. The control plane MUST intersect:
-
-- registry expectations;
-- actual ACP capabilities;
-- product feature requirements.
-
-A mismatch is a typed provisioning failure, not an optimistic fallback.
-
-## Version pinning
-
-A Session records the resolved runtime-definition version. Resume SHOULD use a compatible version:
-
-- exact version when available;
-- a newer version declaring read compatibility with the custody format;
-- otherwise no native resume.
-
-Automatic upgrades MUST NOT strand anchored custody without a tested rollback path.
-They also MUST NOT publish new OneCLI provider routes without an explicit route diff and terminal
-block validation.
+An advertised option, a successful launch or an old Session fact is not this evidence. The same
+contracts apply to every enabled harness; per-integration details identify how a supported standard
+operation or driver guarantee fulfills them, without a new semantic product protocol.
 
 ## Driver boundary
 
-Custody drivers are selected only through the registry. A driver declares:
+Only the registered custody driver knows native paths and transcript formats. It declares capture
+roots, credential exclusions, consistency guarantees and how live continuity evidence is read.
+The product core compares non-secret typed evidence and metadata; it never parses Save bytes.
 
-- format identifier/version;
-- capture roots/allow-list;
-- credential exclusions;
-- consistency mechanism;
-- maximum size;
-- restore collision behavior;
-- compatibility matrix.
+Proof must distinguish the live context from a durable Save, and the Save's producer Session from
+its consumer. A custom persona cannot be assumed to become default because a client request or
+adapter response says default; compatibility must establish the frozen persona invariant.
 
-The driver may know native harness layout; product code may not.
+A native compaction policy must preserve or provide verifiable lineage for the opening continuity
+proof. If that cannot be demonstrated, the integration must not claim the corresponding readback.
 
-## Rollout
+## Rollout and cost
 
-Definitions move through:
+Definitions may be disabled, internal, enabled, deprecated or retired as operator-managed catalogue
+metadata. Enabling requires the evidence above. Retirement must preserve the restore/migration path
+for retained Anchors or explicitly select supported fresh-context continuation.
 
-- `disabled`;
-- `internal`;
-- `enabled`;
-- `deprecated`;
-- `retired`.
-
-Deprecation blocks new Sessions while allowing resume. Retirement is allowed only when no retained
-Session requires the definition or a migration path exists.
+Common tool changes rebuild and verify every harness image. Publication records image size, startup
+cost, exposed tool count and compatibility results so the complete-bundle tradeoff remains visible.
+Compatibility or supply-chain checks cannot be replaced by runtime installation/downloads.

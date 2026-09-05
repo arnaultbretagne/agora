@@ -1,4 +1,4 @@
-# 008 — `CAPABILITIES`
+# 006 — `CAPABILITIES`
 
 `CAPABILITIES` reconciles the Pod-bound OneCLI Agent against the complete exact grant set. It
 compares authority at OneCLI's boundary, preserving every right even when it completes no named

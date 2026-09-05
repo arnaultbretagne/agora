@@ -36,6 +36,11 @@ tests and logs.
 Observation acquisition, claim validation, retries and backoff are engine control flow. They are
 not rows, conditions or results in a rule table.
 
+The [Session boundary contract](../03-session-lifecycle.md) governs admission and quiescence around
+rule-selected mutations. A failed precondition leaves admission closed; it does not let the engine
+select a different business verb. A Session exists before bootstrap, and a Handoff requires verified
+authority and configuration even though synchronization itself is not complete yet.
+
 ## Results
 
 The result grammar is closed:

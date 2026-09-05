@@ -1,6 +1,7 @@
-# 007 — `SYNC`
+# 009 — `SYNC`
 
-`SYNC` is evaluated after [`SESSION`](006_session.md) passes with a live ACP session. It closes the
+`SYNC` is evaluated after [`CONFIG`](008_config.md) passes with a live ACP context, verified
+authority and the requested model/effort. It closes the
 gap between what that session's native context incorporates and what the Workstream recorded up to
 the session's activation, by delivering the opening Handoff
 ([spec 06](../06-anchors-and-handoffs.md)). It is the reconciled form of both resuming and
@@ -25,7 +26,7 @@ was started at watermark `0` — a harness that never ran here, or whose Anchor 
 cross-seed — and only the missing tail when it was restored at the Anchor watermark — the resume.
 The rule does not distinguish the two; the watermark does.
 
-`SYNC-002` passes to the next rule. `current` is observed from the harness's own transcript, never
+`SYNC-002` passes to [`CONVERGE`](010_converge.md). `current` is observed from the harness's own transcript, never
 inferred from a recorded acknowledgement: a session restored from a Save that predates its Handoff
 reads `stale` and is refilled again. That readback is what makes `SYNC` a reconciled field rather
 than a remembered one.

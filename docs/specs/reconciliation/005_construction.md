@@ -53,5 +53,5 @@ It is settled when the Session is opened: a compatible Save exists only for the 
 so a same-harness rebuild restores and refills while a harness change re-seeds from product history
 ([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)).
 
-Readiness follows in the next rule. A Pod that runs `D` may still be `Pending`, or `Running` without
+Authority reconciliation follows, before Session readiness. A Pod that runs `D` may still be `Pending`, or `Running` without
 a live ACP session; `CONSTRUCT-003` only establishes that the right image is being run.

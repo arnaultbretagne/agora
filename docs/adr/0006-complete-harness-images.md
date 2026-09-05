@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — catalogue resolution and integration conformance.
 
 ## Context
 
@@ -23,6 +24,17 @@ Session provenance and Anchor selection; it is not a process or runtime identity
 Supported harness definitions and the common tool catalogue are reviewed, versioned repository
 files rather than mutable product rows. Session facts record the selected `harness_id` and resolved
 artifact digests that were actually used.
+
+Trusted deployment policy selects one immutable catalogue revision for reconciliation. Workers
+must agree on that revision even during rolling deployment; they never substitute their own bundled
+catalogue. Publishing a new revision explicitly re-enqueues affected Workstreams. The current
+construction policy replaces a live Pod whose image no longer matches the selected digest.
+Save compatibility and rollback must be reviewed before publication.
+
+Each enabled definition must demonstrate the required ACP, model/effort readback, quiescence and
+native-continuity contracts. A compatible binary or an advertised option alone is not that proof.
+Persona remains frozen and skills remain outside the current reconciliation inventory until their
+effective application and observation contracts are specified.
 
 Every harness image contains:
 

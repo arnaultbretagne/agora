@@ -79,7 +79,7 @@ one masked by organization policy also remains visible.
 
 ## Reconciliation and unavailable authority
 
-[CAPABILITIES](reconciliation/008_capabilities.md) owns selection of `REVOKE`, `GRANT`, `HOLD` or
+[CAPABILITIES](reconciliation/006_capabilities.md) owns selection of `REVOKE`, `GRANT`, `HOLD` or
 `PASS`; its procedure is not duplicated here.
 
 Before mutation, work admission is closed under the Session transition contract. Excess rights are

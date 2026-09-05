@@ -1,130 +1,138 @@
-# Session lifecycle
+# Session boundaries and work admission
 
-## Durable phases
+This specification applies ADRs [0002](../adr/0002-workstream-session-model.md),
+[0007](../adr/0007-kubernetes-runtime.md) and [0008](../adr/0008-saves-anchors-and-refill.md).
+It replaces the former durable lifecycle phases. Session facts record execution; live admission is
+owned by the control/transport and runtime boundaries and is verified from those owners.
 
-```text
-requested
-    │
-    ▼
-provisioning ───────► failed
-    │
-    ▼
-ready ◄────────────► busy
-  │  ▲                │
-  │  └──── resume ────┘
-  ▼
-suspending ─────────► suspended
-  │                    │
-  │ failure            └── materialize + ACP resume ──► ready
-  ▼
-failed
+## Identities and attribution
 
-ready | busy | suspended ── close ──► closing ──► closed
-```
+- A Session belongs permanently to one Workstream and logs one realized execution.
+- Every new Pod incarnation has a new Agora Session, even when it resumes an old ACP context.
+- A retained Pod can carry successive Sessions across a verified quiescent boundary.
+- Pod UID, process generation and ACP context identifier are non-secret correlations. They do not
+  define an additional domain aggregate. One ACP identifier may occur in several Agora Sessions.
+- A reconnect to the same verified live process/context alone creates no new Session.
+- A lost or replaced process/context invalidates its evidence and ends ordinary work admission. It
+  cannot silently continue under the previous Session identity.
 
-`phase` describes durable product/protocol progress, not raw Kubernetes status.
+All execution facts enter the Workstream stream once. A projection may expose a Session timeline,
+last error or previously verified conditions, but none is proof of current readiness.
 
-## New Session
+## Birth on a new Pod
 
-1. Agora resolves `agent_id` to the controller-authoritative current runtime-definition version.
-2. In one transaction, Agora creates the Session in `requested`, freezes Agent version,
-   workspace/equipment intent and makes it current when requested.
-3. Policy resolves capability intent and atomically binds its policy version, capability digest and
-   independent capability facts.
-4. Broker issues the execution grant only after the dedicated selective OneCLI Agent and complete
-   allow-then-block policy are ready.
-5. Phase advances to `provisioning`.
-6. The control plane materializes the Session Runtime without custody; the controller binds the
-   grant to its workload identity and credential-free relay path.
-7. It opens an ACP connection and calls `initialize`.
-8. It persists the negotiated protocol version and capabilities.
-9. It calls `session/new` with the Session workspace and allowed MCP servers.
-10. It binds the returned `acp_session_id` exactly once.
-11. Phase advances to `ready`.
+1. The controller establishes the Pod under a stable creation attempt; harness work stays gated.
+2. The control plane verifies current ownership and the Pod UID. Under Workstream ordering, it pins
+   `H` to the head before any fact of the new Session, opens the Session and records the Pod's
+   provenance. The operation is idempotent for that Pod establishment.
+3. If the Pod exists but startup fails, that Session retains the failure and cleanup facts. A
+   creation request that never establishes a Pod has operational diagnostics but no Session.
+4. The initially ungranted Agent is reconciled to the required exact authority before bootstrap
+   that needs provider access. All controlled bootstrap is attributed to the new Session.
+5. The rules select native restore/resume or a fresh ACP context. The selected origin, Save if any,
+   watermark `W` and opening cutoff `H` are recorded immutably for this context incarnation.
+6. Model and effort are applied and read back before an opening Handoff may start.
+7. User-purpose work is admitted only after verified synchronization and all other current Intent
+   conditions. A failed bootstrap or Handoff does not erase or reuse the Session.
 
-Any failure before ACP binding completes at step 10 leaves an unbound failed Session. Its Agora ID
-MUST NOT be reused, and Broker/controller reconciliation MUST revoke any partial OneCLI/relay
-authority.
+Creating a Session and admitting work are distinct operations. The Session exists before its first
+ACP envelope; it need not ever become usable. Recording desired values as realized configuration
+before verification is forbidden.
 
-## Prompt turn
+## Admission conditions
 
-1. Validate the Session is current and category cardinality allows the prompt.
-2. Rematerialize/resume first if suspended.
-3. Persist the outbound `session/prompt` envelope with its idempotency key and `purpose`.
-4. Dispatch the exact envelope.
-5. Mark the Session `busy`.
-6. Persist all callbacks, requests and `session/update` notifications.
-7. Persist `PromptResponse`, including stop reason.
-8. Return the Session to `ready`, unless closing or failed.
+The control plane owns prompt admission; the runtime controller and Broker enforce the corresponding
+execution and transport restrictions. A durable work obligation is not permission to execute.
 
-Only one prompt turn may be in flight per Session in v1.
+The following conditions are checked for the same Workstream and target incarnation:
 
-## Suspend
+- the current Intent requests power on and the acting controller still owns its mutation boundary;
+- exactly one reviewed Pod/Agent/binding envelope exists and predecessor authority is fenced out;
+- a Session already owns the bootstrap or work being dispatched;
+- required OneCLI attachments and effective rights match the complete compiled set;
+- native context and ACP connection are established and attributable;
+- model and effort match the requested values before any Handoff or user prompt;
+- synchronization is verified before a user prompt;
+- no prior prompt, callback, tool process or unresolved delivery prevents the required boundary.
 
-Suspension is a product operation, not merely Pod deletion:
+A Handoff is an effectful ACP prompt and may invoke the model and tools. It receives the same exact
+authority/configuration checks as other work, with only its own synchronization precondition omitted.
+The reviewed bootstrap contract must state any provider access required before config readback.
+It cannot start an unrequested generation or admit user work as a shortcut to obtaining that readback.
 
-1. Stop accepting new prompt turns.
-2. If busy, either await completion or cancel according to the caller's explicit policy.
-3. Select the current committed Workstream watermark.
-4. Ask the Session Runtime controller to capture a custody snapshot while leaving the Pod alive.
-5. Verify snapshot metadata and atomically commit the corresponding Agent anchor.
-6. Call ACP `session/close` when supported and appropriate.
-7. Dematerialize the Session Runtime.
-8. Set phase to `suspended`.
+Prompt admission is serialized with new Intent authoring, transition start and finalization. A
+prompt command accepted earlier is revalidated before actual dispatch; it is never silently moved
+to a different Session or sent with stale authority. At most one prompt turn is in flight per
+Workstream, including Handoffs. A superseding Intent closes further admission immediately.
 
-If capture fails, the anchor MUST NOT advance and the controller MUST NOT intentionally delete a
-healthy Pod. An operator may explicitly force-close a broken Session, resulting in `failed` or
-`closed` without a newer resume point.
+## Hot transition on a retained Pod
 
-## Resume
+The boundary wraps the rule-selected changes; it is not an alternate lifecycle command API.
 
-1. Read the anchor and referenced custody snapshot.
-2. Obtain a new execution grant with the Session's persisted capability facts.
-3. Rotate/rebind the same Session's dedicated OneCLI Agent authority and complete route policy.
-4. Rematerialize the same Session's runtime using that snapshot.
-5. Connect and initialize ACP.
-6. Verify the Agent advertises `sessionCapabilities.resume`.
-7. Call `session/resume` with the persisted `acp_session_id`, workspace and allowed MCP servers.
-8. Do not ingest historical content as new Workstream content.
-9. If the Workstream advanced after the snapshot watermark, perform a handoff for the delta.
-10. Set phase to `ready`.
+1. Close new prompt admission. Bind the transition to its current Intent, resolved policy/catalogue,
+   Pod/process/context and the Session whose work is ending.
+2. Reach quiescence: finish or cancel the in-flight turn, settle its final ACP exchange, and drain or
+   terminate its tool processes and external requests. A cancel notification alone proves none of
+   this. A bounded operational deadline prevents unlimited waiting.
+3. Restriction can close provider access immediately without waiting for ACP. Consequences for the
+   interrupted turn stay attributed to its original Session. Additions and config changes wait for
+   the quiescent boundary.
+4. Apply only rule-selected mutations. Each transition exchange is a fact of the previous Session.
+   Partial changes leave work gated; a failure never admits a mixed configuration.
+5. After fresh verification of the complete effective conditions, conditionally commit the boundary
+   against the still-current Intent and target. Close old attribution and open the next Session
+   before subsequent work. A repeated completion commits no second boundary.
+6. Reopen admission only after the owners confirm the committed target is still current and usable.
+   Native context continuity is retained: no Save, restore, resume or new Handoff occurs solely
+   because Agora Session attribution changed.
 
-`session/load` is not the normal resume path because it replays history already persisted by Agora.
+The relevant effective conditions include harness artifacts, native context, model/effort,
+capability meaning and effective grants, and any reconciled persona/skill versions. A new Intent
+with no effective change creates no Session. A compiler revision with an identical meaning/output
+is recorded as verification provenance rather than fabricating a new execution.
 
-## Resume failure
+If a new Intent arrives mid-transition, already observed partial effects remain historical facts.
+The old transition cannot admit work or complete a boundary for that obsolete target. Reconciliation
+uses the latest complete Intent. If it restores the same effective conditions without intervening
+work, no new Session is required. A controller crash leaves admission closed until the same live
+context and actual conditions are verified again.
 
-A failed native resume is terminal for that Session unless the error is classified as transient
-before the ACP method is accepted.
+An inability to prove quiescence or context identity is an operational failure requiring the runtime
+loss/recovery contract; no verb may silently convert a hot change into fresh-context work. Spontaneous
+harness changes during a turn are recorded as observed discrepancies and close subsequent admission.
+Agora never fabricates a historical model/authority boundary at an unknowable earlier instant.
 
-For a permanent failure:
+## Context continuity across Session boundaries
 
-1. retain the failed Session and its custody for diagnosis/retention;
-2. mark it `failed` with a typed reason;
-3. create a new Session;
-4. seed the new Session from the Workstream using the handoff policy;
-5. never bind the new ACP context to the old Agora Session ID.
+The opening context descriptor records the originating Agora Session, Pod UID, process generation,
+ACP context identifier, Save/origin, `W`, `H` and Handoff command if required. Later Sessions on that
+same live context reference this descriptor and its fresh owner proof; they do not reset `W` to zero
+or create another opening Handoff.
 
-## Agent switch
+A descriptor is historical correlation. Fresh evidence of the same native context is still required.
+A new Pod or context always gets a new descriptor and new Session. A reconnect that cannot prove
+continuity remains gated until operation-specific recovery resolves the ambiguity.
 
-Only one Session is current. Switching:
+## Fact boundary
 
-1. suspends the current Session durably;
-2. selects an existing resumable Session for the target Agent or creates a new one;
-3. activates it transactionally;
-4. resumes/restores it when possible;
-5. sends only the missing Workstream range as a handoff.
+The normative meanings of boundary facts are:
 
-Switching Agent never mutates `agent_id` on an existing Session.
+- Session opening: execution provenance and causal Intent for the concrete boundary;
+- native context binding: the actual ACP context and its immutable opening descriptor;
+- effective-conditions verification: what was read, with source identity and resolved versions;
+- transition completion: the old/new Session attribution boundary and realized conditions;
+- execution end or failed attempt: the observed reason and any unresolved effects;
+- restore, Handoff and Save facts: their immutable references and outcomes.
 
-## Close
+Their wire/database schemas must be aligned separately with the canonical Workstream journal.
+Operational claims and command delivery records are not Session lifecycle truth. Late frames retain
+original request/connection causation. If a transport cannot distinguish old buffered frames across
+an attribution boundary, it must drain/reconnect safely before new work; receipt time alone cannot
+relabel them into the next Session.
 
-Close means no future prompt will be accepted for that Session. It:
+## Off and recovery
 
-- cancels active work;
-- asks ACP to close when supported;
-- captures custody only if retention policy requests a final snapshot;
-- dematerializes the Session Runtime;
-- revokes the execution grant, relay mapping and OneCLI Agent authority;
-- records a terminal reason.
-
-Closed and failed Sessions remain part of Workstream history.
+An off Intent closes admission and runs controlled shutdown under ADR 0008. Shutdown facts belong to
+the execution being stopped; there is no off Session. Recovery from Pod loss opens a new Session and
+uses the selected harness's own compatible Anchor or an explicitly fresh context. A permanent native
+restore failure never switches continuation mode inside the failed Session.

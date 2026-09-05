@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — bootstrap admission, hot transitions and context identity.
 
 ## Context
 
@@ -35,12 +36,25 @@ remains recorded in its Session.
 
 The established Pod remains gated until Session creation. Opening the Session permits only
 controlled bootstrap attributed to it; user-purpose prompts, tool use and external work remain
-gated until authority, restore or fresh-context creation, and ACP initialization are verified.
+gated until their prerequisites are verified. Required grants are reconciled before native/ACP
+bootstrap that needs them. A Handoff is an effectful prompt and may begin only after authority,
+context creation and the requested model/effort are verified. User-purpose prompts additionally
+wait for context synchronization. Creating a Session is therefore distinct from admitting work.
 
 For a retained Pod, Agora first reaches a quiescent boundary and applies and verifies the change.
 Any ACP exchange used to perform that transition remains a fact of the previous Session. Once the
 new effective execution exists, Agora opens the new Session and switches fact attribution before
 accepting subsequent harness work. A transition that has no effect creates no new Session.
+
+New Intent, lost current evidence or detected drift closes prompt admission before a transition.
+The control plane serializes that boundary with prompt dispatch and all effective mutations.
+Revocation can cut external access immediately; it must not wait for ACP cooperation. Remaining
+updates from interrupted work retain their original Session attribution.
+
+A crash during transition leaves work gated. Recovery observes the actual Pod, process, ACP context,
+configuration and authority, then completes or abandons the same transition. A recorded successful
+check cannot reopen admission. The boundary is committed idempotently only for the still-current
+Intent, target incarnation and verified effective conditions.
 
 Every new Pod incarnation therefore starts a new Session. The Pod UID, image digests, workload
 identity and other non-secret runtime details are logged as facts of that Session.
@@ -48,6 +62,11 @@ identity and other non-secret runtime details are logged as facts of that Sessio
 A safe change may retain an existing Pod across successive Sessions only at that quiescent
 boundary. No Save, restore, ACP resume or refill occurs because the native context remained live.
 Reusing physical infrastructure never merges Sessions.
+
+The live context is correlated by Pod UID, harness process generation and ACP context identifier.
+Reconnecting to that same live context creates no new execution by itself. Losing the process or
+context invalidates its evidence even if the Pod UID is unchanged. The runtime controller must
+surface that loss; it cannot silently attach new work to the previous Session.
 
 There is no persisted `Runtime` or `SessionRuntime` entity and no `runtime_id`. Kubernetes owns live
 resource state. The reconciler determines current existence and readiness through fresh Kubernetes

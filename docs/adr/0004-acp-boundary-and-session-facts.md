@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — observation and attribution requirements for supported harnesses.
 
 ## Context
 
@@ -57,6 +58,12 @@ create another semantic protocol or reinterpret ACP meaning.
 
 ACP does not define Agora persistence, remote transport, runtime ownership or universal save and
 restore behavior. Those remain separate concerns.
+
+An enabled harness integration must demonstrate the fresh reads required by reconciliation.
+Configuration responses/notifications are evidence only under a verified live connection and
+context incarnation; a persisted response is historical. Native continuity readback belongs to the
+reviewed custody driver and never introduces native transcript parsing into the product core or a
+custom ACP method. Readback is an integration contract, not a guarantee inferred from ACP support.
 
 An incompatible ACP version requires a separate decision and migration plan. A draft protocol
 version is not a production storage contract.

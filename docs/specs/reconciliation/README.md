@@ -1,16 +1,37 @@
 # Reconciliation specification
 
-This directory defines the ordered decision model that realizes a Workstream's complete Intent
-from fresh Observations.
+This directory defines the ordered decision model for a Workstream's complete Intent. Read the
+common registries before the rules; file prefixes order rule evaluation, while rule ids stay stable.
 
-Read the files in numeric order:
+## Registries
 
-1. [`000_taxonomy.md`](000_taxonomy.md) defines the common rule format, result grammar and tick
-   semantics.
-2. [`001_intent.md`](001_intent.md) defines the Intent taxonomy.
-3. [`002_observation.md`](002_observation.md) defines the Observation taxonomy.
-4. [`003_verbs.md`](003_verbs.md) defines the closed action-verb catalogue.
-5. [`004_power.md`](004_power.md) defines the first rule.
+- [000 — Taxonomy and evaluation](000_taxonomy.md)
+- [001 — Intent](001_intent.md)
+- [002 — Observation](002_observation.md)
+- [003 — Action verbs](003_verbs.md)
 
-Every later rule receives the next numeric prefix. A rule file contains one decision table; it does
-not restate the engine semantics or the contracts of unrelated rules.
+## Ordered rules
+
+1. [004 — POWER](004_power.md)
+2. [005 — CONSTRUCTION](005_construction.md)
+3. [006 — CAPABILITIES](006_capabilities.md)
+4. [007 — SESSION](007_session.md)
+5. [008 — CONFIG](008_config.md)
+6. [009 — SYNC](009_sync.md)
+7. [010 — CONVERGE](010_converge.md)
+
+Each rule file contains one mutually exclusive, exhaustive table with exactly
+`Rule | Conditions | Result`. A table selects an objective; its verb contract owns safe execution
+and recovery. Every tick restarts at POWER with current owner evidence.
+
+## Cross-cutting contracts
+
+- [Session boundaries and admission](../03-session-lifecycle.md)
+- [ACP integration and current evidence](../04-acp-integration.md)
+- [Harness registry and conformance](../09-agent-registry.md)
+- [Exact capabilities and OneCLI grants](../10-equipment-and-broker.md)
+- [Acceptance scenarios](../15-acceptance-and-migration.md)
+
+Authority precedes bootstrap that requires it; config precedes the effectful opening Handoff.
+User work additionally waits for synchronization. Claims, observation acquisition and backoff are
+engine control flow, outside the domain tables.

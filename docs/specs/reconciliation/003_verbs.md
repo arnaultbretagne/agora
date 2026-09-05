@@ -39,25 +39,38 @@ and the construction rules to decide that.
 
 ## `RESTORE`
 
-`RESTORE` is selected when the Workstream's Pod is `Running` without a live ACP session and a
-compatible Anchor exists for its harness. It places the Anchor's Save into the Pod — the control
-plane does this; the runtime has no Save-store access
-([ADR 0006](../../adr/0006-complete-harness-images.md)) — and binds the harness to the Anchor's
-Session by `session/resume`, which replays no message
-([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)). The restored context incorporates the
-Anchor watermark `W`. Its observable objective is a subsequent fresh `observation.session = live`.
+**Owner:** control plane, through runtime custody/launch control and ACP. **Inputs:** current
+Workstream/Pod/process, the newly opened Agora Session, selected immutable Save, context descriptor,
+current mutation authority and stable attempt key.
 
-`RESTORE` is idempotent on the Workstream's Session: it opens no second session when one is live. It
-delivers no Handoff; closing the gap above `W` belongs to `REFILL`.
+The rule has established `openable` and a compatible Anchor. Authority is already reconciled.
+Runtime control places and verifies Save bytes before the ACP context starts; the Pod has no
+Save-store access. The control plane initializes ACP and calls standard `session/resume` for the
+Save's native context. It binds that context to the new Agora Session, never to the producing
+Session. It delivers no Handoff.
+
+**Idempotency and recovery:** one attempt binds one Save and target. Partial byte placement is
+recovered by the custody contract; unknown ACP acceptance requires live-context discovery or stays
+explicitly unresolved. A second context is never opened merely because a response was lost.
+
+**Observable postcondition:** `observation.session = live` for the selected restored context, with
+its origin watermark recorded. Permanent failure remains attributed to the attempted Session and
+uses the explicit cleanup/fallback contract, never an inline switch to `START`.
 
 ## `START`
 
-`START` is selected when the Workstream's Pod is `Running` without a live ACP session and no
-compatible Anchor exists for its harness. It opens a fresh, empty session on the harness, whose
-context incorporates watermark `0`. Its observable objective is a subsequent fresh
-`observation.session = live`.
+**Owner:** control plane and standard ACP. **Inputs:** current Workstream/Pod/process, newly opened
+Agora Session and context descriptor at watermark zero, mutation authority and stable attempt key.
 
-`START` is idempotent on the Workstream's Session. It delivers no Handoff.
+The rule has established `openable` and no compatible Anchor. With required authority verified,
+initialize ACP and call `session/new`. Capture and bind the actual returned native context. No
+Handoff is delivered here.
+
+**Idempotency and recovery:** replay of local bookkeeping is idempotent. ACP context creation is
+not assumed universally idempotent: after possible acceptance, discover the actual context or leave
+the attempt unresolved under spec 13. Never open another context on a blind retry.
+
+**Observable postcondition:** `observation.session = live` for the fresh context at watermark zero.
 
 ## `REFILL`
 
@@ -81,6 +94,9 @@ session's `model` configuration option to `intent.model` by `session/set_config_
 takes effect on the next turn, and the adapter re-derives the valid effort levels for the new model.
 Its observable objective is a subsequent fresh `observation.model = intent.model`.
 
+**Owner:** control plane/ACP. **Inputs:** current target context, desired model, verified transition
+boundary and stable attempt key. Unknown acceptance is resolved by config readback under spec 04.
+The same setting is safely repeatable only for the same live target and still-current desired value.
 `SET_MODEL` is idempotent: setting the current value is a no-op. It touches no other option. If the
 model change clamps the effort level, the next tick observes that and `SET_EFFORT` corrects it.
 
@@ -91,7 +107,9 @@ model change clamps the effort level, the next tick observes that and `SET_EFFOR
 `session/set_config_option`, effective on the next turn. Its observable objective is a subsequent
 fresh `observation.effort = intent.effort`.
 
-`SET_EFFORT` is idempotent. It is only ever selected once the model is correct, so the level it sets
+**Owner and target contract:** control plane/ACP, as for `SET_MODEL`, with the desired effort and
+verified running model. Partial/unknown completion is reread before repeat; a changed model
+invalidates the precondition. `SET_EFFORT` is idempotent. It is only ever selected once the model is correct, so the level it sets
 is validated against the model that will actually run.
 
 ## `GRANT`

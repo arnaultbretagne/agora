@@ -1,152 +1,127 @@
 # ACP integration
 
-## Protocol baseline
+This specification implements [ADR 0004](../adr/0004-acp-boundary-and-session-facts.md) and the
+[Session boundary contract](03-session-lifecycle.md). Its types come unchanged from the pinned
+stable ACP v1 SDK/schema. ACP v2 adoption requires a separate ADR and migration.
 
-Production integrations MUST use stable ACP v1 through the official
-`@agentclientprotocol/sdk`. The dependency is pinned centrally. ACP v2 is draft and requires a new
-ADR, compatibility plan and migration tests before adoption.
+## Protocol and ownership
 
-The control plane is the ACP Client. Agent packages provide or select an ACP Agent implementation.
-OneCLI operates below the harness network layer and is never an ACP Agent, Client or transport.
+The control plane is the ACP Client; each reviewed harness exposes the ACP Agent role. OneCLI is
+neither an ACP role nor an ACP transport. The ACP bridge authenticates, frames and captures ACP;
+the Broker provider relay tunnels provider traffic opaquely. These are distinct responsibilities.
 
-Normative upstream references, verified for this baseline on 2026-07-29:
+Use standard ACP requests, content blocks, updates, config options, permissions, tool calls and
+responses. Product causation metadata does not replace those types. No local semantic wire wrapper
+or native harness command is accepted through the product API.
 
-- [ACP v1 Session setup](https://agentclientprotocol.com/protocol/v1/session-setup)
-- [ACP v1 Prompt turn](https://agentclientprotocol.com/protocol/v1/prompt-turn)
-- [ACP v1 Schema](https://agentclientprotocol.com/protocol/v1/schema)
-- [Official TypeScript library](https://agentclientprotocol.com/libraries/typescript)
+Normative protocol references:
 
-## No protocol wrapper
+- [Session setup](https://agentclientprotocol.com/protocol/v1/session-setup)
+- [Session config options](https://agentclientprotocol.com/protocol/v1/session-config-options)
+- [Prompt turn](https://agentclientprotocol.com/protocol/v1/prompt-turn)
+- [ACP schema](https://agentclientprotocol.com/protocol/v1/schema)
 
-Local code MUST NOT define replacements for:
+These references define ACP. Integration-specific guarantees below must be demonstrated for the
+pinned harness; documentation does not certify any existing adapter implementation.
 
-- Session;
-- prompt turn;
-- content blocks;
-- session updates;
-- tool calls;
-- plans;
-- permission requests;
-- modes;
-- config options;
-- stop reasons.
+## Bootstrap and binding
 
-Those types flow from the official SDK. Local metadata may correlate a durable command or Workstream
-range, but it does not alter ACP semantics.
+A concrete Agora Session exists before `initialize`, `session/new` or `session/resume` is scheduled
+or accepted. Each connection is authenticated for its Pod/process/context and current attribution
+boundary using short-lived, single-purpose credentials outside the ACP envelopes.
 
-## Connection bootstrap
+Initialization verifies the negotiated version and required capabilities. A registry expectation
+alone is insufficient. Native restore precedes opening the restored ACP context; the runtime
+controller's controlled launch seam may exist while the ACP process is still gated.
 
-For every materialization:
+`session/new` obtains a harness-chosen ACP context identifier. `session/resume` reopens the native
+context identified by the selected Save, after checking negotiated resume support. Both bind to the
+new Agora Session's context descriptor. Resuming never reuses the producing Agora Session identity.
 
-1. authenticate the ACP bridge using a one-time, Session-scoped credential;
-2. establish a duplex stream;
-3. create an SDK Client connection;
-4. call `initialize`;
-5. validate protocol version and required capabilities;
-6. perform `session/new` or `session/resume`.
+Unknown acceptance is handled by [the failure contract](13-failure-and-idempotency.md). Creating a
+second native context or overwriting an existing binding is not a generic retry strategy.
 
-Initialization responses and negotiated capabilities MUST be persisted as Session facts or exact
-protocol events. A bridge endpoint is never persisted after its short expiry.
+## Current evidence and configuration
 
-## Session creation and binding
+`observation.session`, `observation.model` and `observation.effort` are registered in the
+[Observation taxonomy](reconciliation/002_observation.md). An enabled integration MUST demonstrate:
 
-`session/new` is sent without a client-selected ACP Session ID. The Agent-returned `sessionId` is
-bound to the existing Agora Session exactly once.
+- how an initial authoritative snapshot is acquired for the actual live context;
+- which standard config option ids represent the reviewed model and effort;
+- truthful current values after native resume, rather than defaults echoed from the client;
+- ordering of config updates, completeness of dependent options and effective-on-next-turn behavior;
+- how current evidence is renewed and invalidated when the process or connection changes.
 
-A different returned ID during retry after a response was durably observed is a protocol conflict;
-the control plane MUST stop rather than overwrite the binding.
+A read can be a fresh owner snapshot, or a freshly validated view maintained from a complete ordered
+owner stream since such a snapshot. The latter is allowed only while the same process/context and
+unbroken stream are verified. Lost continuity, unknown buffered updates or reconnection invalidates
+it. Copying the last persisted ACP response or refreshing its timestamp does not renew evidence.
+An action response is never itself the next tick's Observation; acquisition must establish current
+owner evidence independently under this contract.
 
-## Resume and load
+A session listing proves only discovery unless the pinned integration supplies a stronger verified
+live-state contract. Generic ACP support does not imply a universal config getter, liveness query
+or native-transcript read method. An integration lacking a required read stays unavailable for the
+corresponding product behavior until the contract is fulfilled; Agora invents no ACP method.
 
-Normal native continuation MUST use `session/resume`, which restores context without replaying
-history.
+Model changes use `session/set_config_option`. Effort is validated against the model observed after
+that change; dependent option clamping is observed on the next tick. An invalid or disappeared
+option leaves admission closed with a typed incompatibility, never a silently selected default.
+Persona is frozen at `default` in this iteration; native restore must not reintroduce an unverified
+custom persona. Effective settings are recorded as facts, not mutable Session desired-state columns.
 
-`session/load` MAY be used only for:
+## Capture and attribution
 
-- importing a Session owned outside Agora;
-- compatibility with an Agent lacking resume, behind an explicit adapter plan;
-- projection rebuild validation.
+Capture complete accepted serialized envelopes before controlled transport write or semantic
+handling. Preserve all accepted JSON members, unknown `_meta`, array order and lossless numbers.
+Validation must not replace canonical JSON with lossy SDK objects. Invalid frames generate only
+safe operational diagnostics, never canonical content.
 
-Events received during load MUST be tagged `ingest_mode=load_replay` and MUST NOT receive new
-business meaning or appear as duplicate Workstream items.
+Each envelope occurrence has stable dispatch/observation causation and exactly one Agora Session
+attribution in Workstream order. Content equality does not deduplicate occurrences. A connection
+may survive a hot boundary only if its capture seam can preserve the old/new attribution rule;
+otherwise drain and reconnect before admitting new work.
 
-## Prompt correlation
+Outgoing commit means scheduled dispatch; incoming commit means observed and durably accepted.
+Neither proves a later effect. Database failure applies backpressure; uncontrolled loss before
+capture cannot be represented as an accepted fact that Agora never actually received.
 
-Every outbound prompt has an Agora command ID and purpose:
+## Prompt and callback handling
 
-- `user`;
-- `handoff`.
+Each prompt is a durable command with purpose `user` or `handoff`, a stable command id and the
+selected Session/context. There is one in-flight prompt per Workstream. A Handoff uses ordinary
+ACP content and can invoke the model/tools; its prerequisites are specified in spec 03.
 
-The command ID is stored beside, not inside, the canonical ACP envelope. `_meta` MAY carry the ID for
-diagnostics when propagation is supported, but correctness MUST NOT depend on an Agent echoing it.
+Commands and complete outgoing envelopes commit before dispatch. `_meta` propagation is optional
+and cannot be the universal deduplication proof. Missing ACP entity ids remain missing; deterministic
+projection-only fallback keys never enter the protocol.
 
-Because v1 permits missing `messageId`, the projector associates updates with the single in-flight
-prompt turn and creates a synthetic projection entity key when required. Synthetic keys MUST never
-be sent back as ACP IDs.
+The control plane implements negotiated Client responsibilities for permissions, files, terminals,
+elicitation and updates. Requests and responses are captured. Host operations are restricted to
+the owning workload and authorized roots; a runtime request never borrows the control plane's
+filesystem, infrastructure identity or credentials. Local permissions cannot grant external rights
+that OneCLI denies.
 
-## Host callbacks
+MCP registration is the fixed reviewed image registration. It contains no provider secret, OneCLI
+identifier, upstream bearer or relay credential. Capability changes affect grants, not descriptors.
 
-The control plane implements ACP Client responsibilities for:
+## Resume, replay and cancellation
 
-- permission requests;
-- filesystem operations;
-- terminal operations;
-- elicitation;
-- session updates.
+Normal native continuation uses `session/resume` without message replay. `session/load`, if used by
+a separately specified import/validation workflow, must preserve replay provenance and cannot turn
+old source messages into new product history. Reconciliation does not load history to fake a fresh
+config read.
 
-Each request and response MUST be journaled. Permission policy MAY auto-decide only rules explicitly
-authorized by the Session's grants; otherwise the request is surfaced to the user and remains
-pending until answered or timed out.
+Cancellation is advisory. Final updates and responses remain attributable to the interrupted turn.
+Quiescence requires the stronger runtime/transport proof in spec 03. Closing a socket or killing a
+process never fabricates a successful ACP cancellation or close response.
 
-Client-provided `mcpServers` MUST contain no execution-grant reference, OneCLI identifier, relay
-credential, upstream proxy bearer or provider secret. The complete envelope must remain safe to
-journal.
+## Transport and retention
 
-## Content visibility
+The bridge enforces authentication, frame limits, ordered capture, backpressure and credential
+expiry. It records replay/dispatch identities where delivery recovery is supported. It emits no
+query strings, headers, prompts, tool content or tokens in operational logs.
 
-All ACP output MUST be retained:
-
-- user and agent message chunks;
-- thoughts/reasoning updates exposed by the Agent;
-- plans;
-- tool-call starts, updates and results;
-- permission interactions;
-- terminal references;
-- usage and session-info updates;
-- unknown future update variants.
-
-The UI MAY collapse items. Persistence and Web delivery MUST NOT silently discard them.
-
-## Modes and config options
-
-Agent-advertised modes and configuration options are authoritative. The product MAY cache them for
-selection but MUST validate changes against the current negotiated state and send standard
-`session/set_mode` or `session/set_config_option` operations.
-
-Model and reasoning effort MUST NOT become hard-coded columns in the core Session schema.
-
-## Cancellation and close
-
-`session/cancel` is advisory and racing updates may still arrive. The journal MUST continue accepting
-valid final updates until the prompt response reports cancellation.
-
-`session/close` is used only when advertised. Killing the bridge is a runtime fallback, not a
-protocol-level successful close.
-
-## Transport requirements
-
-The bridge MUST:
-
-- be bound to one Agora Session ID;
-- authenticate both ends;
-- enforce maximum frame size;
-- preserve ordering and backpressure;
-- attach an opaque observation identity when it can replay a previously delivered frame;
-- close on credential expiry or Session mismatch;
-- emit transport telemetry without logging content by default.
-
-The bridge MUST NOT inspect Agent meaning, synthesize tool calls, collapse chunks or provide its own
-resume abstraction.
-
-OneCLI proxy/CA/stub configuration is runtime infrastructure and MUST NOT cross the ACP bridge as
-protocol metadata.
+Every accepted ACP update remains canonical, including unknown future updates. Product views may
+collapse them; deterministic projections retain their source references. Save payloads and native
+continuity inspection stay behind the custody driver and never become an alternate product journal.
