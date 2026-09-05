@@ -45,14 +45,20 @@ Anchors are not part of `observation.power`. Durable history and recovery materi
 
 ## `observation.construction`
 
-`observation.construction` is the set of resolved container image digests the Workstream's Pods are
-actually running, and is `∅` when the Workstream has no Pod. It is inferred from what Kubernetes
-runs — never from an Agora-written annotation, an Intent value or a Session fact.
+`observation.construction` describes the Workstream's execution footprint as a set. Each **coherent
+envelope** — one Pod running a harness image, with its bound OneCLI Agent and relay binding both
+present — contributes the resolved digest of that Pod's image. Any footprint that is not part of a
+coherent envelope — a Pod without its Agent or binding, an Agent or binding without its Pod, a
+second Pod — contributes the distinguished element `⊥`. The set is `∅` when the Workstream has no
+footprint at all.
 
-It is derived from one fresh read for the Workstream: every Kubernetes Pod, with the resolved image
-reference (digest) of its harness container. Kubernetes runs exactly the referenced image, so this
-is observed reality rather than a declared value: a Pod cannot report an image it is not running,
-and no annotation the running image does not carry can be inferred.
+It is derived from fresh reads of the same inventories as `observation.power`: every Kubernetes Pod
+with the resolved image reference (digest) of its harness container, every OneCLI Agent and every
+Broker relay binding, each attributed to its Pod. It is inferred from what those systems run and
+hold — never from an Agora-written annotation, an Intent value or a Session fact. Kubernetes runs
+exactly the referenced image, so a digest is observed reality rather than a declared value: a Pod
+cannot report an image it is not running, and no annotation the running image does not carry can
+be inferred.
 
 The reviewed image catalogue pins each `harness_id` to one image digest
 ([ADR 0006](../../adr/0006-complete-harness-images.md)). Resolving `intent.harness` to its pinned
@@ -60,8 +66,8 @@ digest for comparison is the concern of the rule that reads this field, not of t
 Because persona, skills and capabilities produce no image variant (ADR 0006), they never change
 this value.
 
-`observation.construction` reports only which images execute. Readiness, ACP connectivity and
-Session state are not part of it.
+`observation.construction` reports which envelopes execute and whether the footprint is whole.
+Readiness, ACP connectivity and Session state are not part of it.
 
 ## `observation.session`
 

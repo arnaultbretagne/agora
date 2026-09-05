@@ -1,9 +1,10 @@
 # 005 — `CONSTRUCTION`
 
 `CONSTRUCTION` is evaluated after [`POWER`](004_power.md) passes with `intent.power = on`. It
-ensures the Workstream runs exactly one Pod built from the desired harness image: it creates that
-Pod when none exists, and removes a Pod running the wrong image so a later tick can rebuild it. It
-judges only which harness image runs, not whether the Pod is ready or usable.
+ensures the Workstream runs exactly one coherent footprint envelope — a Pod built from the desired
+harness image, with its OneCLI Agent and relay binding — creating it when none exists and removing
+an incoherent or wrong-image footprint so a later tick can rebuild it. It judges only which harness
+image runs and whether the envelope is whole, not whether the Pod is ready or usable.
 
 ## Inputs
 
@@ -29,8 +30,11 @@ Let `D` be the image digest `intent.harness` resolves to.
 
 The conditions are mutually exclusive and exhaustive over `observation.construction`: empty, a
 non-empty set that is not exactly `{D}`, or exactly `{D}`. A set that is not exactly `{D}` covers a
-wrong harness image, a stale digest under the same `harness_id`, and any duplicate or orphaned Pod;
-all are torn down before a clean rebuild.
+wrong harness image, a stale digest under the same `harness_id`, an incomplete envelope (`⊥`: a Pod
+without its Agent or binding, or an Agent or binding without its Pod) and any duplicate footprint;
+all are torn down before a clean rebuild. The envelope is one construction unit: it is built whole
+by `BUILD` and torn down whole by `TURN_OFF`, so a drifted part is repaired by rebuilding the unit,
+never by re-attaching it in place.
 
 A stale Pod is not swapped in place. `CONSTRUCT-002` selects the same `TURN_OFF` as `POWER`: it
 captures the Save under the running harness's Anchor and tears the footprint down. Because

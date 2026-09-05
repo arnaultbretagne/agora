@@ -18,7 +18,8 @@ on nothing: every decision it would need has already been made by the rule that 
 harness image. It provisions, for the Workstream, one Pod from the image `intent.harness` resolves
 to, together with the bound OneCLI Agent and relay binding that complete the footprint envelope. It
 attaches no grant and opens no ACP session. Its observable objective is a subsequent fresh
-`observation.construction` that contains that image (and therefore `observation.power = on`).
+`observation.construction` that is exactly the coherent envelope on that image (and therefore
+`observation.power = on`).
 
 `BUILD` is idempotent on the Workstream's footprint: repeating it while the envelope is already
 being created adds no second Pod, Agent or binding.
