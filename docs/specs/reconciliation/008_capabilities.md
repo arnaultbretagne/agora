@@ -1,36 +1,40 @@
 # 008 — `CAPABILITIES`
 
-`CAPABILITIES` reconciles the OneCLI grants on the Workstream's Agent toward `intent.capabilities`.
-It runs after the Agent exists — provisioned with the Pod by `BUILD` — and reconverges the grants
-whenever they drift, including after a manual edit on OneCLI.
+`CAPABILITIES` reconciles the Pod-bound OneCLI Agent against the complete exact grant set. It
+compares authority at OneCLI's boundary, preserving every right even when it completes no named
+capability ([ADR 0010](../../adr/0010-capabilities-are-onecli-grants.md)).
 
 ## Inputs
 
-`CAPABILITIES` reads only:
+- [`intent.capabilities`](001_intent.md), compiled once for this evaluation to the exact set `D`;
+- [`observation.grants.attached`](002_observation.md), abbreviated `A`;
+- [`observation.grants.effective`](002_observation.md), abbreviated `E`.
 
-- [`intent.capabilities`](001_intent.md);
-- [`observation.capabilities`](002_observation.md).
-
-Both are sets of capability ids over the same reviewed catalogue.
+Set representation, equality and compilation are defined by
+[Capabilities and OneCLI](../10-equipment-and-broker.md#exact-grant-comparison). Compilation is
+trusted resolution, not an Observation. `D`, `A` and `E` contain authorizations, not capability ids.
 
 ## Rules
 
 | Rule | Conditions | Result |
 |---|---|---|
-| `CAPS-001` | `observation.capabilities ⊄ intent.capabilities` | [`ACTION(REVOKE)`](003_verbs.md#revoke) |
-| `CAPS-002` | `observation.capabilities ⊆ intent.capabilities ∧ intent.capabilities ⊄ observation.capabilities` | [`ACTION(GRANT)`](003_verbs.md#grant) |
-| `CAPS-003` | `observation.capabilities = intent.capabilities` | `PASS` |
+| `CAPS-001` | `A ∪ E ⊄ D` | [`ACTION(REVOKE)`](003_verbs.md#revoke) |
+| `CAPS-002` | `A ∪ E ⊆ D ∧ D ⊄ A` | [`ACTION(GRANT)`](003_verbs.md#grant) |
+| `CAPS-004` | `A = D ∧ E ⊂ D` | `HOLD` |
+| `CAPS-003` | `A = D ∧ E = D` | `PASS` |
 
-The conditions partition the two set-differences: an extra grant exists (`CAPS-001`); no extra but a
-missing one (`CAPS-002`); neither (`CAPS-003`). Exactly one matches.
+The partition is: excess attached/effective authority; no excess but missing attachments; correct
+attachments with restricted/pending effectiveness; exact attached and effective authority. Stable
+rule ids are retained even when a new row is inserted.
 
-`CAPS-001` takes priority over `CAPS-002`: unauthorized grants are detached before missing ones are
-attached, so the Agent is never briefly over-authorized while converging. Each verb acts on the
-whole current difference; the successor tick re-reads the effective grants and continues.
+Revocation precedes additions. A half-removed capability remains visible through its remaining
+authorizations. An attachment masked by an organization restriction is still removed if unwanted,
+so lifting that restriction cannot revive stale access.
 
-A grant edited directly on OneCLI does not hold: `observation.capabilities` reports the Agent as it
-really is, and the next tick reconverges it to `intent.capabilities`. Durable removal of an access
-is a change of Intent, not a dashboard edit.
+`CAPS-004` waits on OneCLI effectiveness or on the owner of the external restriction. Its work row
+remains active, work admission stays closed, and the engine watches/rechecks OneCLI with backoff.
+Repeating attachment or broadening policy cannot resolve this case. Permanent owner denials are
+surfaced with their remediation; they are not reported as successful convergence.
 
-`CAPS-003` passes to [`CONFIG`](009_config.md). No domain rule returns `CONVERGED`; convergence
-of the complete Intent belongs to the terminal rule.
+Direct Agent edits are drift and are reconverged. Organization restrictions are external authority
+and Agora never rewrites them to satisfy Intent. `CAPS-003` passes to the next ordered rule.

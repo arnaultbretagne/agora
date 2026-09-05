@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — exact attached/effective comparison and external restrictions.
 
 ## Context
 
@@ -26,11 +27,27 @@ A trusted, versioned policy compiler resolves the complete capability set into o
 OneCLI grant set. The result names every required OneCLI secret or connection grant and its allowed
 tools. Anything absent from that set must be ungranted.
 
+Exactness is checked at the OneCLI grant boundary. Reconciliation compares both the Agent's
+attached grants and its effective authority with the compiled set, including credential or
+connection identity, tool restrictions and approval requirements. Reducing either inventory to
+recognized capability names is forbidden: partial, unknown and over-broad grants must remain
+visible. Grants shared by several capabilities are compiled once from the complete set.
+
+An attached grant masked by an organization restriction is still attached authority that may become
+effective later; it must be removed when absent from Intent. Conversely, an external restriction
+may make desired authority unavailable even when attachment is correct. Agora must expose that
+restriction and keep work gated, rather than broadening the grant or repeatedly rewriting the same
+attachment. Agora never changes organization policy to realize a Workstream Intent.
+
 The compiler emits only that OneCLI grant set. It emits no image selection, MCP registration or
 independent relay policy; relay confinement is mechanically derived from the effective grants under
 ADR 0009. Tool installation, registration and executable availability do not vary with the
 capability set: the same complete tool surface is already present for every harness. Availability
 and discoverability never substitute for a OneCLI grant.
+
+Provider access required to invoke a model must also be represented by reviewed named capabilities
+and included in the compiled set. Selecting a harness or model does not silently add authority.
+An integration whose required authority has no such mapping is not supported.
 
 The compiler refuses an unknown capability or any capability without an exact OneCLI mapping. It
 never guesses a broader grant and never falls back to another authorization path.
@@ -87,6 +104,8 @@ Rejected because files available to hostile code cannot provide an enforceable s
 ## Consequences
 
 - The capability catalogue and compiler are versioned, reviewed policy artifacts.
+- One evaluation and each mutation attempt use one identified compiler/catalogue revision. A
+  revision change requires fresh resolution and reconciliation before work is admitted.
 - Adding a capability requires an exact OneCLI mapping. Adding a new supported tool is a separate
   common-bundle change governed by ADR 0006.
 - Capability changes may be applied without a Pod rebuild, but realized changes always create a new

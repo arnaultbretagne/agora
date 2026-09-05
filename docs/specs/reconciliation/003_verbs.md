@@ -9,8 +9,9 @@ next `NOTIFY`; only that tick's fresh Observation determines the next result.
 
 The verb catalogue is closed. Before implementation, every verb MUST define its owner, inputs,
 idempotency contract and observable postcondition. A rule selects a verb; it does not inline the
-verb's procedure or reproduce decisions owned by later rules. A verb observes nothing and branches
-on nothing: every decision it would need has already been made by the rule that selected it.
+verb's procedure or reproduce decisions owned by later rules. Rules choose the business objective.
+A verb may verify ownership, preconditions and partial effects to execute or recover that objective
+safely. It MUST NOT choose a different business objective or report its response as Observation.
 
 ## `BUILD`
 
@@ -95,22 +96,37 @@ is validated against the model that will actually run.
 
 ## `GRANT`
 
-`GRANT` is selected when the Workstream's Agent lacks grants that `intent.capabilities` requires. It
-attaches, on that Agent, the OneCLI grants realizing every capability in `intent.capabilities` that
-is absent from `observation.capabilities`
-([ADR 0010](../../adr/0010-capabilities-are-onecli-grants.md)). Its observable objective is a
-subsequent fresh `observation.capabilities` that includes those capabilities.
+**Owner:** Broker control, using OneCLI. **Inputs:** Workstream, Pod UID, bound Agent, current
+mutation authority, attempt key and the exact desired grant set compiled for one policy revision.
 
-`GRANT` is idempotent: re-attaching an already-effective grant is a no-op.
+`GRANT` attaches the missing desired authorizations only after the rule has established that neither
+attached nor effective authority exceeds that set. It preserves rights shared by desired
+capabilities. Work admission remains gated during the transition.
+
+**Idempotency and recovery:** the key binds the same target and exact grant payload. A retry reads
+OneCLI and completes missing attachments; it never appends broader defaults. Unknown acceptance is
+resolved through OneCLI readback before reissuing an equivalent mutation. External denial is
+reported without modifying organization policy.
+
+**Observable postcondition:** a later `observation.grants.attached` equals the desired set. Effective
+equality is independently observed; attachment alone does not permit work.
 
 ## `REVOKE`
 
-`REVOKE` is selected when the Workstream's Agent holds grants that `intent.capabilities` does not
-authorize. It detaches, on that Agent, the OneCLI grants for every capability in
-`observation.capabilities` that is absent from `intent.capabilities`. Its observable objective is a
-subsequent fresh `observation.capabilities` that excludes those capabilities.
+**Owner and inputs:** the same ownership and target contract as `GRANT`.
 
-`REVOKE` is idempotent: detaching an absent grant is a no-op.
+`REVOKE` removes every attached or effective excess authorization, including partial, unknown,
+masked or over-broad entries. It narrows a connection grant to the desired tool/approval scope, or
+detaches it before a later `GRANT` if OneCLI cannot safely narrow it. It preserves shared desired
+rights whenever the owner supports that mutation. Restriction cannot depend on ACP health.
+
+**Idempotency and recovery:** absence is a no-op; partial revocation is reread and completed against
+the same target. The relay is closed to affected traffic before changing authority and existing
+tunnels are terminated. Unremovable externally supplied authority leaves access gated and a typed
+diagnostic requiring its owner; it is never declared removed.
+
+**Observable postcondition:** a later union of `observation.grants.attached` and
+`observation.grants.effective` is a subset of the desired set.
 
 No verb returns its postcondition. Once its attempt ends, the reconciler obtains a fresh Observation
 and reevaluates the rules from the first.

@@ -1,378 +1,163 @@
-# Equipment and OneCLI-backed Broker
+# Capabilities and OneCLI
 
-> Architecture-remodel notice: this specification describes the current implementation and still
-> uses its pre-remodel vocabulary and Session-grained runtime authority. It must be aligned to ADRs
-> 0002, 0007, 0009 and 0010 before the replacement architecture is implemented.
+This specification is aligned to ADRs [0009](../adr/0009-onecli-grant-authority.md) and
+[0010](../adr/0010-capabilities-are-onecli-grants.md). It replaces the former equipment, independent
+execution-grant and Session-bound OneCLI model. Historical filenames do not preserve that model.
+Machine-readable contracts require a separate alignment before implementation.
 
-## Objective
-
-Users select useful resources without composing low-level security claims. Agora policy resolves that
-intent into independent capability facts. Broker binds those facts to one Session and configures
-self-hosted OneCLI, the sole credential gateway.
-
-The ownership split is normative:
+## Ownership
 
 | Concern | Owner |
-| --- | --- |
-| User equipment vocabulary and capability resolution | Agora Broker policy |
-| Execution-grant/workload lifecycle | Agora Broker |
-| Session-to-OneCLI Agent lifecycle and rule publication | Agora Broker control adapter |
-| Workload authentication and opaque CONNECT relay | Agora Broker access relay |
-| Provider credential storage/injection, CA/MITM and route decision | OneCLI |
-| Pod lifecycle and fixed safe runtime bundle | Session Runtime controller |
+|---|---|
+| Reviewed named capabilities and exact desired grant compilation | Trusted Agora policy compiler |
+| Attached grants, effective authority, provider credentials and request enforcement | OneCLI |
+| Per-Pod OneCLI Agent lifecycle and control API access | Broker control |
+| Workload authentication and opaque confinement of provider traffic | Broker relay |
+| Pod creation, execution isolation and workload identity | Runtime controller |
 
-Agora MUST NOT implement provider TLS interception, a provider-secret store, credential injection or
-a fallback credential gateway.
+The Browser selects named capabilities in a complete Intent. It supplies no provider scope, OneCLI
+identifier, image, command, secret or relay policy. Personas, skills, software presence and MCP
+registration add no authority.
 
-## Equipment request
+## Compilation
 
-An equipment request is a list of resource intents:
+The compiler consumes the complete capability set under one reviewed catalogue/compiler revision
+and the authenticated principal's permitted bindings. It produces one exact non-secret desired
+OneCLI grant set, or a typed denial. It emits no image, MCP registration or independent egress policy.
 
-```json
-{
-  "catalogueVersion": "2026-07-29",
-  "resources": [
-    { "resource": "vault", "access": "read-write" },
-    { "resource": "github", "access": "propose" }
-  ]
-}
-```
-
-The Broker is authoritative for the safe catalogue. The product projects it through
-`GET /v1/equipment-catalogue`; both shapes use
-`contracts/schemas/equipment-catalogue.schema.json`. It is versioned and never contains provider
-OAuth scopes, token values, endpoint overrides, OneCLI rules or arbitrary MCP server definitions.
-
-A request contains at most one entry per resource. Duplicate or contradictory access intents are
-validation errors, not “last value wins”.
-
-## Policy resolution
-
-Policy evaluates:
-
-- authenticated principal;
-- Workstream category;
-- Agent ID and exact runtime-definition version;
-- requested resources/access;
-- environment;
-- operator rules.
-
-It returns either a typed denial or:
-
-- normalized capability-grant facts;
-- policy, egress-set and credential-set versions;
-- one deterministic capability digest;
-- safe ACP MCP server descriptors;
-- an opaque execution-grant reference.
-
-Resolved capability facts and versions are persisted against the Session. OneCLI identifiers, rules,
-control keys, proxy URLs and bearers are not product facts.
-
-## No combined profiles
-
-Capabilities are independent rows. The system MUST NOT create names for every combination such as
-`repo-dev-vault-v1`.
-
-Policy may define reusable rules or UI presets, but a preset expands to facts and is not the
-authorization claim stored on a Session. The pinned Agent route set expresses reviewed network needs
-for one runtime definition; it is not a capability-combination profile.
-
-## One Session, one OneCLI Agent
-
-Before a grant becomes issuable, the Broker control adapter:
-
-1. derives a unique operational identifier from the Agora Session ID without exposing it publicly;
-2. creates or reconciles exactly one OneCLI Agent for that Session;
-3. attaches, as per-Agent credential grants, only the provider credentials required for Agent
-   invocation and approved equipment — and detaches anything else that Agent holds;
-4. verifies against OneCLI's effective-credentials view that the Agent ends with exactly those
-   credentials, usable, and nothing more, before activation.
-
-A freshly created OneCLI Agent holds no credential at all, so isolation is fail-closed by
-construction: an Agent is only ever as capable as the grants Agora attached to it. The OneCLI
-default Agent and `all` credential mode are forbidden for Session Runtime Pods. A OneCLI Agent is
-never shared or reassigned across Sessions.
-
-Credential grants take effect immediately and are scoped to one Agent: issuing, changing or
-revoking one Session's credentials MUST NOT be observable from another Session's Agent. The Broker
-MUST NOT author project-scope OneCLI policy (see [ADR 0009](../adr/0009-onecli-grant-authority.md)).
-
-OneCLI Agents Agora no longer owns MUST be reconciled away: the Broker deletes its own
-(`sagt-`-prefixed) Agents that no live Session mapping accounts for, at startup and on a schedule.
-An orphaned Agent is a standing credential authority, not clutter.
-
-A Session's OneCLI Agent has the same lifecycle as its Session Runtime, and the component that
-decides the Runtime's fate decides the Agent's. There are exactly two operations:
-
-- **ensure** — one idempotent operation, called identically when a Session starts and when it
-  resumes. It opens the Session's lease or extends it, provisions the Agent under the identifier
-  derived from the Session id, converges its credentials onto exactly what the resolved capabilities
-  compile to, and rotates the upstream authority. There is deliberately no separate renew: whether
-  a lease is being opened or extended is a fact about the lease, and from the provisioning side both
-  are the same gesture. Ensuring something already correct changes nothing.
-- **decommission** — delete the Agent and the row recording it. A suspend decommissions and leaves
-  the grant `issued`; revocation decommissions and moves the grant to `revoked`, which is what
-  makes the entitlement terminal.
-
-Ensure MUST refuse when the request would change the Session's capability digest — that, not the
-request id, is the "a Session cannot be upgraded in place" guard — and when the grant is revoked.
-
-A resume therefore does not "restore" anything, and does not have a verb of its own: it ensures
-again, the same call a first start makes, from the same recorded need.
-
-The Broker MUST NOT keep a lifecycle state for the Agent mirroring the Session's. Whether an Agent
-exists is OneCLI's fact, not the Broker's, and a stored mirror of it will be wrong: measured
-2026-08-11, the mirror said fourteen Agents were `active` while OneCLI held none. The Broker records
-one bit — that it has provisioned and not decommissioned — and that bit exists only so
-reconciliation can tell its own Agents from abandoned ones. Reconciliation MUST NOT decide that a
-Session's Agent is forfeit; it reclaims only Agents no Session claims.
-
-A suspended Session therefore keeps NO standing Agent: a Runtime that no longer exists must not
-leave credential authority behind it. This replaces the earlier "the Agent may remain as the same
-operational principal while suspended".
-
-## Egress-policy compilation
-
-Network egress is Agora's own decision, enforced at the Broker access relay, not in OneCLI
-([ADR 0009](../adr/0009-onecli-grant-authority.md)). The relay is
-deny-by-default: a host absent from the Session's compiled allow-list is refused.
-
-Per Session, the allow-list is the union of:
-
-1. the hosts of the reviewed pinned route set for that Session's Agora Agent;
-2. the hosts derived from that Session's own approved capability facts, access levels and
-   constraints.
-
-There is no terminal `block *` to express and no rule ordering to get wrong: the list is a set, and
-everything outside it is already denied. Deny-by-default belongs to Agora's relay; OneCLI's own
-Default Rule is not relied on for any Agora decision.
+Every right, including model/provider invocation, has a reviewed named mapping. A missing required
+mapping or selection is rejected when authoring an on Intent; harness/model selection adds no hidden
+base grant. The empty set is valid where the reviewed execution needs no privileged external access.
+The same common tool surface remains available to every harness.
 
 The compiler MUST:
 
-- be a pure function of the grant (Agora Agent plus capability facts), so no compiled state can
-  outlive or drift from the grant that produced it, and no Session's egress can be widened by
-  another Session's activity;
-- be deterministic — deduplicated and ordered — from policy version, egress-set version and
-  capability facts;
-- reject an Agent, capability, access level or constraint with no reviewed mapping, rather than
-  compile a list that silently omits or silently widens access;
-- reject empty or wildcard hosts;
-- narrow OpenAI/ChatGPT hosts to the endpoints required by the pinned Codex runtime;
-- include the git-over-HTTPS host, not only the API host, for any capability whose approved tools
-  use git.
+- resolve each secret/connection reference through trusted policy, never Browser input;
+- include exact tools, approval requirements and enforceable restrictions;
+- union shared rights across all selected capabilities before computing a difference;
+- reject unknown capabilities and incompatible or unrepresentable combinations;
+- reject an approval requirement the deployment cannot serve;
+- bind its output and digest to the selected immutable policy revision;
+- refuse a provider operation whose authority cannot be granted and revoked through OneCLI.
 
-Host (CONNECT authority) is the enforcement granularity, matched exactly and case-insensitively —
-never by suffix or wildcard. Path- and method-level egress is out of scope.
+A revision is selected by trusted deployment policy, not by whichever worker happens to run.
+Changing that revision wakes affected Workstreams; an old attempt cannot resolve a new payload
+under the same idempotency key. Session facts record the revision and digest actually realized.
 
-Agent upgrades require a reviewed route diff. An analytics or newly observed endpoint is denied until
-explicitly approved.
+## Exact grant comparison
 
-## Credential-grant compilation
+Let `D` be the compiled desired authorization set, `A` OneCLI's attached authorization set and `E`
+its effective authorization set after external restrictions. Convergence requires `A = D ∧ E = D`.
 
-Which provider credential OneCLI may inject for a Session is a separate, per-Agent decision,
-compiled from the same grant:
+An authorization comparison preserves:
 
-1. the Agent's own provider credential, resolved from `agent_id` and its runtime definition, never
-   from an equipment request;
-2. the credentials and per-tool access derived from approved capability facts and access levels.
+- credential or connection identity and grant kind;
+- each allowed tool or the exact scope of a secret grant;
+- approval versus unconditional permission;
+- all restrictions affecting when or where that permission applies.
 
-The compiler MUST be deterministic, MUST refuse an Agent or capability/access level with no
-reviewed credential mapping, and MUST name credentials by OneCLI type/provider rather than by
-instance identifier. It MUST NOT grant a tool whose use would require an approval this deployment
-cannot answer.
+This is a non-secret comparison model behind the policy boundary, not a replacement provider
+protocol. Inclusion means inclusion of permitted requests under their prerequisites, not textual
+inclusion of serialized grant objects: approval-required execution is a subset of unconditional
+execution of the same tool, and a narrower resource restriction is a subset of the broader scope.
+The pinned mapping must prove such inclusion; it cannot guess it for an unknown restriction.
+Finite tool grants are compared as individual authorizations. A full-access grant is
+expanded only against a complete, revision-bound OneCLI tool catalogue; otherwise it remains an
+explicit broad entry and cannot compare equal to a reviewed finite subset. Restrictions are
+canonicalized only when the pinned OneCLI contract proves equivalence. Unknown fields or entries
+remain distinguishable and prevent equality; they are never silently discarded.
 
-## Execution grant
+A denied permission contributes no usable authorization to `E`; its attachment stays in `A` and
+its denial reason remains acquisition diagnostics. An approval requirement contributes its actual
+restricted authorization, never an unconditional allow. Comparisons never infer effective access
+from attachment, or attachment from effective access.
 
-An execution grant:
+The normalized observations are registered in
+[the Observation taxonomy](reconciliation/002_observation.md). A capability requiring two grants
+with only one remaining therefore leaves that remaining grant visible. An unknown extra grant or
+one masked by organization policy also remains visible.
 
-- is bound to one Session ID and Agora Agent ID;
-- resolves only the persisted capability digest and egress/credential-set versions;
-- maps to the Session's dedicated OneCLI Agent;
-- expires independently from OneCLI's upstream Agent token;
-- is revocable;
-- cannot be upgraded in place;
-- exposes one transient activation reference to the control plane for immediate forwarding to the
-  Session Runtime controller;
-- is bound by the controller to one authenticated Session Runtime workload identity;
-- is never returned to the Browser;
-- is never stored as plaintext bearer material in product tables.
+## Reconciliation and unavailable authority
 
-Grant renewal MUST preserve the same capability digest, Agent/runtime definition and OneCLI Agent
-mapping. Renewal MAY rotate private upstream authority. Changing equipment creates a new Session.
+[CAPABILITIES](reconciliation/008_capabilities.md) owns selection of `REVOKE`, `GRANT`, `HOLD` or
+`PASS`; its procedure is not duplicated here.
 
-## Broker planes
+Before mutation, work admission is closed under the Session transition contract. Excess rights are
+removed before missing ones are attached. Narrowing uses a reviewed OneCLI mutation that preserves
+shared desired rights; if that is impossible, detach first and let a later tick restore the desired
+subset. Partial mutation is verified from both inventories on the next tick.
 
-### Control plane
+A correct attachment with unavailable effectiveness waits for OneCLI propagation or the external
+owner. Organization denial, expired provider authorization and missing approval support have typed
+remediation. Repeatedly attaching the same grant cannot cure them. No worker edits organization
+policy, injects a credential or grants a wider scope as a fallback.
 
-The Broker control adapter is the only Agora component allowed to use the OneCLI control API and
-organization/project key. It uses pinned `@onecli-sh/sdk` and:
+Direct edits to an Agora-owned Agent are drift; a lasting requested change is authored as Intent.
+External restrictions remain authoritative and are never reversed to make the Intent realizable.
+Effective excess authority that Broker cannot remove keeps traffic closed and requires its owner.
 
-- creates/configures/deletes dedicated OneCLI Agents;
-- attaches, detaches and verifies per-Agent credential grants;
-- reconciles away OneCLI Agents no live Session mapping accounts for;
-- calls `getContainerConfig` after credentials are attached, since what it returns depends on them;
-- extracts the upstream OneCLI proxy bearer into Broker-private encrypted state;
-- verifies returned CA/stub material against the operator-managed runtime bundle expected by the
-  Session Runtime controller;
-- rotates authority on revoke/renew;
-- updates provider subscription authentication through an operator-only path.
+## One Pod incarnation, one OneCLI Agent
 
-`onecli run` and SDK `applyContainerConfig` are not production launch contracts. A `false`,
-incomplete or unavailable OneCLI response is a hard provisioning failure.
+`BUILD` establishes one Pod, a dedicated Agent with no grants, and an initially inactive relay
+binding. A stable operational creation key is reserved before external creation; after Kubernetes
+establishes the Pod, the binding includes its immutable UID. The Agent is never rebound to a
+successor Pod or another Workstream. It can serve successive Agora Sessions only on that same Pod.
 
-### Access relay
+Every Agent and binding MUST remain exhaustively discoverable by Workstream independently of the
+Pod's existence. Broker-private records may retain correlation, creation keys and cleanup work;
+they never prove that OneCLI still holds an Agent. Default/shared Agents are forbidden.
 
-The Broker access relay:
+A partial creation or deletion is recovered using the same target and creation key. Before creating
+another Agent after an unknown response, Broker must resolve the first attempt through OneCLI's
+inventory. A duplicate or orphan prevents work and is cleaned up by the construction/shutdown rules.
 
-- authenticates platform workload identity outside the Agent container;
-- resolves exactly one active grant and private OneCLI upstream bearer;
-- checks Session, Agent, expiry and revocation;
-- enforces the Session's compiled host allow-list, deny-by-default, refusing a non-listed CONNECT
-  before any upstream socket is opened;
-- attaches upstream proxy authentication;
-- tunnels CONNECT traffic opaquely.
+## Broker control and relay
 
-Enforcing egress here does not make it a second credential gateway: it decides only whether to open
-a tunnel, and still never terminates provider TLS, reads a tunneled byte or holds a provider
-credential. Its allow/deny decisions are auditable per Session.
+Only Broker control holds OneCLI control authority. It creates/deletes dedicated Agents, mutates
+grants, reads both attached and effective inventories, and owns encrypted private upstream Agent
+bearers. Provider credentials remain exclusively OneCLI-owned.
 
-It MUST NOT:
+The Pod receives a workload-authenticated fixed relay endpoint, non-secret auth placeholders and
+operator-managed CA trust. It receives neither the OneCLI control key nor the upstream Agent bearer.
+The runtime controller rematerializes that fixed bundle from trusted deployment state; responses
+from OneCLI are not a vehicle for arbitrary Pod configuration.
 
-- terminate provider TLS;
-- possess OneCLI CA private keys or provider credentials;
-- inspect provider paths/bodies after CONNECT;
-- inject or mint provider credentials;
-- implement provider-specific behavior;
-- accept a Browser or ACP-supplied bearer.
+Relay reachability is a fixed deterministic, conservative projection of OneCLI's freshly observed
+effective grants. An unrecognized grant has no inferred route. The projection may narrow
+reachability; it cannot widen OneCLI rights. No harness-specific independent allow-list or policy
+compiler output authorizes additional egress.
 
-This relay is an authorization seam, not a second credential gateway.
+The relay authenticates the Pod incarnation, validates that its binding is still usable, and
+forwards opaque CONNECT traffic only to OneCLI. It never terminates provider TLS, reads provider
+content, holds provider credentials or injects them. Direct Pod access to providers, the public
+Internet and OneCLI is denied independently of proxy environment variables.
 
-### OneCLI
+## Revocation and identity changes
 
-OneCLI alone owns:
+Revocation can close the bound relay and terminate established tunnels without ACP cooperation.
+It then removes or narrows OneCLI grants and verifies the resulting authority. The closure cannot
+retroactively undo completed external operations or data already returned.
 
-- provider credentials and subscription auth state;
-- Agent access tokens and selective credential mapping;
-- gateway CA/private key;
-- MITM and credential injection;
-- provider-specific auth stubs/host matching;
-- per-Agent credential-grant enforcement (which credential may be injected for which Agent);
-- request decision telemetry.
+Replacement invalidates the predecessor's binding and Agent before successor work begins. A
+reused Pod changes its authority only across the quiescent Session boundary; its Agent identity is
+retained while its exact grant set changes. Removal of a Workstream's footprint also removes its
+Agent and inactive bindings.
 
-OneCLI does NOT own Agora's network egress policy. Its OSS project scope has no network rule and no
-terminal `block *` to express one with ([ADR 0009](../adr/0009-onecli-grant-authority.md)).
+All mutations carry a target incarnation, a stable attempt key and current controller ownership.
+A stale worker must not recreate an old Agent or reopen a closed predecessor binding. Unknown
+upstream completion is resolved before reusing that target for work.
 
-Its image is pinned by digest. Agora treats its public API/SDK as an external contract and never
-imports OneCLI database tables into product code.
+## Persistence and recovery
 
-## Activation
+Broker-private durable records contain only operational ownership, workload bindings, idempotency
+and cleanup records, plus encrypted upstream Agent authority where required. They are isolated
+from product facts, projections and Saves. Their loss closes outstanding access until owner reads
+and authenticated rebinding establish a valid path.
 
-The control plane passes `grantRef` directly to the Session Runtime controller. The controller
-creates the Session-specific workload identity and calls Broker activation. Broker atomically
-binds:
+OneCLI owns credential storage, gateway CA/private-key material, upstream Agent tokens and request
+audit. Its database, CA state and encryption-key recovery set must be restored consistently.
+Credentials, tokens, prompts, tool results and URL query strings are excluded from Broker logs.
 
-```text
-grant + session_id + agent_id + workload_identity + onecli_agent
-```
-
-The activation response contains identifiers and expiry only. It returns no provider credential,
-OneCLI control key or data-plane bearer. Repeating the same request ID is idempotent; attempting to
-bind the reference to a different identity fails closed.
-
-The Session Runtime controller supplies a fixed safe runtime bundle from trusted deployment state:
-
-- credential-free Broker relay endpoint;
-- OneCLI CA trust;
-- non-secret harness auth stubs/placeholders.
-
-The bundle contains no OneCLI upstream bearer and is never accepted from Browser input.
-Broker activation fails when `getContainerConfig` does not match that bundle; the activation
-response does not become a runtime-configuration transport.
-
-## Agent invocation
-
-The right to invoke the selected Agent/provider is resolved automatically from `agent_id`, runtime
-definition and principal policy. It is not user-visible equipment.
-
-Claude Max and ChatGPT/Codex subscription auth live in OneCLI. Agent images contain the pinned
-harness and ACP adapter; OneCLI does not install them.
-
-Tool/data equipment such as Vault or GitHub remains separately selectable and auditable. Its
-credentials are stored/injected by OneCLI when supported. A missing OneCLI provider capability
-requires an explicit ADR before any alternative credential path is implemented.
-
-## MCP servers
-
-Policy returns safe ACP `mcpServers` descriptors corresponding to grants. Descriptors:
-
-- contain no provider secret;
-- contain no execution-grant, relay or OneCLI token/header;
-- point to Broker-controlled endpoints or trusted credential-free shims;
-- are resent explicitly on ACP new/resume as required;
-- are scoped by the active grant outside the descriptor.
-
-The Broker authenticates the Session Runtime's workload identity outside ACP. Consequently,
-complete `session/new`/`session/resume` envelopes can be journaled without persisting credential
-material.
-
-The Session Runtime controller MUST NOT derive MCP servers from a profile or append harness-specific
-CLI flags.
-
-## Persistence
-
-Broker-private operational state stores:
-
-- grant/activation lifecycle and idempotency records;
-- workload binding;
-- OneCLI Agent mapping;
-- encrypted upstream proxy authority;
-- publication/reconciliation state.
-
-It is not `product.*`. It MUST survive Broker restart or invalidate outstanding access fail-closed.
-
-OneCLI separately owns:
-
-- its PostgreSQL database;
-- `/app/data` CA/private-key state;
-- an externally supplied encryption key.
-
-Production backup/restore MUST preserve those three OneCLI assets as a compatible recovery set.
-
-## Lifecycle
-
-- **Issue:** create/reconcile the Session's OneCLI Agent, attach and verify its credential grants,
-  and compile its egress allow-list, before returning `grantRef`.
-- **Activate:** bind the controller-created workload identity and enable the relay mapping.
-- **Suspend:** disable relay mapping and rotate upstream authority; retain only same-Session
-  operational mapping needed for resume.
-- **Renew:** preserve capability digest and rotate/extend private authority.
-- **Revoke:** deny at the relay first, then rotate/delete OneCLI authority idempotently.
-- **Close/delete:** remove relay mapping and dedicated OneCLI Agent after runtime cleanup.
-- **Provider renewal:** update OneCLI-owned subscription auth without touching custody/product
-  history.
-
-Every transition is audited without prompt/tool content, URLs with query strings or tokens.
-
-## Failure behavior
-
-- OneCLI control API unavailable: no issue/renew/materialize succeeds.
-- Credential grants not verifiably effective, or effective beyond what was intended: no grant is
-  issued.
-- Broker relay unavailable: no provider traffic bypasses it.
-- OneCLI gateway unavailable: the Agent call fails; no direct provider fallback exists.
-- Upstream bearer suspected leaked: disable relay mapping, rotate OneCLI Agent token and reconcile.
-- CA state lost/mismatched: Session Runtimes fail TLS readiness; operators restore the compatible
-  recovery set or perform an explicit rotation.
-- Provider token expires: typed provider-auth failure and operator renewal; never copy the token into
-  the Agent Pod.
-
-## Equipment change
-
-The immutable security envelope is part of Session identity. A user requesting different equipment:
-
-1. durably suspends the current Session;
-2. revokes its active relay/grant;
-3. opens a new Session with a distinct OneCLI Agent and new capability digest;
-4. uses Workstream handoff to preserve product continuity.
-
-ACP mode/model/config changes that do not alter resource authority remain inside the Session.
+The exact public OneCLI API version, supported grant restrictions and negative enforcement checks
+must be pinned and demonstrated before an integration is enabled. This design does not assert that
+an unverified adapter or existing machine-readable contract already meets these requirements.

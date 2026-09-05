@@ -159,16 +159,24 @@ valid values depend on the running model: the adapter rebuilds the option when t
 clamps an unsupported level to `default`. The field is therefore only meaningful once
 `observation.model` is what the Intent wants, which is how the rule that reads it orders its work.
 
-## `observation.capabilities`
+## `observation.grants.attached` and `observation.grants.effective`
 
-`observation.capabilities` is the set of capability ids currently effective as grants on the
-Workstream's OneCLI Agent, possibly empty. It is derived from a fresh, exhaustive read of the
-Agent's effective grants from OneCLI — the owning system
-([ADR 0009](../../adr/0009-onecli-grant-authority.md)) — and never from an Intent value or a
-persisted Agora row.
+These fields are sets of exact non-secret grant authorizations on the one Pod-bound OneCLI Agent:
 
-A capability is in the set only when every grant that realizes it is fully effective on the Agent; a
-partially applied capability is absent. A grant changed directly on OneCLI is observed as it really
-is, so a manual edit that diverges from Intent is visible here and reconverged by the next tick.
+- `observation.grants.attached` reports what OneCLI currently attaches to that Agent, including
+  attachments masked by organization policy;
+- `observation.grants.effective` reports the authority actually usable after OneCLI's restrictions.
+
+Both come from fresh, exhaustive OneCLI inventories for the same Agent incarnation. They are
+defined only after construction establishes that unique Agent. Their representation and equality
+are defined in [Capabilities and OneCLI](../10-equipment-and-broker.md#exact-grant-comparison).
+Credential/connection identity, tool scope, approval mode and restrictions are preserved. Unknown
+or partially attached rights are retained as independently removable entries, never dropped because
+they do not complete a named capability. Failed or inconsistent inventory reads produce neither a
+fabricated empty set nor a conclusion about effective authority.
+
+The observations depend on no Intent value. The rule compiles the desired capability set separately
+for comparison. OneCLI denial reasons and source revisions accompany acquisition as diagnostics;
+they are not a capability, action result or persisted proof of current access.
 
 Later rules extend this registry when they require other normalized evidence.
