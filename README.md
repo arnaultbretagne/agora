@@ -40,7 +40,8 @@ README.md                this entry point
 The [implementation master plan](docs/master-plan.md) sequences the work into slices and keeps the
 register of prerequisites each slice must resolve; it is a roadmap, not a contract. The
 [field findings](docs/field-findings.md) consolidate what the retired implementation measured on real
-infrastructure and which of its bricks each slice may copy.
+infrastructure and which of its bricks each slice may copy. Each slice has an executable plan under
+[`docs/plans/`](docs/plans/README.md).
 
 Specify and implement one behavior at a time, with aligned wire/storage contracts and evidence for
 its acceptance scenarios. Introduce code, tests and tooling when that slice needs them under
