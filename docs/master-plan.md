@@ -231,11 +231,11 @@ depends on it.
 
 **Open before merge.** None; this slice uses only registered vocabulary.
 
-### S2 — Intent authoring, workset and ticks
+### S2 — Intent authoring, workset and ticks (done)
 
 **Goal.** The durable spine of [ADR 0003](adr/0003-reconciliation-over-state.md): complete Intents
 are appended, one work row per Workstream is coalesced, workers claim due work, evaluate, and
-finalize conditionally; nothing external is mutated yet.
+finalize conditionally; nothing external is mutated yet. Pull request #40.
 
 **Sources.** ADR 0003; [engine](specs/reconciliation/engine.md) sections *Intent authoring*,
 *Work generations, claims and leases*, *Tick and acquisition*, *Retry budgets and fairness*,
