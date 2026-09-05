@@ -187,7 +187,9 @@ endpoint and a readiness that reflects its owner connections.
 
 ## 3. Slices
 
-Every slice follows the same shape and is one or a few pull requests:
+Each slice has an executable plan under [`docs/plans/`](plans/README.md), written for a development
+agent: reading list, spec repairs to make first, ordered steps with acceptance, scenarios to run,
+reuse allowed from the archive. Every slice follows the same shape and is one or a few pull requests:
 
 1. **Spec alignment** — the owning specification is extended or repaired first if a needed
    contract is missing; open questions are named, not filled by inference.
