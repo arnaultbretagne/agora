@@ -7,10 +7,16 @@ state by Workstream; commands for which each occurrence matters, including user 
 Handoffs, retain their own identities. Coalescing one cannot discard the other.
 
 An operational attempt binds a stable key to Workstream, selected verb/command, Intent and catalogue
-revision, ownership epoch, concrete target incarnation and immutable payload digest. Reusing the
+revision, original ownership epoch, concrete target incarnation and immutable payload digest. Reusing the
 key with another target or payload is a conflict. The owner records dispatch possibility, known
 partial effects, deadlines and unresolved remote completion across crashes. These are recovery
 records, not a Session lifecycle or an Observation of present reality.
+
+Claim takeover records a newly authorized recovery owner against the same reservation. It preserves
+the original dispatch provenance and never treats a new epoch as proof that dispatch is safe to repeat.
+
+The [engine contract](reconciliation/engine.md) defines claims, mutation epochs, due work and
+conditional finalization. This specification supplies its operation-specific retry obligations.
 
 A timeout does not prove non-acceptance. A successful response does not become a future Observation.
 Before any retry, reconcile the same target through its owner and validate current ownership and

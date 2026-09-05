@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — HOLD, effect ownership, unknown delivery and bounded recovery.
 
 ## Context
 
@@ -44,37 +45,22 @@ Within one PostgreSQL transaction:
 3. an empty `NOTIFY` is emitted on `workstream_reconciliation`.
 
 ```text
-                 Complete Intent for a Workstream
-                              │
-                              ▼
-┌──────────────── PostgreSQL transaction ────────────────┐
-│                                                        │
-│  workstream_intent_events                              │
-│    INSERT (workstream_id, intent_seq, intent)           │
-│                                                        │
-│  workstream_reconciliation_work                        │
-│    UPSERT (workstream_id → intent_seq, work_generation) │
-│                                                        │
-│  NOTIFY workstream_reconciliation                      │
-│    empty payload                                       │
-│                                                        │
-└─────────────────────────────┬──────────────────────────┘
-                              │ COMMIT
-                              ▼
-                     NOTIFY = one tick
-                              │
-                              ▼
-       read work → read Intent → observe → evaluate ordered rules
-                                                   │
-                    ┌──────────────────┼──────────────────┐
-                    │                  │                  │
-                  PASS              ACTION(verb)          CONVERGED
-                    │                  │                  │
-                    ▼                  ▼                  ▼
-              next rule              act       conditionally finalize
-              (same tick)             │
-                                      ▼
-                            NOTIFY = next tick
+Complete Intent
+      │
+      ▼
+PostgreSQL transaction: immutable Intent + coalesced work + empty NOTIFY
+      │ commit
+      ▼
+Tick: claim due work → read Intent → observe → ordered rules
+                                        │
+              ┌───────────┬─────────────┼───────────────────┐
+              ▼           ▼             ▼                   ▼
+             PASS     ACTION(verb)     HOLD              CONVERGED
+              │           │             │                   │
+          next rule     attempt     active work       conditional finalize
+          same tick       │        watch/backoff       no successor tick
+                          ▼
+                 schedule + empty NOTIFY
 ```
 
 `intent_seq` provides logical ordering within one Workstream. `created_at` records when an Intent
@@ -109,8 +95,10 @@ For each work row considered during one tick, the reconciler:
    - `PASS` continues with the next ordered rule during the same tick;
    - `ACTION(verb)` executes that action and ends evaluation of that work row for the current tick;
      after the action attempt completes, an empty `NOTIFY` emits the next tick;
-   - `CONVERGED` ends evaluation, emits no further tick, and conditionally finalizes the work row
-     only if both `intent_seq` and `work_generation` still match what it claimed;
+   - `HOLD` ends evaluation without mutation or an immediate successor tick; the unrealized row
+     remains scheduled for its owner watch and bounded backoff;
+   - `CONVERGED` ends evaluation and conditionally finalizes the work row only while its Intent,
+     work generation, claim, ownership and evidence remain valid; it emits no successor tick;
 5. logs the resulting execution through Session facts when execution occurs.
 
 This evaluation applies independently to each claimed work row. Every new tick reevaluates that
@@ -119,8 +107,27 @@ tick after an action modifies neither `intent_seq` nor `work_generation`; the du
 remains until a rule returns `CONVERGED`. Action success is not treated as Observation: only the
 following tick determines what now exists.
 
-If a newer Intent arrives during reconciliation, the older pass may finish its current safe action
-but may not remove the newer work. The Workstream is reconsidered from its latest complete Intent.
+If a newer Intent arrives, the older pass cannot authorize further obsolete work, finalize the
+newer row or reopen admission. An already dispatched external request may still complete; trusted
+runtime, Broker and ACP boundaries retain, fence and settle that attempt before conflicting work
+proceeds. The next evaluation uses the latest complete Intent.
+
+`work_generation` protects workset finalization; it does not fence external effects. Claims/leases
+select workers, while durable mutation ownership and target-specific attempt records constrain the
+trusted effect owners. A worker-side lease check before a network call is insufficient. Unknown
+Pod/Agent creation cannot be retried with a new key or ignored when finalizing absence. An old grant
+request cannot make an extinguished target usable after a newer off decision.
+
+These records are operational control, not a Runtime domain identity or current-state model.
+Owners supply fresh evidence and enforce their own request boundary. Where an upstream cannot
+conditionally reject stale requests, the trusted writer serializes and resolves possible acceptance
+before releasing the target; inability to prove that resolution remains explicit uncertainty.
+
+Lost notifications, expired claims and finalized rows are covered by bounded polling, source watches
+and recovery sweeps. A HOLD or acquisition failure cannot disappear from scheduling; an exhausted
+retry budget remains unrealized with diagnostics. Invalidating external changes re-enqueue even
+when the Workstream is absent from the workset. A selected catalogue revision is shared across
+workers, and publication durably schedules all affected Workstreams.
 
 Several Intents may therefore be coalesced before execution. An Intent that is replaced before it
 affects execution may produce no Session.
@@ -262,20 +269,21 @@ diagnostics. They do not determine present convergence.
 
 ## Consequences
 
-- External actions have at-least-once rather than exactly-once execution semantics.
-- Reconciliation primitives must be idempotent or safely repeatable.
+- Reconciliation attempts may repeat; exactly-once external execution is not assumed.
+- Effects must be idempotent/safely repeatable or have explicit unknown-acceptance recovery. ACP
+  prompts and context creation are never blindly retried after possible acceptance.
 - For each claimed work row, a tick traverses any number of `PASS` results but executes at most one
   action.
-- An action emits the next tick; `CONVERGED` conditionally finalizes the work and emits no successor
-  tick.
+- An action schedules the next tick; HOLD retains watch/backoff work without an immediate tick;
+  CONVERGED conditionally finalizes without a successor tick.
 - Intermediate Intents may never affect execution and may produce no Session.
 - One Workstream has at most one coalesced desired-state work row.
 - Absence from `workstream_reconciliation_work` records no permanent truth about convergence.
 - External watches and bounded resynchronization must be able to place a Workstream back into the
   workset when current reality may have drifted.
-- Claiming, concurrent Intent insertion, retry, backoff and conditional finalization require a
-  normative specification. That specification must not lose either a newer Intent or a same-Intent
-  resynchronization wake-up.
+- The normative engine contract defines concurrent authoring, claims, effect ownership, retry,
+  acquisition and finalization. It preserves newer Intents and same-Intent wakes and prevents late
+  effects from reopening retired targets. Its owner API requirements must be demonstrated.
 - Operations for which every occurrence matters, such as submitting a prompt, are commands and do
   not use this coalescing mechanism.
 - The exact Observation-to-action decision tree is intentionally deferred to a separate normative
@@ -286,3 +294,5 @@ diagnostics. They do not determine present convergence.
 - [Glossary](../specs/00-glossary.md)
 - [Domain model](../specs/02-domain-model.md)
 - [Reconciliation](../specs/reconciliation/README.md)
+- [Engine contract](../specs/reconciliation/engine.md)
+- [Failure and idempotency](../specs/13-failure-and-idempotency.md)

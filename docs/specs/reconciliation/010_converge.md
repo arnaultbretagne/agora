@@ -30,3 +30,6 @@ Conditional finalization also completes the idempotent attribution/admission bou
 change opens its successor Session before further work. If ownership, Intent or target evidence
 changed, neither finalization nor admission may complete. `CONVERGED` is never a stored permission
 to execute after its supporting evidence expires.
+
+The [engine](engine.md#conditional-finalization-and-admission) also checks unresolved owner requests.
+A claim/Intent CAS alone cannot make a potentially late external effect safe.

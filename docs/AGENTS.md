@@ -32,7 +32,7 @@ After the baseline, read only the row required by the topic being discussed or c
 | Saves, Anchors, restore, resume or refill | ADR [0008](adr/0008-saves-anchors-and-refill.md), [Native continuity](specs/06-anchors-and-handoffs.md), [Saves](specs/07-custody.md) and [Failure/idempotency](specs/13-failure-and-idempotency.md) |
 | Shutdown, partition or physical extinction | ADRs [0007](adr/0007-kubernetes-runtime.md), [0008](adr/0008-saves-anchors-and-refill.md), [0009](adr/0009-onecli-grant-authority.md), then [Runtime control](specs/08-session-runtime-control.md) and [Security](specs/11-security.md) |
 | Capabilities, grants or OneCLI | ADR [0009](adr/0009-onecli-grant-authority.md) and [0010](adr/0010-capabilities-are-onecli-grants.md), [Capabilities and OneCLI](specs/10-equipment-and-broker.md), then the grant Observations, verbs and `CAPABILITIES` rule |
-| PostgreSQL Intent history or workset | ADR [0003](adr/0003-reconciliation-over-state.md) and [0005](adr/0005-postgresql-durable-store.md) |
+| PostgreSQL Intent history, workset, claims or retries | ADRs [0003](adr/0003-reconciliation-over-state.md) and [0005](adr/0005-postgresql-durable-store.md), then [Engine contract](specs/reconciliation/engine.md) and [Failure/idempotency](specs/13-failure-and-idempotency.md) |
 
 Follow links from a selected rule into the taxonomies instead of restating their definitions from
 memory. Read complete selected files; grep snippets are discovery, not sufficient grounding.
@@ -71,8 +71,15 @@ These are warnings, not decisions to complete by inference:
 - Exact attached/effective grants are specified in spec 10 and the reconciliation taxonomies.
   Other flat specifications still contain old lifecycle/authority contracts until explicitly aligned.
 - Specs 03, 04, 06–11, 13 and 15 now define the remodeled boundaries, continuity, shutdown and
-  integration obligations. The engine ownership/scheduling contract still requires alignment.
+  integration obligations. The [engine contract](specs/reconciliation/engine.md) defines ownership,
+  acquisition, scheduling, unknown attempts and finalization; implementations must demonstrate its
+  external-owner fencing requirements rather than assume a database claim is sufficient.
 - ADR 0008 explicitly makes preservation bounded best-effort and termination mandatory. Physical
   extinction can remain unproved under partition; spec 08 retains the corresponding obligation.
 - Existing wire/storage contracts and seed policy have not been validated by these design edits.
   Their alignment and pinned integration conformance remain implementation prerequisites.
+- Flat specs 00, 01, 02, 05, 12 and 14 still require alignment; the [spec index](specs/README.md)
+  routes the authoritative replacement contracts. Do not infer new domain fields from old schemas.
+- Seed fidelity, workspace consistency, source freshness/deadline values and operator fencing
+  mechanisms require pinned implementation evidence. A transcript URI or vanished Pod API object
+  alone does not satisfy the new continuity/extinction contracts.

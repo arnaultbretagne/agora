@@ -70,6 +70,36 @@ Source: [ADR 0008](../adr/0008-saves-anchors-and-refill.md), specs
 | `OFF-007`: provider accepted an operation before revocation | Close existing paths and forbid new requests; preserve uncertainty about the remote effect instead of claiming rollback. |
 | `OFF-008`: a partial restore is stopped | Do not capture/publish its unverified native context over the preceding healthy Anchor. |
 
+## Engine concurrency and recovery
+
+Source: [ADR 0003](../adr/0003-reconciliation-over-state.md), the
+[engine contract](reconciliation/engine.md) and [spec 13](13-failure-and-idempotency.md).
+
+| Scenario | Required outcome |
+|---|---|
+| `ENGINE-001`: two complete Intent requests race | Authoring gives distinct increasing sequences, keeps both immutable events and coalesces work onto the latest; identical request-key retries add no event. |
+| `ENGINE-002`: same request key is reused with another payload | Reject the conflict; do not reinterpret the old command or Intent. |
+| `ENGINE-003`: an old pass converges after a newer Intent commits | Exact conditional finalization fails and the newer work/admission boundary remains intact. |
+| `ENGINE-004`: drift re-enqueues the same Intent during finalization | A new work generation survives; comparing only Intent sequence cannot delete it. |
+| `ENGINE-005`: a work row is deleted/recreated and an old worker returns | Non-reused generation/claim/epoch values reject the ABA attempt. |
+| `ENGINE-006`: a claim expires while its worker is paused in a network call | Transfer blocks new old-owner dispatch and tracks the possibly accepted request before any conflicting effect. |
+| `ENGINE-007`: delayed GRANT or Agent creation arrives after off | The old target stays gated, the late effect is discoverable and cleaned, and off cannot finalize while the request remains unresolved. |
+| `ENGINE-008`: BUILD response is lost while inventory is still empty | Retain the reserved creation attempt; no second build or false off conclusion can precede resolution. |
+| `ENGINE-009`: old TURN_OFF returns after a replacement is authorized | Cleanup uses original UID/Agent targets; it cannot delete by a reused name or reopen/finalize anything for the successor. |
+| `ENGINE-010`: every notification is lost, or thousands are duplicated | Polling finds durable due work; duplicates coalesce without bypassing backoff or duplicating effects. |
+| `ENGINE-011`: HOLD's watch is lost or a permanent error exhausts retry budget | Durable bounded recheck remains, failure is visible and no unchanged action spins or falsely converges. |
+| `ENGINE-012`: finalized live Workstream drifts while absent from the workset | Owner watch or bounded sweep re-enqueues it; scanning active work rows alone fails acceptance. |
+| `ENGINE-013`: separate grant reads straddle an external mutation | Reject/reacquire the inconsistent pair; no fabricated attached/effective equality. |
+| `ENGINE-014`: context or selected registry revision changes during a tick | Invalidate prerequisite evidence; old resolution cannot mutate/admit/finalize the new target. |
+| `ENGINE-015`: action completion races a fresh wake | Its conditional release/backoff update cannot postpone or overwrite newer work; the continuation itself does not invent an Intent revision. |
+| `ENGINE-016`: one Workstream repeatedly fails and other due work arrives | Bounded claims/scans and per-row backoff prevent starvation. |
+| `ENGINE-017`: off is requested while OneCLI is down or a prior harness definition is retired | Accept the authorized complete off Intent with retained selections and start reachable cleanup; inapplicable execution settings cannot veto extinction. |
+| `ENGINE-018`: database work/admission commit succeeds but owner activation fails | Keep execution gated and re-observe; database success is not proof that the current external target is safe to use. |
+
+Exercise these as controlled interleavings with injected process pauses/crashes, owner responses and
+clock advances. Abstract table partition checks alone do not establish lease fencing, delivery
+idempotency, wake-up liveness or external service conformance.
+
 ## Canonical product history
 
 - Journal complete accepted ACP envelopes before controlled dispatch or handling.

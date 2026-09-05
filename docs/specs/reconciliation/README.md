@@ -26,10 +26,16 @@ and recovery. Every tick restarts at POWER with current owner evidence.
 
 ## Cross-cutting contracts
 
+- [Engine: claims, effects, retries, watches and finalization](engine.md)
 - [Session boundaries and admission](../03-session-lifecycle.md)
 - [ACP integration and current evidence](../04-acp-integration.md)
+- [Anchors, refill and native continuity](../06-anchors-and-handoffs.md)
+- [Saves and custody](../07-custody.md)
+- [Kubernetes runtime control and extinction](../08-session-runtime-control.md)
 - [Harness registry and conformance](../09-agent-registry.md)
 - [Exact capabilities and OneCLI grants](../10-equipment-and-broker.md)
+- [Security](../11-security.md)
+- [Failure and idempotency](../13-failure-and-idempotency.md)
 - [Acceptance scenarios](../15-acceptance-and-migration.md)
 
 Authority precedes bootstrap that requires it; config precedes the effectful opening Handoff.

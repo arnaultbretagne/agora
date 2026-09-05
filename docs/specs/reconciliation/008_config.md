@@ -2,9 +2,9 @@
 
 `CONFIG` is evaluated after [`SESSION`](007_session.md) passes, on a live Session. It
 reconciles the sticky session configuration the harness exposes as ACP configuration options —
-today `model` and `effort` — toward the Intent. These options are set once per session and persist
-until changed, so a session opened fresh after a Pod replacement starts at the harness's defaults
-and is brought back to Intent here: the "re-apply on wake" of earlier designs, as a reconciled rule.
+today `model` and `effort` — toward the Intent. These options persist until changed. A fresh or
+resumed context may begin with values that differ from Intent; this rule reads and reconciles the
+actual values before any opening Handoff or user work.
 
 ## Inputs
 

@@ -17,6 +17,9 @@ across crashes. These records cannot prove that a Pod is ready or absent. Live K
 launcher/process evidence and verified infrastructure fencing establish current conditions.
 Historical Session facts are provenance, never a live resource inventory.
 
+The [engine ownership protocol](reconciliation/engine.md#effect-ownership-and-late-requests)
+governs creation, mutation and retirement requests, including unknown upstream acceptance.
+
 ## Construction contract
 
 A creation request accepts only Workstream identity, still-current mutation ownership, stable

@@ -115,7 +115,7 @@ origin. A response, command receipt or URI match alone does not establish it.
 
 `SET_MODEL` is selected when the live Session runs a model other than `intent.model`. It sets the
 session's `model` configuration option to `intent.model` by `session/set_config_option`; the change
-takes effect on the next turn, and the adapter re-derives the valid effort levels for the new model.
+must take effect before the next turn, with actual effort options reported for the new model.
 Its observable objective is a subsequent fresh `observation.model = intent.model`.
 
 **Owner:** control plane/ACP. **Inputs:** current target context, desired model, verified transition

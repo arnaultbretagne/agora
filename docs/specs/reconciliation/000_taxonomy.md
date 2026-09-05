@@ -20,6 +20,10 @@ The reconciliation unit is the Workstream. An empty `NOTIFY` is one tick and cau
 reread the durable workset. The evaluation defined below applies independently to each claimed work
 row: it reads that row's complete Intent and the Observations required by the rules.
 
+The [engine contract](engine.md) defines durable due work, claims, source acquisition, mutation
+ownership, unknown-attempt recovery and conditional finalization. Notifications prompt a scan;
+they neither bypass due times nor carry durable state. Polling and owner watches recover missed ticks.
+
 ## Rules
 
 Rules are evaluated by ascending file prefix, beginning with `004_power.md` for every claimed work
@@ -52,7 +56,7 @@ PASS | ACTION(verb) | HOLD | CONVERGED
 - `PASS` evaluates the next ordered rule for the same work row during the same tick.
 - `ACTION(verb)` executes that single action and ends evaluation of that work row for the current
   tick. When the action attempt completes, the reconciler emits the empty `NOTIFY` that triggers
-  the next tick.
+  the next eligible tick. Persisted backoff controls eligibility even when notifications repeat.
 - `HOLD` ends evaluation of that work row for the current tick without finalizing it: the Intent is
   not yet realized, but no rule can act because the next change is owed by an external owner. It
   changes nothing, selects no verb, returns no value and emits no successor tick. The work row stays
@@ -75,3 +79,8 @@ without returning `ACTION(verb)`, `HOLD` or `CONVERGED` is incomplete.
 
 The next tick never trusts an action response as current state. It rebuilds Observation and
 reevaluates from the first rule.
+
+Claim loss or unavailable/ambiguous evidence leaves durable work under engine scheduling; neither
+is a fifth result or a reason to invent a domain HOLD row. Finalization additionally checks that
+no unresolved owner request can invalidate convergence. Work generation protects the work row;
+external mutation ownership and concrete targets protect effects (engine contract).

@@ -67,6 +67,11 @@ explicit broad entry and cannot compare equal to a reviewed finite subset. Restr
 canonicalized only when the pinned OneCLI contract proves equivalence. Unknown fields or entries
 remain distinguishable and prevent equality; they are never silently discarded.
 
+An observed scope whose inclusion in the reviewed desired set cannot be proved is conservatively
+classified as excess, retaining its removable OneCLI entry identity. Desired compilation never
+emits an unknown scope. If the owner cannot identify or remove the entry, access stays gated with
+a diagnostic; uncertainty cannot make the grant table pass.
+
 A denied permission contributes no usable authorization to `E`; its attachment stays in `A` and
 its denial reason remains acquisition diagnostics. An approval requirement contributes its actual
 restricted authorization, never an unconditional allow. Comparisons never infer effective access
@@ -146,6 +151,10 @@ Agent and inactive bindings.
 All mutations carry a target incarnation, a stable attempt key and current controller ownership.
 A stale worker must not recreate an old Agent or reopen a closed predecessor binding. Unknown
 upstream completion is resolved before reusing that target for work.
+
+The [engine ownership protocol](reconciliation/engine.md#effect-ownership-and-late-requests)
+governs these mutations, including a request that arrives after an obsolete worker loses its claim.
+Unsettled creation remains an operational obligation even before OneCLI inventory shows its result.
 
 ## Persistence and recovery
 

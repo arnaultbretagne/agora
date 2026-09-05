@@ -51,8 +51,9 @@ combination. Agora installs or downloads nothing as part of Pod realization.
 Adding, removing or upgrading a supported tool changes the common bundle and rebuilds and tests
 every harness image.
 
-Personas and skills are versioned files or configuration selected by Intent. Their effective
-versions are recorded with the Session, but they grant no authority. Security never depends on a
+Personas and skills, when their selection is specified, are versioned files or configuration rather
+than image variants. The current taxonomy permits only default persona and has no skill field.
+Effective versions are Session provenance and grant no authority. Security never depends on a
 hostile process being unable to find, copy or invoke an available file or executable.
 
 Trust applies to the provenance of the image, not to the running execution. The harness process and

@@ -16,3 +16,9 @@ meaning.
 | `intent.persona` | `default` | **Frozen.** The reviewed fresh/restore path must establish default persona; an echoed request value is not proof. Persona selection remains disabled until an effective application/readback contract is registered. No rule infers it from an absent ACP option. |
 
 Later rules extend this registry when their Intent fields are specified.
+
+Catalogue/compiler revisions are trusted resolution provenance, not extra public Intent fields.
+Every worker uses the same selected revision set under the [engine contract](engine.md). On Intent
+authoring validates executable model/effort/authority combinations. For off, those settings are
+inapplicable to realization: a complete request may retain previously accepted selections, without
+depending on OneCLI availability or newly enabled catalogue entries to authorize extinction.
