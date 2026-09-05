@@ -107,3 +107,120 @@ GRANT UPDATE (
 GRANT SELECT ON workstream_intent_events TO agora_engine;
 GRANT SELECT, INSERT, UPDATE, DELETE ON workstream_reconciliation_work TO agora_engine;
 GRANT USAGE ON SEQUENCE work_generation_seq TO agora_product, agora_engine;
+
+-- S3 canonical history — facts and Sessions ------------------------------------------------------
+
+-- One canonical ordered fact stream per Workstream (ADR 0002, ADR 0004). head_seq is the
+-- allocator: appends take the Workstream row lock (the same one Intent authoring takes), so
+-- birth, Intent events and facts are totally ordered. The trigger forbids a decrease; the
+-- delete+recreate ABA concern does not apply to a row that is never deleted.
+ALTER TABLE workstreams ADD COLUMN head_seq bigint NOT NULL DEFAULT 0;
+
+CREATE FUNCTION workstream_head_seq_never_regresses() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.head_seq < OLD.head_seq THEN
+    RAISE EXCEPTION 'head_seq cannot decrease on workstreams (workstream %: % -> %)',
+      OLD.id, OLD.head_seq, NEW.head_seq
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER workstreams_head_seq_no_regression
+BEFORE UPDATE ON workstreams
+FOR EACH ROW EXECUTE FUNCTION workstream_head_seq_never_regresses();
+
+-- Sessions are filtered views of the Workstream stream with their own identity — NOT a second
+-- journal and NOT a lifecycle (no phase column; ADR 0002, ADR 0003). opened_at_seq is the seq of
+-- the session.opened fact; cutoff_h is the head before any fact of this Session (CONT-001/002).
+-- The partial unique index enforces at most one current execution per Workstream (ADR 0003).
+CREATE TABLE sessions (
+  id uuid PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  ordinal int NOT NULL,
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  opened_at_seq bigint NOT NULL,
+  cutoff_h bigint NOT NULL,
+  pod_uid text NOT NULL,
+  provenance jsonb NOT NULL,
+  attribution_ended_at timestamptz NULL,
+  UNIQUE (workstream_id, ordinal),
+  UNIQUE (workstream_id, pod_uid)
+);
+
+CREATE UNIQUE INDEX sessions_one_current_per_workstream
+  ON sessions (workstream_id) WHERE attribution_ended_at IS NULL;
+
+CREATE TABLE workstream_facts (
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  seq bigint NOT NULL,
+  session_id uuid NULL REFERENCES sessions(id),
+  kind text NOT NULL,
+  payload jsonb NOT NULL,
+  causation jsonb NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workstream_id, seq)
+);
+
+CREATE INDEX workstream_facts_by_session ON workstream_facts (session_id, seq);
+
+-- S3 projections ---------------------------------------------------------------------------------
+
+-- Disposable, checkpointed, rebuildable read models (ADR 0004: readable models are projections).
+-- through_seq is the last fact seq folded for this projector on this Workstream; a projector
+-- version change forces a rebuild (checkpoint row replaced from seq 0).
+CREATE TABLE projection_checkpoints (
+  projector text NOT NULL,
+  workstream_id uuid NOT NULL,
+  projector_version text NOT NULL,
+  through_seq bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (projector, workstream_id)
+);
+
+CREATE TABLE projection_sessions (
+  workstream_id uuid NOT NULL,
+  session_id uuid NOT NULL,
+  ordinal int NOT NULL,
+  pod_uid text NOT NULL,
+  opened_at timestamptz NOT NULL,
+  cutoff_h bigint NOT NULL,
+  attribution_ended_at timestamptz NULL,
+  image_digest text NULL,
+  first_seq bigint NOT NULL,
+  latest_seq bigint NOT NULL,
+  PRIMARY KEY (workstream_id, session_id)
+);
+
+-- S3 authority boundaries ------------------------------------------------------------------------
+
+DO $$
+DECLARE
+  role_name text;
+BEGIN
+  FOREACH role_name IN ARRAY ARRAY['agora_projector']
+  LOOP
+    BEGIN
+      EXECUTE format('CREATE ROLE %I NOLOGIN', role_name);
+    EXCEPTION
+      WHEN duplicate_object OR unique_violation THEN
+        NULL;
+    END;
+  END LOOP;
+END;
+$$;
+
+REVOKE ALL ON sessions, workstream_facts, projection_checkpoints, projection_sessions FROM PUBLIC;
+
+-- Product (control plane / runtime birth): append facts under the Workstream lock, advance the
+-- head, open and end Sessions. Facts and Sessions are immutable once written — no UPDATE, no
+-- DELETE on workstream_facts; only the attribution boundary on sessions may be closed.
+GRANT UPDATE (head_seq) ON workstreams TO agora_product;
+GRANT SELECT, INSERT, UPDATE (attribution_ended_at) ON sessions TO agora_product;
+GRANT SELECT, INSERT ON workstream_facts TO agora_product;
+
+-- Projector: read canonical state, own the projection tables and their checkpoints. It never
+-- writes history.
+GRANT SELECT ON workstream_facts, sessions TO agora_projector;
+GRANT SELECT, INSERT, UPDATE, DELETE ON projection_checkpoints, projection_sessions TO agora_projector;

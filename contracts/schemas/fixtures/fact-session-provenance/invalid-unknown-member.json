@@ -1,0 +1,6 @@
+{
+  "imageDigest": "sha256:9f2c7a1b",
+  "workloadIdentity": "agora-wl-1",
+  "runtimeIds": {},
+  "bearer": "sk-totally-a-secret"
+}

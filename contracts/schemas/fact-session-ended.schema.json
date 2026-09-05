@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/fact-session-ended.schema.json",
+  "title": "session.ended payload",
+  "description": "Payload of the session.ended fact: attribution to this Session ended. This is not an off Session — ADR 0002.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason"],
+  "properties": {
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why attribution ended (e.g. superseded by a successor Session, extinguished)."
+    }
+  }
+}

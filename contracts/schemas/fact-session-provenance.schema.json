@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/fact-session-provenance.schema.json",
+  "title": "session.provenance payload",
+  "description": "Payload of a session.provenance fact: non-secret runtime correlations recorded during the Session (ADR 0002 — Facts and related records). Never carries credentials or bearer tokens (secret guard applies).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtimeIds"],
+  "properties": {
+    "imageDigest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Admitted pinned image digest of the envelope (ADR 0006)."
+    },
+    "workloadIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Scoped workload identity the Pod runs under."
+    },
+    "runtimeIds": {
+      "type": "object",
+      "description": "Non-secret runtime identifiers (process generation, bridge context id, policy version, ...)."
+    }
+  }
+}

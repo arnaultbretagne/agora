@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/fact-kinds.json",
+  "title": "Workstream fact kinds",
+  "description": "Registry of canonical fact kinds (ADR 0004). A kind must be registered here before any code may append it. Payload schemas are JSON Schema 2020-12 documents under contracts/schemas/. Grounding names the normative section the kind exists for; kinds without a normative home are not registered.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kinds"],
+  "properties": {
+    "kinds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "sessionScoped", "payloadSchema", "grounding"],
+        "properties": {
+          "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$" },
+          "sessionScoped": {
+            "type": "boolean",
+            "description": "True when the fact must reference exactly one session_id (ADR 0004: every canonical fact references exactly one Session)."
+          },
+          "payloadSchema": { "type": "string", "format": "uri" },
+          "grounding": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "kinds": [
+    {
+      "kind": "session.opened",
+      "sessionScoped": true,
+      "payloadSchema": "https://agora.dev/schemas/fact-session-opened.schema.json",
+      "grounding": "execution.md — Session birth and admission: birth pins cutoff H, opens the Session and records Pod UID/provenance in one serialized operation"
+    },
+    {
+      "kind": "session.ended",
+      "sessionScoped": true,
+      "payloadSchema": "https://agora.dev/schemas/fact-session-ended.schema.json",
+      "grounding": "ADR 0002 — turning execution off ends attribution and no off Session exists; execution.md — Hot Session boundaries"
+    },
+    {
+      "kind": "session.provenance",
+      "sessionScoped": true,
+      "payloadSchema": "https://agora.dev/schemas/fact-session-provenance.schema.json",
+      "grounding": "ADR 0002 — Facts and related records: non-secret correlations (image digest, workload identity, runtime ids); ADR 0006"
+    }
+  ]
+}

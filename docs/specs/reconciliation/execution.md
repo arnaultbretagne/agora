@@ -62,7 +62,10 @@ revocation cannot retract returned data or establish rollback.
 Every established Pod gets a new Agora Session before native launch or any ACP envelope, including
 failed bootstrap attempts. In one operation serialized with Workstream appends, pin opening cutoff
 `H` to the prior head, open the Session and record the Pod UID/provenance. Repeating that birth cannot
-create another Session or cutoff. A request that establishes no Pod creates no Session.
+create another Session or cutoff. A request that establishes no Pod creates no Session. The birth
+operation appends the Session's first fact — the registered `session.opened` kind
+(`contracts/schemas/fact-kinds.json`) — so nothing of this Session precedes `H`; ending attribution
+appends `session.ended`. No `off` Session exists (ADR 0002).
 
 BUILD opens no native context. Subsequent rules reconcile exact grants, select restore or fresh
 start, verify actual model/effort, then synchronize the immutable
