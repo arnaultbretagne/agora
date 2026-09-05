@@ -41,6 +41,35 @@ and [Harness conformance](09-agent-registry.md).
 | `SESSION-A10`: grants need restriction while ACP is unreachable | Revocation still closes the provider path and removes excess rights. |
 | `SESSION-A11`: two deployed workers carry different catalogues | Both use the selected trusted revision or refuse the attempt; image/authority targets never oscillate by worker version. |
 
+## Native continuity and bounded shutdown
+
+Source: [ADR 0008](../adr/0008-saves-anchors-and-refill.md), specs
+[06](06-anchors-and-handoffs.md), [07](07-custody.md), [08](08-session-runtime-control.md),
+[11](11-security.md) and [13](13-failure-and-idempotency.md).
+
+| Scenario | Required outcome |
+|---|---|
+| `CONT-001`: bootstrap appends facts before Handoff creation | The range ends at `H` pinned before Session birth; none of its own facts enters that range. |
+| `CONT-002`: fresh Workstream has no prior facts | `W = H = 0`; verify the native origin and send no empty Handoff. |
+| `CONT-003`: restore an older Save into a new Pod | A new Agora Session owns restore/resume and exact refill `(W, H]`, even if the ACP id is reused. |
+| `CONT-004`: URI is present but payload differs or the turn is incomplete | No synchronization success; current native input digest and completed incorporation must be established. |
+| `CONT-005`: Handoff may be accepted, then its response is lost | Preserve one ambiguous command and gate work; no blind resend on reconnect or notification. |
+| `CONT-006`: native compaction or context replacement destroys verifiable lineage | Invalidate evidence and gate admission; a stored receipt never becomes live proof. |
+| `CONT-007`: switch A → B → A with A's compatible Anchor | Resume A's native Save in a new Session and refill its missing range. |
+| `CONT-008`: permanent Save/target incompatibility versus temporary store outage | Only verified incompatibility excludes the pair; clean fallback uses another Pod/Session and does not loop on the known-bad Save. |
+| `CONT-009`: queued product facts were never incorporated at capture | The Save frontier does not simply copy the current journal head; Anchor publication requires a provable nondecreasing frontier. |
+| `CONT-010`: stale capture races a newer Anchor at the same watermark | Conditional publication rejects the stale capture and preserves the newer Anchor. |
+| `CONT-011`: restore references an unversioned or unavailable workspace dependency | Reject exact resume; no claim that a transcript Save reconstructs missing workspace state. |
+| `CONT-012`: context is live but no new Save has committed for many turns | Report native-state loss exposure since the old Anchor; promise no fixed recovery point. |
+| `OFF-001`: capture hangs, fails or exceeds its limit | Revoke immediately and terminate after the original bounded preservation budget; retain the old Anchor and record loss exposure. |
+| `OFF-002`: controller restarts after Save/Anchor commit | Discover the committed result, continue target cleanup and never reset the shutdown deadline. |
+| `OFF-003`: Failed or expired-startup Pod remains with denied grants | Construction marks the incarnation unreusable and selects cleanup before a later capability HOLD can strand it. |
+| `OFF-004`: Pod is gone but an Agent, attachment or inactive binding remains | Power stays on and cleanup removes the orphan using exhaustive Workstream attribution. |
+| `OFF-005`: force-deleted Pod can still run on a partitioned node | Retain its retirement obligation, cut authority independently and block successor work until physical fencing/termination is proved. |
+| `OFF-006`: Kubernetes or OneCLI fails during shutdown | Reachable owners still restrict/clean their resources; no incomplete inventory can prove off. |
+| `OFF-007`: provider accepted an operation before revocation | Close existing paths and forbid new requests; preserve uncertainty about the remote effect instead of claiming rollback. |
+| `OFF-008`: a partial restore is stopped | Do not capture/publish its unverified native context over the preceding healthy Anchor. |
+
 ## Canonical product history
 
 - Journal complete accepted ACP envelopes before controlled dispatch or handling.

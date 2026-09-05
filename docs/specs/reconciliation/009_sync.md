@@ -21,19 +21,16 @@ context must contain is fixed by the Workstream's own record, not by a desired v
 
 The two values of `observation.sync` partition the input, so exactly one row matches.
 
-`SYNC-001` delivers the opening Handoff for `(W, head]`: the whole product history when the session
-was started at watermark `0` — a harness that never ran here, or whose Anchor was incompatible; the
-cross-seed — and only the missing tail when it was restored at the Anchor watermark — the resume.
-The rule does not distinguish the two; the watermark does.
+`SYNC-001` commits or recovers the one opening Handoff for the descriptor's fixed `(W, H]`.
+`W = 0` gives the cross-seed; a restored Save gives the missing tail. `H` was fixed before the new
+Session's facts, never sampled at REFILL dispatch. The rule does not choose between these modes.
 
-`SYNC-002` passes to [`CONVERGE`](010_converge.md). `current` is observed from the harness's own transcript, never
-inferred from a recorded acknowledgement: a session restored from a Save that predates its Handoff
-reads `stale` and is refilled again. That readback is what makes `SYNC` a reconciled field rather
-than a remembered one.
+`SYNC-002` passes to [`CONVERGE`](010_converge.md). Current native evidence must prove the exact
+input and completed incorporation/continuity under the driver contract. Neither a URI occurrence
+nor a recorded acknowledgement is enough. An empty opening range requires no prompt.
 
-`SYNC` is not a standing drift reconciler. Under the mono-active Workstream — one current Session,
-every prompt routed to it — no gap opens while a session is live; the only gap is the one at
-activation, and `SYNC-001` fires until it is closed. Prompt admission waits for `SYNC-002`, so the
-head `REFILL` pins is the head at activation. Should the Workstream ever admit several live
-Sessions, this rule becomes a watermark-against-head comparison, and the transcript readback it
-already relies on is what would keep that extension observable.
+A hot Session transition that keeps the verified native context preserves its opening descriptor;
+it does not refill. Loss of process/context or verifiable lineage invalidates synchronization even
+under mono-active routing. Ambiguous acceptance is acquisition/attempt recovery under spec 13 and
+never automatically becomes `stale`. See [spec 06](../06-anchors-and-handoffs.md) for proof and policy
+limits, and the REFILL verb for per-context command identity.

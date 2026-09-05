@@ -1,122 +1,120 @@
-# Custody
+# Saves and custody
 
-## Purpose
+## Purpose and opacity
 
-Custody preserves the harness state required to resume one ACP Session after its runtime Pod is
-gone. It is not product history, ACP replay, an observability sink or a portable cross-Agent format.
+A Save is immutable recovery material from the verified native context of a producing Session.
+It can be restored by a later Session of the same harness under an explicitly compatible driver.
+It is neither product history nor an execution identity. [ADR 0008](../adr/0008-saves-anchors-and-refill.md)
+and [spec 06](06-anchors-and-handoffs.md) define Anchor and frontier semantics.
 
-## Opacity
+Only the pinned custody driver interprets payload bytes. Core sees non-opaque metadata:
 
-Only the Session's custody driver may interpret payload bytes. Core services treat:
+- Save ID, producing Session, Workstream and `harness_id`;
+- producing image/registry/driver revisions and readable format ID/version;
+- byte length, checksum and creation time;
+- inclusive frontier `W`, seed-policy provenance and native-context origin correlation;
+- the declared workspace/artifact dependency manifest and compatibility metadata.
 
-- format ID;
-- format version;
-- adapter version;
-- byte length;
-- checksum;
-- watermark;
-- creation time
+Even a JSONL native format is stored and transported as opaque bytes. Driver evidence of native
+continuity is a separate bounded integration interface; it does not give core access to payloads.
+A Save never gains a mutable consumer or `restored_into` field. Each later restore is a fact of its
+consuming Session referencing the immutable Save.
 
-as metadata and treat the payload as an opaque byte stream.
+## Capture identity and commit
 
-Even when the payload is JSONL, it MUST be stored as bytes and MUST NOT be queried as JSON.
+A capture request is bound to the producing Session, live Pod/process/context, frontier and driver
+revision. Reusing its stable request ID yields the same Save ID and committed bytes. A different
+payload or frontier under that ID is a conflict. Request bookkeeping is operational idempotency,
+not evidence that capture finished or that a Pod still exists.
 
-## Snapshot identity
+The runtime controller invokes the reviewed driver after the harness, children and native storage
+have reached the documented quiescent/consistent boundary. It streams within declared size and
+shutdown-time budgets, verifies checksum/length and commits bytes plus metadata atomically. A
+reference becomes usable only after complete commit; a truncated stream never becomes a ready Save.
 
-Snapshots are immutable and append-only:
+Capture requires no provider request, grant or secret. Revocation and transport closure proceed
+independently. The control plane may publish the committed Save to the Anchor only under spec 06's
+conditional transaction. A retry after commit discovers that Save; it does not recapture a changed
+context under the old request ID.
 
-```text
-(session_id, generation) -> snapshot_id
-(session_id, capture_request_id) -> same snapshot_id on retry
-```
+An unverified restore, unsynchronized opening context or unknown context lineage is ineligible to
+replace an Anchor. A shutdown that cannot establish a valid frontier skips capture with a typed
+reason. Its old Anchor remains untouched. Saving is best-effort; termination is mandatory after
+the fixed budget even when capture or Anchor publication fails.
 
-Generation is monotonically increasing per Session. A committed snapshot cannot be overwritten.
+## Restore and invalidation
 
-## Capture contract
+Before launching the ACP context, runtime control:
 
-The Session Runtime controller calls the registered driver:
+1. authorizes access to the Save for this Workstream and target harness;
+2. resolves the pinned producer metadata and target driver compatibility;
+3. verifies the dependency manifest and clean target native-state location;
+4. streams and verifies size/checksum through a scoped restore channel;
+5. places the bytes consistently through the driver and records placement for this target attempt;
+6. permits ACP launch only after verification, retaining the new Agora Session attribution.
 
-```ts
-capture(source: HarnessHome): AsyncIterable<Uint8Array>
-```
+The Pod can already exist with its controlled launcher waiting; restoring "before ACP launch" does
+not require creating the product Session or reading bytes before Kubernetes establishes the Pod.
+Partial placement is cleaned or resumed under the same attempt. Existing unrelated native state is
+never overwritten, and an unknown resume cannot be followed by an unrelated `session/new`.
 
-Capture MUST:
+Invalidation is append-only metadata with cause, verifier, affected format/driver target and time.
+Checksum corruption can invalidate the artifact; a rejected resume format can exclude just that
+Save/target pair. Unavailability, deadline expiry or uncertain transport alone do neither. The
+original Save and Anchor are not rewritten; reads consider the current verified exclusions.
+A corrected driver revision may pass a new explicit compatibility validation, without erasing the
+prior failure. Repeatedly selecting a pair already proven incompatible is forbidden.
 
-1. operate on a quiescent or driver-consistent harness state;
-2. stream with a configured maximum size and timeout;
-3. calculate SHA-256 while streaming;
-4. write payload and metadata atomically;
-5. expose the row only after complete commit;
-6. bind the caller's capture request ID to that generation;
-7. return a reference, never the payload, to the control plane.
+## Native state, workspace and artifacts
 
-A capture error leaves no ready partial snapshot.
+A Save is not a snapshot of the entire container filesystem. Each reviewed harness definition
+must classify every persistent dependency:
 
-## Restore contract
+| Data | Durability and recovery contract |
+|---|---|
+| Native harness state | Included in the opaque Save or explicitly unnecessary for resume |
+| Workspace files needed to interpret native context | Included in the driver bundle, or referenced by an immutable authorized workspace snapshot with matching revision/checksum |
+| Published artifacts | Independently committed and retained; Save metadata references authorized immutable artifacts when needed |
+| Ephemeral caches and scratch files | Explicitly disposable; no recovery guarantee |
+| Credentials, workload identity, Agent tokens, relay material | Excluded and freshly materialized by their owners |
 
-Before Pod startup, the controller:
+A reference to an unversioned directory or a Pod-local path does not establish durability. A driver
+must demonstrate a consistent native/workspace cut or reject capture/restore; it cannot combine an
+old transcript with arbitrary newer files while claiming exact native continuation. This obligation
+does not add a public workspace domain identity or presume a storage backend beyond the reviewed
+mount/snapshot contract.
 
-1. checks snapshot Session ownership;
-2. resolves the pinned Agent runtime definition;
-3. validates format/adapter compatibility;
-4. streams bytes while verifying size and checksum;
-5. calls the custody driver's `restore`;
-6. prevents overwrite of unexpected pre-existing native state;
-7. starts the ACP Agent only after restore succeeds.
+After loss, only committed Saves, retained product facts and independently durable artifacts are
+recoverable under their policies. Shutdown-only capture has no fixed recovery-point objective for
+native state or unsaved workspace edits. A future periodic checkpoint guarantee needs an explicit
+ADR amendment, storage budget and consistency contract.
 
-Restore failure prevents Pod readiness and is reported with a typed reason.
+## Storage and access
 
-## Storage
+The baseline stores bounded payloads in PostgreSQL under a separate custody boundary, as selected
+by ADR 0005. Payload and metadata become visible in one commit. The repository interface remains
+blob-backend-neutral; changing physical storage requires a separate decision when justified by
+measured sizes/throughput, without changing Save identity or Anchor semantics.
 
-The baseline stores payloads in Postgres `bytea` under the `custody` schema because:
+The control plane reads metadata only; the runtime custody service reads/writes authorized payloads;
+Web has no payload access. Pods receive scoped restore/capture streams and no database credentials.
+Database roles and separate relations or explicit column grants enforce the separation. Operators
+have audited break-glass access only. Existing SQL/API schemas require alignment before implementation.
 
-- expected native transcripts/bundles are bounded;
-- transactional metadata and bytes simplify atomicity;
-- TOAST handles compression/out-of-line storage;
-- a dedicated PVC is unnecessary.
+Payloads can contain sensitive prompts, paths and results: encrypt storage/transport, authorize and
+audit reads, never log bytes, and apply Workstream deletion and retention policy. Drivers explicitly
+exclude credential paths. OneCLI trust roots and non-secret stubs are rematerialized from trusted
+deployment state. A claimed exclusion requires tests against the pinned harness bundle.
 
-The repository interface MUST remain blob-backend-neutral. A size/throughput threshold may trigger a
-future object-store ADR without changing Session or Anchor semantics.
+## Retention and compatibility
 
-## Access control
+Every Save still referenced by an Anchor or an in-flight authorized restore is retained. The latest
+successful Save per retained producing Session is retained according to product retention policy;
+unreferenced prior generations and partial staging data have bounded grace periods. Invalidation
+does not permit deleting an object while retained references still require it. Workstream deletion
+first extinguishes execution, then removes its recovery material and dependent private artifacts.
 
-- `control-plane`: metadata `SELECT`, no payload access;
-- `session-runtime-controller`: payload read/write for authorized Sessions;
-- `web`: no custody access;
-- `session-runtime`: no database credentials; bytes enter through one-time restore/capture streams;
-- operators: audited break-glass access only.
-
-Database grants MUST enforce these rules independently of application code.
-
-## Confidentiality
-
-Custody may contain prompts, tool results, file paths or harness metadata. It MUST:
-
-- use encrypted storage and encrypted transport;
-- never contain active Broker leases, OneCLI control/upstream authority, generated auth stubs or
-  provider secrets by design;
-- never be logged;
-- have payload reads audited;
-- follow Workstream deletion and retention policy.
-
-The custody driver MUST explicitly exclude known credential paths.
-The OneCLI CA and non-secret runtime stubs are rematerialized from trusted deployment state rather
-than captured.
-
-## Retention
-
-- Every snapshot referenced by an Anchor is retained.
-- The newest successful snapshot per non-deleted Session is retained.
-- A small configurable number of unreferenced prior generations MAY be retained for rollback.
-- Partial, invalid and unreferenced snapshots are garbage-collected after a grace period.
-- Deleting a Workstream eventually deletes all of its custody after runtime cleanup.
-
-## Compatibility
-
-An Agent runtime definition declares readable and writable custody formats. An upgrade that cannot
-read an existing anchored format MUST either:
-
-- keep the old adapter available for restore and migration;
-- require a new Session seeded from product history.
-
-It MUST NOT pretend native resume succeeded.
+Registry upgrades retain enough producer metadata to capture a running old image and enough driver
+support to read its declared compatible Saves. Otherwise they explicitly choose a new Session
+cross-seeded from product history. No upgrade may claim successful resume after silently dropping
+native/workspace dependencies. Conformance scenarios belong in [spec 15](15-acceptance-and-migration.md).

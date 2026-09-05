@@ -26,6 +26,11 @@ At most one Pod may perform work or retain external authority for a Workstream a
 predecessor is quiesced and deauthorized before successor work begins. A Pod is never reassigned to
 another Workstream and never concurrently carries several Sessions.
 
+Under node partition or forced API deletion, extinction may remain unproved. Runtime control keeps
+an operational retirement obligation for that Pod UID until termination or infrastructure fencing
+proves it cannot continue work. External access is cut independently; a successor remains gated
+while local execution could still overlap. A lease timeout or missing API object is not such proof.
+
 Agora opens a Session when an Intent first acquires a concrete execution boundary.
 
 For a new runtime incarnation, Kubernetes must first establish the Pod. Agora then opens the

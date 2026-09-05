@@ -15,27 +15,45 @@ safely. It MUST NOT choose a different business objective or report its response
 
 ## `BUILD`
 
-`BUILD` is selected when a live footprint is wanted but the Workstream runs no Pod on the desired
-harness image. It provisions, for the Workstream, one Pod from the image `intent.harness` resolves
-to, together with the bound OneCLI Agent and relay binding that complete the footprint envelope. It
-attaches no grant and opens no ACP session. Its observable objective is a subsequent fresh
-`observation.construction` that is exactly the coherent envelope on that image (and therefore
-`observation.power = on`).
+**Owner:** runtime control and Broker, coordinated by the control plane. **Inputs:** Workstream,
+still-current creation authority, stable attempt key, pinned target harness/catalogue revision and
+reviewed workspace reference. The rule has proved that the footprint is empty.
 
-`BUILD` is idempotent on the Workstream's footprint: repeating it while the envelope is already
-being created adds no second Pod, Agent or binding.
+Create one gated Pod and its uniquely bound selective OneCLI Agent and relay binding. Record
+creation correlations before dispatch and discover each partial effect through its owner. Once the
+Pod exists, complete its idempotent Agora Session birth before native launch. BUILD attaches no
+grant and opens no ACP context. A request that produces no Pod has no Session.
+
+**Idempotency and recovery:** the same attempt completes or discovers the same reserved targets.
+An unknown creation cannot free the slot for a competing BUILD. A stale owner cannot create or
+activate a successor; late resources remain discoverable and fenced. A partial envelope after the
+attempt ends is observed as incoherent and the rule selects cleanup on the next tick.
+
+**Observable postcondition:** exactly one coherent envelope on the pinned image,
+`observation.construction = {D}`. This establishes neither live ACP nor work admission. Full target,
+retirement and launch contracts are in [spec 08](../08-session-runtime-control.md).
 
 ## `TURN_OFF`
 
-`TURN_OFF` is selected when the current footprint must cease: because power is desired `off`, or
-because a construction rule found the wrong footprint and wants it gone before a rebuild. It
-performs the controlled shutdown of [ADR 0008](../../adr/0008-saves-anchors-and-refill.md): quiesce
-the harness, capture the Save, advance the Anchor, revoke the grants and relay binding, remove the
-OneCLI Agent, then delete the Pod. Its observable objective is a subsequent fresh
-`observation.power = off`.
+**Owner:** runtime control, Broker and custody/control plane for the optional Save. **Inputs:**
+Workstream, concrete footprint/retirement targets, current mutation authority, stable shutdown
+attempt, original deadline and the producing Session/context when one exists.
 
-`TURN_OFF` does not decide whether the Workstream comes back up; the next tick reads `intent.power`
-and the construction rules to decide that.
+Close admission and affected relay paths, terminate existing tunnels and start OneCLI revocation
+independently of ACP. Attempt quiescence and eligible Save capture within the fixed shutdown budget;
+conditionally advance the Anchor only after commit. Continue Pod termination and Agent/binding
+cleanup whether saving succeeds, fails or times out. No extra forced-loss permission is required
+([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)).
+
+**Idempotency and recovery:** repeat cleanup on the same concrete targets, discover partial effects
+and committed Saves, and never reset the preservation deadline. Reachable owners progress even if
+another fails. Unknown physical execution remains in the runtime retirement inventory until stopped
+or fenced; deleting its API object alone cannot complete the objective. An old attempt cannot delete
+a replacement by following a reused name or Workstream alias.
+
+**Observable postcondition:** all required inventories empty, `observation.power = off`. No `off`
+Session is created. The verb never decides whether to rebuild; only a later tick's Intent and rules
+do. It has no semantic success value that could replace the independent absence check.
 
 ## `RESTORE`
 
@@ -74,18 +92,24 @@ the attempt unresolved under spec 13. Never open another context on a blind retr
 
 ## `REFILL`
 
-`REFILL` is selected when the live Session's context is `stale`. It commits the opening Handoff
-command for the range `(W, head]` — `W` the watermark the Session incorporates, `head` the Workstream
-head read at commit — and, when that range is non-empty, dispatches it as the Handoff prompt: a
-deterministic, bounded `ContentBlock::Resource` at the stable URI, `purpose = handoff`
-([spec 06, "Handoff representation"](../06-anchors-and-handoffs.md)). Its observable objective is a
-subsequent fresh `observation.sync = current`.
+**Owner:** control plane, canonical history renderer and ACP bridge. **Inputs:** current live
+context/opening descriptor, immutable `(W, H]`, rendering-policy revision, verified grants/config,
+current dispatch ownership and the descriptor's stable opening-command identity.
 
-`REFILL` is idempotent within one live incarnation of the Session: a retry rebuilds the same range
-and dispatches nothing twice. A later incarnation — the Session reopened after a Save captured
-without the Handoff — is a new idempotency scope, so the same range is delivered again rather than
-refused. Prompt admission waits for `observation.sync = current`, so the head read at commit is the
-head at activation, never one advanced by the Session's own turns.
+Commit or recover the exact Handoff range, digest and standard embedded content under
+[spec 06](../06-anchors-and-handoffs.md). `H` was frozen before the origin Session's first facts;
+the current journal head is not an input. The rule has proved stale context with no unresolved
+possibly accepted opening delivery. Send the Handoff under the same effectful-turn admission barrier
+as other work, except its own synchronization prerequisite. An empty range requires no dispatch.
+
+**Idempotency and recovery:** rebuilding command data is idempotent within this native-context
+origin, including hot Agora Session changes. Delivery is not universally idempotent. Possible ACP
+acceptance must be resolved under spec 13, never blindly retried or deduplicated by URI alone.
+A clean replacement is a new Pod/Agora Session and context-origin scope even if native resume reuses
+an ACP identifier; prior remote effects may still be ambiguous.
+
+**Observable postcondition:** fresh driver evidence yields `observation.sync = current` for this
+origin. A response, command receipt or URI match alone does not establish it.
 
 ## `SET_MODEL`
 
@@ -97,8 +121,9 @@ Its observable objective is a subsequent fresh `observation.model = intent.model
 **Owner:** control plane/ACP. **Inputs:** current target context, desired model, verified transition
 boundary and stable attempt key. Unknown acceptance is resolved by config readback under spec 04.
 The same setting is safely repeatable only for the same live target and still-current desired value.
-`SET_MODEL` is idempotent: setting the current value is a no-op. It touches no other option. If the
-model change clamps the effort level, the next tick observes that and `SET_EFFORT` corrects it.
+The integration must demonstrate safely repeatable model selection. Changing model can alter effort
+options; the next tick observes the actual result before `SET_EFFORT`. No other desired option is
+implicitly rewritten or accepted as a substitute.
 
 ## `SET_EFFORT`
 

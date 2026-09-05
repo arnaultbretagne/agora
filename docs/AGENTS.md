@@ -29,7 +29,8 @@ After the baseline, read only the row required by the topic being discussed or c
 | `POWER` | [`004_power.md`](specs/reconciliation/004_power.md) plus its linked Intent, Observation and verb entries |
 | Harness images or Pod lifecycle | ADR [0006](adr/0006-complete-harness-images.md) and [0007](adr/0007-kubernetes-runtime.md), then [Harness conformance](specs/09-agent-registry.md) |
 | ACP or Session facts | ADR [0004](adr/0004-acp-boundary-and-session-facts.md), [0002](adr/0002-workstream-session-model.md) and [0007](adr/0007-kubernetes-runtime.md), then [Session boundaries](specs/03-session-lifecycle.md) and [ACP integration](specs/04-acp-integration.md) |
-| Saves, Anchors, restore, resume or refill | ADR [0008](adr/0008-saves-anchors-and-refill.md) |
+| Saves, Anchors, restore, resume or refill | ADR [0008](adr/0008-saves-anchors-and-refill.md), [Native continuity](specs/06-anchors-and-handoffs.md), [Saves](specs/07-custody.md) and [Failure/idempotency](specs/13-failure-and-idempotency.md) |
+| Shutdown, partition or physical extinction | ADRs [0007](adr/0007-kubernetes-runtime.md), [0008](adr/0008-saves-anchors-and-refill.md), [0009](adr/0009-onecli-grant-authority.md), then [Runtime control](specs/08-session-runtime-control.md) and [Security](specs/11-security.md) |
 | Capabilities, grants or OneCLI | ADR [0009](adr/0009-onecli-grant-authority.md) and [0010](adr/0010-capabilities-are-onecli-grants.md), [Capabilities and OneCLI](specs/10-equipment-and-broker.md), then the grant Observations, verbs and `CAPABILITIES` rule |
 | PostgreSQL Intent history or workset | ADR [0003](adr/0003-reconciliation-over-state.md) and [0005](adr/0005-postgresql-durable-store.md) |
 
@@ -69,8 +70,9 @@ These are warnings, not decisions to complete by inference:
   Skills remain outside this iteration; do not infer additional Intent fields.
 - Exact attached/effective grants are specified in spec 10 and the reconciliation taxonomies.
   Other flat specifications still contain old lifecycle/authority contracts until explicitly aligned.
-- Specs 03, 04 and 09 now define Session boundaries and integration conformance. Native
-  continuity/shutdown and engine ownership/retry contracts still require alignment before implementation.
-- ADR 0008 still makes healthy Pod deletion conditional on a successful Save or explicit forced
-  loss, while the latest design discussion makes preservation best-effort and extinction mandatory.
-  This conflict must be resolved before specifying `TURN_OFF`.
+- Specs 03, 04, 06–11, 13 and 15 now define the remodeled boundaries, continuity, shutdown and
+  integration obligations. The engine ownership/scheduling contract still requires alignment.
+- ADR 0008 explicitly makes preservation bounded best-effort and termination mandatory. Physical
+  extinction can remain unproved under partition; spec 08 retains the corresponding obligation.
+- Existing wire/storage contracts and seed policy have not been validated by these design edits.
+  Their alignment and pinned integration conformance remain implementation prerequisites.

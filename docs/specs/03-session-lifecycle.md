@@ -47,7 +47,8 @@ execution and transport restrictions. A durable work obligation is not permissio
 The following conditions are checked for the same Workstream and target incarnation:
 
 - the current Intent requests power on and the acting controller still owns its mutation boundary;
-- exactly one reviewed Pod/Agent/binding envelope exists and predecessor authority is fenced out;
+- exactly one reviewed Pod/Agent/binding envelope exists and predecessor execution and authority
+  are proven extinguished or fenced under spec 08;
 - a Session already owns the bootstrap or work being dispatched;
 - required OneCLI attachments and effective rights match the complete compiled set;
 - native context and ACP connection are established and attributable;
@@ -72,8 +73,9 @@ The boundary wraps the rule-selected changes; it is not an alternate lifecycle c
 1. Close new prompt admission. Bind the transition to its current Intent, resolved policy/catalogue,
    Pod/process/context and the Session whose work is ending.
 2. Reach quiescence: finish or cancel the in-flight turn, settle its final ACP exchange, and drain or
-   terminate its tool processes and external requests. A cancel notification alone proves none of
-   this. A bounded operational deadline prevents unlimited waiting.
+   terminate its tool processes and local external-request paths. Remote operations already accepted
+   may remain unresolved and are recorded under spec 13; they cannot be claimed rolled back. A
+   cancel notification alone proves no quiescence. The operational deadline is bounded.
 3. Restriction can close provider access immediately without waiting for ACP. Consequences for the
    interrupted turn stay attributed to its original Session. Additions and config changes wait for
    the quiescent boundary.
@@ -87,7 +89,7 @@ The boundary wraps the rule-selected changes; it is not an alternate lifecycle c
    because Agora Session attribution changed.
 
 The relevant effective conditions include harness artifacts, native context, model/effort,
-capability meaning and effective grants, and any reconciled persona/skill versions. A new Intent
+capability meaning and effective grants, and the frozen persona guarantee. A new Intent
 with no effective change creates no Session. A compiler revision with an identical meaning/output
 is recorded as verification provenance rather than fabricating a new execution.
 

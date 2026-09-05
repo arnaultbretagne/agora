@@ -1,155 +1,124 @@
 # Failure model and idempotency
 
-## Principles
+## Principles and attempt records
 
-- Durable intent precedes external side effects.
-- Retried commands reuse the same idempotency key.
-- Safe retries are explicit per operation.
-- Unknown delivery is not reported as success or silently duplicated.
-- Compensation never rewrites history.
-- Runtime state is reconciled from its owner.
+Durable Intent or a durable command precedes its external effects. Reconciliation coalesces desired
+state by Workstream; commands for which each occurrence matters, including user prompts and
+Handoffs, retain their own identities. Coalescing one cannot discard the other.
 
-## Command states
+An operational attempt binds a stable key to Workstream, selected verb/command, Intent and catalogue
+revision, ownership epoch, concrete target incarnation and immutable payload digest. Reusing the
+key with another target or payload is a conflict. The owner records dispatch possibility, known
+partial effects, deadlines and unresolved remote completion across crashes. These are recovery
+records, not a Session lifecycle or an Observation of present reality.
 
-```text
-accepted -> dispatching -> acknowledged -> completed
-                    │             │
-                    ├-> unknown   └-> failed
-                    └-> failed
-```
+A timeout does not prove non-acceptance. A successful response does not become a future Observation.
+Before any retry, reconcile the same target through its owner and validate current ownership and
+preconditions. The engine cannot translate a failed verb into a different business verb; fresh
+registered observations and ordered rules select the next objective.
 
-`unknown` means the remote side may have accepted the operation but Agora lacks proof. Resolution is
-operation-specific.
+## Retry contracts
 
-## Retry classification
+| Operation | Safe repetition and ambiguity resolution |
+|---|---|
+| Append complete Intent | Same author/request key and payload returns the original immutable event; new requests serialize by Workstream |
+| Open Agora Session | Unique birth per Pod UID, or unique verified hot-boundary key; retry cannot duplicate the Session/cutoff |
+| Create Pod/envelope | Same creation attempt and reserved target; discover external creation before another build |
+| Create OneCLI Agent/binding | Same Pod-bound creation correlation; inventory discovers partial/orphaned results before retry |
+| Attach or revoke grants | Reread exact attached/effective rights on the same Agent; converge the still-authorized payload without widening defaults |
+| Change model/effort | Fresh current-context readback; revalidate the model/options and still-current target before repeating |
+| ACP initialize | Connection-scoped negotiation; reconnect does not imply a new native context |
+| ACP new/resume | After possible acceptance, discover/bind the actual context or remain unresolved; never blindly open another |
+| ACP prompt, including Handoff | Never automatically resend after possible acceptance; apply the prompt contract below |
+| ACP cancel | Repeat only for the intended active target/turn; do not let a delayed session-scoped cancel interrupt a later turn |
+| Place Save bytes | Same Save and target attempt, clean/verified placement under the driver contract before ACP launch |
+| Capture Save | Same capture key yields one immutable committed Save; a partial stream is not reusable recovery material |
+| Publish Anchor | Conditional expected-Anchor/provenance/frontier transaction; an older/equal-watermark capture cannot replace a newer publication |
+| Terminate Pod | Delete the concrete UID, never a replacement with a reused name; verify physical retirement separately |
+| Remove Agent/binding | Same concrete incarnation, complete partial removal and verify absence; do not operate on a rebound Workstream alias |
+| Journal/projector apply | Stable fact identity and canonical Workstream sequence; replay never duplicates product facts |
+| Emit reconciliation tick | Duplicate or missing notifications do not lose durable work; due work is rediscovered |
 
-| Operation | Automatic retry | Rule |
-|---|---|---|
-| Create Workstream/Session rows | yes | database transaction + idempotency key |
-| Issue equivalent execution grant | yes | same Session and capability digest |
-| Reconcile dedicated OneCLI Agent | yes | deterministic Session mapping; selective mode required |
-| Publish OneCLI policy | conditional | same policy digest; verify complete ordered published state |
-| Bind grant/relay workload identity | yes | same request, Session, Agent and identity only |
-| Materialize Session Runtime | yes | idempotent `PUT` by Session |
-| Read Session Runtime status | yes | read-only |
-| ACP `initialize` | connection-scoped | reconnect creates a new connection |
-| ACP `session/new` | no after unknown acceptance | reconcile if Agent supports discovery; otherwise fail provisioning |
-| ACP `session/resume` | only before accepted response | same Session ID, classified transport errors |
-| ACP `session/prompt` | no blind retry after possible acceptance | preserve command as unknown and reconcile/user-decision |
-| ACP cancel | yes | notification is idempotent in effect |
-| Capture custody | yes | same capture request ID; one committed generation |
-| Dematerialize Session Runtime | yes | idempotent `DELETE` |
-| Revoke grant | yes | idempotent |
-| Rotate/delete OneCLI Agent authority | yes | same Session/grant cleanup intent |
-| Projection apply | yes | event ID/checkpoint |
-| Journal outbox publish | yes | event identity + per-Workstream canonical-head sweep |
-| Feed read/replay | yes | durable feed position + idempotent item operation |
+No operation is universally safe merely because its HTTP method or ACP method appears repeatable.
+Pinned owner integrations must demonstrate the indicated discovery, deduplication and fencing.
 
 ## Prompt delivery ambiguity
 
-ACP v1 does not provide a universal product-level idempotency key for prompts. Therefore:
+The baseline assumes no universal ACP prompt idempotency guarantee. The control plane commits the
+command and exact target before dispatch; the bridge durably records that dispatch may occur before
+sending. Transport acceptance is distinguished from harness acceptance, turn completion and native
+incorporation. A crash in an uncertain interval yields an unresolved attempt, not a safe resend.
 
-- the control plane journals before dispatch;
-- the bridge acknowledges transport acceptance;
-- once acceptance is possible, the same prompt MUST NOT be automatically sent again;
-- reconnect attempts first recover the active response or restored Session state;
-- unresolved ambiguity becomes a user-visible `prompt_delivery_unknown`;
-- a user retry is a new prompt turn with a new command ID.
+Recovery first reconnects to the same verified Pod/process/context and seeks operation-specific
+evidence. A proven never-sent or definitively rejected-before-acceptance attempt may dispatch the
+same command. Possible acceptance without decisive evidence remains `prompt_delivery_unknown`,
+visible to the user, with that context's next turn gated. A URI occurrence, lost response or elapsed
+time cannot prove that no external side effect occurred.
 
-Adapters MAY provide stronger deduplication via opaque `_meta`, but core correctness MUST NOT depend
-on it.
+A user-requested retry is a new command explicitly linked to the ambiguous predecessor and exposes
+the possibility of duplicated external effects. It is admitted only after the previous context/turn
+has been resolved or extinguished; a new key alone is not permission to run concurrently. Neither
+custom ACP metadata nor a product command ID is assumed to deduplicate harness/provider operations.
 
-## Crash matrix
+An opening Handoff follows the same contract. Its immutable range and digest can be rebuilt, but
+that is not permission to resend after possible acceptance. `observation.sync` is unavailable while
+native incorporation/absence is unresolved. Only verified incorporation passes SYNC. A clean
+replacement has a new Session/context delivery scope; earlier remote effects can still be unknown.
 
-### Control plane crashes before dispatch
+## Restore failure and clean fallback
 
-Command remains accepted; dispatcher safely sends it.
+A verified permanent format, checksum or native-resume incompatibility is recorded against the
+artifact or exact Save/driver target under spec 07. The failed execution is retired and its native
+state is not eligible for capture/Anchor publication. Fresh owner evidence makes it unusable, so
+the domain rules select `TURN_OFF`. After verified cleanup, a still-on Intent can build a new Pod,
+open a new Session and choose fresh start because the unusable recovery pair is excluded.
 
-### Control plane crashes after prompt acceptance
+Unavailable storage, permission/configuration errors and lost responses are typed separately; they
+do not establish corruption. An unknown new/resume attempt stays bound to its reserved target.
+Runtime control may fence and retire an unrecoverable launch attempt within its original launch
+budget; it must still discover/stop any possibly opened context before replacement can perform work.
+There is no silent restore-to-start switch inside an attempted Session.
 
-On restart it reconnects when possible and continues journaling. It does not blindly resend.
+## Crash and race scenarios
 
-### Session Runtime controller crashes during provision
+| Interruption | Required recovery |
+|---|---|
+| Intent commits but notification is lost | Durable due work is rediscovered and the latest complete Intent evaluated |
+| Worker loses claim during an external request | The old response cannot finalize work or reopen admission; the trusted owner settles/fences the old request before conflicting mutation |
+| Pod exists but Session bootstrap has not committed | Keep the Pod gated and complete its same idempotent Session birth/cutoff before work |
+| BUILD creates only part of its envelope | Discover the same attempt; after it ends, fresh incomplete construction selects cleanup, never an undocumented repair action |
+| Broker creates Agent then crashes before linking Pod | Recover by the pre-recorded creation correlation and exhaustive Workstream inventory; no second untracked Agent |
+| Grant request arrives after a newer off Intent | Owner admission rejects obsolete work or keeps its in-flight target fenced until the late effect is removed |
+| Config changes then worker crashes | Recover actual config and the same quiescent boundary; no old-generation admission or duplicated successor Session |
+| Prompt may be accepted before local acknowledgement | Recover the same turn or retain explicit ambiguity; no blind resend |
+| Pod or native process dies without a Save | Keep old Anchor; new Pod means new Session and compatible restore/refill or explicit cross-seed |
+| Save commits before Anchor publication crashes | Discover immutable Save and conditionally publish only with valid capture provenance and expected Anchor |
+| Anchor commits before termination crashes | Preserve committed Anchor; continue target cleanup without recapturing or resetting the shutdown deadline |
+| Capture never finishes | Cancel/abandon capture at the fixed deadline, retain old Anchor and proceed with termination |
+| Pod API object disappears on a partitioned node | Keep retirement obligation; revoke authority independently and block successor work until physical execution is fenced |
+| OneCLI or Kubernetes is unavailable during off | Progress cleanup through reachable owners; report unresolved remainder and never manufacture empty inventories |
+| Relay is unavailable or binding evidence expires | No alternate provider path or credential injection; access remains closed until the owner verifies the current target |
+| OneCLI credential/trust state cannot be restored | Keep access closed and require the responsible owner to restore/rotate compatible state; never remount secrets into Pods |
+| Projection lags or crashes | Replay canonical facts; expose incomplete projection and do not render a Handoff from an unproved cutoff |
 
-Reconciliation reads Kubernetes labels/status and completes or fails the same materialization.
+## Deadlines, errors and scheduling
 
-### Pod dies without a fresh capture
+Every operation declares a timeout, cumulative retry budget and external-owner diagnostic category:
+acquisition unavailable/inconsistent, stale ownership, incompatible integration, denied authority,
+launch/context failure, prompt ambiguity, Save integrity/size/capture failure, or incomplete
+extinction. Exact wire error names and values belong in aligned machine-readable contracts.
 
-Restore the latest anchored snapshot and hand off the Workstream range after its watermark. Events
-already journaled remain product history.
+Deadlines survive restarts. Backoff uses bounded delay and jitter; notifications cannot bypass a
+retry budget or turn an unchanged permanent incompatibility into an immediate action loop. A
+resource/Intent/catalogue change can invalidate the blocking cause and request fresh evaluation.
+An exhausted budget retains the unrealized work and exposes its cause; it is not `CONVERGED`.
 
-### Capture commits but Anchor update crashes
+`HOLD` is selected only by domain rows for a valid observed condition awaiting its owner.
+Acquisition failure, unknown acceptance and claim loss are engine control, not additional HOLD rows
+or alternate domain state. Each remains discoverable with a wake source or scheduled bounded
+recheck. Shutdown restrictions are never suspended by an ACP or Save retry budget.
 
-The snapshot is unreferenced but discoverable. Reconciliation may attach it only after verifying
-Session, Agent and watermark; otherwise retention cleanup removes it.
-
-### Anchor commits but Pod deletion crashes
-
-The Pod remains live. Deletion is retried; the durable snapshot is already safe.
-
-### Projection crashes
-
-Journal ingestion continues if capacity policy allows. The projector resumes from its checkpoint or
-rebuilds. Clients may see a declared feed delay, never fabricated completeness.
-
-### Broker is unavailable
-
-No new Session Runtime is materialized. Existing grants follow their expiry; the system does not
-bypass policy or inject provider secrets directly.
-
-### Broker creates a OneCLI Agent then crashes
-
-Reconciliation finds the deterministic Session mapping, forces selective mode and either completes
-the exact policy digest or revokes/deletes the orphan. It never creates a second OneCLI Agent for the
-Session.
-
-### OneCLI policy publication is unknown
-
-The grant remains inactive. Reconciliation reads the effective published rule order and only
-activates when all explicit allows and the final `block *` match the expected digest.
-
-### Broker access relay is unavailable
-
-The Session Runtime Pod has no provider path. It does not receive the upstream OneCLI bearer and
-cannot connect directly to OneCLI or providers.
-
-### OneCLI gateway is unavailable
-
-Active Agent calls fail with a typed runtime/provider-path failure. No custom gateway, direct
-credential injection or provider fallback is attempted.
-
-### OneCLI CA or encryption state is incompatible
-
-Readiness fails closed. Operators restore the compatible OneCLI database, `/app/data` and external
-encryption key or execute an explicit CA rotation; existing Session Runtimes are not silently
-reconfigured.
-
-## Timeouts
-
-Timeouts are typed by phase:
-
-- `grant_timeout`;
-- `onecli_policy_timeout`;
-- `relay_activation_timeout`;
-- `loge_provision_timeout`;
-- `acp_connect_timeout`;
-- `acp_initialize_timeout`;
-- `session_new_timeout`;
-- `session_resume_timeout`;
-- `prompt_timeout`;
-- `custody_capture_timeout`;
-- `loge_delete_timeout`.
-
-A timeout does not imply the remote side did nothing; its retry classification controls next steps.
-
-## Reconciliation loops
-
-Reconcilers MUST be:
-
-- level-based, not dependent on missed in-memory events;
-- bounded and backoff-aware;
-- idempotent;
-- observable;
-- able to stop on permanent typed failure.
-
-No reconciler may create a new Session as an invisible fallback.
+Operational diagnostics may persist attempts and errors. Product facts retain execution outcomes
+in their original Session, including late frames from interrupted work. Recovery cannot erase,
+relabel or invent history to make an attempt appear successful. The scenarios in spec 15 are design
+acceptance obligations, not claims that existing code or schemas already implement this behavior.

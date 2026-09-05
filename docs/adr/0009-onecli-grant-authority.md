@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — incarnation fencing and revocation independent of native preservation.
 
 ## Context
 
@@ -21,8 +22,8 @@ OneCLI is the only system that materializes, changes and revokes external capabi
 Agora execution.
 
 Agora policy determines the complete desired grant set. The reconciler converges one selective
-OneCLI Agent onto exactly that set using OneCLI grant and ungrant operations, then verifies the
-effective grants through OneCLI before work proceeds.
+OneCLI Agent onto exactly that set using OneCLI grant and ungrant operations, then verifies both
+attached and effective grants through OneCLI before work proceeds.
 
 OneCLI alone stores provider credentials and injects them into approved requests. Agora does not
 build or retain a parallel credential store, provider adapter or enforceable grant system.
@@ -52,6 +53,19 @@ projections, persona or skill files, or Saves.
 Grant and ungrant are hot reconciliation actions. They do not inherently require a new image or Pod.
 They affect subsequent requests; they cannot erase data already returned or retroactively cancel an
 operation that has completed.
+
+Shutdown and restriction close affected relay paths and existing tunnels without waiting for ACP,
+quiescence or a Save. OneCLI grant and Agent removal are then verified independently. A request
+already accepted by an external provider may still complete; Agora records that uncertainty and
+does not claim remote rollback. The relay remains an opaque transport, never a provider TLS endpoint
+or a parser of request content.
+
+Mutation ownership must be enforced at Broker/runtime boundaries, not only checked before updating
+the reconciler's work row. A delayed grant, Agent creation or Pod creation from an obsolete attempt
+cannot revive an extinguished incarnation. Where an upstream lacks conditional mutation or
+idempotency, its unknown in-flight operation must be resolved or its target retired and fenced
+before conflicting work proceeds. The normative engine contract defines this obligation without
+assuming that OneCLI implements an Agora epoch parameter.
 
 ## Why this choice
 

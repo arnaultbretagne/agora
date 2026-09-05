@@ -1,125 +1,151 @@
-# Anchors and handoffs
+# Anchors, refill and native continuity
 
-## Anchor meaning
+## Scope and identities
 
-For `(workstream_id, agent_id)`, an Anchor states:
+[ADR 0008](../adr/0008-saves-anchors-and-refill.md) governs durable continuation. An Anchor belongs
+to `(workstream_id, harness_id)` and references an immutable Save produced by an earlier Session.
+Restoring it always occurs in a new Agora Session on a new Pod. A native ACP context identifier may
+be reused by resume; the producing Agora Session never is.
 
-> Restoring `custody_snapshot_id` for `session_id` gives this Agent durable context synchronized
-> through the inclusive Workstream sequence `synced_through_seq`.
-
-An Anchor is a durable proof, not a guess based on the last sent prompt.
+Saves preserve native context. Handoffs supply a deterministic rendering of product facts missing
+from that context. Neither makes opaque harness state a second product journal.
 
 ## Anchor invariants
 
-- There is at most one Anchor per Workstream and Agent.
-- The referenced Session belongs to the Workstream and Agent.
-- The referenced custody snapshot belongs to the Session.
-- The referenced custody snapshot is committed and not invalidated.
-- Snapshot and Anchor watermarks are identical.
-- Watermarks never decrease.
-- A watermark cannot exceed the owning Workstream's committed canonical head.
-- An Anchor may move to a newer Session of the same Agent only after that Session has a committed
-  snapshot.
-- An active, unsnapshotted context MUST NOT be advertised as a durable Anchor.
+- At most one Anchor exists per Workstream and harness.
+- Its Save belongs to that Workstream/harness and to its producing Session.
+- Only a fully committed, validated Save can advance an Anchor.
+- The Anchor and Save have the same inclusive synchronization frontier `W`.
+- `W` never decreases and never exceeds the Workstream's committed canonical head.
+- Native state retained only in a live Pod is never an Anchor.
+- Compatibility and invalidation are checked afresh at use; an older Anchor can become unusable.
+  Such a record is retained as provenance, without pretending that it is still resumable.
 
-## Advancing an Anchor
+Anchor publication is a conditional product transaction after Save commit. It verifies provenance,
+compatibility, the capture authorization and the expected previous Anchor. A competing or delayed
+capture cannot replace a newer Anchor merely because its numeric watermark is equal. A committed
+Save that loses publication remains unreferenced and follows retention policy.
 
-1. Select the latest committed Workstream head after the Session is quiescent.
-2. Capture custody with that head as watermark.
-3. Verify the snapshot checksum and metadata.
-4. In one product transaction, upsert the Anchor if the watermark is not stale.
-5. Only then dematerialize the Session Runtime.
+The represented frontier is established from the quiescent native context and the recorded seed
+policy. Reading the latest journal head is insufficient: queued prompts or concurrently committed
+facts may not have reached that context. The driver/control-plane contract must account for every
+selected item through `W`; excluded fact kinds are explicit policy exclusions. If only a lower
+frontier is provable, record it and do not lower the Anchor. Never claim a greater frontier to make
+publication succeed.
 
-If the transaction loses a race to a newer Anchor, the snapshot remains unreferenced and is eligible
-for retention cleanup.
+## Opening descriptor and cutoff
 
-## Choosing a target Session
+After Kubernetes establishes the gated Pod, one operation serialized with Workstream appends pins
+`H` to the existing canonical head and opens the new Agora Session. This happens before any of
+that Session's provisioning, restore, ACP or Handoff facts are appended (spec 03).
 
-When activating an Agent:
+The native context's immutable opening descriptor binds:
 
-1. If an Anchor exists and its Session is resumable under the current registry definition, use it.
-2. Otherwise create a new Session for that Agent.
-3. The target context watermark is the Anchor watermark or zero.
-4. The missing range is `(watermark, current_workstream_head]`.
+- origin Agora Session and Pod UID, then verified process generation and ACP context identifier;
+- selected Save and its frontier `W`, or a fresh origin with `W = 0`;
+- fixed cutoff `H`, with `0 ≤ W ≤ H`;
+- the rendering-policy version and, when needed, the opening Handoff command and content digest.
 
-An explicit UI choice MAY select an older Session, but doing so cannot move the Agent Anchor
-backwards.
+Selecting a Save and assigning an ACP identifier complete the same descriptor idempotently before
+use; they cannot silently replace a bound origin. A hot Session transition on the same live context
+references this descriptor. It does not sample another `H` or refill its own new Session facts.
+
+The range is always `(W, H]`, never `(W, head at dispatch]`. A context opened on an empty Workstream
+has `H = 0` even though its own bootstrap subsequently appends facts. When `W = H`, no Handoff is
+sent; the verified context origin is sufficient for opening synchronization.
+
+## Choosing continuation
+
+The Anchor is read for the harness actually established by construction, using the trusted target
+registry revision. A compatible, non-invalidated Save selects `RESTORE`; absence or verified
+incompatibility selects `START`. Returning A → B → A can restore A's own Anchor. A driver upgrade
+checks format, adapter and workspace compatibility instead of assuming every same-harness Save fits.
+
+Restore places and verifies bytes through runtime custody control before ACP opens the context.
+Resume binds the restored native context to the new Agora Session. Fresh start opens a clean
+context at zero. Configuration and grants are verified before either path sends a Handoff.
+
+A permanent restore/resume failure remains a fact of its attempted Session. The custody owner must
+verify and record either artifact corruption or incompatibility of the exact Save/target pair
+under spec 07. Runtime control retires the failed incarnation, and the `SESSION` or `CONSTRUCTION`
+rule selects cleanup. Only after cleanup can a later rule create a clean Pod and a new Session,
+with its own cutoff, to cross-seed. The failed Session never changes from restore to fresh mode.
+A transient read failure or ambiguous ACP response cannot invalidate recovery material.
 
 ## Handoff representation
 
-A Handoff is a standard ACP `session/prompt` with:
-
-- `purpose=handoff` in durable command metadata;
-- `source_from_seq` exclusive;
-- `source_through_seq` inclusive;
-- `seed_policy_version`;
-- one or more standard ACP content blocks.
-
-The preferred representation is a `ContentBlock::Resource` containing a deterministic, bounded
-rendering of the selected Workstream range. The resource URI is stable and descriptive, for example:
+One durable command binds the context descriptor, range, rendering-policy version, digest and
+standard ACP content blocks. Its product purpose is `handoff`; correctness requires no custom ACP
+`_meta`. The stable descriptive resource URI is:
 
 ```text
 agora://workstreams/{workstream_id}/handoffs/{command_id}
 ```
 
-Correctness MUST NOT rely on the Agent interpreting custom `_meta`.
+The baseline sends the bounded content as a standard embedded resource; the pinned integration must
+negotiate support. A resource link alone is not delivery of its contents. ACP defines these content
+forms, not Agora watermarks or synchronization proof
+([ACP content](https://agentclientprotocol.com/protocol/v1/content)).
 
-The builder MUST use a projector version proven complete through `source_through_seq`, or fold the
-canonical events directly. It MUST NOT build from a stale Web cache.
+The builder folds canonical Workstream facts or uses a projector proven complete through `H`.
+It never reads an unversioned Web cache. Committing the Handoff does not append duplicate copies of
+its source facts; the product renders one inspectable synchronization item with source references.
 
-## Seed policy
+## Seed policy and fidelity
 
-The seed policy is versioned and auditable. It independently selects:
+The versioned policy specifies inclusion and ordering for user/harness messages, durable outcomes,
+thoughts, plans, permission decisions, tool summaries/results, resources and prior synchronization
+markers. It excludes transport/bootstrap bookkeeping and expansion of earlier Handoffs as duplicate
+history. A selection through `H` is complete only under this declared policy.
 
-- user and agent messages;
-- thoughts;
-- plans;
-- tool-call summaries or full results;
-- permission decisions;
-- artifacts/resources;
-- previous handoff markers.
+Required metadata includes size limits, encoding, deterministic truncation/manifest rules, resource
+access requirements, digest and every fidelity reduction. Included resources must remain authorized
+and available for the promised retention period. If a required source is unavailable or the input
+cannot fit the policy, acquisition/rendering fails visibly; no unrecorded model summary substitutes
+for the selected range. A product confirmation required by a specific fidelity policy cannot be
+inferred from timeout. It does not block an independently requested shutdown.
 
-The baseline policy MUST include user and agent messages and durable outcomes. Tool calls, thoughts
-and large results MUST have explicit inclusion rules and size budgets; they are never silently
-excluded because the UI collapsed them.
+The existing `contracts/policies/handoff-seed-v1.md` must be aligned and versioned before enabling
+this baseline; this design revision neither inspects nor validates that machine-adjacent contract.
+Policy changes do not silently re-seed a live context or rewrite Save metadata.
 
-The Handoff command records the policy version and content digest.
+## Current native proof
 
-The concrete baseline is
-[`handoff-v1`](../../contracts/policies/handoff-seed-v1.md).
+A driver-specific, bounded read obtains evidence from the actual current native context. It must
+establish the exact opening input by range, policy and digest, and completed incorporation under
+the integration's documented turn/continuity semantics. It binds the evidence to the Pod UID,
+process generation and native context lineage. This is an integration conformance obligation,
+not an ACP method or a generic transcript parser in core.
 
-## Avoiding duplicate product history
+A URI occurrence alone can be an echo, a partial input or an artifact from another context. An ACP
+response or durable command alone proves no current native contents. A native input marker before
+completion is not proof that the effectful Handoff finished. Cancellation, failure or partial
+acceptance must be classified explicitly and cannot automatically establish synchronization.
 
-The source events remain the only product representation of their original content. The target
-Session receives a new Handoff prompt, rendered in the Workstream as one inspectable synchronization
-card.
+Compaction may preserve a verifiable native lineage for the incorporated input; its conformance
+contract must specify how. If the driver cannot distinguish incorporation from absence, acquisition
+fails and work stays gated. It must not invent `stale` to make another prompt possible.
 
-The projector MUST NOT expand the Handoff back into duplicate copies of every source item. If the
-Agent echoes the resource, that echo remains a target-Session event correlated to the Handoff turn.
+`observation.sync = current` means that the verified origin has an empty range, or that this exact
+non-empty Handoff was incorporated and its continuity remains verifiable. `stale` requires current
+proof of absence and that no possibly accepted opening attempt is still unresolved. Prompt receipts
+are useful for ambiguity resolution, not substitutes for native proof. Spec 13 forbids blind resend.
 
-## Example
+This proof covers the declared rendering policy; it does not prove that the model understood the
+input, kept every token forever or can reconstruct arbitrary native state. Evidence is invalidated
+by process loss, context replacement or a break in verifiable lineage. Mono-active execution alone
+does not rule out such drift. A transport reconnect to the same verified context and a hot Agora
+Session change do not by themselves require refill.
 
-```text
-Claude Anchor = C
-Workstream head after Codex = D
+## Failure and loss exposure
 
-restore Claude custody(C)
-ACP session/resume(claude_acp_session_id)
-handoff source range (C, D]
-continue Claude from synchronized context
-```
+A live context may be synchronized while its durable Anchor is old. A crash restores the old Save
+and opens a new range; previously journaled facts retain their original identity. This is a new
+native context and a new Handoff delivery scope, not retry of an ambiguous prompt to the old context.
+Any external action already triggered by an earlier Handoff remains subject to external-system
+idempotency; synchronization is not an exactly-once business transaction.
 
-On the next Claude suspension, capture a snapshot at the new head and advance the Claude Anchor.
-
-## Failure handling
-
-- Resume fails before Handoff: fail or retry resume; do not advance anything.
-- Handoff dispatch is uncertain: apply the prompt-delivery ambiguity rules; never blindly resend.
-  Any dispatch attempt proven not accepted remains attached to the same durable
-  command/idempotency key.
-- Handoff prompt returns an error: target remains at the old durable Anchor; surface failure.
-- Agent completes Handoff but capture later fails: the live context is usable, but its durable Anchor
-  remains old. A crash restores the old snapshot and replays the same missing range.
-- Source range exceeds size policy: apply the policy's deterministic manifest/previews and resource
-  links, record truncation metadata, and require user confirmation when fidelity is degraded; never
-  substitute an unrecorded model summary.
+Shutdown-only Saves provide no fixed maximum native-state loss window. Native-only data since the
+last usable Save can disappear. Product history can be rendered again under policy; uncommitted
+workspace edits, native reasoning and external side effects cannot be claimed recovered from ACP
+facts. The workspace and artifact boundaries are specified in [Saves](07-custody.md).

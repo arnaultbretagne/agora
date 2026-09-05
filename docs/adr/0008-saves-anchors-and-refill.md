@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
+- **Revised:** 2026-09-05 — bounded best-effort preservation, mandatory extinction and continuity proof.
 
 ## Context
 
@@ -36,26 +37,30 @@ Saves are not periodic checkpoints and are not created after every turn or Sessi
 transition that keeps the live Pod and native context requires no Save and does not advance the
 durable Anchor.
 
-Each `(workstream_id, harness_id)` has at most one Anchor. It points to a committed compatible Save
-and its watermark never decreases.
+Each `(workstream_id, harness_id)` has at most one Anchor. It points to a committed Save and its
+watermark never decreases. Compatibility is checked against the target harness definition at use;
+later invalidation can make an existing Anchor unusable without rewriting it or lowering its frontier.
 
-The Save is produced by the current Session whose live context is being stopped. Controlled Pod
-deletion follows this order:
+The Save is produced by the current Session whose verified live context is being stopped. Shutdown
+closes admission and starts authority removal immediately, independently of ACP health and capture.
+Agora attempts to quiesce the harness and capture eligible native context within a fixed shutdown
+budget. A successful capture is committed before advancing the Anchor. Capture requires no provider
+access and cannot extend the budget across retries or controller restarts.
 
-1. stop accepting new prompts and quiesce the harness;
-2. select the represented Workstream watermark;
-3. capture and commit the Save;
-4. advance the Anchor;
-5. revoke the Pod's OneCLI grants and relay binding, then remove its OneCLI Agent;
-6. delete the Pod;
-7. observe that execution and authority are absent.
+Whether preservation succeeds, fails or times out, Agora proceeds with Pod termination and completes
+grant, Agent and relay cleanup. It then verifies absence through the resource owners. Removing a
+Pod API object alone does not prove that its process stopped; unresolved execution is fenced and
+tracked until the runtime contract can establish extinction. A successor cannot overlap the
+predecessor's work or external authority.
 
 This is also how an `off` Intent is realized. Every durable fact produced while extinguishing the
 execution remains attributed to the Session being stopped. Agora creates no `off` Session because
 absence is not an execution.
 
-If capture fails, the Anchor remains unchanged. A healthy Pod is not intentionally deleted unless
-an explicit forced-shutdown policy accepts the loss.
+If capture fails, the Anchor remains unchanged and the loss exposure is recorded. An `off` Intent
+or rule-selected replacement authorizes termination after that bounded attempt; no additional
+forced-shutdown approval is required. This revision replaces the earlier decision that kept a
+healthy Pod alive until a Save succeeded or a separate forced-loss policy was invoked.
 
 When Kubernetes has established a new Pod, Agora freezes `H` as the Workstream head and opens its
 Session before restore, ACP bootstrap or harness work. That cutoff and Session creation are one
@@ -69,7 +74,9 @@ Continuation then follows one of these paths:
 - Without a compatible Anchor, Agora binds fresh authority to the new execution, initializes a clean
   context with ACP `session/new`, then **cross-seeds** it from `(0, H]`.
 
-An empty range requires no refill or cross-seed.
+An empty range requires no refill or cross-seed. `H` is the cutoff fixed before the new Session's
+facts, not a later head sampled when its Handoff command is created. A hot Session transition
+retaining the same verified native context retains its opening descriptor and needs no new Handoff.
 
 The terms are distinct:
 
@@ -82,16 +89,25 @@ Refill and cross-seed are Agora operations carried by ordinary ACP `session/prom
 defines neither operation, nor Saves, Anchors or Workstream watermarks. The selected source range,
 rendering-policy version and digest are facts of the new Session.
 
+Synchronization requires fresh evidence from the current native context for the exact rendered
+input and its completed incorporation under the pinned driver contract. A URI, transport
+acknowledgement or recorded command alone is insufficient. This proves the declared bounded seed
+policy, not lossless retention or semantic understanding of every historical fact. Unknown prompt
+acceptance is never resolved by blindly sending it again.
+
 All ACP envelopes exchanged during either attempt belong to the new Session. Resuming an ACP
 context never resurrects the Session that produced the Save.
 
-A permanent restore or ACP-resume failure remains recorded in the Session that attempted it. A
-fresh-context fallback opens another Session against a clean runtime, uses ACP `session/new` and
-cross-seeds `(0, H]`; it never silently changes continuation mode inside the failed Session.
+A permanent restore or ACP-resume failure remains recorded in the Session that attempted it. Its
+cause is verified and the unusable Save/target compatibility is recorded before cleanup, so recovery
+does not select the same known-bad pair forever. A fresh-context fallback opens another Session
+against a clean Pod, pins that Session's own `H`, uses ACP `session/new` and cross-seeds `(0, H]`;
+it never silently changes continuation mode inside the failed Session. Transient failure does not
+invalidate a Save. Ambiguous acceptance is resolved under spec 13 before another context is opened.
 
-Any Pod loss without a newly committed Save, whether uncontrolled or explicitly forced after a
-capture failure, does not move the Anchor. Recovery starts from the old Anchor and refills `(W, H]`
-again.
+Any Pod loss without a newly committed Save does not move the Anchor. Recovery starts from the old
+compatible Anchor and refills `(W, H]`, or cross-seeds if no usable Anchor remains. Native-only state
+since the last Save can be lost; no fixed recovery-point guarantee is implied by shutdown-only Saves.
 
 ## Why this choice
 
@@ -104,8 +120,8 @@ every new Pod prevents restoration from reviving expired or revoked access.
 
 The central statement of this decision is:
 
-> Before a Pod is intentionally deleted, Agora Saves its native context; a later Session restores
-> that Save and refills everything recorded since its Anchor.
+> Before termination, Agora makes a bounded attempt to preserve native context. Extinction proceeds;
+> continuation uses the latest usable Save and the Workstream range absent from it.
 
 ## Options considered
 

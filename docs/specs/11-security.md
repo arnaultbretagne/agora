@@ -1,179 +1,119 @@
-# Security
+# Security and extinction
 
-> Architecture-remodel notice: this specification describes the current implementation and still
-> uses its pre-remodel runtime and authority grains. It must be aligned to ADRs 0002, 0006, 0007 and
-> 0009 before the replacement architecture is implemented.
+## Threat model and owners
 
-## Threat model
+Harnesses, installed tools, native state and all code inside an execution Pod are untrusted. Prompt
+injection can cause arbitrary local execution. The design protects provider/infrastructure secrets,
+Workstream data, product database integrity, Kubernetes control and capability authority without
+relying on model cooperation.
 
-The Agent and everything it executes inside a Session Runtime are untrusted. Prompt injection may
-cause arbitrary code execution within that runtime.
+[ADR 0009](../adr/0009-onecli-grant-authority.md) and [spec 10](10-equipment-and-broker.md) make OneCLI
+the sole external grant and credential authority. The complete image carries software, not access.
+The control plane owns product authorization and Intent; runtime control owns Kubernetes isolation;
+Broker control owns the Pod-bound OneCLI Agent and its opaque access relay. These service boundaries
+remain authenticated even when services share a repository.
 
-Primary assets are:
+## Authentication and product authorization
 
-- provider and infrastructure credentials;
-- other users' Workstreams and custody;
-- Kubernetes control;
-- product database integrity;
-- capability policy;
-- repository/vault write authority.
+Human/API calls use platform identity and Workstream membership at every boundary. An owner can
+read/write, administer membership and delete; an editor can submit Intent/prompts and edit product
+metadata; a viewer can read authorized items/feed/status. Service actions record actor and delegated
+authority and do not manufacture a human membership.
 
-The design does not rely on the Agent following instructions.
+Service calls use authenticated workload identity. ACP connections and relay bindings are scoped
+to the exact Pod/process or workload incarnation. One selective OneCLI Agent belongs to one Pod UID
+and may serve successive Agora Sessions on that Pod; it is never reused by a replacement or another
+Workstream. Session attribution does not grant external access.
 
-## Trust boundaries
+The browser selects reviewed harness/model/effort and named capabilities and submits ordinary prompt
+content or permission decisions. It cannot supply arbitrary PodSpecs, credential IDs, provider
+endpoints, executable configuration, foreign Saves or OneCLI control material. Required provider
+invocation is covered by explicitly selected named capability policy, never implicitly by a model.
 
-```text
-Internet
-  │
-  ▼
-Web/API ── product identity ── Control plane
-                                  │
-                 ┌────────────────┴───────────────┐
-                 ▼                                ▼
-          Session Runtime controller           Broker control/policy ──► OneCLI control API
-                 │ workload API                  │
-                 ▼                               ▼
-          untrusted Session Runtime Pod ── workload ID ──► Broker access relay
-          Broker access relay ── opaque CONNECT ─────────► OneCLI gateway ──► provider
-```
+## Network and opaque relay
 
-Every arrow crosses authenticated authorization. Same-repository code does not imply same runtime
-trust.
+Default-deny isolation prevents Pods from reaching product Postgres, Kubernetes control, other
+Workstreams, providers, the public Internet or OneCLI directly. Explicit internal reachability is
+limited to reviewed authenticated bridge, relay and custody transports. The provider relay reaches
+only the reviewed OneCLI gateway path; there is no fallback route during an outage.
 
-## Authentication and authorization
+Broker authenticates the workload and selects its bound OneCLI Agent. It tunnels provider traffic
+opaquely. It must not terminate provider TLS, inspect prompt/tool bodies, inject credentials or
+become an HTTP provider adapter. OneCLI stores and injects provider credentials.
 
-- Human/API requests use the platform identity provider.
-- Workstream authorization is checked against durable `owner | editor | viewer` membership.
-- Service-to-service calls use workload identity and authenticated TLS.
-- Session Runtime materialization requires an execution grant bound to Session and Agent.
-- One dedicated selective OneCLI Agent is mapped to exactly one Agora Session, holding only the
-  credential grants that Session resolved — a new Agent holds none.
-- ACP bridge credentials are one-time or short-lived and Session-bound.
-- Database access uses distinct roles per deployable.
-- Authorization is checked at every resource boundary, not only in the UI.
+The relay's reachability filter is a deterministic conservative projection of observed effective
+OneCLI grants. A route has no independent allow policy and confers no credential-backed authority
+without a matching OneCLI grant. An unrepresentable or stale projection closes access until verified.
+Unknown attached rights are removed even when masked by upstream restrictions (spec 10).
 
-Baseline role semantics are:
+Conformance must exercise actual provider/tool requests, denied routes and existing tunnels under
+the pinned OneCLI/relay version. A successful CONNECT response alone proves neither authorization
+nor a credential-bearing operation. No undocumented gateway default, rule ordering or API feature
+is assumed to provide the required behavior.
 
-- `owner`: read/write, membership administration and deletion;
-- `editor`: read/write Sessions, prompts and metadata, but no membership administration/deletion;
-- `viewer`: read items/feed/status only.
+## Restriction, shutdown and in-flight requests
 
-System/service commands carry their actor and an explicit delegated authority path; they do not
-manufacture a human membership.
+New Intent, loss of trustworthy evidence or a detected unsafe drift closes work admission. Broker
+closes affected relay routes and existing tunnels before restriction, independently of ACP health,
+quiescence and Save success. It removes excess attached/effective grants through OneCLI and verifies
+the remaining exact set. Failure to revoke leaves the target gated with a typed owner diagnostic.
 
-## Kubernetes
+For shutdown, revoke all grants and upstream Agent authority, delete the Agent and remove its relay
+binding, while runtime control independently terminates execution. An inactive binding or an Agent
+with no grants still counts as footprint until removed. Partial cleanup cannot be called `off`.
 
-Only the Session Runtime controller ServiceAccount may create/delete Session Runtime workloads.
+Closure prevents further transport through the revoked binding. It cannot retract data already
+returned or cancel an operation accepted by a provider. Such a request may complete remotely and
+its outcome can remain unknown. A completed ACP cancellation is not a universal rollback of tools,
+child processes or external side effects; local quiescence and external ambiguity are separate.
+The ACP cancellation/late-update contract is described by
+[ACP prompt turns](https://agentclientprotocol.com/protocol/v1/prompt-turn#cancellation).
 
-Pods materializing Session Runtimes:
+A stale controller cannot revive access by finishing an old grant or Agent creation after cleanup.
+Trusted mutation boundaries enforce current ownership and resolve unknown in-flight operations
+before allowing conflicting work. Pod/Agent identities are never rebound. Workset finalization CAS
+alone is insufficient to enforce this; the engine and spec 13 define the recovery obligation.
 
-- use no Kubernetes API token;
-- run non-root;
-- receive a restrictive security context and runtime class;
-- cannot mount host paths or arbitrary PVCs;
-- cannot select an image, command, env or ServiceAccount;
-- cannot receive OneCLI control keys, upstream Agent bearers or provider credentials;
-- have CPU, memory, PID and ephemeral-storage limits;
-- carry deterministic Session/Agent labels without user-controlled label keys.
+A missing Pod API object does not prove physical termination under partition. The runtime retirement
+inventory and infrastructure-fencing contract in spec 08 protect against overlapping execution and
+workspace writes. Workload expiry or relay closure alone does not establish that local code stopped.
 
-The controller validates the generated PodSpec before submission.
+## Secrets and content
 
-## Network
+Provider credentials exist only in OneCLI. Its control key is restricted to Broker control; the
+per-Agent upstream bearer is encrypted in Broker-private operational storage and available only to
+the relay. Pods receive neither. Workload/bridge credentials are short-lived, scoped and excluded
+from product facts, logs, Saves and environment-based content transport. Trust roots and placeholder
+stubs are non-secret deployment assets, never a way to recover upstream authority.
 
-Default-deny NetworkPolicies isolate:
+Saves and workspace dependencies exclude renewable authority by reviewed driver construction.
+They can still contain confidential prompts, paths and tool output; reads remain Workstream-scoped,
+encrypted and audited. Core services do not inspect Save bytes to enforce these rules.
 
-- Session Runtime Pods from product Postgres;
-- Session Runtime Pods from the Kubernetes API;
-- Session Runtime Pods from other Session Runtime Pods;
-- public Web ingress from internal control APIs;
-- Broker admin plane from Session Runtime Pods.
+ACP input is bounded and validated under stable ACP types. Unknown metadata is preserved without
+execution, filesystem callbacks stay within authorized roots, permission decisions are explicit,
+and Web escapes untrusted content. Retained raw envelopes have product access control; logs are not
+an alternate transcript store.
 
-Session Runtime Pods may reach the authenticated Broker access relay, ACP bridge and explicitly
-required internal services. They MUST NOT reach providers, the public Internet, OneCLI control API
-or OneCLI gateway directly.
+OneCLI/relay logs and audit records exclude query strings, headers, request/response bodies, tokens
+and Save bytes. Content-bearing approval previews are disabled unless their exact pinned behavior
+has a reviewed confidentiality contract. Approval scope still participates in grant equality; this
+does not silently replace required approval with unconditional access.
 
-The relay may reach only the OneCLI gateway.
+## Infrastructure, storage and supply chain
 
-Provider egress is deny-by-default **at the relay**, per Session
-([ADR 0009](../adr/0009-onecli-grant-authority.md)): the relay refuses to bridge
-a CONNECT whose host is absent from that Session's compiled, reviewed allow-list, before any
-upstream socket exists. OneCLI's own Default Rule is neither sufficient nor relied upon — its OSS
-project scope cannot express a terminal `block *` at all. Agent/runtime upgrades require an
-egress-set diff and negative tests for unlisted ordinary and LLM hosts; a negative test MUST assert
-the refusal at the relay, since OneCLI's gateway answers `200` to every CONNECT and a probe that
-stops at the status line proves nothing.
+Only runtime control's service identity can create/delete execution workloads. Validated templates
+pin image digests, non-root identity, restricted mounts, limits and no Kubernetes token. A Pod may
+not choose its image, service account, command or privileged configuration. Database roles separate
+product facts, projections, custody metadata, custody payloads and migrations; core has no payload
+read grant. Access is enforced by storage roles as well as application authorization.
 
-## Secrets
+Harness/tool/adapter and OneCLI artifacts have reviewed pinned versions and provenance. Pods install
+nothing at startup. Registry changes include dependency, grant, Save compatibility and isolation
+review; rollout retains definitions required by running old images. Conformance includes rejection
+of wrong incarnations, direct provider paths, stale grants, credential capture and late mutations.
 
-- Provider secrets and subscription auth live only in OneCLI.
-- The OneCLI organization/project control key is available only to Broker control.
-- The dedicated OneCLI Agent upstream bearer is encrypted in Broker-private operational state and
-  available only to the access relay.
-- Execution-grant activation references and platform Session Runtime workload credentials are
-  ephemeral and never persisted in product tables, ACP envelopes or logs.
-- ACP tunnel credentials are ephemeral and redacted.
-- Custody drivers exclude credential paths.
-- Workspace content and custody are never placed in environment variables.
-- Secrets are not embedded in registry definitions or Pod templates.
-- OneCLI CA trust and `onecli-managed`/placeholder stubs are non-secret deployment assets and cannot
-  be used to recover upstream authority.
-
-## Database
-
-Required roles:
-
-- `agora_product`: product facts and journal;
-- `agora_projector`: projection rebuild/write;
-- `agora_custody_meta`: custody metadata only;
-- `agora_custody_runtime`: custody payload read/write;
-- `agora_migrator`: DDL only.
-
-The control-plane role MUST receive an explicit column-level denial for custody payload where
-supported, backed by separate repository credentials.
-
-## ACP and content
-
-ACP envelopes are untrusted input. The control plane:
-
-- enforces frame/body limits;
-- validates JSON-RPC and stable ACP types;
-- preserves unknown `_meta` without executing it;
-- escapes content in Web rendering;
-- validates filesystem paths against Session roots;
-- applies permission policy before tool/terminal actions;
-- rate-limits abusive update streams.
-
-Thoughts/tool output may contain secrets from the workspace; access follows Workstream authorization.
-
-## Browser boundary
-
-The Browser may submit:
-
-- Agent IDs from the public registry;
-- equipment intent from the public policy projection;
-- standard prompt content;
-- user permission decisions.
-
-It may not submit runtime definitions, raw capabilities, provider endpoints, commands/env, custody
-references belonging to another Session, or execution-grant material.
-
-## Supply chain
-
-- Runtime images are pinned by digest.
-- OneCLI is pinned by digest and its source/release provenance is verified.
-- Agent adapter package versions are pinned and scanned.
-- Agent images already contain pinned harness/adapter binaries; Pods install nothing at startup.
-- Registry changes require review.
-- CI uses least-privilege tokens.
-- Production deployment artifacts are provenance-attested where available.
-- An adapter upgrade includes custody-compatibility and ACP contract tests.
-- A OneCLI/Agent upgrade includes route-diff, provider-auth, query-log-redaction and revocation tests.
-
-## Audit
-
-Security audit records include actor, Session, action class, decision, policy version and outcome.
-They exclude prompt content, tool output, tokens and custody bytes.
-
-Break-glass custody reads and policy overrides require dedicated, durable audit events.
-OneCLI gateway stdout MUST omit query strings, headers and bodies. OneCLI manual approval is disabled
-for content-bearing LLM/tool routes because its approval preview may summarize request bodies.
+Audit records retain actor, Workstream, Session where one exists, target incarnation, operation,
+policy/registry revision and outcome. Reconciliation attempts before Pod birth have no fabricated
+Session. Privileged overrides and break-glass reads require dedicated durable audit. No security
+property in this specification is claimed verified by this documentation-only design revision.

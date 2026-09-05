@@ -3,8 +3,8 @@
 `CONSTRUCTION` is evaluated after [`POWER`](004_power.md) passes with `intent.power = on`. It
 ensures the Workstream runs exactly one coherent footprint envelope — a Pod built from the desired
 harness image, with its OneCLI Agent and relay binding — creating it when none exists and removing
-an incoherent or wrong-image footprint so a later tick can rebuild it. It judges only which harness
-image runs and whether the envelope is whole, not whether the Pod is ready or usable.
+an incoherent or wrong-image footprint so a later tick can rebuild it. It judges the admitted image
+and whether the envelope is whole and reusable; a healthy startup can pass without ACP readiness.
 
 ## Inputs
 
@@ -37,21 +37,22 @@ by `BUILD` and torn down whole by `TURN_OFF`, so a drifted part is repaired by r
 never by re-attaching it in place.
 
 A stale Pod is not swapped in place. `CONSTRUCT-002` selects the same `TURN_OFF` as `POWER`: it
-captures the Save under the running harness's Anchor and tears the footprint down. Because
-`intent.power` is still `on`, the successor tick passes `POWER` and reaches `CONSTRUCT-001`, which
+attempts a bounded Save under the running harness's Anchor and tears the footprint down regardless
+of capture outcome. Because `intent.power` is still `on`, the successor tick passes `POWER` and
+reaches `CONSTRUCT-001`, which
 builds the Pod from the now-current `intent.harness`. Reusing `TURN_OFF` keeps the verb catalogue
 small and keeps the swap consistent with the "an action returns nothing; the next tick decides"
 law: `TURN_OFF` never knows whether it extinguishes for good or to make way for a rebuild.
 
 Comparing against the pinned digest `D` means a re-pinned image under the same `harness_id` reads as
-stale and is replaced. If a mere image upgrade should not disrupt a running Pod, `CONSTRUCT-002` can
-compare `harness_id` instead and let the digest converge at the next teardown — a policy choice for
-this rule, not a change to the Observation.
+stale and is replaced. Registry publication must explicitly re-enqueue affected Workstreams under
+the shared revision contract in spec 09; worker-local deployment versions cannot change the target.
 
-Whether a rebuilt Pod restores its predecessor's native context or starts fresh is not decided here.
-It is settled when the Session is opened: a compatible Save exists only for the same `harness_id`,
-so a same-harness rebuild restores and refills while a harness change re-seeds from product history
-([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)).
+Whether a rebuilt Pod restores or starts fresh is decided by `SESSION`, from the target harness's
+own compatible Anchor. A → B → A can resume A; neither a harness change nor a same-harness image
+upgrade proves compatibility or absence by itself (ADR 0008).
 
-Authority reconciliation follows, before Session readiness. A Pod that runs `D` may still be `Pending`, or `Running` without
-a live ACP session; `CONSTRUCT-003` only establishes that the right image is being run.
+Authority reconciliation follows. A coherent Pod on `D` can still be Pending or await ACP launch.
+Terminal/retired footprints instead include `⊥` and select cleanup here, before any later HOLD.
+BUILD attempt recovery is operation-specific; after an attempt ends, an observed incomplete envelope
+is torn down rather than repaired by an unregistered domain action.
