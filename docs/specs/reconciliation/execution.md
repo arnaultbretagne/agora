@@ -22,6 +22,20 @@ Workstream and referenced resources; service actions retain actor and delegated 
 attribution grants no access. Harnesses, tools and native state are untrusted, including under prompt
 injection. Their callbacks never borrow control-plane filesystem access or infrastructure credentials.
 
+### Workstream authorization
+
+The minimal product authorization model, recorded before the control-plane API exists (S2):
+
+- A principal identifier arrives in one header set by the deployment's trusted authentication proxy;
+  the previous deployment used `X-Forwarded-Email`. The proxy, not Agora, authenticates the human;
+  requests reaching Agora without that header carry no principal and are unauthenticated.
+- The Workstream's creating principal is its owner. Only the owner reads or writes the Workstream,
+  its Intents and its product-facing views. Ownership is not transferable while no transfer contract
+  is registered.
+- Service actions (workers, controllers, brokers) are not human principals: they act under their own
+  service identity, carry the actor that caused them where a record requires one, and never widen a
+  human principal's access.
+
 Runtime control resolves reviewed images, commands, mounts and limits server-side. Public input
 cannot supply arbitrary images, argv, environment, PodSpecs, credential IDs or executable definitions.
 Pods run non-root with bounded resources, no host privileges or Kubernetes token, and default-deny

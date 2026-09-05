@@ -1,0 +1,21 @@
+{
+  "name": "@agora/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "start": "node dist/src/main.js",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agora/domain": "0.0.0",
+    "@agora/engine": "0.0.0",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
+  }
+}
