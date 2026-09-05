@@ -1,79 +1,53 @@
 # Agora
 
-Agora is an ACP-native product for running durable human/agent workstreams in isolated
-**Session Runtimes**.
+Agora coordinates successive harness executions within a Workstream. A complete **Intent** says
+what is wanted, fresh **Observation** reports what exists, a **Session** records one execution,
+and the **Workstream** orders its facts. Reconciliation connects these four temporal concepts.
 
-This repository is a clean architectural baseline. It intentionally contains contracts,
-specifications and implementation plans before production code. Agents implementing the system must
-follow [AGENTS.md](AGENTS.md) and the plan dependency graph in [plans/README.md](plans/README.md).
+This branch is the design baseline for a new implementation. It contains the current decisions and
+behavior contracts; executable code, old schemas, implementation plans and build tooling have been
+retired. Their presence in Git history does not make them part of the new architecture.
 
-## Five core terms
+## Read the design
 
-1. A **Workstream** is the non-null business object shown by the product.
-2. A **Session** is one ACP execution context attached to one Workstream and one Agent.
-3. A **Session Runtime** is the singleton infrastructure subresource through which exactly one
-   Session is materialized, not another domain entity.
-4. An **Anchor** records how much of a Workstream is durably known by one Agent.
-5. A **Custody snapshot** is opaque harness state used to resume one Session.
-
-There is no `Conversation`, `Run`, `Loge`, reusable Session Runtime, generic runtime profile or
-custom Agent message protocol.
-
-## Repository shape
+1. Start with [ADR 0002](docs/adr/0002-workstream-session-model.md) for the model and
+   [ADR 0003](docs/adr/0003-reconciliation-over-state.md) for reconciliation.
+2. Read the [specification index](docs/specs/reconciliation/README.md), then the registries and
+   ordered rules it lists.
+3. Follow the supporting [engine](docs/specs/reconciliation/engine.md),
+   [execution](docs/specs/reconciliation/execution.md) and
+   [continuity](docs/specs/reconciliation/continuity.md) contracts as needed.
+4. Use the [acceptance scenarios](docs/specs/reconciliation/acceptance.md) to assess concrete behavior.
+   The [ADR index](docs/adr/index.md) supplies the rationale for all ten active decisions.
 
 ```text
-apps/
-  web/               Human-facing web application
-  control-plane/     Workstream API, Session coordinator and ACP Client
-  session-runtime-controller/
-                     Kubernetes lifecycle for Session Runtimes
-  broker/            Capability policy, OneCLI lifecycle and opaque workload relay
-
-packages/
-  domain/            Domain types and invariants
-  acp/               ACP connection and journaling integration
-  store-pg/          Product journal and projections
-  session-runtime-control/   Session Runtime control client/server contracts
-  custody/           Opaque custody persistence
-  equipment-policy/ Capability request and grant resolution
-  agent-registry/    Trusted Agent runtime definitions
-  observability/     Correlation helpers only
-
-agents/
-  claude-code/       Claude ACP runtime definition and custody driver
-  codex/             Codex ACP runtime definition and custody driver
-
-contracts/           Machine-readable HTTP, event, registry and SQL contracts
-docs/specs/          Normative system specifications
-docs/adr/            One consolidated ADR series and index
-plans/               Ordered implementation plans for coding agents
+docs/
+  AGENTS.md                reading and design instructions
+  adr/                     active decisions and index
+  specs/reconciliation/    taxonomies, rules and supporting contracts
+AGENTS.md                  repository instructions
+README.md                  this entry point
 ```
 
-The repository is a monorepo, not a monolith. `control-plane`, `session-runtime-controller`, and
-`broker` are separate deployables with separate identities and permissions.
+## What comes next
 
-Self-hosted OneCLI is the separately operated, pinned credential gateway. It alone stores/injects
-provider credentials and performs MITM; Agora does not contain a parallel gateway.
+Specify and implement one behavior at a time, with aligned wire/storage contracts and evidence for
+its acceptance scenarios. Introduce code, tests and tooling when that slice needs them under
+[ADR 0001](docs/adr/0001-unified-repository.md). Concrete policies, schemas, integration support,
+deadlines and workspace/fencing mechanisms are still prerequisites to resolve, not guarantees
+provided by these documents. There is no runnable application or implementation test suite here.
 
-## Read order
+## Recover the previous repository
 
-1. [Glossary](docs/specs/00-glossary.md)
-2. [System architecture](docs/specs/01-system-architecture.md)
-3. [Domain model](docs/specs/02-domain-model.md)
-4. [ADR index](docs/adr/index.md)
-5. [Implementation program](plans/00-program.md)
+The annotated tag [`archive/pre-design-cleanup-2026-09-05`](https://github.com/arnaultbretagne/agora/tree/archive/pre-design-cleanup-2026-09-05)
+retains the complete tracked repository before cleanup, including the architecture-review commits.
+Browse that tag for the old implementation, flat specifications and parked ADRs. To inspect it
+locally without changing this branch:
 
-## Contract checks
-
-```bash
-npm ci
-npm test
+```sh
+git worktree add --detach ../agora-before-cleanup archive/pre-design-cleanup-2026-09-05
 ```
 
-The local checker validates repository indexes/links, JSON Schemas, OpenAPI documents and the agent
-plan graph. CI additionally applies both SQL contracts to a disposable PostgreSQL 17 service.
-
-## Status
-
-Architecture baseline accepted on 2026-07-29 after the OneCLI spike. P01 is ready; every later
-package remains gated by the dependency graph and its plan exit criteria.
+Git preserves committed files; it does not back up ignored or untracked local files. The cleanup
+changes tracked content only. Historical documents are available for reference, not as implicit
+contracts to restore during implementation.

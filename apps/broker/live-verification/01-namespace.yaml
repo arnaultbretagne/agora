@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: agora-onecli-test
-  labels:
-    agora.dev/purpose: onecli-live-verification

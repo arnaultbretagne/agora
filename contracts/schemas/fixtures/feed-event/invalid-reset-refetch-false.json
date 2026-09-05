@@ -1,7 +1,0 @@
-{
-  "workstreamId": "11111111-1111-1111-1111-111111111111",
-  "position": 7,
-  "throughWorkstreamSeq": 12,
-  "operation": "reset",
-  "payload": { "reason": "retention_gap", "refetch": false }
-}
