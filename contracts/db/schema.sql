@@ -1,0 +1,5 @@
+-- Agora durable store (ADR 0005). Applied from scratch by `npm run db:reset`; there are no
+-- incremental migrations before first release. Every table is introduced by the implementation
+-- slice that specifies its behavior, with the authority boundary it belongs to:
+--   canonical history (Intent events, Workstream facts), operational control (reconciliation work),
+--   rebuildable projections, opaque Saves.

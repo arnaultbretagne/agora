@@ -4,9 +4,10 @@ Agora coordinates successive harness executions within a Workstream. A complete 
 what is wanted, fresh **Observation** reports what exists, a **Session** records one execution,
 and the **Workstream** orders its facts. Reconciliation connects these four temporal concepts.
 
-This branch is the design baseline for a new implementation. It contains the current decisions and
-behavior contracts; executable code, old schemas, implementation plans and build tooling have been
-retired. Their presence in Git history does not make them part of the new architecture.
+This repository is the design baseline for a new implementation. It contains the current decisions
+and behavior contracts plus the repository scaffold (workspace, checks, CI, database reset) and the
+carried-over Web UI shell. The old implementation, schemas and plans have been retired; their presence
+in Git history does not make them part of the new architecture.
 
 ## Read the design
 
@@ -21,12 +22,17 @@ retired. Their presence in Git history does not make them part of the new archit
    The [ADR index](docs/adr/index.md) supplies the rationale for all ten active decisions.
 
 ```text
+apps/
+  web/                   human-facing UI shell (client carried over; relay to the control plane)
+contracts/
+  db/schema.sql          PostgreSQL schema, applied from scratch (no migrations before first release)
 docs/
-  AGENTS.md                reading and design instructions
-  adr/                     active decisions and index
-  specs/reconciliation/    taxonomies, rules and supporting contracts
-AGENTS.md                  repository instructions
-README.md                  this entry point
+  AGENTS.md              reading and design instructions
+  adr/                   active decisions and index
+  specs/reconciliation/  taxonomies, rules and supporting contracts
+scripts/                 repository rules (dependency direction, forbidden vocabulary) and db reset
+AGENTS.md                repository instructions
+README.md                this entry point
 ```
 
 ## What comes next
@@ -35,7 +41,13 @@ Specify and implement one behavior at a time, with aligned wire/storage contract
 its acceptance scenarios. Introduce code, tests and tooling when that slice needs them under
 [ADR 0001](docs/adr/0001-unified-repository.md). Concrete policies, schemas, integration support,
 deadlines and workspace/fencing mechanisms are still prerequisites to resolve, not guarantees
-provided by these documents. There is no runnable application or implementation test suite here.
+provided by these documents. No reconciliation behavior is implemented yet; `apps/web` only serves the
+UI shell and relays API traffic to a control plane that does not exist yet.
+
+```sh
+npm ci && npm test          # repository rules, build, unit tests
+DATABASE_URL=postgres://user:pass@host:5432/postgres npm run db:reset   # drop/create and apply the schema
+```
 
 ## Recover the previous repository
 
