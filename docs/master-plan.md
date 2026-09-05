@@ -11,7 +11,9 @@ owning specification (see [docs/AGENTS.md](AGENTS.md)), then implements. Propose
 and API shapes below are starting points for the slice that owns them, not decisions.
 
 Reading order: §1 target system, §2 technical foundations, §3 the slices in order, §4 the register
-of prerequisites each slice must resolve, §5 milestones and risks.
+of prerequisites each slice must resolve, §5 milestones and risks. The measurements the retired
+implementation left behind, and the code bricks worth copying per slice, are consolidated in
+[field findings](field-findings.md).
 
 ---
 
