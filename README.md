@@ -37,6 +37,9 @@ README.md                this entry point
 
 ## What comes next
 
+The [implementation master plan](docs/master-plan.md) sequences the work into slices and keeps the
+register of prerequisites each slice must resolve; it is a roadmap, not a contract.
+
 Specify and implement one behavior at a time, with aligned wire/storage contracts and evidence for
 its acceptance scenarios. Introduce code, tests and tooling when that slice needs them under
 [ADR 0001](docs/adr/0001-unified-repository.md). Concrete policies, schemas, integration support,

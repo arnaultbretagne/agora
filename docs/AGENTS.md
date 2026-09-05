@@ -29,6 +29,9 @@ After the baseline, read the complete sources needed for the topic:
 | Persistence, ownership, acquisition, retries or scheduling | [Engine](specs/reconciliation/engine.md), ADRs [0003](adr/0003-reconciliation-over-state.md) and [0005](adr/0005-postgresql-durable-store.md) |
 | Validation or implementation acceptance | [Acceptance](specs/reconciliation/acceptance.md) and each affected behavior contract |
 
+The [master plan](master-plan.md) sequences implementation slices and assigns open prerequisites;
+it is non-normative and never a source of contracts.
+
 Read linked definitions, not just search snippets. Repository/deployment structure is governed by
 [ADR 0001](adr/0001-unified-repository.md); protocol history and projections by
 [ADR 0004](adr/0004-acp-boundary-and-session-facts.md).
