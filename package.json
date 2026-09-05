@@ -1,0 +1,27 @@
+{
+  "name": "@agora/root",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agora — reconciliation of harness executions within Workstreams",
+  "workspaces": [
+    "apps/*",
+    "harnesses/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node scripts/check-dependency-direction.mjs && node scripts/check-forbidden-vocabulary.mjs",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run check && npm run build && npm run test --workspaces --if-present",
+    "db:reset": "node scripts/db-reset.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "pg": "8.23.0",
+    "typescript": "7.0.2"
+  }
+}

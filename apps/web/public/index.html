@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <!-- viewport-fit=cover pairs with the composer's env(safe-area-inset-bottom): without it iOS
+       reports a zero inset and the send button sits under the home indicator. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Agora</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <!-- The design system's licensed faces are named first in tokens.css and fall back through
+       Newsreader/Inter to the system stacks. The OLD UI pulled those two from Google Fonts; this one
+       does not link any external stylesheet, so the page has no third-party runtime dependency and
+       renders identically whether or not anything outside this cluster is reachable. -->
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app" class="app sidebar-open">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="scrim" id="scrim"></div>
+    <section class="main" id="main"></section>
+  </div>
+  <script type="module" src="/client/app.js"></script>
+</body>
+</html>
