@@ -9,7 +9,8 @@ next `NOTIFY`; only that tick's fresh Observation determines the next result.
 
 The verb catalogue is closed. Before implementation, every verb MUST define its owner, inputs,
 idempotency contract and observable postcondition. A rule selects a verb; it does not inline the
-verb's procedure or reproduce decisions owned by later rules.
+verb's procedure or reproduce decisions owned by later rules. A verb observes nothing and branches
+on nothing: every decision it would need has already been made by the rule that selected it.
 
 ## `BUILD`
 
@@ -34,17 +35,42 @@ OneCLI Agent, then delete the Pod. Its observable objective is a subsequent fres
 `TURN_OFF` does not decide whether the Workstream comes back up; the next tick reads `intent.power`
 and the construction rules to decide that.
 
-## `OPEN_SESSION`
+## `RESTORE`
 
-`OPEN_SESSION` is selected when the Workstream's Pod is `Running` but holds no live ACP session. It
-establishes the session on the harness: a fresh session, or — when a compatible Save exists for the
-same `harness_id` — a restore from the Anchor followed by the refill of the product-history frontier
-([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)). Its observable objective is a subsequent
-fresh `observation.session = live`.
+`RESTORE` is selected when the Workstream's Pod is `Running` without a live ACP session and a
+compatible Anchor exists for its harness. It places the Anchor's Save into the Pod — the control
+plane does this; the runtime has no Save-store access
+([ADR 0006](../../adr/0006-complete-harness-images.md)) — and binds the harness to the Anchor's
+Session by `session/resume`, which replays no message
+([ADR 0008](../../adr/0008-saves-anchors-and-refill.md)). The restored context incorporates the
+Anchor watermark `W`. Its observable objective is a subsequent fresh `observation.session = live`.
 
-`OPEN_SESSION` is idempotent on the Workstream's session: it opens no second session when one is
-already live. Restore-versus-fresh is decided inside the verb from the Anchor store; the selecting
-rule does not reproduce that choice.
+`RESTORE` is idempotent on the Workstream's Session: it opens no second session when one is live. It
+delivers no Handoff; closing the gap above `W` belongs to `REFILL`.
+
+## `START`
+
+`START` is selected when the Workstream's Pod is `Running` without a live ACP session and no
+compatible Anchor exists for its harness. It opens a fresh, empty session on the harness, whose
+context incorporates watermark `0`. Its observable objective is a subsequent fresh
+`observation.session = live`.
+
+`START` is idempotent on the Workstream's Session. It delivers no Handoff.
+
+## `REFILL`
+
+`REFILL` is selected when the live Session's context is `stale`. It commits the opening Handoff
+command for the range `(W, head]` — `W` the watermark the Session incorporates, `head` the Workstream
+head read at commit — and, when that range is non-empty, dispatches it as the Handoff prompt: a
+deterministic, bounded `ContentBlock::Resource` at the stable URI, `purpose = handoff`
+([spec 06, "Handoff representation"](../06-anchors-and-handoffs.md)). Its observable objective is a
+subsequent fresh `observation.sync = current`.
+
+`REFILL` is idempotent within one live incarnation of the Session: a retry rebuilds the same range
+and dispatches nothing twice. A later incarnation — the Session reopened after a Save captured
+without the Handoff — is a new idempotency scope, so the same range is delivered again rather than
+refused. Prompt admission waits for `observation.sync = current`, so the head read at commit is the
+head at activation, never one advanced by the Session's own turns.
 
 ## `GRANT`
 

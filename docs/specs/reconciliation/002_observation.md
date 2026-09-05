@@ -77,6 +77,61 @@ ACP session state observed through the Broker relay that owns the connection. It
 only; which harness image runs is `observation.construction`, not this field. With no Pod at all it
 is `pending`.
 
+## `observation.anchor`
+
+`observation.anchor` is a scalar with exactly two values, `compatible` or `none`, describing whether
+durable continuation material exists for the harness the Workstream's Pod runs:
+
+- `compatible` — the Anchor store holds an Anchor for `(workstream, harness_id)` whose Save is not
+  invalidated and is resumable under the current reviewed harness definition: its recorded format
+  id, format version and adapter version are ones that definition accepts
+  ([spec 06, "Choosing a target Session"](../06-anchors-and-handoffs.md);
+  [spec 07, "Compatibility"](../07-custody.md));
+- `none` — no such Anchor, or its Save is invalidated or incompatible.
+
+It is derived from a fresh read of the Anchor store and of the Save's non-opaque metadata — never
+its payload ([ADR 0008](../../adr/0008-saves-anchors-and-refill.md); spec 07, "Opacity") — joined
+with the reviewed harness definition. The `harness_id` is the one the live Pod runs, resolved from
+`observation.construction`, so this field depends on no Intent value.
+
+The Anchor store is an inventory of durable artifacts, not a current-state row about the runtime:
+reading it observes what continuation material exists, not what the runtime claims to be. When
+`compatible`, the Anchor's `synced_through_seq` is the watermark `W` a restored context
+incorporates.
+
+## `observation.sync`
+
+`observation.sync` is a scalar with exactly two values, `current` or `stale`, describing whether the
+live Session's native context holds the opening Handoff that closes the gap between its watermark
+and the Workstream head at activation ([spec 06](../06-anchors-and-handoffs.md)). It is defined
+when `observation.session = live`.
+
+Let `W` be the watermark the live context incorporates by construction: the compatible Anchor's
+`synced_through_seq` when the Session was restored, `0` when it was started fresh. An **opening
+Handoff** is a durable Handoff command targeting the live Session with `source_from_seq = W`; its
+`source_through_seq` is the head pinned when the command was committed.
+
+```text
+observation.sync = current
+  iff some opening Handoff exists whose range (W, source_through_seq] is empty,
+      or whose resource is present in the live native transcript
+
+observation.sync = stale
+  otherwise: no opening Handoff yet, or none whose non-empty range is present
+```
+
+Presence is a **readback of the harness's own transcript** — the same native context the custody
+driver captures for a Save, read live — for the Handoff's stable resource URI
+`agora://workstreams/{workstream_id}/handoffs/{command_id}`. Because a Handoff is a message in that
+transcript, presence proves incorporation. An acknowledgement of delivery recorded by Agora does
+not, and MUST NOT substitute for it: a Session restored from a Save captured before its Handoff
+shows the URI absent and is `stale`, whatever Agora recorded for an earlier incarnation.
+
+The Handoff command record supplies only the range a `REFILL` committed to; it is the definition of
+the delivery, not evidence that it landed. Under the mono-active Workstream — one current Session,
+every prompt routed to it — no gap can open while a Session is live, so `current` holds until the
+Session is replaced.
+
 ## `observation.capabilities`
 
 `observation.capabilities` is the set of capability ids currently effective as grants on the

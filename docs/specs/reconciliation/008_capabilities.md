@@ -1,4 +1,4 @@
-# 007 — `CAPABILITIES`
+# 008 — `CAPABILITIES`
 
 `CAPABILITIES` reconciles the OneCLI grants on the Workstream's Agent toward `intent.capabilities`.
 It runs after the Agent exists — provisioned with the Pod by `BUILD` — and reconverges the grants
