@@ -4,7 +4,7 @@ export interface Problem {
   readonly type: string
   readonly title: string
   readonly status: number
-  readonly code: string
+  readonly code?: string
   readonly detail?: string
 }
 
@@ -133,11 +133,97 @@ export interface EquipmentRequest {
   readonly resources: readonly EquipmentResourceRequest[]
 }
 
-export function listWorkstreams(): Promise<{ items: readonly Workstream[]; nextCursor: string | null }> {
+/* ---------- S2 control-plane contract (contracts/api/control-plane.openapi.yaml) ---------- */
+
+export interface WorkstreamRecord {
+  readonly id: string
+  readonly title: string
+  readonly ownerPrincipal: string
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export interface IntentRequestBody {
+  readonly power: 'on' | 'off'
+  readonly harness: string
+  readonly capabilities: readonly string[]
+  readonly model: string
+  readonly effort: string
+  readonly persona: 'default'
+}
+
+export interface IntentAuthoringResult {
+  readonly status: 'created' | 'replayed'
+  readonly intentSeq: number
+}
+
+export interface WorkIntentView {
+  readonly intentSeq: number
+  readonly workGeneration: number
+  readonly dueAt: string
+  readonly attemptCount: number
+  readonly blockingCause: string | null
+  readonly claimed: boolean
+  readonly note: string
+}
+
+export interface WorkstreamIntentView {
+  readonly workstreamId: string
+  readonly intent: IntentRequestBody
+  readonly intentSeq: number
+  readonly revisionSet: Record<string, unknown>
+  readonly createdAt: string
+  readonly work: WorkIntentView | null
+}
+
+/** The principal's Workstreams, creation order (GET /v1/workstreams). */
+export function listWorkstreams(): Promise<readonly WorkstreamRecord[]> {
   return request('/v1/workstreams')
 }
 
-export function getWorkstream(id: string): Promise<WorkstreamDetail> {
+/** Creates a Workstream owned by the caller; the key replays the same Workstream (200) instead of creating twice. */
+export function createWorkstream(body: { readonly title: string }): Promise<WorkstreamRecord> {
+  return request('/v1/workstreams', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify(body),
+  })
+}
+
+export function getWorkstream(id: string): Promise<WorkstreamRecord> {
+  return request(`/v1/workstreams/${id}`)
+}
+
+/** Title only — the one Workstream field a human owns directly in S2. */
+export function patchWorkstream(id: string, patch: { readonly title: string }): Promise<WorkstreamRecord> {
+  return request(`/v1/workstreams/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+/** One complete desired state; the key is the authoring request key (same key + same content replays, different content conflicts). */
+export function putIntent(id: string, intent: IntentRequestBody): Promise<IntentAuthoringResult> {
+  return request(`/v1/workstreams/${id}/intent`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify(intent),
+  })
+}
+
+/** Latest Intent event plus the operational work view — scheduling state, never a convergence proof. */
+export function getIntent(id: string): Promise<WorkstreamIntentView> {
+  return request(`/v1/workstreams/${id}/intent`)
+}
+
+/* ---------- legacy product API (retired implementation) ---------- */
+
+export function legacyListWorkstreams(): Promise<{ items: readonly Workstream[]; nextCursor: string | null }> {
+  return request('/v1/workstreams')
+}
+
+export function legacyGetWorkstream(id: string): Promise<WorkstreamDetail> {
   return request(`/v1/workstreams/${id}`)
 }
 
@@ -162,7 +248,7 @@ export function getSession(sessionId: string): Promise<Session> {
 }
 
 /** Title and pin — the only two Workstream fields a human owns directly; everything else about a Workstream is derived from what actually happened to it. */
-export function patchWorkstream(workstreamId: string, patch: { readonly title?: string; readonly pinned?: boolean }): Promise<Workstream> {
+export function legacyPatchWorkstream(workstreamId: string, patch: { readonly title?: string; readonly pinned?: boolean }): Promise<Workstream> {
   return request(`/v1/workstreams/${workstreamId}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
@@ -274,7 +360,7 @@ export function setMode(sessionId: string, modeId: string): Promise<unknown> {
   })
 }
 
-export function createWorkstream(
+export function legacyCreateWorkstream(
   body: CreateWorkstreamRequest,
 ): Promise<{ command: { commandId: string }; workstream: Workstream; session: Session }> {
   return request('/v1/workstreams', {

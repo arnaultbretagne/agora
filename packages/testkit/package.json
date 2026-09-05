@@ -1,0 +1,11 @@
+{
+  "name": "@agora/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit"
+  }
+}

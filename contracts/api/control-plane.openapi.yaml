@@ -1,0 +1,341 @@
+openapi: 3.1.0
+info:
+  title: Agora control plane
+  version: 0.2.0-s2
+  description: |
+    Product API for Workstreams and complete Intents (slice S2). Principal identity arrives in one
+    header set by the deployment's trusted authentication proxy (execution.md, Workstream
+    authorization); requests without it are unauthenticated. The work-row view returned by
+    GET /workstreams/{id}/intent is operational scheduling state, explicitly not a convergence
+    proof.
+servers:
+  - url: /v1
+tags:
+  - name: Workstreams
+  - name: Intents
+paths:
+  /workstreams:
+    post:
+      tags: [Workstreams]
+      summary: Create a Workstream owned by the caller
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkstreamCreate'
+      responses:
+        '201':
+          description: Created; the caller is the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workstream'
+        '200':
+          description: Replayed; the same Idempotency-Key already created this owner's Workstream.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workstream'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/Invalid'
+    get:
+      tags: [Workstreams]
+      summary: List the principal's Workstreams
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+      responses:
+        '200':
+          description: The owned Workstreams.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workstream'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /workstreams/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    get:
+      tags: [Workstreams]
+      summary: Read one owned Workstream
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+      responses:
+        '200':
+          description: The Workstream.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workstream'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Workstreams]
+      summary: Rename an owned Workstream
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkstreamCreate'
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workstream'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Invalid'
+  /workstreams/{id}/intent:
+    parameters:
+      - $ref: '#/components/parameters/WorkstreamId'
+    put:
+      tags: [Intents]
+      summary: Author one complete Intent
+      description: |
+        The Idempotency-Key is the authoring request key. The same key with the same complete
+        Intent replays the original event; the same key with different content is a conflict.
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Intent'
+      responses:
+        '201':
+          description: Appended and scheduled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentAuthoring'
+        '200':
+          description: Replayed original event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntentAuthoring'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The request key was reused with different content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/Invalid'
+    get:
+      tags: [Intents]
+      summary: Latest Intent event plus the operational work view
+      description: |
+        `work` is durable scheduling state (due time, attempts, blocking cause) owned by the
+        engine. Its absence or presence is never a convergence proof.
+      parameters:
+        - $ref: '#/components/parameters/Principal'
+      responses:
+        '200':
+          description: The latest event and the operational work view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkstreamIntentView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  parameters:
+    Principal:
+      name: X-Forwarded-Email
+      in: header
+      required: true
+      description: Principal identifier supplied by the deployment's trusted authentication proxy.
+      schema:
+        type: string
+        minLength: 1
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    WorkstreamId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Malformed request (missing header, unparsable body).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthenticated:
+      description: The authentication proxy did not supply a principal.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No owned Workstream with this id.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Invalid:
+      description: Semantically invalid input.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    WorkstreamCreate:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+    Workstream:
+      type: object
+      additionalProperties: false
+      required: [id, title, ownerPrincipal, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        ownerPrincipal:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Intent:
+      type: object
+      additionalProperties: false
+      required: [power, harness, capabilities, model, effort, persona]
+      properties:
+        power:
+          enum: [on, off]
+        harness:
+          type: string
+          minLength: 1
+        capabilities:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
+        model:
+          type: string
+          minLength: 1
+        effort:
+          type: string
+          minLength: 1
+        persona:
+          const: default
+      description: Complete desired execution state (contracts/schemas/intent.schema.json is the validating contract; catalogue membership applies to on Intents).
+    IntentAuthoring:
+      type: object
+      additionalProperties: false
+      required: [status, intentSeq]
+      properties:
+        status:
+          enum: [created, replayed]
+        intentSeq:
+          type: integer
+          minimum: 1
+    WorkView:
+      type: object
+      additionalProperties: false
+      required: [intentSeq, workGeneration, dueAt, attemptCount, blockingCause, claimed, note]
+      properties:
+        intentSeq:
+          type: integer
+        workGeneration:
+          type: integer
+        dueAt:
+          type: string
+          format: date-time
+        attemptCount:
+          type: integer
+        blockingCause:
+          type: [string, 'null']
+        claimed:
+          type: boolean
+        note:
+          type: string
+          enum:
+            - operational scheduling state, not a convergence proof
+    WorkstreamIntentView:
+      type: object
+      additionalProperties: false
+      required: [workstreamId, intent, intentSeq, revisionSet, createdAt, work]
+      properties:
+        workstreamId:
+          type: string
+          format: uuid
+        intent:
+          $ref: '#/components/schemas/Intent'
+        intentSeq:
+          type: integer
+          minimum: 1
+        revisionSet:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        work:
+          oneOf:
+            - $ref: '#/components/schemas/WorkView'
+            - type: 'null'
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Always populated (findings §6.8).
+        instance:
+          type: string

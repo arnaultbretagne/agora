@@ -35,30 +35,25 @@ import {
   activateSession,
   createWorkstream,
   deleteWorkstream,
-  getAgentConfigOptions,
-  getEquipmentCatalogue,
-  getSession,
+  getIntent,
   getWorkstream,
-  listAgents,
-  listItems,
-  listTurns,
   listWorkstreams,
   openSession,
   patchWorkstream,
-  probeAgentConfigOptions,
   promptSession,
+  putIntent,
   setConfigOption,
-  subscribeFeed,
   suspendSession,
   type AgentConfigOptions,
   type ConfigValue,
   type EquipmentCatalogue,
   type EquipmentResourceRequest,
-  type FeedEvent,
+  type IntentRequestBody,
   type PublicAgent,
   type RequestedConfigOption,
   type Session,
   type Workstream,
+  type WorkstreamIntentView,
   type WorkstreamItem,
   type WorkstreamTurn,
 } from './api.js'
@@ -66,14 +61,12 @@ import { icons } from './icons.js'
 import { escapeHtml, renderMarkdown } from './markdown.js'
 import {
   clampIndex,
-  configOptionsFromItems,
   currentSession,
   effectiveConfig,
   findConfigOption,
   groupWorkstreams,
   hasRunningTurn,
   invocationTurnSpent,
-  itemCarriesConfigOptions,
   launchableAgents,
   messagesFromItems,
   planTranscript,
@@ -156,6 +149,8 @@ const state = {
     config: {} as Record<string, ConfigValue>,
   },
   unsubscribeFeed: undefined as (() => void) | undefined,
+  /** Latest Intent event and operational work view for the OPEN Workstream (S2 control plane). */
+  intentView: null as WorkstreamIntentView | null,
 }
 
 const isMobile = (): boolean => matchMedia(MOBILE_QUERY).matches
@@ -373,6 +368,11 @@ function stateChip(workstreamId: string): string {
 
 function renderTopbar(): void {
   const workstream = activeWorkstream()
+  const power = state.intentView?.intent.power
+  const work = state.intentView?.work
+  const powerTitle = work
+    ? `due ${new Date(work.dueAt).toLocaleString()} · ${work.attemptCount} tentative(s)${work.blockingCause ? ` · ${work.blockingCause}` : ''} — état opérationnel, pas une preuve de convergence`
+    : 'Aucune demande de power enregistrée'
   const bar = $main!.querySelector('.topbar')
   if (!bar) return renderMain()
   bar.innerHTML = `
@@ -384,6 +384,11 @@ function renderTopbar(): void {
       ${workstream ? stateChip(workstream.id) : ''}
       ${workstream ? selectorsCluster() : ''}
       ${
+        workstream
+          ? `<button class="icon-btn muted" id="power-toggle" title="Power ${power === 'on' ? 'off' : 'on'} — ${escapeHtml(powerTitle)}">${icons.power(17)}<span class="power-label">${power === 'on' ? 'ON' : 'OFF'}</span></button>`
+          : ''
+      }
+      ${
         workstream && runtimeStateOf(workstream.id) !== 'dormant'
           ? `<button class="icon-btn muted" id="stop-session" title="Arrêter la session (l’historique est conservé, la conversation reprend au prochain message)">${icons.power(17)}</button>`
           : ''
@@ -393,6 +398,7 @@ function renderTopbar(): void {
     </div>`
   bar.querySelector<HTMLElement>('#menu-btn')?.addEventListener('click', () => setSidebar(true))
   bar.querySelector<HTMLElement>('#mobile-new')?.addEventListener('click', newChat)
+  bar.querySelector<HTMLElement>('#power-toggle')?.addEventListener('click', () => void togglePower())
   bar.querySelector<HTMLElement>('#stop-session')?.addEventListener('click', () => void stopSession(state.activeId))
   bar.querySelector<HTMLElement>('#delete-conv')?.addEventListener('click', () => void removeWorkstream(state.activeId))
   bar.querySelector<HTMLElement>('#topbar-title')?.addEventListener('dblclick', () => void renameWorkstream(state.activeId))
@@ -791,7 +797,6 @@ function renderHarnessMenu(host: HTMLElement): void {
       renderComposer()
       renderTopbar()
       renderMenus()
-      void loadAgentConfig(state.draft.agentId)
     })
   }
 }
@@ -1012,6 +1017,7 @@ function newChat(): void {
   state.turns = []
   state.echoes = []
   state.configOptions = []
+  state.intentView = null
   state.draft.persona = ''
   state.draft.equipment = []
   // A draft belongs to the conversation it was typed into: carrying it across would silently
@@ -1047,6 +1053,7 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
   // A draft belongs to the conversation it was typed into: carrying it across would silently
   // reconfigure a Session the operator is no longer looking at.
   state.draft.config = {}
+  state.intentView = null
   if (isMobile()) {
     state.sidebarOpen = false
     applySidebar()
@@ -1056,121 +1063,59 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
   await loadWorkstream(workstreamId)
 }
 
+/**
+ * S2 surface: the Workstream record plus its latest Intent and operational work view. There are no
+ * Sessions, items or feeds on this API yet — the transcript area stays empty and the power state is
+ * what the operator can actually drive.
+ */
 async function loadWorkstream(workstreamId: string): Promise<void> {
   try {
-    const detail = await getWorkstream(workstreamId)
-    const { sessions, projectionHead: _head, ...workstream } = detail
-    state.workstreams.set(workstreamId, workstream)
-    state.sessions.set(workstreamId, asArray<Session>(sessions))
-    state.detailSeenAt.set(workstreamId, workstream.updatedAt)
-
-    const [itemsPage, turnsPage] = await Promise.all([listItems(workstreamId), listTurns(workstreamId)])
-    if (state.activeId !== workstreamId) return
-    state.items = [...asArray<WorkstreamItem>(itemsPage.items)]
-    state.turns = [...asArray<WorkstreamTurn>(turnsPage.turns)]
+    const record = await getWorkstream(workstreamId)
+    state.workstreams.set(workstreamId, toWorkstream(record))
+    state.items = []
+    state.turns = []
     state.echoes = []
-    state.configOptions = configOptionsFromItems(state.items) ?? []
+    state.configOptions = []
+    await refreshIntent(workstreamId)
     renderSidebar()
     renderMain()
-    subscribe(workstreamId, itemsPage.feedPosition)
   } catch (error) {
     toast(errorText(error), true)
   }
 }
 
-/**
- * Resumes from the feed position the item page was consistent with, so nothing between the snapshot
- * and the subscription is missed or replayed (docs/specs/14). `reset` means the client's cursor is
- * ahead of what the feed still retains — the only correct response is to refetch, not to guess.
- */
-function subscribe(workstreamId: string, after: number): void {
-  state.unsubscribeFeed = subscribeFeed(
-    workstreamId,
-    after,
-    (event: FeedEvent) => {
-      if (state.activeId !== workstreamId) return
-      applyFeedEvent(workstreamId, event)
-    },
-    (status) => {
-      state.feedLive = status === 'connected'
-    },
-  )
-}
-
-function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
-  if (event.operation === 'upsert') {
-    const item = event.payload as unknown as WorkstreamItem
-    const index = state.items.findIndex((existing) => existing.id === item.id)
-    if (index >= 0) state.items[index] = item
-    else state.items.push(item)
-    // The Agent naming its own session arrives as a `session_info` item, and the displayed title is
-    // derived from it server-side — so this is the moment the conversation stops being called after
-    // its first message. Re-read it now rather than waiting up to 6 s for the sidebar poll.
-    if (item.kind === 'session_info') void refreshWorkstreamTitle(workstreamId)
-    scheduleMessagesRender()
-    // A `PUT config-options` response travels the same journaled connection as `session/new`, so the
-    // freshest advertised option set arrives here too — the model panel needs no separate refresh.
-    //
-    // Gated on the frame actually carrying one: the topbar and the open menu depend on nothing else
-    // in a feed frame, and rebuilding that whole selector cluster on every streamed chunk was the
-    // second half of the flicker reported on 2026-08-08.
-    if (itemCarriesConfigOptions(item)) {
-      state.configOptions = configOptionsFromItems(state.items) ?? state.configOptions
-      renderTopbar()
-      renderMenus()
-    }
-    return
-  }
-  if (event.operation === 'remove') {
-    const itemId = (event.payload as { itemId?: string }).itemId
-    state.items = state.items.filter((item) => item.id !== itemId)
-    renderMessages()
-    return
-  }
-  if (event.operation === 'status') {
-    const subjectId = event.payload['subjectId'] as string | undefined
-    const status = (event.payload['state'] as { status?: WorkstreamTurn['status'] } | undefined)?.status
-    if (!subjectId || !status) return
-    const index = state.turns.findIndex((turn) => turn.id === subjectId)
-    if (index >= 0) {
-      const existing = state.turns[index]
-      if (existing) state.turns[index] = { ...existing, status }
-    } else {
-      void refreshTurns(workstreamId)
-    }
-    renderMessages()
-    // An invocation's single turn opening is what closes its composer, and that arrives here.
-    syncComposerLock()
-    return
-  }
-  if (event.operation === 'reset') {
-    void loadWorkstream(workstreamId)
-  }
-}
-
-/** A conversation renames itself once its Agent has a subject for it; only the title is re-read, so this cannot disturb the transcript being rendered. */
-async function refreshWorkstreamTitle(workstreamId: string): Promise<void> {
+async function refreshIntent(workstreamId: string): Promise<void> {
   try {
-    const detail = await getWorkstream(workstreamId)
-    const { sessions: _sessions, projectionHead: _head, ...workstream } = detail
-    state.workstreams.set(workstreamId, workstream)
-    renderSidebar()
-    renderTopbar()
+    state.intentView = await getIntent(workstreamId)
   } catch {
-    // The next sidebar poll re-reads it anyway; a failed title refresh is not worth a toast.
+    // A Workstream without any Intent event yet has nothing to show — not an operator-facing error.
+    state.intentView = null
+  }
+  renderTopbar()
+}
+
+/** The complete desired state S2 can author. S7's real catalogue replaces the fixed selections. */
+function stubIntent(power: 'on' | 'off'): IntentRequestBody {
+  return {
+    power,
+    harness: 'claude-code',
+    capabilities: ['workspace.read'],
+    model: 'model-a',
+    effort: 'default',
+    persona: 'default',
   }
 }
 
-/** A `status` frame for a Turn this page has never seen carries no start time or ordinal, so the turn list is refetched rather than half-invented from the frame. */
-async function refreshTurns(workstreamId: string): Promise<void> {
+async function togglePower(): Promise<void> {
+  const workstreamId = state.activeId
+  if (!workstreamId) return
+  const target: 'on' | 'off' = state.intentView?.intent.power === 'on' ? 'off' : 'on'
   try {
-    const page = await listTurns(workstreamId)
-    if (state.activeId !== workstreamId) return
-    state.turns = [...asArray<WorkstreamTurn>(page.turns)]
-    renderMessages()
-    syncComposerLock()
-  } catch {
-    // A failed turn refresh costs a typing indicator, nothing more — the next frame retries.
+    const result = await putIntent(workstreamId, stubIntent(target))
+    await refreshIntent(workstreamId)
+    toast(result.status === 'created' ? `Power ${target} demandé.` : 'Cette demande était déjà enregistrée.')
+  } catch (error) {
+    toast(errorText(error), true)
   }
 }
 
@@ -1212,42 +1157,37 @@ function carriedConfigOptions(): readonly RequestedConfigOption[] {
   return carried
 }
 
-async function startWorkstream(text: string): Promise<void> {
-  const agentId = selectedAgentId()
-  if (!agentId) {
-    toast('Choisissez un harness avant d’envoyer.', true)
-    return
-  }
-  const catalogue = state.catalogue
-  if (!catalogue) {
-    toast('Catalogue d’équipement indisponible — réessayez.', true)
-    return
-  }
-  const persona = state.draft.persona
-  const created = await createWorkstream({
+/** Map a control-plane record onto the sidebar's Workstream shape; the fields S2 has no source for are neutral defaults, never invented facts. */
+function toWorkstream(record: {
+  readonly id: string
+  readonly title: string
+  readonly createdAt: string
+  readonly updatedAt: string
+}): Workstream {
+  return {
+    id: record.id,
     category: 'discussion',
-    agentId,
-    ...(persona ? { persona } : {}),
-    workspace: { workspaceRef: WORKSPACE_REF },
-    // The catalogue version comes from the server's own catalogue on every load: the Broker rejects
-    // a stale one outright, and a client-side literal drifting from it is a bug this repo has
-    // already been bitten by once.
-    equipment: { catalogueVersion: catalogue.version, resources: state.draft.equipment },
-    prompt: [{ type: 'text', text }],
-    // Only what the operator actually chose. An untouched selector sends nothing, so the harness's
-    // own default applies rather than a value this client picked for display.
-    ...(draftConfigOptions().length > 0 ? { configOptions: draftConfigOptions() } : {}),
-  })
-  state.workstreams.set(created.workstream.id, created.workstream)
-  state.sessions.set(created.workstream.id, [created.session])
-  state.activeId = created.workstream.id
+    title: record.title,
+    pinned: false,
+    role: 'owner',
+    currentSessionId: null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  }
+}
+
+async function startWorkstream(text: string): Promise<void> {
+  const created = await createWorkstream({ title: text })
+  state.workstreams.set(created.id, toWorkstream(created))
+  state.activeId = created.id
   state.items = []
   state.turns = []
-  state.echoes = [{ id: `echo-${Date.now()}`, text, seq: 0 }]
+  state.echoes = []
   state.configOptions = []
+  state.intentView = null
   renderSidebar()
   renderMain()
-  await loadWorkstream(created.workstream.id)
+  await loadWorkstream(created.id)
 }
 
 async function sendPrompt(workstreamId: string, text: string): Promise<void> {
@@ -1268,25 +1208,12 @@ async function sendPrompt(workstreamId: string, text: string): Promise<void> {
     if (error instanceof ApiError && error.problem.code === 'runtime_unavailable') {
       toast('Réveil de la session…')
       await activateSession(session.id)
-      await waitForReady(session.id)
       await promptSession(session.id, [{ type: 'text', text }])
       await loadWorkstream(workstreamId)
       return
     }
     throw error
   }
-}
-
-/** Bounded because a Runtime that never reaches `ready` must surface as an error the operator can see, not as a spinner that never resolves. A cold Pod took ~10 s when this was last measured live. */
-async function waitForReady(sessionId: string, timeoutMs = 90_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 1_000))
-    const session = await getSession(sessionId)
-    if (session.phase === 'ready' || session.phase === 'busy') return
-    if (session.phase === 'failed') throw new Error(session.failure?.detail ?? 'La session a échoué au démarrage.')
-  }
-  throw new Error('La session n’a pas démarré à temps.')
 }
 
 /**
@@ -1409,16 +1336,11 @@ async function chooseEquipment(token: string): Promise<void> {
   await relaunchSession('Nouvelle session avec cet équipement…')
 }
 
+/** Pinning is not in the S2 control-plane contract: the button stays but says so, instead of failing silently or pretending. */
 async function togglePin(workstreamId: string): Promise<void> {
   const workstream = state.workstreams.get(workstreamId)
   if (!workstream) return
-  try {
-    const updated = await patchWorkstream(workstreamId, { pinned: !workstream.pinned })
-    state.workstreams.set(workstreamId, updated)
-    renderSidebar()
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  toast('L’épinglage n’est pas disponible sur l’API actuelle.', true)
 }
 
 async function renameWorkstream(workstreamId: string | null): Promise<void> {
@@ -1429,7 +1351,7 @@ async function renameWorkstream(workstreamId: string | null): Promise<void> {
   if (!title || title === workstream.title) return
   try {
     const updated = await patchWorkstream(workstreamId, { title })
-    state.workstreams.set(workstreamId, updated)
+    state.workstreams.set(workstreamId, toWorkstream(updated))
     renderSidebar()
     renderTopbar()
   } catch (error) {
@@ -1484,19 +1406,15 @@ async function removeWorkstream(workstreamId: string | null): Promise<void> {
  * ------------------------------------------------------------------ */
 
 /**
- * The list endpoint carries no Session phase, so the state dot needs one detail read per Workstream.
- * Refetched only when a Workstream's `updatedAt` moved since the last read (the journal bumps it on
- * every event, so provisioning and prompting both show up) or when its phase has never been read —
- * which keeps a steady-state poll to a single request.
+ * S2 list refresh: one GET of the owned Workstreams. The legacy per-Workstream detail read is gone
+ * with the detail endpoint itself — everything the sidebar shows is on the record now.
  */
 async function refreshList(): Promise<void> {
-  const items = asArray<Workstream>((await listWorkstreams()).items)
+  const records = asArray<import('./api.js').WorkstreamRecord>(await listWorkstreams())
   const seen = new Set<string>()
-  const stale: string[] = []
-  for (const workstream of items) {
-    seen.add(workstream.id)
-    if (state.detailSeenAt.get(workstream.id) !== workstream.updatedAt) stale.push(workstream.id)
-    state.workstreams.set(workstream.id, workstream)
+  for (const record of records) {
+    seen.add(record.id)
+    state.workstreams.set(record.id, toWorkstream(record))
   }
   for (const id of [...state.workstreams.keys()]) {
     if (seen.has(id)) continue
@@ -1505,68 +1423,12 @@ async function refreshList(): Promise<void> {
     state.detailSeenAt.delete(id)
   }
   renderSidebar()
-
-  await Promise.all(
-    stale.map(async (workstreamId) => {
-      try {
-        const detail = await getWorkstream(workstreamId)
-        state.sessions.set(workstreamId, asArray<Session>(detail.sessions))
-        state.detailSeenAt.set(workstreamId, detail.updatedAt)
-      } catch {
-        // A Workstream that vanished between the list and the detail read is simply gone; the next
-        // poll drops it. Nothing here is worth interrupting the operator over.
-      }
-    }),
-  )
-  renderSidebar()
   if (state.activeId) renderTopbar()
 }
 
-/**
- * Loads what an Agent says it can be configured with, and — the first time nothing is known — asks
- * the engine to run it empty once to find out (the operator's own decision: never a model list this
- * client declares).
- *
- * The empty run is asked for AT MOST once per Agent per page: it materializes a real Runtime, and a
- * render loop that kept asking would spend the run namespace's whole quota on a question. While it
- * runs, the poll below picks the answer up.
- */
-async function loadAgentConfig(agentId: string, allowProbe = true): Promise<void> {
-  if (!agentId) return
-  try {
-    let view = await getAgentConfigOptions(agentId)
-    if (view.state === 'unknown' && allowProbe && !state.probeRequested.has(agentId)) {
-      state.probeRequested.add(agentId)
-      view = await probeAgentConfigOptions(agentId)
-    }
-    state.agentConfig.set(agentId, view)
-    renderComposer()
-    renderTopbar()
-    renderMenus()
-    if (view.state === 'probing') {
-      // A cold Runtime takes ~10 s to answer; re-read rather than block the UI on it.
-      setTimeout(() => void loadAgentConfig(agentId, false), 4_000)
-    }
-  } catch {
-    // A missing catalogue costs the model selector, nothing else — the conversation still runs on
-    // the harness default, and a toast on every page load would be noise.
-  }
-}
-
 async function reload(): Promise<void> {
-  try {
-    const [agentsPage, catalogue] = await Promise.all([listAgents(), getEquipmentCatalogue()])
-    state.agents = asArray<PublicAgent>(agentsPage.items)
-    // A catalogue without resources is not usable for anything — keeping it would let a create go
-    // out with an undefined `catalogueVersion`, which the Broker refuses anyway, at the cost of a
-    // far less obvious error than the toast `startWorkstream` raises when this is absent.
-    state.catalogue = Array.isArray(catalogue?.resources) ? catalogue : undefined
-    const available = launchableAgents(state.agents)
-    if (!available.some((agent) => agent.agentId === state.draft.agentId)) state.draft.agentId = available[0]?.agentId ?? ''
-    void loadAgentConfig(selectedAgentId())
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  // S2: no agent or equipment catalogue exists on this API yet, so the selectors stay empty and
+  // every legacy action that needs them fails with its own visible message.
   try {
     await refreshList()
   } catch (error) {
