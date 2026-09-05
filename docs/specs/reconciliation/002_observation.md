@@ -138,6 +138,27 @@ the delivery, not evidence that it landed. Under the mono-active Workstream — 
 every prompt routed to it — no gap can open while a Session is live, so `current` holds until the
 Session is replaced.
 
+## `observation.model`
+
+`observation.model` is the model id the live Session actually runs: the `currentValue` of the
+session's `model` configuration option, read fresh from the harness through ACP
+(`SessionConfigSelect.currentValue`, refreshed by `ConfigOptionUpdate`). The owner is the live ACP
+session. It is defined when `observation.session = live`.
+
+This readback is truthful across a Pod replacement: on session load the pinned adapter awaits the
+SDK's own report of the live model before answering, so a resumed session reports the model it
+really runs rather than a default. That is what makes model a reconcilable field. Persona is the
+contrast case — its reported value is reseeded from the client on load — and is therefore not
+observed here.
+
+## `observation.effort`
+
+`observation.effort` is the effort level the live Session actually runs: the `currentValue` of its
+`effort` configuration option, read fresh the same way, and defined under the same condition. Its
+valid values depend on the running model: the adapter rebuilds the option when the model changes and
+clamps an unsupported level to `default`. The field is therefore only meaningful once
+`observation.model` is what the Intent wants, which is how the rule that reads it orders its work.
+
 ## `observation.capabilities`
 
 `observation.capabilities` is the set of capability ids currently effective as grants on the

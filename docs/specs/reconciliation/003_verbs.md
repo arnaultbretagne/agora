@@ -73,6 +73,26 @@ without the Handoff — is a new idempotency scope, so the same range is deliver
 refused. Prompt admission waits for `observation.sync = current`, so the head read at commit is the
 head at activation, never one advanced by the Session's own turns.
 
+## `SET_MODEL`
+
+`SET_MODEL` is selected when the live Session runs a model other than `intent.model`. It sets the
+session's `model` configuration option to `intent.model` by `session/set_config_option`; the change
+takes effect on the next turn, and the adapter re-derives the valid effort levels for the new model.
+Its observable objective is a subsequent fresh `observation.model = intent.model`.
+
+`SET_MODEL` is idempotent: setting the current value is a no-op. It touches no other option. If the
+model change clamps the effort level, the next tick observes that and `SET_EFFORT` corrects it.
+
+## `SET_EFFORT`
+
+`SET_EFFORT` is selected when the live Session runs `intent.model` but an effort level other than
+`intent.effort`. It sets the session's `effort` configuration option to `intent.effort` by
+`session/set_config_option`, effective on the next turn. Its observable objective is a subsequent
+fresh `observation.effort = intent.effort`.
+
+`SET_EFFORT` is idempotent. It is only ever selected once the model is correct, so the level it sets
+is validated against the model that will actually run.
+
 ## `GRANT`
 
 `GRANT` is selected when the Workstream's Agent lacks grants that `intent.capabilities` requires. It

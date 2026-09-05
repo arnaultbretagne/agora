@@ -32,8 +32,5 @@ A grant edited directly on OneCLI does not hold: `observation.capabilities` repo
 really is, and the next tick reconverges it to `intent.capabilities`. Durable removal of an access
 is a change of Intent, not a dashboard edit.
 
-`CAPS-003` passes to the next rule. It is deliberately not `CONVERGED`: the session-configuration
-and content passes (model, effort, persona, skills) are not yet written, so the complete Intent is
-not realized here. Reaching the end of the current set after `CAPS-003` is therefore an intentional,
-temporary incompleteness ([`000`](000_taxonomy.md)) until the final rule — which converges the whole
-Intent — exists.
+`CAPS-003` passes to [`CONFIG`](009_config.md). No domain rule returns `CONVERGED`; convergence
+of the complete Intent belongs to the terminal rule.
