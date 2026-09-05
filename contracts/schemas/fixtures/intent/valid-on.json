@@ -1,0 +1,8 @@
+{
+  "power": "on",
+  "harness": "claude-code",
+  "capabilities": ["workspace.read", "provider.invoke"],
+  "model": "claude-sonnet-4-5",
+  "effort": "high",
+  "persona": "default"
+}

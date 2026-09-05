@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/intent.schema.json",
+  "title": "Intent",
+  "description": "Complete desired execution state for one Workstream, per docs/specs/reconciliation/001_intent.md. Shape only: catalogue membership of harness, model, effort and capabilities is validated against the reviewed CatalogueView at authoring time (on Intents only), not by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["power", "harness", "capabilities", "model", "effort", "persona"],
+  "properties": {
+    "power": {
+      "description": "Whether a live execution footprint should exist.",
+      "enum": ["on", "off"]
+    },
+    "harness": {
+      "description": "One harness_id from the reviewed catalogue selecting one digest-pinned trusted image.",
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "description": "Complete set of named capabilities requested for execution, possibly empty; compiled to exact OneCLI grants.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "model": {
+      "description": "Exactly one model id the harness definition advertises.",
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "description": "Exactly one effort level valid for the selected model.",
+      "type": "string",
+      "minLength": 1
+    },
+    "persona": {
+      "description": "Frozen at default until an effective application/readback contract is registered.",
+      "const": "default"
+    }
+  }
+}

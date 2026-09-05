@@ -13,7 +13,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "check": "node scripts/check-dependency-direction.mjs && node scripts/check-forbidden-vocabulary.mjs",
+    "check": "node scripts/check-dependency-direction.mjs && node scripts/check-forbidden-vocabulary.mjs && node scripts/run-schema-fixtures.mjs",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run check && npm run build && npm run test --workspaces --if-present",
@@ -21,6 +21,8 @@
   },
   "devDependencies": {
     "@types/node": "26.4.1",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
     "pg": "8.23.0",
     "typescript": "7.0.2"
   }

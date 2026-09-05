@@ -1,0 +1,8 @@
+{
+  "power": "on",
+  "harness": "claude-code",
+  "capabilities": [],
+  "model": "claude-sonnet-4-5",
+  "effort": 3,
+  "persona": "default"
+}

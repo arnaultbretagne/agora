@@ -1,0 +1,8 @@
+{
+  "power": "off",
+  "harness": "claude-code",
+  "capabilities": ["workspace.read"],
+  "model": "claude-sonnet-4-5",
+  "effort": "high",
+  "persona": "default"
+}

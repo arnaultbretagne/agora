@@ -1,0 +1,12 @@
+{
+  "name": "@agora/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  }
+}

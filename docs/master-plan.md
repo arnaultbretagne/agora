@@ -205,10 +205,10 @@ placeholder or silent fallback was introduced, and README/AGENTS point to what n
 Workspaces, checks, CI with PostgreSQL, `db:reset`, `apps/web` carried over behind a static server
 with an opaque `/v1` relay. Pull request #35.
 
-### S1 — Domain core and pure rule engine
+### S1 — Domain core and pure rule engine (done)
 
 **Goal.** Make the taxonomies and the seven ordered rule tables executable as pure code, with the
-partition property proved.
+partition property proved. Pull request #39.
 
 **Sources.** [000](specs/reconciliation/000_taxonomy.md), [001](specs/reconciliation/001_intent.md),
 [002](specs/reconciliation/002_observation.md), [003](specs/reconciliation/003_verbs.md),
