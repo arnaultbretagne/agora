@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/fact-session-opened.schema.json",
+  "title": "session.opened payload",
+  "description": "Payload of the session.opened fact: the cutoff H pinned at birth, the Pod UID of the incarnation and the Session's provenance record (execution.md — Session birth and admission).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["podUid", "cutoffH", "provenance"],
+  "properties": {
+    "podUid": { "type": "string", "minLength": 1 },
+    "cutoffH": { "type": "integer", "minimum": 0 },
+    "provenance": {
+      "type": "object",
+      "description": "Non-secret provenance of the incarnation (image digest reference, workload identity, runtime ids)."
+    }
+  }
+}
