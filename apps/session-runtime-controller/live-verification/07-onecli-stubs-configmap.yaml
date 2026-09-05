@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: agora-onecli-stubs
-  namespace: agora-p04-test
-data:
-  onecli-managed: placeholder

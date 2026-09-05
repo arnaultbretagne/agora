@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: agora-p04-test
-  labels:
-    agora.dev/purpose: p04-verification

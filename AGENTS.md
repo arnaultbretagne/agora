@@ -1,89 +1,56 @@
-# Instructions for implementation agents
+# Instructions for agents
 
-This file is normative for every coding agent working in this repository.
+Agora is in design phase. The current baseline is the accepted ADRs and
+`docs/specs/reconciliation/`; the previous implementation is available only in Git history.
 
-## Required reading
+## Before working
 
-Before changing code, read:
+Read [docs/AGENTS.md](docs/AGENTS.md) completely and follow its baseline and topic routing before
+architecture reasoning, design answers, specification changes or implementation. Use current
+repository sources, distinguish decisions from open questions, and repair conflicting contracts
+before implementing dependent behavior. Do not infer the new design from retired code or schemas.
 
-1. `docs/specs/00-glossary.md`
-2. `docs/specs/02-domain-model.md`
-3. the complete specification governing the package being changed;
-4. the ADRs referenced by that specification;
-5. the assigned file under `plans/`.
+## Implementation discipline
 
-Do not infer architecture from an implementation stub. Specifications and machine-readable contracts
-take precedence over code. ADRs explain decisions but do not replace specifications.
+Add implementation only for a specified behavior with identified acceptance scenarios. Introduce
+its aligned machine-readable contracts, code and meaningful failure/concurrency validation together.
+The old package layout and plans supply no defaults. Follow
+[ADR 0001](docs/adr/0001-unified-repository.md) when adding deployables or shared packages.
 
-## Forbidden concept drift
+Keep work scoped and commit coherent changes. Do not weaken an invariant to make a check pass.
+A design scenario is not an executed test; report the actual validation and remaining limitations.
+Implementation acceptance needs aligned docs/contracts, demonstrated owner behavior and safe
+operational correlation, without placeholders or silent fallbacks.
 
-Do not introduce:
+## Domain and protocol invariants
 
-- `Conversation` as a domain aggregate;
-- a `Run` entity or `run_id`;
-- `Loge` or `loge_id`;
-- a persisted `SessionRuntime` entity or `runtime_id`;
-- a Session Runtime reusable by several Sessions;
-- `native_session_id`;
-- a harness `Thread` as an Agora aggregate;
-- `kind` as a synonym for Agent;
-- fixed combination profiles such as `repo-dev-vault`;
-- a custom semantic protocol around ACP;
-- application-owned infrastructure logs;
-- parsed or normalized custody payloads.
+- Intent is complete desired state; Observation is fresh owner evidence; Session is realized history;
+  Workstream provides one canonical order. Keep those temporal meanings separate.
+- Do not introduce Conversation, Run, Loge, Runtime/SessionRuntime or harness Thread as product
+  aggregates, or `run_id`, `loge_id`, `runtime_id` or `native_session_id`.
+- Use `harness`/`harness_id` for the integration; reserve Agent for ACP and OneCLI roles.
+- Register fields, values, results and verbs before using them in rules. Use no combination profiles
+  or new semantic protocol around ACP.
+- Import pinned stable ACP v1 SDK types. Preserve complete envelopes, unknown metadata and lossless
+  JSON numbers. Do not duplicate/fork ACP types; a bridge may authenticate/frame, never translate.
+- Projections are disposable. Core treats Save bytes as opaque. Infrastructure telemetry does not
+  belong in the product journal.
+- Retried external operations require stable attempt identity and operation-specific recovery;
+  unknown acceptance never authorizes a blind prompt or context-creation retry.
 
-The only accepted terms and meanings are in the glossary.
+## Trust boundaries
 
-## Protocol rules
-
-- Import ACP v1 types from `@agentclientprotocol/sdk`.
-- Preserve complete ACP envelopes, including unknown `_meta` fields.
-- Never duplicate or fork ACP request/update types in local contracts.
-- A network bridge may frame or authenticate ACP bytes; it must not translate ACP semantics.
-- ACP v2 is draft and must not enter production code without a new ADR.
-
-## Persistence rules
-
-- `product.workstream_events` is the canonical product journal.
-- Projection tables must be disposable and rebuildable.
-- Custody bytes are opaque and may only be accessed by the custody/runtime role.
-- Infrastructure telemetry never belongs in the product journal.
-- Every externally retried command must have an idempotency key.
-
-## Security rules
-
-- Browser input expresses resource intent, never raw capabilities or provider scopes.
-- Only the policy service resolves intent into grants.
-- Only the Session Runtime controller owns Kubernetes workload permissions.
-- Provider secrets live only in OneCLI; its control key and upstream Agent bearer never enter a
-  Session Runtime.
-- OneCLI is the only credential gateway. Never build/port a parallel MITM, secret store, injector or
-  provider adapter.
-- Broker may implement only OneCLI control lifecycle and a workload-authenticated opaque relay; that
-  relay must not terminate provider TLS, inspect provider content or inject credentials.
-- Every Session uses one dedicated selective OneCLI Agent and explicit allows followed by `block *`.
-- Agent images contain pinned harness/ACP binaries; Pods never install them at startup.
-- Never persist bearer tokens, one-time ACP tunnel tokens or provider credentials in product,
-  projection, custody or ACP data. The only exception is encrypted Broker-private upstream OneCLI
-  authority required by ADR 0010; provider credentials remain OneCLI-owned.
-- The public runtime API must not accept arbitrary commands, argv, environment variables or images.
-- Gateway/process logs must omit URL query strings, headers, prompts, tool content and tokens.
-
-## Delivery rules
-
-- Work from one implementation plan at a time.
-- Update that plan's checklist in the same change.
-- Add contract and failure-path tests before marking a phase complete.
-- Do not weaken an invariant to make a test pass.
-- If a spec is ambiguous, stop and propose a spec/ADR change before coding divergent behavior.
-- Keep changes scoped; do not implement a later plan opportunistically.
-
-## Definition of done
-
-A plan is complete only when:
-
-- its stated contract tests pass;
-- all acceptance scenarios are covered;
-- observability correlation is present without leaking content or secrets;
-- docs and schemas agree with the implementation;
-- no placeholder or silent fallback remains.
+- Browser input selects reviewed public values, not provider scopes, OneCLI identifiers, images,
+  commands or executable runtime configuration. Only trusted policy compiles exact grants.
+- Only runtime control owns Kubernetes workload permissions. Harness images are complete and pinned;
+  Pods install no harness/adapter at startup.
+- OneCLI is the sole credential gateway and grant authority. Build no parallel injector, secret
+  store, MITM or provider adapter. Broker forwards provider traffic opaquely and cannot widen grants.
+- A dedicated selective OneCLI Agent belongs to one Pod incarnation and may serve only successive
+  Sessions on that Pod. It is never rebound to a successor or another Workstream.
+- Provider secrets remain OneCLI-owned. Its control key and upstream Agent bearer never enter Pods.
+  Encrypted Broker-private upstream authority is separate from product data, projections and Saves.
+- Bearers, bridge tokens and provider credentials never enter ACP facts, product data, Saves or logs.
+  Logs also omit query strings, headers, prompts, tool content and payload bytes.
+- Revocation does not wait for ACP or Save capture. Physical retirement requires owner evidence;
+  Kubernetes API absence alone cannot authorize overlapping successor execution.
