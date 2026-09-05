@@ -21,7 +21,9 @@ Repository boundaries and runtime boundaries therefore solve two different probl
 Agora application code, harness code, reusable packages, machine-readable contracts and architecture
 documentation are versioned in one repository.
 
-The repository is divided by responsibility:
+The implementation layout is divided by responsibility. The current design baseline keeps only
+its documentation and repository guidance; introduce these directories when a specified
+implementation slice needs them, without restoring the retired implementation as a template:
 
 ```text
 apps/
@@ -119,5 +121,4 @@ Distinct artifacts keep deployed contents aligned with each component's responsi
 
 ## Governing specs
 
-- [System architecture](../specs/01-system-architecture.md)
-- [Security](../specs/11-security.md)
+- [Execution owners and isolation](../specs/reconciliation/execution.md#owners-and-isolation)

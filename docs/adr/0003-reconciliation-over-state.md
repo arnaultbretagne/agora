@@ -291,8 +291,5 @@ diagnostics. They do not determine present convergence.
 
 ## Governing specs
 
-- [Glossary](../specs/00-glossary.md)
-- [Domain model](../specs/02-domain-model.md)
 - [Reconciliation](../specs/reconciliation/README.md)
-- [Engine contract](../specs/reconciliation/engine.md)
-- [Failure and idempotency](../specs/13-failure-and-idempotency.md)
+- [Engine ownership and recovery](../specs/reconciliation/engine.md)

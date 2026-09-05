@@ -31,7 +31,7 @@ attempt ends is observed as incoherent and the rule selects cleanup on the next 
 
 **Observable postcondition:** exactly one coherent envelope on the pinned image,
 `observation.construction = {D}`. This establishes neither live ACP nor work admission. Full target,
-retirement and launch contracts are in [spec 08](../08-session-runtime-control.md).
+retirement and launch contracts are in [execution](execution.md).
 
 ## `TURN_OFF`
 
@@ -86,7 +86,7 @@ Handoff is delivered here.
 
 **Idempotency and recovery:** replay of local bookkeeping is idempotent. ACP context creation is
 not assumed universally idempotent: after possible acceptance, discover the actual context or leave
-the attempt unresolved under spec 13. Never open another context on a blind retry.
+the attempt unresolved under [delivery recovery](engine.md#prompt-delivery-and-context-creation). Never open another context on a blind retry.
 
 **Observable postcondition:** `observation.session = live` for the fresh context at watermark zero.
 
@@ -97,14 +97,14 @@ context/opening descriptor, immutable `(W, H]`, rendering-policy revision, verif
 current dispatch ownership and the descriptor's stable opening-command identity.
 
 Commit or recover the exact Handoff range, digest and standard embedded content under
-[spec 06](../06-anchors-and-handoffs.md). `H` was frozen before the origin Session's first facts;
+[Native continuity](continuity.md). `H` was frozen before the origin Session's first facts;
 the current journal head is not an input. The rule has proved stale context with no unresolved
 possibly accepted opening delivery. Send the Handoff under the same effectful-turn admission barrier
 as other work, except its own synchronization prerequisite. An empty range requires no dispatch.
 
 **Idempotency and recovery:** rebuilding command data is idempotent within this native-context
 origin, including hot Agora Session changes. Delivery is not universally idempotent. Possible ACP
-acceptance must be resolved under spec 13, never blindly retried or deduplicated by URI alone.
+acceptance must be resolved under [delivery recovery](engine.md#prompt-delivery-and-context-creation), never blindly retried or deduplicated by URI alone.
 A clean replacement is a new Pod/Agora Session and context-origin scope even if native resume reuses
 an ACP identifier; prior remote effects may still be ambiguous.
 
@@ -119,7 +119,7 @@ must take effect before the next turn, with actual effort options reported for t
 Its observable objective is a subsequent fresh `observation.model = intent.model`.
 
 **Owner:** control plane/ACP. **Inputs:** current target context, desired model, verified transition
-boundary and stable attempt key. Unknown acceptance is resolved by config readback under spec 04.
+boundary and stable attempt key. Unknown acceptance is resolved by config readback under [ACP evidence](execution.md#acp-facts-and-current-evidence).
 The same setting is safely repeatable only for the same live target and still-current desired value.
 The integration must demonstrate safely repeatable model selection. Changing model can alter effort
 options; the next tick observes the actual result before `SET_EFFORT`. No other desired option is

@@ -3,8 +3,8 @@
 This is the only active ADR index for Agora.
 
 ADRs record decisions and rationale. Target behavior and its implementation prerequisites are
-specified under `docs/specs/`; follow [the remodeling authority map](../specs/README.md).
-Documents under `parked/` are retained for comparison and do not govern the active design.
+specified in [reconciliation](../specs/reconciliation/README.md). The retired documents and
+implementation remain in Git history, outside the current baseline.
 
 | ADR | Status | Decision |
 |---|---|---|
@@ -19,17 +19,11 @@ Documents under `parked/` are retained for comparison and do not govern the acti
 | [0009](0009-onecli-grant-authority.md) | Accepted | OneCLI is the only external grant authority and credential gateway |
 | [0010](0010-capabilities-are-onecli-grants.md) | Accepted | Flat capabilities compile only to exact OneCLI grants |
 
-## Parked records
-
-Earlier ADR texts are retained under [`parked/`](parked/README.md). They are historical input, not
-active decisions. ADR 0002 and the reconciliation taxonomies define the active vocabulary. The
-specification index distinguishes aligned contracts from flat documents still awaiting remodeling.
-
 ## Status policy
 
 - `Proposed`: requires operator review before dependent implementation begins.
 - `Accepted`: binding for implementation.
 - `Superseded`: retained only if a later ADR replaces it.
 
-Coding agents MUST NOT implement a plan depending on a Proposed ADR until it is accepted or the plan
-explicitly limits itself to a reversible spike.
+Implementation must not depend on a Proposed ADR until it is accepted, unless the work explicitly
+limits itself to a reversible spike.

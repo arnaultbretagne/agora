@@ -60,8 +60,9 @@ Changing the desired capability set creates a new complete Intent and, when real
 If OneCLI can reconcile the new grant set safely at runtime, the same Pod may be retained across that
 Session boundary.
 
-Personas and skills remain independent Intent fields. They are files and instructions, not
-capabilities. Discovering, copying or self-installing a skill never changes the OneCLI grant set.
+Persona is currently frozen at `default`; skills are outside the current Intent registry.
+When their selection is specified, they remain files and instructions rather than capabilities.
+Discovering, copying or self-installing a skill never changes the OneCLI grant set.
 
 ## Why this choice
 
@@ -118,5 +119,6 @@ Rejected because files available to hostile code cannot provide an enforceable s
 
 ## Governing specs
 
-- [Capabilities and OneCLI](../specs/10-equipment-and-broker.md)
-- [Security](../specs/11-security.md)
+- [Capability compilation](../specs/reconciliation/001_intent.md#capability-compilation)
+- [Exact grant comparison](../specs/reconciliation/002_observation.md#exact-grant-comparison)
+- [Capabilities rule](../specs/reconciliation/006_capabilities.md)

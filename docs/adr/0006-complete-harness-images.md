@@ -103,5 +103,5 @@ inputs after the image has been verified.
 
 ## Governing specs
 
-- [Harness registry](../specs/09-agent-registry.md)
-- [Security](../specs/11-security.md)
+- [Harness and owner conformance](../specs/reconciliation/execution.md#harness-and-owner-conformance)
+- [Isolation](../specs/reconciliation/execution.md#owners-and-isolation)

@@ -72,5 +72,6 @@ authority.
 
 ## Governing specs
 
-- [Journal and projections](../specs/05-journal-and-projections.md)
-- [Saves](../specs/07-custody.md)
+- [Engine persistence and ownership](../specs/reconciliation/engine.md)
+- [Canonical facts and projections](../specs/reconciliation/execution.md#acp-facts-and-current-evidence)
+- [Custody storage and retention](../specs/reconciliation/continuity.md#storage-and-retention)

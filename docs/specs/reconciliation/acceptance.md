@@ -1,14 +1,14 @@
-# Acceptance and migration
+# Reconciliation acceptance
 
-These are design and black-box acceptance scenarios for the accepted remodeling ADRs. A documented
-scenario is not an executed test. Implementation must align its machine-readable contracts and
-provide evidence before claiming the corresponding acceptance gate.
+These are design and black-box acceptance obligations. A documented scenario is not an executed
+test. Each implementation slice must define aligned contracts and supply evidence for the scenarios
+it touches before claiming acceptance.
 
 ## Exact authority
 
-Source: [ADR 0010](../adr/0010-capabilities-are-onecli-grants.md),
-[Capabilities and OneCLI](10-equipment-and-broker.md), and the
-[CAPABILITIES rule](reconciliation/006_capabilities.md).
+Source: [ADR 0010](../../adr/0010-capabilities-are-onecli-grants.md),
+[compilation](001_intent.md#capability-compilation), [exact grants](002_observation.md#exact-grant-comparison)
+and [CAPABILITIES](006_capabilities.md).
 
 | Scenario | Required outcome |
 |---|---|
@@ -24,8 +24,7 @@ Source: [ADR 0010](../adr/0010-capabilities-are-onecli-grants.md),
 
 ## Session admission and conformance
 
-Source: [Session boundaries](03-session-lifecycle.md), [ACP integration](04-acp-integration.md)
-and [Harness conformance](09-agent-registry.md).
+Source: [execution boundaries and conformance](execution.md).
 
 | Scenario | Required outcome |
 |---|---|
@@ -43,9 +42,9 @@ and [Harness conformance](09-agent-registry.md).
 
 ## Native continuity and bounded shutdown
 
-Source: [ADR 0008](../adr/0008-saves-anchors-and-refill.md), specs
-[06](06-anchors-and-handoffs.md), [07](07-custody.md), [08](08-session-runtime-control.md),
-[11](11-security.md) and [13](13-failure-and-idempotency.md).
+Source: [ADR 0008](../../adr/0008-saves-anchors-and-refill.md), [continuity](continuity.md),
+[extinction](execution.md#shutdown-and-physical-extinction) and
+[prompt recovery](engine.md#prompt-delivery-and-context-creation).
 
 | Scenario | Required outcome |
 |---|---|
@@ -72,8 +71,7 @@ Source: [ADR 0008](../adr/0008-saves-anchors-and-refill.md), specs
 
 ## Engine concurrency and recovery
 
-Source: [ADR 0003](../adr/0003-reconciliation-over-state.md), the
-[engine contract](reconciliation/engine.md) and [spec 13](13-failure-and-idempotency.md).
+Source: [ADR 0003](../../adr/0003-reconciliation-over-state.md) and [the engine contract](engine.md).
 
 | Scenario | Required outcome |
 |---|---|
@@ -100,55 +98,14 @@ Exercise these as controlled interleavings with injected process pauses/crashes,
 clock advances. Abstract table partition checks alone do not establish lease fencing, delivery
 idempotency, wake-up liveness or external service conformance.
 
-## Canonical product history
 
-- Journal complete accepted ACP envelopes before controlled dispatch or handling.
-- Preserve accepted unknown members and lossless semantic JSON numbers.
-- Attribute each execution fact to one Agora Session and one Workstream order.
-- Rebuild projections without changing canonical facts or duplicating source content.
-- Preserve uncertainty about dispatch; a scheduled outgoing envelope is not proof of receipt.
+## Validation boundary
 
-## Execution identity
+Evidence must cover canonical ACP capture and attribution, lossless JSON preservation, deterministic
+projection rebuild, storage-role and Workstream authorization, credential/payload exclusions, and
+actual external-owner behavior under the pinned identities and versions. Scope checks and table
+partition checks alone cannot establish these properties.
 
-- A request superseded before a Pod is established creates no Session.
-- Every new Pod establishes a new Session before restore or ACP bootstrap, including failed attempts.
-- A retained Pod can span successive Sessions only at the ADR 0007 quiescent boundary.
-- A Pod and its dedicated OneCLI Agent never move to another Workstream or Pod incarnation.
-- A compatible Save can be restored into a new Session without mutating its producer relationship.
-
-## Security and isolation
-
-- Reject arbitrary image, command, argv, environment and Kubernetes fragments at the runtime API.
-- Accept reviewed capability names and reject Browser-supplied provider scopes/OneCLI identifiers.
-- Enforce Workstream owner/editor/viewer membership and resource ownership at every boundary.
-- Keep provider secrets in OneCLI and upstream Agent bearers in encrypted Broker-private storage.
-- Deny Pod access to product storage, Save storage, Kubernetes control, other Pods and direct providers.
-- Verify relay confinement derives only from effective OneCLI grants and never injects credentials.
-- Verify revocation terminates existing tunnels and prevents subsequent credential-backed requests.
-- Exercise auth, grants, relay and Save exclusions for every enabled pinned harness integration.
-- Verify product, operational and OneCLI backup/restore independently and without credential leakage.
-
-## Contract gates
-
-The required evidence includes database constraints and concurrency checks, pinned ACP compatibility,
-projection rebuild equivalence, external-owner idempotency, failure injection and authorization under
-actual service identities. Contracts and tests must use the remodeled Workstream/Pod/Session grains.
-An old test that expects a new Pod to retain the same Agora Session identity must be replaced.
-
-## Existing product data
-
-Legacy messages MUST NOT be converted into fabricated ACP facts. Before production cutover, choose
-an explicit fresh-data/read-only-archive policy or separately specify an import format through an ADR.
-Old native Saves are resumable only after compatibility has been demonstrated; otherwise retain them
-under archive policy and start from explicitly supported product history.
-
-## Delivery and go-live
-
-Each implementation plan must identify its normative contracts and scenario ids, update its checklist
-and supply the required evidence. A docs-only revision completes a design change, not implementation
-acceptance. No plan may implement a stale flat specification or an unaligned schema as an alternative
-baseline.
-
-Production cutover requires aligned contracts, demonstrated scenarios, recoverable product and OneCLI
-storage, operational failure procedures, retention/deletion policy and an explicit data migration
-choice. There is no concurrent writing of two competing product models as equal sources of truth.
+SQL/API schemas, seed policy, workspace/driver mechanisms, source freshness, deadlines and physical
+fencing must be specified and demonstrated by the relevant implementation slice. These scenarios
+supply no default values or automatic certification for a harness, gateway or deployment.

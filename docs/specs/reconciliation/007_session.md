@@ -32,7 +32,7 @@ Exactly one matches, and the Anchor is consulted only when a context can safely 
 
 `SESSION-005` selects cleanup of the unusable execution. The next tick, under a still-on Intent,
 can rebuild. A permanently failed restore is recorded and its Save compatibility handled under
-specs 06/07 before this cleanup; no fresh fallback occurs in the failed Session.
+[continuity](continuity.md) before this cleanup; no fresh fallback occurs in the failed Session.
 
 `SESSION-001` waits only while an owner can still progress. Pod/launcher changes and bounded backoff
 wake the row; expiration of the startup deadline is reflected by fresh owner evidence as unusable.

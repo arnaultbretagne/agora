@@ -43,7 +43,7 @@ In one transaction:
 Prompt dispatch reservations and Session boundaries participate in the same Workstream ordering.
 A command queued earlier is revalidated before dispatch; Intent authoring cannot race a permission
 that remains indefinitely usable. A request already possibly sent is retained as an in-flight
-obligation and is resolved under spec 13, not retroactively called unsent.
+obligation and is resolved under [prompt recovery](#prompt-delivery-and-context-creation), not retroactively called unsent.
 
 The deployment selects an immutable compatible set of harness, capability, compiler and rendering
 revisions. Workers do not choose from their local binaries. Each evaluation/attempt records its
@@ -103,7 +103,7 @@ OneCLI attached/effective sets must describe the same Agent and a consistent sou
 owner supplies separate reads, bracket/revalidate source changes and retry inconsistent pairs.
 Kubernetes, Broker and native reads must refer to the same incarnation. A stored diagnostic snapshot
 or an action response is not the next tick's evidence. A continuously maintained config snapshot is
-usable only with freshly verified stream continuity and current target under spec 04, not solely
+usable only with freshly verified stream continuity and current target under [ACP evidence](execution.md#acp-facts-and-current-evidence), not solely
 because its timestamp is recent.
 
 There is no atomic transaction across Kubernetes, OneCLI and a harness. The engine records the
@@ -172,7 +172,7 @@ Recover a crashed attempt before allowing a duplicate or conflicting action. Thi
 running its obsolete desired effect to completion: an old target can be fenced and cleaned while
 the latest Intent remains authoritative. A currently selected TURN_OFF may close reachable paths
 despite an unresolved older positive request; it must retain that request's cleanup obligation.
-Spec 13 defines operation-specific ambiguity, particularly ACP new/resume/prompt.
+The [prompt contract](#prompt-delivery-and-context-creation) defines ACP new/resume/prompt ambiguity.
 
 - `PASS` continues within this tick with valid prerequisite evidence.
 - `ACTION(verb)` executes at most that one selected objective, then schedules reevaluation.
@@ -184,6 +184,42 @@ Attempt completion alone changes neither `intent_seq` nor `work_generation`. Due
 and lease release are conditional operational updates, so an old completion cannot postpone a new
 Intent or overwrite its claim. An independently observed resource change is an external wake and
 can legitimately advance the generation even when that resource changed because of Agora's action.
+
+## Prompt delivery and context creation
+
+The baseline assumes no universal ACP prompt idempotency guarantee. The control plane commits the
+command and exact target before dispatch; the bridge durably records that dispatch may occur before
+sending. Transport acceptance is distinguished from harness acceptance, turn completion and native
+incorporation. A crash in an uncertain interval yields an unresolved attempt, not a safe resend.
+
+Recovery first reconnects to the same verified Pod/process/context and seeks operation-specific
+evidence. A proven never-sent or definitively rejected-before-acceptance attempt may dispatch the
+same command. Possible acceptance without decisive evidence remains `prompt_delivery_unknown`,
+visible to the user, with that context's next turn gated. A URI occurrence, lost response or elapsed
+time cannot prove that no external side effect occurred.
+
+A user-requested retry is a new command explicitly linked to the ambiguous predecessor and exposes
+the possibility of duplicated external effects. It is admitted only after the previous context/turn
+has been resolved or extinguished; a new key alone is not permission to run concurrently. Neither
+custom ACP metadata nor a product command ID is assumed to deduplicate harness/provider operations.
+
+An opening Handoff follows the same contract. Its immutable range and digest can be rebuilt, but
+that is not permission to resend after possible acceptance. `observation.sync` is unavailable while
+native incorporation/absence is unresolved. Only verified incorporation passes SYNC. A clean
+replacement has a new Session/context delivery scope; earlier remote effects can still be unknown.
+
+ACP new/resume follows the same acceptance distinction: discover and bind the actual context, or
+retain the unresolved reservation. A reconnect is not evidence that no context was created. Never
+open a second context after possible acceptance merely because the response was lost.
+
+A delayed session-scoped cancel must not interrupt a later turn. Repeat cancellation only after
+verifying the intended context and active turn; completion requires the execution contract's stronger
+quiescence evidence. Late exchanges and effects retain their original Session attribution.
+
+Verified permanent restore incompatibility follows [clean fallback](continuity.md#compatibility-restore-and-fallback).
+Unknown acceptance or temporary owner failure cannot invalidate a Save or select a different verb.
+Other operation-specific repetition and postconditions belong to the [verb contracts](003_verbs.md)
+and [capture/publication contract](continuity.md), not an alternative engine decision tree.
 
 ## Retry budgets and fairness
 
@@ -232,7 +268,7 @@ creation can still arrive. A mismatch retains the newer obligation and starts no
 
 For POWER's off convergence, all footprint and retirement inventories must be empty; no Session or
 admission is opened. For terminal on convergence, conditionally complete the idempotent attribution
-boundary from spec 03 and enable only its current target. Admission owners validate that committed
+boundary from [execution](execution.md#hot-session-boundaries) and enable only its current target. Admission owners validate that committed
 boundary and their current local conditions before accepting a prompt/route; a database commit
 alone does not reopen an obsolete transport.
 
@@ -240,6 +276,6 @@ The work row can then be removed or conditionally marked no longer pending. Its 
 durable assertion of readiness. Per-dispatch validation, evidence expiry, watches and recovery
 sweeps continue for live resources. A subsequent change creates a fresh work generation.
 
-Acceptance interleavings are in [spec 15](../15-acceptance-and-migration.md). This contract requires
+Acceptance interleavings are in [the scenario catalogue](acceptance.md). This contract requires
 aligned SQL/API constraints and owner conformance before implementation acceptance; it neither
 introduces a lifecycle state machine nor asserts that existing code already provides these guarantees.

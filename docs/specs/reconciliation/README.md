@@ -1,14 +1,17 @@
 # Reconciliation specification
 
-This directory defines the ordered decision model for a Workstream's complete Intent. Read the
-common registries before the rules; file prefixes order rule evaluation, while rule ids stay stable.
+This is the current normative specification for Agora's new architecture, alongside the accepted
+[ADRs](../../adr/index.md). The repository is in design phase. Retired specifications, schemas,
+implementation plans and code live in Git history and provide no alternative contract.
 
 ## Registries
 
+Read the common vocabulary before the rules:
+
 - [000 — Taxonomy and evaluation](000_taxonomy.md)
-- [001 — Intent](001_intent.md)
-- [002 — Observation](002_observation.md)
-- [003 — Action verbs](003_verbs.md)
+- [001 — Complete Intent and capability compilation](001_intent.md)
+- [002 — Observation and exact grant comparison](002_observation.md)
+- [003 — Action verbs and their recovery obligations](003_verbs.md)
 
 ## Ordered rules
 
@@ -21,23 +24,32 @@ common registries before the rules; file prefixes order rule evaluation, while r
 7. [010 — CONVERGE](010_converge.md)
 
 Each rule file contains one mutually exclusive, exhaustive table with exactly
-`Rule | Conditions | Result`. A table selects an objective; its verb contract owns safe execution
-and recovery. Every tick restarts at POWER with current owner evidence.
+`Rule | Conditions | Result`. A table selects an objective; its verb owns safe execution and recovery.
+Every tick restarts at POWER with current owner evidence. Acquisition, ownership and backoff are
+engine control, outside the domain tables.
 
-## Cross-cutting contracts
+## Supporting contracts
 
-- [Engine: claims, effects, retries, watches and finalization](engine.md)
-- [Session boundaries and admission](../03-session-lifecycle.md)
-- [ACP integration and current evidence](../04-acp-integration.md)
-- [Anchors, refill and native continuity](../06-anchors-and-handoffs.md)
-- [Saves and custody](../07-custody.md)
-- [Kubernetes runtime control and extinction](../08-session-runtime-control.md)
-- [Harness registry and conformance](../09-agent-registry.md)
-- [Exact capabilities and OneCLI grants](../10-equipment-and-broker.md)
-- [Security](../11-security.md)
-- [Failure and idempotency](../13-failure-and-idempotency.md)
-- [Acceptance scenarios](../15-acceptance-and-migration.md)
+| Contract | Scope |
+|---|---|
+| [Engine](engine.md) | Intent ordering, claims, effects, command ambiguity, watches, scheduling and conditional finalization |
+| [Execution](execution.md) | Service authority, Session birth/admission, hot boundaries, ACP evidence, isolation, extinction and integration conformance |
+| [Continuity](continuity.md) | Save/Anchor invariants, opening range, workspace consistency, seed policy, native proof and storage |
+| [Acceptance](acceptance.md) | Stable design scenarios and the evidence required from implementation |
 
 Authority precedes bootstrap that requires it; config precedes the effectful opening Handoff.
-User work additionally waits for synchronization. Claims, observation acquisition and backoff are
-engine control flow, outside the domain tables.
+User work additionally waits for synchronization. Neither a completed action nor a persisted
+Session fact substitutes for current owner evidence.
+
+## Implementation prerequisites
+
+This corpus defines behavior without preserving the retired API, SQL or package layout. Introduce
+machine-readable contracts and implementation incrementally for a specified behavior and its
+acceptance scenarios. Concrete grant mappings, wire/storage schemas, seed fidelity, custody/workspace
+mechanisms, freshness/deadline values and physical fencing still require explicit definitions and
+pinned integration evidence. Documentation alone certifies none of them.
+
+Intent currently contains power, harness, capabilities, model, effort and frozen default persona.
+Skills and selectable personas require a further decision and taxonomy change. Product UI/API,
+retention values and any existing-data migration need their own scoped decisions when required;
+the removed documents must not supply implicit defaults.

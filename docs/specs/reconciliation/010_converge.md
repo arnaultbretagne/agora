@@ -18,7 +18,7 @@ the evaluation.
 A single unconditional row is trivially mutually exclusive and exhaustive.
 
 Placing convergence in a dedicated terminal rule keeps every domain rule's converged case a plain
-`PASS` and makes the rule set extensible without churn: a new domain — skills, next — is inserted
+`PASS` and makes the rule set extensible without churn: a newly specified domain is inserted
 before `CONVERGE`, which is renumbered to stay last, and no existing rule changes its result.
 
 `CONVERGED` here means the complete Intent, as its fields are currently registered in
@@ -26,7 +26,8 @@ before `CONVERGE`, which is renumbered to stay last, and no existing rule change
 observed drift surfaced by a watch, revives the work row and evaluation restarts at `POWER`.
 
 Conditional finalization also completes the idempotent attribution/admission boundary from
-[spec 03](../03-session-lifecycle.md). A new Pod already has its bootstrap Session; a realized hot
+[Session boundaries](execution.md#hot-session-boundaries). A new Pod already has its bootstrap
+Session; a realized hot
 change opens its successor Session before further work. If ownership, Intent or target evidence
 changed, neither finalization nor admission may complete. `CONVERGED` is never a stored permission
 to execute after its supporting evidence expires.

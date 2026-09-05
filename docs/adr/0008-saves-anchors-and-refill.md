@@ -103,7 +103,7 @@ cause is verified and the unusable Save/target compatibility is recorded before 
 does not select the same known-bad pair forever. A fresh-context fallback opens another Session
 against a clean Pod, pins that Session's own `H`, uses ACP `session/new` and cross-seeds `(0, H]`;
 it never silently changes continuation mode inside the failed Session. Transient failure does not
-invalidate a Save. Ambiguous acceptance is resolved under spec 13 before another context is opened.
+invalidate a Save. Ambiguous acceptance is resolved under the [engine recovery contract](../specs/reconciliation/engine.md#prompt-delivery-and-context-creation) before another context is opened.
 
 Any Pod loss without a newly committed Save does not move the Anchor. Recovery starts from the old
 compatible Anchor and refills `(W, H]`, or cross-seeds if no usable Anchor remains. Native-only state
@@ -165,5 +165,5 @@ security authority.
 
 ## Governing specs
 
-- [Anchors and refill](../specs/06-anchors-and-handoffs.md)
-- [Saves](../specs/07-custody.md)
+- [Native continuity](../specs/reconciliation/continuity.md)
+- [Shutdown and physical extinction](../specs/reconciliation/execution.md#shutdown-and-physical-extinction)

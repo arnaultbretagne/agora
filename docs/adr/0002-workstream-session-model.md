@@ -194,5 +194,5 @@ The Session provides that boundary without introducing another journal.
 
 ## Governing specs
 
-- [Glossary](../specs/00-glossary.md)
-- [Domain model](../specs/02-domain-model.md)
+- [Reconciliation taxonomy](../specs/reconciliation/000_taxonomy.md)
+- [Session boundaries and facts](../specs/reconciliation/execution.md)

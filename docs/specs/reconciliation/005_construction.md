@@ -46,7 +46,7 @@ law: `TURN_OFF` never knows whether it extinguishes for good or to make way for 
 
 Comparing against the pinned digest `D` means a re-pinned image under the same `harness_id` reads as
 stale and is replaced. Registry publication must explicitly re-enqueue affected Workstreams under
-the shared revision contract in spec 09; worker-local deployment versions cannot change the target.
+the shared revision contract in [revision publication](engine.md#intent-authoring-and-revision-selection); worker-local deployment versions cannot change the target.
 
 Whether a rebuilt Pod restores or starts fresh is decided by `SESSION`, from the target harness's
 own compatible Anchor. A → B → A can resume A; neither a harness change nor a same-harness image

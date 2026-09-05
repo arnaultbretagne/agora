@@ -316,5 +316,5 @@ change both runtime behavior and retained history without a controlled migration
 
 ## Governing specs
 
-- [ACP integration](../specs/04-acp-integration.md)
-- [Journal and projections](../specs/05-journal-and-projections.md)
+- [ACP facts and current evidence](../specs/reconciliation/execution.md#acp-facts-and-current-evidence)
+- [Prompt delivery recovery](../specs/reconciliation/engine.md#prompt-delivery-and-context-creation)

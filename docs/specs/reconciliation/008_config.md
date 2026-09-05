@@ -34,9 +34,9 @@ run. Any reset caused by `SET_MODEL` is observed and corrected on the next tick.
 requested value is an incompatibility, never permission to accept a substituted default. Each
 verb has one objective with one verified postcondition.
 
-An enabled integration must demonstrate truthful model/effort readback under spec 04. Unsupported
+An enabled integration must demonstrate truthful model/effort readback under [ACP evidence](execution.md#acp-facts-and-current-evidence). Unsupported
 or stale readback leaves admission closed; no default is fabricated. Persona stays frozen until its
-application/readback contract exists. The transition barrier in spec 03 applies before changing an
+application/readback contract exists. The transition barrier in [Session boundaries](execution.md#hot-session-boundaries) applies before changing an
 already-working context, including between the model and effort actions.
 
 `CONFIG-003` passes to [`SYNC`](009_sync.md), so a Handoff never starts on unverified defaults.

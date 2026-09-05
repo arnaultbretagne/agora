@@ -112,5 +112,6 @@ transport confinement derived from the OneCLI grant set.
 
 ## Governing specs
 
-- [Capabilities and OneCLI](../specs/10-equipment-and-broker.md)
-- [Security](../specs/11-security.md)
+- [Owners and isolation](../specs/reconciliation/execution.md#owners-and-isolation)
+- [Exact grant evidence](../specs/reconciliation/002_observation.md#exact-grant-comparison)
+- [Effect ownership](../specs/reconciliation/engine.md#effect-ownership-and-late-requests)

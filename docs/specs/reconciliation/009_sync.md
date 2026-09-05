@@ -4,7 +4,7 @@
 authority and the requested model/effort. It closes the
 gap between what that session's native context incorporates and what the Workstream recorded up to
 the session's activation, by delivering the opening Handoff
-([spec 06](../06-anchors-and-handoffs.md)). It is the reconciled form of both resuming and
+([Native continuity](continuity.md)). It is the reconciled form of both resuming and
 cross-seeding: the same rule, distinguished only by the watermark.
 
 ## Inputs
@@ -31,6 +31,6 @@ nor a recorded acknowledgement is enough. An empty opening range requires no pro
 
 A hot Session transition that keeps the verified native context preserves its opening descriptor;
 it does not refill. Loss of process/context or verifiable lineage invalidates synchronization even
-under mono-active routing. Ambiguous acceptance is acquisition/attempt recovery under spec 13 and
-never automatically becomes `stale`. See [spec 06](../06-anchors-and-handoffs.md) for proof and policy
+under mono-active routing. Ambiguous acceptance is acquisition/attempt recovery under [delivery recovery](engine.md#prompt-delivery-and-context-creation) and
+never automatically becomes `stale`. See [Native continuity](continuity.md) for proof and policy
 limits, and the REFILL verb for per-context command identity.

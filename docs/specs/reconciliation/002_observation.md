@@ -13,7 +13,7 @@ This scalar has exactly two values: `on` and `off`. Its authoritative Workstream
 
 - every Kubernetes Pod, regardless of phase/readiness/termination;
 - runtime control's unresolved retirement obligations for Pod incarnations whose physical execution
-  is not yet proven stopped or fenced ([spec 08](../08-session-runtime-control.md));
+  is not yet proven stopped or fenced ([Runtime extinction](execution.md#shutdown-and-physical-extinction));
 - every OneCLI Agent, including an Agent with no grants;
 - every attached or effective OneCLI grant;
 - every Broker relay binding, including an inactive or unhealthy binding.
@@ -78,9 +78,9 @@ This scalar describes the current Pod/process/native context, not an Agora Sessi
   unrecoverable launch/context failure prevents reuse of this execution boundary.
 
 Sources are fresh Kubernetes status, the runtime controller's live launch/process evidence and the
-harness/driver reads specified by [ACP integration](../04-acp-integration.md) and
-[Harness conformance](../09-agent-registry.md). An unreachable owner that cannot distinguish a live
-context from absence produces no value; it does not prove `openable`. A historical Session row or
+harness/driver reads specified by [ACP integration](execution.md#acp-facts-and-current-evidence) and
+[Harness conformance](execution.md#harness-and-owner-conformance). An unreachable owner that cannot
+distinguish a live context from absence produces no value; it does not prove `openable`. A historical Session row or
 an action error cannot by itself produce `unusable`.
 
 The controlled launch seam is operational runtime control, not a custom ACP method. It permits
@@ -95,12 +95,11 @@ durable continuation material exists for the harness the Workstream's Pod runs:
 - `compatible` — the Anchor store holds an Anchor for `(workstream, harness_id)` whose Save/target pair has no verified
   invalidation and is resumable under the current reviewed harness definition: its recorded format
   id, format version and adapter version are ones that definition accepts
-  ([spec 06, "Choosing continuation"](../06-anchors-and-handoffs.md);
-  [spec 07, "Compatibility"](../07-custody.md));
+  ([compatibility](continuity.md#compatibility-restore-and-fallback));
 - `none` — no such Anchor, or its Save is invalidated or incompatible.
 
 It is derived from a fresh read of the Anchor store and of the Save's non-opaque metadata — never
-its payload ([ADR 0008](../../adr/0008-saves-anchors-and-refill.md); spec 07, "Opacity") — joined
+its payload ([ADR 0008](../../adr/0008-saves-anchors-and-refill.md); [Save opacity](continuity.md#saves-capture-and-workspace)) — joined
 with the reviewed harness definition. The `harness_id` is the one the live Pod runs, resolved from
 `observation.construction`, so this field depends on no Intent value.
 
@@ -113,7 +112,7 @@ incorporates.
 
 This scalar has exactly two values, `current` and `stale`, for a verified live native context. It
 compares that context with its immutable opening descriptor from
-[spec 06](../06-anchors-and-handoffs.md): origin Pod/process/context, selected Save and frontier `W`
+[Native continuity](continuity.md): origin Pod/process/context, selected Save and frontier `W`
 (or zero), and cutoff `H` fixed before the origin Agora Session's first facts.
 
 ```text
@@ -140,13 +139,14 @@ The descriptor is historical input defining what should have been supplied, not 
 A hot Agora Session transition on the same verified native context keeps this descriptor; it sends
 no new opening Handoff. Pod/process/context loss invalidates evidence even if an ACP id is reused.
 Mono-active routing alone does not make synchronization permanent. Every use requires the freshness
-and continuity contract in spec 04; declared source invalidation closes admission and re-enqueues work.
+and continuity contract in [ACP evidence](execution.md#acp-facts-and-current-evidence). Declared source
+invalidation closes admission and re-enqueues work.
 
 ## `observation.model`
 
 The actual model id of the live context, read through the reviewed standard ACP model config option.
 It is defined when `observation.session = live`, under the fresh snapshot/continuous-stream contract
-in [ACP integration](../04-acp-integration.md#current-evidence-and-configuration).
+in [ACP integration](execution.md#acp-facts-and-current-evidence).
 
 A resumed context must report its actual model, not a default copied from the request. This is an
 enablement requirement on the pinned integration, not an assertion about an unverified adapter.
@@ -168,7 +168,7 @@ These fields are sets of exact non-secret grant authorizations on the one Pod-bo
 
 Both come from fresh, exhaustive OneCLI inventories for the same Agent incarnation. They are
 defined only after construction establishes that unique Agent. Their representation and equality
-are defined in [Capabilities and OneCLI](../10-equipment-and-broker.md#exact-grant-comparison).
+are defined in [exact grant comparison](#exact-grant-comparison).
 Credential/connection identity, tool scope, approval mode and restrictions are preserved. Unknown
 or partially attached rights are retained as independently removable entries, never dropped because
 they do not complete a named capability. Failed or inconsistent inventory reads produce neither a
@@ -177,5 +177,38 @@ fabricated empty set nor a conclusion about effective authority.
 The observations depend on no Intent value. The rule compiles the desired capability set separately
 for comparison. OneCLI denial reasons and source revisions accompany acquisition as diagnostics;
 they are not a capability, action result or persisted proof of current access.
+
+## Exact grant comparison
+
+Let `D` be the compiled desired authorization set, `A` OneCLI's attached authorization set and `E`
+its effective authorization set after external restrictions. Convergence requires `A = D ∧ E = D`.
+
+An authorization comparison preserves:
+
+- credential or connection identity and grant kind;
+- each allowed tool or the exact scope of a secret grant;
+- approval versus unconditional permission;
+- all restrictions affecting when or where that permission applies.
+
+This is a non-secret comparison model behind the policy boundary, not a replacement provider
+protocol. Inclusion means inclusion of permitted requests under their prerequisites, not textual
+inclusion of serialized grant objects: approval-required execution is a subset of unconditional
+execution of the same tool, and a narrower resource restriction is a subset of the broader scope.
+The pinned mapping must prove such inclusion; it cannot guess it for an unknown restriction.
+Finite tool grants are compared as individual authorizations. A full-access grant is
+expanded only against a complete, revision-bound OneCLI tool catalogue; otherwise it remains an
+explicit broad entry and cannot compare equal to a reviewed finite subset. Restrictions are
+canonicalized only when the pinned OneCLI contract proves equivalence. Unknown fields or entries
+remain distinguishable and prevent equality; they are never silently discarded.
+
+An observed scope whose inclusion in the reviewed desired set cannot be proved is conservatively
+classified as excess, retaining its removable OneCLI entry identity. Desired compilation never
+emits an unknown scope. If the owner cannot identify or remove the entry, access stays gated with
+a diagnostic; uncertainty cannot make the grant table pass.
+
+A denied permission contributes no usable authorization to `E`; its attachment stays in `A` and
+its denial reason remains acquisition diagnostics. An approval requirement contributes its actual
+restricted authorization, never an unconditional allow. Comparisons never infer effective access
+from attachment, or attachment from effective access.
 
 Later rules extend this registry when they require other normalized evidence.

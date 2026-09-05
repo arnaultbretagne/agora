@@ -124,5 +124,5 @@ unrelated histories.
 
 ## Governing specs
 
-- [Session lifecycle](../specs/03-session-lifecycle.md)
-- [Kubernetes runtime control](../specs/08-session-runtime-control.md)
+- [Execution boundaries](../specs/reconciliation/execution.md)
+- [Observable runtime evidence](../specs/reconciliation/002_observation.md)

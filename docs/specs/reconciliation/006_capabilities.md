@@ -10,8 +10,8 @@ capability ([ADR 0010](../../adr/0010-capabilities-are-onecli-grants.md)).
 - [`observation.grants.attached`](002_observation.md), abbreviated `A`;
 - [`observation.grants.effective`](002_observation.md), abbreviated `E`.
 
-Set representation, equality and compilation are defined by
-[Capabilities and OneCLI](../10-equipment-and-broker.md#exact-grant-comparison). Compilation is
+Set representation and equality are defined by [exact grant comparison](002_observation.md#exact-grant-comparison);
+compilation is defined in [Intent](001_intent.md#capability-compilation). Compilation is
 trusted resolution, not an Observation. `D`, `A` and `E` contain authorizations, not capability ids.
 
 ## Rules
