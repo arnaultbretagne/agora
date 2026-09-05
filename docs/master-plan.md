@@ -260,10 +260,10 @@ Workstream is an open decision recorded in §4).
 `ENGINE-010`, `ENGINE-015`, `ENGINE-016`, `ENGINE-017` (authoring side) as interleavings on real
 PostgreSQL with `packages/testkit`'s clock and paused workers.
 
-### S3 — Workstream journal, Sessions and projections framework
+### S3 — Workstream journal, Sessions and projections framework (done)
 
 **Goal.** One canonical ordered fact stream per Workstream, Sessions as filtered views, birth
-that pins `H`, and a projector framework that is rebuildable by construction.
+that pins `H`, and a projector framework that is rebuildable by construction. Pull request #41.
 
 **Sources.** [ADR 0002](adr/0002-workstream-session-model.md), ADR 0004 (facts and projections),
 [execution: Session birth](specs/reconciliation/execution.md#session-birth-and-admission),
