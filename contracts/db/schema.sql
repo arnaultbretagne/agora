@@ -163,12 +163,21 @@ CREATE TABLE sessions (
   -- Never the OneCLI bearer (that stays Broker-private, ADR 0009) and never sent anywhere but the
   -- bridge's own WebSocket handshake.
   bridge_token text NULL,
-  UNIQUE (workstream_id, ordinal),
-  UNIQUE (workstream_id, pod_uid)
+  UNIQUE (workstream_id, ordinal)
 );
 
 CREATE UNIQUE INDEX sessions_one_current_per_workstream
   ON sessions (workstream_id) WHERE attribution_ended_at IS NULL;
+
+-- S8 Step 4b: at most one CURRENT (unended) Session per (Workstream, Pod) — openSession's own
+-- idempotency guard against the same BUILD's replayed response creating two rows. Deliberately NOT
+-- a plain UNIQUE(workstream_id, pod_uid): a hot Session boundary (execution.md "Hot Session
+-- boundaries") ends one Session's attribution and opens its successor on the SAME retained Pod —
+-- a flat constraint would forbid that legitimate case outright, not just the replay it exists to
+-- catch. sessions_one_current_per_workstream above already enforces "at most one current Session,
+-- full stop" — this index narrows that same guarantee to a given Pod specifically.
+CREATE UNIQUE INDEX sessions_one_current_per_workstream_pod
+  ON sessions (workstream_id, pod_uid) WHERE attribution_ended_at IS NULL;
 
 CREATE TABLE workstream_facts (
   workstream_id uuid NOT NULL REFERENCES workstreams(id),

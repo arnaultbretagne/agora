@@ -1,5 +1,6 @@
 export * from './append.js'
 export * from './sessions.js'
+export * from './hot-boundary.js'
 export * from './reads.js'
 export * from './secret-guard.js'
 export * from './fact-kinds.js'

@@ -30,8 +30,12 @@ export async function openSession(
     throw new JournalError('unknown_workstream', `no Workstream ${workstreamId}`)
   }
 
+  // Only the CURRENT (unended) Session for this Pod counts as "the same BUILD's replayed response"
+  // — an ENDED one sharing this podUid is a hot boundary's predecessor (execution.md "Hot Session
+  // boundaries"), never a reason to resurrect it here (sessions_one_current_per_workstream_pod
+  // enforces there is at most one unended match to find).
   const existing = await client.query(
-    'SELECT id, ordinal, cutoff_h, opened_at_seq FROM sessions WHERE workstream_id = $1 AND pod_uid = $2',
+    'SELECT id, ordinal, cutoff_h, opened_at_seq FROM sessions WHERE workstream_id = $1 AND pod_uid = $2 AND attribution_ended_at IS NULL',
     [workstreamId, command.podUid],
   )
   if (existing.rowCount !== 0) {
