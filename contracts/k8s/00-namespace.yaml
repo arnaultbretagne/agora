@@ -1,0 +1,8 @@
+# S6 — the namespace every Agora-managed Pod lives in (contracts/catalogue/runtime-settings.json
+# pins "namespace": "agora-runs"; this file and that catalogue entry must never disagree).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agora-runs
+  labels:
+    agora.dev/app: runtime-controlled

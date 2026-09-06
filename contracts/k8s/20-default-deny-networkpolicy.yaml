@@ -1,0 +1,14 @@
+# S6 — default-deny for the whole namespace: every Pod (harness Pods included) starts with zero
+# ingress and zero egress. A harness Pod already carries no ServiceAccount token and no cluster
+# authority (k8s-pod-spec.ts); this closes the remaining network path. S7's Broker relay adds the
+# one narrow allow a harness Pod needs (egress to the relay only) — nothing here anticipates it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: agora-runs
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

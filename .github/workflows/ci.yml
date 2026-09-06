@@ -44,3 +44,51 @@ jobs:
         run: npm run db:reset
       - name: Test
         run: npm run test --workspaces --if-present
+
+  kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create a kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: agora-runtime-control
+      - name: Apply the runtime-control manifests
+        run: kubectl apply -f contracts/k8s/
+      - name: Namespaces and the default-deny NetworkPolicy exist
+        run: |
+          kubectl get namespace agora-runs agora-system
+          kubectl get networkpolicy default-deny-all -n agora-runs
+          kubectl get serviceaccount runtime-control -n agora-system
+          kubectl get serviceaccount harness -n agora-runs
+      - name: runtime-control's ServiceAccount has exactly its declared Pod authority
+        run: |
+          set -e
+          sa=system:serviceaccount:agora-system:runtime-control
+          for verb in get list watch create delete; do
+            kubectl auth can-i "$verb" pods -n agora-runs --as="$sa" | grep -qx yes
+          done
+          kubectl auth can-i get nodes --as="$sa" | grep -qx yes
+      - name: runtime-control's ServiceAccount has no authority beyond that (least privilege)
+        run: |
+          set -e
+          sa=system:serviceaccount:agora-system:runtime-control
+          ! kubectl auth can-i get secrets -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i list nodes --as="$sa" | grep -qx yes
+          ! kubectl auth can-i delete nodes --as="$sa" | grep -qx yes
+          ! kubectl auth can-i get pods -n agora-system --as="$sa" | grep -qx yes
+      - name: the harness ServiceAccount carries no authority at all
+        run: |
+          set -e
+          sa=system:serviceaccount:agora-runs:harness
+          ! kubectl auth can-i get pods -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i get secrets -n agora-runs --as="$sa" | grep -qx yes
+      - name: a real Pod round-trips through the runtime-control identity (create, observe, delete)
+        run: |
+          set -e
+          sa=system:serviceaccount:agora-system:runtime-control
+          kubectl run smoke-test --image=registry.k8s.io/pause:3.9 -n agora-runs --as="$sa" \
+            --overrides='{"spec":{"serviceAccountName":"harness","automountServiceAccountToken":false}}'
+          kubectl wait --for=condition=Ready pod/smoke-test -n agora-runs --timeout=60s
+          kubectl get pod smoke-test -n agora-runs --as="$sa"
+          kubectl delete pod smoke-test -n agora-runs --as="$sa" --wait=true

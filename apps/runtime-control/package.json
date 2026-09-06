@@ -1,0 +1,23 @@
+{
+  "name": "@agora/runtime-control",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agora/domain": "0.0.0",
+    "@agora/engine": "0.0.0",
+    "@agora/journal": "0.0.0",
+    "@agora/observation": "0.0.0",
+    "@agora/owner-requests": "0.0.0",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
+  }
+}

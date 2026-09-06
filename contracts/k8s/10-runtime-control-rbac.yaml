@@ -1,0 +1,65 @@
+# S6 — runtime-control's own identity and authority (ADR 0007: "the runtime controller
+# materializes a resolved execution"; main.ts: "its only Kubernetes authority is Pods", plus
+# read-only Nodes for P6 fencing evidence). Deployed in agora-system, a namespace the default-deny
+# NetworkPolicy never touches (that policy is scoped to agora-runs, where harness Pods live) — the
+# controller needs an open path to the API server and to PostgreSQL.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agora-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runtime-control
+  namespace: agora-system
+---
+# Namespaced: full lifecycle authority over Pods in the one namespace they run in, nothing else —
+# no Secrets, ConfigMaps, exec/attach, or any resource besides Pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: runtime-control-pods
+  namespace: agora-runs
+rules:
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: runtime-control-pods
+  namespace: agora-runs
+subjects:
+  - kind: ServiceAccount
+    name: runtime-control
+    namespace: agora-system
+roleRef:
+  kind: Role
+  name: runtime-control-pods
+  apiGroup: rbac.authorization.k8s.io
+---
+# Cluster-scoped (Nodes have no namespace): read-only, and only `get` — P6 fencing evidence needs
+# one node's current Ready condition, never a cluster-wide list or watch.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: runtime-control-nodes-read
+rules:
+  - apiGroups: ['']
+    resources: ['nodes']
+    verbs: ['get']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: runtime-control-nodes-read
+subjects:
+  - kind: ServiceAccount
+    name: runtime-control
+    namespace: agora-system
+roleRef:
+  kind: ClusterRole
+  name: runtime-control-nodes-read
+  apiGroup: rbac.authorization.k8s.io
