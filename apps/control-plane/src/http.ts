@@ -407,8 +407,20 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
       if (segments.length === 4 && segments[3] === 'cancel' && method === 'POST') {
         if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
-        await channels.cancel(workstreamId)
-        return sendJson(res, 202, { cancelled: true })
+        const body = await readJsonBody(req)
+        const commandId = (body.ok ? (body.body as Record<string, unknown>)?.['commandId'] : undefined) as unknown
+        if (typeof commandId !== 'string' || commandId.length === 0) {
+          return sendProblem(res, 422, 'Invalid cancel', 'commandId must be the exact turn to cancel — a delayed cancel must name its intended target, never "whatever is active"')
+        }
+        try {
+          const outcome = await channels.cancel(workstreamId, commandId)
+          return sendJson(res, 202, { cancelled: outcome === 'cancel_sent' })
+        } catch (error) {
+          if (error instanceof Error && error.message === 'channel_not_open') {
+            return sendProblem(res, 409, 'No open channel', 'there is no live ACP channel for this Workstream to cancel on')
+          }
+          throw error
+        }
       }
 
       return sendProblem(res, 405, 'Method not allowed', `${method} is not supported here`)

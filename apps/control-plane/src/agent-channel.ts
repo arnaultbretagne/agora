@@ -65,6 +65,8 @@ export interface ChannelManagerOptions {
   readonly connector?: ChannelConnector
 }
 
+export type CancelOutcome = 'cancel_sent' | 'not_active'
+
 interface PendingPermission {
   readonly id: string
   readonly resolve: (decision: { outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }) => void
@@ -209,11 +211,26 @@ export class AgentChannels {
     }
   }
 
-  async cancel(workstreamId: string, commandId?: string): Promise<void> {
+  /**
+   * A delayed cancel verifies the intended context and active turn (execution.md — prompt
+   * recovery) before sending anything: by the time an operator's cancel arrives, the turn it meant
+   * may already have finished (or a later one may already be in flight) — `commandId` names exactly
+   * which turn the caller intends to stop, and a cancel that no longer matches the channel's own
+   * current one is a safe no-op, never a blind "cancel whatever's active right now".
+   */
+  async cancel(workstreamId: string, commandId: string): Promise<CancelOutcome> {
     const channel = this.#channels.get(workstreamId)
     if (channel === undefined) throw new Error('channel_not_open')
-    await channel.connection.agent.request(acp.methods.agent.session.cancel, { sessionId: channel.acpSessionId, reason: 'operator requested' }).catch(() => {})
-    void commandId
+    if (channel.currentCommandId !== commandId) return 'not_active'
+    // `session/cancel` is a NOTIFICATION (schema.CancelNotification, AgentNotificationMethod), not
+    // a request — the S4-era code that called `.request(...)` here compiled (the SDK's generic
+    // string-method overload accepts it) but semantically asked the agent for a JSON-RPC response
+    // to a method it never answers, awaiting a reply that never comes. `.notify()` never inherited
+    // that: fire-and-forget, exactly what ACP itself specifies for this method.
+    // schema.CancelNotification carries only sessionId (+ _meta) — no `reason` field exists on the
+    // real protocol; the S4-era code invented one that every peer would have silently dropped.
+    await channel.connection.agent.notify(acp.methods.agent.session.cancel, { sessionId: channel.acpSessionId }).catch(() => {})
+    return 'cancel_sent'
   }
 
   decidePermission(workstreamId: string, permissionId: string, optionId: string): boolean {
