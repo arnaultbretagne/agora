@@ -15,6 +15,8 @@ import type { OneCliClient } from './onecli/client.js'
 export interface BrokerApiOptions {
   readonly client: OneCliClient
   readonly gate: OwnerGate
+  /** REVOKE closes the relay before narrowing/detaching authority (003 verbs) — optional only for tests that never open a tunnel. */
+  readonly tunnels?: { terminateAll(incarnation: string): number }
 }
 
 function problem(res: ServerResponse, status: number, title: string, detail: string): void {
@@ -101,6 +103,8 @@ async function attachGrant(options: BrokerApiOptions, request: OwnerRequest): Pr
 async function detachGrant(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
   const grants = (request.payload as { grants?: unknown }).grants
   if (!Array.isArray(grants)) return { kind: 'unknown', detail: 'payload.grants must be the compiled desired grant set' }
+  // The relay closes to affected traffic before authority narrows (003 verbs REVOKE) — never after.
+  options.tunnels?.terminateAll(request.target.id)
   const agent = await ensureAgent(options.client, request.target.id)
   const desired = fromWireGrantSet(grants as never)
   await revokeExcessGrants(options.client, agent.id, desired)
@@ -108,6 +112,7 @@ async function detachGrant(options: BrokerApiOptions, request: OwnerRequest): Pr
 }
 
 async function cleanupAgent(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
+  options.tunnels?.terminateAll(request.target.id)
   await retireAgent(options.client, request.target.id)
   await options.gate.retire(request.workstreamId, request.target.id)
   return { kind: 'completed', result: { retired: request.target.id } }

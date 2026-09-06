@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { construction, harnessDigestForCatalogue, normalizeConstruction, normalizePower, normalizeSession } from '../src/index.js'
+import { construction, harnessDigestForCatalogue, normalizeConstruction, normalizeConstructionWithBinding, normalizeGrantsAttached, normalizeGrantsEffective, normalizePower, normalizePowerWithBroker, normalizeSession } from '../src/index.js'
 import type { PodObservation } from '../src/index.js'
 
 function pod(overrides: Partial<PodObservation> = {}): PodObservation {
@@ -54,4 +54,45 @@ test('harnessDigestForCatalogue: only a digest pinned in the catalogue contribut
   const digestFor = harnessDigestForCatalogue([{ imageDigest: 'sha256:current' }])
   assert.equal(digestFor('sha256:current'), 'sha256:current')
   assert.equal(digestFor('sha256:stale'), null, 'a Pod admitted under a since-rotated digest is never guessed current')
+})
+
+test('normalizePowerWithBroker: an Agent, grant or binding with no Pod at all is still on (002: a missing Pod cannot hide them)', () => {
+  const emptyKubernetes = { workstreamId: 'w', podCount: 0, unresolvedObligations: 0, complete: true }
+  assert.equal(normalizePowerWithBroker(emptyKubernetes, { agentExists: true, hasAnyGrant: false, hasBinding: false }), 'on')
+  assert.equal(normalizePowerWithBroker(emptyKubernetes, { agentExists: false, hasAnyGrant: true, hasBinding: false }), 'on')
+  assert.equal(normalizePowerWithBroker(emptyKubernetes, { agentExists: false, hasAnyGrant: false, hasBinding: true }), 'on')
+})
+
+test('normalizePowerWithBroker: off needs both a complete empty Kubernetes listing AND a read, empty broker inventory', () => {
+  const emptyKubernetes = { workstreamId: 'w', podCount: 0, unresolvedObligations: 0, complete: true }
+  assert.equal(normalizePowerWithBroker(emptyKubernetes, { agentExists: false, hasAnyGrant: false, hasBinding: false }), 'off')
+  assert.equal(normalizePowerWithBroker(emptyKubernetes, null), null, 'an unread broker inventory cannot prove off')
+})
+
+test('normalizePowerWithBroker: a Kubernetes footprint alone still proves on while the broker owner is unreachable', () => {
+  const onKubernetes = { workstreamId: 'w', podCount: 1, unresolvedObligations: 0, complete: true }
+  assert.equal(normalizePowerWithBroker(onKubernetes, null), 'on')
+})
+
+test('normalizeConstructionWithBinding: agentBound:false makes an otherwise-coherent Pod incoherent', () => {
+  const coherentPod = pod({ admittedDigest: 'sha256:admitted' })
+  const withoutBinding = normalizeConstructionWithBinding([{ ...coherentPod, agentBound: false }])
+  assert.equal(withoutBinding.kind === 'set' && withoutBinding.incoherent, true)
+})
+
+test('normalizeConstructionWithBinding: omitting agentBound entirely keeps S6\'s Kubernetes-only coherence', () => {
+  const coherentPod = pod({ admittedDigest: 'sha256:admitted' })
+  assert.deepEqual(normalizeConstructionWithBinding([coherentPod]), normalizeConstruction([coherentPod]))
+})
+
+test('normalizeGrantsAttached/Effective: an unsettled read is unavailable, never an empty or full guess', () => {
+  assert.deepEqual(normalizeGrantsAttached(undefined), { ok: false, reason: 'unavailable' })
+  assert.deepEqual(normalizeGrantsEffective(undefined), { ok: false, reason: 'unavailable' })
+})
+
+test('normalizeGrantsAttached/Effective: a settled consistent pair reports its own attached/effective sets', () => {
+  const attached = new Set([{ kind: 'secret' as const, credential: 's1', tools: 'full' as const, approval: 'unconditional' as const, restrictions: [] }])
+  const effective = new Set<(typeof attached extends Set<infer T> ? T : never)>()
+  assert.deepEqual(normalizeGrantsAttached({ attached }), { ok: true, value: attached })
+  assert.deepEqual(normalizeGrantsEffective({ effective }), { ok: true, value: effective })
 })

@@ -188,6 +188,31 @@ test('owner-api detach_grant: narrows an over-broad connection to the desired sc
   })
 })
 
+test('owner-api detach_grant: closes the relay to the incarnation before narrowing authority (003 verbs REVOKE)', async () => {
+  await withTestDatabase(async (pool) => {
+    await insertWorkstream(pool, WORKSTREAM_ID)
+    const client = new StatefulOneCliClient()
+    await client.createAgent('x', 'incarnation-3')
+    const terminated: string[] = []
+    const tunnels = {
+      terminateAll: (incarnation: string): number => {
+        terminated.push(incarnation)
+        return 1
+      },
+    }
+    const gate = new PgOwnerGate(pool, 'broker')
+    const server = createBrokerApi({ client, gate, tunnels })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-3' }, payload: { grants: [] } }))
+      assert.deepEqual(terminated, ['incarnation-3'])
+    } finally {
+      server.close()
+    }
+  })
+})
+
 test('owner-api cleanup_agent: deletes the Agent and retires the target for future positive operations', async () => {
   await withTestDatabase(async (pool) => {
     await insertWorkstream(pool, WORKSTREAM_ID)
