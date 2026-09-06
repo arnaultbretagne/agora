@@ -24,7 +24,9 @@ RUN npm install --global @agentclientprotocol/codex-acp@1.10.0 && npm cache clea
 # entry, never the bare specifier: resolving the package lands on the library main, which exits
 # without serving ACP (the trap claude-code's README records; it applies here identically).
 RUN node "$(npm root -g)/@agentclientprotocol/codex-acp/dist/index.js" --version \
-    && test -d "$(npm root -g)/@openai/codex"
+    && node -e "const {createRequire} = require('node:module'); \
+        const resolve = createRequire('$(npm root -g)/@agentclientprotocol/codex-acp/dist/index.js'); \
+        console.log('@openai/codex', resolve('@openai/codex/package.json').version)"
 
 FROM node:22-bookworm-slim
 
