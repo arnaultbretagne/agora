@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type pg from 'pg'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
-import { bindAcpContext, currentSession, recordBridgeToken } from '../src/index.js'
+import { bindAcpContext, currentOpeningWindow, currentSession, recordBridgeToken } from '../src/index.js'
 import { createWorkstream, openTestSession, PRODUCT, withTx } from './support.js'
 
 async function connect(db: TestDatabase): Promise<pg.PoolClient> {
@@ -64,6 +64,34 @@ test('currentSession: null when every Session\'s attribution has ended', async (
       await createWorkstream(db, client) // unrelated Workstream, never touched
       const session = await currentSession(db.pool, workstreamId)
       assert.equal(session, null)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('currentOpeningWindow: a fresh Session reads the empty range (W = H)', async () => {
+  await withTestDatabase(async (db) => {
+    const client = await connect(db)
+    try {
+      const workstreamId = await createWorkstream(db, client)
+      await openTestSession(db, client, workstreamId)
+      const window = await currentOpeningWindow(db.pool, workstreamId)
+      assert.ok(window !== null)
+      assert.equal(window.w, window.h)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('currentOpeningWindow: null when there is no current Session', async () => {
+  await withTestDatabase(async (db) => {
+    const client = await connect(db)
+    try {
+      const workstreamId = await createWorkstream(db, client)
+      const window = await currentOpeningWindow(db.pool, workstreamId)
+      assert.equal(window, null)
     } finally {
       client.release()
     }

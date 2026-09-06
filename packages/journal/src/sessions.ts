@@ -106,6 +106,29 @@ export async function currentSession(client: pg.Pool | pg.PoolClient, workstream
   return { sessionId: row['id'], podUid: row['pod_uid'], acpContextId: row['acp_context_id'], processGeneration: row['process_generation'], bridgeToken: row['bridge_token'] }
 }
 
+export interface OpeningWindow {
+  /** The Session's own opening cutoff (CONT-001/002: "H" in that test's own vocabulary — the fact
+   * stream head at the exact moment cutoff_h was pinned, before the session.opened fact). */
+  readonly w: number
+  /**
+   * The opening descriptor's fixed H — "H was fixed before the new Session's facts, never sampled
+   * at REFILL dispatch" (009_sync.md). Only S9's restore path ever gives a Session an H that
+   * differs from its own W (a restored Save's own preceding cutoff); every S8 Session is the
+   * cross-seed case (`W = 0`, no restore machinery exists yet), so W and H are always the same
+   * value here — not an approximation, the literal fixed descriptor for this case (CONT-002: "a
+   * fresh Workstream pins the cutoff H = 0" uses "H" for exactly this field).
+   */
+  readonly h: number
+}
+
+/** The current Session's opening range (W, H], `null` when there is no current Session — sync has nothing to report without one, never a guessed range. */
+export async function currentOpeningWindow(client: pg.Pool | pg.PoolClient, workstreamId: string): Promise<OpeningWindow | null> {
+  const result = await client.query('SELECT cutoff_h FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL', [workstreamId])
+  if (result.rowCount === 0) return null
+  const w: number = result.rows[0]!['cutoff_h']
+  return { w, h: w }
+}
+
 export interface EndedAttribution {
   readonly sessionId: string
   readonly ended: boolean

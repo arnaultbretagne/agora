@@ -2,8 +2,8 @@
 // owners — runtime-control's Pod inventory and broker's Agent/grant inventory for the Workstream's
 // current incarnation (packages/engine's own currentIncarnation lookup — the same one the verb
 // runner uses, so both sides of BUILD/GRANT agree on which incarnation is "current"). session,
-// model, effort, anchor and sync stay `unavailable`: they are ACP-facing evidence this slice does
-// not yet produce (S8's remaining steps, S9) — never invented, never guessed from a partial read.
+// model, effort and sync (Steps 2/3) are real; anchor stays `unavailable` — S9 scope, never
+// invented, never guessed from a partial read.
 import type pg from 'pg'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import type { ObservationSource } from '@agora/engine'
@@ -16,13 +16,14 @@ import {
   normalizeSessionWithAcp,
   normalizeModel,
   normalizeEffort,
+  normalizeSync,
   harnessDigestForCatalogue,
   type BrokerFootprint,
   type PodObservation,
   type AcpConnectionEvidence,
 } from '@agora/observation'
 import { fromWireGrantSet } from '@agora/domain'
-import { currentSession, type CurrentSession } from '@agora/journal'
+import { currentSession, currentOpeningWindow, type CurrentSession } from '@agora/journal'
 import { probeSession, type SessionProbeOptions } from './session-probe.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
@@ -70,10 +71,11 @@ export class HttpObservationSource implements ObservationSource {
 
   async reader(workstreamId: string): Promise<ObservationReader> {
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
-    const [k8sInventory, brokerInventory, session] = await Promise.all([
+    const [k8sInventory, brokerInventory, session, openingWindow] = await Promise.all([
       this.fetchK8sInventory(workstreamId),
       incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined),
       currentSession(this.options.productPool, workstreamId),
+      currentOpeningWindow(this.options.productPool, workstreamId),
     ])
 
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
@@ -133,7 +135,10 @@ export class HttpObservationSource implements ObservationSource {
       },
       session: () => (sessionValue === null ? UNAVAILABLE : { ok: true, value: sessionValue }),
       anchor: () => read('observation.anchor'),
-      sync: () => read('observation.sync'),
+      sync: () => {
+        const value = normalizeSync(openingWindow)
+        return value === null ? UNAVAILABLE : { ok: true, value }
+      },
       model: () => {
         const value = normalizeModel(configSnapshot)
         return value === null ? UNAVAILABLE : { ok: true, value }

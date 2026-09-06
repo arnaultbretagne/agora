@@ -166,20 +166,38 @@ test('grantsAttached/Effective: reports the broker\'s own wire-format sets for t
   })
 })
 
-test('anchor/sync stay unavailable — not yet produced by this slice, never invented', async () => {
+test('anchor stays unavailable — S9 scope, never invented', async () => {
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
     await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
     const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
     const reader = await source.reader(workstreamId)
-    for (const field of [reader.anchor(), reader.sync()]) {
-      assert.deepEqual(field, { ok: false, reason: 'unavailable' })
-    }
+    assert.deepEqual(reader.anchor(), { ok: false, reason: 'unavailable' })
+  })
+})
+
+test('sync: no current Session at all reads unavailable, never a guessed range', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const reader = await source.reader(workstreamId)
+    assert.deepEqual(reader.sync(), { ok: false, reason: 'unavailable' })
+  })
+})
+
+test('sync: a freshly opened Session reads the empty range as current (S8 scope — non-empty ranges are S9)', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const reader = await source.reader(workstreamId)
+    assert.deepEqual(reader.sync(), { ok: true, value: 'current' })
   })
 })
 
 // observation.session/model/effort are real, S8 Step 2/3 wiring — see the dedicated tests below (not
-// a placeholder like anchor/sync above, even though "no Pod at all" also happens to read unavailable).
+// a placeholder like anchor above, even though "no Pod at all" also happens to read unavailable).
 test('model/effort: no live Session yet reads unavailable, never a guessed default', async () => {
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
