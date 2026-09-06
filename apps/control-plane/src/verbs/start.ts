@@ -5,10 +5,21 @@
 // server.ts's own adapter process outlives any one WebSocket (findings — "a dropped connection
 // reconnects to the SAME process"), so there is no correctness reason to keep a connection alive
 // between verb executions; SET_MODEL/SET_EFFORT/prompt dispatch (S8 Steps 3/5) reconnect the same
-// way. Unknown acceptance (a lost session/new response) is resolved by discovery — `session/list`
-// against the fixed workspace root — never a blind second session/new (findings P3:
-// sessionCapabilities.list). A context bound at an older process generation is already dead (the
-// process that held it is gone): that case always creates fresh, discovery would find nothing.
+// way. Unknown acceptance (a lost session/new response) is resolved by discovery first —
+// `session/list` against the fixed workspace root — never a blind second session/new.
+//
+// The honest limit of that discovery, measured on claude-agent-acp 0.75.1 by the conformance suite
+// (harnesses/conformance, check `discovery/empty-context-is-listed`): a context with NO content yet
+// is reachable by `session/resume`/`session/load` but is NOT returned by `session/list` — and a
+// context created by a lost `session/new` response is exactly that, empty. So discovery finds a
+// context that already has content (a rebind after a reconnect), and cannot find the orphan of a
+// lost `session/new`; that case falls through to creating a fresh context and leaves the orphan
+// behind. What that costs is bounded and stated rather than papered over: the orphan holds no
+// conversation and no attribution, nothing is forked, and it dies with the Pod — but it is a leak,
+// and closing it needs a surface the standard protocol does not offer today.
+//
+// A context bound at an older process generation is already dead (the process that held it is
+// gone): that case always creates fresh, discovery would find nothing.
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'

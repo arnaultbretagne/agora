@@ -99,6 +99,38 @@ same discipline P3 used when it avoided `session/prompt` entirely.
   recovery refuses to read across a changed process generation and says so
   (`recovery/context.ts`). Proving delivery across that boundary is S9 custody work.
 
+## Conformance suite result, 2026-09-06 (`harnesses/conformance`)
+
+Run against this harness's own pinned adapter, locally over stdio
+(`node harnesses/conformance/dist/src/cli.js --harness claude-code --adapter <entry> --workspace /tmp
+--expect-adapter-name @agentclientprotocol/claude-agent-acp --expect-adapter-version 0.75.1
+--allow-model-spend`): **10 passed, 0 failed, 2 skipped.**
+
+- *Launch and identity* — answered: protocol version 1 negotiated; `agentInfo` matches the pinned
+  `@agentclientprotocol/claude-agent-acp@0.75.1`; `loadSession` + `sessionCapabilities.resume` +
+  `sessionCapabilities.list` all advertised; a context created on one connection is reachable from
+  another (the property the bridge server promises).
+- *Configuration and bootstrap* — answered: `model`/`effort` are real select options with current
+  values; readback is truthful from both the mutation and a later `session/resume` (SESSION-A08);
+  an unsupported model value is **refused rather than silently substituted**; a model change
+  re-reports the effort options that apply to it.
+- *Quiescence and delivery* — answered: `session/cancel` is accepted as a notification and the
+  connection stays usable; `session/load` replays the prompt verbatim, which is what lets an
+  ambiguous dispatch be resolved without a blind resend.
+- *Isolation and OneCLI* — not answered here: it needs a Pod behind the Broker relay.
+- *Continuity and custody* / *Ownership and recovery* — no runnable harness-side check in S8; the
+  first is S9's, the second is proven on the owner side (runtime-control/broker).
+
+**The one skip that is a finding, not a gap in the suite:** a context with **no content yet** is
+NOT returned by `session/list`, although it is reachable by `session/resume`/`session/load`. A
+context created by a *lost* `session/new` response is exactly that — empty — so START's
+unknown-acceptance discovery cannot find it through the standard surface, falls through to creating
+a fresh context, and leaves an empty, unattributed orphan behind. That orphan holds no conversation
+and no attribution, nothing is forked, and it dies with the Pod, but it is a real leak and it is
+recorded here rather than papered over (`apps/control-plane/src/verbs/start.ts` says the same at the
+point where it matters). If a later adapter version lists empty contexts, the suite's
+`discovery/empty-context-is-listed` check turns green on its own and the hole closes.
+
 ## Real bridge prompt dispatch — built and tested, not yet run against a real Pod
 
 apps/control-plane's `AgentChannels` now has a pluggable transport

@@ -416,10 +416,14 @@ implemented in `apps/control-plane/src/recovery/context.ts`. Still genuinely ope
 boundary's own trigger — the database mechanism exists (`packages/journal`'s `commitHotBoundary`)
 but nothing in S8's own rule tables currently invokes it (CONFIG/CAPABILITIES changes are already
 handled live without ending the Session; S9's restore path looks like the first real trigger, not
-S8's own scope); the conformance suite and the actual end-to-end run, both needing a built image on
-real Kubernetes with real OneCLI credentials (no Docker in the environment this was written in —
-CI's `harness-image` job now builds and asserts the image, but running the full chain is a
-deployment step beyond it).
+S8's own scope); the actual end-to-end run, which needs the built image deployed on real Kubernetes
+with real OneCLI credentials (CI's `harness-image` job now builds and asserts the image, but running
+the full chain is a deployment step beyond it). The conformance suite itself exists
+(`harnesses/conformance`, black-box over any harness's ACP surface) and was run against the real
+pinned adapter: 10 passed, 0 failed, 2 skipped — the skips being the relay row (needs a Pod) and one
+real finding, that a context with no content is not listed, so START cannot discover the orphan of a
+lost `session/new` (recorded in the harness README and at the point in `verbs/start.ts` where it
+matters).
 
 ### S9 — Native continuity: Saves, Anchors, restore and refill
 
