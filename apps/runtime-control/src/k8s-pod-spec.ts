@@ -11,6 +11,14 @@ export interface HarnessDefinition {
   readonly imageDigest: string
   readonly launchCommand: readonly string[]
   readonly mounts: readonly { readonly name: string; readonly mountPath: string; readonly readOnly?: boolean }[]
+  /**
+   * Where the harness keeps its own native state — its `HOME`. S9 custody: the driver reads and
+   * places the transcript under it, so it must be backed by a writable mount, and the root
+   * filesystem stays read-only. Declared here, in the reviewed catalogue, never by a request.
+   */
+  readonly harnessHome: string
+  /** The fixed workspace root the adapter is launched with; the transcript's directory slug derives from it. */
+  readonly workspaceRoot: string
   /** P11: the named capability admission verifies is granted before the first prompt — model/provider access, never implicit (AUTH-009). */
   readonly bootstrapCapability?: string
   /** P11: the reviewed, curated model/effort catalogue — a deliberate subset of what the adapter actually offers (harnesses/claude-code/README.md). */
@@ -74,6 +82,10 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
       serviceAccountName: 'harness',
       automountServiceAccountToken: false,
       restartPolicy: 'Never',
+      // The root filesystem stays read-only, so the ONE writable place is the harness-home emptyDir
+      // — and an emptyDir is root-owned unless an fsGroup is set. Without this the adapter cannot
+      // write the transcript it is later captured from, and a restore would have nowhere to land.
+      securityContext: { fsGroup: settings.runAsUser },
       activeDeadlineSeconds: settings.startupDeadlineSeconds,
       terminationGracePeriodSeconds: settings.terminationGraceSeconds,
       containers: [
@@ -86,6 +98,13 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
           env: [
             { name: 'AGORA_INCARNATION', value: input.incarnation },
             { name: 'AGORA_EVIDENCE_URL', value: `${settings.ownerApiBaseUrl}/v1/pods/${name}/evidence` },
+            // S9 custody: where the harness's native state lives, and where it fetches and reports a
+            // restored Save. The Pod never sees a Save id or a store credential — the offer arrives
+            // on the evidence endpoint it already polls, and these are just the addresses.
+            { name: 'HOME', value: harness.harnessHome },
+            { name: 'AGORA_HARNESS_HOME', value: harness.harnessHome },
+            { name: 'AGORA_WORKSPACE_ROOT', value: harness.workspaceRoot },
+            { name: 'AGORA_CUSTODY_URL', value: `${settings.ownerApiBaseUrl}/v1/pods/${name}/custody` },
             { name: 'BRIDGE_PORT', value: String(settings.bridgePort) },
             { name: 'BRIDGE_AUTH_SECRET', valueFrom: { secretKeyRef: { name: settings.bridgeAuthSecretName, key: settings.bridgeAuthSecretKey } } },
             // No credential in this URL — the relay identifies the Pod by its own source IP

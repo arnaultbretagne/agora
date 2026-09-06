@@ -14,6 +14,7 @@ import { buildPodSpec, type HarnessDefinition, type RuntimeSettings } from './k8
 import { podName } from './k8s-labels.js'
 import { WakeLog, readWakes } from './wakes.js'
 import { mintBridgeToken } from '@agora/acp'
+import type { CustodyTransport, PlacementReport } from './custody-transport.js'
 
 export interface OwnerApiOptions {
   readonly k8s: K8sClient
@@ -25,6 +26,8 @@ export interface OwnerApiOptions {
   readonly wakes: WakeLog
   /** P4: signs the bridge token minted at gate release — the same secret every harness Pod verifies against. */
   readonly bridgeAuthSecret: string
+  /** S9: present only where restores are served; absent, every Pod launches with no placement and the gate behaves exactly as it did in S8. */
+  readonly custody?: CustodyTransport
 }
 
 function problem(res: ServerResponse, status: number, title: string, detail: string): void {
@@ -64,6 +67,14 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
         const discharged = await options.obligations.discharge(parts[2]!, 'fenced')
         if (!discharged) return problem(res, 404, 'Not found', `no outstanding retirement obligation for pod ${parts[2]}`)
         return send(res, 200, { fenced: parts[2] })
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'payload' && req.method === 'GET') {
+        return handleCustodyPayload(options, req, res, parts[2]!)
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'placement' && req.method === 'POST') {
+        return handleCustodyPlacement(options, res, parts[2]!, (await body(req)) as PlacementReport)
       }
 
       if (parts[0] === 'v1' && parts[1] === 'wakes' && req.method === 'GET') {
@@ -106,7 +117,40 @@ async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, nam
     processGeneration: seam?.state().processGeneration ?? 0,
     startupDeadlineExpired: isStartupDeadlineExpired(metadata?.creationTimestamp ?? null, status?.phase ?? 'Unknown', new Date().toISOString(), options.settings.startupDeadlineSeconds),
     seam: seam?.state() ?? null,
+    // S9: the Pod learns here that a Save is waiting for it, on the endpoint it already polls while
+    // held at the seam. The offer carries no bytes — only what it takes to fetch and verify them.
+    custody: options.custody?.offer(name) ?? null,
   })
+}
+
+/** Streams the staged Save's bytes to the Pod holding the placement token. The store stays on this side. */
+async function handleCustodyPayload(options: OwnerApiOptions, req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+  if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody placements')
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  const outcome = await options.custody.fetch(name, url.searchParams.get('token') ?? '')
+  switch (outcome.kind) {
+    case 'bytes':
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(outcome.bytes.byteLength) })
+      return void res.end(Buffer.from(outcome.bytes))
+    case 'no_placement':
+      return problem(res, 404, 'Not found', `no custody placement is staged for pod ${name}`)
+    case 'unauthorized':
+      return problem(res, 403, 'Forbidden', 'the placement token does not match this Pod and Save')
+    case 'payload_missing':
+      // An outage, not an incompatibility: nothing is invalidated, and the gate simply stays shut.
+      return problem(res, 503, 'Payload unavailable', `the payload for Save ${outcome.saveId} could not be read`)
+  }
+}
+
+/** Records the driver's placement report and verifies it against the Save metadata. */
+function handleCustodyPlacement(options: OwnerApiOptions, res: ServerResponse, name: string, report: PlacementReport): void {
+  if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody placements')
+  if (typeof report?.token !== 'string' || typeof report.checksum !== 'string' || typeof report.byteLength !== 'number') {
+    return problem(res, 422, 'Invalid placement report', 'token, checksum and byte_length are required')
+  }
+  const outcome = options.custody.confirm(name, report)
+  if (outcome.kind === 'rejected') return problem(res, 409, 'Placement rejected', outcome.reason)
+  return send(res, 200, { placed: true, saveId: outcome.placement.saveId })
 }
 
 async function handleOwnerRequest(options: OwnerApiOptions, res: ServerResponse, request: OwnerRequest): Promise<void> {
@@ -190,6 +234,11 @@ function gateRelease(options: OwnerApiOptions, request: OwnerRequest): OwnerResp
   if (seam === undefined || typeof sessionId !== 'string') {
     return { kind: 'unknown', detail: 'seam not established' }
   }
+  // S9: a Pod that is restoring must have its transcript verified in place before the adapter is
+  // allowed to open a context on it — an unverified or half-placed restore that resumed would be
+  // indistinguishable from a genuine one afterwards.
+  const blocked = options.custody?.gateBlockedReason(name) ?? null
+  if (blocked !== null) return { kind: 'unknown', detail: blocked }
   if (!seam.release(sessionId)) return { kind: 'unknown', detail: 'seam already bound to another Session' }
   // P4: minted only once release actually succeeds — the incarnation is confirmed real at this point.
   const bridgeToken = mintBridgeToken(request.target.id, options.bridgeAuthSecret)

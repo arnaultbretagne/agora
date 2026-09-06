@@ -92,7 +92,7 @@ test('owner-api create_pod: the PodSpec comes from the reviewed catalogue, keyed
     const k8s = new FakeK8sClient()
     const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
     const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
-    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
     const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
@@ -127,7 +127,7 @@ test('owner-api create_pod: a 409 from a crash-then-retry resolves by discoverin
     k8s.failNextCreateWith409()
     const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
     const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
-    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
     const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
@@ -151,7 +151,7 @@ test('owner-api gate_release: mints a bridge token verifiable for exactly this i
     const k8s = new FakeK8sClient()
     const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
     const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
-    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
     const seams = new Map()
     const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams, gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -204,6 +204,96 @@ test('evidence: a live restartCount catches the seam up exactly once, then stays
 
       const second = (await (await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/evidence`)).json()) as { processGeneration: number }
       assert.equal(second.processGeneration, 2, 'an unchanged restartCount never advances the seam again')
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('custody: the offer reaches the Pod on the evidence endpoint, and the gate opens only once the placement verifies', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  const { CustodyTransport } = await import('../src/custody-transport.js')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const name = 'agora-' + workstreamId.slice(0, 8) + '-inc-1'
+    const bytes = new TextEncoder().encode('{"type":"user","sessionId":"ctx-1"}\n')
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
+    const custody = new CustodyTransport({ secret: 'test-secret', readPayload: async (saveId) => (saveId === 'save-1' ? bytes : null) })
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret', custody })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    const base = `http://127.0.0.1:${port}`
+    try {
+      await postOwnerRequest(port, request({ workstreamId }))
+      const offer = custody.stage({ podName: name, saveId: 'save-1', checksum: 'sha256:abc', byteLength: bytes.byteLength })
+
+      // What the Pod sees while it waits at the seam: the offer, and no bytes.
+      const evidence = (await (await fetch(`${base}/v1/pods/${name}/evidence`)).json()) as { custody: { saveId: string; token: string } | null }
+      assert.equal(evidence.custody?.saveId, 'save-1')
+      assert.equal(evidence.custody?.token, offer.token)
+
+      assert.equal((await fetch(`${base}/v1/pods/${name}/custody/payload?token=wrong`)).status, 403)
+      const payload = await fetch(`${base}/v1/pods/${name}/custody/payload?token=${offer.token}`)
+      assert.equal(payload.status, 200)
+      assert.deepEqual(new Uint8Array(await payload.arrayBuffer()), bytes)
+
+      // The gate refuses while the placement is unverified — the adapter must not open a context on
+      // a transcript nobody checked.
+      const blocked = await postOwnerRequest(port, request({ workstreamId, operation: 'gate_release', attemptKey: 'attempt-blocked', payload: { sessionId: 'session-1' } }))
+      assert.equal(blocked.kind, 'unknown')
+      assert.match(String(blocked['detail']), /has not been verified/)
+
+      const wrongReport = await fetch(`${base}/v1/pods/${name}/custody/placement`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: offer.token, checksum: 'sha256:different', byteLength: bytes.byteLength, path: '/home/agent/x.jsonl' }),
+      })
+      assert.equal(wrongReport.status, 409)
+
+      const goodReport = await fetch(`${base}/v1/pods/${name}/custody/placement`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: offer.token, checksum: 'sha256:abc', byteLength: bytes.byteLength, path: '/home/agent/x.jsonl' }),
+      })
+      assert.equal(goodReport.status, 200)
+
+      const released = await postOwnerRequest(port, request({ workstreamId, operation: 'gate_release', attemptKey: 'attempt-released', payload: { sessionId: 'session-1' } }))
+      assert.equal(released.kind, 'completed')
+      // And the offer is withdrawn: there is nothing left for the Pod to place.
+      const after = (await (await fetch(`${base}/v1/pods/${name}/evidence`)).json()) as { custody: unknown }
+      assert.equal(after.custody, null)
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('custody: a runtime-control that serves no placements behaves exactly as it did before S9', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const name = 'agora-' + workstreamId.slice(0, 8) + '-inc-1'
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      await postOwnerRequest(port, request({ workstreamId }))
+      const evidence = (await (await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/evidence`)).json()) as { custody: unknown }
+      assert.equal(evidence.custody, null)
+      assert.equal((await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/custody/payload?token=x`)).status, 404)
+      const released = await postOwnerRequest(port, request({ workstreamId, operation: 'gate_release', attemptKey: 'attempt-release', payload: { sessionId: 'session-1' } }))
+      assert.equal(released.kind, 'completed')
     } finally {
       server.close()
     }

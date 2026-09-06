@@ -140,3 +140,55 @@ that test drives a real ACP agent (the pinned SDK) over an in-process duplex sta
 bridge, the same reasoning as `verbs/start.test.ts`. Whether it works against the ACTUAL adapter
 process inside a real Pod is exactly the same "no Docker here" gap as the image build above, not a
 new one.
+
+## Custody driver (S9 Step 2) — measured live
+
+`src/driver.ts` implements the `CustodyDriver` contract for this harness under
+[continuity.md's `claude-code` registration (P12)](../../docs/specs/reconciliation/continuity.md).
+Everything below was measured against the pinned adapter by
+`measure/custody-round-trip.mjs`, not assumed — the script is in the repo so the acceptance can be
+re-run (it spends two real model calls, so it is never part of `npm test`):
+
+```sh
+npm run build -w @agora/harness-claude-code
+ADAPTER_PATH=<…/claude-agent-acp/dist/index.js> node harnesses/claude-code/measure/custody-round-trip.mjs
+```
+
+**The round trip.** Plant a codeword in home A → `SIGKILL` the adapter → `capture()` → `restore()`
+into a home B that has never seen the context → `session/resume` → ask for the codeword back:
+
+```text
+captured 13063 bytes in 255ms, checksum sha256:968e41bf…
+payload carries the credential: false
+restored to <home B>/.claude/projects/-…-work/<context id>.jsonl in 11ms
+resumed in home B by session/resume
+answer: "MIRABELLE-7241"
+CODEWORD RECALLED: true
+```
+
+The one transcript file is genuinely sufficient: a different home, a different process, no
+`.claude.json`, no settings, no cached state — only the credential, which the driver never captures
+and the experiment therefore has to supply separately.
+
+**Two things the measurement corrected in the first implementation.**
+
+1. *The directory slug is not "slashes become dashes".* Every character outside `[A-Za-z0-9-]`
+   becomes `-`, and case is preserved: `/a/A_b.c-d 1` → `-a-A-b-c-d-1`. The first version replaced
+   only `/`, which looks right until a path contains a dot — and the transcript lives under a
+   `.claude` home, so a dotted workspace root is not exotic. It looked in the wrong directory and
+   reported "no transcript for context", which is exactly the failure a Save exists to prevent.
+2. *"The process is gone" is not yet "the file is finished".* After `SIGKILL`, the transcript kept
+   changing for roughly 100–200 ms (measured: one change at t+0, settled from t+100 ms onwards).
+   A single disagreeing pair of reads therefore means "not yet", not "never" — so capture waits for
+   the file to settle within its budget instead of refusing the first time it disagrees. The
+   default stability window is 250 ms for that reason. The full capture took 255 ms against a 10 s
+   budget; restore took 11 ms against 30 s.
+
+**What the driver proves and what it does not.** It proves the payload's identity (checksum,
+byte length, the context id every transcript line agrees on) and, once the Handoff renderer exists
+(S9 Step 5), delivery of an opening range by finding its digest in the transcript. It does **not**
+prove lossless retention, and it has no semantic understanding of what the context contains. A
+missing digest is `unprovable`, never `not_incorporated`: native compaction removes exactly that
+evidence (`CONT-006`), and reading its absence as "never delivered" would authorise a resend.
+Until the renderer exists there is no digest to look for, so the captured frontier is the
+conservative floor — `frontierW = 0` — never the journal head (`CONT-009`).

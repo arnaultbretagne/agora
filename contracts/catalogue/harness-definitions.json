@@ -1,13 +1,18 @@
 {
   "$id": "https://agora.dev/catalogue/harness-definitions.json",
   "title": "Harness definitions (P11 first values, S8)",
-  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest stays a placeholder until CI's image build publishes the real one (no Docker in the environment this was authored in — see harnesses/claude-code/README.md). The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) — 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again.",
+  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest stays a placeholder until CI's image build publishes the real one (no Docker in the environment this was authored in — see harnesses/claude-code/README.md). The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) — 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again. 'harnessHome' is the harness's HOME and the only writable path in the Pod (an emptyDir, fsGroup-owned by runAsUser): the adapter writes its transcript there and S9 custody reads and places it there; the root filesystem stays read-only.",
   "harnesses": [
     {
       "harnessId": "claude-code",
       "imageDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "launchCommand": ["node", "dist/src/launch.js"],
-      "mounts": [{ "name": "relay-ca", "mountPath": "/etc/agora/relay-ca", "readOnly": true }],
+      "harnessHome": "/home/agent",
+      "workspaceRoot": "/home/agent/work",
+      "mounts": [
+        { "name": "relay-ca", "mountPath": "/etc/agora/relay-ca", "readOnly": true },
+        { "name": "harness-home", "mountPath": "/home/agent", "readOnly": false }
+      ],
       "bootstrapCapability": "provider.anthropic",
       "models": {
         "sonnet": { "efforts": ["default", "low", "medium", "high", "xhigh", "max"] },

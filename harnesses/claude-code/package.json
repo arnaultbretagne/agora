@@ -12,5 +12,8 @@
   "dependencies": {
     "@agora/acp": "0.0.0",
     "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@agora/custody": "0.0.0"
   }
 }

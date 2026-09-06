@@ -5,6 +5,7 @@
 // in the gate_release owner-response, never here: this process only needs to know the gate opened.
 import { spawn } from 'node:child_process'
 import { adapterProcessFrom, startBridgeServer, type BridgeServer } from './bridge-server.js'
+import { ClaudeCodeCustodyDriver } from './driver.js'
 
 export interface LaunchOptions {
   readonly evidenceUrl: string
@@ -13,28 +14,85 @@ export interface LaunchOptions {
   readonly bridgeAuthSecret: string
   readonly bridgePort: number
   readonly adapterCommand: readonly string[]
+  /** S9: where a restored transcript is placed. Absent, this Pod simply never restores anything. */
+  readonly custody?: { readonly harnessHome: string; readonly workspaceRoot: string; readonly placementUrlBase: string }
   readonly onLog?: (message: string) => void
+}
+
+/** The custody offer runtime-control publishes on the evidence endpoint while the Pod waits (S9). */
+interface PlacementOffer {
+  readonly saveId: string
+  readonly checksum: string
+  readonly byteLength: number
+  readonly token: string
 }
 
 interface SeamEvidence {
   readonly seam: { readonly released: boolean } | null
+  readonly custody?: PlacementOffer | null
 }
 
-export async function waitForGateRelease(options: Pick<LaunchOptions, 'evidenceUrl' | 'pollIntervalMs' | 'onLog'>): Promise<void> {
+/**
+ * Waits at the seam, and — if a Save is offered while waiting — fetches and places it before the
+ * gate can open. The ordering is the point: runtime-control will not release the gate until the
+ * placement it staged has been verified, so the adapter never starts against a transcript that is
+ * absent, half-written or not the one the Save records.
+ *
+ * A placement that fails is retried on the next poll rather than escalated. The gate stays shut
+ * either way, which is the honest outcome: the alternative — launching anyway — would produce a
+ * context indistinguishable from a genuine resume.
+ */
+export async function waitForGateRelease(options: Pick<LaunchOptions, 'evidenceUrl' | 'pollIntervalMs' | 'custody' | 'onLog'>): Promise<void> {
   const pollIntervalMs = options.pollIntervalMs ?? 1000
   const log = options.onLog ?? (() => {})
+  let placed: string | null = null
   for (;;) {
     try {
       const res = await fetch(options.evidenceUrl)
       if (res.ok) {
         const evidence = (await res.json()) as SeamEvidence
+        const offer = evidence.custody ?? null
+        if (offer !== null && offer.saveId !== placed) {
+          if (options.custody === undefined) {
+            // The gate will never open, and that is correct: runtime-control staged a restore this
+            // Pod is not configured to place, so launching would resume nothing while looking as if
+            // it had. Say so on every poll rather than failing silently.
+            log(`a Save is offered for this Pod but no custody paths were configured; the gate stays shut`)
+          } else {
+            await placeSave(options.custody, offer, log)
+            placed = offer.saveId
+          }
+        }
         if (evidence.seam?.released === true) return
       }
     } catch (error) {
-      log(`evidence poll failed, retrying: ${error instanceof Error ? error.message : String(error)}`)
+      log(`waiting at the seam, retrying: ${error instanceof Error ? error.message : String(error)}`)
     }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
   }
+}
+
+async function placeSave(
+  custody: NonNullable<LaunchOptions['custody']>,
+  offer: PlacementOffer,
+  log: (message: string) => void,
+): Promise<void> {
+  const payload = await fetch(`${custody.placementUrlBase}/payload?token=${encodeURIComponent(offer.token)}`)
+  if (!payload.ok) throw new Error(`fetching Save ${offer.saveId} failed: HTTP ${String(payload.status)}`)
+  const bytes = new Uint8Array(await payload.arrayBuffer())
+
+  const driver = new ClaudeCodeCustodyDriver({ harnessHome: custody.harnessHome, workspaceRoot: custody.workspaceRoot })
+  const placement = await driver.restore(bytes)
+  log(`placed Save ${offer.saveId} at ${placement.path} (${String(placement.byteLength)} bytes)`)
+
+  // The report carries what the driver measured on disk, not what the offer claimed: runtime-control
+  // compares it against the Save metadata, and that comparison is what opens the gate.
+  const report = await fetch(`${custody.placementUrlBase}/placement`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: offer.token, checksum: placement.checksum, byteLength: placement.byteLength, path: placement.path }),
+  })
+  if (!report.ok) throw new Error(`placement report for Save ${offer.saveId} was refused: HTTP ${String(report.status)}`)
 }
 
 export async function launch(options: LaunchOptions): Promise<BridgeServer> {
@@ -59,10 +117,18 @@ function optionsFromEnv(env: NodeJS.ProcessEnv): LaunchOptions {
   if (incarnation === undefined) throw new Error('AGORA_INCARNATION is required')
   if (bridgeAuthSecret === undefined) throw new Error('BRIDGE_AUTH_SECRET is required')
   if (evidenceUrl === undefined) throw new Error('AGORA_EVIDENCE_URL is required')
+  const harnessHome = env.AGORA_HARNESS_HOME
+  const workspaceRoot = env.AGORA_WORKSPACE_ROOT
+  const custodyUrl = env.AGORA_CUSTODY_URL
   return {
     evidenceUrl,
     incarnation,
     bridgeAuthSecret,
+    // All three come from the reviewed catalogue through the PodSpec. Missing any of them means
+    // this Pod simply never restores: it launches with no placement, which is the S8 behaviour.
+    ...(harnessHome !== undefined && workspaceRoot !== undefined && custodyUrl !== undefined
+      ? { custody: { harnessHome, workspaceRoot, placementUrlBase: custodyUrl } }
+      : {}),
     bridgePort: Number(env.BRIDGE_PORT ?? 8765),
     adapterCommand: ['node', '/usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'],
     onLog: (message: string) => console.log(message),

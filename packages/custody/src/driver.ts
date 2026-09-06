@@ -36,6 +36,12 @@ export interface OpeningDescriptor {
   readonly w: number
   readonly h: number
   readonly contextId: string
+  /**
+   * The digest of the Handoff that carried `(W, H]`, once one has been rendered (S9 Step 5). It is
+   * what a driver looks for: the digest, not the text, because equal content is not equal delivery.
+   * Absent for an empty range — and absent is never an invitation to match on something weaker.
+   */
+  readonly handoffDigest?: string
 }
 
 export type OpeningProof =
