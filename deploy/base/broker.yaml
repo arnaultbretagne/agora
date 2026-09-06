@@ -45,7 +45,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: broker
-          image: ghcr.io/arnaultbretagne/agora-broker:overlay-pins-this-by-digest
+          image: ghcr.io/arnaultbretagne/agora-engine-broker:overlay-pins-this-by-digest
           env:
             - name: PORT
               value: '8091'

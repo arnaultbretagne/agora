@@ -7,6 +7,7 @@
 // always the half nobody is currently looking at.
 import type { CustodyDriver } from '@agora/custody'
 import { launch, type LaunchOptions } from './launch.js'
+import { parseCredentialStubs, writeCredentialStubs } from './credential-stubs.js'
 import type { BridgeServer } from './bridge-server.js'
 
 export interface HarnessEntrypoint {
@@ -44,7 +45,20 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv, harness: HarnessEntrypoin
   }
 }
 
-/** What a harness's own `launch.ts` calls when it is the entry module. */
+/**
+ * What a harness's own `launch.ts` calls when it is the entry module.
+ *
+ * The credential stubs are written BEFORE the seam is waited on, let alone the adapter spawned:
+ * both pinned adapters read their auth state at startup, and a stub that arrives afterwards is a
+ * stub that arrived too late (field findings §2.2, §2.3). They carry no authority — the real bearer
+ * never leaves the Broker (ADR 0009).
+ */
 export async function runHarness(harness: HarnessEntrypoint, env: NodeJS.ProcessEnv = process.env): Promise<BridgeServer> {
+  const home = env.AGORA_HARNESS_HOME ?? env.HOME
+  const stubs = parseCredentialStubs(env.AGORA_CREDENTIAL_STUBS)
+  if (stubs.length > 0) {
+    if (home === undefined) throw new Error('AGORA_CREDENTIAL_STUBS was supplied without a HOME to write it under')
+    for (const path of writeCredentialStubs(stubs, home)) console.log(`credential stub written: ${path}`)
+  }
   return launch(optionsFromEnv(env, harness))
 }

@@ -20,9 +20,15 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: agora-system
+          # BOTH control-plane deployments: the API drives a channel for a prompt, the WORKER runs
+          # START/SET_MODEL/SET_EFFORT. They are separate Deployments with separate labels
+          # (`control-plane-api`, `control-plane-worker`), and matching only `app: control-plane`
+          # matched neither — every verb that opens a bridge WebSocket would have been dropped.
           podSelector:
-            matchLabels:
-              app: control-plane
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [control-plane-api, control-plane-worker]
       ports:
         - port: 8765
           protocol: TCP

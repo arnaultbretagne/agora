@@ -1,0 +1,33 @@
+# The engine's own PostgreSQL (S13). A cluster of its own rather than a database inside the one the
+# retired implementation still runs on: the schema in contracts/db/schema.sql owns its roles
+# cluster-globally, and role separation is the whole point of them.
+#
+# `enableSuperuserAccess` is on because applying the schema CREATEs roles and GRANTs across them,
+# which the application owner cannot do. It is the operator's connection, used once at install and
+# for the role passwords — not something any workload holds: no deployable's connection string
+# names it.
+#
+# No barman/S3 backup here yet. The other clusters on this host back up to R2 and this one should
+# too before it holds anything that cannot be replayed — but a backup destination is an environment
+# decision, and inventing one silently would be worse than saying it is missing.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: agora-engine-pg
+  namespace: agora-system
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.4
+  enableSuperuserAccess: true
+  enablePDB: true
+  primaryUpdateStrategy: unsupervised
+  bootstrap:
+    initdb:
+      database: agora
+      owner: agora_owner
+  storage:
+    size: 10Gi
+    storageClass: local-path
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: '2', memory: 1Gi }

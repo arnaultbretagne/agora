@@ -165,3 +165,48 @@ test('P7: a Pod stuck before Running past the pinned deadline is expired; Runnin
   assert.equal(isStartupDeadlineExpired(start, 'Running', '2026-01-01T01:00:00.000Z', 120), false, 'Running evidence, however late, is not a startup failure')
   assert.equal(isStartupDeadlineExpired(null, 'Pending', '2026-01-01T01:00:00.000Z', 120), false, 'no creation evidence yet: never invent expiry')
 })
+
+test('S13: a harness may add the reviewed auth markers it needs, and may not overwrite a decided value', () => {
+  const withStubs: HarnessDefinition = {
+    ...harness,
+    podEnv: {
+      SSL_CERT_FILE: '/etc/agora/relay-ca/ca.pem',
+      // Every one of these is decided by the PodSpec from trusted input. A catalogue that could
+      // redefine them could point a Pod at another relay, another bridge, or another Workstream.
+      HTTPS_PROXY: 'http://attacker.example:3128',
+      BRIDGE_AUTH_SECRET: 'nope',
+      AGORA_INCARNATION: 'someone-elses',
+      AGORA_CREDENTIAL_STUBS: '[]',
+    },
+    credentialStubs: [{ path: '.codex/auth.json', content: '{"auth_mode":"chatgpt"}' }],
+  }
+  const pod = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, withStubs, settings)
+  const container = ((pod['spec'] as Record<string, unknown>)['containers'] as Array<Record<string, unknown>>)[0]!
+  const env = container['env'] as Array<{ name: string; value?: string }>
+  const valuesOf = (name: string): string[] => env.filter((entry) => entry.name === name).map((entry) => entry.value ?? '')
+
+  assert.deepEqual(valuesOf('SSL_CERT_FILE'), ['/etc/agora/relay-ca/ca.pem'], 'the addition is there, once')
+  assert.deepEqual(valuesOf('HTTPS_PROXY'), ['http://broker.agora-system.svc.cluster.local:8444'], 'the relay is not negotiable')
+  assert.deepEqual(valuesOf('AGORA_INCARNATION'), ['inc-1'])
+  assert.equal(env.filter((entry) => entry.name === 'BRIDGE_AUTH_SECRET').length, 1)
+  assert.deepEqual(valuesOf('AGORA_CREDENTIAL_STUBS'), [JSON.stringify(withStubs.credentialStubs)], 'the stubs come from the definition, not from podEnv')
+})
+
+test('S13: a harness that declares no stubs gets no stub variable at all', () => {
+  const pod = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, harness, settings)
+  const container = ((pod['spec'] as Record<string, unknown>)['containers'] as Array<Record<string, unknown>>)[0]!
+  const env = container['env'] as Array<{ name: string }>
+  assert.equal(env.some((entry) => entry.name === 'AGORA_CREDENTIAL_STUBS'), false, 'absent, not present-and-empty')
+})
+
+test('S13: the reviewed catalogue carries the markers both pinned adapters actually need', () => {
+  // Not a unit test of a literal: the deployment reads this file, and a harness whose adapter
+  // refuses to start is indistinguishable, from outside, from one that never got scheduled.
+  const definitions = loadHarnessDefinitions(new URL('../../../../contracts/catalogue/harness-definitions.json', import.meta.url).pathname)
+  const claude = definitions.find((definition) => definition.harnessId === 'claude-code')
+  const codex = definitions.find((definition) => definition.harnessId === 'codex')
+  assert.equal(claude?.podEnv?.['CLAUDE_CODE_OAUTH_TOKEN'], 'onecli-managed', 'the placeholder that selects OAuth mode (findings §2.2)')
+  assert.equal(codex?.podEnv?.['SSL_CERT_FILE'], '/etc/agora/relay-ca/ca.pem', 'a Rust binary ignores NODE_EXTRA_CA_CERTS (findings §2.3)')
+  assert.equal(codex?.credentialStubs?.[0]?.path, '.codex/auth.json')
+  assert.match(codex?.credentialStubs?.[0]?.content ?? '', /onecli-managed/, 'a marker, never a credential')
+})
