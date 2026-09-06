@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@agora/acp": "0.0.0",
+    "@agora/custody": "0.0.0",
     "@agora/domain": "0.0.0",
     "@agora/engine": "0.0.0",
     "@agora/journal": "0.0.0",

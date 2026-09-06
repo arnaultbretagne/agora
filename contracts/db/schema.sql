@@ -568,7 +568,29 @@ CREATE TABLE save_invalidations (
 
 CREATE INDEX save_invalidations_by_save ON save_invalidations (save_id);
 
-REVOKE ALL ON saves, save_payloads, anchors, save_invalidations FROM PUBLIC;
+-- S9 Step 3 — bounded preservation at shutdown (OFF-001, OFF-002). One row per shutdown attempt on
+-- one incarnation. `deadline_at` is pinned the FIRST time TURN_OFF runs and is never re-derived:
+-- a controller that restarts mid-shutdown discovers the deadline it already owes rather than
+-- granting itself a fresh budget, which is the whole of OFF-002. Termination does not depend on any
+-- of this — it proceeds whether or not a Save was captured; the row is what makes the LOSS honest.
+CREATE TABLE shutdowns (
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  incarnation text NOT NULL,
+  session_id uuid NULL REFERENCES sessions(id),
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  deadline_at timestamptz NOT NULL,
+  -- pending -> captured | refused | ineligible | expired. Never blocks termination in any state.
+  capture_outcome text NOT NULL DEFAULT 'pending',
+  capture_detail text NULL,
+  save_id uuid NULL REFERENCES saves(id),
+  -- published | rejected_stale_expectation | rejected_frontier_not_ahead | not_attempted
+  anchor_outcome text NULL,
+  terminated_at timestamptz NULL,
+  PRIMARY KEY (workstream_id, incarnation)
+);
+
+REVOKE ALL ON saves, save_payloads, anchors, save_invalidations, shutdowns FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON shutdowns TO agora_product;
 
 -- Control plane: writes and reads Save metadata, publishes Anchors, records invalidations. No
 -- UPDATE or DELETE on saves (immutable) and NO grant of any kind on save_payloads.

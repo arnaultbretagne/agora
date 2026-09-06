@@ -105,6 +105,9 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
             { name: 'AGORA_HARNESS_HOME', value: harness.harnessHome },
             { name: 'AGORA_WORKSPACE_ROOT', value: harness.workspaceRoot },
             { name: 'AGORA_CUSTODY_URL', value: `${settings.ownerApiBaseUrl}/v1/pods/${name}/custody` },
+            // The Pod's own UID, from the downward API rather than from anything it could assert:
+            // it is half of a Save's capture key, so it must be what Kubernetes says it is.
+            { name: 'AGORA_POD_UID', valueFrom: { fieldRef: { fieldPath: 'metadata.uid' } } },
             { name: 'BRIDGE_PORT', value: String(settings.bridgePort) },
             { name: 'BRIDGE_AUTH_SECRET', valueFrom: { secretKeyRef: { name: settings.bridgeAuthSecretName, key: settings.bridgeAuthSecretKey } } },
             // No credential in this URL — the relay identifies the Pod by its own source IP

@@ -12,6 +12,8 @@ import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
+import { createTurnOffExecutor } from './verbs/turn-off.js'
+import { createRuntimeControlCaptureSource } from './capture-source.js'
 import { RealChannelConnector } from './real-channel-connector.js'
 import type { PromptRecoveryOptions } from './recovery/context.js'
 
@@ -121,11 +123,20 @@ export async function run(options: MainOptions = {}): Promise<void> {
             SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
             SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
           },
-          createSessionOpeningExecutor({
-            inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+          // TURN_OFF wraps the owner path rather than replacing it: it pins the shutdown deadline,
+          // cuts authority, attempts an eligible capture inside what is left of the budget, and then
+          // lets the same cleanup_pod through it always would have (S9 Step 3).
+          createTurnOffExecutor({
+            inner: createSessionOpeningExecutor({
+              inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+              productPool,
+              enginePool,
+              runtimeControlBaseUrl,
+              logger: (message) => console.log(message),
+            }),
             productPool,
             enginePool,
-            runtimeControlBaseUrl,
+            capture: createRuntimeControlCaptureSource({ runtimeControlBaseUrl, logger: (message) => console.log(message) }),
             logger: (message) => console.log(message),
           }),
         )

@@ -7,10 +7,17 @@
 // The transport deliberately knows nothing about transcripts, paths or formats: those are the
 // harness driver's, and the driver runs inside the Pod. This module moves opaque bytes and checks a
 // checksum, which is exactly the "core never reads Save bytes" line ADR 0008 draws.
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 
 /** What the payload store hands back, abstracted so this module never owns a pool of its own. */
 export type PayloadReader = (saveId: string) => Promise<Uint8Array | null>
+/**
+ * Where captured bytes are finally written, keyed by the Save the control plane committed. It takes
+ * a Save id and not a staging id because `save_payloads` references `saves` — bytes cannot exist in
+ * the store before the metadata that describes them, which is the right way round: a payload with no
+ * Save is garbage a sweep can drop, a Save with no payload would be a promise nobody can keep.
+ */
+export type PayloadWriter = (saveId: string, bytes: Uint8Array) => Promise<void>
 
 export interface PlacementCommand {
   readonly podName: string
@@ -71,6 +78,10 @@ export function mintPlacementToken(podName: string, saveId: string, secret: stri
   return createHmac('sha256', secret).update(`custody:${podName}:${saveId}`).digest('hex')
 }
 
+function checksumOfBytes(bytes: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+}
+
 function tokenMatches(expected: string, presented: string): boolean {
   const a = Buffer.from(expected, 'utf8')
   const b = Buffer.from(presented, 'utf8')
@@ -88,14 +99,79 @@ interface MutablePlacement {
   token: string
 }
 
+/** A capture the control plane asked for, and that the Pod's own driver has not answered yet. */
+export interface CaptureRequest {
+  readonly podName: string
+  readonly contextId: string
+  readonly processGeneration: number
+  readonly token: string
+}
+
+/** What the Pod's driver reports back — the driver's own metadata, plus the bytes it captured. */
+export interface CaptureReport {
+  readonly token: string
+  readonly checksum: string
+  readonly formatId: string
+  readonly formatVersion: number
+  readonly driverRevision: string
+  readonly frontierW: number
+  readonly nativeOrigin: unknown
+  readonly workspaceDeps: unknown
+  /** Set instead of the metadata when the driver refused the cut; never an outage. */
+  readonly refusedReason?: string
+}
+
+export type CaptureOutcome =
+  | { readonly kind: 'captured'; readonly capture: CapturedBytes }
+  | { readonly kind: 'refused'; readonly reason: string }
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'none' }
+
+export interface CapturedBytes {
+  readonly podName: string
+  readonly contextId: string
+  readonly processGeneration: number
+  readonly stagingId: string
+  readonly checksum: string
+  readonly byteLength: number
+  readonly formatId: string
+  readonly formatVersion: number
+  readonly driverRevision: string
+  readonly frontierW: number
+  readonly nativeOrigin: unknown
+  readonly workspaceDeps: unknown
+}
+
+interface MutableCapture {
+  request: CaptureRequest
+  result: CaptureOutcome
+  /**
+   * The captured bytes, held here until the control plane commits a Save for them. Memory, not a
+   * staging table, because the whole window is one shutdown budget and one payload per Pod: if this
+   * process dies inside it, the capture is simply lost and the shutdown records that loss, which is
+   * exactly what it would have to do for any other unfinished capture.
+   */
+  bytes: Uint8Array | null
+}
+
 export interface CustodyTransportOptions {
   readonly readPayload: PayloadReader
+  /** Absent where no capture is served (a runtime-control that only restores). */
+  readonly writePayload?: PayloadWriter
   /** The same BRIDGE_AUTH_SECRET the Pod already holds; no second secret to distribute. */
   readonly secret: string
+  /** Test seam for the staging id a capture's bytes are written under. */
+  readonly newStagingId?: () => string
+}
+
+/** A capture token: same secret, different purpose string, so a placement token can never fetch a capture and back. */
+export function mintCaptureToken(podName: string, contextId: string, processGeneration: number, secret: string): string {
+  return createHmac('sha256', secret).update(`custody-capture:${podName}:${contextId}:${String(processGeneration)}`).digest('hex')
 }
 
 export class CustodyTransport {
   readonly #placements = new Map<string, MutablePlacement>()
+  readonly #captures = new Map<string, MutableCapture>()
   readonly #options: CustodyTransportOptions
 
   constructor(options: CustodyTransportOptions) {
@@ -198,6 +274,110 @@ export class CustodyTransport {
     if (placement === undefined) return null
     const { token: _token, ...rest } = placement
     return rest
+  }
+
+  /**
+   * Asks the Pod's own driver for a capture at this cut. Nothing is pushed: the Pod learns about it
+   * on the endpoint it already polls, does the work with its own driver, and posts the bytes back.
+   * That keeps custody out of the ACP bridge entirely, and it keeps working while the Pod is being
+   * torn down and nothing can reach it inbound.
+   *
+   * Idempotent per (Pod, context, generation): asking again returns the same request, and asking
+   * again after an answer returns the answer rather than restarting the capture. A capture keyed to
+   * a DIFFERENT generation replaces a pending one — the old cut's process is gone, so its capture
+   * can never complete (SESSION-A06).
+   */
+  requestCapture(request: Omit<CaptureRequest, 'token'>): CaptureRequest {
+    const existing = this.#captures.get(request.podName)
+    if (
+      existing !== undefined &&
+      existing.request.contextId === request.contextId &&
+      existing.request.processGeneration === request.processGeneration
+    ) {
+      return existing.request
+    }
+    const full: CaptureRequest = { ...request, token: mintCaptureToken(request.podName, request.contextId, request.processGeneration, this.#options.secret) }
+    this.#captures.set(request.podName, { request: full, result: { kind: 'pending' }, bytes: null })
+    return full
+  }
+
+  /** What the Pod is told to capture, while it still owes an answer. */
+  captureRequest(podName: string): CaptureRequest | null {
+    const capture = this.#captures.get(podName)
+    return capture === undefined || capture.result.kind !== 'pending' ? null : capture.request
+  }
+
+  /**
+   * Records the driver's answer. A refusal is an ANSWER, not a failure of this transport: the driver
+   * looked and could not take a quiescent cut, and the caller needs to know that within its budget
+   * rather than waiting out the clock.
+   */
+  async submitCapture(podName: string, report: CaptureReport, bytes: Uint8Array): Promise<CaptureOutcome> {
+    const capture = this.#captures.get(podName)
+    if (capture === undefined) return { kind: 'none' }
+    if (!tokenMatches(capture.request.token, report.token)) return { kind: 'refused', reason: 'the capture token does not match this Pod, context and generation' }
+
+    if (typeof report.refusedReason === 'string') {
+      capture.result = { kind: 'refused', reason: report.refusedReason }
+      return capture.result
+    }
+    if (checksumOfBytes(bytes) !== report.checksum) {
+      // The bytes and the driver's own metadata disagree: something went wrong in transit, and
+      // storing either one would make the Save's checksum a lie.
+      capture.result = { kind: 'refused', reason: 'the posted bytes do not match the checksum the driver reported' }
+      return capture.result
+    }
+    if (this.#options.writePayload === undefined) {
+      capture.result = { kind: 'refused', reason: 'this runtime-control serves no capture payload store' }
+      return capture.result
+    }
+
+    const stagingId = (this.#options.newStagingId ?? randomUUID)()
+    capture.bytes = bytes
+    capture.result = {
+      kind: 'captured',
+      capture: {
+        podName,
+        contextId: capture.request.contextId,
+        processGeneration: capture.request.processGeneration,
+        stagingId,
+        checksum: report.checksum,
+        byteLength: bytes.byteLength,
+        formatId: report.formatId,
+        formatVersion: report.formatVersion,
+        driverRevision: report.driverRevision,
+        frontierW: report.frontierW,
+        nativeOrigin: report.nativeOrigin,
+        workspaceDeps: report.workspaceDeps,
+      },
+    }
+    return capture.result
+  }
+
+  /** The answer so far: `pending` until the Pod reports, and the caller's own budget decides how long that is worth waiting for. */
+  captureOutcome(podName: string): CaptureOutcome {
+    return this.#captures.get(podName)?.result ?? { kind: 'none' }
+  }
+
+  /**
+   * Writes the staged bytes under the Save the control plane just committed, then forgets them.
+   * Idempotent through the store's own `ON CONFLICT DO NOTHING`: a retried commit for the same Save
+   * writes nothing new, and a commit for a capture this process no longer holds says so rather than
+   * pretending the bytes are safe.
+   */
+  async commitCapture(podName: string, stagingId: string, saveId: string): Promise<'committed' | 'no_capture'> {
+    const capture = this.#captures.get(podName)
+    if (capture === undefined || capture.result.kind !== 'captured' || capture.bytes === null) return 'no_capture'
+    if (capture.result.capture.stagingId !== stagingId) return 'no_capture'
+    if (this.#options.writePayload === undefined) return 'no_capture'
+    await this.#options.writePayload(saveId, capture.bytes)
+    this.#captures.delete(podName)
+    return 'committed'
+  }
+
+  /** Forgets a capture the control plane has given up on. */
+  discardCapture(podName: string): boolean {
+    return this.#captures.delete(podName)
   }
 
   /**

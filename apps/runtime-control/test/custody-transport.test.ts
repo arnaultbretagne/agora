@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
-import { CustodyTransport, mintPlacementToken } from '../src/custody-transport.js'
+import { CustodyTransport, mintCaptureToken, mintPlacementToken } from '../src/custody-transport.js'
 
 const SECRET = 'bridge-auth-secret'
 const BYTES = new TextEncoder().encode('{"type":"user","sessionId":"ctx-1"}\n')
@@ -109,4 +110,107 @@ test('a rejected placement is restageable, so the same attempt can retry without
   assert.equal(retried?.saveId, 'save-1')
   assert.equal(custody.confirm('ws-pod-1', report({ token: retried!.token })).kind, 'placed')
   assert.equal(custody.gateBlockedReason('ws-pod-1'), null)
+})
+
+// --- capture (S9 Step 3) --------------------------------------------------------------------
+
+const CAPTURE_REPORT = {
+  checksum: `sha256:${'0'.repeat(64)}`,
+  formatId: 'claude-code-transcript',
+  formatVersion: 1,
+  driverRevision: 'claude-code-transcript-1',
+  frontierW: 0,
+  nativeOrigin: { podUid: 'pod-uid-1' },
+  workspaceDeps: {},
+}
+
+function captureTransport(): { custody: CustodyTransport; written: { saveId: string; bytes: Uint8Array }[] } {
+  const written: { saveId: string; bytes: Uint8Array }[] = []
+  const custody = new CustodyTransport({
+    secret: SECRET,
+    readPayload: async () => null,
+    writePayload: async (saveId, bytes) => void written.push({ saveId, bytes }),
+    newStagingId: () => 'staging-1',
+  })
+  return { custody, written }
+}
+
+function reportFor(bytes: Uint8Array, token: string): Parameters<CustodyTransport['submitCapture']>[1] {
+  return { ...CAPTURE_REPORT, token, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
+}
+
+test('asking for the same capture twice does not restart it, and an answer is not re-asked', async () => {
+  const { custody } = captureTransport()
+  const first = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+  const second = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+  assert.deepEqual(first, second)
+  assert.deepEqual(custody.captureRequest('ws-pod-1'), first, 'the Pod is told about it until it answers')
+
+  await custody.submitCapture('ws-pod-1', reportFor(BYTES, first.token), BYTES)
+
+  assert.equal(custody.captureRequest('ws-pod-1'), null, 'answered: nothing left to publish to the Pod')
+  assert.equal(custody.captureOutcome('ws-pod-1').kind, 'captured')
+})
+
+test('SESSION-A06: a capture keyed to a new generation replaces the pending one', () => {
+  const { custody } = captureTransport()
+  const old = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+  const fresh = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 1 })
+
+  assert.notEqual(fresh.token, old.token)
+  // The old cut's process is gone, so its capture can never complete; nothing waits on it.
+  assert.equal(custody.captureRequest('ws-pod-1')?.processGeneration, 1)
+})
+
+test('a refusal from the driver is an answer, recorded as one', async () => {
+  const { custody } = captureTransport()
+  const request = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+
+  const outcome = await custody.submitCapture('ws-pod-1', { ...CAPTURE_REPORT, token: request.token, refusedReason: 'the transcript was still changing' }, new Uint8Array())
+
+  assert.deepEqual(outcome, { kind: 'refused', reason: 'the transcript was still changing' })
+  assert.equal(custody.captureOutcome('ws-pod-1').kind, 'refused')
+})
+
+test('bytes that disagree with the driver\'s own checksum are refused, never stored', async () => {
+  const { custody, written } = captureTransport()
+  const request = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+
+  const outcome = await custody.submitCapture('ws-pod-1', reportFor(BYTES, request.token), new TextEncoder().encode('something else'))
+
+  assert.equal(outcome.kind, 'refused')
+  assert.equal(written.length, 0, 'storing either side of a disagreement would make the Save checksum a lie')
+})
+
+test('a capture posted with the wrong token changes nothing', async () => {
+  const { custody } = captureTransport()
+  custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+
+  const outcome = await custody.submitCapture('ws-pod-1', reportFor(BYTES, mintCaptureToken('ws-pod-1', 'ctx-1', 9, SECRET)), BYTES)
+
+  assert.equal(outcome.kind, 'refused')
+  assert.equal(custody.captureOutcome('ws-pod-1').kind, 'pending', 'the real capture is still owed')
+})
+
+test('the bytes are written only under the Save the control plane committed', async () => {
+  const { custody, written } = captureTransport()
+  const request = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+  await custody.submitCapture('ws-pod-1', reportFor(BYTES, request.token), BYTES)
+  assert.equal(written.length, 0, 'nothing is stored while no Save exists to reference')
+
+  assert.equal(await custody.commitCapture('ws-pod-1', 'staging-1', 'save-42'), 'committed')
+
+  assert.equal(written.length, 1)
+  assert.equal(written[0]!.saveId, 'save-42')
+  assert.deepEqual(written[0]!.bytes, BYTES)
+  // Committed and forgotten: a second commit has nothing to write, and says so.
+  assert.equal(await custody.commitCapture('ws-pod-1', 'staging-1', 'save-42'), 'no_capture')
+})
+
+test('committing a staging id this transport never held is refused rather than assumed', async () => {
+  const { custody } = captureTransport()
+  const request = custody.requestCapture({ podName: 'ws-pod-1', contextId: 'ctx-1', processGeneration: 0 })
+  await custody.submitCapture('ws-pod-1', reportFor(BYTES, request.token), BYTES)
+
+  assert.equal(await custody.commitCapture('ws-pod-1', 'staging-from-another-process', 'save-42'), 'no_capture')
 })

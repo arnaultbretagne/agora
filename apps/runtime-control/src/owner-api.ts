@@ -77,6 +77,38 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
         return handleCustodyPlacement(options, res, parts[2]!, (await body(req)) as PlacementReport)
       }
 
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'capture' && req.method === 'POST') {
+        return handleCustodyCapture(options, req, res, parts[2]!)
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'request-capture' && req.method === 'POST') {
+        // The control plane asks; it never receives bytes. What comes back is the request the Pod
+        // will be told about on its own poll, and later the driver's metadata — never the payload.
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody captures')
+        const ask = (await body(req)) as { contextId?: unknown; processGeneration?: unknown }
+        if (typeof ask?.contextId !== 'string' || typeof ask.processGeneration !== 'number') {
+          return problem(res, 422, 'Invalid capture request', 'context_id and process_generation are required')
+        }
+        options.custody.requestCapture({ podName: parts[2]!, contextId: ask.contextId, processGeneration: ask.processGeneration })
+        return send(res, 202, { requested: true })
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'capture-outcome' && req.method === 'GET') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody captures')
+        return send(res, 200, options.custody.captureOutcome(parts[2]!))
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'commit' && req.method === 'POST') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody captures')
+        const commit = (await body(req)) as { stagingId?: unknown; saveId?: unknown }
+        if (typeof commit?.stagingId !== 'string' || typeof commit.saveId !== 'string') {
+          return problem(res, 422, 'Invalid commit', 'staging_id and save_id are required')
+        }
+        const outcome = await options.custody.commitCapture(parts[2]!, commit.stagingId, commit.saveId)
+        if (outcome === 'no_capture') return problem(res, 409, 'No staged capture', `no staged capture ${commit.stagingId} is held for pod ${parts[2]}`)
+        return send(res, 200, { committed: true })
+      }
+
       if (parts[0] === 'v1' && parts[1] === 'wakes' && req.method === 'GET') {
         const response = await readWakes(options.wakes, url.searchParams.get('cursor'), () => distinctLiveWorkstreamIds(options.k8s))
         return send(res, 200, response)
@@ -120,7 +152,57 @@ async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, nam
     // S9: the Pod learns here that a Save is waiting for it, on the endpoint it already polls while
     // held at the seam. The offer carries no bytes — only what it takes to fetch and verify them.
     custody: options.custody?.offer(name) ?? null,
+    // And, at shutdown, what the control plane is asking this Pod's own driver to capture. It
+    // arrives on the same poll: nothing is pushed into a Pod that may be moments from termination.
+    custodyCapture: options.custody?.captureRequest(name) ?? null,
   })
+}
+
+/**
+ * Takes the driver's captured bytes. The body is the raw payload; the driver's own metadata rides in
+ * headers so the bytes never have to be re-encoded into JSON — and so this side can stream them into
+ * the payload store without parsing anything it is not supposed to read.
+ */
+async function handleCustodyCapture(options: OwnerApiOptions, req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+  if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody captures')
+  const header = (key: string): string => (Array.isArray(req.headers[key]) ? (req.headers[key] as string[])[0] ?? '' : (req.headers[key] as string | undefined) ?? '')
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  const refusedReason = header('x-agora-refused')
+
+  const report = {
+    token: header('x-agora-capture-token'),
+    checksum: header('x-agora-checksum'),
+    formatId: header('x-agora-format-id'),
+    formatVersion: Number(header('x-agora-format-version')),
+    driverRevision: header('x-agora-driver-revision'),
+    frontierW: Number(header('x-agora-frontier-w')),
+    nativeOrigin: parseJsonHeader(header('x-agora-native-origin')),
+    workspaceDeps: parseJsonHeader(header('x-agora-workspace-deps')),
+    ...(refusedReason.length > 0 ? { refusedReason } : {}),
+  }
+  const outcome = await options.custody.submitCapture(name, report, new Uint8Array(Buffer.concat(chunks)))
+  switch (outcome.kind) {
+    case 'captured':
+      return send(res, 200, { captured: true, byteLength: outcome.capture.byteLength })
+    case 'refused':
+      // The driver looked and could not take a quiescent cut. That is an answer, not an error on
+      // this side: recording it is what lets TURN_OFF stop waiting and terminate on time.
+      return send(res, 200, { captured: false, reason: outcome.reason })
+    case 'none':
+      return problem(res, 404, 'Not found', `no capture was requested for pod ${name}`)
+    case 'pending':
+      return problem(res, 500, 'Internal error', 'the capture is still pending after its own submission')
+  }
+}
+
+function parseJsonHeader(value: string): unknown {
+  if (value.length === 0) return {}
+  try {
+    return JSON.parse(value)
+  } catch {
+    return {}
+  }
 }
 
 /** Streams the staged Save's bytes to the Pod holding the placement token. The store stays on this side. */

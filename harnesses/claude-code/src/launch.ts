@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process'
 import { adapterProcessFrom, startBridgeServer, type BridgeServer } from './bridge-server.js'
 import { ClaudeCodeCustodyDriver } from './driver.js'
+import { startCustodyAgent } from './custody-agent.js'
 
 export interface LaunchOptions {
   readonly evidenceUrl: string
@@ -14,8 +15,10 @@ export interface LaunchOptions {
   readonly bridgeAuthSecret: string
   readonly bridgePort: number
   readonly adapterCommand: readonly string[]
-  /** S9: where a restored transcript is placed. Absent, this Pod simply never restores anything. */
+  /** S9: where a restored transcript is placed, and where a capture is posted back. Absent, this Pod neither restores nor is captured. */
   readonly custody?: { readonly harnessHome: string; readonly workspaceRoot: string; readonly placementUrlBase: string }
+  /** The Pod's own UID from the downward API — half of a Save's capture key, so never self-asserted. */
+  readonly podUid?: string
   readonly onLog?: (message: string) => void
 }
 
@@ -101,6 +104,18 @@ export async function launch(options: LaunchOptions): Promise<BridgeServer> {
   if (command === undefined) throw new Error('adapterCommand must name at least the binary to run')
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] })
   const adapter = adapterProcessFrom(child)
+  // Custody answers run beside the bridge, never through it: a capture is asked for exactly when a
+  // shutdown is closing the bridge's own connections.
+  if (options.custody !== undefined && options.podUid !== undefined) {
+    startCustodyAgent({
+      evidenceUrl: options.evidenceUrl,
+      custodyUrlBase: options.custody.placementUrlBase,
+      harnessHome: options.custody.harnessHome,
+      workspaceRoot: options.custody.workspaceRoot,
+      podUid: options.podUid,
+      ...(options.onLog !== undefined ? { onLog: options.onLog } : {}),
+    })
+  }
   return startBridgeServer({
     port: options.bridgePort,
     incarnation: options.incarnation,
@@ -129,6 +144,7 @@ function optionsFromEnv(env: NodeJS.ProcessEnv): LaunchOptions {
     ...(harnessHome !== undefined && workspaceRoot !== undefined && custodyUrl !== undefined
       ? { custody: { harnessHome, workspaceRoot, placementUrlBase: custodyUrl } }
       : {}),
+    ...(env.AGORA_POD_UID !== undefined ? { podUid: env.AGORA_POD_UID } : {}),
     bridgePort: Number(env.BRIDGE_PORT ?? 8765),
     adapterCommand: ['node', '/usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'],
     onLog: (message: string) => console.log(message),
