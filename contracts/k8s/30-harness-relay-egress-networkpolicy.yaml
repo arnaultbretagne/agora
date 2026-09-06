@@ -25,6 +25,21 @@ spec:
       ports:
         - port: 8444
           protocol: TCP
+    # runtime-control's owner API: the Pod polls its own evidence endpoint to learn the launch gate
+    # opened, and answers custody requests on the same host. Without this the Pod waits at the seam
+    # for ever — which reads, from every other component, exactly like a Pod that never started.
+    # It is a narrow allow to ONE Service port, and it carries no authority: what the Pod may ask
+    # for there is decided by runtime-control from the Pod's own name, not from what it says.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agora-system
+          podSelector:
+            matchLabels:
+              app: runtime-control
+      ports:
+        - port: 8090
+          protocol: TCP
     # DNS — without it the harness Pod cannot even resolve the relay's Service name (kube-system's
     # own namespace label is cluster-managed, not this catalogue's to set).
     - to:
