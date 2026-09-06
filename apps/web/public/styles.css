@@ -444,6 +444,80 @@ button { font-family: var(--font-sans); }
   color: var(--app-ink);
 }
 
+/* ---------------- keyboard focus (S12 Step 5) ---------------- */
+
+/* Everything that can hold focus has to show it. The two `outline: none` rules above are on text
+   inputs whose containers carry the emphasis instead; these are the controls whose focus ring the
+   shell never drew at all, which is invisible to a mouse and disqualifying for a keyboard. */
+.search-box:focus-within { border-color: var(--primary); }
+#identity:focus-visible,
+.menu-row:focus-visible,
+.selector-btn:focus-visible,
+.icon-btn:focus-visible,
+.conv-item:focus-visible,
+.send-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+
+/* ---------------- banner and permissions (S12) ---------------- */
+
+/* Both sit in the normal flow above the floating composer: what the operator must see is not an
+   overlay that can be dismissed by accident, and a HOLD cause that scrolls away with the transcript
+   is a HOLD cause nobody reads. */
+.banner:empty, .permissions:empty { display: none; }
+
+.banner {
+  max-width: 768px;
+  margin: 0 auto;
+  padding: 0 20px;
+  width: 100%;
+}
+.banner-row {
+  border: 1px solid var(--app-hairline);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--app-ink);
+  background: var(--surface-soft);
+}
+.banner-row.delivery-unknown { border-left-color: var(--error); }
+.banner-row.restricted { border-left-color: var(--warning); }
+.banner-row.held { border-left-color: var(--accent-amber); }
+.banner-row.reconciling { border-left-color: var(--accent-teal); }
+.banner-row.loss { border-left-color: var(--warning); }
+.banner-remediation { color: var(--app-muted); }
+
+.permissions {
+  max-width: 768px;
+  margin: 0 auto 8px;
+  padding: 0 20px;
+  width: 100%;
+}
+.permission {
+  border: 1px solid var(--app-hairline);
+  border-left: 3px solid var(--accent-amber);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background: var(--surface-soft);
+}
+/* An answer already sent is stated, not styled as a question still waiting for one. */
+.permission.sent, .permission.answered { border-left-color: var(--app-hairline); }
+.permission-label { margin: 0; font-size: 13px; color: var(--app-ink); }
+.permission-options { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.permission-option {
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--app-hairline);
+  background: var(--app-canvas);
+  color: var(--app-ink);
+}
+.permission-option:hover { border-color: var(--primary); }
+.permission-option:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
 /* ---------------- composer ---------------- */
 
 /* No band: the composer floats as an overlay over the chat. A short fade to the

@@ -211,3 +211,42 @@ test('the worker finalizes an off Intent and the operational view shows the abse
     }
   })
 })
+
+test('S12: the catalogue endpoint publishes exactly the reviewed public values a client may select', async () => {
+  await withTestDatabase(async (db) => {
+    const api = await startApi(db)
+    try {
+      const response = await request(api.port, '/v1/catalogue', OWNER)
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as {
+        capabilities: readonly string[]
+        harnesses: readonly { id: string; models: readonly { id: string; efforts: readonly string[] }[] }[]
+      }
+      assert.deepEqual(body.capabilities, ['provider.invoke', 'workspace.read'])
+      assert.deepEqual(body.harnesses.map((harness) => harness.id), ['claude-code'])
+      // Efforts hang off the model they apply to, because that is the shape CONFIG needs: a model
+      // change re-reports the efforts valid for it, and a flat list would let a client offer one
+      // that is not.
+      assert.deepEqual(body.harnesses[0]!.models, [
+        { id: 'model-a', efforts: ['default', 'high'] },
+        { id: 'model-b', efforts: ['default'] },
+      ])
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S12: the sessions endpoint shows the opening range and how much is newer than the recovery point', async () => {
+  await withTestDatabase(async (db) => {
+    const api = await startApi(db)
+    try {
+      const { id } = await createWorkstream(api.port, 'k-sessions')
+      const empty = (await (await request(api.port, `/v1/workstreams/${id}/sessions`, OWNER)).json()) as { sessions: readonly unknown[]; lossExposure: readonly unknown[] }
+      assert.deepEqual(empty.sessions, [])
+      assert.deepEqual(empty.lossExposure, [], 'no Anchor yet means no exposure to report, not an exposure of zero')
+    } finally {
+      await api.close()
+    }
+  })
+})

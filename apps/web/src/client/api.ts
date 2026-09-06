@@ -1,4 +1,11 @@
-/** Thin fetch wrapper over contracts/openapi/product-api.yaml — no framework, native `fetch`/DOM only (see ../../DECISION.md). */
+// The product API, by hand, from contracts/api/control-plane.openapi.yaml — no framework, native
+// `fetch`/DOM only.
+//
+// S12 rewrote this file against what the server actually serves. Everything the carried-over shell
+// used to call and no server implements is GONE rather than stubbed: an activate/suspend/close/probe
+// that answers 404 is worse than an absent function, because it implies a lifecycle the design does
+// not have. There is no Session `phase` here for the same reason — a Session is not a state machine
+// (ADR 0002), and a field named `phase` is an invitation to treat it as one.
 
 export interface Problem {
   readonly type: string
@@ -30,105 +37,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) throw new ApiError(body as Problem)
   return body as T
 }
-
-export interface Workstream {
-  readonly id: string
-  readonly category: 'discussion' | 'invocation'
-  readonly title: string
-  readonly pinned: boolean
-  readonly role: 'owner' | 'editor' | 'viewer'
-  readonly currentSessionId: string | null
-  readonly createdAt: string
-  readonly updatedAt: string
-}
-
-export interface Session {
-  readonly id: string
-  readonly workstreamId: string
-  readonly ordinal: number
-  readonly agentId: string
-  /** Absent when the Session runs as the harness default — the persona selector reads this to show what is actually in force. */
-  readonly persona?: string
-  readonly phase: string
-  readonly current: boolean
-  readonly runtimeDefinitionVersion: string
-  readonly createdAt: string
-  readonly failure: { readonly code: string; readonly detail?: string } | null
-  readonly liveSessionRuntime?: { readonly state: string; readonly podUid?: string }
-}
-
-export interface WorkstreamDetail extends Workstream {
-  readonly sessions: readonly Session[]
-  readonly projectionHead: number
-}
-
-export interface WorkstreamItem {
-  readonly id: string
-  readonly workstreamId: string
-  readonly sessionId: string
-  readonly turnId: string | null
-  readonly kind: string
-  readonly firstEventId: string
-  readonly latestEventId: string
-  readonly firstWorkstreamSeq: number
-  readonly latestWorkstreamSeq: number
-  readonly value: Record<string, unknown>
-  readonly contentSha256: string
-  readonly updatedAt: string
-}
-
-export interface WorkstreamTurn {
-  readonly id: string
-  readonly workstreamId: string
-  readonly sessionId: string
-  readonly turnOrdinal: number
-  readonly purpose: 'user' | 'handoff'
-  readonly status: 'running' | 'completed' | 'cancelled' | 'failed'
-  readonly stopReason: string | null
-  readonly usage: Record<string, unknown> | null
-  readonly startedAt: string
-  readonly endedAt: string | null
-}
-
-export interface PublicAgent {
-  readonly agentId: string
-  readonly runtimeDefinitionVersion: string
-  readonly label: string
-  readonly description: string
-  readonly availability: 'enabled' | 'unavailable' | 'deprecated'
-  /** The only persona values `POST /v1/workstreams` and `POST /v1/workstreams/{id}/sessions` accept for this Agent — anything else is refused with 409 `persona_unavailable`. */
-  readonly personas: readonly string[]
-}
-
-export interface CatalogueAccessLevel {
-  readonly access: string
-  readonly label: string
-  readonly description?: string
-}
-
-export interface CatalogueResource {
-  readonly resource: string
-  readonly label: string
-  readonly description: string
-  readonly accessLevels: readonly CatalogueAccessLevel[]
-}
-
-export interface EquipmentCatalogue {
-  readonly version: string
-  readonly resources: readonly CatalogueResource[]
-}
-
-export interface EquipmentResourceRequest {
-  readonly resource: string
-  readonly access: string
-}
-
-export interface EquipmentRequest {
-  readonly catalogueVersion: string
-  readonly resources: readonly EquipmentResourceRequest[]
-}
-
-/* ---------- S2 control-plane contract (contracts/api/control-plane.openapi.yaml) ---------- */
 
 export interface WorkstreamRecord {
   readonly id: string
@@ -212,6 +120,68 @@ export function getIntent(id: string): Promise<WorkstreamIntentView> {
   return request(`/v1/workstreams/${id}/intent`)
 }
 
+/* ---------- S12: the reviewed public values, and what a Session actually is ---------- */
+
+export interface CatalogueModel {
+  readonly id: string
+  /** Efforts hang off the model they apply to: a model change re-reports the efforts valid for IT. */
+  readonly efforts: readonly string[]
+}
+
+export interface CatalogueHarness {
+  readonly id: string
+  readonly models: readonly CatalogueModel[]
+}
+
+export interface Catalogue {
+  readonly revisionId: string | null
+  readonly capabilities: readonly string[]
+  readonly harnesses: readonly CatalogueHarness[]
+}
+
+/**
+ * Every value an Intent may name. The browser selects from these and never invents one; the server
+ * validates against the same view, so a selection this endpoint did not offer is refused rather
+ * than quietly accepted.
+ */
+export function getCatalogue(): Promise<Catalogue> {
+  return request('/v1/catalogue')
+}
+
+export interface SessionView {
+  readonly id: string
+  readonly ordinal: number
+  readonly openedAt: string
+  /** `(w, h]` — what the Session was born owing, fixed once (continuity.md). */
+  readonly openingRange: { readonly w: number; readonly h: number }
+  readonly restoredFromSaveId: string | null
+  readonly podUid: string
+  readonly provenance: Record<string, unknown>
+  readonly contextId: string | null
+  readonly processGeneration: number
+  readonly attributionEndedAt: string | null
+}
+
+export interface LossExposure {
+  readonly harnessId: string
+  readonly saveId: string
+  readonly frontierW: number
+  readonly anchoredAt: string
+  /** How much of the record is newer than the newest recovery point (CONT-012). */
+  readonly factsSinceAnchor: number
+}
+
+export interface SessionsView {
+  readonly headSeq: number
+  readonly sessions: readonly SessionView[]
+  readonly lossExposure: readonly LossExposure[]
+}
+
+/** The Workstream's Sessions and, with them, how much would be lost if execution ended now. */
+export function listSessions(workstreamId: string): Promise<SessionsView> {
+  return request(`/v1/workstreams/${workstreamId}/sessions`)
+}
+
 /* ---------- legacy product API (retired implementation) ---------- */
 
 /* ---------- S4 conversation contract ---------- */
@@ -254,7 +224,25 @@ export function cancelTurn(workstreamId: string, commandId: string): Promise<{ c
   })
 }
 
-export function listPendingPermissions(workstreamId: string): Promise<{ pending: readonly string[] }> {
+export interface PermissionOption {
+  readonly optionId: string
+  readonly name: string
+  readonly kind: string | null
+}
+
+/**
+ * A request the agent is blocked on, with the options IT offered. The browser picks one of these
+ * and nothing else — the same rule the Intent editor follows for the catalogue, for the same
+ * reason: a value the server never published is a value nobody reviewed.
+ */
+export interface PendingPermission {
+  readonly permissionId: string
+  readonly toolCallId: string | null
+  readonly title: string
+  readonly options: readonly PermissionOption[]
+}
+
+export function listPendingPermissions(workstreamId: string): Promise<{ pending: readonly PendingPermission[] }> {
   return request(`/v1/workstreams/${workstreamId}/permissions/pending`)
 }
 
@@ -263,79 +251,6 @@ export function decidePermission(workstreamId: string, permissionId: string, opt
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ optionId }),
-  })
-}
-
-/** Title and pin — the only two Workstream fields a human owns directly; everything else about a Workstream is derived from what actually happened to it. */
-export function legacyPatchWorkstream(workstreamId: string, patch: { readonly title?: string; readonly pinned?: boolean }): Promise<Workstream> {
-  return request(`/v1/workstreams/${workstreamId}`, {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
-    body: JSON.stringify(patch),
-  })
-}
-
-/** ACP's own union: a select takes a value id, a boolean option takes a state. */
-export type ConfigValue = string | boolean
-
-export interface RequestedConfigOption {
-  readonly optionId: string
-  readonly value: ConfigValue
-}
-
-export interface CreateWorkstreamRequest {
-  readonly category: 'discussion' | 'invocation'
-  readonly agentId: string
-  readonly persona?: string
-  readonly workspace: { readonly workspaceRef: string }
-  readonly equipment: EquipmentRequest
-  readonly prompt: readonly { readonly type: string; readonly text: string }[]
-  /** Choices made in the composer, where no Agent is running to be told directly — the engine delivers them before the first prompt. */
-  readonly configOptions?: readonly RequestedConfigOption[]
-}
-
-export interface OpenSessionRequest {
-  readonly agentId: string
-  readonly persona?: string
-  readonly workspace: { readonly workspaceRef: string }
-  readonly equipment: EquipmentRequest
-  readonly activate: boolean
-  /** Carries the configuration across: a new Session for the same conversation would otherwise start on the harness default rather than what the operator is looking at. */
-  readonly configOptions?: readonly RequestedConfigOption[]
-}
-
-export interface AgentConfigOptions {
-  readonly agentId: string
-  readonly runtimeDefinitionVersion: string
-  readonly state: 'known' | 'probing' | 'unknown' | 'unavailable'
-  readonly options: readonly unknown[]
-  readonly observedAt?: string
-  readonly detail?: string
-}
-
-/**
- * Persona and equipment are both frozen on a Session's launch envelope, so changing either on a
- * running Workstream is not a mutation — it is a new Session, which is exactly what this opens.
- * With `activate: true` the engine also carries the history across (docs/specs/06), so the operator
- * sees one continuous conversation rather than a restart.
- */
-/** Re-materializes a suspended/idle Session's Runtime. Required before prompting one whose ACP connection is gone — see `promptSession`'s `runtime_unavailable`. */
-/**
- * The Agent answers with its FULL option set, not just the one that changed, because changing one
- * may change what the others accept — so the response replaces the client's copy wholesale rather
- * than patching a single entry. A refusal arrives as 409 `config_option_rejected`.
- *
- * A Session whose Runtime has been reclaimed answers `{pending: true}` instead: the choice is
- * recorded and delivered when it next resumes. That is a success, not a failure — the caller shows
- * the chosen value and says it takes effect on the next message.
- */
-export function legacyCreateWorkstream(
-  body: CreateWorkstreamRequest,
-): Promise<{ command: { commandId: string }; workstream: Workstream; session: Session }> {
-  return request('/v1/workstreams', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
-    body: JSON.stringify(body),
   })
 }
 

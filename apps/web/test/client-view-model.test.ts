@@ -11,89 +11,41 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { PublicAgent, Session, WorkstreamItem, WorkstreamTurn } from '../src/client/api.js'
 import {
   clampIndex,
   configOptionsFromItems,
-  currentSession,
+  deriveStatus,
   effectiveConfig,
   findConfigOption,
   groupOf,
   groupWorkstreams,
   hasRunningTurn,
   invocationTurnSpent,
-  launchableAgents,
   itemCarriesConfigOptions,
+  lossExposureBanner,
   messagesFromItems,
+  permissionPrompts,
   planTranscript,
   railIndexAt,
   railIndexOf,
-  runtimeStateOfPhase,
-  STATE_LABELS,
   type ChatMessage,
   type RenderedRow,
+  type WorkstreamItem,
+  type WorkstreamTurn,
 } from '../src/client/view-model.js'
 
 function item(overrides: Partial<WorkstreamItem> & { kind: string; value: Record<string, unknown> }): WorkstreamItem {
   return {
     id: overrides.id ?? `item-${Math.random()}`,
-    workstreamId: 'w1',
     sessionId: 's1',
-    turnId: null,
     kind: overrides.kind,
-    firstEventId: 'e1',
-    latestEventId: 'e1',
+    entityKey: overrides.entityKey ?? 'entity-1',
     firstWorkstreamSeq: overrides.firstWorkstreamSeq ?? 1,
     latestWorkstreamSeq: overrides.latestWorkstreamSeq ?? overrides.firstWorkstreamSeq ?? 1,
     value: overrides.value,
-    contentSha256: 'sha',
     updatedAt: '2026-08-06T10:00:00.000Z',
   }
 }
-
-function session(overrides: Partial<Session>): Session {
-  return {
-    id: 's1',
-    workstreamId: 'w1',
-    ordinal: 1,
-    agentId: 'fake-agent',
-    phase: 'ready',
-    current: true,
-    runtimeDefinitionVersion: 'v1',
-    createdAt: '2026-08-06T10:00:00.000Z',
-    failure: null,
-    ...overrides,
-  }
-}
-
-// ---------- runtime state ----------
-
-test('every Session phase maps onto one of the four states the operator reads', () => {
-  assert.equal(runtimeStateOfPhase('requested'), 'starting')
-  assert.equal(runtimeStateOfPhase('provisioning'), 'starting')
-  assert.equal(runtimeStateOfPhase('ready'), 'live')
-  assert.equal(runtimeStateOfPhase('busy'), 'live')
-  assert.equal(runtimeStateOfPhase('failed'), 'error')
-  for (const resting of ['suspending', 'suspended', 'closing', 'closed']) {
-    assert.equal(runtimeStateOfPhase(resting), 'dormant', `${resting} is at rest, not broken`)
-  }
-  // A Workstream whose Sessions have all gone, or that has none yet, is at rest — not an error.
-  assert.equal(runtimeStateOfPhase(undefined), 'dormant')
-  assert.equal(runtimeStateOfPhase('some-phase-this-build-does-not-know'), 'dormant')
-})
-
-test('every state has a French label — an unlabelled dot is an unreadable dot', () => {
-  for (const state of ['dormant', 'starting', 'live', 'error'] as const) {
-    assert.ok(STATE_LABELS[state].length > 0)
-  }
-})
-
-test('the Session the UI speaks to is the current one, whatever its ordinal', () => {
-  const sessions = [session({ id: 'old', ordinal: 1, current: false }), session({ id: 'now', ordinal: 2, current: true })]
-  assert.equal(currentSession(sessions)?.id, 'now')
-  assert.equal(currentSession([session({ current: false })]), undefined)
-  assert.equal(currentSession([]), undefined)
-})
 
 // ---------- history grouping ----------
 
@@ -198,18 +150,7 @@ test('a malformed message item degrades to an empty turn instead of throwing', (
 })
 
 function turn(status: WorkstreamTurn['status'], purpose: WorkstreamTurn['purpose'] = 'user'): WorkstreamTurn {
-  return {
-    id: `t-${purpose}-${status}`,
-    workstreamId: 'w1',
-    sessionId: 's1',
-    turnOrdinal: 1,
-    purpose,
-    status,
-    stopReason: null,
-    usage: null,
-    startedAt: '2026-08-06T10:00:00.000Z',
-    endedAt: null,
-  }
+  return { id: `t-${purpose}-${status}`, purpose, status }
 }
 
 test('the typing indicator is a running Turn — there is no separate signal to wait for', () => {
@@ -311,21 +252,68 @@ test('arrow keys clamp at the ends rather than wrapping', () => {
   assert.equal(clampIndex(3, 5), 3)
 })
 
-// ---------- agents ----------
+// ---------- S12: derived status and loss exposure ----------
 
-test('only enabled Agents are offered — the server refuses to launch the others', () => {
-  const agent = (agentId: string, availability: PublicAgent['availability']): PublicAgent => ({
-    agentId,
-    runtimeDefinitionVersion: 'v1',
-    label: agentId,
-    description: '',
-    availability,
-    personas: [],
+const OBSERVED = new Date('2026-09-06T12:00:00.000Z')
+
+test('a Workstream with no Intent says so, rather than claiming to be at rest', () => {
+  const status = deriveStatus({ intent: null, deliveryUnknown: false, observedAt: OBSERVED })
+  assert.equal(status.kind, 'no-intent')
+  assert.equal(status.blocksSending, false)
+})
+
+test('converged is stated as of a moment, never as "ready"', () => {
+  const status = deriveStatus({ intent: { work: null }, deliveryUnknown: false, observedAt: OBSERVED })
+  assert.equal(status.kind, 'converged')
+  assert.match(status.label, /2026-09-06T12:00:00\.000Z/)
+  // "Ready" is a promise about the future; this is a statement about a moment that has passed.
+  assert.ok(!/pr[êe]t|ready/i.test(status.label))
+})
+
+test('a blocking cause is shown verbatim: the rule id is what makes it actionable', () => {
+  const status = deriveStatus({
+    intent: { work: { blockingCause: 'CONSTRUCT-002 awaiting bounded save', attemptCount: 2 } },
+    deliveryUnknown: false,
+    observedAt: OBSERVED,
   })
-  assert.deepEqual(
-    launchableAgents([agent('a', 'enabled'), agent('b', 'unavailable'), agent('c', 'deprecated')]).map((entry) => entry.agentId),
-    ['a'],
-  )
+  assert.equal(status.kind, 'reconciling')
+  assert.match(status.label, /CONSTRUCT-002 awaiting bounded save/)
+})
+
+test('CAPS-004: an external restriction says who can lift it, and does not claim we are working on it', () => {
+  const status = deriveStatus({
+    intent: { work: { blockingCause: 'capability_restricted: provider.anthropic', attemptCount: 9 } },
+    deliveryUnknown: false,
+    observedAt: OBSERVED,
+  })
+  assert.equal(status.kind, 'restricted')
+  assert.match(status.remediation ?? '', /organisation/)
+  assert.equal(status.blocksSending, false, 'a restriction on one authority does not stop every message')
+})
+
+test('CONT-005: an ambiguous delivery outranks everything and blocks sending', () => {
+  const status = deriveStatus({
+    intent: { work: { blockingCause: 'CONSTRUCT-002 awaiting bounded save', attemptCount: 1 } },
+    deliveryUnknown: true,
+    observedAt: OBSERVED,
+  })
+  assert.equal(status.kind, 'delivery-unknown')
+  assert.equal(status.blocksSending, true)
+  // The warning must name the actual risk: a resend could duplicate an effect already produced.
+  assert.match(status.remediation ?? '', /dupliquer un effet externe/)
+})
+
+test('CONT-012: the loss banner counts facts, and says nothing when there is nothing to say', () => {
+  assert.equal(lossExposureBanner([]), undefined)
+  assert.equal(lossExposureBanner([{ harnessId: 'claude-code', factsSinceAnchor: 0, anchoredAt: '2026-09-06T10:00:00Z' }]), undefined)
+  const banner = lossExposureBanner([
+    { harnessId: 'claude-code', factsSinceAnchor: 7, anchoredAt: '2026-09-06T10:00:00Z' },
+    { harnessId: 'codex', factsSinceAnchor: 0, anchoredAt: '2026-09-06T11:00:00Z' },
+  ])
+  assert.match(banner ?? '', /claude-code : 7 fait/)
+  assert.ok(!/codex/.test(banner ?? ''), 'a harness with nothing at risk is not mentioned')
+  // The distinction that matters: Agora keeps the facts; the NATIVE context might not.
+  assert.match(banner ?? '', /conservés par Agora/)
 })
 
 /**
@@ -534,4 +522,68 @@ test('required: a feed frame that cannot have changed the selectors is recognisa
   assert.equal(itemCarriesConfigOptions(item({ kind: 'message', value: { role: 'agent', content: [] } })), false)
   assert.equal(itemCarriesConfigOptions(item({ kind: 'unknown', value: { envelope: { result: { sessionId: 'x' } } } })), false)
   assert.equal(itemCarriesConfigOptions(item({ kind: 'unknown', value: {} })), false)
+})
+
+// ---------- S12 Step 4: permission decisions ----------
+
+const REQUEST = {
+  permissionId: 'perm-1',
+  toolCallId: 'tool-1',
+  title: 'Lire un fichier',
+  options: [{ optionId: 'allow', name: 'Autoriser' }, { optionId: 'reject', name: 'Refuser' }],
+}
+
+test('S12: an unanswered request offers exactly the options the agent listed', () => {
+  const [prompt] = permissionPrompts({ pending: [REQUEST], items: [], submitted: [] })
+  assert.equal(prompt?.state, 'asked')
+  assert.deepEqual(prompt?.options.map((option) => option.optionId), ['allow', 'reject'])
+  assert.match(prompt?.label ?? '', /Lire un fichier/)
+})
+
+test('S12: a decision that has left the browser reads as SENT — a click is not an outcome', () => {
+  const submitted = [{ permissionId: 'perm-1', toolCallId: 'tool-1', title: 'Lire un fichier', optionId: 'allow', optionName: 'Autoriser' }]
+  // Still pending on the channel: the response frame has not been written yet.
+  const [pending] = permissionPrompts({ pending: [REQUEST], items: [], submitted })
+  assert.equal(pending?.state, 'sent')
+  assert.equal(pending?.options.length, 0, 'the buttons are gone: answering twice is not a thing to offer')
+  assert.doesNotMatch(pending?.label ?? '', /Autorisé|accordé/, 'nothing may claim the permission was granted')
+
+  // Off the pending list but not yet projected: the answer is in flight, and that is all we know.
+  const [inFlight] = permissionPrompts({ pending: [], items: [], submitted })
+  assert.equal(inFlight?.state, 'sent')
+})
+
+test('S12: only the projected response frame turns a decision into an answer, and it is the wire that is quoted', () => {
+  const submitted = [{ permissionId: 'perm-1', toolCallId: 'tool-1', title: 'Lire un fichier', optionId: 'allow', optionName: 'Autoriser' }]
+  const decided = item({
+    kind: 'permission',
+    entityKey: 'tool-1',
+    value: { status: 'decided', outcome: { outcome: 'selected', optionId: 'allow' } },
+  })
+  const [answered] = permissionPrompts({ pending: [], items: [decided], submitted })
+  assert.equal(answered?.state, 'answered')
+  assert.match(answered?.label ?? '', /Autoriser/)
+
+  // The wire carried something else than this browser believes it sent: the wire is what is shown.
+  const other = item({ kind: 'permission', entityKey: 'tool-1', value: { status: 'decided', outcome: { outcome: 'selected', optionId: 'reject' } } })
+  const [surprising] = permissionPrompts({ pending: [], items: [other], submitted })
+  assert.match(surprising?.label ?? '', /reject/)
+  assert.doesNotMatch(surprising?.label ?? '', /Autoriser/)
+
+  // A permission item still pending proves nothing was answered, whatever this client did.
+  const stillPending = item({ kind: 'permission', entityKey: 'tool-1', value: { status: 'pending' } })
+  assert.equal(permissionPrompts({ pending: [], items: [stillPending], submitted })[0]?.state, 'sent')
+})
+
+test('S12: a permission nobody here answered is not narrated once it leaves the pending list', () => {
+  const decided = item({ kind: 'permission', entityKey: 'tool-9', value: { status: 'decided', outcome: { outcome: 'selected', optionId: 'allow' } } })
+  assert.deepEqual(permissionPrompts({ pending: [], items: [decided], submitted: [] }), [])
+})
+
+test('S12: a cancelled request says so rather than reporting a choice', () => {
+  const submitted = [{ permissionId: 'perm-1', toolCallId: 'tool-1', title: 'Lire un fichier', optionId: 'allow', optionName: 'Autoriser' }]
+  const cancelled = item({ kind: 'permission', entityKey: 'tool-1', value: { status: 'decided', outcome: { outcome: 'cancelled' } } })
+  const [prompt] = permissionPrompts({ pending: [], items: [cancelled], submitted })
+  assert.equal(prompt?.state, 'answered')
+  assert.match(prompt?.label ?? '', /annulée/)
 })

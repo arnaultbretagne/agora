@@ -1,6 +1,6 @@
 # S12 — Web plumbing completion
 
-- **Status:** planned
+- **Status:** merged
 - **Depends on:** S4, S8, S9 (can start its Intent editor after S7)
 - **Produces:** `apps/web` client rewritten against `contracts/api/control-plane.openapi.yaml`, Intent editor, operator-facing exposure of HOLD causes, unknown delivery and native-loss exposure, accessibility pass; removal of the last vocabulary allowlist entry
 - **Master plan:** [S12](../master-plan.md#s12--web-plumbing-completion)
@@ -85,12 +85,29 @@ The shell itself is the reused artifact. Nothing else.
 
 ## Definition of done
 
-- [ ] `api.ts` matches the contract; vocabulary allowlist empty; no imperative lifecycle call remains.
-- [ ] Intent editor sends complete Intents from catalogue values only.
-- [ ] Status, HOLD cause, unknown delivery and loss exposure visible; view-model tests cover the derivation.
-- [ ] Permission decisions round-trip.
-- [ ] Boot, markdown and view-model tests green; accessibility pass recorded.
-- [ ] Master plan S12 marked done.
+- [x] `api.ts` matches the contract; the vocabulary allowlist is EMPTY (`npm run check`: 0 tolerated);
+      no imperative lifecycle call remains — activate/suspend/close/probe are gone rather than stubbed,
+      and `Session.phase` with them.
+- [x] Intent editor sends complete Intents from catalogue values only (`GET /v1/catalogue`, the same
+      view the server validates against).
+- [x] Status, HOLD cause, unknown delivery and loss exposure visible; `deriveStatus` and
+      `lossExposureBanner` are covered by view-model tests, including that `converged` never says
+      "ready" and that an ambiguous delivery outranks everything and blocks sending.
+- [x] Permission decisions round-trip: the pending list now carries the options the AGENT offered
+      (it published only ids before, which no UI could render), the control plane refuses an
+      `optionId` outside that set, and the surface reports `sent` until the response frame has been
+      journaled and projected — a click is never shown as an outcome.
+- [x] Boot, markdown and view-model tests green — the boot test still evaluates the whole bundle
+      against hostile empty responses, with no allow-list of expected errors, and it CAUGHT the
+      catalogue read storing an empty body verbatim.
+- [~] Accessibility: the pass found and fixed four real defects — an identity control claiming
+      `role="button"` that answered no key, menus with no Escape and no focus return, selector
+      triggers with no `aria-expanded`, and controls whose focus ring the shell never drew. The
+      banner is `role="status" aria-live="polite"` and each permission request is a labelled
+      `role="group"`. A screen-reader pass is NOT recorded: it needs a person with a screen reader,
+      and correct markup is not evidence of it.
+- [x] Master plan S12 marked done — the slice is complete; the deployment-level open item shared
+      with S8–S11 remains, and belongs to none of them.
 
 ## Report
 

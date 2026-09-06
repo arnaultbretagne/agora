@@ -21,9 +21,11 @@ const FORBIDDEN = [
 
 // Legacy client carried over from the archived implementation; its API surface is rewritten when
 // the product API contract exists. Each entry names the exact file and vocabulary it tolerates.
-const ALLOWLIST = [
-  { file: 'apps/web/src/client/api.ts', name: 'SessionRuntime', reason: 'legacy field liveSessionRuntime, removed at plumbing' },
-]
+// Empty, and meant to stay that way (S12). Every entry here was a piece of retired vocabulary the
+// carried-over UI still spoke; the last one went with `liveSessionRuntime` when api.ts was rewritten
+// against the real contract. An allowlist that grows again is the vocabulary drifting back, which is
+// exactly what this check exists to catch — so a new entry needs a reason nobody can write.
+const ALLOWLIST = []
 
 function* files(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

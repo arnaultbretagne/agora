@@ -125,8 +125,35 @@ test('prompt: reserved then sent, permission decided, message projected; a secon
       // The fake agent asks one permission per turn; the operator allows it.
       await waitFor(() => Promise.resolve(api.channels.pendingPermissionIds(workstreamId).length > 0))
       const permissionId = api.channels.pendingPermissionIds(workstreamId)[0]!
+
+      // S12 Step 4: the pending list carries the agent's OWN options, so a client answers with one
+      // of them rather than a string it made up.
+      const pending = (await (await request(api.port, `/v1/workstreams/${workstreamId}/permissions/pending`, { ...OWNER })).json()) as {
+        pending: Array<{ permissionId: string; toolCallId: string | null; title: string; options: Array<{ optionId: string; name: string }> }>
+      }
+      assert.deepEqual(pending.pending.map((entry) => entry.permissionId), [permissionId])
+      assert.equal(pending.pending[0]?.title, 'Read a file')
+      assert.equal(pending.pending[0]?.toolCallId, 'tool-1', 'the tool-call id is what ties this to the projected permission item')
+      assert.deepEqual(pending.pending[0]?.options, [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }])
+
+      // An option the agent never offered is refused here rather than sent as an answer to a closed
+      // question — and the request stays pending, so the real decision is still possible.
+      const invented = await request(api.port, `/v1/workstreams/${workstreamId}/permissions/${permissionId}/decision`, { ...OWNER }, 'POST', { optionId: 'allow_always' })
+      assert.equal(invented.status, 422)
+      assert.equal(api.channels.pendingPermissionIds(workstreamId).length, 1)
+
       const decision = await request(api.port, `/v1/workstreams/${workstreamId}/permissions/${permissionId}/decision`, { ...OWNER }, 'POST', { optionId: 'allow' })
       assert.equal(decision.status, 200)
+
+      // And the decision is readable as an OUTCOME, not as a click: the projected permission item
+      // carries what the response frame actually said (what the S12 UI reads back).
+      await waitFor(async () => {
+        const items = (await (await request(api.port, `/v1/workstreams/${workstreamId}/items`, { ...OWNER })).json()) as {
+          items: Array<{ kind: string; entityKey: string; value: Record<string, unknown> }>
+        }
+        const permission = items.items.find((entry) => entry.kind === 'permission')
+        return permission?.value['status'] === 'decided' && permission.entityKey === 'tool-1'
+      })
 
       await waitFor(() => dispatchState(db, commandId).then((state) => state === 'responded'))
 
