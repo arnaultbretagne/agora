@@ -60,6 +60,18 @@ export function loadCatalogueView(harnessDefinitionsPath: string, capabilitiesPa
   }
 }
 
+interface RuntimeSettingsFile {
+  readonly bridgePort: number
+}
+
+/** The one runtime-settings.json field control-plane itself needs directly (S8 START): the port
+ * every harness Pod's bridge server listens on. Everything else in that file is runtime-control's
+ * own concern (ADR 0001 — read as plain JSON here, never its loader). */
+export function loadBridgePort(runtimeSettingsPath: string): number {
+  const settings = JSON.parse(readFileSync(runtimeSettingsPath, 'utf8')) as RuntimeSettingsFile
+  return settings.bridgePort
+}
+
 export function catalogueRevisionSet(harnessDefinitionsPath: string, capabilitiesPath: string): RevisionSet {
   // A trivial content signature — enough to distinguish "the catalogue changed" for ENGINE-014's
   // "an old attempt cannot resolve a new payload under the same idempotency key" without pulling

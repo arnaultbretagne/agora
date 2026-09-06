@@ -5,10 +5,12 @@ import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
-import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests } from './catalogue.js'
+import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort } from './catalogue.js'
 import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
+import { createStartExecutor } from './verbs/start.js'
+import { createVerbRouter } from './verb-router.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -57,6 +59,8 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const catalogue = harnessDefinitionsPath && capabilitiesPath ? loadCatalogueView(harnessDefinitionsPath, capabilitiesPath) : undefined
   const revisionSet = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath) : undefined
   const harnessDigests = harnessDefinitionsPath ? loadHarnessDigests(harnessDefinitionsPath) : undefined
+  const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
+  const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
 
   if (mode === 'api' || mode === 'both') {
     const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
@@ -67,7 +71,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
   if (mode === 'worker' || mode === 'both') {
     const runtimeControlBaseUrl = env.RUNTIME_CONTROL_URL
     const brokerBaseUrl = env.BROKER_URL
-    const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined
+    const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined && bridgePort !== undefined
 
     const observationSource: ObservationSource = wired
       ? new HttpObservationSource({
@@ -79,13 +83,18 @@ export async function run(options: MainOptions = {}): Promise<void> {
         })
       : new UnavailableObservationSource()
     const executor: VerbExecutor = wired
-      ? createSessionOpeningExecutor({
-          inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
-          productPool,
-          enginePool,
-          runtimeControlBaseUrl,
-          logger: (message) => console.log(message),
-        })
+      ? createVerbRouter(
+          {
+            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+          },
+          createSessionOpeningExecutor({
+            inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+            productPool,
+            enginePool,
+            runtimeControlBaseUrl,
+            logger: (message) => console.log(message),
+          }),
+        )
       : new NoVerbExecutor()
 
     // resolve.harnessDigest is a real, static catalogue lookup — resolve.capabilityGrants stays
