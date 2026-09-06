@@ -149,10 +149,13 @@ test('a retired incarnation is not rebuilt into — BUILD mints a fresh one, and
     assert.equal(seen.length, 2)
     assert.notEqual(seen[1], retired, 'the retired incarnation is dead; a rebuild gets a fresh one')
 
-    // And once every incarnation is retired there is nothing left to act on: TURN_OFF says so
-    // explicitly rather than aiming at a dead target, which the owner would refuse as stale.
+    // Cleanup, on the other hand, MUST still be able to name a retired incarnation: a Pod outlives
+    // its retirement whenever a cleanup response was lost, and refusing to name it would leave a
+    // real running Pod nothing in the system can remove (engine.md — "concrete-target cleanup stays
+    // authorized"). Live, that was the state a Workstream ended in.
     await retireTarget(db.pool, WORKSTREAM, 'concrete', seen[1]!, 'cleanup_pod:TURN_OFF')
-    await assert.rejects(() => runner.execute('TURN_OFF', context({ workGeneration: 3 })), MissingIncarnationError)
+    await runner.execute('TURN_OFF', context({ workGeneration: 3 }))
+    assert.equal(seen[2], seen[1], 'TURN_OFF aims at the Pod that exists, retired or not')
   })
 })
 

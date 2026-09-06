@@ -8,7 +8,7 @@ import type pg from 'pg'
 import type { Verb } from '@agora/domain'
 import type { QueryClient } from './db.js'
 import type { VerbContext, VerbExecutor } from './verb-executor.js'
-import { isCleanupOperation, payloadDigest, type OwnerRequest, type OwnerResponse, type OwnerTarget } from '@agora/owner-requests'
+import { isCleanupOperation, isPositiveOperation, payloadDigest, type OwnerRequest, type OwnerResponse, type OwnerTarget } from '@agora/owner-requests'
 import { isRetired, retireTarget } from './retirement.js'
 import { dispatchAttempt, hasUnresolvedAttempts, markAttemptUnknown, reopenAttemptForRecovery, reserveAttempt, unresolvedRepeatOf, type AttemptReservation } from './attempts.js'
 import { loadLatestIntentEvent } from './authoring.js'
@@ -72,7 +72,11 @@ async function incarnationForBuild(client: QueryClient, workstreamId: string): P
  * separate "current incarnation" table to keep in sync): a create_pod attempt that might still be
  * accepted (settled, dispatched, or unknown — never assumed absent) names it as its own target id.
  */
-export async function currentIncarnation(client: QueryClient, workstreamId: string): Promise<string | undefined> {
+export async function currentIncarnation(
+  client: QueryClient,
+  workstreamId: string,
+  options: { readonly includeRetired?: boolean } = {},
+): Promise<string | undefined> {
   const result = await client.query(
     `SELECT target_id FROM owner_attempts a
      WHERE a.workstream_id = $1 AND a.operation = 'create_pod' AND a.state IN ('settled', 'dispatched', 'unknown')
@@ -82,9 +86,9 @@ export async function currentIncarnation(client: QueryClient, workstreamId: stri
        -- positive work on CONCRETE targets), and then every later operation on it, gate_release
        -- first of all, was refused as stale for ever. The Pod ran, the seam never opened, and
        -- nothing anywhere said why.
-       AND NOT EXISTS (SELECT 1 FROM target_retirements r WHERE r.target_id = a.target_id)
+       AND ($2 OR NOT EXISTS (SELECT 1 FROM target_retirements r WHERE r.target_id = a.target_id))
      ORDER BY a.reserved_at DESC LIMIT 1`,
-    [workstreamId],
+    [workstreamId, options.includeRetired === true],
   )
   return (result.rows[0] as { target_id?: string } | undefined)?.target_id
 }
@@ -99,7 +103,11 @@ async function planFor(client: QueryClient, verb: Verb, context: VerbContext): P
       return { operation: 'create_pod', target: { kind: 'reserved', id: incarnation }, payload: { harnessId } }
     }
     case 'TURN_OFF': {
-      const incarnation = await currentIncarnation(client, context.workstreamId)
+      // CLEANUP includes retired incarnations, and must: "concrete-target cleanup stays authorized"
+      // (engine.md). A Pod outlives its incarnation's retirement often enough — a cleanup whose
+      // response was lost, a Pod that came back from a late create — and refusing to name it would
+      // leave a real, running Pod that nothing in the system is able to remove.
+      const incarnation = await currentIncarnation(client, context.workstreamId, { includeRetired: true })
       if (incarnation === undefined) throw new MissingIncarnationError(context.workstreamId, verb)
       return { operation: 'cleanup_pod', target: { kind: 'concrete', id: incarnation }, payload: {} }
     }
@@ -111,7 +119,9 @@ async function planFor(client: QueryClient, verb: Verb, context: VerbContext): P
       return { operation: 'attach_grant', target: { kind: 'concrete', id: incarnation }, payload: { capabilityIds: Array.isArray(capabilities) ? capabilities : [] } }
     }
     case 'REVOKE': {
-      const incarnation = await currentIncarnation(client, context.workstreamId)
+      // Revocation is cleanup too: withdrawing authority from a retired incarnation is exactly
+      // what a shutdown does, and it is authorized on a retired target for that reason.
+      const incarnation = await currentIncarnation(client, context.workstreamId, { includeRetired: true })
       if (incarnation === undefined) throw new MissingIncarnationError(context.workstreamId, verb)
       const intentEvent = await loadLatestIntentEvent(client, context.workstreamId)
       const capabilities = (intentEvent?.intent as { capabilities?: unknown } | undefined)?.capabilities
@@ -137,9 +147,11 @@ export class OwnerVerbRunner implements VerbExecutor {
     const pool = this.options.pool
     const plan = await planFor(pool, verb, context)
 
-    if (await isRetired(pool, plan.target.id)) {
-      // A retired target refuses positive work at the engine too — the owner would reject it; the
-      // engine surfaces the typed cause instead of a generic owner error.
+    // A retired target refuses POSITIVE work at the engine too — the owner would reject it; the
+    // engine surfaces the typed cause instead of a generic owner error. Cleanup is deliberately
+    // exempt, at both ends: "concrete-target cleanup stays authorized" (engine.md), and without the
+    // exemption a Pod that outlives its incarnation's retirement is one nothing can ever remove.
+    if (isPositiveOperation(plan.operation) && (await isRetired(pool, plan.target.id))) {
       throw new Error(`target_retired:${plan.target.id}`)
     }
 
