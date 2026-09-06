@@ -2,9 +2,14 @@
 // inventory; they never read a persisted state row. Unavailable evidence is absent, never a value.
 import type { ConstructionObservation, ConstructionMember } from '@agora/domain'
 import { construction } from '@agora/domain'
+import type { PodObservation, SessionObservationValue } from './types.js'
 
 export { construction }
 export * from './grants.js'
+export * from './types.js'
+export * from './session.js'
+export * from './config.js'
+export * from './sync.js'
 
 export interface RuntimeFootprint {
   readonly workstreamId: string
@@ -39,15 +44,6 @@ export function normalizePowerWithBroker(kubernetesFootprint: RuntimeFootprint, 
   return kubernetes // 'off' or null, exactly as the Kubernetes-only rule already decided
 }
 
-export interface PodObservation {
-  readonly uid: string
-  readonly phase: string
-  readonly imageId: string | null
-  readonly admittedDigest: string | null
-  readonly retiring: boolean
-  readonly startupDeadlineExpired: boolean
-  readonly harnessDigestFor: (admittedDigest: string) => string | null
-}
 
 /**
  * observation.construction (Kubernetes part): exactly one non-retiring Pod whose admitted digest
@@ -88,9 +84,7 @@ export function harnessDigestForCatalogue(catalogue: readonly { readonly imageDi
   return (digest: string) => (known.has(digest) ? digest : null)
 }
 
-export type SessionObservationValue = 'pending' | 'openable' | 'unusable'
-
-/** observation.session (Kubernetes part): ACP context evidence arrives in S8; the seam gates it. */
+/** observation.session (Kubernetes-only evidence — session.ts's normalizeSessionWithAcp is the S8 form that also produces `live`). */
 export function normalizeSession(input: {
   readonly pod: PodObservation | null
   readonly launchedContextBound: boolean | null
