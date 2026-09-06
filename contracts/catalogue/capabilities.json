@@ -1,0 +1,23 @@
+{
+  "$id": "https://agora.dev/catalogue/capabilities.json",
+  "title": "Named capabilities (S7 first values, P9)",
+  "note": "Flat registry of capability ids an Intent may request (001 Intent taxonomy). Each id must have exactly one entry in grant-mappings.json; the compiler rejects any id not registered here. Harness/model selection adds no implicit capability (AUTH-009).",
+  "capabilities": [
+    {
+      "id": "provider.anthropic",
+      "description": "Invoke the Anthropic API under the project's reviewed OneCLI credential."
+    },
+    {
+      "id": "provider.openai",
+      "description": "Invoke the OpenAI/Codex API under the project's reviewed OneCLI credential."
+    },
+    {
+      "id": "tool.github.read",
+      "description": "Read-only GitHub access (clone/pull, list/read repos, issues, pull requests) via the reviewed GitHub App connection. No approval needed per call."
+    },
+    {
+      "id": "tool.github.write",
+      "description": "Mutating GitHub access (push, create pull requests/issues/comments, delete branches) via the reviewed GitHub App connection. Every call requires approval."
+    }
+  ]
+}
