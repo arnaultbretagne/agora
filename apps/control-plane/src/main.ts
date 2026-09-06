@@ -8,6 +8,7 @@ import { AgentChannels } from './agent-channel.js'
 import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests } from './catalogue.js'
 import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
+import { createSessionOpeningExecutor } from './session-opener.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -78,7 +79,12 @@ export async function run(options: MainOptions = {}): Promise<void> {
         })
       : new UnavailableObservationSource()
     const executor: VerbExecutor = wired
-      ? new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) })
+      ? createSessionOpeningExecutor({
+          inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+          productPool,
+          runtimeControlBaseUrl,
+          logger: (message) => console.log(message),
+        })
       : new NoVerbExecutor()
 
     // resolve.harnessDigest is a real, static catalogue lookup — resolve.capabilityGrants stays

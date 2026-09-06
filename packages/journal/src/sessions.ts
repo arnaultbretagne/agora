@@ -67,6 +67,45 @@ export async function openSession(
   return { sessionId, ordinal, cutoffH, openedAtSeq: appended.seq }
 }
 
+export interface AcpContextBinding {
+  readonly contextId: string
+  readonly processGeneration: number
+}
+
+/**
+ * Records the Session's live ACP context (S8 START/RESTORE) — operational, not a new immutable
+ * fact: observation.session's own fresh reads (runtime-control's process generation, a live ACP
+ * probe) are what actually prove liveness on any later tick; this row is only what START bound,
+ * so a reconnect can find the same context id to verify against, never a second source of truth.
+ */
+export async function bindAcpContext(client: pg.PoolClient, sessionId: string, binding: AcpContextBinding): Promise<void> {
+  await client.query('UPDATE sessions SET acp_context_id = $1, process_generation = $2 WHERE id = $3', [binding.contextId, binding.processGeneration, sessionId])
+}
+
+/** The P4 bridge token this Session's control-plane connection uses — persisted so a later reconnect (not just the process that received gate_release's response) can still authenticate. */
+export async function recordBridgeToken(client: pg.PoolClient, sessionId: string, token: string): Promise<void> {
+  await client.query('UPDATE sessions SET bridge_token = $1 WHERE id = $2', [token, sessionId])
+}
+
+export interface CurrentSession {
+  readonly sessionId: string
+  readonly podUid: string
+  readonly acpContextId: string | null
+  readonly processGeneration: number
+  readonly bridgeToken: string | null
+}
+
+/** The one Session with no ended attribution for this Workstream, if any — the only one START/CONFIG ever act on. */
+export async function currentSession(client: pg.Pool | pg.PoolClient, workstreamId: string): Promise<CurrentSession | null> {
+  const result = await client.query(
+    'SELECT id, pod_uid, acp_context_id, process_generation, bridge_token FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL',
+    [workstreamId],
+  )
+  if (result.rowCount === 0) return null
+  const row = result.rows[0]!
+  return { sessionId: row['id'], podUid: row['pod_uid'], acpContextId: row['acp_context_id'], processGeneration: row['process_generation'], bridgeToken: row['bridge_token'] }
+}
+
 export interface EndedAttribution {
   readonly sessionId: string
   readonly ended: boolean
