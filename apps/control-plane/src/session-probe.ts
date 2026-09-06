@@ -136,7 +136,9 @@ export async function probeSession(
         client.release()
       }
     } finally {
-      await connection.close()
+      // Bounded, like everything else here: a close that never resolves is a tick that never ends,
+      // and this one runs in a `finally`, so it would swallow the result we already have.
+      await within(Promise.resolve(connection.close()), options.requestTimeoutMs, 'the bridge close').catch(() => {})
     }
   } catch (error) {
     options.logger?.(`session probe for ${input.workstreamId} failed: ${error instanceof Error ? error.message : String(error)}`)

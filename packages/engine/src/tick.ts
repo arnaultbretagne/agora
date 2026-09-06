@@ -5,6 +5,8 @@ import pg from 'pg'
 import { NOTIFY_CHANNEL } from './authoring.js'
 
 export interface TickSourceOptions {
+  /** After this long, a scan that has not returned is presumed stalled and another is allowed to start (P7 — engine.claimLeaseMs). */
+  readonly stallBudgetMs?: number
   readonly pool: pg.Pool
   /** Connection string for the dedicated LISTEN client. */
   readonly connectionString: string
@@ -23,15 +25,36 @@ interface CoalescedRunner {
   dispose(): void
 }
 
-export function createCoalescedRunner(scan: () => Promise<void>, logger: (message: string) => void): CoalescedRunner {
+/**
+ * Coalesces overlapping scans — and, since the first live deployment, refuses to be killed by one
+ * that never returns.
+ *
+ * The `running` flag used to be cleared only in the `finally`, so a scan that hung left it true for
+ * ever: every later poll and every NOTIFY returned immediately, the loop went silent, and the
+ * process looked perfectly healthy. Twice on the cluster that is exactly what happened, and the
+ * only symptom was a Workstream that stopped converging with no error anywhere.
+ *
+ * A worker that hangs is indistinguishable from a worker that crashed, and the engine already
+ * handles a crashed worker: its claim lease expires and the row is retried. So after
+ * `stallBudgetMs` the runner says so, loudly, and lets the next scan start — the abandoned one
+ * still holds nothing that a lease does not release.
+ */
+export function createCoalescedRunner(scan: () => Promise<void>, logger: (message: string) => void, stallBudgetMs?: number): CoalescedRunner {
   let running = false
   let queued = false
+  let startedAt = 0
   const run = async (): Promise<void> => {
     if (running) {
-      queued = true
-      return
+      if (stallBudgetMs !== undefined && Date.now() - startedAt > stallBudgetMs) {
+        logger(`scan has not returned in ${String(Date.now() - startedAt)}ms — starting another; the stalled one holds nothing a claim lease will not release`)
+        running = false
+      } else {
+        queued = true
+        return
+      }
     }
     running = true
+    startedAt = Date.now()
     try {
       await scan()
     } catch (error) {
@@ -54,7 +77,7 @@ export function createCoalescedRunner(scan: () => Promise<void>, logger: (messag
 
 export async function startTickSource(options: TickSourceOptions): Promise<TickSource> {
   const logger = options.logger ?? (() => {})
-  const runner = createCoalescedRunner(options.scan, logger)
+  const runner = createCoalescedRunner(options.scan, logger, options.stallBudgetMs)
 
   const poll = setInterval(() => {
     void runner.run()

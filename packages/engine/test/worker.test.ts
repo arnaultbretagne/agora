@@ -371,3 +371,30 @@ test('claims are bounded by the batch size', async () => {
     }
   })
 })
+
+test('S13: a scan that never returns does not silently end reconciliation', async () => {
+  // The `running` flag used to be cleared only in the finally, so one hung scan left it true for
+  // ever: every later poll returned immediately and the loop went quiet while the process looked
+  // healthy. Live, twice — and the only symptom was a Workstream that stopped converging.
+  const logged: string[] = []
+  let started = 0
+  const runner = createCoalescedRunner(
+    async () => {
+      started += 1
+      await new Promise(() => {}) // never settles, like an owner that accepts and answers nothing
+    },
+    (message) => logged.push(message),
+    20,
+  )
+
+  void runner.run()
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  void runner.run()
+  assert.equal(started, 1, 'inside the budget, an overlapping run still coalesces')
+
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  void runner.run()
+  assert.equal(started, 2, 'past it, the next scan runs rather than the loop dying')
+  assert.match(logged.join('\n'), /has not returned/)
+  runner.dispose()
+})

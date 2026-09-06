@@ -230,6 +230,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const ticks = await startTickSource({
       pool: enginePool,
       connectionString: databaseUrl,
+      // A scan that has not returned within one claim lease is presumed stalled: whatever it still
+      // holds, the lease releases. Without this a single hung scan silently ended reconciliation
+      // for this whole process — twice, live, before every owner call was bounded.
+      stallBudgetMs: settings.engine.claimLeaseMs,
       scan: async () => {
         const summary = await scan()
         metrics.increment(METRIC.ticks, 'Reconciliation scans run')
