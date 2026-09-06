@@ -5,7 +5,7 @@
   "harnesses": [
     {
       "harnessId": "claude-code",
-      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:47d66b35f3f1e715e077e3308950a0d50b1f947055be05d45e1fb4b0a8dd7fa2",
+      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:2a1e619d7e8cf70d523e898cee72455a98a54d65fccdb26eb205868b02d8cfd7",
       "launchCommand": [
         "node",
         "dist/src/launch.js"
@@ -80,7 +80,7 @@
     },
     {
       "harnessId": "codex",
-      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-codex@sha256:3bd54fb9e651a6d6cc5ddc4ff67a58a0196b3f7179d934d9bcd068274f813f2f",
+      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-codex@sha256:e49cb9f889db9f710c99f8eed339cfccf0455ecf458fe7151f74c3399d4c8258",
       "launchCommand": [
         "node",
         "dist/src/launch.js"
