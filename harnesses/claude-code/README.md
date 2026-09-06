@@ -54,9 +54,35 @@ ever sent — every measurement below is `initialize`/`session/new`/`session/set
   Pod; `harnesses/claude-code/image/Dockerfile` below is written but unverified end to end (CI's
   `verify`/`kind` jobs run on GitHub-hosted runners, which do have Docker — the build itself should
   be exercised there before this harness is trusted).
-- P4 (incarnation authentication replacing the S4 development secret) and the full admission/hot-
-  boundary control-plane wiring are separate, larger pieces of this same slice; see the PR for what
-  landed alongside this measurement.
 - No `session/prompt` was ever sent — deliberately: it is the one ACP call that spends real model
   usage, and nothing above needed it. The end-to-end canary prompt this plan's Step 6 asks for is
-  still open.
+  still open, and so is Step 5's own core mechanism below.
+
+## Step 5 (prompt recovery) — blocked on a live measurement, not yet built
+
+`engine.md`'s prompt delivery recovery needs "operation-specific evidence (turn state, last stop
+reason)" to decide whether an ambiguous (`unknown`) prompt was ever actually delivered before
+resolving it — reconnect and discover, never a blind resend. The standard ACP surface has no
+generic "was my last prompt processed" query (execution.md says as much: "no universal config
+getter, liveness query, transcript read or prompt deduplication"); the only plausible mechanism
+this adapter offers is `session/load` (`agentCapabilities.loadSession: true`, verified above), which
+replays prior conversation as `session/update` notifications rather than returning a value — whether
+that replay is complete, ordered, and distinguishes "never sent" from "sent, no response yet" from
+"responded" is **not measured**, because measuring it means actually sending a `session/prompt` (the
+one call P3 deliberately never made — real model spend). Building `recovery/context.ts` against a
+guess here would repeat the exact mistake P11 already flagged once ("do not hardcode the model
+list... it must come from a fresh read") for a mechanism that costs money to verify instead of a
+free RPC — so it is being named as an open, load-bearing gap instead of guessed shut. Whoever picks
+this up next: spend one deliberately bounded, fixed canary prompt against the real adapter, capture
+the exact `session/update` shape `session/load` replays afterward, and record it here the same way
+the rest of this file records what was actually seen, before writing the recovery logic itself.
+
+## Real bridge prompt dispatch — built and tested, not yet run against a real Pod
+
+apps/control-plane's `AgentChannels` now has a pluggable transport
+(`RealChannelConnector`, resuming the Session's already-bound ACP context) instead of only the S4
+dev stub, and a real prompt turn round-trips through it in `real-channel-connector.test.ts` — but
+that test drives a real ACP agent (the pinned SDK) over an in-process duplex standing in for the
+bridge, the same reasoning as `verbs/start.test.ts`. Whether it works against the ACTUAL adapter
+process inside a real Pod is exactly the same "no Docker here" gap as the image build above, not a
+new one.

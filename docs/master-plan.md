@@ -406,8 +406,18 @@ image.
 `ENGINE-018`, plus the first end-to-end run: browser → Intent → Pod → exact grants → prompt →
 streamed answer → facts and projections.
 
-**Open before merge.** Adapter evidence for `set_config_option` and actual model/effort readback
-after resume; bridge authentication material; frame size limits (§4).
+**Open before merge.** Resolved: adapter evidence for `set_config_option` and actual model/effort
+readback after resume (P3, truthful — `harnesses/claude-code/README.md`); bridge authentication
+material (P4, implemented and tested); START/CONFIG/admission and the real bridge prompt path
+(`apps/control-plane`, all tested against a real ACP agent over an in-process duplex, not mocks at
+the ACP-message level). Still genuinely open: the hot Session boundary's own trigger — the database
+mechanism exists (`packages/journal`'s `commitHotBoundary`) but nothing in S8's own rule tables
+currently invokes it (CONFIG/CAPABILITIES changes are already handled live without ending the
+Session; S9's restore path looks like the first real trigger, not S8's own scope); Step 5's prompt
+delivery recovery, blocked on a live measurement of `session/load`'s actual replay shape (real model
+spend — deliberately not guessed, see the harness README); the conformance suite and the actual
+end-to-end run, both needing a built image on real Kubernetes (no Docker in the environment this
+was written in — CI's `kind` job is where that gets exercised first).
 
 ### S9 — Native continuity: Saves, Anchors, restore and refill
 
