@@ -382,7 +382,19 @@ ACP. BUILD and TURN_OFF gain their Broker parts. `packages/observation`: `grants
 **Open before merge.** Concrete capability→grant mappings for the first capabilities, OneCLI
 inventory/idempotency capabilities, relay authentication of the incarnation (§4).
 
-### S8 — First harness integration: claude-code
+### S8 — First harness integration: claude-code (merged; one item open)
+
+**Status.** Steps 1-6 are implemented, tested and merged (pull request #46): the image builds and is
+asserted in CI, START binds exactly one context with unknown-acceptance discovery,
+observation.session/model/effort/sync are live, SET_MODEL/SET_EFFORT drive the real context, the
+admission checklist gates every prompt dispatch, prompt delivery recovery resolves an ambiguous
+dispatch against the harness's own `session/load` replay (mechanism measured, not assumed), the hot
+Session boundary's database mechanism exists, and `harnesses/conformance` runs black-box against any
+harness (10 passed / 0 failed / 2 skipped against the real adapter). **Not done:** the first
+end-to-end run named in Evidence below — it needs the current code deployed on real Kubernetes with
+real OneCLI credentials, which is a deployment decision (the cluster's running `agora-*` workloads
+are the retired implementation's, not this codebase's) rather than remaining engineering. S8 is
+therefore NOT marked done.
 
 **Goal.** A live ACP context inside a Pod, its configuration read truthfully, the first user
 prompt admitted through the full chain.
