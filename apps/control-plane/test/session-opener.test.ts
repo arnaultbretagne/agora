@@ -211,3 +211,53 @@ test('a non-BUILD verb: never touches runtime-control or sessions', async () => 
     assert.equal(inner.calls.length, 1)
   })
 })
+
+test('S13: a Session whose Pod was replaced ends, so the next Pod can get one at all', async () => {
+  // Live finding. A Session is opened for ONE Pod and named by its uid; when that Pod is destroyed
+  // (CONSTRUCT-002 replacing it, a cleanup, a node loss) nothing ended the Session, and
+  // `sessions_one_current_per_workstream` then refused every later open with a unique violation.
+  // The Workstream could never get another Session — permanently — and the only trace was one log
+  // line saying "session opening after BUILD failed".
+  await withTestDatabase(async (db) => {
+    const client = await db.pool.connect()
+    try {
+      const workstreamId = randomUUID()
+      await db.asRole(client, 'agora_product', () =>
+        client.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()]),
+      )
+      const first = await startRuntimeControl([{ uid: 'pod-a', forcedDeletion: false, incarnation: 'inc-1' }])
+      const executorFor = (rc: RuntimeControlStub) =>
+        createSessionOpeningExecutor({ inner: new RecordingVerbExecutor(), productPool: db.pool, enginePool: db.pool, runtimeControlBaseUrl: rc.url })
+      try {
+        await executorFor(first).execute('BUILD', context({ workstreamId }))
+      } finally {
+        first.server.close()
+      }
+
+      // The Pod is gone; a new one exists in its place.
+      const second = await startRuntimeControl([{ uid: 'pod-b', forcedDeletion: false, incarnation: 'inc-2' }])
+      try {
+        await executorFor(second).execute('BUILD', context({ workstreamId }))
+        assert.equal(second.ownerRequests.length, 1, 'the new Pod\'s gate is released')
+      } finally {
+        second.server.close()
+      }
+
+      const sessions = await client.query('SELECT pod_uid, attribution_ended_at FROM sessions WHERE workstream_id = $1 ORDER BY ordinal', [workstreamId])
+      assert.equal(sessions.rowCount, 2, 'the new Pod got a Session of its own')
+      assert.notEqual(sessions.rows[0]!['attribution_ended_at'], null, 'the old one ended rather than blocking for ever')
+      assert.equal(sessions.rows[1]!['pod_uid'], 'pod-b')
+      assert.equal(sessions.rows[1]!['attribution_ended_at'], null)
+
+      // And the ending is in the record, with its reason — not just a column change.
+      const ended = await client.query(
+        "SELECT payload FROM workstream_facts WHERE workstream_id = $1 AND kind = 'session.ended'",
+        [workstreamId],
+      )
+      assert.equal(ended.rowCount, 1)
+      assert.equal((ended.rows[0]!['payload'] as { reason?: string }).reason, 'pod_replaced')
+    } finally {
+      client.release()
+    }
+  })
+})
