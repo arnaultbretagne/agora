@@ -1,12 +1,34 @@
-// The harness-side custody agent (S9 Step 3). It polls the same evidence endpoint the launch seam
-// already uses, and when the control plane asks for a capture it runs THIS harness's driver and
-// posts the bytes back to runtime-control.
+// The harness-side custody agent (S9 Step 3, generalized in S10 Step 1). It polls the same evidence
+// endpoint the launch seam already uses, and when the control plane asks for a capture, a placement
+// or a proof it hands the work to THIS harness's driver and posts the result to runtime-control.
+//
+// The driver is injected. Everything here — the poll, the endpoints, the headers, the refusal
+// semantics — is identical for every harness; what a capture IS differs entirely, and that is the
+// only thing each harness supplies.
 //
 // Deliberately not on the bridge. Mixing custody into the ACP relay would put capture behind the
 // same connection a shutdown is busy closing, and it would make the protocol surface responsible for
 // something that is not protocol. Polling also keeps working while the Pod is being torn down and
 // nothing can reach it inbound — which is exactly when a capture is asked for.
-import { ClaudeCodeCustodyDriver, CustodyRefusedError } from './driver.js'
+import type { CustodyDriver, OpeningDescriptor } from '@agora/custody'
+
+/**
+ * A refusal a driver raises when it looked and could not take a cut. It is an ANSWER, not an error:
+ * the control plane is on a shutdown budget and needs to know now (OFF-001). A driver signals one by
+ * throwing an error carrying this code — the class itself lives in each harness, because each has
+ * its own reasons.
+ */
+export interface DriverRefusal {
+  readonly code: 'capture_refused' | 'restore_refused'
+  readonly reason: string
+}
+
+function refusalOf(error: unknown): DriverRefusal | null {
+  const candidate = error as { code?: unknown; reason?: unknown }
+  return (candidate?.code === 'capture_refused' || candidate?.code === 'restore_refused') && typeof candidate.reason === 'string'
+    ? { code: candidate.code, reason: candidate.reason }
+    : null
+}
 
 /** The offer runtime-control publishes when a Save is waiting to be placed for this Pod. */
 export interface PlacementOffer {
@@ -25,8 +47,8 @@ export interface CaptureRequest {
 export interface CustodyAgentOptions {
   readonly evidenceUrl: string
   readonly custodyUrlBase: string
-  readonly harnessHome: string
-  readonly workspaceRoot: string
+  /** This harness's own driver — the one thing that is not shared. */
+  readonly driver: CustodyDriver
   readonly podUid: string
   readonly pollIntervalMs?: number
   readonly onLog?: (message: string) => void
@@ -54,16 +76,15 @@ interface CustodyEvidence {
  * stored receipt — exactly what CONT-006 says never becomes live proof.
  */
 export async function answerProofRequest(
-  options: { readonly custodyUrlBase: string; readonly harnessHome: string; readonly workspaceRoot: string },
+  options: { readonly custodyUrlBase: string; readonly driver: CustodyDriver },
   request: ProofRequest,
 ): Promise<'incorporated' | 'not_incorporated' | 'unprovable'> {
-  const driver = new ClaudeCodeCustodyDriver({ harnessHome: options.harnessHome, workspaceRoot: options.workspaceRoot })
-  const proof = await driver.proveOpening({
+  const proof = await options.driver.proveOpening({
     w: request.w,
     h: request.h,
     contextId: request.contextId,
     ...(request.handoffDigest !== null ? { handoffDigest: request.handoffDigest } : {}),
-  })
+  } satisfies OpeningDescriptor)
   const response = await fetch(`${options.custodyUrlBase}/proof`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -84,7 +105,7 @@ export async function answerProofRequest(
  * path, so the two can never drift into placing things differently.
  */
 export async function placeOfferedSave(
-  options: { readonly custodyUrlBase: string; readonly harnessHome: string; readonly workspaceRoot: string },
+  options: { readonly custodyUrlBase: string; readonly driver: CustodyDriver },
   offer: PlacementOffer,
   log: (message: string) => void,
 ): Promise<void> {
@@ -92,8 +113,7 @@ export async function placeOfferedSave(
   if (!payload.ok) throw new Error(`fetching Save ${offer.saveId} failed: HTTP ${String(payload.status)}`)
   const bytes = new Uint8Array(await payload.arrayBuffer())
 
-  const driver = new ClaudeCodeCustodyDriver({ harnessHome: options.harnessHome, workspaceRoot: options.workspaceRoot })
-  const placement = await driver.restore(bytes)
+  const placement = await options.driver.restore(bytes)
   log(`placed Save ${offer.saveId} at ${placement.path} (${String(placement.byteLength)} bytes)`)
 
   // The report carries what the driver measured on disk, not what the offer claimed: runtime-control
@@ -111,10 +131,12 @@ export async function placeOfferedSave(
  * shutdown budget and needs "the driver looked and could not take a quiescent cut" now, not a
  * silence it has to wait out (OFF-001).
  */
-export async function answerCaptureRequest(options: CustodyAgentOptions, request: CaptureRequest): Promise<'captured' | 'refused'> {
-  const driver = new ClaudeCodeCustodyDriver({ harnessHome: options.harnessHome, workspaceRoot: options.workspaceRoot })
+export async function answerCaptureRequest(
+  options: { readonly custodyUrlBase: string; readonly driver: CustodyDriver; readonly podUid: string },
+  request: CaptureRequest,
+): Promise<'captured' | 'refused'> {
   try {
-    const captured = await driver.capture({
+    const captured = await options.driver.capture({
       podUid: options.podUid,
       processGeneration: request.processGeneration,
       contextId: request.contextId,
@@ -124,15 +146,16 @@ export async function answerCaptureRequest(options: CustodyAgentOptions, request
       'x-agora-checksum': captured.checksum,
       'x-agora-format-id': captured.formatId,
       'x-agora-format-version': String(captured.formatVersion),
-      'x-agora-driver-revision': driver.driverRevision,
+      'x-agora-driver-revision': options.driver.driverRevision,
       'x-agora-frontier-w': String(captured.frontierW),
       'x-agora-native-origin': JSON.stringify(captured.nativeOrigin ?? {}),
       'x-agora-workspace-deps': JSON.stringify(captured.workspaceDeps ?? {}),
     }, captured.bytes)
     return 'captured'
   } catch (error) {
-    if (!(error instanceof CustodyRefusedError)) throw error
-    await post(options.custodyUrlBase, { 'x-agora-capture-token': request.token, 'x-agora-refused': error.reason }, new Uint8Array())
+    const refusal = refusalOf(error)
+    if (refusal === null) throw error
+    await post(options.custodyUrlBase, { 'x-agora-capture-token': request.token, 'x-agora-refused': refusal.reason }, new Uint8Array())
     return 'refused'
   }
 }

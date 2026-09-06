@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agora — reconciliation of harness executions within Workstreams",
+  "description": "Agora \u2014 reconciliation of harness executions within Workstreams",
   "workspaces": [
     "apps/*",
     "harnesses/*",
@@ -14,8 +14,8 @@
   },
   "scripts": {
     "check": "node scripts/check-dependency-direction.mjs && node scripts/check-forbidden-vocabulary.mjs && node scripts/run-schema-fixtures.mjs",
-    "build": "npm run build -w @agora/domain && npm run build -w @agora/owner-requests && npm run build -w @agora/observation && npm run build -w @agora/policy && npm run build -w @agora/testkit && npm run build -w @agora/engine && npm run build -w @agora/journal && npm run build -w @agora/custody && npm run build -w @agora/acp && npm run build -w @agora/projections && npm run build -w @agora/broker && npm run build -w @agora/harness-claude-code && npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck -w @agora/domain && npm run typecheck -w @agora/owner-requests && npm run typecheck -w @agora/observation && npm run typecheck -w @agora/policy && npm run typecheck -w @agora/testkit && npm run typecheck -w @agora/engine && npm run typecheck -w @agora/journal && npm run typecheck -w @agora/custody && npm run typecheck -w @agora/acp && npm run typecheck -w @agora/projections && npm run typecheck -w @agora/broker && npm run typecheck -w @agora/harness-claude-code && npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @agora/domain && npm run build -w @agora/owner-requests && npm run build -w @agora/observation && npm run build -w @agora/testkit && npm run build -w @agora/policy && npm run build -w @agora/engine && npm run build -w @agora/journal && npm run build -w @agora/custody && npm run build -w @agora/acp && npm run build -w @agora/harness-bridge && npm run build -w @agora/projections && npm run build -w @agora/broker && npm run build -w @agora/harness-claude-code && npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck -w @agora/domain && npm run typecheck -w @agora/owner-requests && npm run typecheck -w @agora/observation && npm run typecheck -w @agora/testkit && npm run typecheck -w @agora/policy && npm run typecheck -w @agora/engine && npm run typecheck -w @agora/journal && npm run typecheck -w @agora/custody && npm run typecheck -w @agora/acp && npm run typecheck -w @agora/harness-bridge && npm run typecheck -w @agora/projections && npm run typecheck -w @agora/broker && npm run typecheck -w @agora/harness-claude-code && npm run typecheck --workspaces --if-present",
     "test": "npm run check && npm run build && npm run test --workspaces --if-present",
     "db:reset": "node scripts/db-reset.mjs"
   },

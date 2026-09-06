@@ -23,6 +23,12 @@ export interface ConformanceTarget {
   }
   /** The fixed workspace root the harness is launched with. */
   readonly workspaceRoot: string
+  /**
+   * What this harness calls the two options the Intent names `model` and `effort` (S10 Step 1).
+   * codex calls effort `reasoning_effort`; looking for `effort` there would report a missing option
+   * where the only thing missing was the mapping.
+   */
+  readonly configOptionIds?: { readonly model: string; readonly effort: string }
   /** Opening a second connection must reach the SAME harness process (bridge-server.ts's contract). */
   connect(): Promise<TargetConnection>
   /** Explicitly opted into by the operator: checks that would spend real model usage stay skipped otherwise. */
@@ -32,6 +38,7 @@ export interface ConformanceTarget {
 }
 
 export interface SpawnedAdapterOptions {
+  readonly configOptionIds?: ConformanceTarget['configOptionIds']
   readonly harnessId: string
   readonly command: string
   readonly args: readonly string[]
@@ -98,12 +105,14 @@ export function spawnedAdapterTarget(options: SpawnedAdapterOptions): Conformanc
     expected: options.expected ?? {},
     workspaceRoot: options.workspaceRoot,
     ...(options.allowModelSpend === undefined ? {} : { allowModelSpend: options.allowModelSpend }),
+    ...(options.configOptionIds === undefined ? {} : { configOptionIds: options.configOptionIds }),
     connect,
     shutdown: () => child.kill(),
   }
 }
 
 export interface BridgeTargetOptions {
+  readonly configOptionIds?: ConformanceTarget['configOptionIds']
   readonly harnessId: string
   readonly url: string
   readonly token: string
@@ -121,6 +130,7 @@ export function bridgeTarget(options: BridgeTargetOptions): ConformanceTarget {
     workspaceRoot: options.workspaceRoot,
     ...(options.allowModelSpend === undefined ? {} : { allowModelSpend: options.allowModelSpend }),
     ...(options.relay === undefined ? {} : { relay: options.relay }),
+    ...(options.configOptionIds === undefined ? {} : { configOptionIds: options.configOptionIds }),
     connect: async () => {
       const bridge = await connectBridge({ url: options.url, token: options.token })
       return { stream: bridge.stream, close: () => bridge.close() }

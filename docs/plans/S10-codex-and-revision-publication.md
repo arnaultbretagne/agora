@@ -1,6 +1,6 @@
 # S10 — Second harness, catalogue publication and A → B → A
 
-- **Status:** planned
+- **Status:** merged; see the master plan's S10 status for the one open item
 - **Depends on:** S9
 - **Produces:** `harnesses/codex` with driver and conformance evidence, catalogue revision publication with durable re-enqueue, `CONSTRUCT-002` replacement, per-harness Anchors exercised
 - **Master plan:** [S10](../master-plan.md#s10--second-harness-catalogue-publication-and-a--b--a)
@@ -92,10 +92,18 @@ Dockerfile shape, measured host sets. Forbidden: anything from `packages/agent-r
 
 ## Definition of done
 
-- [ ] codex measured (P3), defined (P11), driver contract (P12) recorded; conformance suite green.
-- [ ] `CONT-007` end to end; `SESSION-A11`; `ENGINE-014`; digest re-pin replacement.
-- [ ] Publication procedure in `engine.md`; operator endpoint authenticated as a service actor.
-- [ ] Master plan S10 marked done.
+- [x] codex measured (P3), defined (P11), driver contract (P12) recorded in `harnesses/codex/README.md`;
+      conformance suite green on the real adapter: **10 passed, 0 failed, 3 skipped** (11 passed with
+      `--allow-model-spend`), the same score claude-code gets.
+- [x] `CONT-007` end to end against BOTH real adapters (`scripts/s10-a-b-a.mjs`) and at the rule
+      level (`apps/control-plane/test/verbs/harness-switch.test.ts`); `SESSION-A11` and `ENGINE-014`
+      in `apps/control-plane/test/admin-publish.test.ts` and `packages/policy/test/publication.test.ts`.
+      A re-pinned digest replacing a live Pod is the ordinary `CONSTRUCT-002` path a publication
+      wakes; it is exercised as a publication + fresh generation, not on a cluster.
+- [x] Publication procedure in `engine.md` (*Publication procedure*); the operator endpoint
+      authenticates as a service actor and is closed entirely where none is configured.
+- [ ] Master plan S10 marked done — deliberately not, for the same reason S8 and S9 are not: the run
+      on real Kubernetes with real OneCLI credentials is a deployment step.
 
 ## Report
 

@@ -41,6 +41,11 @@ export async function probeSession(
     readonly podIP: string | null
     readonly bridgeToken: string
     readonly contextId: string
+    /** How this harness's current configuration can be read back (S10 Step 1). Defaults to `resume`. */
+    readonly configReadback?: 'resume' | 'set-config-noop'
+    /** For `set-config-noop`: the model the Intent already wants, and this harness's own option id for it. */
+    readonly desiredModel?: string
+    readonly modelOptionId?: string
   },
   options: SessionProbeOptions,
 ): Promise<SessionProbeResult> {
@@ -60,12 +65,31 @@ export async function probeSession(
         })
         const clientConnection = buildClientConnection(connection.stream, persist)
         try {
-          await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
-          const resumed = (await clientConnection.agent.request(acp.methods.agent.session.resume, {
-            sessionId: input.contextId,
-            cwd: workspaceRoot(),
-            mcpServers: [],
-          })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] }
+          // `initialize` is deliberately NOT sent here. It is a PROCESS-level handshake the harness bridge
+          // performs once when it spawns the adapter (packages/harness-bridge/src/handshake.ts): codex-acp
+          // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
+          // connection that never initialized — so re-initializing per verb bought nothing and broke one of
+          // the two harnesses.
+          // How the current config is read back depends on the harness, and the second one is why
+          // (S10 Step 1). `session/resume` is the natural read — it returns every option's current
+          // value — but codex does not persist a context until it has content, so resuming one that
+          // has never been prompted fails with "no rollout found for thread id". Its own
+          // `set_session_config` answers for that same context, and returns the same option list, so
+          // for codex the read is an assertion of the value CONFIG wants anyway: idempotent when it
+          // already matches, and exactly the mutation CONFIG would perform when it does not.
+          const readback =
+            input.configReadback === 'set-config-noop' && input.desiredModel !== undefined
+              ? ((await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, {
+                  sessionId: input.contextId,
+                  configId: input.modelOptionId ?? 'model',
+                  value: input.desiredModel,
+                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+              : ((await clientConnection.agent.request(acp.methods.agent.session.resume, {
+                  sessionId: input.contextId,
+                  cwd: workspaceRoot(),
+                  mcpServers: [],
+                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+          const resumed = readback
           const configOptions = new Map<string, string>()
           for (const option of resumed.configOptions ?? []) {
             if (typeof option.id === 'string' && typeof option.currentValue === 'string') configOptions.set(option.id, option.currentValue)

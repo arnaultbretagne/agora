@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
-import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import { waitForGateRelease } from '../src/launch.js'
-import { transcriptPath } from '../src/driver.js'
+import { FakeDriver } from './fake-driver.js'
 
 type FakeResponse = { readonly kind: 'destroy' } | { readonly kind: 'respond'; readonly status: number; readonly seam: { readonly released: boolean } | null }
 
@@ -134,53 +132,40 @@ function startCustodyServer(bytes: Uint8Array, options: { readonly rejectFirstRe
   })
 }
 
-function transcriptBytes(contextId: string): Uint8Array {
-  return new TextEncoder().encode(`${JSON.stringify({ type: 'user', sessionId: contextId, message: { role: 'user', content: 'codeword: mirabelle' } })}\n`)
+function payloadBytes(contextId: string): Uint8Array {
+  return new TextEncoder().encode(`native state for ${contextId}`)
 }
 
 test('a Save offered at the seam is fetched and placed before the gate ever opens', async () => {
-  const home = await mkdtemp(`${tmpdir()}/agora-launch-`)
   const contextId = randomUUID()
-  const bytes = transcriptBytes(contextId)
+  const bytes = payloadBytes(contextId)
+  const driver = new FakeDriver({ placedPath: `/home/agent/${contextId}.jsonl` })
   const { server, evidenceUrl, custodyUrl, reports } = await startCustodyServer(bytes)
   try {
-    await waitForGateRelease({
-      evidenceUrl,
-      pollIntervalMs: 10,
-      custody: { harnessHome: home, workspaceRoot: '/home/agent/work', placementUrlBase: custodyUrl },
-    })
+    await waitForGateRelease({ evidenceUrl, pollIntervalMs: 10, custody: { driver, placementUrlBase: custodyUrl } })
 
-    const path = transcriptPath({ harnessHome: home, workspaceRoot: '/home/agent/work', contextId })
-    assert.deepEqual(new Uint8Array(await readFile(path)), bytes, 'the transcript is on disk before the gate opened')
+    assert.deepEqual(driver.restored, [bytes], 'the bytes reached the driver before the gate opened')
     assert.equal(reports.length, 1)
-    assert.equal(reports[0]!.path, path, 'the report names what the driver actually wrote')
+    assert.equal(reports[0]!.path, `/home/agent/${contextId}.jsonl`, 'the report names what the driver actually wrote')
   } finally {
     server.close()
-    await rm(home, { recursive: true, force: true })
   }
 })
 
 test('a refused placement report is retried at the seam rather than launching anyway', async () => {
-  const home = await mkdtemp(`${tmpdir()}/agora-launch-`)
-  const bytes = transcriptBytes(randomUUID())
+  const bytes = payloadBytes(randomUUID())
+  const driver = new FakeDriver()
   const { server, evidenceUrl, custodyUrl, reports } = await startCustodyServer(bytes, { rejectFirstReport: true })
-  const logs: string[] = []
   try {
-    await waitForGateRelease({
-      evidenceUrl,
-      pollIntervalMs: 10,
-      custody: { harnessHome: home, workspaceRoot: '/home/agent/work', placementUrlBase: custodyUrl },
-      onLog: (message) => logs.push(message),
-    })
+    await waitForGateRelease({ evidenceUrl, pollIntervalMs: 10, custody: { driver, placementUrlBase: custodyUrl } })
     assert.equal(reports.length, 2, 'the same attempt retries its own placement; it never gives up and launches')
   } finally {
     server.close()
-    await rm(home, { recursive: true, force: true })
   }
 })
 
 test('a Save offered to a Pod with no custody paths keeps waiting and says so, instead of launching', async () => {
-  const bytes = transcriptBytes(randomUUID())
+  const bytes = payloadBytes(randomUUID())
   const { server, evidenceUrl, reports, release } = await startCustodyServer(bytes)
   const logs: string[] = []
   try {
@@ -189,7 +174,6 @@ test('a Save offered to a Pod with no custody paths keeps waiting and says so, i
     assert.equal(reports.length, 0, 'nothing was placed, and nothing was reported as placed')
     assert.ok(logs.some((message) => message.includes('no custody paths were configured')))
     assert.ok(logs.length >= 2, 'it keeps saying so on every poll rather than failing silently')
-    // Only a real gate release ends the wait; here the test opens it so the loop can finish.
     release()
     await waiting
   } finally {

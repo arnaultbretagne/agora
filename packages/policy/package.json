@@ -10,6 +10,10 @@
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
-    "@agora/domain": "0.0.0"
+    "@agora/domain": "0.0.0",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
   }
 }

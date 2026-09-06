@@ -135,7 +135,11 @@ async function runRefill(
     })
     const clientConnection = buildClientConnection(connection.stream, persist)
     try {
-      await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
+      // `initialize` is deliberately NOT sent here. It is a PROCESS-level handshake the harness bridge
+      // performs once when it spawns the adapter (packages/harness-bridge/src/handshake.ts): codex-acp
+      // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
+      // connection that never initialized — so re-initializing per verb bought nothing and broke one of
+      // the two harnesses.
       await mark(options.productPool, commandId, markDispatched)
       try {
         // An embedded resource, not a resource link: a link does not deliver bytes, and the whole

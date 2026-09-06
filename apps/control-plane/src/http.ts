@@ -15,6 +15,8 @@ import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
 import { checkAdmission } from './admission.js'
 import { NoBridgeAvailableError } from './real-channel-connector.js'
 import { recoverPromptDelivery, type PromptRecoveryOptions } from './recovery/context.js'
+import { handleAdminRevisions, type AdminPublishOptions } from './http/admin-publish.js'
+import { isRevisionCurrent } from '@agora/policy'
 
 export interface AdmissionCheckOptions {
   readonly observationSource: ObservationSource
@@ -37,6 +39,17 @@ export interface ControlPlaneOptions {
    * refusing a new turn. Absent in deployments without real owners — the CONT-005 gate then simply
    * refuses, exactly as it did before recovery existed. */
   readonly recovery?: PromptRecoveryOptions
+  /** S10: publishing a reviewed catalogue revision. Absent, the endpoint answers 503 — a deployment
+   * that has not decided who may re-pin its images does not get a default answer to that question. */
+  readonly publication?: Omit<AdminPublishOptions, 'productPool'>
+  /**
+   * This process's own catalogue revision id (S10, ENGINE-014/SESSION-A11). Every mutation is fenced
+   * against the durably SELECTED revision: a worker whose local catalogue is not the selected one
+   * refuses rather than acting on it, which is what stops two workers on different images from
+   * oscillating an image or authority target between them. Absent, or with no selection published,
+   * nothing is fenced — a deployment that has never published a revision has none to be stale against.
+   */
+  readonly revisionId?: string
 }
 
 async function handlePrompt(
@@ -48,6 +61,7 @@ async function handlePrompt(
   nowSql?: string,
   admission?: AdmissionCheckOptions,
   recovery?: PromptRecoveryOptions,
+  revisionId?: string,
 ): Promise<void> {
   if (channels === undefined) {
     return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
@@ -92,6 +106,11 @@ async function handlePrompt(
     if (verdict.kind === 'unresolved') {
       return sendProblem(res, 409, 'Prompt delivery unknown', `a previous prompt may have been accepted and recovery could not resolve it: ${verdict.reason} (CONT-005)`)
     }
+  }
+
+  if (!(await isRevisionCurrent(productPool, revisionId ?? null))) {
+    // ENGINE-014: rejected immediately, not after the publication sweep reaches this Workstream.
+    return sendProblem(res, 409, 'Obsolete revision', `this worker resolves catalogue revision ${String(revisionId)}, which is no longer the selected one`)
   }
 
   let reserved: { readonly reserved: { readonly id: string }; readonly sessionId: string } | undefined
@@ -262,6 +281,8 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       if (segments[1] === 'healthz' && method === 'GET') {
         return sendJson(res, 200, { ok: true })
       }
+      // Operator surface, authenticated as a service actor rather than as a product user.
+      if (await handleAdminRevisions({ productPool, ...(options.publication ?? {}) }, req, res, segments, method)) return
       if (segments[1] !== 'workstreams') {
         return sendProblem(res, 404, 'Not found', `no resource at ${req.url ?? '/'}`)
       }
@@ -345,6 +366,17 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
           if (key === null) return sendProblem(res, 400, 'Missing Idempotency-Key', 'the Idempotency-Key header is required')
           const body = await readJsonBody(req)
           if (!body.ok) return sendProblem(res, 400, 'Invalid JSON', 'the request body must be valid JSON')
+          // The revision fence runs BEFORE the shape is validated, deliberately: a worker whose
+          // catalogue is superseded must not judge an Intent against that catalogue at all. Its
+          // verdict on which models, efforts and capabilities are valid is exactly what is stale.
+          if (!(await isRevisionCurrent(productPool, options.revisionId ?? null))) {
+            return sendProblem(
+              res,
+              409,
+              'Obsolete revision',
+              `this worker resolves catalogue revision ${String(options.revisionId)}, which is no longer the selected one; it refuses rather than authoring against it (SESSION-A11)`,
+            )
+          }
           const shape = validateIntentShape(body.body, catalogue)
           if (!shape.valid) {
             const detail = shape.errors.map((error) => `${error.field}: ${error.message}`).join('; ')
@@ -394,7 +426,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
 
       if (segments.length === 4 && segments[3] === 'prompt' && method === 'POST') {
-        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission, recovery)
+        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission, recovery, options.revisionId)
       }
       if (segments.length === 4 && segments[3] === 'items' && method === 'GET') {
         const items = await productPool.query(

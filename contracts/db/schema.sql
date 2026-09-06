@@ -610,3 +610,56 @@ GRANT SELECT ON saves, anchors, save_invalidations TO agora_custody_meta;
 -- Payload transport (runtime-control): the bytes, and nothing else. It cannot read the metadata
 -- that decides which Save is current, and it cannot publish an Anchor.
 GRANT SELECT, INSERT, DELETE ON save_payloads TO agora_custody_payload;
+
+-- S10 operational — catalogue revision publication ------------------------------------------------
+
+-- The one selected revision of the trusted deployment policy (001 Intent, engine.md — Intent
+-- authoring and revision selection). Workers read the SELECTION from here, never from whichever
+-- catalogue happened to ship in their own container image (SESSION-A11): two workers on different
+-- local files must both act on the selected revision or refuse, and a single row is what makes
+-- "the selected one" a fact rather than a per-worker opinion.
+CREATE TABLE selected_revision (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  revision_id text NOT NULL,
+  revision_set jsonb NOT NULL,
+  selected_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- One publication of a new revision. `cursor_workstream_id` is how enumeration resumes after a
+-- crash: targets are recorded in id order, and the sweep picks up from the last one it wrote
+-- (ENGINE-014's "publication durably records affected Workstreams and schedules bounded
+-- re-enqueue" — durably, so a controller restart owes the rest of the list, not a fresh start).
+CREATE TABLE revision_publications (
+  id uuid PRIMARY KEY,
+  revision_id text NOT NULL,
+  revision_set jsonb NOT NULL,
+  published_at timestamptz NOT NULL DEFAULT now(),
+  -- enumerating -> enqueuing -> complete. Never skipped: a publication that has not finished
+  -- enumerating cannot know which Workstreams it still owes a wake.
+  state text NOT NULL DEFAULT 'enumerating' CHECK (state IN ('enumerating', 'enqueuing', 'complete')),
+  cursor_workstream_id uuid NULL,
+  completed_at timestamptz NULL
+);
+
+-- One row per affected Workstream, including Workstreams with no work row at all — an idle
+-- Workstream whose harness digest was re-pinned is exactly the case a workset-only enumeration
+-- would miss, and it is the case that matters.
+CREATE TABLE publication_targets (
+  publication_id uuid NOT NULL REFERENCES revision_publications(id),
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'enqueued')),
+  enqueued_at timestamptz NULL,
+  PRIMARY KEY (publication_id, workstream_id)
+);
+
+CREATE INDEX publication_targets_pending ON publication_targets (publication_id, workstream_id) WHERE state = 'pending';
+
+REVOKE ALL ON selected_revision, revision_publications, publication_targets FROM PUBLIC;
+
+-- Publication is an operator action taken through the product API, and the re-enqueue it schedules
+-- writes the same work rows Intent authoring does — so the product role owns it. The engine reads
+-- the selection to fence its own attempts and never publishes one.
+GRANT SELECT, INSERT, UPDATE ON selected_revision TO agora_product;
+GRANT SELECT, INSERT, UPDATE ON revision_publications TO agora_product;
+GRANT SELECT, INSERT, UPDATE ON publication_targets TO agora_product;
+GRANT SELECT ON selected_revision TO agora_engine;

@@ -148,7 +148,11 @@ export class AgentChannels {
       },
     })
     channel.connection = connection
-    await connection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
+    // `initialize` is deliberately NOT sent here. It is a PROCESS-level handshake the harness bridge
+    // performs once when it spawns the adapter (packages/harness-bridge/src/handshake.ts): codex-acp
+    // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
+    // connection that never initialized — so re-initializing per verb bought nothing and broke one of
+    // the two harnesses.
     channel.acpSessionId =
       connected.existingContextId !== undefined
         ? await resumeExistingContext(connection, connected.existingContextId)

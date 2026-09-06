@@ -23,6 +23,8 @@ export interface ConnectionOptions {
 }
 
 export interface CheckContext {
+  /** The one process-level handshake, cached for the run. */
+  readonly handshake: () => Promise<Record<string, unknown>>
   readonly target: ConformanceTarget
   /** Opens a connection, runs the body, and always closes it — the harness process itself is untouched. */
   withConnection<T>(body: (connection: acp.ClientConnection) => Promise<T>, options?: ConnectionOptions): Promise<T>
@@ -48,6 +50,21 @@ function noopPersist(): (direction: 'client_to_agent' | 'agent_to_client', frame
   }
 }
 
+/**
+ * The adapter's `initialize` result, obtained ONCE per run and reused. This mirrors what the harness
+ * bridge does in production (packages/harness-bridge/src/handshake.ts) — and it is not a
+ * convenience: `codex-acp` 1.10.0 refuses a second `initialize` on the same process with
+ * "Already initialized", so a suite that initialized per check would report a broken harness where
+ * the only thing broken was the suite's own assumption.
+ */
+export function handshakeFactory(target: ConformanceTarget, withConnection: CheckContext['withConnection']): () => Promise<Record<string, unknown>> {
+  let pending: Promise<Record<string, unknown>> | null = null
+  return () => {
+    pending ??= withConnection((connection) => initialize(connection, target))
+    return pending
+  }
+}
+
 export function connectionFactory(target: ConformanceTarget): CheckContext['withConnection'] {
   return async function withConnection<T>(body: (connection: acp.ClientConnection) => Promise<T>, options?: ConnectionOptions): Promise<T> {
     const opened: TargetConnection = await target.connect()
@@ -64,6 +81,11 @@ export function connectionFactory(target: ConformanceTarget): CheckContext['with
 
 async function initialize(connection: acp.ClientConnection, target: ConformanceTarget): Promise<Record<string, unknown>> {
   return (await connection.agent.request(acp.methods.agent.initialize, initializeParams(target.workspaceRoot))) as Record<string, unknown>
+}
+
+/** The option ids this harness uses for the Intent's `model` and `effort` (S10 Step 1). */
+function optionIds(target: ConformanceTarget): { model: string; effort: string } {
+  return { model: target.configOptionIds?.model ?? 'model', effort: target.configOptionIds?.effort ?? 'effort' }
 }
 
 async function newSession(connection: acp.ClientConnection, target: ConformanceTarget): Promise<NewSessionResponse> {
@@ -87,10 +109,10 @@ function skip(id: string, row: ConformanceRowId, detail: string): CheckResult {
 export type Check = (context: CheckContext) => Promise<CheckResult>
 
 /** Launch and identity: the negotiated protocol is the pinned stable v1, not whatever the peer prefers. */
-export const protocolVersionCheck: Check = async ({ target, withConnection }) => {
+export const protocolVersionCheck: Check = async ({ target, handshake }) => {
   const id = 'identity/protocol-version'
   const row: ConformanceRowId = 'launch-and-identity'
-  const result = await withConnection((connection) => initialize(connection, target))
+  const result = await handshake()
   const negotiated = result['protocolVersion']
   const expected = target.expected.protocolVersion ?? acp.PROTOCOL_VERSION
   return negotiated === expected
@@ -99,10 +121,10 @@ export const protocolVersionCheck: Check = async ({ target, withConnection }) =>
 }
 
 /** Launch and identity: the image really carries the adapter the reviewed catalogue pinned. */
-export const agentIdentityCheck: Check = async ({ target, withConnection }) => {
+export const agentIdentityCheck: Check = async ({ target, handshake }) => {
   const id = 'identity/agent-info'
   const row: ConformanceRowId = 'launch-and-identity'
-  const result = await withConnection((connection) => initialize(connection, target))
+  const result = await handshake()
   const info = (result['agentInfo'] ?? {}) as { name?: string; version?: string }
   if (target.expected.adapterName === undefined && target.expected.adapterVersion === undefined) {
     return skip(id, row, `no pinned identity to compare against; observed ${String(info.name)}@${String(info.version)}`)
@@ -120,10 +142,10 @@ export const agentIdentityCheck: Check = async ({ target, withConnection }) => {
  * readback, `session.list` for START's discovery of a lost `session/new`. A harness missing any of
  * them cannot be enabled, because the corresponding evidence would have to be invented instead.
  */
-export const requiredCapabilitiesCheck: Check = async ({ target, withConnection }) => {
+export const requiredCapabilitiesCheck: Check = async ({ handshake }) => {
   const id = 'identity/required-capabilities'
   const row: ConformanceRowId = 'launch-and-identity'
-  const result = await withConnection((connection) => initialize(connection, target))
+  const result = await handshake()
   const capabilities = (result['agentCapabilities'] ?? {}) as { loadSession?: unknown; sessionCapabilities?: Record<string, unknown> }
   const missing: string[] = []
   if (capabilities.loadSession !== true) missing.push('agentCapabilities.loadSession')
@@ -139,28 +161,42 @@ export const requiredCapabilitiesCheck: Check = async ({ target, withConnection 
  * Launch and identity, stable correlation: a second connection reaches the SAME harness process, so
  * a context created on one connection is reachable from the next. This is the property the bridge
  * server promises ("the adapter process outlives any single WebSocket connection") and the one
- * START's rebind and Step 5's recovery actually depend on. Reachability is tested with
- * `session/resume`, NOT with `session/list` — see the discovery check below for why those are not
- * the same question.
+ * START's rebind and Step 5's recovery actually depend on.
+ *
+ * Reachability is tested with a session-scoped CONFIG read, not with `session/resume` and not with
+ * `session/list`. Resume is the wrong instrument here: codex does not persist a context until it has
+ * content, so resuming a freshly created one fails with "no rollout found for thread id" even though
+ * the process plainly still holds it — and holding it is the property under test. `session/list` is a
+ * different question again; see the discovery check below.
  */
 export const sameProcessAcrossConnectionsCheck: Check = async ({ target, withConnection }) => {
   const id = 'identity/same-process-across-connections'
   const row: ConformanceRowId = 'launch-and-identity'
-  let sessionId: string
+  const ids = optionIds(target)
+  let created: NewSessionResponse
   try {
-    sessionId = await withConnection(async (connection) => {
-      await initialize(connection, target)
-      return (await newSession(connection, target)).sessionId
-    })
+    created = await withConnection((connection) => newSession(connection, target))
   } catch (error) {
     return skip(id, row, `could not open a session to correlate: ${describe(error)}`)
   }
+  const sessionId = created.sessionId
+  const value = optionOf(created, ids.model)?.currentValue
+  if (typeof value !== 'string') return skip(id, row, `the new context reported no \`${ids.model}\` value to assert back`)
+
   try {
-    await withConnection(async (connection) => {
-      await initialize(connection, target)
-      await connection.agent.request(acp.methods.agent.session.resume, { sessionId, cwd: target.workspaceRoot, mcpServers: [] })
+    const readBack = await withConnection(async (connection) => {
+      // Asserting the value the context ALREADY reports is a genuine no-op, and the response carries
+      // every option's current value — the same readback the control plane performs.
+      const response = (await connection.agent.request(acp.methods.agent.session.setConfigOption, {
+        sessionId,
+        configId: ids.model,
+        value,
+      })) as { configOptions?: readonly ConfigOption[] }
+      return optionOf(response, ids.model)?.currentValue
     })
-    return pass(id, row, `the context ${sessionId} created on one connection is reachable from another`)
+    return readBack === value
+      ? pass(id, row, `the context ${sessionId} created on one connection is reachable from another (${ids.model} reads back as ${value})`)
+      : fail(id, row, `a second connection reached ${sessionId} but reported ${String(readBack)} where the first reported ${value}`)
   } catch (error) {
     return fail(id, row, `the context ${sessionId} is not reachable from a second connection: ${describe(error)}`)
   }
@@ -185,14 +221,12 @@ export const emptyContextDiscoverableCheck: Check = async ({ target, withConnect
   let sessionId: string
   try {
     sessionId = await withConnection(async (connection) => {
-      await initialize(connection, target)
       return (await newSession(connection, target)).sessionId
     })
   } catch (error) {
     return skip(id, row, `could not open a session to look for: ${describe(error)}`)
   }
   const listed = await withConnection(async (connection) => {
-    await initialize(connection, target)
     return (await connection.agent.request(acp.methods.agent.session.list, { cwd: target.workspaceRoot })) as {
       sessions?: readonly { sessionId?: string }[]
     }
@@ -213,19 +247,19 @@ export const configOptionsPresentCheck: Check = async ({ target, withConnection 
   let session: NewSessionResponse
   try {
     session = await withConnection(async (connection) => {
-      await initialize(connection, target)
       return newSession(connection, target)
     })
   } catch (error) {
     return skip(id, row, `could not open a session: ${describe(error)}`)
   }
-  const model = optionOf(session, 'model')
-  const effort = optionOf(session, 'effort')
+  const ids = optionIds(target)
+  const model = optionOf(session, ids.model)
+  const effort = optionOf(session, ids.effort)
   const problems: string[] = []
-  if (model === undefined) problems.push('no `model` config option')
-  else if (typeof model.currentValue !== 'string') problems.push('`model` has no currentValue')
-  if (effort === undefined) problems.push('no `effort` config option')
-  else if (typeof effort.currentValue !== 'string') problems.push('`effort` has no currentValue')
+  if (model === undefined) problems.push(`no \`${ids.model}\` config option`)
+  else if (typeof model.currentValue !== 'string') problems.push(`\`${ids.model}\` has no currentValue`)
+  if (effort === undefined) problems.push(`no \`${ids.effort}\` config option`)
+  else if (typeof effort.currentValue !== 'string') problems.push(`\`${ids.effort}\` has no currentValue`)
   return problems.length === 0
     ? pass(id, row, `model=${String(model?.currentValue)} effort=${String(effort?.currentValue)}`)
     : fail(id, row, problems.join('; '))
@@ -241,9 +275,9 @@ export const truthfulReadbackCheck: Check = async ({ target, withConnection }) =
   const row: ConformanceRowId = 'configuration-and-bootstrap'
   try {
     return await withConnection(async (connection) => {
-      await initialize(connection, target)
       const session = await newSession(connection, target)
-      const model = optionOf(session, 'model')
+      const ids = optionIds(target)
+      const model = optionOf(session, ids.model)
       const current = model?.currentValue
       const alternative = model?.options?.map((option) => option.value).find((value) => typeof value === 'string' && value !== current)
       if (typeof alternative !== 'string') {
@@ -251,22 +285,27 @@ export const truthfulReadbackCheck: Check = async ({ target, withConnection }) =
       }
       const setResponse = (await connection.agent.request(acp.methods.agent.session.setConfigOption, {
         sessionId: session.sessionId,
-        configId: 'model',
+        configId: ids.model,
         value: alternative,
       })) as { configOptions?: readonly ConfigOption[] }
-      const afterSet = optionOf(setResponse, 'model')?.currentValue
+      const afterSet = optionOf(setResponse, ids.model)?.currentValue
       if (afterSet !== alternative) {
         return fail(id, row, `set_config_option reported ${String(afterSet)} after setting ${alternative}`)
       }
-      const resumed = (await connection.agent.request(acp.methods.agent.session.resume, {
-        sessionId: session.sessionId,
-        cwd: target.workspaceRoot,
-        mcpServers: [],
-      })) as { configOptions?: readonly ConfigOption[] }
-      const afterResume = optionOf(resumed, 'model')?.currentValue
-      return afterResume === alternative
-        ? pass(id, row, `model reads back as ${alternative} both from the mutation and from resume`)
-        : fail(id, row, `resume reported ${String(afterResume)} after the model was set to ${alternative} (SESSION-A08)`)
+      // Read back on a SEPARATE connection, by asserting the value the context should now hold. A
+      // resume would be the obvious instrument and is the wrong one: codex cannot resume a context
+      // that has never been prompted, and this check is about the VALUE, not about persistence.
+      const afterReconnect = await withConnection(async (second) => {
+        const response = (await second.agent.request(acp.methods.agent.session.setConfigOption, {
+          sessionId: session.sessionId,
+          configId: ids.model,
+          value: alternative,
+        })) as { configOptions?: readonly ConfigOption[] }
+        return optionOf(response, ids.model)?.currentValue
+      })
+      return afterReconnect === alternative
+        ? pass(id, row, `model reads back as ${alternative} both from the mutation and from a separate connection`)
+        : fail(id, row, `a separate connection reported ${String(afterReconnect)} after the model was set to ${alternative} (SESSION-A08)`)
     })
   } catch (error) {
     return skip(id, row, `could not exercise configuration: ${describe(error)}`)
@@ -283,17 +322,17 @@ export const noSubstitutedDefaultCheck: Check = async ({ target, withConnection 
   const row: ConformanceRowId = 'configuration-and-bootstrap'
   try {
     return await withConnection(async (connection) => {
-      await initialize(connection, target)
       const session = await newSession(connection, target)
-      const before = optionOf(session, 'model')?.currentValue
+      const ids = optionIds(target)
+      const before = optionOf(session, ids.model)?.currentValue
       const unsupported = 'agora-conformance-model-that-does-not-exist'
       try {
         const response = (await connection.agent.request(acp.methods.agent.session.setConfigOption, {
           sessionId: session.sessionId,
-          configId: 'model',
+          configId: ids.model,
           value: unsupported,
         })) as { configOptions?: readonly ConfigOption[] }
-        const after = optionOf(response, 'model')?.currentValue
+        const after = optionOf(response, ids.model)?.currentValue
         if (after === unsupported) return fail(id, row, 'the harness accepted a model it never advertised')
         return fail(id, row, `an unsupported model was silently substituted (${String(before)} -> ${String(after)}) instead of refused`)
       } catch {
@@ -315,17 +354,17 @@ export const dependentOptionsCheck: Check = async ({ target, withConnection }) =
   const row: ConformanceRowId = 'configuration-and-bootstrap'
   try {
     return await withConnection(async (connection) => {
-      await initialize(connection, target)
       const session = await newSession(connection, target)
-      const model = optionOf(session, 'model')
+      const ids = optionIds(target)
+      const model = optionOf(session, ids.model)
       const alternative = model?.options?.map((option) => option.value).find((value) => typeof value === 'string' && value !== model.currentValue)
       if (typeof alternative !== 'string') return skip(id, row, 'the harness offers no second model value to change to')
       const response = (await connection.agent.request(acp.methods.agent.session.setConfigOption, {
         sessionId: session.sessionId,
-        configId: 'model',
+        configId: ids.model,
         value: alternative,
       })) as { configOptions?: readonly ConfigOption[] }
-      const effort = optionOf(response, 'effort')
+      const effort = optionOf(response, ids.effort)
       return effort !== undefined && typeof effort.currentValue === 'string'
         ? pass(id, row, `the model change re-reported effort (currentValue=${effort.currentValue})`)
         : fail(id, row, 'changing the model did not report the effort options that apply to it')
@@ -345,12 +384,19 @@ export const cancelIsANotificationCheck: Check = async ({ target, withConnection
   const row: ConformanceRowId = 'quiescence-and-delivery'
   try {
     return await withConnection(async (connection) => {
-      await initialize(connection, target)
       const session = await newSession(connection, target)
+      const ids = optionIds(target)
+      const model = optionOf(session, ids.model)?.currentValue
       await connection.agent.notify(acp.methods.agent.session.cancel, { sessionId: session.sessionId })
       // The connection must still work afterwards: a peer that errored or closed on the
-      // notification would fail here rather than silently look fine.
-      await connection.agent.request(acp.methods.agent.session.resume, { sessionId: session.sessionId, cwd: target.workspaceRoot, mcpServers: [] })
+      // notification would fail here rather than silently look fine. A no-op config assertion is
+      // the probe, not a resume — codex cannot resume a context that has never been prompted, and
+      // that has nothing to do with whether it survived a cancel.
+      await connection.agent.request(acp.methods.agent.session.setConfigOption, {
+        sessionId: session.sessionId,
+        configId: ids.model,
+        value: typeof model === 'string' ? model : '',
+      })
       return pass(id, row, 'session/cancel is accepted as a notification and the connection stays usable')
     })
   } catch (error) {
@@ -372,7 +418,6 @@ export const replayProvidesRecoveryEvidenceCheck: Check = async ({ target, withC
   const canary = 'Reply with exactly the single word: PONG'
   try {
     const sessionId = await withConnection(async (connection) => {
-      await initialize(connection, target)
       const session = await newSession(connection, target)
       await connection.agent.request(acp.methods.agent.session.prompt, { sessionId: session.sessionId, prompt: [{ type: 'text', text: canary }] })
       return session.sessionId
@@ -381,7 +426,6 @@ export const replayProvidesRecoveryEvidenceCheck: Check = async ({ target, withC
     const replayed: { role: 'user' | 'agent'; text: string }[] = []
     await withConnection(
       async (connection) => {
-        await initialize(connection, target)
         await connection.agent.request(acp.methods.agent.session.load, { sessionId, cwd: target.workspaceRoot, mcpServers: [] })
       },
       {
@@ -418,8 +462,36 @@ export const relayIsolationCheck: Check = async ({ target }) => {
   return skip(id, row, 'the relay decision path is covered by apps/broker\'s own tests; an in-Pod egress probe belongs to the end-to-end run')
 }
 
+/**
+ * Launch and identity: Agora opens a fresh connection per verb and NEVER initializes on it — the
+ * bridge did that once, when it spawned the adapter. This check is that assumption, made explicit.
+ * It also records what a second `initialize` does, because the two pinned adapters disagree and the
+ * disagreement is exactly why the assumption had to become explicit.
+ */
+export const handshakeIsPerProcessCheck: Check = async ({ target, handshake, withConnection }) => {
+  const id = 'identity/handshake-is-per-process'
+  const row: ConformanceRowId = 'launch-and-identity'
+  await handshake()
+
+  let secondInitialize: string
+  try {
+    await withConnection((connection) => initialize(connection, target))
+    secondInitialize = 'a second initialize is accepted'
+  } catch (error) {
+    secondInitialize = `a second initialize is refused (${describe(error)})`
+  }
+
+  try {
+    const created = await withConnection((connection) => newSession(connection, target))
+    return pass(id, row, `a connection that never initialized can open a context (${created.sessionId}); ${secondInitialize}`)
+  } catch (error) {
+    return fail(id, row, `a connection that never initialized cannot open a context: ${describe(error)} — Agora's per-verb connections would all fail`)
+  }
+}
+
 export const ALL_CHECKS: readonly Check[] = [
   protocolVersionCheck,
+  handshakeIsPerProcessCheck,
   agentIdentityCheck,
   requiredCapabilitiesCheck,
   sameProcessAcrossConnectionsCheck,

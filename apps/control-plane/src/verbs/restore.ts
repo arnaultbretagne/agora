@@ -15,7 +15,7 @@ import { bindAcpContext, currentSession, recordRestoreOrigin } from '@agora/jour
 import { getAnchor, getSave, invalidate, isExcluded, type Save } from '@agora/custody'
 import { normalizeAnchor } from '@agora/observation'
 import type { Verb } from '@agora/domain'
-import type { VerbContext, VerbExecutor } from '@agora/engine'
+import { loadLatestIntentEvent, type VerbContext, type VerbExecutor } from '@agora/engine'
 import { workspaceRoot } from '../workspace-root.js'
 
 export interface RestoreHarness {
@@ -29,8 +29,12 @@ export interface RestoreExecutorOptions {
   readonly productPool: pg.Pool
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
-  /** The deployed harness definition a Save must be compatible with. */
-  readonly harness: RestoreHarness
+  /**
+   * The deployed harness definitions, by id. Which one applies is the Workstream's own Intent's
+   * answer, not this executor's: Anchors are per (Workstream, harness), so a Workstream on codex
+   * restores codex's Anchor and leaves claude-code's exactly where it was (CONT-007).
+   */
+  readonly harnesses: ReadonlyMap<string, RestoreHarness>
   /** How long to wait for the Pod to place and verify the transcript before giving up for this tick. */
   readonly placementTimeoutMs?: number
   readonly pollIntervalMs?: number
@@ -80,22 +84,21 @@ async function runRestore(
   if (session === null || session.bridgeToken === null) return // birth/gate not caught up yet
   if (session.acpContextId !== null) return // this Session already holds a context; RESTORE is done
 
-  const anchor = await getAnchor(options.productPool, context.workstreamId, options.harness.harnessId)
+  const harness = await harnessFor(options, context.workstreamId)
+  if (harness === undefined) return // no Intent, or a harness with no custody contract: nothing to restore
+
+  const anchor = await getAnchor(options.productPool, context.workstreamId, harness.harnessId)
   if (anchor === null) return // nothing to restore — the rule tables will select START instead
   const save = await getSave(options.productPool, anchor.saveId)
   if (save === null) return
 
   const excluded = await isExcluded(options.productPool, save.id, save.driverRevision)
-  const compatibility = normalizeAnchor({
-    save,
-    harness: options.harness,
-    invalidated: excluded,
-  })
+  const compatibility = normalizeAnchor({ save, harness, invalidated: excluded })
   if (compatibility === 'none') {
     // Permanent and VERIFIED: this Save cannot be read by this harness, and no retry changes that.
     // Recording it is what stops the next tick looping on the known-bad Save (CONT-008); cleanup
     // then proceeds through the ordinary path, with no restore-to-start switch inside this Session.
-    if (!excluded) await recordVerifiedIncompatibility(options, save)
+    if (!excluded) await recordVerifiedIncompatibility(options, harness, save)
     return
   }
 
@@ -121,7 +124,11 @@ async function runRestore(
       })
       const clientConnection = buildClientConnection(connection.stream, persist)
       try {
-        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
+        // `initialize` is deliberately NOT sent here. It is a PROCESS-level handshake the harness bridge
+        // performs once when it spawns the adapter (packages/harness-bridge/src/handshake.ts): codex-acp
+        // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
+        // connection that never initialized — so re-initializing per verb bought nothing and broke one of
+        // the two harnesses.
         // The context id is the Save's own — the transcript that was just placed IS that context.
         await clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: workspaceRoot(), mcpServers: [] })
         await bindAcpContext(client, session.sessionId, { contextId: save.contextId, processGeneration: currentGeneration })
@@ -174,7 +181,14 @@ async function placeSaveInPod(options: RestoreExecutorOptions, podName: string, 
   }
 }
 
-async function recordVerifiedIncompatibility(options: RestoreExecutorOptions, save: Save): Promise<void> {
+/** The harness this Workstream's current Intent names, if it has a custody contract at all. */
+async function harnessFor(options: RestoreExecutorOptions, workstreamId: string): Promise<RestoreHarness | undefined> {
+  const intent = await loadLatestIntentEvent(options.productPool, workstreamId)
+  const harnessId = (intent?.intent as { harness?: unknown } | undefined)?.harness
+  return typeof harnessId === 'string' ? options.harnesses.get(harnessId) : undefined
+}
+
+async function recordVerifiedIncompatibility(options: RestoreExecutorOptions, harness: RestoreHarness, save: Save): Promise<void> {
   const client = await options.productPool.connect()
   try {
     await invalidate(client, {
@@ -182,9 +196,9 @@ async function recordVerifiedIncompatibility(options: RestoreExecutorOptions, sa
       // Scoped to the driver revision, not the Save: a corrected driver can still read these bytes,
       // and excluding the Save outright would throw away recoverable state (CONT-008).
       driverRevision: save.driverRevision,
-      cause: `the deployed ${options.harness.harnessId} harness cannot read format ${save.formatId} v${String(save.formatVersion)} under driver ${save.driverRevision}`,
+      cause: `the deployed ${harness.harnessId} harness cannot read format ${save.formatId} v${String(save.formatVersion)} under driver ${save.driverRevision}`,
       verifier: 'control-plane/restore',
-      target: options.harness.acceptedDriverRevisions.join(',') || options.harness.harnessId,
+      target: harness.acceptedDriverRevisions.join(',') || harness.harnessId,
     })
   } finally {
     client.release()

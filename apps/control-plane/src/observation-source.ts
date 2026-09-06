@@ -7,7 +7,7 @@
 import type pg from 'pg'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import type { ObservationSource } from '@agora/engine'
-import { currentIncarnation } from '@agora/engine'
+import { currentIncarnation, loadLatestIntentEvent } from '@agora/engine'
 import {
   normalizeConstructionWithBinding,
   normalizePowerWithBroker,
@@ -72,11 +72,18 @@ export interface HttpObservationSourceOptions {
   /** {harnessId: imageDigest} — the reviewed digest mapping construction checks admitted/running images against. */
   readonly harnessCatalogue: readonly { readonly imageDigest: string }[]
   /**
-   * The deployed harness a Save would have to be restored into (S9 Step 4). Absent, observation.anchor
-   * stays unavailable — which is right, not conservative: without knowing which formats and driver
-   * revisions the target actually accepts, "compatible" would be a guess and "none" would be a lie.
+   * The deployed harnesses a Save could be restored into, by harness id (S9 Step 4, S10 Step 2).
+   * The Anchor is per (Workstream, harness), so the one that matters is the harness this
+   * Workstream's current Intent names — a Workstream on codex must not see claude-code's Anchor,
+   * and switching back to claude-code must find it again untouched (CONT-007). Absent, or naming a
+   * harness with no custody contract, observation.anchor stays unavailable: without knowing which
+   * formats and driver revisions the target accepts, `compatible` would be a guess and `none` a lie.
    */
-  readonly restoreHarness?: AnchorEvidence['harness']
+  readonly restoreHarnesses?: ReadonlyMap<string, NonNullable<AnchorEvidence['harness']>>
+  /** What each harness calls the `model`/`effort` options (S10 Step 1). Absent, the Intent's own names are used. */
+  readonly configOptionIds?: ReadonlyMap<string, { readonly model: string; readonly effort: string }>
+  /** How each harness answers a configuration readback (S10 Step 1). Absent, `session/resume`. */
+  readonly configReadback?: ReadonlyMap<string, 'resume' | 'set-config-noop'>
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
@@ -111,14 +118,20 @@ export class HttpObservationSource implements ObservationSource {
             harnessDigestFor: digestFor,
           }
     const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
+    // Read back under the ids THIS harness uses: codex reports effort as `reasoning_effort`, and
+    // looking for `effort` there would silently produce "no snapshot" — which reads as an
+    // unavailable observation, which stalls CONFIG forever rather than failing visibly.
+    const observedHarness = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { harness?: unknown } | undefined
+    const optionIds =
+      (typeof observedHarness?.harness === 'string' ? this.options.configOptionIds?.get(observedHarness.harness) : undefined) ?? { model: 'model', effort: 'effort' }
     const syncEvidence = await this.fetchSyncEvidence(workstreamId, session, openingWindow, establishedPod, acpEvidence)
     const sessionValue = normalizeSessionWithAcp({ pod: establishedPodObservation, startupDeadlineSeconds: 0, podAgeSeconds: 0, acp: acpEvidence })
     // model/effort are only ever read off a snapshot taken while the Session was actually live —
     // config.ts's own contract (a value handed to it is trusted as already fresh); a stale/absent
     // probe means no snapshot at all, never a guessed or carried-over value.
     const configSnapshot =
-      sessionValue === 'live' && configOptions !== null && configOptions.has('model') && configOptions.has('effort')
-        ? { model: configOptions.get('model')!, effort: configOptions.get('effort')! }
+      sessionValue === 'live' && configOptions !== null && configOptions.has(optionIds.model) && configOptions.has(optionIds.effort)
+        ? { model: configOptions.get(optionIds.model)!, effort: configOptions.get(optionIds.effort)! }
         : null
 
     return {
@@ -255,8 +268,13 @@ export class HttpObservationSource implements ObservationSource {
   }
 
   private async fetchAnchorEvidence(workstreamId: string): Promise<AnchorEvidence | null> {
-    const harness = this.options.restoreHarness
-    if (harness === undefined || harness === null) return null
+    const harnesses = this.options.restoreHarnesses
+    if (harnesses === undefined || harnesses.size === 0) return null
+    const intent = await loadLatestIntentEvent(this.options.productPool, workstreamId)
+    const harnessId = (intent?.intent as { harness?: unknown } | undefined)?.harness
+    if (typeof harnessId !== 'string') return null
+    const harness = harnesses.get(harnessId)
+    if (harness === undefined) return null
     const anchor = await getAnchor(this.options.productPool, workstreamId, harness.harnessId)
     if (anchor === null) return { save: null, harness, invalidated: false }
     const save = await getSave(this.options.productPool, anchor.saveId)
@@ -310,8 +328,23 @@ export class HttpObservationSource implements ObservationSource {
       // meaningless (no config snapshot to read from a dead process either).
       return { acp: { connected: true, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration }, configOptions: null }
     }
+    // What this harness needs in order to answer "what is your current configuration?" — declared in
+    // the reviewed definition, because the two pinned adapters answer it differently.
+    const intent = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { harness?: unknown; model?: unknown } | undefined
+    const harnessId = typeof intent?.harness === 'string' ? intent.harness : undefined
+    const readback = harnessId === undefined ? undefined : this.options.configReadback?.get(harnessId)
+    const optionIds = harnessId === undefined ? undefined : this.options.configOptionIds?.get(harnessId)
     const probe = await probeSession(
-      { workstreamId, sessionId: session.sessionId, podIP: pod.podIP, bridgeToken: session.bridgeToken, contextId: session.acpContextId },
+      {
+        workstreamId,
+        sessionId: session.sessionId,
+        podIP: pod.podIP,
+        bridgeToken: session.bridgeToken,
+        contextId: session.acpContextId,
+        ...(readback !== undefined ? { configReadback: readback } : {}),
+        ...(typeof intent?.model === 'string' ? { desiredModel: intent.model } : {}),
+        ...(optionIds !== undefined ? { modelOptionId: optionIds.model } : {}),
+      },
       { productPool: this.options.productPool, bridgePort: this.options.bridgePort, ...(this.options.logger ? { logger: this.options.logger } : {}), ...(this.options.connect ? { connect: this.options.connect } : {}) },
     )
     return {
