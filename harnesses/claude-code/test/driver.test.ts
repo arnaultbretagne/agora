@@ -84,23 +84,29 @@ test('CONT-009: the captured frontier is what the driver proved, never a journal
 test('a transcript that keeps changing past the budget is refused: no quiescent cut was reached', async () => {
   const { home, contextId, path } = await fixture()
   await writeTranscript(path, transcript(contextId, [{ role: 'user', content: 'first' }]))
-  const driver = new ClaudeCodeCustodyDriver({ harnessHome: home, workspaceRoot: WORKSPACE_ROOT, stabilityWindowMs: 5, captureTimeoutMs: 60 })
+  // Deterministic rather than racing: the change lands 40ms into a 100ms stability window — well
+  // after the first read has certainly finished and well before the second begins — and the clock
+  // has already spent the budget when the driver checks it. The first version of this test raced a
+  // writer against real reads: it passed locally and failed on a loaded CI runner, which is the
+  // same as not testing anything.
+  let reads = 0
+  const driver = new ClaudeCodeCustodyDriver({
+    harnessHome: home,
+    workspaceRoot: WORKSPACE_ROOT,
+    stabilityWindowMs: 100,
+    captureTimeoutMs: 50,
+    now: () => (reads++ === 0 ? 0 : 1_000),
+  })
+  const late = setTimeout(() => void writeTranscript(path, transcript(contextId, [{ role: 'assistant', content: 'still writing' }])), 40)
 
-  let lines = 1
-  const growing = setInterval(() => {
-    lines += 1
-    void writeTranscript(path, transcript(contextId, Array.from({ length: lines }, (_, i) => ({ role: 'assistant' as const, content: `chunk ${String(i)}` }))))
-  }, 4)
-  try {
-    await assert.rejects(driver.capture(cut(contextId)), (error: unknown) => {
-      assert.ok(error instanceof CustodyRefusedError)
-      assert.equal(error.code, 'capture_refused')
-      assert.match(error.reason, /still changing after 60ms/)
-      return true
-    })
-  } finally {
-    clearInterval(growing)
-  }
+  await assert.rejects(driver.capture(cut(contextId)), (error: unknown) => {
+    assert.ok(error instanceof CustodyRefusedError)
+    assert.equal(error.code, 'capture_refused')
+    assert.match(error.reason, /still changing after 50ms/)
+    return true
+  })
+
+  clearTimeout(late)
   await rm(home, { recursive: true, force: true })
 })
 

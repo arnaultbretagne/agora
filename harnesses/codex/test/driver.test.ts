@@ -96,22 +96,28 @@ test('a rollout that keeps changing past the budget is refused', async () => {
   const { home, contextId } = await fixture()
   const path = rolloutPath(home, contextId)
   await write(path, rollout(contextId))
-  const driver = new CodexCustodyDriver({ harnessHome: home, workspaceRoot: WORKSPACE_ROOT, stabilityWindowMs: 5, captureTimeoutMs: 60 })
-  let n = 0
-  const growing = setInterval(() => {
-    n += 1
-    void write(path, rollout(contextId, Array.from({ length: n }, (_, i) => ({ type: 'response_item', payload: { content: `chunk ${String(i)}` } }))))
-  }, 4)
-  try {
-    await assert.rejects(driver.capture(cut(contextId)), (error: unknown) => {
-      assert.ok(error instanceof CustodyRefusedError)
-      assert.equal(error.code, 'capture_refused')
-      assert.match(error.reason, /still changing after 60ms/)
-      return true
-    })
-  } finally {
-    clearInterval(growing)
-  }
+  // Deterministic: the change lands 40ms into a 100ms stability window — after the first read has
+  // certainly finished, before the second begins — and the clock has already spent the budget when
+  // the driver checks it. Racing a writer against real reads passes on a quiet machine and fails on
+  // a busy one, which is the same as not testing anything.
+  let reads = 0
+  const driver = new CodexCustodyDriver({
+    harnessHome: home,
+    workspaceRoot: WORKSPACE_ROOT,
+    stabilityWindowMs: 100,
+    captureTimeoutMs: 50,
+    now: () => (reads++ === 0 ? 0 : 1_000),
+  })
+  const late = setTimeout(() => void write(path, rollout(contextId, [{ type: 'response_item', payload: { content: 'more' } }])), 40)
+
+  await assert.rejects(driver.capture(cut(contextId)), (error: unknown) => {
+    assert.ok(error instanceof CustodyRefusedError)
+    assert.equal(error.code, 'capture_refused')
+    assert.match(error.reason, /still changing after 50ms/)
+    return true
+  })
+
+  clearTimeout(late)
   await rm(home, { recursive: true, force: true })
 })
 
