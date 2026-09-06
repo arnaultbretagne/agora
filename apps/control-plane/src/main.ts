@@ -111,6 +111,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
         ...(configOptionIds !== undefined ? { configOptionIds } : {}),
         ...(configReadback !== undefined ? { configReadback } : {}),
         ...(settings !== undefined ? { syncProofMaxAgeMs: settings.custody.syncProofMaxAgeMs } : {}),
+        // Every owner read and every adapter probe is bounded (P7). Unbounded, one component that
+        // accepts a connection and answers nothing freezes the tick that asked — with the work row
+        // still claimed, so that Workstream stops reconciling entirely. Found live, twice.
+        ...(settings !== undefined ? { requestTimeoutMs: settings.engine.ownerRequestTimeoutMs, adapterRequestTimeoutMs: settings.harness.adapterRequestTimeoutMs } : {}),
         logger: (message) => console.log(message),
       })
     : new UnavailableObservationSource()
@@ -197,7 +201,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
           // lets the same cleanup_pod through it always would have (S9 Step 3).
           createTurnOffExecutor({
             inner: createSessionOpeningExecutor({
-              inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+              inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl, requestTimeoutMs: settings.engine.ownerRequestTimeoutMs }), logger: (message) => console.log(message) }),
               productPool,
               enginePool,
               runtimeControlBaseUrl,

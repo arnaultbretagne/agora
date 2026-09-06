@@ -18,6 +18,31 @@ export interface SessionProbeOptions {
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket. */
   readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
+  /**
+   * How long the connect and the one ACP request may take (P7 — harness.adapterRequestTimeoutMs).
+   *
+   * An adapter that accepts the WebSocket and then answers nothing is indistinguishable from a slow
+   * one, and this probe runs INSIDE a reconciliation tick that holds the Workstream's claim: without
+   * a deadline, one unresponsive Pod stops that Workstream reconciling for ever. A probe that times
+   * out reports `disconnected`, which is what "we could not read it" has always meant here.
+   */
+  readonly requestTimeoutMs?: number
+}
+
+/** Rejects if the promise has not settled inside the deadline. The probe's catch turns that into `disconnected`. */
+async function within<T>(work: Promise<T>, timeoutMs: number | undefined, what: string): Promise<T> {
+  if (timeoutMs === undefined) return work
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} did not answer within ${String(timeoutMs)}ms`)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 export interface SessionProbeResult {
@@ -52,7 +77,7 @@ export async function probeSession(
   if (input.podIP === null) return DISCONNECTED
   const connect = options.connect ?? connectBridge
   try {
-    const connection = await connect({ url: `ws://${input.podIP}:${options.bridgePort}/`, token: input.bridgeToken })
+    const connection = await within(connect({ url: `ws://${input.podIP}:${options.bridgePort}/`, token: input.bridgeToken }), options.requestTimeoutMs, 'the bridge')
     try {
       const client = await options.productPool.connect()
       try {
@@ -79,16 +104,24 @@ export async function probeSession(
           // already matches, and exactly the mutation CONFIG would perform when it does not.
           const readback =
             input.configReadback === 'set-config-noop' && input.desiredModel !== undefined
-              ? ((await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, {
-                  sessionId: input.contextId,
-                  configId: input.modelOptionId ?? 'model',
-                  value: input.desiredModel,
-                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
-              : ((await clientConnection.agent.request(acp.methods.agent.session.resume, {
-                  sessionId: input.contextId,
-                  cwd: workspaceRoot(),
-                  mcpServers: [],
-                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+              ? ((await within(
+                  clientConnection.agent.request(acp.methods.agent.session.setConfigOption, {
+                    sessionId: input.contextId,
+                    configId: input.modelOptionId ?? 'model',
+                    value: input.desiredModel,
+                  }),
+                  options.requestTimeoutMs,
+                  'set_session_config',
+                )) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+              : ((await within(
+                  clientConnection.agent.request(acp.methods.agent.session.resume, {
+                    sessionId: input.contextId,
+                    cwd: workspaceRoot(),
+                    mcpServers: [],
+                  }),
+                  options.requestTimeoutMs,
+                  'session/resume',
+                )) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
           const resumed = readback
           const configOptions = new Map<string, string>()
           for (const option of resumed.configOptions ?? []) {

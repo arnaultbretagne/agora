@@ -6,6 +6,8 @@ import type { OwnerRequest, OwnerResponse } from '@agora/owner-requests'
 import type { VerbRunnerTransport } from '@agora/engine'
 
 export interface HttpOwnerTransportOptions {
+  /** How long one owner call may take (P7 — engine.ownerRequestTimeoutMs). Absent, calls are unbounded, which only a test should choose. */
+  readonly requestTimeoutMs?: number
   readonly runtimeControlBaseUrl: string
   readonly brokerBaseUrl: string
 }
@@ -15,17 +17,24 @@ const RUNTIME_CONTROL_OPERATIONS = new Set(['create_pod', 'cleanup_pod', 'gate_r
 export function createHttpOwnerTransport(options: HttpOwnerTransportOptions): VerbRunnerTransport {
   return {
     route: (operation) => (RUNTIME_CONTROL_OPERATIONS.has(operation) ? 'runtime-control' : 'broker'),
-    send: async (owner, request) => sendOwnerRequest(owner === 'runtime-control' ? options.runtimeControlBaseUrl : options.brokerBaseUrl, request),
+    send: async (owner, request) =>
+      sendOwnerRequest(owner === 'runtime-control' ? options.runtimeControlBaseUrl : options.brokerBaseUrl, request, options.requestTimeoutMs),
   }
 }
 
 /** Exported for callers outside the routed transport (session-opener's own gate_release dispatch: not a tracked verb, just this one owner). */
-export async function sendOwnerRequest(baseUrl: string, request: OwnerRequest): Promise<OwnerResponse> {
+export async function sendOwnerRequest(baseUrl: string, request: OwnerRequest, timeoutMs?: number): Promise<OwnerResponse> {
   try {
+    // BOUNDED, always. An owner that accepts the connection and never answers used to hang the
+    // caller for ever — and a verb execution holds a claim, so one unanswering owner stopped that
+    // Workstream reconciling at all. Found live: a NetworkPolicy DROPPED the packets (rather than
+    // refusing them), so nothing errored and nothing returned. A timeout is `unknown`, which is
+    // what a lost call has always meant here.
     const res = await fetch(`${baseUrl}/v1/owner-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request),
+      ...(timeoutMs !== undefined ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     })
     const body = (await res.json()) as OwnerResponse | { readonly title?: string; readonly detail?: string }
     if (!res.ok) {

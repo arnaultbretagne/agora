@@ -1,8 +1,7 @@
 {
   "$id": "https://agora.dev/catalogue/runtime-settings.json",
   "title": "Runtime settings (P7)",
-  "note": "Every timing and budget the specifications leave open, pinned in one place with a reason. Code carries no defaults for these (packages/engine/src/settings.ts refuses to start without them): a value that can silently fall back to something is a value nobody has decided. The `rationale` object mirrors the shape above it, one line per setting — a number without a reason is a number the next person will change by accident.",
-
+  "note": "Every timing and budget the specifications leave open, pinned in one place with a reason. Code carries no defaults for these (packages/engine/src/settings.ts refuses to start without them): a value that can silently fall back to something is a value nobody has decided. The `rationale` object mirrors the shape above it, one line per setting \u2014 a number without a reason is a number the next person will change by accident.",
   "namespace": "agora-runs",
   "startupDeadlineSeconds": 120,
   "terminationGraceSeconds": 30,
@@ -16,7 +15,6 @@
   "relayHost": "broker.agora-system.svc.cluster.local",
   "relayPort": 8444,
   "relayCaConfigMapName": "agora-onecli-ca",
-
   "engine": {
     "claimLeaseMs": 30000,
     "claimLimit": 10,
@@ -30,9 +28,9 @@
       "jitterRatio": 0.25,
       "maxAttempts": 5,
       "recheckDelayMs": 300000
-    }
+    },
+    "ownerRequestTimeoutMs": 10000
   },
-
   "custody": {
     "preservationBudgetMs": 20000,
     "captureTimeoutMs": 10000,
@@ -42,13 +40,12 @@
     "placementTimeoutMs": 30000,
     "syncProofMaxAgeMs": 5000
   },
-
   "harness": {
     "seamPollIntervalMs": 1000,
     "custodyPollIntervalMs": 1000,
-    "adapterHandshakeTimeoutMs": 30000
+    "adapterHandshakeTimeoutMs": 30000,
+    "adapterRequestTimeoutMs": 15000
   },
-
   "rationale": {
     "startupDeadlineSeconds": "A Pod that has not reached Running in two minutes is not slow, it is stuck: image pull plus adapter start was measured well inside it.",
     "terminationGraceSeconds": "Enough for the adapter to flush its transcript after SIGTERM; the shutdown budget below is what actually bounds preservation.",
@@ -63,16 +60,18 @@
     "engine.backoff.maxDelayMs": "The cap. A minute is long enough to stop hammering a broken owner, short enough that recovery is not perceived as a hang.",
     "engine.backoff.jitterRatio": "Spreads retries so many Workstreams failing on the same owner do not resynchronize into a thundering herd.",
     "engine.backoff.maxAttempts": "After five failures the cause is not transient. The row stops retrying and says so, rather than spinning invisibly.",
-    "engine.backoff.recheckDelayMs": "How often an exhausted row is looked at again — slow, but never never: the cause may have been fixed by someone else.",
+    "engine.backoff.recheckDelayMs": "How often an exhausted row is looked at again \u2014 slow, but never never: the cause may have been fixed by someone else.",
     "custody.preservationBudgetMs": "The whole shutdown preservation window (OFF-001). Termination happens at the deadline whether or not a Save was captured; a larger value buys transcripts at the cost of leaving Pods alive longer.",
     "custody.captureTimeoutMs": "How long one driver capture may take inside that budget, leaving room for the Save commit and Anchor publication that follow.",
     "custody.restoreTimeoutMs": "A restore places one file; thirty seconds covers a slow store read, not a hung one.",
     "custody.maxPayloadBytes": "32 MiB. A conversation transcript larger than this is a different problem than custody; the limit refuses the capture rather than growing the budget.",
     "custody.captureStabilityWindowMs": "Two reads this far apart must agree before a cut is called quiescent. Measured: a transcript keeps changing for ~100-200 ms after the process is killed.",
-    "custody.placementTimeoutMs": "How long RESTORE waits for the Pod to place and verify the bytes before giving up for this tick. Not a failure — the next tick asks again.",
+    "custody.placementTimeoutMs": "How long RESTORE waits for the Pod to place and verify the bytes before giving up for this tick. Not a failure \u2014 the next tick asks again.",
     "custody.syncProofMaxAgeMs": "How recent a driver verdict must be to count as current evidence. continuity.md asks for bounded current proof; this is the bound.",
     "harness.seamPollIntervalMs": "How often a Pod asks whether its gate opened. One second is imperceptible at launch and negligible in load.",
     "harness.custodyPollIntervalMs": "How often a Pod asks whether a capture, placement or proof is wanted. Also the floor on how fast a shutdown can get its answer.",
-    "harness.adapterHandshakeTimeoutMs": "How long the bridge waits for the adapter's own initialize before declaring the process unusable."
+    "harness.adapterHandshakeTimeoutMs": "How long the bridge waits for the adapter's own initialize before declaring the process unusable.",
+    "engine.ownerRequestTimeoutMs": "How long ONE owner call may take before the caller gives up and reports the field unavailable. It must stay under claimLeaseMs: an owner that never answers used to hang a tick for ever with the work row still claimed, which stops that Workstream reconciling at all \u2014 found live when a NetworkPolicy dropped (rather than refused) the Broker's packets.",
+    "harness.adapterRequestTimeoutMs": "How long one ACP request to a harness adapter may take. An adapter that accepts a connection and never answers is indistinguishable from a slow one until this expires; without it a single unresponsive Pod froze the tick that probed it."
   }
 }

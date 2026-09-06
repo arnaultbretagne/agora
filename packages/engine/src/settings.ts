@@ -20,6 +20,8 @@ export interface EngineSettings {
   readonly sweepIntervalMs: number
   readonly publicationBatchSize: number
   readonly publicationSweepIntervalMs: number
+  /** How long one owner call may take before the caller gives up and reports the field unavailable. */
+  readonly ownerRequestTimeoutMs: number
   readonly backoff: BackoffSettings
 }
 
@@ -37,6 +39,8 @@ export interface HarnessTimingSettings {
   readonly seamPollIntervalMs: number
   readonly custodyPollIntervalMs: number
   readonly adapterHandshakeTimeoutMs: number
+  /** How long one ACP request to an adapter may take. An adapter that answers nothing must not hang a tick. */
+  readonly adapterRequestTimeoutMs: number
 }
 
 export interface PinnedSettings {
@@ -89,6 +93,7 @@ export function readPinnedSettings(document: Record<string, unknown>): PinnedSet
       sweepIntervalMs: positive(engine, 'sweepIntervalMs', 'engine'),
       publicationBatchSize: positive(engine, 'publicationBatchSize', 'engine'),
       publicationSweepIntervalMs: positive(engine, 'publicationSweepIntervalMs', 'engine'),
+      ownerRequestTimeoutMs: positive(engine, 'ownerRequestTimeoutMs', 'engine'),
       backoff: {
         baseDelayMs: positive(backoff, 'baseDelayMs', 'engine.backoff'),
         maxDelayMs: positive(backoff, 'maxDelayMs', 'engine.backoff'),
@@ -110,6 +115,7 @@ export function readPinnedSettings(document: Record<string, unknown>): PinnedSet
       seamPollIntervalMs: positive(harness, 'seamPollIntervalMs', 'harness'),
       custodyPollIntervalMs: positive(harness, 'custodyPollIntervalMs', 'harness'),
       adapterHandshakeTimeoutMs: positive(harness, 'adapterHandshakeTimeoutMs', 'harness'),
+      adapterRequestTimeoutMs: positive(harness, 'adapterRequestTimeoutMs', 'harness'),
     },
   }
 }
@@ -145,6 +151,16 @@ export function assertSettingsCoherent(settings: PinnedSettings): void {
   if (settings.engine.claimLeaseMs <= settings.engine.tickPollIntervalMs) {
     // A lease shorter than a tick would let a second worker claim a row the first is still acting on.
     problems.push('engine.claimLeaseMs must exceed engine.tickPollIntervalMs: a lease shorter than a scan interval can be reclaimed under a live worker')
+  }
+  if (settings.engine.ownerRequestTimeoutMs >= settings.engine.claimLeaseMs) {
+    // A call that can outlast the claim it is made under is a call that can hang a Workstream: the
+    // lease expires, another worker claims the row, and the first is still waiting on an owner that
+    // will never answer. Live, exactly this stopped one Workstream reconciling entirely.
+    problems.push(`engine.ownerRequestTimeoutMs (${String(settings.engine.ownerRequestTimeoutMs)}) must be under engine.claimLeaseMs (${String(settings.engine.claimLeaseMs)})`)
+  }
+  if (settings.harness.adapterRequestTimeoutMs >= settings.engine.claimLeaseMs) {
+    // Same reason, one layer further out: the probe of an unresponsive adapter happens inside a tick.
+    problems.push(`harness.adapterRequestTimeoutMs (${String(settings.harness.adapterRequestTimeoutMs)}) must be under engine.claimLeaseMs (${String(settings.engine.claimLeaseMs)})`)
   }
   if (settings.custody.syncProofMaxAgeMs > settings.engine.tickPollIntervalMs) {
     // A verdict older than a tick is not "current evidence" for the tick that reads it.

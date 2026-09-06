@@ -120,3 +120,22 @@ test('the jitter spread is bounded by the pinned ratio, so retries scatter witho
   assert.ok(highest > lowest, 'jitter must actually spread retries')
   assert.ok(highest <= Math.round(lowest * (1 + backoff.jitterRatio)) + 1)
 })
+
+test('S13: a call that can outlast the claim it is made under is refused as incoherent', () => {
+  // Both of these exist because a call with no deadline froze a reconciliation tick, live, with the
+  // work row still claimed — once when a NetworkPolicy dropped the Broker's packets (a denial that
+  // hangs rather than refuses), once when an adapter accepted a WebSocket and answered nothing.
+  const base = pinned()
+  assert.ok(base.engine.ownerRequestTimeoutMs < base.engine.claimLeaseMs)
+  assert.ok(base.harness.adapterRequestTimeoutMs < base.engine.claimLeaseMs)
+  assertSettingsCoherent(base)
+
+  assert.throws(
+    () => assertSettingsCoherent({ ...base, engine: { ...base.engine, ownerRequestTimeoutMs: base.engine.claimLeaseMs } }),
+    /ownerRequestTimeoutMs/,
+  )
+  assert.throws(
+    () => assertSettingsCoherent({ ...base, harness: { ...base.harness, adapterRequestTimeoutMs: base.engine.claimLeaseMs + 1 } }),
+    /adapterRequestTimeoutMs/,
+  )
+})
