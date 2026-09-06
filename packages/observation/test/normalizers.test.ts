@@ -96,3 +96,20 @@ test('normalizeGrantsAttached/Effective: a settled consistent pair reports its o
   assert.deepEqual(normalizeGrantsAttached({ attached }), { ok: true, value: attached })
   assert.deepEqual(normalizeGrantsEffective({ effective }), { ok: true, value: effective })
 })
+
+test('S13: a Pod still PULLING its image is coherent — an empty imageId is absence of evidence, not a stranger', () => {
+  // The kubelet publishes a container status whose imageID is "" while the pull is in flight. Read
+  // as an id it matched nothing in the catalogue, the Pod read as incoherent, and CONSTRUCT-002
+  // selects TURN_OFF for that: on the first live deployment every harness Pod was destroyed
+  // mid-pull, so no image slower to pull than one tick could ever converge.
+  const pulling = normalizeConstruction([pod({ phase: 'Pending', imageId: '' })])
+  assert.deepEqual(pulling, construction([{ digest: 'sha256:harness' }]), 'the admitted digest is what is known, and it is the right one')
+
+  // Once it IS running something, that something is what counts — including when it is wrong.
+  const stranger = normalizeConstruction([pod({ phase: 'Running', imageId: 'sha256:somebody-elses' })])
+  assert.equal(stranger.kind === 'set' && stranger.incoherent, true)
+
+  // And an empty ADMITTED digest is not an image either: nothing to compare, so incoherent.
+  const nothing = normalizeConstruction([pod({ phase: 'Pending', imageId: '', admittedDigest: '' })])
+  assert.equal(nothing.kind === 'set' && nothing.incoherent, true)
+})

@@ -58,7 +58,20 @@ export function normalizeConstruction(pods: readonly PodObservation[]): Construc
 function podMember(pod: PodObservation): ConstructionMember {
   if (pod.retiring || pod.startupDeadlineExpired) return { incoherent: true }
   if (pod.phase === 'Succeeded' || pod.phase === 'Failed') return { incoherent: true }
-  const digest = pod.imageId !== null ? pod.harnessDigestFor(pod.imageId) : pod.admittedDigest !== null ? pod.harnessDigestFor(pod.admittedDigest) : null
+  // An EMPTY imageId is the absence of evidence, not evidence of a stranger's image: the kubelet
+  // publishes exactly that while a Pod is still pulling. Reading it as an id made a pulling Pod
+  // look like an incoherent one, and incoherent means TURN_OFF — so a Pod was replaced for the
+  // crime of not having finished its first pull. Falling through to the ADMITTED digest is what
+  // this line always meant to do.
+  // A RUNNING image is judged on its own and never falls back to what was admitted: a Pod running
+  // something the catalogue does not know is incoherent, whatever it was admitted as. The fallback
+  // is for a Pod that is not running anything YET.
+  const hasRunningImage = pod.imageId !== null && pod.imageId !== ''
+  const digest = hasRunningImage
+    ? pod.harnessDigestFor(pod.imageId!)
+    : pod.admittedDigest !== null && pod.admittedDigest !== ''
+      ? pod.harnessDigestFor(pod.admittedDigest)
+      : null
   if (digest === null) return { incoherent: true }
   return { digest }
 }
