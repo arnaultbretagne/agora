@@ -180,6 +180,14 @@ termination means preservation never vetoes cleanup; it promises no fixed physic
 for an unreachable machine. Unknown creations and late owner requests also block finalization under
 the engine contract. Names or Workstream aliases never substitute for concrete cleanup targets.
 
+Physical extinction evidence (P6, what this implementation accepts as proof that a Pod's process
+stopped): the Pod is observed `Succeeded` or `Failed` with every container state `terminated`; or
+the Pod was force-deleted and its node is `Ready` and reports the Pod gone via the kubelet; or the
+operator explicitly fenced the infrastructure (node drained and cordoned). A partitioned or NotReady
+node leaves the obligation unresolved: the inventory keeps reporting the footprint and `off` stays
+unrealized. A deletion receipt alone never discharges anything. Runtime-control restarts never reset
+the persisted original shutdown deadline.
+
 ## Harness and owner conformance
 
 An enabled definition pins image/common tool bundle, harness/ACP/driver versions, fixed launch/MCP

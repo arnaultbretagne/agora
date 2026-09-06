@@ -1,0 +1,11 @@
+{
+  "$id": "https://agora.dev/catalogue/runtime-settings.json",
+  "title": "Runtime settings (P7 first values)",
+  "note": "S11 pins these after the conformance suite proves them on the pinned infrastructure; until then these are working defaults, not guarantees.",
+  "namespace": "agora-runs",
+  "startupDeadlineSeconds": 120,
+  "terminationGraceSeconds": 30,
+  "inventoryFreshnessMs": 5000,
+  "runtimeClassName": "sandboxed",
+  "runAsUser": 10001
+}

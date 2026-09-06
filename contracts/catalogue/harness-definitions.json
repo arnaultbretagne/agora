@@ -1,0 +1,13 @@
+{
+  "$id": "https://agora.dev/catalogue/harness-definitions.json",
+  "title": "Harness definitions (minimal, S6)",
+  "note": "Reviewed mapping harness_id → pinned image digest, launch command and mounts. The full definition (S8) adds the custody driver and conformance obligations. Nothing here is request-suppliable (ADR 0006).",
+  "harnesses": [
+    {
+      "harnessId": "claude-code",
+      "imageDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "launchCommand": ["/usr/local/bin/entrypoint"],
+      "mounts": [{ "name": "relay-ca", "mountPath": "/etc/agora/relay-ca", "readOnly": true }]
+    }
+  ]
+}

@@ -398,3 +398,58 @@ CREATE TABLE wake_sources (
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON mutation_epochs, owner_attempts, target_retirements, wake_sources TO agora_engine;
 GRANT SELECT ON owner_attempts, target_retirements TO agora_product;
+
+-- S6 operational — runtime-control retirement obligations ------------------------------------------------
+
+-- Recorded when a Pod is deleted with its ORIGINAL deadline; discharged only on P6 termination
+-- evidence or verified fencing. Survives runtime-control restarts (OFF-002) and work-row deletion.
+-- Keyed by the Pod's stable deterministic name (k8s-labels.ts podName()), not its K8s-assigned uid,
+-- so the obligation stays discoverable by pre-recorded correlation even after the Pod is fully gone.
+CREATE TABLE retirement_obligations (
+  pod_name text PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  reason text NOT NULL,
+  deadline timestamptz NOT NULL,
+  -- The node last observed hosting the Pod, recorded at cleanup time (P6: a force-deleted Pod's
+  -- absence only counts as termination evidence once that node is confirmed Ready — a partitioned
+  -- or NotReady node leaves the obligation unresolved).
+  node_name text NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX retirement_obligations_workstream ON retirement_obligations (workstream_id);
+
+GRANT SELECT, INSERT, DELETE ON retirement_obligations TO agora_engine;
+GRANT SELECT ON retirement_obligations TO agora_product;
+
+-- S6 operational — runtime-control's own owner record (engine.md — the owner request protocol;
+-- P5, shared shape, per-owner persistence). Mirrors packages/owner-requests' OwnerRecord: last
+-- accepted epoch per Workstream, one row per attempt key (idempotent replay by digest), and
+-- targets this owner has itself retired (positive operations refuse them forever; concrete-target
+-- cleanup stays authorized). Independent of the engine's own mutation_epochs/owner_attempts, which
+-- record the dispatch side, not the owner's.
+CREATE TABLE runtime_control_epochs (
+  workstream_id uuid PRIMARY KEY REFERENCES workstreams(id),
+  epoch bigint NOT NULL
+);
+
+CREATE TABLE runtime_control_attempts (
+  attempt_key text PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  payload_digest text NOT NULL,
+  response jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX runtime_control_attempts_workstream ON runtime_control_attempts (workstream_id);
+
+CREATE TABLE runtime_control_retired_targets (
+  target_id text PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  retired_at timestamptz NOT NULL DEFAULT now()
+);
+
+GRANT SELECT, INSERT, UPDATE ON runtime_control_epochs TO agora_engine;
+GRANT SELECT, INSERT ON runtime_control_attempts TO agora_engine;
+GRANT SELECT, INSERT ON runtime_control_retired_targets TO agora_engine;
+GRANT SELECT ON runtime_control_epochs, runtime_control_attempts, runtime_control_retired_targets TO agora_product;
