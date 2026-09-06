@@ -277,6 +277,14 @@ caps and resynchronization bounds before acceptance. The conformance suite uses 
 to prove these bounds; prose does not imply that current defaults satisfy them. Security closure
 and the fixed preservation budget cannot be extended by ordinary action backoff.
 
+Every timing and budget this section leaves open is pinned in
+`contracts/catalogue/runtime-settings.json`, with one line of rationale each, and read through one
+typed loader that carries no defaults: a value that can silently fall back to something in code is a
+value nobody has decided. `packages/engine/test/settings.test.ts` proves the pinned set is coherent
+and proves each coherence rule by falsifying it — a backoff that could exceed its cap, a lease that
+could be reclaimed under a live worker, a capture budget that could consume the whole shutdown
+window, a proof older than the tick reading it.
+
 ## Watches and recovery sweeps
 
 Every fact that can invalidate convergence has both a wake source and a bounded recovery path:

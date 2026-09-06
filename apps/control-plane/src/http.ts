@@ -17,6 +17,7 @@ import { NoBridgeAvailableError } from './real-channel-connector.js'
 import { recoverPromptDelivery, type PromptRecoveryOptions } from './recovery/context.js'
 import { handleAdminRevisions, type AdminPublishOptions } from './http/admin-publish.js'
 import { isRevisionCurrent } from '@agora/policy'
+import type { Metrics } from '@agora/telemetry'
 
 export interface AdmissionCheckOptions {
   readonly observationSource: ObservationSource
@@ -50,6 +51,10 @@ export interface ControlPlaneOptions {
    * nothing is fenced — a deployment that has never published a revision has none to be stale against.
    */
   readonly revisionId?: string
+  /** S11: the process's metric registry, rendered at /v1/metrics. */
+  readonly metrics?: Metrics
+  /** S11: owner connectivity, for readiness. Absent in modes with no owners to check. */
+  readonly readiness?: () => Promise<{ readonly ready: boolean; readonly reason: string }>
 }
 
 async function handlePrompt(
@@ -280,6 +285,17 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
       if (segments[1] === 'healthz' && method === 'GET') {
         return sendJson(res, 200, { ok: true })
+      }
+      if (segments[1] === 'readyz' && method === 'GET') {
+        // Readiness reflects the owners, not this process's own liveness: an API that answers while
+        // it cannot reach runtime-control would take traffic it can only refuse.
+        const ready = options.readiness === undefined ? { ready: true, reason: 'no owner connectivity to check in this mode' } : await options.readiness()
+        return sendJson(res, ready.ready ? 200 : 503, ready)
+      }
+      if (segments[1] === 'metrics' && method === 'GET') {
+        if (options.metrics === undefined) return sendProblem(res, 404, 'Not found', 'this deployment exposes no metrics')
+        res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' })
+        return void res.end(options.metrics.render())
       }
       // Operator surface, authenticated as a service actor rather than as a product user.
       if (await handleAdminRevisions({ productPool, ...(options.publication ?? {}) }, req, res, segments, method)) return

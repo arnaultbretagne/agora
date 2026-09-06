@@ -1,6 +1,6 @@
 # S11 — Operations, retention and hardening
 
-- **Status:** planned
+- **Status:** merged, partially — see the master plan's S11 status for exactly what is and is not done
 - **Depends on:** S10
 - **Produces:** pinned deployment settings proved by the conformance suite, retention jobs, metrics and dashboards, supply-chain review, deployment packaging, security review, backup/restore drill
 - **Master plan:** [S11](../master-plan.md#s11--operations-retention-and-hardening)
@@ -104,12 +104,25 @@ Findings only; no archived operational code.
 
 ## Definition of done
 
-- [ ] All settings pinned in catalogue files and proved under the controllable clock.
-- [ ] Retention sweeps and Workstream deletion pipeline tested.
-- [ ] Redaction test green on every log path; metrics exposed.
-- [ ] Images pinned with SBOM and provenance; bundle change rebuilds all harnesses.
-- [ ] Backup/restore drill performed and recorded; `block *` invariant asserted at startup.
-- [ ] Security review with evidence per boundary; master plan S11 marked done.
+- [x] All settings pinned in `contracts/catalogue/runtime-settings.json` and read through one typed
+      loader with no defaults; each coherence rule proved by falsifying it
+      (`packages/engine/test/settings.test.ts`). The controllable clock is exercised by the existing
+      engine tests; the settings tests use injected clocks directly.
+- [x] Retention sweeps and the Workstream deletion pipeline, tested
+      (`apps/control-plane/test/retention.test.ts`): an anchored Save is never deleted, an
+      invalidation never shortens retention, and deletion is refused while anything of the execution
+      still exists.
+- [x] Redaction test green on every log path (`packages/telemetry` — an allow list, not a denylist);
+      metrics exposed at `/v1/metrics` and readiness at `/v1/readyz`.
+- [~] Images: both harness images build in CI, assert their pinned adapters and their non-root UID,
+      and an SBOM is produced per image. Provenance attestation and digest-pinned publication belong
+      to whatever pushes to a registry, which CI deliberately does not do yet.
+- [ ] Backup/restore drill: written in `docs/operations/runbook.md` from the measured asset list,
+      NOT performed — it is a deployment action on the live cluster.
+- [~] Security review: written with evidence per boundary
+      (`docs/operations/security-review.md`), against the code and the test suite. The rows marked
+      *deployment* need a running cluster.
+- [ ] Master plan S11 marked done — not, for the reasons above.
 
 ## Report
 

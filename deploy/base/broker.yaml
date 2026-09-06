@@ -1,0 +1,86 @@
+# The Broker is the only holder of the OneCLI control key and of every Agent bearer (ADR 0009). It
+# is also the relay: a harness Pod's egress goes through it and carries no credential of its own.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: broker
+  annotations:
+    agora.dev/authority: >-
+      OneCLI control key and per-Agent bearers. No Kubernetes authority: it cannot create, read or
+      delete a Pod, and runtime-control cannot read a secret it holds.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+spec:
+  selector:
+    app: broker
+  ports:
+    - name: http
+      port: 8091
+      targetPort: http
+    - name: relay
+      port: 8444
+      targetPort: relay
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broker
+  template:
+    metadata:
+      labels:
+        app: broker
+    spec:
+      serviceAccountName: broker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: broker
+          image: ghcr.io/arnaultbretagne/agora-broker:overlay-pins-this-by-digest
+          env:
+            - name: PORT
+              value: '8091'
+            - name: RELAY_PORT
+              value: '8444'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-database, key: ENGINE_URL }
+            - name: ONECLI_BASE_URL
+              value: http://onecli.agora-system.svc.cluster.local:3000
+            - name: ONECLI_CONTROL_KEY
+              valueFrom:
+                secretKeyRef: { name: agora-onecli, key: CONTROL_KEY }
+            - name: POLICY_CAPABILITIES_PATH
+              value: /etc/agora/capabilities.json
+            - name: POLICY_GRANT_MAPPINGS_PATH
+              value: /etc/agora/grant-mappings.json
+          ports:
+            - name: http
+              containerPort: 8091
+            - name: relay
+              containerPort: 8444
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+          volumeMounts:
+            - name: catalogue
+              mountPath: /etc/agora
+              readOnly: true
+      volumes:
+        - name: catalogue
+          configMap: { name: agora-catalogue }

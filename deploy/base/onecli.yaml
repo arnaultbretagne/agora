@@ -1,0 +1,73 @@
+# OneCLI, with the three assets that must survive a restart AND a restore (field findings §3.2):
+# its PostgreSQL data, its /app/data directory (which holds the gateway CA), and the external
+# SECRET_ENCRYPTION_KEY. Losing any one of them silently breaks credential injection or TLS
+# validation for every already-running Pod — which is why they are a backup drill, not a note.
+apiVersion: v1
+kind: Service
+metadata:
+  name: onecli
+spec:
+  selector:
+    app: onecli
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: onecli-data
+spec:
+  accessModes: ['ReadWriteOnce']
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: onecli
+spec:
+  replicas: 1
+  strategy:
+    # The PVC is ReadWriteOnce and the gateway CA is in it: two replicas would either fail to
+    # schedule or, worse, serve two different CAs.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: onecli
+  template:
+    metadata:
+      labels:
+        app: onecli
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+      containers:
+        - name: onecli
+          image: ghcr.io/onecli/onecli:overlay-pins-this-by-digest
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-onecli, key: DATABASE_URL }
+            # External and backed up separately: OneCLI cannot decrypt a restored database without
+            # exactly this key, and a key generated at first boot is a key nobody wrote down.
+            - name: SECRET_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: { name: agora-onecli, key: SECRET_ENCRYPTION_KEY }
+          ports:
+            - name: http
+              containerPort: 3000
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: '2', memory: 2Gi }
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: onecli-data

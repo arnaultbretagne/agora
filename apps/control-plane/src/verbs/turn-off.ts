@@ -72,6 +72,11 @@ export interface TurnOffOptions {
   readonly logger?: (message: string) => void
 }
 
+/**
+ * The fallback used only where no settings file is wired (tests, and the unwired dev mode). A real
+ * deployment passes the pinned value from contracts/catalogue/runtime-settings.json — S11's rule is
+ * that no timing lives only in code.
+ */
 export const DEFAULT_PRESERVATION_BUDGET_MS = 20_000
 
 interface ShutdownRecord {

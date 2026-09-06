@@ -1,0 +1,45 @@
+# What may be evicted, and what may not.
+#
+# The API tolerates disruption (two replicas, stateless). The worker, runtime-control and the Broker
+# do not: each is single-replica and each holds something a drain must not interrupt half-way — a
+# claimed work row mid-verb, a shutdown inside its preservation budget, a relay carrying a turn.
+# `maxUnavailable: 0` makes a node drain WAIT for a human decision rather than take one silently.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: control-plane-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane-worker
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: control-plane-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: runtime-control
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: runtime-control
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: broker
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: broker

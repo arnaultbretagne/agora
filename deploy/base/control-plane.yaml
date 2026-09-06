@@ -1,0 +1,154 @@
+# The control plane runs as two deployments of one image: the product API and the reconciliation
+# worker. Same code, different mode, different scaling and different failure meaning — an API that
+# is down refuses requests, a worker that is down stops converging, and conflating them hides which.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: control-plane
+  annotations:
+    agora.dev/authority: >-
+      PostgreSQL only. The control plane has no Kubernetes and no OneCLI credentials by design
+      (execution.md — Owners and isolation); it asks runtime-control and the Broker, which own them.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+spec:
+  selector:
+    app: control-plane-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: control-plane-api
+  template:
+    metadata:
+      labels:
+        app: control-plane-api
+    spec:
+      serviceAccountName: control-plane
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: control-plane
+          image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
+          args: ['api']
+          env:
+            - name: MODE
+              value: api
+            - name: PORT
+              value: '8080'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-database, key: CONTROL_PLANE_URL }
+            - name: HARNESS_DEFINITIONS_PATH
+              value: /etc/agora/harness-definitions.json
+            - name: POLICY_CAPABILITIES_PATH
+              value: /etc/agora/capabilities.json
+            - name: RUNTIME_SETTINGS_PATH
+              value: /etc/agora/runtime-settings.json
+            - name: RUNTIME_CONTROL_URL
+              value: http://runtime-control.agora-system.svc.cluster.local:8090
+            - name: BROKER_URL
+              value: http://broker.agora-system.svc.cluster.local:8091
+            # Publication is an operator action; naming the actor is what opens the endpoint at all.
+            - name: PUBLICATION_SERVICE_ACTOR
+              valueFrom:
+                secretKeyRef: { name: agora-operator, key: PUBLICATION_SERVICE_ACTOR }
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /v1/readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v1/healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+          volumeMounts:
+            - name: catalogue
+              mountPath: /etc/agora
+              readOnly: true
+      volumes:
+        - name: catalogue
+          configMap: { name: agora-catalogue }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane-worker
+spec:
+  # Exactly one replica is NOT required for correctness — claims and generations make concurrent
+  # workers safe (ENGINE-005) — but more than one buys nothing until the workset is large, and one
+  # makes a log easier to read.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: control-plane-worker
+  template:
+    metadata:
+      labels:
+        app: control-plane-worker
+    spec:
+      serviceAccountName: control-plane
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: control-plane
+          image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
+          args: ['worker']
+          env:
+            - name: MODE
+              value: worker
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-database, key: CONTROL_PLANE_URL }
+            - name: HARNESS_DEFINITIONS_PATH
+              value: /etc/agora/harness-definitions.json
+            - name: POLICY_CAPABILITIES_PATH
+              value: /etc/agora/capabilities.json
+            # Required in this mode: the worker's lease, backoff and budgets are pinned, never
+            # defaulted in code, and it refuses to start without them.
+            - name: RUNTIME_SETTINGS_PATH
+              value: /etc/agora/runtime-settings.json
+            - name: RUNTIME_CONTROL_URL
+              value: http://runtime-control.agora-system.svc.cluster.local:8090
+            - name: BROKER_URL
+              value: http://broker.agora-system.svc.cluster.local:8091
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+          volumeMounts:
+            - name: catalogue
+              mountPath: /etc/agora
+              readOnly: true
+      volumes:
+        - name: catalogue
+          configMap: { name: agora-catalogue }

@@ -1,0 +1,73 @@
+# runtime-control owns Kubernetes Pods and nothing else. Its ServiceAccount's RBAC lives in
+# contracts/k8s/10-runtime-control-rbac.yaml — the authority is a reviewed contract, not a
+# deployment detail, which is why it is not restated here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: runtime-control
+spec:
+  selector:
+    app: runtime-control
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runtime-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: runtime-control
+  template:
+    metadata:
+      labels:
+        app: runtime-control
+    spec:
+      serviceAccountName: runtime-control
+      # The ONE deployable that legitimately carries a Kubernetes token.
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: runtime-control
+          image: ghcr.io/arnaultbretagne/agora-runtime-control:overlay-pins-this-by-digest
+          env:
+            - name: PORT
+              value: '8090'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-database, key: ENGINE_URL }
+            # The payload role: bytes, and no Save metadata at all (contracts/db/schema.sql).
+            - name: CUSTODY_PAYLOAD_DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: agora-database, key: CUSTODY_PAYLOAD_URL }
+            - name: RUNTIME_SETTINGS_PATH
+              value: /etc/agora/runtime-settings.json
+            - name: HARNESS_DEFINITIONS_PATH
+              value: /etc/agora/harness-definitions.json
+            - name: BRIDGE_AUTH_SECRET
+              valueFrom:
+                secretKeyRef: { name: agora-bridge-auth, key: BRIDGE_AUTH_SECRET }
+          ports:
+            - name: http
+              containerPort: 8090
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+          volumeMounts:
+            - name: catalogue
+              mountPath: /etc/agora
+              readOnly: true
+      volumes:
+        - name: catalogue
+          configMap: { name: agora-catalogue }

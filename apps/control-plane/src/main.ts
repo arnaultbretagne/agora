@@ -11,9 +11,11 @@ import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
+import { readFileSync } from 'node:fs'
 import { createVerbRouter } from './verb-router.js'
 import { setWorkspaceRoot } from './workspace-root.js'
-import { publicationSweep } from '@agora/engine'
+import { publicationSweep, readPinnedSettings, assertSettingsCoherent } from '@agora/engine'
+import { createLogger, errorClass, Metrics, METRIC } from '@agora/telemetry'
 import { advancePublication, unfinishedPublications } from '@agora/policy'
 import { createTurnOffExecutor } from './verbs/turn-off.js'
 import { createRestoreExecutor } from './verbs/restore.js'
@@ -23,9 +25,6 @@ import { RealChannelConnector } from './real-channel-connector.js'
 import type { PromptRecoveryOptions } from './recovery/context.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
-
-/** How often an interrupted publication is picked back up. Bounded work, rarely needed. */
-const PUBLICATION_SWEEP_INTERVAL_MS = 30_000
 
 /** Before HARNESS_DEFINITIONS_PATH/POLICY_CAPABILITIES_PATH/RUNTIME_CONTROL_URL/BROKER_URL are all configured, every field is unavailable — rules can only schedule work, never act, exactly as S2 always did. */
 class UnavailableObservationSource implements ObservationSource {
@@ -62,8 +61,16 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const mode = args.includes('--api-only') ? 'api' : args.includes('--worker-only') ? 'worker' : (env.AGORA_MODE ?? 'both')
   const databaseUrl = requireDatabaseUrl(env)
   const port = Number(env.PORT ?? 8080)
-  const pollIntervalMs = Number(env.TICK_POLL_MS ?? 5_000)
+  // Every timing comes from the reviewed settings file (S11 Step 1 — P7). No literal here, and no
+  // default in the loader either: a timing that can fall back to something is one nobody decided.
+  // The API-only mode does not schedule anything and so needs none of them; the worker does, and
+  // says so rather than inventing values.
+  const settingsPath = env.RUNTIME_SETTINGS_PATH
+  const settings = settingsPath === undefined ? undefined : readPinnedSettings(JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>)
+  if (settings !== undefined) assertSettingsCoherent(settings)
 
+  const metrics = new Metrics()
+  const log = createLogger()
   const productPool = createPool(databaseUrl)
   const enginePool = createPool(databaseUrl)
 
@@ -103,6 +110,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
         ...(restoreHarnesses !== undefined ? { restoreHarnesses } : {}),
         ...(configOptionIds !== undefined ? { configOptionIds } : {}),
         ...(configReadback !== undefined ? { configReadback } : {}),
+        ...(settings !== undefined ? { syncProofMaxAgeMs: settings.custody.syncProofMaxAgeMs } : {}),
         logger: (message) => console.log(message),
       })
     : new UnavailableObservationSource()
@@ -133,6 +141,21 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ...(catalogue ? { catalogue } : {}),
       ...(revisionSet ? { revisionSet } : {}),
       ...(revisionId !== undefined ? { revisionId } : {}),
+      metrics,
+      ...(wired
+        ? {
+            readiness: async (): Promise<{ ready: boolean; reason: string }> => {
+              // A fresh reach for the owner this process cannot work without. Not cached: readiness
+              // that remembers is readiness that lies during exactly the outage it exists to report.
+              try {
+                const response = await fetch(`${runtimeControlBaseUrl}/v1/wakes`)
+                return response.ok ? { ready: true, reason: 'runtime-control answered' } : { ready: false, reason: `runtime-control answered HTTP ${String(response.status)}` }
+              } catch (error) {
+                return { ready: false, reason: `runtime-control is unreachable: ${errorClass(error)}` }
+              }
+            },
+          }
+        : {}),
       // The operator surface exists only where the deployment named who may use it.
       ...(env.PUBLICATION_SERVICE_ACTOR !== undefined
         ? { publication: { servicePrincipal: env.PUBLICATION_SERVICE_ACTOR, ...(revisionSet ? { revisionSet } : {}), logger: (message: string) => console.log(message) } }
@@ -141,9 +164,13 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ...(wired ? { recovery: { productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) } satisfies PromptRecoveryOptions } : {}),
     })
     await new Promise<void>((ready) => server.listen(port, '0.0.0.0', ready))
-    console.log(`control plane API listening on :${port}`)
+    log.info('api.listening', { count: port })
   }
   if (mode === 'worker' || mode === 'both') {
+    if (settings === undefined) {
+      throw new Error('RUNTIME_SETTINGS_PATH is required to run the reconciliation worker: its claim lease, backoff and budgets are pinned in contracts/catalogue/runtime-settings.json, never defaulted in code')
+    }
+    const pollIntervalMs = settings.engine.tickPollIntervalMs
     const executor: VerbExecutor = wired
       ? createVerbRouter(
           {
@@ -151,7 +178,17 @@ export async function run(options: MainOptions = {}): Promise<void> {
             SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
             SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
             ...(restoreHarnesses !== undefined
-              ? { RESTORE: createRestoreExecutor({ productPool, runtimeControlBaseUrl, bridgePort, harnesses: restoreHarnesses, logger: (message) => console.log(message) }) }
+              ? {
+                  RESTORE: createRestoreExecutor({
+                    productPool,
+                    runtimeControlBaseUrl,
+                    bridgePort,
+                    harnesses: restoreHarnesses,
+                    placementTimeoutMs: settings.custody.placementTimeoutMs,
+                    pollIntervalMs: settings.harness.custodyPollIntervalMs,
+                    logger: (message) => console.log(message),
+                  }),
+                }
               : {}),
             REFILL: createRefillExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
           },
@@ -168,7 +205,8 @@ export async function run(options: MainOptions = {}): Promise<void> {
             }),
             productPool,
             enginePool,
-            capture: createRuntimeControlCaptureSource({ runtimeControlBaseUrl, logger: (message) => console.log(message) }),
+            capture: createRuntimeControlCaptureSource({ runtimeControlBaseUrl, pollIntervalMs: settings.harness.custodyPollIntervalMs, logger: (message) => console.log(message) }),
+            preservationBudgetMs: settings.custody.preservationBudgetMs,
 
             logger: (message) => console.log(message),
           }),
@@ -180,17 +218,33 @@ export async function run(options: MainOptions = {}): Promise<void> {
       observationSource,
       executor,
       resolve,
+      leaseMs: settings.engine.claimLeaseMs,
+      claimBatch: settings.engine.claimLimit,
+      backoff: settings.engine.backoff,
       logger: (message) => console.log(message),
     })
     const ticks = await startTickSource({
       pool: enginePool,
       connectionString: databaseUrl,
       scan: async () => {
-        await scan()
+        const summary = await scan()
+        metrics.increment(METRIC.ticks, 'Reconciliation scans run')
+        metrics.increment(METRIC.claims, 'Work rows claimed', {}, summary.claimed)
+        for (const [outcome, count] of [
+          ['action', summary.action],
+          ['hold', summary.hold],
+          ['retry', summary.retry],
+          ['acquisition', summary.acquisition],
+          ['blocked', summary.blocked],
+          ['stale', summary.stale],
+        ] as const) {
+          if (count > 0) metrics.increment(METRIC.evaluations, 'Rule evaluations by outcome', { outcome }, count)
+        }
+        if (summary.hold > 0) metrics.increment(METRIC.holds, 'Rows that held', {}, summary.hold)
       },
       pollIntervalMs,
     })
-    console.log(`reconciliation worker scanning every ${pollIntervalMs}ms${wired ? '' : ' (owners unwired: observation unavailable, no verb executor)'}`)
+    log.info('worker.started', { count: pollIntervalMs, outcome: wired ? 'wired' : 'owners-unwired' })
 
     // A publication that was interrupted mid-enumeration still owes every Workstream it had not
     // reached a wake. Resuming it is scheduling, not policy, so the sweep takes both halves as
@@ -198,9 +252,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const publications = setInterval(() => {
       void publicationSweep(
         () => unfinishedPublications(productPool),
-        (publicationId) => advancePublication(productPool, publicationId, { maxPasses: 20 }),
+        (publicationId) => advancePublication(productPool, publicationId, { batchSize: settings.engine.publicationBatchSize, maxPasses: 20 }),
       ).catch((error: unknown) => console.error('publication sweep failed', error))
-    }, PUBLICATION_SWEEP_INTERVAL_MS)
+    }, settings.engine.publicationSweepIntervalMs)
     publications.unref?.()
     const stop = async (): Promise<void> => {
       clearInterval(publications)

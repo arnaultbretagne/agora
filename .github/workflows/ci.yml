@@ -34,6 +34,21 @@ jobs:
         run: |
           uid=$(docker run --rm --entrypoint id agora-harness-codex:ci -u)
           test "$uid" = "10001"
+      # S11 Step 4 — supply chain. An SBOM per harness image, produced from the image itself rather
+      # than from the lockfile: what shipped is what is in the layers, and those two can differ.
+      # Kept as build artifacts here; publishing them with provenance belongs to whatever pushes the
+      # images to a registry, which this workflow deliberately does not do.
+      - name: SBOM for both harness images
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            anchore/syft:latest agora-harness-claude-code:ci -o spdx-json > sbom-claude-code.spdx.json
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            anchore/syft:latest agora-harness-codex:ci -o spdx-json > sbom-codex.spdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-sboms
+          path: sbom-*.spdx.json
+          if-no-files-found: error
 
   verify:
     runs-on: ubuntu-latest

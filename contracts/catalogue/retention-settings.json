@@ -1,0 +1,17 @@
+{
+  "$id": "https://agora.dev/catalogue/retention-settings.json",
+  "title": "Retention settings (P14)",
+  "note": "Grace periods, in days unless stated. Every one is a FLOOR on how long something is kept, never a promise that it is deleted the moment it expires. continuity.md — Storage and retention is the normative text; this file is the numbers, and apps/control-plane/src/retention.ts is the only thing that reads them.",
+
+  "unreferencedSaveGraceDays": 14,
+  "latestSavePerSessionGraceDays": 14,
+  "saveWithoutPayloadGraceHours": 1,
+  "sweepBatchSize": 200,
+
+  "rationale": {
+    "unreferencedSaveGraceDays": "A Save no Anchor names any more. Long enough for someone to notice a bad restore and ask for the previous one; short enough that a busy Workstream does not accumulate a month of transcripts.",
+    "latestSavePerSessionGraceDays": "The last Save of a retained producing Session stays as long as the Session does, plus this: 'what did that Session end with' should outlive the Session by a little, not by nothing.",
+    "saveWithoutPayloadGraceHours": "Metadata whose bytes were never committed — a capture that died between the two commits. One hour covers a controller restart mid-shutdown; past that it is a row describing nothing.",
+    "sweepBatchSize": "Rows per retention pass. Bounded work, like every other sweep."
+  }
+}
