@@ -306,9 +306,9 @@ response gates the next turn, no blind resend).
 **Open before merge.** Re-pin the ACP SDK version and confirm adapter support for
 `session/set_config_option`, model/effort readback and `session/resume` (§4).
 
-### S5 — Owner request protocol, epochs and attempt recovery
+### S5 — Owner request protocol, epochs and attempt recovery (done)
 
-**Goal.** The part of the engine that makes external effects safe, exercised entirely against
+**Goal.** The part of the engine that makes external effects safe, exercised entirely against Pull request #43.
 fake owners so its interleavings are cheap to run before any real Kubernetes or OneCLI exists.
 
 **Sources.** [engine: effect ownership](specs/reconciliation/engine.md#effect-ownership-and-late-requests),
