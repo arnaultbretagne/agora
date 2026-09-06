@@ -146,10 +146,16 @@ test('SESSION-A06: a process restart inside the Pod invalidates the evidence and
   assert.match(admittedSpecDigest({ containers: [] }), /^[0-9a-f]{64}$/)
 })
 
-test('the harness definitions catalogue is the only image source', () => {
+test('the harness definitions catalogue is the only image source, and it names a pullable reference', () => {
   const defs = loadHarnessDefinitions(new URL('../../../../contracts/catalogue/harness-definitions.json', import.meta.url).pathname)
   assert.equal(defs[0]!.harnessId, 'claude-code')
-  assert.match(defs[0]!.imageDigest, /^sha256:[0-9a-f]{64}$/)
+  // A BARE `sha256:…` is what this file held until the first real deployment, and it is not an
+  // image reference at all: `image: sha256:0000…` cannot be pulled by any runtime. What admission
+  // compares (CONSTRUCT-002) and what the kubelet pulls have to be the same string, and that
+  // string is repository@digest.
+  for (const definition of defs) {
+    assert.match(definition.imageDigest, /^ghcr\.io\/[a-z0-9-]+\/[a-z0-9-]+@sha256:[0-9a-f]{64}$/, `${definition.harnessId} must name a published image by digest`)
+  }
 })
 
 test('the settings carry the P7 first values', () => {
