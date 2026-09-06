@@ -13,6 +13,7 @@ import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
 import { RealChannelConnector } from './real-channel-connector.js'
+import type { PromptRecoveryOptions } from './recovery/context.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -107,6 +108,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ...(catalogue ? { catalogue } : {}),
       ...(revisionSet ? { revisionSet } : {}),
       ...(wired ? { admission: { observationSource, resolve } } : {}),
+      ...(wired ? { recovery: { productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) } satisfies PromptRecoveryOptions } : {}),
     })
     await new Promise<void>((ready) => server.listen(port, '0.0.0.0', ready))
     console.log(`control plane API listening on :${port}`)

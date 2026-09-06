@@ -14,6 +14,7 @@ import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
 import { checkAdmission } from './admission.js'
 import { NoBridgeAvailableError } from './real-channel-connector.js'
+import { recoverPromptDelivery, type PromptRecoveryOptions } from './recovery/context.js'
 
 export interface AdmissionCheckOptions {
   readonly observationSource: ObservationSource
@@ -32,6 +33,10 @@ export interface ControlPlaneOptions {
    * (runtime-control/broker) aren't wired either — there is nothing real to admit against yet, same
    * as S2's stub-catalogue mode; prompts there skip the check rather than being permanently refused. */
   readonly admission?: AdmissionCheckOptions
+  /** S8 Step 5: resolves an ambiguous previous prompt against the harness's own replay before
+   * refusing a new turn. Absent in deployments without real owners — the CONT-005 gate then simply
+   * refuses, exactly as it did before recovery existed. */
+  readonly recovery?: PromptRecoveryOptions
 }
 
 async function handlePrompt(
@@ -42,6 +47,7 @@ async function handlePrompt(
   workstreamId: string,
   nowSql?: string,
   admission?: AdmissionCheckOptions,
+  recovery?: PromptRecoveryOptions,
 ): Promise<void> {
   if (channels === undefined) {
     return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
@@ -74,6 +80,17 @@ async function handlePrompt(
     const decision = await checkAdmission(admission.observationSource, workstreamId, intent, admission.resolve)
     if (!decision.admitted) {
       return sendProblem(res, 409, 'Admission not granted', decision.reason)
+    }
+  }
+
+  // CONT-005: a previous prompt that may or may not have been accepted gates this one. Before
+  // refusing, try to actually resolve it against the harness's own replay (S8 Step 5) — recovery
+  // either proves it was delivered or proves it never was, and only an unresolvable one still
+  // gates. Recovery never re-sends anything; it only settles the ambiguous record.
+  if (recovery !== undefined && (await hasUnresolvedPrompt(productPool, workstreamId))) {
+    const verdict = await recoverPromptDelivery(recovery, workstreamId)
+    if (verdict.kind === 'unresolved') {
+      return sendProblem(res, 409, 'Prompt delivery unknown', `a previous prompt may have been accepted and recovery could not resolve it: ${verdict.reason} (CONT-005)`)
     }
   }
 
@@ -125,6 +142,15 @@ async function handlePrompt(
     }
     throw error
   }
+}
+
+/** Cheap pre-check so recovery (which opens a real ACP connection) only runs when something is actually ambiguous. */
+async function hasUnresolvedPrompt(productPool: pg.Pool, workstreamId: string): Promise<boolean> {
+  const result = await productPool.query(
+    `SELECT 1 FROM command_dispatches WHERE workstream_id = $1 AND kind = 'prompt' AND state = 'unknown' LIMIT 1`,
+    [workstreamId],
+  )
+  return (result.rowCount ?? 0) > 0
 }
 
 async function markDispatchUnknown(productPool: pg.Pool, commandId: string): Promise<void> {
@@ -225,6 +251,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
   const enginePool = options.enginePool ?? options.productPool
   const channels = options.channels
   const admission = options.admission
+  const recovery = options.recovery
 
   return createServer((req, res) => {
     void (async () => {
@@ -367,7 +394,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
 
       if (segments.length === 4 && segments[3] === 'prompt' && method === 'POST') {
-        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission)
+        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission, recovery)
       }
       if (segments.length === 4 && segments[3] === 'items' && method === 'GET') {
         const items = await productPool.query(

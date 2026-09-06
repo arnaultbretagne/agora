@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createServer } from 'node:http'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession } from '@agora/journal'
 import type { ObservationSource } from '@agora/engine'
 import { createControlPlaneServer, type AdmissionCheckOptions } from '../src/http.js'
+import type { PromptRecoveryOptions } from '../src/recovery/context.js'
 import { AgentChannels, type ChannelConnector } from '../src/agent-channel.js'
 import type { AddressInfo } from 'node:net'
 
@@ -15,9 +17,22 @@ interface RunningApi {
   readonly close: () => Promise<void>
 }
 
-async function startApi(db: TestDatabase, promptDelayMs = 0, admission?: AdmissionCheckOptions, connector?: ChannelConnector): Promise<RunningApi> {
+async function startApi(
+  db: TestDatabase,
+  promptDelayMs = 0,
+  admission?: AdmissionCheckOptions,
+  connector?: ChannelConnector,
+  recovery?: PromptRecoveryOptions,
+): Promise<RunningApi> {
   const channels = new AgentChannels({ pool: db.pool, nowSql: db.nowSql, promptDelayMs, logger: (message) => console.error(`[channel] ${message}`), ...(connector ? { connector } : {}) })
-  const server = createControlPlaneServer({ productPool: db.pool, enginePool: db.pool, channels, nowSql: db.nowSql, ...(admission ? { admission } : {}) })
+  const server = createControlPlaneServer({
+    productPool: db.pool,
+    enginePool: db.pool,
+    channels,
+    nowSql: db.nowSql,
+    ...(admission ? { admission } : {}),
+    ...(recovery ? { recovery } : {}),
+  })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return {
@@ -255,6 +270,97 @@ test('S8 Step 4b/5 prerequisite: an unreachable real bridge answers 503 and mark
       assert.equal(dispatch.rowCount, 1, 'the reservation still happened — this is a committed dispatch, not a silently dropped one')
       assert.equal(dispatch.rows[0]!['state'], 'unknown', 'never left stuck in reserved forever')
     } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S8 Step 5: the CONT-005 gate lifts once recovery proves the ambiguous prompt was delivered', async () => {
+  await withTestDatabase(async (db) => {
+    const { bindAcpContext, recordBridgeToken } = await import('@agora/journal')
+    const acp = await import('@agentclientprotocol/sdk')
+    const { markDispatched, markUnknown, reserveDispatch } = await import('@agora/acp')
+
+    // A fake harness whose session/load replays the lost prompt — the measured real shape.
+    const aToB = new TransformStream<Uint8Array, Uint8Array>()
+    const bToA = new TransformStream<Uint8Array, Uint8Array>()
+    const agentApp = acp.agent({ name: 'replaying-fake-agent' })
+    agentApp.onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }))
+    agentApp.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
+      const sessionId = (params as { sessionId: string }).sessionId
+      await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'perdu en vol' } },
+      })
+      await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'répondu quand même' } },
+      })
+      return {}
+    })
+    const agentConnection = agentApp.connect(acp.ndJsonStream(bToA.writable, aToB.readable))
+
+    const runtimeControl = createServer((req, res) => {
+      const url = req.url ?? ''
+      if (url.startsWith('/v1/workstreams/')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ pods: [{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5' }], obligations: [], complete: true }))
+        return
+      }
+      if (url.endsWith('/evidence')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ processGeneration: 0 }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    await new Promise<void>((resolve) => runtimeControl.listen(0, '127.0.0.1', resolve))
+    const rcPort = (runtimeControl.address() as AddressInfo).port
+
+    const recovery: PromptRecoveryOptions = {
+      productPool: db.pool,
+      runtimeControlBaseUrl: `http://127.0.0.1:${rcPort}`,
+      bridgePort: 8765,
+      connect: async () => ({
+        connectionId: 'c1',
+        stream: { writable: aToB.writable, readable: bToA.readable },
+        close: async () => agentConnection.close?.(),
+        closed: Promise.resolve(),
+      }),
+    }
+
+    const api = await startApi(db, 0, { observationSource: fakeObservationSource(true), resolve: RESOLVE }, undefined, recovery)
+    try {
+      const workstreamId = await createWorkstreamWithSession(db, api.port)
+      const putIntent = await request(api.port, `/v1/workstreams/${workstreamId}/intent`, { ...OWNER, 'idempotency-key': 'intent-1' }, 'PUT', onIntent())
+      assert.ok(putIntent.status === 200 || putIntent.status === 201)
+
+      // Bind the context and leave one prompt ambiguous — the CONT-005 gate.
+      const client = await db.pool.connect()
+      let lostId: string
+      try {
+        const sessionRow = await db.pool.query('SELECT id FROM sessions WHERE workstream_id = $1', [workstreamId])
+        const sessionId = sessionRow.rows[0]!['id'] as string
+        await client.query('BEGIN')
+        await recordBridgeToken(client, sessionId, 'bridge-token-1')
+        await bindAcpContext(client, sessionId, { contextId: 'ctx-1', processGeneration: 0 })
+        await client.query('COMMIT')
+        await client.query('BEGIN')
+        const lost = await reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text: 'perdu en vol' }, requestKey: 'lost-1' })
+        await markDispatched(client, lost.id)
+        await markUnknown(client, lost.id)
+        await client.query('COMMIT')
+        lostId = lost.id
+      } finally {
+        client.release()
+      }
+
+      const accepted = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'after-recovery' }, 'POST', { text: 'la suite' })
+      assert.equal(accepted.status, 202, 'recovery resolved the ambiguity, so the next turn is admitted')
+      assert.equal(await dispatchState(db, lostId), 'responded', 'the lost prompt is settled by evidence, not re-sent')
+    } finally {
+      runtimeControl.close()
       await api.close()
     }
   })

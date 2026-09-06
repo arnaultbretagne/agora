@@ -136,3 +136,51 @@ export async function markUnknown(client: pg.PoolClient, commandId: string): Pro
 export async function markRejectedBeforeAcceptance(client: pg.PoolClient, commandId: string): Promise<boolean> {
   return transition(client, commandId, ['dispatched', 'reserved'], 'rejected_before_acceptance', true)
 }
+
+/**
+ * Recovery-only exits from `unknown` (S8 Step 5 — engine.md "Prompt delivery and context
+ * creation"). Deliberately separate from markResponded/markRejectedBeforeAcceptance, which only
+ * accept `dispatched`/`reserved`: an `unknown` may only be resolved by evidence gathered from the
+ * harness itself, never by the dispatch path optimistically re-deciding its own lost outcome.
+ * `apps/control-plane/src/recovery/context.ts` is the one caller, and it only calls these after a
+ * `session/load` replay actually showed (or provably lacked) the prompt.
+ */
+export async function resolveUnknownAsDelivered(client: pg.PoolClient, commandId: string): Promise<boolean> {
+  return transition(client, commandId, ['unknown'], 'responded', true)
+}
+
+/** The replay proved the prompt never reached the harness: `rejected_before_acceptance` is exactly the "provably never sent" state. */
+export async function resolveUnknownAsNeverDelivered(client: pg.PoolClient, commandId: string): Promise<boolean> {
+  return transition(client, commandId, ['unknown'], 'rejected_before_acceptance', true)
+}
+
+export interface UnresolvedPrompt {
+  readonly id: string
+  readonly sessionId: string
+  readonly text: string | null
+  readonly state: DispatchState
+}
+
+/**
+ * Every prompt this Session actually attempted to send, oldest first — the ordered send history
+ * recovery compares against the harness's own replay. `reserved` is excluded: it never reached the
+ * transport, so it can never appear in a replay and would shift every later position by one.
+ */
+export async function attemptedPrompts(client: DispatchQueryer, workstreamId: string, sessionId: string): Promise<readonly UnresolvedPrompt[]> {
+  const result = await client.query(
+    `SELECT id, session_id, request, state FROM command_dispatches
+     WHERE workstream_id = $1 AND session_id = $2 AND kind = 'prompt'
+       AND state IN ('dispatched', 'responded', 'unknown')
+     ORDER BY reserved_at`,
+    [workstreamId, sessionId],
+  )
+  return result.rows.map((row) => {
+    const request = row['request'] as { text?: unknown } | null
+    return {
+      id: row['id'] as string,
+      sessionId: row['session_id'] as string,
+      text: typeof request?.text === 'string' ? request.text : null,
+      state: row['state'] as DispatchState,
+    }
+  })
+}

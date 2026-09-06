@@ -409,15 +409,17 @@ streamed answer → facts and projections.
 **Open before merge.** Resolved: adapter evidence for `set_config_option` and actual model/effort
 readback after resume (P3, truthful — `harnesses/claude-code/README.md`); bridge authentication
 material (P4, implemented and tested); START/CONFIG/admission and the real bridge prompt path
-(`apps/control-plane`, all tested against a real ACP agent over an in-process duplex, not mocks at
-the ACP-message level). Still genuinely open: the hot Session boundary's own trigger — the database
-mechanism exists (`packages/journal`'s `commitHotBoundary`) but nothing in S8's own rule tables
-currently invokes it (CONFIG/CAPABILITIES changes are already handled live without ending the
-Session; S9's restore path looks like the first real trigger, not S8's own scope); Step 5's prompt
-delivery recovery, blocked on a live measurement of `session/load`'s actual replay shape (real model
-spend — deliberately not guessed, see the harness README); the conformance suite and the actual
-end-to-end run, both needing a built image on real Kubernetes (no Docker in the environment this
-was written in — CI's `kind` job is where that gets exercised first).
+(`apps/control-plane`, all tested against a real ACP agent, not mocks at the ACP-message level);
+Step 5's prompt delivery recovery, whose mechanism was measured live against the pinned adapter
+(`session/load` replays the verbatim history — see the harness README's own Step 5 section) and
+implemented in `apps/control-plane/src/recovery/context.ts`. Still genuinely open: the hot Session
+boundary's own trigger — the database mechanism exists (`packages/journal`'s `commitHotBoundary`)
+but nothing in S8's own rule tables currently invokes it (CONFIG/CAPABILITIES changes are already
+handled live without ending the Session; S9's restore path looks like the first real trigger, not
+S8's own scope); the conformance suite and the actual end-to-end run, both needing a built image on
+real Kubernetes with real OneCLI credentials (no Docker in the environment this was written in —
+CI's `harness-image` job now builds and asserts the image, but running the full chain is a
+deployment step beyond it).
 
 ### S9 — Native continuity: Saves, Anchors, restore and refill
 
