@@ -18,8 +18,20 @@ export const STUB_REVISION_SET: RevisionSet = { catalogue: 'stub-s2' }
 interface HarnessDefinitionsFile {
   readonly harnesses: readonly {
     readonly harnessId: string
+    readonly imageDigest: string
     readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
   }[]
+}
+
+export interface HarnessDigest {
+  readonly harnessId: string
+  readonly imageDigest: string
+}
+
+/** The reviewed harness_id -> pinned digest mapping (001 Intent, resolve.harnessDigest) — construction compares observed evidence against exactly this, never Intent's own say-so. */
+export function loadHarnessDigests(harnessDefinitionsPath: string): readonly HarnessDigest[] {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  return harnessFile.harnesses.map((h) => ({ harnessId: h.harnessId, imageDigest: h.imageDigest }))
 }
 
 interface CapabilitiesFile {

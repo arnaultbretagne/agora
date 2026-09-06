@@ -1,13 +1,17 @@
-// The verb runner (S5): a verb becomes one or more owner requests under one attempt key, each
-// verifying ownership and preconditions. It returns no reconciliation value — the engine emits the
-// continuation tick after the attempt ends. Per-verb recovery encodes each verb's "Idempotency and
-// recovery" paragraph (003 verbs); the ACP-facing recovery bodies stay stubs until S8/S9 wire them.
+// The verb runner (S5 scaffold, wired for real in S8): a verb becomes one or more owner requests
+// under one attempt key, each verifying ownership and preconditions, dispatched and settled
+// through the same tracked attempt lifecycle ENGINE-006/007/008 already exercise
+// (reserve -> dispatch -> settle/unknown, never a direct untracked transport call). Per-verb
+// recovery encodes each verb's "Idempotency and recovery" paragraph (003 verbs); the ACP-facing
+// recovery bodies stay stubs until S8/S9 wire them.
 import type pg from 'pg'
 import type { Verb } from '@agora/domain'
+import type { QueryClient } from './db.js'
 import type { VerbContext, VerbExecutor } from './verb-executor.js'
-import { OwnerClient, type OwnerRequest, type OwnerResponse } from '@agora/owner-requests'
+import type { OwnerRequest, OwnerResponse, OwnerTarget } from '@agora/owner-requests'
 import { isRetired } from './retirement.js'
 import { dispatchAttempt, hasUnresolvedAttempts, markAttemptUnknown, reserveAttempt, type AttemptReservation } from './attempts.js'
+import { loadLatestIntentEvent } from './authoring.js'
 
 export interface VerbRunnerTransport {
   /** The owner the verb talks to, by operation namespace. */
@@ -31,37 +35,81 @@ export class UnwiredVerbError extends Error {
   }
 }
 
+export class MissingIncarnationError extends Error {
+  readonly code = 'missing_incarnation'
+
+  constructor(readonly workstreamId: string, readonly verb: Verb) {
+    super(`${verb} needs a prior BUILD's incarnation for ${workstreamId}, and none is on record`)
+    this.name = 'MissingIncarnationError'
+  }
+}
+
 interface VerbPlan {
   readonly operation: string
-  readonly target: OwnerTargetSpec
+  readonly target: OwnerTarget
   readonly payload: Record<string, unknown>
 }
 
-interface OwnerTargetSpec {
-  readonly kind: 'concrete' | 'reserved'
-  readonly id: string
-}
-
-/**
- * Per-verb request plans. BUILD creates on a reserved slot; TURN_OFF/REVOKE/GRANT act on concrete
- * targets (Pod UID / Agent id); RESTORE/START/REFILL/SET_* are ACP-facing and remain explicit
- * stubs — their recovery functions arrive with S8/S9 and until then fail typed, never silently.
- */
 /** The attempt identity is stable per (Workstream, rule, generation): a retry under the same generation keeps the key. */
 export function attemptKeyFor(verb: Verb, context: VerbContext): string {
   return `${context.workstreamId}/${verb}/${context.rule}/${context.workGeneration}`
 }
 
-function planFor(verb: Verb, context: VerbContext): VerbPlan {
+/**
+ * BUILD's reserved target id (the incarnation): a fresh one, unless a still-possibly-accepted
+ * create_pod attempt already reserved one for this Workstream — reusing it is what makes a
+ * crash-then-retry BUILD land on the exact same reserved target instead of abandoning it
+ * (engine.md: "the resulting late resource is discoverable by its pre-recorded correlation").
+ */
+async function incarnationForBuild(client: QueryClient, workstreamId: string): Promise<string> {
+  const existing = await currentIncarnation(client, workstreamId)
+  return existing ?? crypto.randomUUID()
+}
+
+/**
+ * The incarnation a prior BUILD reserved for this Workstream — GRANT/TURN_OFF act on the SAME
+ * concrete target BUILD did, never a freshly invented one. Looked up from owner_attempts (no
+ * separate "current incarnation" table to keep in sync): a create_pod attempt that might still be
+ * accepted (settled, dispatched, or unknown — never assumed absent) names it as its own target id.
+ */
+export async function currentIncarnation(client: QueryClient, workstreamId: string): Promise<string | undefined> {
+  const result = await client.query(
+    `SELECT target_id FROM owner_attempts
+     WHERE workstream_id = $1 AND operation = 'create_pod' AND state IN ('settled', 'dispatched', 'unknown')
+     ORDER BY reserved_at DESC LIMIT 1`,
+    [workstreamId],
+  )
+  return (result.rows[0] as { target_id?: string } | undefined)?.target_id
+}
+
+async function planFor(client: QueryClient, verb: Verb, context: VerbContext): Promise<VerbPlan> {
   switch (verb) {
-    case 'BUILD':
-      return { operation: 'create_pod', target: { kind: 'reserved', id: `slot:${context.workstreamId}:${context.intentSeq}` }, payload: { workstreamId: context.workstreamId, intentSeq: context.intentSeq } }
-    case 'TURN_OFF':
-      return { operation: 'cleanup_pod', target: { kind: 'concrete', id: `pod:${context.workstreamId}` }, payload: { workstreamId: context.workstreamId } }
-    case 'GRANT':
-      return { operation: 'attach_grant', target: { kind: 'concrete', id: `agent:${context.workstreamId}` }, payload: { workstreamId: context.workstreamId } }
-    case 'REVOKE':
-      return { operation: 'detach_grant', target: { kind: 'concrete', id: `agent:${context.workstreamId}` }, payload: { workstreamId: context.workstreamId } }
+    case 'BUILD': {
+      const intentEvent = await loadLatestIntentEvent(client, context.workstreamId)
+      const harnessId = (intentEvent?.intent as { harness?: unknown } | undefined)?.harness
+      if (typeof harnessId !== 'string') throw new Error(`BUILD has no harness in the current Intent for ${context.workstreamId}`)
+      const incarnation = await incarnationForBuild(client, context.workstreamId)
+      return { operation: 'create_pod', target: { kind: 'reserved', id: incarnation }, payload: { harnessId } }
+    }
+    case 'TURN_OFF': {
+      const incarnation = await currentIncarnation(client, context.workstreamId)
+      if (incarnation === undefined) throw new MissingIncarnationError(context.workstreamId, verb)
+      return { operation: 'cleanup_pod', target: { kind: 'concrete', id: incarnation }, payload: {} }
+    }
+    case 'GRANT': {
+      const incarnation = await currentIncarnation(client, context.workstreamId)
+      if (incarnation === undefined) throw new MissingIncarnationError(context.workstreamId, verb)
+      const intentEvent = await loadLatestIntentEvent(client, context.workstreamId)
+      const capabilities = (intentEvent?.intent as { capabilities?: unknown } | undefined)?.capabilities
+      return { operation: 'attach_grant', target: { kind: 'concrete', id: incarnation }, payload: { capabilityIds: Array.isArray(capabilities) ? capabilities : [] } }
+    }
+    case 'REVOKE': {
+      const incarnation = await currentIncarnation(client, context.workstreamId)
+      if (incarnation === undefined) throw new MissingIncarnationError(context.workstreamId, verb)
+      const intentEvent = await loadLatestIntentEvent(client, context.workstreamId)
+      const capabilities = (intentEvent?.intent as { capabilities?: unknown } | undefined)?.capabilities
+      return { operation: 'detach_grant', target: { kind: 'concrete', id: incarnation }, payload: { capabilityIds: Array.isArray(capabilities) ? capabilities : [] } }
+    }
     case 'RESTORE':
     case 'START':
     case 'REFILL':
@@ -79,9 +127,8 @@ export class OwnerVerbRunner implements VerbExecutor {
   constructor(private readonly options: VerbRunnerOptions) {}
 
   async execute(verb: Verb, context: VerbContext): Promise<void> {
-    const plan = planFor(verb, context)
-    const nowSql = this.options.nowSql ?? 'now()'
     const pool = this.options.pool
+    const plan = await planFor(pool, verb, context)
 
     if (await isRetired(pool, plan.target.id)) {
       // A retired target refuses positive work at the engine too — the owner would reject it; the
@@ -90,7 +137,8 @@ export class OwnerVerbRunner implements VerbExecutor {
     }
 
     const epochRow = await pool.query('SELECT epoch FROM mutation_epochs WHERE workstream_id = $1', [context.workstreamId])
-    const epoch: number = epochRow.rows[0]?.['epoch'] ?? 1
+    const epoch: number = (epochRow.rows[0] as { epoch?: number } | undefined)?.epoch ?? 1
+    const attemptKey = attemptKeyFor(verb, context)
 
     const reserveClient = await pool.connect()
     let reservation: AttemptReservation
@@ -102,8 +150,8 @@ export class OwnerVerbRunner implements VerbExecutor {
         operation: plan.operation,
         target: plan.target,
         payload: plan.payload,
-        revisionSet: { attempt: attemptKeyFor(verb, context) },
-        dispatchOwner: `attempt:${attemptKeyFor(verb, context)}`,
+        revisionSet: { attempt: attemptKey },
+        dispatchOwner: `attempt:${attemptKey}`,
         positive: POSITIVE_OPERATIONS.has(plan.operation),
       })
       await reserveClient.query('COMMIT')
@@ -115,21 +163,23 @@ export class OwnerVerbRunner implements VerbExecutor {
     reserveClient.release()
 
     const owner = this.options.transport.route(plan.operation)
-    const client = new OwnerClient((request) => this.options.transport.send(owner, request))
-    const { response } = await client.submit({
-      epoch,
-      workstreamId: context.workstreamId,
-      attemptKey: reservation.attemptKey,
-      operation: plan.operation,
-      target: plan.target,
-      payload: plan.payload,
-      payloadDigest: reservation.payloadDigest,
-      revisionSet: { attempt: attemptKeyFor(verb, context) },
-    })
+    const { settled, response } = await dispatchAttempt(
+      pool,
+      reservation,
+      { operation: plan.operation, payload: plan.payload, revisionSet: { attempt: attemptKey } },
+      (request) => this.options.transport.send(owner, request),
+    )
 
-    if (response.kind === 'rejected_stale_epoch' || response.kind === 'rejected_key_mismatch' || response.kind === 'unknown') {
-      // The runner never selects a different verb on failure: the attempt state carries the truth
-      // and the engine's backoff/budget machinery decides what happens next (ENGINE-011 shape).
+    if (response === null) {
+      // dispatchAttempt marked this attempt superseded before ever calling the transport
+      // (ENGINE-014: a request resolved under an old revision never reaches the owner).
+      this.options.logger?.(`verb ${verb} attempt ${reservation.attemptKey} superseded before dispatch (stale revision)`)
+      return
+    }
+    // The runner never selects a different verb on failure: the attempt state carries the truth
+    // (settled/unknown, already recorded by dispatchAttempt) and the engine's backoff/budget
+    // machinery decides what happens next (ENGINE-011 shape) — this is observability only.
+    if (!settled || response.kind === 'rejected_stale_epoch' || response.kind === 'rejected_key_mismatch' || response.kind === 'unknown') {
       this.options.logger?.(`verb ${verb} attempt ${reservation.attemptKey} -> ${response.kind}`)
     }
   }

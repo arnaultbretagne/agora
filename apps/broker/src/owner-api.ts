@@ -4,9 +4,10 @@
 // (Step 6) is expected to have already done this, but a GRANT retry after a crash between BUILD
 // and GRANT must not fail just because it re-derives the same Agent.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { fromWireGrantSet, toWireGrantSet } from '@agora/domain'
+import { toWireGrantSet, type Authorization } from '@agora/domain'
 import type { OwnerGate } from '@agora/owner-requests'
 import type { OwnerRequest, OwnerResponse } from '@agora/owner-requests'
+import { compile, type CapabilityCatalogue, type CredentialResolver } from '@agora/policy'
 import { agentIdentifierFor, ensureAgent, retireAgent } from './agents.js'
 import { attachDesiredGrants, revokeExcessGrants } from './grants.js'
 import { readConsistentInventory } from './inventory.js'
@@ -16,6 +17,9 @@ import type { PrivateStore } from './private-store.js'
 export interface BrokerApiOptions {
   readonly client: OneCliClient
   readonly gate: OwnerGate
+  /** The reviewed capability catalogue, and the live resolver turning its stable refs into this project's actual OneCLI ids — refreshed before every compile so a newly configured credential is visible without a restart. */
+  readonly catalogue: CapabilityCatalogue
+  readonly resolver: CredentialResolver & { refresh(): Promise<void> }
   /** REVOKE closes the relay before narrowing/detaching authority (003 verbs) — optional only for tests that never open a tunnel. */
   readonly tunnels?: { terminateAll(incarnation: string): number }
   /** Where the relay reads the Agent's gateway bearer from — optional only for tests that never exercise the relay. */
@@ -92,15 +96,31 @@ async function handleOwnerRequest(options: BrokerApiOptions, res: ServerResponse
   return send(res, 200, response)
 }
 
+/**
+ * Compilation happens here, not at the caller (001 Intent — "the exact desired grant set compiled
+ * for one policy revision" is the verb's input, but only the Broker has live secret/connection
+ * ids to resolve against; refreshing the resolver right before compiling means a credential an
+ * operator just configured in OneCLI is visible without restarting this process).
+ */
+async function compileDesired(options: BrokerApiOptions, request: OwnerRequest): Promise<{ kind: 'compiled'; grants: ReadonlySet<Authorization> } | OwnerResponse> {
+  const capabilityIds = (request.payload as { capabilityIds?: unknown }).capabilityIds
+  if (!Array.isArray(capabilityIds) || !capabilityIds.every((id) => typeof id === 'string')) {
+    return { kind: 'unknown', detail: 'payload.capabilityIds must be the Intent\'s requested capability id list' }
+  }
+  await options.resolver.refresh()
+  const result = compile(capabilityIds, options.catalogue, options.resolver)
+  if (result.kind === 'denied') return { kind: 'unknown', detail: `${result.reason}: ${result.detail}` }
+  return { kind: 'compiled', grants: result.grants }
+}
+
 async function attachGrant(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
-  const grants = (request.payload as { grants?: unknown }).grants
-  if (!Array.isArray(grants)) return { kind: 'unknown', detail: 'payload.grants must be the compiled desired grant set' }
+  const compiled = await compileDesired(options, request)
+  if (compiled.kind !== 'compiled') return compiled
   const agent = await ensureAgent(options.client, request.target.id)
   await storeBearerFor(options, request.target.id, agent.id)
-  const desired = fromWireGrantSet(grants as never)
   const inventory = await readConsistentInventory(options.client, agent.id)
   if (inventory === undefined) return { kind: 'unknown', detail: 'attached/effective did not settle to a consistent pair' }
-  await attachDesiredGrants(options.client, agent.id, desired)
+  await attachDesiredGrants(options.client, agent.id, compiled.grants)
   return { kind: 'completed', result: { agentId: agent.id } }
 }
 
@@ -115,13 +135,12 @@ async function storeBearerFor(options: BrokerApiOptions, incarnation: string, ag
 }
 
 async function detachGrant(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
-  const grants = (request.payload as { grants?: unknown }).grants
-  if (!Array.isArray(grants)) return { kind: 'unknown', detail: 'payload.grants must be the compiled desired grant set' }
+  const compiled = await compileDesired(options, request)
+  if (compiled.kind !== 'compiled') return compiled
   // The relay closes to affected traffic before authority narrows (003 verbs REVOKE) — never after.
   options.tunnels?.terminateAll(request.target.id)
   const agent = await ensureAgent(options.client, request.target.id)
-  const desired = fromWireGrantSet(grants as never)
-  await revokeExcessGrants(options.client, agent.id, desired)
+  await revokeExcessGrants(options.client, agent.id, compiled.grants)
   return { kind: 'completed', result: { agentId: agent.id } }
 }
 

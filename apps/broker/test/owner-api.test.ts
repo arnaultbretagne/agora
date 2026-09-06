@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import pg from 'pg'
 import { PgOwnerGate, payloadDigest, type OwnerRequest } from '@agora/owner-requests'
-import { toWireGrantSet, type Authorization } from '@agora/domain'
+import type { CapabilityCatalogue, CredentialResolver, GrantMappingEntry } from '@agora/policy'
 import { createBrokerApi } from '../src/owner-api.js'
 import type { AgentGrantConnection, AgentGrantSecret, AgentGrants, ConnectionGrantInput, ContainerConfig, EffectiveCredentials, OneCliAgent, OneCliClient, OneCliConnection, OneCliSecret } from '../src/onecli/client.js'
 
@@ -101,6 +101,22 @@ class StatefulOneCliClient implements OneCliClient {
   }
 }
 
+/** A fixed capability -> grant mapping and a resolver that trusts the ref as already the live id (StatefulOneCliClient doesn't model a separate id space) — enough to exercise compileDesired without pulling in the real OneCliCredentialResolver. */
+function fakeCatalogue(mappings: Record<string, readonly GrantMappingEntry[]>): CapabilityCatalogue {
+  return { revisionId: 'test-revision', capabilities: new Set(Object.keys(mappings)), grantsFor: (id) => mappings[id] }
+}
+
+const identityResolver: CredentialResolver & { refresh(): Promise<void> } = {
+  resolveSecret: (ref) => ref,
+  resolveConnection: (ref) => ref,
+  refresh: async () => {},
+}
+
+const CATALOGUE = fakeCatalogue({
+  'test.secret': [{ kind: 'secret', credentialRef: 's1', tools: 'full', approval: 'unconditional' }],
+  'test.connection.read': [{ kind: 'connection', credentialRef: 'c1', tools: ['get_repo'], approval: 'unconditional' }],
+})
+
 const WORKSTREAM_ID = '00000000-0000-4000-8000-000000000001'
 
 async function insertWorkstream(pool: pg.Pool, id: string): Promise<void> {
@@ -108,7 +124,7 @@ async function insertWorkstream(pool: pg.Pool, id: string): Promise<void> {
 }
 
 function request(overrides: Partial<OwnerRequest> = {}): OwnerRequest {
-  const payload = overrides.payload ?? {}
+  const payload = overrides.payload ?? { capabilityIds: [] }
   return {
     epoch: 1,
     workstreamId: WORKSTREAM_ID,
@@ -127,19 +143,36 @@ async function post(port: number, req: OwnerRequest): Promise<{ kind: string; [k
   return (await res.json()) as { kind: string; [key: string]: unknown }
 }
 
-test('owner-api attach_grant: ensures the incarnation\'s Agent and attaches the compiled desired set', async () => {
+test('owner-api attach_grant: ensures the incarnation\'s Agent, compiles the capability ids and attaches the result', async () => {
   await withTestDatabase(async (pool) => {
     await insertWorkstream(pool, WORKSTREAM_ID)
     const client = new StatefulOneCliClient()
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      const desired: readonly Authorization[] = [{ kind: 'secret', credential: 's1', tools: 'full', approval: 'unconditional', restrictions: [] }]
-      const result = await post(port, request({ payload: { grants: toWireGrantSet(new Set(desired)) } }))
+      const result = await post(port, request({ payload: { capabilityIds: ['test.secret'] } }))
       assert.equal(result.kind, 'completed')
       assert.ok(client.secrets.has('s1'))
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('owner-api attach_grant: an unknown capability id is refused rather than silently attaching nothing', async () => {
+  await withTestDatabase(async (pool) => {
+    await insertWorkstream(pool, WORKSTREAM_ID)
+    const client = new StatefulOneCliClient()
+    const gate = new PgOwnerGate(pool, 'broker')
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await post(port, request({ payload: { capabilityIds: ['nonexistent'] } }))
+      assert.equal(result.kind, 'unknown')
+      assert.equal(client.secrets.size, 0)
     } finally {
       server.close()
     }
@@ -151,12 +184,11 @@ test('owner-api attach_grant: an idempotent replay attaches nothing twice', asyn
     await insertWorkstream(pool, WORKSTREAM_ID)
     const client = new StatefulOneCliClient()
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      const desired: readonly Authorization[] = [{ kind: 'secret', credential: 's1', tools: 'full', approval: 'unconditional', restrictions: [] }]
-      const req = request({ payload: { grants: toWireGrantSet(new Set(desired)) } })
+      const req = request({ payload: { capabilityIds: ['test.secret'] } })
       const first = await post(port, req)
       const replay = await post(port, req)
       assert.deepEqual(replay, first)
@@ -174,12 +206,11 @@ test('owner-api detach_grant: narrows an over-broad connection to the desired sc
     await client.createAgent('x', 'incarnation-2')
     client.connections.set('c1', { connectionId: 'c1', provider: 'github-app', access: 'custom', allow: ['get_repo', 'list_repos'], ask: [] })
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      const desired: readonly Authorization[] = [{ kind: 'connection', credential: 'c1', tools: new Set(['get_repo']), approval: 'unconditional', restrictions: [] }]
-      const result = await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-2' }, payload: { grants: toWireGrantSet(new Set(desired)) } }))
+      const result = await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-2' }, payload: { capabilityIds: ['test.connection.read'] } }))
       assert.equal(result.kind, 'completed')
       assert.deepEqual(client.connections.get('c1')!.allow, ['get_repo'])
     } finally {
@@ -195,11 +226,11 @@ test('owner-api attach_grant: captures the Agent\'s gateway bearer into the priv
     const { EncryptedPrivateStore } = await import('../src/private-store.js')
     const privateStore = new EncryptedPrivateStore('test-key')
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate, privateStore })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver, privateStore })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      const result = await post(port, request({ target: { kind: 'concrete', id: 'incarnation-bearer' }, payload: { grants: [] } }))
+      const result = await post(port, request({ target: { kind: 'concrete', id: 'incarnation-bearer' }, payload: { capabilityIds: [] } }))
       assert.equal(result.kind, 'completed')
       assert.ok(privateStore.get('incarnation-bearer')?.startsWith('aoc_'))
       assert.equal(JSON.stringify(result).includes('aoc_'), false, 'the bearer never appears in the owner-request response')
@@ -216,11 +247,11 @@ test('owner-api cleanup_agent: erases the private-store bearer along with the Ag
     const { EncryptedPrivateStore } = await import('../src/private-store.js')
     const privateStore = new EncryptedPrivateStore('test-key')
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate, privateStore })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver, privateStore })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      await post(port, request({ target: { kind: 'concrete', id: 'incarnation-cleanup' }, payload: { grants: [] } }))
+      await post(port, request({ target: { kind: 'concrete', id: 'incarnation-cleanup' }, payload: { capabilityIds: [] } }))
       assert.ok(privateStore.get('incarnation-cleanup') !== undefined)
       await post(port, request({ operation: 'cleanup_agent', target: { kind: 'concrete', id: 'incarnation-cleanup' }, attemptKey: 'cleanup-1' }))
       assert.equal(privateStore.get('incarnation-cleanup'), undefined)
@@ -243,11 +274,11 @@ test('owner-api detach_grant: closes the relay to the incarnation before narrowi
       },
     }
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate, tunnels })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver, tunnels })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-3' }, payload: { grants: [] } }))
+      await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-3' }, payload: { capabilityIds: [] } }))
       assert.deepEqual(terminated, ['incarnation-3'])
     } finally {
       server.close()
@@ -260,11 +291,11 @@ test('owner-api cleanup_agent: deletes the Agent and retires the target for futu
     await insertWorkstream(pool, WORKSTREAM_ID)
     const client = new StatefulOneCliClient()
     const gate = new PgOwnerGate(pool, 'broker')
-    const server = createBrokerApi({ client, gate })
+    const server = createBrokerApi({ client, gate, catalogue: CATALOGUE, resolver: identityResolver })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
-      await post(port, request({ payload: { grants: [] } })) // creates the Agent for incarnation-1
+      await post(port, request({ payload: { capabilityIds: [] } })) // creates the Agent for incarnation-1
       const cleanup = await post(port, request({ operation: 'cleanup_agent', attemptKey: 'attempt-cleanup' }))
       assert.equal(cleanup.kind, 'completed')
       assert.deepEqual(await client.listAgents(), [])

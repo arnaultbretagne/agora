@@ -108,7 +108,7 @@ async function processRow(
   }
 
   // One fresh reader per tick: no evidence is carried across ticks (engine contract).
-  const reader = observationSource.reader(row.workstreamId)
+  const reader = await observationSource.reader(row.workstreamId)
   const evaluation = evaluate(intent, reader, resolve)
 
   if (evaluation.kind === 'acquisition_incomplete') {
