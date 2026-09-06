@@ -280,9 +280,9 @@ command, a first trivial projector (Session list with provenance).
 on a fresh Workstream), idempotent birth under concurrent repetition, projector determinism
 (rebuild equals incremental).
 
-### S4 — ACP capture seam, bridge client, commands and feed
+### S4 — ACP capture seam, bridge client, commands and feed (done)
 
-**Goal.** Complete ACP envelopes become Session facts losslessly in both directions; prompts are
+**Goal.** Complete ACP envelopes become Session facts losslessly in both directions; prompts are Pull request #42.
 commands with reservations; readable items are projections served to the browser.
 
 **Sources.** ADR 0004; [execution: ACP facts and current evidence](specs/reconciliation/execution.md#acp-facts-and-current-evidence);
