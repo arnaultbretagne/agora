@@ -4,6 +4,7 @@ import type { ConstructionObservation, ConstructionMember } from '@agora/domain'
 import { construction } from '@agora/domain'
 
 export { construction }
+export * from './grants.js'
 
 export interface RuntimeFootprint {
   readonly workstreamId: string
@@ -16,6 +17,26 @@ export interface RuntimeFootprint {
 export function normalizePower(footprint: RuntimeFootprint): 'on' | 'off' | null {
   if (footprint.podCount > 0 || footprint.unresolvedObligations > 0) return 'on'
   return footprint.complete ? 'off' : null
+}
+
+/**
+ * S7 Step 6: observation.power ALSO counts every OneCLI Agent (granted or not), every attached or
+ * effective grant, and every Broker relay binding — a missing Pod cannot hide any of these (002).
+ * `null` (broker inventory unavailable) can still combine with a Kubernetes `on` — a positive
+ * footprint from one owner suffices for `on` even while another is unreachable.
+ */
+export interface BrokerFootprint {
+  readonly agentExists: boolean
+  readonly hasAnyGrant: boolean
+  readonly hasBinding: boolean
+}
+
+export function normalizePowerWithBroker(kubernetesFootprint: RuntimeFootprint, broker: BrokerFootprint | null): 'on' | 'off' | null {
+  const kubernetes = normalizePower(kubernetesFootprint)
+  if (kubernetes === 'on') return 'on'
+  if (broker !== null && (broker.agentExists || broker.hasAnyGrant || broker.hasBinding)) return 'on'
+  if (broker === null) return null // an unread broker inventory cannot prove off, even if Kubernetes alone is empty
+  return kubernetes // 'off' or null, exactly as the Kubernetes-only rule already decided
 }
 
 export interface PodObservation {
@@ -34,23 +55,25 @@ export interface PodObservation {
  * retiring, deadline-expired or unknown-image Pods contribute ⊥.
  */
 export function normalizeConstruction(pods: readonly PodObservation[]): ConstructionObservation {
-  const members: ConstructionMember[] = []
-  for (const pod of pods) {
-    if (pod.retiring || pod.startupDeadlineExpired) {
-      members.push({ incoherent: true })
-      continue
-    }
-    if (pod.phase === 'Succeeded' || pod.phase === 'Failed') {
-      members.push({ incoherent: true })
-      continue
-    }
-    const digest = pod.imageId !== null ? pod.harnessDigestFor(pod.imageId) : pod.admittedDigest !== null ? pod.harnessDigestFor(pod.admittedDigest) : null
-    if (digest === null) {
-      members.push({ incoherent: true })
-      continue
-    }
-    members.push({ digest })
-  }
+  return construction(pods.map((pod) => podMember(pod)))
+}
+
+function podMember(pod: PodObservation): ConstructionMember {
+  if (pod.retiring || pod.startupDeadlineExpired) return { incoherent: true }
+  if (pod.phase === 'Succeeded' || pod.phase === 'Failed') return { incoherent: true }
+  const digest = pod.imageId !== null ? pod.harnessDigestFor(pod.imageId) : pod.admittedDigest !== null ? pod.harnessDigestFor(pod.admittedDigest) : null
+  if (digest === null) return { incoherent: true }
+  return { digest }
+}
+
+/**
+ * S7 Step 6: a coherent envelope needs its unique Pod-bound selective OneCLI Agent and relay
+ * binding too (002) — `agentBound` is the broker's own evidence that this Pod's incarnation has
+ * exactly that. Omitting it (`undefined`) keeps S6's Kubernetes-only coherence unchanged, so
+ * existing callers without a broker inventory yet are not forced to supply one.
+ */
+export function normalizeConstructionWithBinding(pods: readonly (PodObservation & { readonly agentBound?: boolean })[]): ConstructionObservation {
+  const members = pods.map((pod): ConstructionMember => (pod.agentBound === false ? { incoherent: true } : podMember(pod)))
   return construction(members)
 }
 

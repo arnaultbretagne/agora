@@ -1,15 +1,18 @@
 {
-  "name": "@agora/owner-requests",
+  "name": "@agora/broker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": "./dist/src/index.js",
+  "exports": "./dist/src/main.js",
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
+    "@agora/domain": "0.0.0",
+    "@agora/owner-requests": "0.0.0",
+    "@agora/policy": "0.0.0",
     "pg": "8.23.0"
   }
 }

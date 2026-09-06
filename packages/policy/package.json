@@ -1,5 +1,5 @@
 {
-  "name": "@agora/owner-requests",
+  "name": "@agora/policy",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,6 +10,6 @@
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
-    "pg": "8.23.0"
+    "@agora/domain": "0.0.0"
   }
 }

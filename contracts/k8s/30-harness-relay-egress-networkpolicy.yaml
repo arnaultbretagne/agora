@@ -1,0 +1,38 @@
+# S7 — the one narrow exception to 20-default-deny-networkpolicy.yaml: a harness Pod may reach the
+# Broker's relay port and nothing else (ADR 0009 — the Pod never gets a direct path to OneCLI or to
+# any provider; every egress goes through the relay's own authorization decision). Matches whatever
+# labels the Broker Deployment carries (`app: broker`, port 8444) — not itself declared here, same
+# as runtime-control's own Deployment (contracts/k8s only carries namespace/RBAC/NetworkPolicy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harness-egress-to-relay
+  namespace: agora-runs
+spec:
+  podSelector:
+    matchLabels:
+      agora.dev/app: runtime-controlled
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agora-system
+          podSelector:
+            matchLabels:
+              app: broker
+      ports:
+        - port: 8444
+          protocol: TCP
+    # DNS — without it the harness Pod cannot even resolve the relay's Service name (kube-system's
+    # own namespace label is cluster-managed, not this catalogue's to set).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

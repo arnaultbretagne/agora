@@ -83,6 +83,20 @@ jobs:
           sa=system:serviceaccount:agora-runs:harness
           ! kubectl auth can-i get pods -n agora-runs --as="$sa" | grep -qx yes
           ! kubectl auth can-i get secrets -n agora-runs --as="$sa" | grep -qx yes
+      - name: the broker ServiceAccount can only read Pods — no write, no Nodes
+        run: |
+          set -e
+          sa=system:serviceaccount:agora-system:broker
+          kubectl auth can-i get pods -n agora-runs --as="$sa" | grep -qx yes
+          kubectl auth can-i list pods -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i create pods -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i delete pods -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i watch pods -n agora-runs --as="$sa" | grep -qx yes
+          ! kubectl auth can-i get nodes --as="$sa" | grep -qx yes
+          ! kubectl auth can-i get secrets -n agora-runs --as="$sa" | grep -qx yes
+      - name: a harness Pod may reach only the relay port, nothing else on the network
+        run: |
+          kubectl get networkpolicy harness-egress-to-relay -n agora-runs
       - name: a real Pod round-trips through the runtime-control identity (create, observe, delete)
         run: |
           set -e

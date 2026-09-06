@@ -1,0 +1,29 @@
+{
+  "$id": "https://agora.dev/catalogue/grant-mappings.json",
+  "title": "Capability to OneCLI grant mappings (S7 first values, P9)",
+  "note": "Every right named here is reviewed. credentialRef is never a live OneCLI id (secretId/connectionId are per-project runtime values, not catalogue content) — it is the stable OneCLI field the trusted resolver matches against: a Secret's `type` for kind=secret, a Connection's `provider` for kind=connection (apps/broker/src/onecli verified live, 2026-09-06, apps/broker/README.md). tools is either the literal string \"full\" or an explicit tool id list from GET /apps/{provider}/permission-definition.",
+  "mappings": {
+    "provider.anthropic": [
+      { "kind": "secret", "credentialRef": "anthropic", "tools": "full", "approval": "unconditional" }
+    ],
+    "provider.openai": [
+      { "kind": "secret", "credentialRef": "openai", "tools": "full", "approval": "unconditional" }
+    ],
+    "tool.github.read": [
+      {
+        "kind": "connection",
+        "credentialRef": "github-app",
+        "tools": ["git_clone", "get_repo", "list_repos", "list_pulls", "list_issues", "graphql_query", "read_raw_content"],
+        "approval": "unconditional"
+      }
+    ],
+    "tool.github.write": [
+      {
+        "kind": "connection",
+        "credentialRef": "github-app",
+        "tools": ["git_push", "create_pull", "create_comment", "create_issue", "graphql_mutation", "delete_branch"],
+        "approval": "required"
+      }
+    ]
+  }
+}

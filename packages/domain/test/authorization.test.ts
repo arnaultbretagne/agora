@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { Authorization, GrantComparisonContext } from '../src/index.js'
-import { authorizationKey, equals, excess, grantUnion, includes, isSubset } from '../src/index.js'
+import { authorizationKey, equals, excess, fromWireGrantSet, grantUnion, includes, isSubset, toWireGrantSet } from '../src/index.js'
 
 interface AuthOverrides {
   kind?: Authorization['kind']
@@ -153,4 +153,13 @@ test('grantUnion merges attached and effective entries for comparison', () => {
   const desired = new Set([auth({ credential: 'cred-a' })])
   assert.equal(isSubset(union, desired), false)
   assert.deepEqual(excess(union, desired), [...effective])
+})
+
+test('a grant set round-trips through the wire form exactly (JSON has no Set)', () => {
+  const grants = new Set([auth({ credential: 'cred-a', tools: new Set(['b', 'a']) }), auth({ credential: 'cred-b', tools: 'full' })])
+  const wire = toWireGrantSet(grants)
+  const json = JSON.parse(JSON.stringify(wire)) as typeof wire
+  assert.deepEqual(json[0]!.tools, ['a', 'b'], 'tools travel sorted, not in Set iteration order')
+  const restored = fromWireGrantSet(json)
+  assert.equal(equals(restored, grants), true)
 })

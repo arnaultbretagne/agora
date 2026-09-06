@@ -1,0 +1,8 @@
+{
+  "$id": "https://agora.dev/catalogue/egress-hosts.json",
+  "title": "Reviewed egress hosts per connection provider (S7 Step 5, P9)",
+  "note": "The relay's reachability projection (ADR 0009: 'a fixed deterministic projection of OneCLI's observed effective grant set') for app connections, keyed by the same `provider` OneCLI's effective-credentials response names directly. A usable secret instead carries its own reviewed host straight from OneCLI (set when an operator configured it) — no entry needed here. An unknown provider projects to no host: a stale or unreviewed mapping closes access, it never opens it.",
+  "hosts": {
+    "github-app": ["api.github.com", "github.com", "raw.githubusercontent.com", "codeload.github.com"]
+  }
+}

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { withTestDatabase } from '@agora/testkit'
 import { payloadDigest, type OwnerRequest } from '@agora/owner-requests'
-import { PgOwnerGate } from '../src/owner-gate.js'
+import { PgOwnerGate } from '@agora/owner-requests'
 import type { HttpError, K8sClient, K8sObject } from '../src/k8s-client.js'
 
 async function insertWorkstream(pool: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, id: string): Promise<void> {
@@ -25,62 +25,9 @@ function request(overrides: Partial<OwnerRequest> = {}): OwnerRequest {
   }
 }
 
-test('PgOwnerGate: a stale epoch is rejected before any downstream call', async () => {
-  await withTestDatabase(async (db) => {
-    const workstreamId = randomUUID()
-    await insertWorkstream(db.pool, workstreamId)
-    const gate = new PgOwnerGate(db.pool as never)
-    const req = request({ workstreamId, epoch: 5 })
-    await gate.record(req, { kind: 'completed', result: {} })
-
-    const older = await gate.decide(request({ workstreamId, epoch: 2, attemptKey: 'attempt-2' }))
-    assert.deepEqual(older, { kind: 'respond', response: { kind: 'rejected_stale_epoch', recordedEpoch: 5 } })
-  })
-})
-
-test('PgOwnerGate: a reused attempt key with the same payload replays the recorded response (idempotent retry)', async () => {
-  await withTestDatabase(async (db) => {
-    const workstreamId = randomUUID()
-    await insertWorkstream(db.pool, workstreamId)
-    const gate = new PgOwnerGate(db.pool as never)
-    const req = request({ workstreamId })
-    await gate.record(req, { kind: 'completed', result: { podName: 'agora-x' } })
-
-    const replay = await gate.decide(req)
-    assert.deepEqual(replay, { kind: 'respond', response: { kind: 'completed', result: { podName: 'agora-x' } } })
-  })
-})
-
-test('PgOwnerGate: a reused attempt key with a different payload is rejected_key_mismatch', async () => {
-  await withTestDatabase(async (db) => {
-    const workstreamId = randomUUID()
-    await insertWorkstream(db.pool, workstreamId)
-    const gate = new PgOwnerGate(db.pool as never)
-    const req = request({ workstreamId })
-    await gate.record(req, { kind: 'completed', result: {} })
-
-    const mismatched = request({ workstreamId, payload: { harnessId: 'other' } })
-    const decision = await gate.decide({ ...mismatched, payloadDigest: payloadDigest(mismatched.payload) })
-    assert.equal(decision.kind, 'respond')
-    assert.equal(decision.kind === 'respond' && decision.response.kind, 'rejected_key_mismatch')
-  })
-})
-
-test('PgOwnerGate: a retired target refuses a new positive operation but stays open to processing', async () => {
-  await withTestDatabase(async (db) => {
-    const workstreamId = randomUUID()
-    await insertWorkstream(db.pool, workstreamId)
-    const gate = new PgOwnerGate(db.pool as never)
-    await gate.retire(workstreamId, 'inc-1')
-
-    const decision = await gate.decide(request({ workstreamId, target: { kind: 'concrete', id: 'inc-1' } }))
-    assert.equal(decision.kind, 'respond')
-    assert.equal(decision.kind === 'respond' && decision.response.kind, 'rejected_stale_epoch', 'retired concrete targets refuse positive operations forever')
-
-    const cleanup = await gate.decide(request({ workstreamId, operation: 'cleanup_pod', target: { kind: 'concrete', id: 'inc-1' } }))
-    assert.equal(cleanup.kind, 'process', 'cleanup on an already-retired concrete target stays authorized')
-  })
-})
+// PgOwnerGate's own contract (stale epoch, idempotent replay, key mismatch, retired target,
+// multi-owner isolation) is tested once, in packages/owner-requests where the class lives — see
+// pg-gate.test.ts. These tests exercise runtime-control's owner-api HTTP surface built on top of it.
 
 // A minimal K8sClient double for the owner-api create/cleanup flows — exercises the real
 // buildPodSpec/catalogue path and the reserved-target correlation, not a re-decision of it.
@@ -143,7 +90,7 @@ test('owner-api create_pod: the PodSpec comes from the reviewed catalogue, keyed
     const workstreamId = randomUUID()
     await insertWorkstream(db.pool, workstreamId)
     const k8s = new FakeK8sClient()
-    const gate = new PgOwnerGate(db.pool as never)
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
     const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001 }
     const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
     const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog() })
@@ -178,7 +125,7 @@ test('owner-api create_pod: a 409 from a crash-then-retry resolves by discoverin
     const name = 'agora-' + workstreamId.slice(0, 8) + '-inc-1'
     k8s.seed(name, { apiVersion: 'v1', kind: 'Pod', metadata: { name, uid: 'uid-existing' }, spec: { containers: [{ image: `sha256:${'a'.repeat(64)}` }] } })
     k8s.failNextCreateWith409()
-    const gate = new PgOwnerGate(db.pool as never)
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
     const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001 }
     const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
     const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog() })
