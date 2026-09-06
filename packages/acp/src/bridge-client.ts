@@ -72,11 +72,27 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
     else incomingController.enqueue(new Uint8Array(data as ArrayBuffer))
   }
 
+  // A socket can be errored and then closed, or closed twice, and a ReadableStream controller
+  // THROWS on the second close/error — from a WebSocket event handler, where the throw is uncaught
+  // and kills the process. That is not theoretical: the control-plane worker crash-looped on
+  // `ERR_INVALID_STATE: Controller is already closed` the first time a verb closed a bridge while
+  // its socket was already closing. The stream's terminal state is reached once, here.
+  let terminated = false
   const incoming = new ReadableStream<Uint8Array>({
     start(controller) {
-      incomingController.enqueue = (chunk) => controller.enqueue(chunk)
-      incomingController.close = () => controller.close()
-      incomingController.error = (reason) => controller.error(reason)
+      incomingController.enqueue = (chunk) => {
+        if (!terminated) controller.enqueue(chunk)
+      }
+      incomingController.close = () => {
+        if (terminated) return
+        terminated = true
+        controller.close()
+      }
+      incomingController.error = (reason) => {
+        if (terminated) return
+        terminated = true
+        controller.error(reason)
+      }
     },
   })
 
