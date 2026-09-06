@@ -8,9 +8,9 @@ import type pg from 'pg'
 import type { Verb } from '@agora/domain'
 import type { QueryClient } from './db.js'
 import type { VerbContext, VerbExecutor } from './verb-executor.js'
-import type { OwnerRequest, OwnerResponse, OwnerTarget } from '@agora/owner-requests'
+import { payloadDigest, type OwnerRequest, type OwnerResponse, type OwnerTarget } from '@agora/owner-requests'
 import { isRetired } from './retirement.js'
-import { dispatchAttempt, hasUnresolvedAttempts, markAttemptUnknown, reserveAttempt, type AttemptReservation } from './attempts.js'
+import { dispatchAttempt, hasUnresolvedAttempts, markAttemptUnknown, reopenAttemptForRecovery, reserveAttempt, unresolvedRepeatOf, type AttemptReservation } from './attempts.js'
 import { loadLatestIntentEvent } from './authoring.js'
 
 export interface VerbRunnerTransport {
@@ -139,6 +139,35 @@ export class OwnerVerbRunner implements VerbExecutor {
     const epochRow = await pool.query('SELECT epoch FROM mutation_epochs WHERE workstream_id = $1', [context.workstreamId])
     const epoch: number = (epochRow.rows[0] as { epoch?: number } | undefined)?.epoch ?? 1
     const attemptKey = attemptKeyFor(verb, context)
+
+    // RECOVERY FIRST (ENGINE-008). If this exact request is already outstanding — same operation,
+    // same target, same payload digest — it is re-asked under its OWN key rather than reserved
+    // again. The owner answers from its record if it has one, and executes if it never got that
+    // far; either way the attempt stops being possibly-accepted, which is the only thing that
+    // unblocks the next positive attempt on this target. Re-asking under a fresh key is explicitly
+    // not an option: it would be a second create, not an answer about the first.
+    const repeat = await unresolvedRepeatOf(pool, {
+      workstreamId: context.workstreamId,
+      operation: plan.operation,
+      target: plan.target,
+      payloadDigest: payloadDigest(plan.payload),
+    })
+    if (repeat !== undefined) {
+      const reopened = await reopenAttemptForRecovery(pool, repeat.attemptKey)
+      if (reopened) {
+        // The CURRENT epoch, not the one it was first asked under: this is the current owner
+        // re-asking, and an older epoch is exactly what an owner is required to reject.
+        const { response } = await dispatchAttempt(
+          pool,
+          { ...repeat, epoch },
+          { operation: plan.operation, payload: plan.payload, revisionSet: { attempt: repeat.attemptKey } },
+          (request) => this.options.transport.send(this.options.transport.route(plan.operation), request),
+          { epoch },
+        )
+        this.options.logger?.(`verb ${verb} re-asked unresolved attempt ${repeat.attemptKey} -> ${response?.kind ?? 'no response'}`)
+        return
+      }
+    }
 
     const reserveClient = await pool.connect()
     let reservation: AttemptReservation

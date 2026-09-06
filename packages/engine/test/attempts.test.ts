@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type pg from 'pg'
 import { withTestDatabase, RuntimeControlFake, type TestDatabase } from '@agora/testkit'
-import { OwnerClient } from '@agora/owner-requests'
+import { OwnerClient, payloadDigest } from '@agora/owner-requests'
 import {
   dispatchAttempt,
   hasUnresolvedAttempts,
@@ -10,6 +10,8 @@ import {
   markAttemptDispatched,
   markAttemptUnknown,
   reserveAttempt,
+  reopenAttemptForRecovery,
+  unresolvedRepeatOf,
   AttemptConflictError,
 } from '../src/index.js'
 
@@ -228,6 +230,70 @@ test('ENGINE-014: a request resolved under an old revision set is superseded at 
         markAttemptDispatched(client, reservation.attemptKey, { catalogue: 'rev-1' }).catch(() => false),
       )
       assert.equal(sameRevision, false, 'a superseded attempt cannot be revived')
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('S13/ENGINE-008: an unresolved attempt is re-asked under its OWN key, and that is what unblocks the Workstream', async () => {
+  // Found on the first live deployment: the owner answered 500 once (the API server refused the
+  // Pod), the attempt went `unknown`, and because an unresolved positive attempt blocks the next
+  // one, the Workstream never reconciled again. Nothing in the system re-asked.
+  await withTestDatabase(async (db) => {
+    const client = await connect(db)
+    try {
+      await setup(db, client)
+      const payload = { harness: 'claude-code' }
+      const reservation = await db.asRole(client, 'agora_engine', () =>
+        (async () => {
+          await client.query('BEGIN')
+          const reserved = await reserveAttempt(client, {
+            workstreamId: WORKSTREAM,
+            epoch: 1,
+            operation: 'create_pod',
+            target: { kind: 'reserved', id: 'slot-1' },
+            payload,
+            revisionSet: {},
+            dispatchOwner: 'worker-a',
+            positive: true,
+          })
+          await client.query('COMMIT')
+          return reserved
+        })(),
+      )
+      await db.asRole(client, 'agora_engine', () => markAttemptUnknown(client, reservation.attemptKey))
+
+      // The same request — same operation, same target, same digest — finds the outstanding attempt.
+      const repeat = await unresolvedRepeatOf(db.pool, {
+        workstreamId: WORKSTREAM,
+        operation: 'create_pod',
+        target: { kind: 'reserved', id: 'slot-1' },
+        payloadDigest: payloadDigest(payload),
+      })
+      assert.equal(repeat?.attemptKey, reservation.attemptKey, 'the SAME key: a fresh one would be a second create, not an answer about the first')
+
+      // A DIFFERENT payload is a different question, and finds nothing to re-ask.
+      const other = await unresolvedRepeatOf(db.pool, {
+        workstreamId: WORKSTREAM,
+        operation: 'create_pod',
+        target: { kind: 'reserved', id: 'slot-1' },
+        payloadDigest: payloadDigest({ harness: 'codex' }),
+      })
+      assert.equal(other, undefined)
+
+      // Re-asked, the owner answers definitively and the attempt stops being possibly-accepted.
+      assert.equal(await db.asRole(client, 'agora_engine', () => reopenAttemptForRecovery(client, reservation.attemptKey)), true)
+      const owner = new RuntimeControlFake()
+      const { response } = await dispatchAttempt(
+        db.pool,
+        { ...repeat!, epoch: 2 },
+        { operation: 'create_pod', payload, revisionSet: {} },
+        async (request) => (await new OwnerClient(async (r) => owner.handle(r)).submit(request)).response,
+        { epoch: 2 },
+      )
+      assert.equal(response?.kind, 'completed')
+      assert.equal(await hasUnresolvedAttempts(db.pool, WORKSTREAM), false, 'the Workstream can reconcile again')
     } finally {
       client.release()
     }
