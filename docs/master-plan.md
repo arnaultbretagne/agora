@@ -282,8 +282,8 @@ on a fresh Workstream), idempotent birth under concurrent repetition, projector 
 
 ### S4 — ACP capture seam, bridge client, commands and feed (done)
 
-**Goal.** Complete ACP envelopes become Session facts losslessly in both directions; prompts are Pull request #42.
-commands with reservations; readable items are projections served to the browser.
+**Goal.** Complete ACP envelopes become Session facts losslessly in both directions; prompts are
+commands with reservations; readable items are projections served to the browser. Pull request #42.
 
 **Sources.** ADR 0004; [execution: ACP facts and current evidence](specs/reconciliation/execution.md#acp-facts-and-current-evidence);
 [engine: prompt delivery](specs/reconciliation/engine.md#prompt-delivery-and-context-creation).
@@ -308,8 +308,9 @@ response gates the next turn, no blind resend).
 
 ### S5 — Owner request protocol, epochs and attempt recovery (done)
 
-**Goal.** The part of the engine that makes external effects safe, exercised entirely against Pull request #43.
+**Goal.** The part of the engine that makes external effects safe, exercised entirely against
 fake owners so its interleavings are cheap to run before any real Kubernetes or OneCLI exists.
+Pull request #43.
 
 **Sources.** [engine: effect ownership](specs/reconciliation/engine.md#effect-ownership-and-late-requests),
 *Action recovery*, *Watches and recovery sweeps*, *Conditional finalization*.
@@ -326,10 +327,11 @@ lost responses, delayed acceptance and crashes.
 **Evidence.** `ENGINE-006`, `ENGINE-007`, `ENGINE-008`, `ENGINE-009`, `ENGINE-011`,
 `ENGINE-012` (sweep path), `ENGINE-014`, `ENGINE-018`, all as interleavings on fake owners.
 
-### S6 — Runtime control on Kubernetes
+### S6 — Runtime control on Kubernetes (done)
 
 **Goal.** The first real owner: Pods materialized from reviewed definitions, exhaustive
-inventories with retirement obligations, the controlled launch seam, process evidence.
+inventories with retirement obligations, the controlled launch seam, process evidence. Pull
+request #44.
 
 **Sources.** [ADR 0007](adr/0007-kubernetes-runtime.md), ADR 0006,
 [execution: owners and isolation, shutdown and extinction](specs/reconciliation/execution.md),
