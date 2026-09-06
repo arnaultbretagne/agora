@@ -1,11 +1,11 @@
 {
   "$id": "https://agora.dev/catalogue/harness-definitions.json",
   "title": "Harness definitions (P11 first values, S8)",
-  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest stays a placeholder until CI's image build publishes the real one (no Docker in the environment this was authored in \u2014 see harnesses/claude-code/README.md). The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) \u2014 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again. 'harnessHome' is the harness's HOME and the only writable path in the Pod (an emptyDir, fsGroup-owned by runAsUser): the adapter writes its transcript there and S9 custody reads and places it there; the root filesystem stays read-only. The codex entry maps the registered Intent fields onto THIS adapter's own option ids (configOptionIds): intent.model is codex's `model`, intent.effort is its `reasoning_effort` \u2014 a mapping in the definition, never a new Intent field (measured, harnesses/codex/README.md). 'podEnv' and 'credentialStubs' are the reviewed, NON-SECRET markers each adapter needs to select its auth mode (field findings \u00a72.2, \u00a72.3): the real bearer is attached by the Broker's relay and never reaches the Pod (ADR 0009). They are catalogue content, never request-suppliable, and the PodSpec refuses any name it decides itself.",
+  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest is the published image, by digest: .github/workflows/publish.yml pushes it to GHCR with an SBOM and a provenance attestation, and this value is what a Pod is admitted against (CONSTRUCT-002). Repinning it here IS a rollout \u2014 the rule tables replace every Pod whose admitted digest no longer matches, after a bounded Save. The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) \u2014 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again. 'harnessHome' is the harness's HOME and the only writable path in the Pod (an emptyDir, fsGroup-owned by runAsUser): the adapter writes its transcript there and S9 custody reads and places it there; the root filesystem stays read-only. The codex entry maps the registered Intent fields onto THIS adapter's own option ids (configOptionIds): intent.model is codex's `model`, intent.effort is its `reasoning_effort` \u2014 a mapping in the definition, never a new Intent field (measured, harnesses/codex/README.md). 'podEnv' and 'credentialStubs' are the reviewed, NON-SECRET markers each adapter needs to select its auth mode (field findings \u00a72.2, \u00a72.3): the real bearer is attached by the Broker's relay and never reaches the Pod (ADR 0009). They are catalogue content, never request-suppliable, and the PodSpec refuses any name it decides itself.",
   "harnesses": [
     {
       "harnessId": "claude-code",
-      "imageDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:4d0f138d43307ba67dec38d3f2729051d45f7f82bb76283ce73d87f301b12a80",
       "launchCommand": [
         "node",
         "dist/src/launch.js"
@@ -80,7 +80,7 @@
     },
     {
       "harnessId": "codex",
-      "imageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "imageDigest": "ghcr.io/arnaultbretagne/agora-harness-codex@sha256:68eb466eb0a53ff6bb45fd715042f3b6f54d314bcb2466a7247ed8ab11146c72",
       "launchCommand": [
         "node",
         "dist/src/launch.js"
