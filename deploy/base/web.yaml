@@ -6,6 +6,14 @@
 # (the g4 cluster fronts its apps with oauth2-proxy), and a default that exposed this one would be
 # a default nobody chose.
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+automountServiceAccountToken: false
+imagePullSecrets:
+  - name: ghcr-pull
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: web
@@ -31,6 +39,7 @@ spec:
       labels:
         app: web
     spec:
+      serviceAccountName: web
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
