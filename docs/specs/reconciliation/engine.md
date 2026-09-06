@@ -148,6 +148,15 @@ can arrive after a newer local decision; reading the database just before sendin
 Failover of that writer must preserve its in-flight reservation and prevent an old process from
 issuing another request. Unprovable failover leaves the target closed and the obligation unresolved.
 
+The owner request protocol (contract: `contracts/schemas/owner-request.schema.json`): every owner
+mutation is one envelope `{ epoch, workstream_id, attempt_key, operation, target: concrete | reserved, payload, payload_digest, revision_set }`,
+answered by exactly one of `accepted | rejected_stale_epoch | rejected_key_mismatch | completed | unknown`.
+`payload_digest` is the SHA-256 of the canonical JSON payload. Owners reject an `epoch` older than
+the last epoch they accepted for the Workstream, reject a reused `attempt_key` carrying a different
+digest, return the recorded result for a reused key with the same digest, and retain `unknown` when
+their own downstream call did not settle. Positive operations are refused on retired targets;
+concrete-target cleanup stays authorized.
+
 For example, an old GRANT may become attached after a newer off Intent. The relay must already be
 closed, and cleanup cannot declare the Agent absent/finalized until the grant request is definitively
 settled and authority removed. An unknown Agent/Pod creation similarly keeps its reservation: an

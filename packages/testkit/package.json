@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": "./dist/src/index.js",
+  "devDependencies": {
+    "@agora/owner-requests": "0.0.0"
+  },
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit"

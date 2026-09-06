@@ -9,6 +9,7 @@ import { errorMessage } from './db.js'
 import { loadIntentEvent, notifyTick, type EngineTimeOptions, type SerializedIntent } from './authoring.js'
 import type { ObservationSource } from './observation-source.js'
 import { claimDue, finalize, release, reschedule, type ClaimedWorkRow } from './workset.js'
+import { hasUnresolvedAttempts } from './attempts.js'
 import type { VerbContext, VerbExecutor } from './verb-executor.js'
 
 export type WorkerOutcome = 'finalized' | 'action' | 'hold' | 'retry' | 'acquisition' | 'blocked' | 'stale'
@@ -123,6 +124,19 @@ async function processRow(
 
   const { rule, result } = evaluation
   if (result.kind === 'CONVERGED') {
+    // Conditional finalization: an off conclusion cannot land while an attempt is possibly
+    // accepted (ENGINE-008/018) — the row stays due and the engine keeps watching.
+    const unresolved = await hasUnresolvedAttempts(pool, row.workstreamId)
+    if (unresolved) {
+      await reschedule(pool, ref, {
+        delayMs: backoffDelayMs(policy, 1),
+        attemptCount: row.attemptCount,
+        blockingCause: 'unresolved_owner_attempts',
+        lastError: null,
+        nowSql: options.nowSql,
+      })
+      return 'blocked'
+    }
     const finalized = await finalize(pool, { ...ref, intentSeq: row.intentSeq })
     return finalized ? 'finalized' : 'stale'
   }
