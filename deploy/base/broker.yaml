@@ -1,15 +1,11 @@
 # The Broker is the only holder of the OneCLI control key and of every Agent bearer (ADR 0009). It
 # is also the relay: a harness Pod's egress goes through it and carries no credential of its own.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: broker
-  annotations:
-    agora.dev/authority: >-
-      OneCLI control key and per-Agent bearers. No Kubernetes authority: it cannot create, read or
-      delete a Pod, and runtime-control cannot read a secret it holds.
-automountServiceAccountToken: false
----
+#
+# Its ServiceAccount and RBAC live in contracts/k8s/30-broker-rbac.yaml, like runtime-control's:
+# the authority is a reviewed contract, not a deployment detail, and declaring it in both places
+# made the kustomize build fail as a duplicate.
+# The Broker is the only holder of the OneCLI control key and of every Agent bearer (ADR 0009). It
+# is also the relay: a harness Pod's egress goes through it and carries no credential of its own.
 apiVersion: v1
 kind: Service
 metadata:
@@ -40,7 +36,9 @@ spec:
         app: broker
     spec:
       serviceAccountName: broker
-      automountServiceAccountToken: false
+      # The relay reads its token at startup to resolve Pod identity by source IP (P10). With this
+      # false — as it was before this deployment was ever run — the process throws on boot.
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -56,15 +54,29 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: agora-database, key: ENGINE_URL }
-            - name: ONECLI_BASE_URL
-              value: http://onecli.agora-system.svc.cluster.local:3000
-            - name: ONECLI_CONTROL_KEY
+            # These four names are the ones apps/broker/src/main.ts reads. The manifest used to
+            # invent its own (ONECLI_BASE_URL, ONECLI_CONTROL_KEY); the process would have started
+            # and then refused every request, which is the worst of both.
+            - name: ONECLI_URL
+              value: http://onecli.agora-onecli.svc.cluster.local:10254
+            - name: ONECLI_GATEWAY_URL
+              value: http://onecli.agora-onecli.svc.cluster.local:10255
+            - name: ONECLI_API_KEY
               valueFrom:
                 secretKeyRef: { name: agora-onecli, key: CONTROL_KEY }
+            # The key the Broker's private store encrypts Agent bearers with. Its own, not OneCLI's:
+            # losing it costs the stored bearers, losing OneCLI's costs everything.
+            - name: BROKER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: { name: agora-broker, key: BROKER_ENCRYPTION_KEY }
+            - name: AGORA_NAMESPACE
+              value: agora-runs
             - name: POLICY_CAPABILITIES_PATH
               value: /etc/agora/capabilities.json
             - name: POLICY_GRANT_MAPPINGS_PATH
               value: /etc/agora/grant-mappings.json
+            - name: POLICY_EGRESS_HOSTS_PATH
+              value: /etc/agora/egress-hosts.json
           ports:
             - name: http
               containerPort: 8091

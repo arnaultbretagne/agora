@@ -6,6 +6,11 @@ kind: ServiceAccount
 metadata:
   name: broker
   namespace: agora-system
+  annotations:
+    agora.dev/authority: >-
+      OneCLI control key and per-Agent bearers, plus the read-only Pod authority below and nothing
+      else: the relay resolves a connecting Pod's identity from its source IP, which this cluster
+      has no service mesh to assert otherwise (P10). It can neither create nor delete a Pod.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

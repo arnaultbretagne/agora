@@ -26,7 +26,7 @@ same open item S8, S9 and S10 each record.
 |---|---|---|
 | The OneCLI control key is the Broker's alone | only `deploy/base/broker.yaml` mounts `agora-onecli/CONTROL_KEY` | manifest review; nothing else references that secret |
 | Agent bearers never reach a Pod | the Broker stores them in its private store and the relay attaches them itself (ADR 0009) | `apps/broker/src/private-store.ts`, `relay/`; `broker` tests |
-| The Broker has no Kubernetes authority | its ServiceAccount has no RBAC and does not mount a token | `deploy/base/broker.yaml` |
+| The Broker's Kubernetes authority is read-only Pods in `agora-runs`, and nothing else | `contracts/k8s/30-broker-rbac.yaml` grants `get`/`list` on Pods there; the relay reads its token to resolve a connecting Pod by source IP (P10) | RBAC review; `apps/broker/src/relay/k8s-pod-lookup.ts`. **This row said "no Kubernetes authority and no token" until the first real deployment**: the manifest set `automountServiceAccountToken: false` and the process throws on boot without it, so the claim was untestable and wrong |
 
 ## The control plane cannot reach the owners' authority
 
