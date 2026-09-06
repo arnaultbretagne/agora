@@ -12,7 +12,11 @@ FROM node:22-bookworm-slim AS workspace
 
 WORKDIR /workspace
 COPY . .
-RUN npm ci && npm run build --workspaces --if-present && npm prune --omit=dev
+# `npm run build` (the root's own script), NOT `--workspaces --if-present` directly: the latter
+# does not reliably topologically order workspace builds (@agora/testkit's own .d.ts must exist
+# before packages whose TEST files import it can type-check) — the root script hand-orders exactly
+# that, and every other build in this repo (CI's own `verify` job included) already goes through it.
+RUN npm ci && npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS adapter
 
