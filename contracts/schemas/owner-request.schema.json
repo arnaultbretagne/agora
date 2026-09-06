@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/owner-request.schema.json",
+  "title": "Owner request",
+  "description": "The one request envelope every trusted owner (runtime control S6, broker S7) accepts, and the one response grammar it answers with (engine.md — Effect ownership and late requests). Owners are serialized per Workstream by mutation epochs; an owner rejects any request whose epoch is older than the last epoch it accepted for that Workstream.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["epoch", "workstream_id", "attempt_key", "operation", "target", "payload", "payload_digest", "revision_set"],
+  "properties": {
+    "epoch": { "type": "integer", "minimum": 1, "description": "Mutation epoch for the Workstream; owners reject epoch < their recorded value." },
+    "workstream_id": { "type": "string", "format": "uuid" },
+    "attempt_key": { "type": "string", "minLength": 1, "description": "Stable attempt identity. A reused key with a different payload digest is rejected_key_mismatch; the same key and digest returns the recorded result." },
+    "operation": { "type": "string", "minLength": 1, "description": "Registered owner operation (e.g. create_pod, cleanup_pod, attach_grant, detach_grant). Positive operations are forbidden on retired targets." },
+    "target": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "const": "concrete" }, "id": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "const": "reserved" }, "id": { "type": "string", "minLength": 1 } } }
+      ],
+      "description": "The concrete target identity (Pod UID, Agent id) or a reserved slot the owner created before dispatch."
+    },
+    "payload": { "type": "object", "description": "Operation payload. Never carries credentials or bearer tokens." },
+    "payload_digest": { "type": "string", "minLength": 1, "description": "SHA-256 of the canonical JSON payload." },
+    "revision_set": { "type": "object", "description": "The immutable revision set the request was resolved under; stale revisions are rejected." }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "epoch": 0,
+  "workstream_id": "0f0e7d01-3c2d-4e5f-8a9b-1c2d3e4f5a6b",
+  "attempt_key": "ws-1/build/1",
+  "operation": "create_pod",
+  "target": { "kind": "reserved", "id": "slot-1" },
+  "payload": { "harness": "claude-code" },
+  "payload_digest": "3f7a1c",
+  "revision_set": { "catalogue": "stub-s2" }
+}

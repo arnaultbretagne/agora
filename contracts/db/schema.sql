@@ -116,6 +116,12 @@ GRANT USAGE ON SEQUENCE work_generation_seq TO agora_product, agora_engine;
 -- delete+recreate ABA concern does not apply to a row that is never deleted.
 ALTER TABLE workstreams ADD COLUMN head_seq bigint NOT NULL DEFAULT 0;
 
+-- SELECT + UPDATE (head_seq) let the engine take the FOR UPDATE row lock while reserving owner
+-- attempts (SELECT FOR UPDATE requires both — findings §5); the engine never actually moves the
+-- head, that stays the product's fact-append path.
+GRANT SELECT ON workstreams TO agora_engine;
+GRANT UPDATE (head_seq) ON workstreams TO agora_engine;
+
 CREATE FUNCTION workstream_head_seq_never_regresses() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.head_seq < OLD.head_seq THEN
@@ -339,3 +345,56 @@ GRANT USAGE, SELECT ON SEQUENCE feed_events_position_seq TO agora_projector, ago
 -- S4: the control-plane API serves product reads from the projections and diagnostics (read-only;
 -- the projector keeps sole write authority over the projection tables).
 GRANT SELECT ON projection_items, projection_turns, acp_diagnostics TO agora_product;
+
+-- S5 operational — mutation epochs, owner attempts, target retirements, wake sources --------------
+
+-- One epoch per Workstream, issued by the control plane on claim transfer; each owner mirrors the
+-- last epoch it accepted and rejects anything older (engine.md — Effect ownership).
+CREATE TABLE mutation_epochs (
+  workstream_id uuid PRIMARY KEY REFERENCES workstreams(id),
+  epoch bigint NOT NULL,
+  owner_claim text NULL,
+  issued_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- The durable reservation that precedes every dispatch: a crash between dispatch and settle leaves
+-- `dispatched`, which recovery treats as possibly accepted. attempt_key is the stable identity —
+-- a reused key with a different digest is rejected_key_mismatch at the owner.
+CREATE TABLE owner_attempts (
+  attempt_key text PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  epoch bigint NOT NULL,
+  operation text NOT NULL,
+  target_kind text NOT NULL CHECK (target_kind IN ('concrete', 'reserved')),
+  target_id text NOT NULL,
+  payload_digest text NOT NULL,
+  state text NOT NULL CHECK (state IN ('reserved', 'dispatched', 'settled', 'unknown', 'superseded')),
+  dispatch_owner text NOT NULL,
+  recovery_owner text NULL,
+  revision_set jsonb NOT NULL,
+  reserved_at timestamptz NOT NULL DEFAULT now(),
+  settled_at timestamptz NULL
+);
+
+CREATE INDEX owner_attempts_workstream_state ON owner_attempts (workstream_id, state);
+
+-- Retired targets (Pod UID, Agent id, reserved slot) never accept positive mutations or rebinding
+-- again; concrete-target cleanup stays authorized. Retirement survives work-row deletion.
+CREATE TABLE target_retirements (
+  target_id text PRIMARY KEY,
+  target_kind text NOT NULL CHECK (target_kind IN ('concrete', 'reserved')),
+  workstream_id uuid NOT NULL,
+  reason text NOT NULL,
+  retired_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- The engine's wake registry (engine.md — Watches and recovery sweeps): each source keeps its
+-- cursor; a bounded sweep can re-enqueue Workstreams absent from the workset.
+CREATE TABLE wake_sources (
+  source text PRIMARY KEY,
+  cursor text NULL,
+  last_seen timestamptz NULL
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON mutation_epochs, owner_attempts, target_retirements, wake_sources TO agora_engine;
+GRANT SELECT ON owner_attempts, target_retirements TO agora_product;
