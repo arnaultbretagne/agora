@@ -1,0 +1,92 @@
+# Publishing images (S13). `ci.yml` deliberately builds and pushes nothing: it proves the images
+# CAN be built. This workflow is what makes them deployable, and it is separate for one reason —
+# pushing is the step that has write authority, and it should not be reachable from a pull request.
+#
+# Every image is published BY DIGEST, with an SBOM and a provenance attestation. A tag is a name
+# that can come to mean something else; the deployment overlay pins digests, and "which code is
+# running" has to be answerable from the manifest alone (ADR 0006).
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  # Provenance attestations are signed with this workflow's identity, not with a key someone stores.
+  id-token: write
+  attestations: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      # One job per image: a failure names which image failed, and the four are independent.
+      fail-fast: false
+      matrix:
+        include:
+          - name: agora-control-plane
+            dockerfile: apps/control-plane/image/Dockerfile
+          - name: agora-runtime-control
+            dockerfile: apps/runtime-control/image/Dockerfile
+          - name: agora-broker
+            dockerfile: apps/broker/image/Dockerfile
+          - name: agora-web
+            dockerfile: apps/web/image/Dockerfile
+          - name: agora-harness-claude-code
+            dockerfile: harnesses/claude-code/image/Dockerfile
+          - name: agora-harness-codex
+            dockerfile: harnesses/codex/image/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # The commit is a tag for humans; the digest is what the deployment pins.
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:main
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # An attestation the registry carries, verifiable with `gh attestation verify`: the SBOM above
+      # says what is inside the image, this says which workflow run built it.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the digest
+        run: |
+          mkdir -p digests
+          printf '%s' '${{ steps.build.outputs.digest }}' > "digests/${{ matrix.name }}"
+          {
+            echo "### ${{ matrix.name }}"
+            echo ''
+            echo '```'
+            echo "ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: digests/
+          if-no-files-found: error

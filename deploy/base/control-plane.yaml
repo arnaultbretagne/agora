@@ -46,10 +46,11 @@ spec:
       containers:
         - name: control-plane
           image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
-          args: ['api']
+          # `--api-only` is the flag main.ts actually parses; `AGORA_MODE` is its env equivalent.
+          # An unrecognised argument would have left BOTH deployments running BOTH modes, which is
+          # what this manifest said before anything ran it.
+          args: ['--api-only']
           env:
-            - name: MODE
-              value: api
             - name: PORT
               value: '8080'
             - name: DATABASE_URL
@@ -119,10 +120,8 @@ spec:
       containers:
         - name: control-plane
           image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
-          args: ['worker']
+          args: ['--worker-only']
           env:
-            - name: MODE
-              value: worker
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: agora-database, key: CONTROL_PLANE_URL }

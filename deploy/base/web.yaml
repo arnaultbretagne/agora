@@ -1,0 +1,56 @@
+# The operator surface (S12). It serves the static client and relays `/v1/*` to the control plane
+# opaquely — it holds no credential, reads no database and makes no decision; everything it shows
+# is derived in the browser from what the product API answers.
+#
+# No Ingress here: who may reach it, and behind what authentication, is an environment's decision
+# (the g4 cluster fronts its apps with oauth2-proxy), and a default that exposed this one would be
+# a default nobody chose.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: web
+          image: ghcr.io/arnaultbretagne/agora-web:overlay-pins-this-by-digest
+          env:
+            - name: PORT
+              value: '8080'
+            - name: CONTROL_PLANE_URL
+              value: http://control-plane.agora-system.svc.cluster.local:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }

@@ -1,0 +1,15 @@
+# The reviewed cluster contracts, as a kustomize resource so a deployment overlay can pull them in
+# by directory. They are contracts, not deployment details: the namespaces, the two ServiceAccounts
+# that carry authority, and the NetworkPolicies that make "a Pod's egress is the relay only" a
+# property of the cluster rather than of a container's good behaviour.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 10-harness-serviceaccount.yaml
+  - 10-runtime-control-rbac.yaml
+  - 20-default-deny-networkpolicy.yaml
+  - 30-broker-rbac.yaml
+  - 30-harness-relay-egress-networkpolicy.yaml
+  - 40-control-plane-ingress-to-bridge-networkpolicy.yaml

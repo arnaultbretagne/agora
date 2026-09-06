@@ -95,7 +95,9 @@ jobs:
         with:
           cluster_name: agora-runtime-control
       - name: Apply the runtime-control manifests
-        run: kubectl apply -f contracts/k8s/
+        # `-k`, not `-f`: the directory is a kustomization now (a deployment overlay pulls it in as
+        # a resource), and `-f` on a directory would try to apply kustomization.yaml as an object.
+        run: kubectl apply -k contracts/k8s/
       - name: Namespaces and the default-deny NetworkPolicy exist
         run: |
           kubectl get namespace agora-runs agora-system
