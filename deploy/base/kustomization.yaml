@@ -1,0 +1,32 @@
+# S11 Step 5 — the deployment, as files an operator applies rather than commands they remember.
+#
+# The base is complete and unopinionated about environment: images are placeholders an overlay
+# pins by digest, and every value that differs between environments is a ConfigMap or Secret the
+# overlay supplies. Nothing here reaches into a cluster; `kubectl apply -k` does.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agora-system
+
+resources:
+  - namespace.yaml
+  - control-plane.yaml
+  - runtime-control.yaml
+  - broker.yaml
+  - onecli.yaml
+  - poddisruptionbudgets.yaml
+
+configMapGenerator:
+  - name: agora-catalogue
+    files:
+      - harness-definitions.json=../../contracts/catalogue/harness-definitions.json
+      - capabilities.json=../../contracts/catalogue/capabilities.json
+      - runtime-settings.json=../../contracts/catalogue/runtime-settings.json
+      - retention-settings.json=../../contracts/catalogue/retention-settings.json
+      - grant-mappings.json=../../contracts/catalogue/grant-mappings.json
+
+# A catalogue change must produce a NEW ConfigMap name, so a rollout actually happens and every
+# worker moves to the same revision at once (SESSION-A11). Suffixing by content hash is what makes
+# "publish a revision" and "restart onto it" the same event.
+generatorOptions:
+  disableNameSuffixHash: false

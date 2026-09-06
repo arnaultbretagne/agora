@@ -515,7 +515,28 @@ revision publication with durable enumeration of affected Workstreams and bounde
 **Evidence.** `CONT-007`, `SESSION-A11`, `ENGINE-014` (revision change mid-tick), image
 upgrade replaces a live Pod after a bounded Save.
 
-### S11 — Operations, retention and hardening
+### S11 — Operations, retention and hardening (merged, partially)
+
+**Status.** Done and merged: the pinned settings and their falsification tests, retention and the
+Workstream deletion pipeline, telemetry with an allow-list redaction test, `/v1/metrics` and
+`/v1/readyz`, the Kustomize deployment, the runbook and the security review. Not done, and each for a
+stated reason rather than an omission:
+
+- the OneCLI backup/restore drill is written from the measured asset list but has not been performed
+  — it is an action on the live cluster;
+- provenance attestation and digest-pinned publication belong to whatever pushes images to a
+  registry, which CI deliberately does not do yet (SBOMs are produced per image and kept as build
+  artifacts);
+- the security review's *deployment* rows are claims about manifests and code, checked by reading
+  them; confirming them on a cluster is the same open item S8, S9 and S10 each record.
+
+The settings work is the part worth naming: every timing the specs left open is now in one reviewed
+file with a line of rationale each, read through a loader that carries NO defaults — a value that can
+silently fall back to something in code is a value nobody has decided. The coherence rules between
+settings are each proved by falsifying them, so a capture budget that could swallow the whole
+shutdown window, or a lease that could be reclaimed under a live worker, fails a test rather than a
+production incident.
+
 
 **Delivers.** Pinned deployment settings (claim duration, renewal, evidence expiry, action and
 startup/shutdown deadlines, retry caps, resynchronization bounds) with the conformance suite

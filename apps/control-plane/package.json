@@ -17,6 +17,7 @@
     "@agora/journal": "0.0.0",
     "@agora/observation": "0.0.0",
     "@agora/policy": "0.0.0",
+    "@agora/telemetry": "0.0.0",
     "pg": "8.23.0"
   },
   "devDependencies": {

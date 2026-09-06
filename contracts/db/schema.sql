@@ -663,3 +663,28 @@ GRANT SELECT, INSERT, UPDATE ON selected_revision TO agora_product;
 GRANT SELECT, INSERT, UPDATE ON revision_publications TO agora_product;
 GRANT SELECT, INSERT, UPDATE ON publication_targets TO agora_product;
 GRANT SELECT ON selected_revision TO agora_engine;
+
+-- S11 retention — a role that may delete recovery material, and nothing else ----------------------
+
+-- Deleting a Save is not the control plane's authority: the control plane decides what to preserve
+-- and what to publish, and a component that can both publish an Anchor and delete the Save under it
+-- can quietly lose a recovery point. Retention runs as its own role, which can remove material and
+-- cannot create or anchor any.
+DO $$
+BEGIN
+  BEGIN
+    EXECUTE 'CREATE ROLE agora_retention NOLOGIN';
+  EXCEPTION
+    WHEN duplicate_object OR unique_violation THEN
+      NULL;
+  END;
+END;
+$$;
+
+GRANT SELECT, DELETE ON saves TO agora_retention;
+GRANT SELECT, DELETE ON save_payloads TO agora_retention;
+GRANT SELECT, DELETE ON save_invalidations TO agora_retention;
+-- Anchors are READ ONLY here: retention must be able to see what an Anchor still needs, and must
+-- never be able to unpublish one to make its own deletion legal.
+GRANT SELECT ON anchors TO agora_retention;
+GRANT SELECT ON sessions, workstreams TO agora_retention;

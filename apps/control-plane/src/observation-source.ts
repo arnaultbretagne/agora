@@ -33,9 +33,6 @@ import { openingRequestKey } from './descriptor.js'
 import { getAnchor, getSave, isExcluded } from '@agora/custody'
 import { probeSession, type SessionProbeOptions } from './session-probe.js'
 
-/** How recent a driver verdict has to be to count as current evidence (continuity.md: bounded). */
-const SYNC_PROOF_MAX_AGE_MS = 5_000
-
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
 interface PodInventoryEntry {
@@ -84,6 +81,8 @@ export interface HttpObservationSourceOptions {
   readonly configOptionIds?: ReadonlyMap<string, { readonly model: string; readonly effort: string }>
   /** How each harness answers a configuration readback (S10 Step 1). Absent, `session/resume`. */
   readonly configReadback?: ReadonlyMap<string, 'resume' | 'set-config-noop'>
+  /** How recent a driver verdict must be to count as current evidence (P7, continuity.md: bounded). */
+  readonly syncProofMaxAgeMs?: number
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
@@ -254,7 +253,7 @@ export class HttpObservationSource implements ObservationSource {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ contextId: session.acpContextId, processGeneration: session.processGeneration, w: window.w, h: window.h, handoffDigest }),
       })
-      const query = new URLSearchParams({ contextId: session.acpContextId ?? '', maxAgeMs: String(SYNC_PROOF_MAX_AGE_MS) })
+      const query = new URLSearchParams({ contextId: session.acpContextId ?? '', maxAgeMs: String(this.options.syncProofMaxAgeMs ?? 5_000) })
       if (handoffDigest !== null) query.set('handoffDigest', handoffDigest)
       const response = await fetch(`${base}/proof-outcome?${query.toString()}`)
       if (!response.ok) return null

@@ -1,0 +1,28 @@
+# The dev overlay. It pins images by DIGEST — a tag is a name that can come to mean something else,
+# and "which code is running" must be answerable from the manifest alone (ADR 0006).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agora-system
+
+resources:
+  - ../../base
+  - ../../../contracts/k8s
+
+images:
+  - name: ghcr.io/arnaultbretagne/agora-control-plane
+    newName: ghcr.io/arnaultbretagne/agora-control-plane
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/arnaultbretagne/agora-runtime-control
+    newName: ghcr.io/arnaultbretagne/agora-runtime-control
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/arnaultbretagne/agora-broker
+    newName: ghcr.io/arnaultbretagne/agora-broker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/onecli/onecli
+    newName: ghcr.io/onecli/onecli
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+# Secrets are NOT generated here. They are created out of band and referenced by name, so that
+# applying this overlay can never overwrite a credential — and so that this repository never
+# contains one, not even a placeholder that someone later mistakes for a real value.

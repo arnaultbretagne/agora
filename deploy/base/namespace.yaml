@@ -1,0 +1,9 @@
+# The control plane's own namespace. Harness Pods live in `agora-runs` (contracts/k8s/00-namespace.yaml)
+# and are the only thing runtime-control may create; nothing in this namespace is ever created by a
+# request.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agora-system
+  labels:
+    agora.dev/app: control
