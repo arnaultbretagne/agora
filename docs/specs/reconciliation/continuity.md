@@ -58,6 +58,63 @@ consistent native/workspace cut or reject capture/restore, never pair an old tra
 arbitrary newer files while claiming exact continuation. This defines a dependency contract, not
 a new public workspace aggregate or an unselected snapshot backend.
 
+### Registered driver: `claude-code` (P12)
+
+Format `claude-code-transcript`, version `1`. The measurements this contract rests on were taken
+against the pinned adapter and are recorded in `harnesses/claude-code/README.md`; where this
+contract makes a choice rather than reporting a measurement, it says so.
+
+**Captured artifact.** Exactly one file: the harness's own JSONL transcript for the context being
+captured, at `<harness home>/.claude/projects/<workspace root slug>/<context id>.jsonl`, where the
+slug is the workspace root with every character outside `[A-Za-z0-9-]` replaced by `-` and case
+preserved (measured against the pinned adapter: `/a/A_b.c-d 1` gives `-a-A-b-c-d-1`; reading it as
+"slashes become dashes" points at the wrong directory for any path containing a dot). The harness
+home is the container's `HOME`, declared in the harness definition and the one writable path in the
+Pod. Nothing else is captured. The file is the whole payload; its
+byte length and checksum are the Save's.
+
+**Excluded, always.** Credentials and workload identity under the harness home
+(`.claude/.credentials.json` above all), harness settings, caches, any other context's transcript, and every file under the
+workspace root. Exclusion is not an optimisation: a Save that carried credentials would move secrets
+into a store core can read the metadata of, and a Save that carried arbitrary workspace files would
+claim a consistency it cannot verify.
+
+**Quiescent cut.** Capture requires, in order: admission closed for the Session; no prompt turn in
+flight and none possibly accepted (an `unknown` dispatch is not quiescence); the context's process
+alive at the generation the Save is keyed to; and the transcript file unchanged across two
+consecutive reads. A cut that cannot satisfy all four is refused with a typed reason rather than
+captured partially — a partial stream is unusable, and a transcript read while a turn is being
+written is a partial stream.
+
+**Workspace dependency classification.** This driver captures the conversation, not the workspace.
+For the fixed workspace root it therefore declares: no workspace files in the bundle, and no
+authorized immutable snapshot reference. A Save whose `workspace_deps` is empty claims exact
+continuation of the native context ONLY; any workspace state a restored context expects is either
+independently committed (published artifacts) or disposable (caches and scratch). A restore that
+needs a versioned workspace dependency this driver did not record is rejected rather than attempted
+(`CONT-011`). Extending the driver to reference an immutable snapshot is a change to this contract,
+not a driver implementation detail.
+
+**Proving the exact opening input and lineage.** The driver proves incorporation of an opening
+descriptor `(W, H]` from the transcript alone:
+
+- an empty range (`W = H`) is vacuously incorporated — there is nothing to incorporate, which is
+  why a cross-seeded first Session needs no Handoff;
+- a non-empty range is incorporated only when the Handoff command's own recorded digest appears in
+  the transcript as a received user message; the digest, not the text, because equal content is not
+  equal delivery;
+- anything else is **unprovable**, which is distinct from "not incorporated" and never authorises a
+  resend. Native compaction or context replacement that removes the evidence makes the range
+  unprovable, invalidates the lineage and gates admission (`CONT-006`); it never silently downgrades
+  to `stale`.
+
+**Limits (first values; `S11` pins them after the conformance suite proves them on the pinned
+infrastructure, as `runtime-settings.json` already does for `P7`).** Maximum captured payload
+32 MiB; capture must complete within 10 s of the cut being established; restore placement must
+complete within 30 s. Exceeding a limit refuses the capture with a typed reason and, at shutdown,
+leaves the previous Anchor in place with loss exposure recorded — it never extends the preservation
+budget.
+
 ## Anchors and frontiers
 
 At most one Anchor exists per Workstream/harness. It references a fully committed Save from that
@@ -153,3 +210,26 @@ Retain producer definitions needed for running old images and declared compatibi
 native resume requires explicit fresh-context continuation. Exact retention values, seed policy and
 driver/workspace mechanisms remain implementation prerequisites to demonstrate in
 [acceptance](acceptance.md), not guarantees supplied by this design text.
+
+### Retention, first values (P14)
+
+Chosen, not derived — recorded here so a sweep can be written against a number instead of a feeling.
+Every one of them is a floor on how long something is kept, never a promise that it is deleted the
+moment it expires.
+
+| Material | Grace period | Why this one |
+|---|---|---|
+| A Save under an Anchor | Indefinite, while the Anchor names it | It is the recovery point. Deleting it is deleting the ability to resume. |
+| A Save an Anchor no longer names | **14 days** from the moment it stopped being named | Long enough for a human to notice a bad restore and ask for the previous one; short enough that a busy Workstream does not accumulate a month of transcripts. |
+| The latest successful Save of a retained producing Session | **14 days** past that Session's own retention | Keeps "what did that Session end with" answerable for as long as the Session itself is. |
+| Payload bytes with no Save row | **1 hour** | A capture that never committed its metadata. One hour covers a controller restart mid-shutdown; beyond that it is garbage nobody can identify. |
+| A staged placement that never verified | **1 hour** past the Pod's own termination | The Pod that would have placed it is gone; the bytes are still in the store under their Save and lose nothing. |
+| An invalidated (Save, driver revision) pair | The Save's own period, unchanged | An invalidation is evidence, not a deletion trigger: a corrected driver revision may still read those bytes (`CONT-008`). |
+
+An invalidation therefore never shortens retention, and a retention sweep never deletes material an
+Anchor or an authorized in-flight restore still needs — the two rules together are what stop a
+cleanup from quietly removing the recovery point it was meant to tidy around.
+
+**Workstream deletion** extinguishes execution FIRST: Pods and Agents gone, authority revoked,
+attribution ended. Only then are Saves, payloads and Anchors removed. Deleting a payload while a Pod
+could still be restoring from it would leave that Pod holding native state nothing can account for.

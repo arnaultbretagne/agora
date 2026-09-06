@@ -437,7 +437,24 @@ real finding, that a context with no content is not listed, so START cannot disc
 lost `session/new` (recorded in the harness README and at the point in `verbs/start.ts` where it
 matters).
 
-### S9 — Native continuity: Saves, Anchors, restore and refill
+### S9 — Native continuity: Saves, Anchors, restore and refill (merged; one item open)
+
+**Status.** Everything below is built, tested and merged. The one thing not done is the same one
+S8 leaves open and for the same reason: the run on real Kubernetes with real OneCLI credentials,
+which is a deployment decision rather than remaining engineering. In its place, the off/on cycle
+was run end to end against the REAL adapter, driver, custody transport, owner API and database,
+with only Kubernetes and OneCLI stubbed (`scripts/s9-end-to-end.mjs`): a codeword planted before
+the shutdown, captured at a quiescent cut, its Anchor advanced, restored into a home that had never
+seen the context, resumed, refilled with the facts appended while off — and recalled. S9 is
+therefore NOT marked done.
+
+That run paid for itself twice. It caught the control plane hardcoding `/workspace` while the
+PodSpec launched the adapter in the harness definition's own root (the workspace root is now
+configured once, from the catalogue, and read everywhere), and it caught `save_payloads`
+referencing `saves` in the wrong commit order — bytes cannot be written under a Save that has not
+committed yet, so TURN_OFF now commits the metadata, binds the payload, and publishes the Anchor as
+three ordered steps whose every gap is survivable in exactly one direction.
+
 
 **Goal.** Shutdown preserves eligible native context within a fixed budget; a new Pod restores,
 resumes and refills exactly `(W, H]`; the opening Handoff follows a versioned seed policy.

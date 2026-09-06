@@ -36,6 +36,7 @@ export interface TestDatabase {
 export async function withTestDatabase<T>(run: (db: TestDatabase) => Promise<T>): Promise<T> {
   const database = `agora_test_${randomUUID().replaceAll('-', '')}`
   const maintenance = new pg.Pool({ connectionString: maintenanceUrl(), max: 2 })
+  maintenance.on('error', () => {})
   try {
     await maintenance.query(`CREATE DATABASE "${database}"`)
   } finally {
@@ -48,6 +49,14 @@ export async function withTestDatabase<T>(run: (db: TestDatabase) => Promise<T>)
   // Concurrency tests hold many clients at once; the default max (10) would deadlock a test that
   // acquires more clients than the pool holds before releasing any (findings §5).
   const pool = new pg.Pool({ connectionString, max: 25 })
+  // `DROP DATABASE … WITH (FORCE)` below terminates any connection still open to this database.
+  // `pool.end()` resolves once its clients are released, but a socket can still be closing when the
+  // drop lands — and pg then emits that termination as a POOL error with no request to attach it to,
+  // which node:test reports as an uncaughtException against whatever test is running at the time.
+  // That is the "50 concurrent appends fails with `terminating connection due to administrator
+  // command`" flake, twice in CI: the failure never belonged to the test it was reported against.
+  // A pool that is being torn down has no error worth propagating, so this swallows exactly that.
+  pool.on('error', () => {})
   const schema = readFileSync(SCHEMA_PATH, 'utf8')
   try {
     await pool.query(schema)
@@ -64,6 +73,7 @@ export async function withTestDatabase<T>(run: (db: TestDatabase) => Promise<T>)
   } finally {
     await pool.end()
     const cleanup = new pg.Pool({ connectionString: maintenanceUrl(), max: 2 })
+    cleanup.on('error', () => {})
     try {
       await cleanup.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`)
     } finally {

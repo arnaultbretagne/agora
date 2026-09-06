@@ -21,10 +21,20 @@ import {
   type BrokerFootprint,
   type PodObservation,
   type AcpConnectionEvidence,
+  normalizeAnchor,
+  type AnchorEvidence,
+  type SyncEvidence,
+  type HandoffDeliveryState,
+  type DriverProof,
 } from '@agora/observation'
 import { fromWireGrantSet } from '@agora/domain'
-import { currentSession, currentOpeningWindow, type CurrentSession } from '@agora/journal'
+import { currentSession, currentOpeningWindow, type CurrentSession, type OpeningWindow } from '@agora/journal'
+import { openingRequestKey } from './descriptor.js'
+import { getAnchor, getSave, isExcluded } from '@agora/custody'
 import { probeSession, type SessionProbeOptions } from './session-probe.js'
+
+/** How recent a driver verdict has to be to count as current evidence (continuity.md: bounded). */
+const SYNC_PROOF_MAX_AGE_MS = 5_000
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -61,6 +71,12 @@ export interface HttpObservationSourceOptions {
   readonly bridgePort: number
   /** {harnessId: imageDigest} — the reviewed digest mapping construction checks admitted/running images against. */
   readonly harnessCatalogue: readonly { readonly imageDigest: string }[]
+  /**
+   * The deployed harness a Save would have to be restored into (S9 Step 4). Absent, observation.anchor
+   * stays unavailable — which is right, not conservative: without knowing which formats and driver
+   * revisions the target actually accepts, "compatible" would be a guess and "none" would be a lie.
+   */
+  readonly restoreHarness?: AnchorEvidence['harness']
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
@@ -71,11 +87,12 @@ export class HttpObservationSource implements ObservationSource {
 
   async reader(workstreamId: string): Promise<ObservationReader> {
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
-    const [k8sInventory, brokerInventory, session, openingWindow] = await Promise.all([
+    const [k8sInventory, brokerInventory, session, openingWindow, anchorEvidence] = await Promise.all([
       this.fetchK8sInventory(workstreamId),
       incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined),
       currentSession(this.options.productPool, workstreamId),
       currentOpeningWindow(this.options.productPool, workstreamId),
+      this.fetchAnchorEvidence(workstreamId),
     ])
 
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
@@ -94,6 +111,7 @@ export class HttpObservationSource implements ObservationSource {
             harnessDigestFor: digestFor,
           }
     const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
+    const syncEvidence = await this.fetchSyncEvidence(workstreamId, session, openingWindow, establishedPod, acpEvidence)
     const sessionValue = normalizeSessionWithAcp({ pod: establishedPodObservation, startupDeadlineSeconds: 0, podAgeSeconds: 0, acp: acpEvidence })
     // model/effort are only ever read off a snapshot taken while the Session was actually live —
     // config.ts's own contract (a value handed to it is trusted as already fresh); a stale/absent
@@ -134,9 +152,11 @@ export class HttpObservationSource implements ObservationSource {
         return { ok: true, value: normalizeConstructionWithBinding(pods) }
       },
       session: () => (sessionValue === null ? UNAVAILABLE : { ok: true, value: sessionValue }),
-      anchor: () => read('observation.anchor'),
+      // A fresh read every tick, never a cached verdict: an invalidation recorded a second ago has
+      // to be able to turn `compatible` into `none` before the next RESTORE is selected.
+      anchor: () => (anchorEvidence === null ? UNAVAILABLE : { ok: true, value: normalizeAnchor(anchorEvidence) }),
       sync: () => {
-        const value = normalizeSync(openingWindow)
+        const value = normalizeSync(syncEvidence)
         return value === null ? UNAVAILABLE : { ok: true, value }
       },
       model: () => {
@@ -150,6 +170,98 @@ export class HttpObservationSource implements ObservationSource {
       grantsAttached: () => normalizeGrantsAttached(brokerInventory === undefined ? undefined : { attached: fromWireGrantSet(brokerInventory.attached as never) }),
       grantsEffective: () => normalizeGrantsEffective(brokerInventory === undefined ? undefined : { effective: fromWireGrantSet(brokerInventory.effective as never) }),
     }
+  }
+
+  /**
+   * The Anchor, its Save's non-opaque metadata and whether a verified invalidation excludes the
+   * pair — all read fresh. Returns null when there is no harness definition to judge against, which
+   * leaves the field unavailable rather than inventing a verdict.
+   */
+  /**
+   * observation.sync's inputs, all read fresh: the fixed opening range, what the one Handoff command
+   * for it is doing, and the driver's own verdict about the LIVE context — asked for every tick and
+   * accepted only while it is recent (continuity.md: bounded current evidence). A verdict that is
+   * missing, stale, or about a different descriptor leaves the field undecidable, which gates
+   * admission rather than authorizing a resend.
+   */
+  private async fetchSyncEvidence(
+    workstreamId: string,
+    session: CurrentSession | null,
+    openingWindow: OpeningWindow | null,
+    pod: PodInventoryEntry | undefined,
+    acpEvidence: AcpConnectionEvidence | null,
+  ): Promise<SyncEvidence | null> {
+    if (openingWindow === null) return null
+    const descriptor = { w: openingWindow.w, h: openingWindow.h }
+    if (openingWindow.h <= openingWindow.w) {
+      // The empty range: nothing to deliver and nothing to prove, so no Pod round trip at all.
+      return { descriptor, delivery: 'none', proof: 'incorporated', lineageIntact: true }
+    }
+    if (session === null || session.acpContextId === null || pod === undefined) return null
+
+    const delivery = await this.fetchHandoffDelivery(workstreamId, session, openingWindow)
+    const digest = delivery.digest
+    const lineageIntact = acpEvidence !== null && acpEvidence.connected && acpEvidence.contextProcessGeneration === acpEvidence.currentProcessGeneration
+    if (!lineageIntact) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact: false }
+
+    const proof = await this.fetchDriverProof(pod.name, session, openingWindow, digest)
+    if (proof === null) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact }
+    return { descriptor, delivery: delivery.state, proof, lineageIntact }
+  }
+
+  /** The one Handoff command for this range, by its deterministic request key — never "the latest one". */
+  private async fetchHandoffDelivery(
+    workstreamId: string,
+    session: CurrentSession,
+    window: OpeningWindow,
+  ): Promise<{ state: HandoffDeliveryState; digest: string | null }> {
+    const result = await this.options.productPool.query(
+      'SELECT state, request FROM command_dispatches WHERE workstream_id = $1 AND request_key = $2',
+      [workstreamId, openingRequestKey(session.sessionId, window)],
+    )
+    if (result.rowCount === 0) return { state: 'none', digest: null }
+    const row = result.rows[0] as { state: string; request: { digest?: unknown } }
+    const state: HandoffDeliveryState =
+      row.state === 'dispatched' || row.state === 'responded' || row.state === 'unknown' || row.state === 'rejected_before_acceptance'
+        ? row.state
+        : 'none' // `reserved`: committed but not yet sent, so nothing is outstanding on the wire
+    return { state, digest: typeof row.request?.digest === 'string' ? row.request.digest : null }
+  }
+
+  private async fetchDriverProof(
+    podName: string,
+    session: CurrentSession,
+    window: OpeningWindow,
+    handoffDigest: string | null,
+  ): Promise<DriverProof | null> {
+    const base = `${this.options.runtimeControlBaseUrl}/v1/pods/${podName}/custody`
+    try {
+      await fetch(`${base}/request-proof`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contextId: session.acpContextId, processGeneration: session.processGeneration, w: window.w, h: window.h, handoffDigest }),
+      })
+      const query = new URLSearchParams({ contextId: session.acpContextId ?? '', maxAgeMs: String(SYNC_PROOF_MAX_AGE_MS) })
+      if (handoffDigest !== null) query.set('handoffDigest', handoffDigest)
+      const response = await fetch(`${base}/proof-outcome?${query.toString()}`)
+      if (!response.ok) return null
+      const outcome = (await response.json()) as { verdict?: DriverProof } | null
+      return outcome?.verdict ?? null
+    } catch (error) {
+      // Unreachable is not evidence of anything. The field stays undecidable.
+      this.options.logger?.(`sync proof for ${podName} unavailable: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
+  }
+
+  private async fetchAnchorEvidence(workstreamId: string): Promise<AnchorEvidence | null> {
+    const harness = this.options.restoreHarness
+    if (harness === undefined || harness === null) return null
+    const anchor = await getAnchor(this.options.productPool, workstreamId, harness.harnessId)
+    if (anchor === null) return { save: null, harness, invalidated: false }
+    const save = await getSave(this.options.productPool, anchor.saveId)
+    if (save === null) return { save: null, harness, invalidated: false }
+    return { save, harness, invalidated: await isExcluded(this.options.productPool, save.id, save.driverRevision) }
   }
 
   private async fetchK8sInventory(workstreamId: string): Promise<WorkstreamInventory | undefined> {

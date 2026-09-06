@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
 import { buildClientConnection, connectBridge, createPersist, initializeParams, type BridgeConnection } from '@agora/acp'
-import { WORKSPACE_ROOT } from './workspace-root.js'
+import { workspaceRoot } from './workspace-root.js'
 
 export interface SessionProbeOptions {
   readonly productPool: pg.Pool
@@ -60,10 +60,10 @@ export async function probeSession(
         })
         const clientConnection = buildClientConnection(connection.stream, persist)
         try {
-          await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+          await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
           const resumed = (await clientConnection.agent.request(acp.methods.agent.session.resume, {
             sessionId: input.contextId,
-            cwd: WORKSPACE_ROOT,
+            cwd: workspaceRoot(),
             mcpServers: [],
           })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] }
           const configOptions = new Map<string, string>()

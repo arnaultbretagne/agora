@@ -1,0 +1,18 @@
+{
+  "workstreamId": "8f6b1f1e-2f2a-4a1e-9c0f-5a0f9d2c1b34",
+  "sessionId": "0a4f9c2d-1e3b-4c5d-8e9f-0a1b2c3d4e5f",
+  "harnessId": "claude-code",
+  "formatId": "claude-code-transcript",
+  "formatVersion": 1,
+  "driverRevision": "claude-code-transcript-1",
+  "imageDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "byteLength": 13063,
+  "checksum": "sha256:968e41bfb6f5815b7db5b7711e958783529f880e3269041599d71a858325b061",
+  "frontierW": 0,
+  "seedPolicyRevision": "handoff-seed-v1",
+  "nativeOrigin": { "podUid": "measured-pod", "processGeneration": 0, "contextId": "ba2cb536-4fdf-4378-9ae7-f692804d34a4" },
+  "workspaceDeps": {},
+  "podUid": "measured-pod",
+  "processGeneration": 0,
+  "contextId": "ba2cb536-4fdf-4378-9ae7-f692804d34a4"
+}

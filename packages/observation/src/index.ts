@@ -10,6 +10,7 @@ export * from './types.js'
 export * from './session.js'
 export * from './config.js'
 export * from './sync.js'
+export * from './anchor.js'
 
 export interface RuntimeFootprint {
   readonly workstreamId: string

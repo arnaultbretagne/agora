@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
+import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import { waitForGateRelease } from '../src/launch.js'
+import { transcriptPath } from '../src/driver.js'
 
 type FakeResponse = { readonly kind: 'destroy' } | { readonly kind: 'respond'; readonly status: number; readonly seam: { readonly released: boolean } | null }
 
@@ -58,6 +62,136 @@ test('waitForGateRelease keeps polling through a network failure (connection res
   try {
     await waitForGateRelease({ evidenceUrl: url, pollIntervalMs: 10, onLog: (m) => logs.push(m) })
     assert.ok(logs.length >= 2, 'each failed poll is logged, not thrown')
+  } finally {
+    server.close()
+  }
+})
+
+/**
+ * A stand-in for runtime-control's custody endpoints, with the same ordering rule: the seam stays
+ * shut until a placement report matching the Save's own checksum arrives. What this exercises is the
+ * harness half of that handshake — fetch, place through the driver, report, and only then launch.
+ */
+function startCustodyServer(bytes: Uint8Array, options: { readonly rejectFirstReport?: boolean } = {}): Promise<{
+  server: Server
+  evidenceUrl: string
+  custodyUrl: string
+  reports: { checksum: string; byteLength: number; path: string }[]
+  /** Test-only escape hatch: opens the seam without a placement, so a waiting test can finish. */
+  release: () => void
+}> {
+  const checksum = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+  const reports: { checksum: string; byteLength: number; path: string }[] = []
+  let released = false
+  let rejectionsLeft = options.rejectFirstReport === true ? 1 : 0
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (url.pathname === '/evidence') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return void res.end(JSON.stringify({ seam: { released }, custody: released ? null : { saveId: 'save-1', checksum, byteLength: bytes.byteLength, token: 'token-1' } }))
+      }
+      if (url.pathname === '/custody/payload') {
+        if (url.searchParams.get('token') !== 'token-1') {
+          res.writeHead(403)
+          return void res.end()
+        }
+        res.writeHead(200, { 'content-type': 'application/octet-stream' })
+        return void res.end(Buffer.from(bytes))
+      }
+      if (url.pathname === '/custody/placement') {
+        const chunks: Buffer[] = []
+        req.on('data', (chunk: Buffer) => chunks.push(chunk))
+        return void req.on('end', () => {
+          const report = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { checksum: string; byteLength: number; path: string }
+          reports.push(report)
+          if (rejectionsLeft > 0) {
+            rejectionsLeft -= 1
+            res.writeHead(409, { 'content-type': 'application/problem+json' })
+            return void res.end(JSON.stringify({ title: 'Placement rejected' }))
+          }
+          released = report.checksum === checksum && report.byteLength === bytes.byteLength
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ placed: true }))
+        })
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      resolve({
+        server,
+        evidenceUrl: `http://127.0.0.1:${port}/evidence`,
+        custodyUrl: `http://127.0.0.1:${port}/custody`,
+        reports,
+        release: () => {
+          released = true
+        },
+      })
+    })
+  })
+}
+
+function transcriptBytes(contextId: string): Uint8Array {
+  return new TextEncoder().encode(`${JSON.stringify({ type: 'user', sessionId: contextId, message: { role: 'user', content: 'codeword: mirabelle' } })}\n`)
+}
+
+test('a Save offered at the seam is fetched and placed before the gate ever opens', async () => {
+  const home = await mkdtemp(`${tmpdir()}/agora-launch-`)
+  const contextId = randomUUID()
+  const bytes = transcriptBytes(contextId)
+  const { server, evidenceUrl, custodyUrl, reports } = await startCustodyServer(bytes)
+  try {
+    await waitForGateRelease({
+      evidenceUrl,
+      pollIntervalMs: 10,
+      custody: { harnessHome: home, workspaceRoot: '/home/agent/work', placementUrlBase: custodyUrl },
+    })
+
+    const path = transcriptPath({ harnessHome: home, workspaceRoot: '/home/agent/work', contextId })
+    assert.deepEqual(new Uint8Array(await readFile(path)), bytes, 'the transcript is on disk before the gate opened')
+    assert.equal(reports.length, 1)
+    assert.equal(reports[0]!.path, path, 'the report names what the driver actually wrote')
+  } finally {
+    server.close()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a refused placement report is retried at the seam rather than launching anyway', async () => {
+  const home = await mkdtemp(`${tmpdir()}/agora-launch-`)
+  const bytes = transcriptBytes(randomUUID())
+  const { server, evidenceUrl, custodyUrl, reports } = await startCustodyServer(bytes, { rejectFirstReport: true })
+  const logs: string[] = []
+  try {
+    await waitForGateRelease({
+      evidenceUrl,
+      pollIntervalMs: 10,
+      custody: { harnessHome: home, workspaceRoot: '/home/agent/work', placementUrlBase: custodyUrl },
+      onLog: (message) => logs.push(message),
+    })
+    assert.equal(reports.length, 2, 'the same attempt retries its own placement; it never gives up and launches')
+  } finally {
+    server.close()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a Save offered to a Pod with no custody paths keeps waiting and says so, instead of launching', async () => {
+  const bytes = transcriptBytes(randomUUID())
+  const { server, evidenceUrl, reports, release } = await startCustodyServer(bytes)
+  const logs: string[] = []
+  try {
+    const waiting = waitForGateRelease({ evidenceUrl, pollIntervalMs: 5, onLog: (message) => logs.push(message) })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(reports.length, 0, 'nothing was placed, and nothing was reported as placed')
+    assert.ok(logs.some((message) => message.includes('no custody paths were configured')))
+    assert.ok(logs.length >= 2, 'it keeps saying so on every poll rather than failing silently')
+    // Only a real gate release ends the wait; here the test opens it so the loop can finish.
+    release()
+    await waiting
   } finally {
     server.close()
   }

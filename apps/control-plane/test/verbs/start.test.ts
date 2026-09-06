@@ -7,7 +7,7 @@ import type { DuplexByteStream } from '@agora/acp'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession, recordBridgeToken, bindAcpContext, currentSession } from '@agora/journal'
 import type { VerbContext } from '@agora/engine'
-import { createStartExecutor, UnsupportedVerbError, WORKSPACE_ROOT } from '../../src/verbs/start.js'
+import { createStartExecutor, UnsupportedVerbError, workspaceRoot } from '../../src/verbs/start.js'
 
 function context(workstreamId: string): VerbContext {
   return { workstreamId, intentSeq: 1, workGeneration: 1, claimToken: 'claim-1', rule: 'SESSION-001' }
@@ -35,7 +35,7 @@ function fakeAcpAgent(options: FakeAgentOptions = {}): { readonly clientStream: 
   agentApp.onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: false } }))
   agentApp.onRequest(acp.methods.agent.session.list, () => {
     options.onSessionList?.()
-    return { sessions: (options.existingSessions ?? []).map((s) => ({ sessionId: s.sessionId, cwd: WORKSPACE_ROOT })) }
+    return { sessions: (options.existingSessions ?? []).map((s) => ({ sessionId: s.sessionId, cwd: workspaceRoot() })) }
   })
   agentApp.onRequest(acp.methods.agent.session.new, () => {
     options.onSessionNew?.()

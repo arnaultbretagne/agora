@@ -76,6 +76,22 @@ export interface AcpContextBinding {
   readonly processGeneration: number
 }
 
+export interface RestoreOrigin {
+  /** The frontier the restored Save actually PROVED (CONT-009) — the opening range's lower bound. */
+  readonly originW: number
+  readonly saveId: string
+}
+
+/**
+ * Records what a RESTORE carried into this Session (S9). Separate from bindAcpContext because the
+ * two answer different questions: that one says which native context is live, this one says how much
+ * of the Workstream's record that context already had. A Session with no restore keeps `origin_w = 0`
+ * — the cross-seed, where the whole range up to H still has to be refilled.
+ */
+export async function recordRestoreOrigin(client: pg.PoolClient, sessionId: string, origin: RestoreOrigin): Promise<void> {
+  await client.query('UPDATE sessions SET origin_w = $1, origin_save_id = $2 WHERE id = $3', [origin.originW, origin.saveId, sessionId])
+}
+
 /**
  * Records the Session's live ACP context (S8 START/RESTORE) — operational, not a new immutable
  * fact: observation.session's own fresh reads (runtime-control's process generation, a live ACP
@@ -111,26 +127,28 @@ export async function currentSession(client: pg.Pool | pg.PoolClient, workstream
 }
 
 export interface OpeningWindow {
-  /** The Session's own opening cutoff (CONT-001/002: "H" in that test's own vocabulary — the fact
-   * stream head at the exact moment cutoff_h was pinned, before the session.opened fact). */
+  /**
+   * The opening range's lower bound: what the context already had when this Session opened. 0 for a
+   * cross-seed; a restored Save's proven frontier otherwise (S9 — sessions.origin_w).
+   */
   readonly w: number
   /**
    * The opening descriptor's fixed H — "H was fixed before the new Session's facts, never sampled
-   * at REFILL dispatch" (009_sync.md). Only S9's restore path ever gives a Session an H that
-   * differs from its own W (a restored Save's own preceding cutoff); every S8 Session is the
-   * cross-seed case (`W = 0`, no restore machinery exists yet), so W and H are always the same
-   * value here — not an approximation, the literal fixed descriptor for this case (CONT-002: "a
-   * fresh Workstream pins the cutoff H = 0" uses "H" for exactly this field).
+   * at REFILL dispatch" (009_sync.md). Pinned at Session birth as cutoff_h and never re-read.
    */
   readonly h: number
+  readonly saveId: string | null
 }
 
 /** The current Session's opening range (W, H], `null` when there is no current Session — sync has nothing to report without one, never a guessed range. */
 export async function currentOpeningWindow(client: pg.Pool | pg.PoolClient, workstreamId: string): Promise<OpeningWindow | null> {
-  const result = await client.query('SELECT cutoff_h FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL', [workstreamId])
+  const result = await client.query('SELECT cutoff_h, origin_w, origin_save_id FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL', [workstreamId])
   if (result.rowCount === 0) return null
-  const w: number = result.rows[0]!['cutoff_h']
-  return { w, h: w }
+  const row = result.rows[0]!
+  // A Session that never restored has origin_w = 0 AND a cutoff pinned at the head it was born at:
+  // W = 0, H = cutoff_h. Before S9 those were reported as equal, which made every cross-seed look
+  // already synchronized; they are equal only when the Workstream had no facts at all (CONT-002).
+  return { w: Number(row['origin_w']), h: Number(row['cutoff_h']), saveId: (row['origin_save_id'] as string | null) ?? null }
 }
 
 export interface EndedAttribution {

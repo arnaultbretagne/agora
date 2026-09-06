@@ -12,7 +12,12 @@ const harness: HarnessDefinition = {
   harnessId: 'claude-code',
   imageDigest: `sha256:${'a'.repeat(64)}`,
   launchCommand: ['/usr/local/bin/entrypoint'],
-  mounts: [{ name: 'relay-ca', mountPath: '/etc/agora/relay-ca', readOnly: true }],
+  mounts: [
+    { name: 'relay-ca', mountPath: '/etc/agora/relay-ca', readOnly: true },
+    { name: 'harness-home', mountPath: '/home/agent', readOnly: false },
+  ],
+  harnessHome: '/home/agent',
+  workspaceRoot: '/home/agent/work',
 }
 
 const settings: RuntimeSettings = {

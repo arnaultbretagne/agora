@@ -11,6 +11,8 @@ import { PgOwnerGate } from '@agora/owner-requests'
 import { loadHarnessDefinitions, loadRuntimeSettings, type RuntimeSettings } from './k8s-pod-spec.js'
 import { LABEL_APP, LABEL_WORKSTREAM } from './k8s-labels.js'
 import { WakeLog } from './wakes.js'
+import { CustodyTransport } from './custody-transport.js'
+import { readPayload, writePayload } from '@agora/custody'
 import type { K8sClient } from './k8s-client.js'
 
 const SWEEP_INTERVAL_MS = 30_000
@@ -35,7 +37,24 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
   const gate = new PgOwnerGate(pool, 'runtime-control')
   const wakes = new WakeLog()
 
-  const server = createOwnerApi({ k8s, obligations, seams, gate, harnesses, settings, wakes, bridgeAuthSecret })
+  // The payload role, and only it: this pool can read and write Save bytes and cannot see a single
+  // row of Save metadata (contracts/db/schema.sql). That is what "core never reads Save bytes" and
+  // "the transport never decides which Save is current" look like as a connection string.
+  const payloadPool = new pg.Pool({ connectionString: env.CUSTODY_PAYLOAD_DATABASE_URL ?? databaseUrl })
+  const custody = new CustodyTransport({
+    secret: bridgeAuthSecret,
+    readPayload: async (saveId) => readPayload(payloadPool, saveId),
+    writePayload: async (saveId, bytes) => {
+      const client = await payloadPool.connect()
+      try {
+        await writePayload(client, saveId, bytes)
+      } finally {
+        client.release()
+      }
+    },
+  })
+
+  const server = createOwnerApi({ k8s, obligations, seams, gate, harnesses, settings, wakes, bridgeAuthSecret, custody })
   server.listen(Number(env.PORT ?? 8090), '0.0.0.0', () => {
     console.log(`runtime-control owner API on :${env.PORT ?? 8090}`)
   })
@@ -52,6 +71,7 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
       clearInterval(sweepTimer)
       server.close()
       void pool.end()
+      void payloadPool.end()
     },
   }
 }

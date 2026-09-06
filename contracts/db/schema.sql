@@ -163,6 +163,12 @@ CREATE TABLE sessions (
   -- Never the OneCLI bearer (that stays Broker-private, ADR 0009) and never sent anywhere but the
   -- bridge's own WebSocket handshake.
   bridge_token text NULL,
+  -- S9: the opening range's LOWER bound. 0 is the cross-seed (nothing was carried in); a restored
+  -- Save gives the frontier that Save could actually prove (CONT-009), never the journal head and
+  -- never the Save's own optimistic idea of what it contained. Together with cutoff_h it fixes the
+  -- opening range (W, H] once, at birth or at restore — never re-sampled at REFILL dispatch.
+  origin_w bigint NOT NULL DEFAULT 0,
+  origin_save_id uuid NULL,
   UNIQUE (workstream_id, ordinal)
 );
 
@@ -244,7 +250,7 @@ REVOKE ALL ON sessions, workstream_facts, projection_checkpoints, projection_ses
 -- head, open and end Sessions. Facts and Sessions are immutable once written — no UPDATE, no
 -- DELETE on workstream_facts; only the attribution boundary on sessions may be closed.
 GRANT UPDATE (head_seq) ON workstreams TO agora_product;
-GRANT SELECT, INSERT, UPDATE (attribution_ended_at, acp_context_id, process_generation, bridge_token) ON sessions TO agora_product;
+GRANT SELECT, INSERT, UPDATE (attribution_ended_at, acp_context_id, process_generation, bridge_token, origin_w, origin_save_id) ON sessions TO agora_product;
 GRANT SELECT, INSERT ON workstream_facts TO agora_product;
 
 -- Projector: read canonical state, own the projection tables and their checkpoints. It never
@@ -482,3 +488,125 @@ GRANT SELECT, INSERT, UPDATE ON owner_record_epochs TO agora_engine;
 GRANT SELECT, INSERT ON owner_record_attempts TO agora_engine;
 GRANT SELECT, INSERT ON owner_record_retired_targets TO agora_engine;
 GRANT SELECT ON owner_record_epochs, owner_record_attempts, owner_record_retired_targets TO agora_product;
+
+-- ---------------------------------------------------------------------------
+-- S9 custody — Saves (metadata), payloads (a separate role), Anchors, invalidations
+-- ---------------------------------------------------------------------------
+-- ADR 0008: a Save is native bytes plus the metadata that makes them verifiable; core never reads
+-- the bytes. The split below is the whole point of two roles: the control plane owns Save METADATA
+-- (it decides what was captured and what may be published), runtime-control's transport owns the
+-- BYTES (it streams them into a Pod before launch) — and neither can do the other's job.
+DO $$
+DECLARE
+  role_name text;
+BEGIN
+  FOREACH role_name IN ARRAY ARRAY['agora_custody_meta', 'agora_custody_payload']
+  LOOP
+    BEGIN
+      EXECUTE format('CREATE ROLE %I NOLOGIN', role_name);
+    EXCEPTION
+      WHEN duplicate_object OR unique_violation THEN
+        NULL;
+    END;
+  END LOOP;
+END;
+$$;
+
+-- Immutable once written. There is deliberately no `consumer` or `restored_into` column: a Save
+-- records what was captured, never who later used it (ADR 0008 — a Save is not a lifecycle).
+CREATE TABLE saves (
+  id uuid PRIMARY KEY,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  -- The Session that PRODUCED the capture; a restore always belongs to a new Session (CONT-003).
+  session_id uuid NOT NULL REFERENCES sessions(id),
+  harness_id text NOT NULL,
+  format_id text NOT NULL,
+  format_version int NOT NULL,
+  driver_revision text NOT NULL,
+  image_digest text NOT NULL,
+  byte_length bigint NOT NULL,
+  checksum text NOT NULL,
+  -- What the driver PROVED was incorporated, never a copy of the journal head (CONT-009).
+  frontier_w bigint NOT NULL,
+  seed_policy_revision text NOT NULL,
+  native_origin jsonb NOT NULL,
+  workspace_deps jsonb NOT NULL,
+  -- The capture key: repeating a capture discovers the same Save instead of writing a second one.
+  pod_uid text NOT NULL,
+  process_generation int NOT NULL,
+  context_id text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (pod_uid, process_generation, context_id, frontier_w, driver_revision)
+);
+
+CREATE INDEX saves_by_workstream ON saves (workstream_id, created_at DESC);
+
+-- The bytes, reachable only through the payload role. Core (product/engine/projector) has no grant
+-- here at all, which is what "core never reads Save bytes" means in practice rather than in prose.
+CREATE TABLE save_payloads (
+  save_id uuid PRIMARY KEY REFERENCES saves(id),
+  bytes bytea NOT NULL,
+  written_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- One Anchor per (Workstream, harness): the newest Save that harness may be restored from.
+CREATE TABLE anchors (
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  harness_id text NOT NULL,
+  save_id uuid NOT NULL REFERENCES saves(id),
+  frontier_w bigint NOT NULL,
+  published_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workstream_id, harness_id)
+);
+
+-- Append-only evidence that a Save (optionally only under one driver revision) must not be used.
+-- A temporary store outage is NOT an invalidation: only verified incompatibility lands here
+-- (CONT-008), so a transient failure can never permanently exclude a healthy Save.
+CREATE TABLE save_invalidations (
+  id uuid PRIMARY KEY,
+  save_id uuid NOT NULL REFERENCES saves(id),
+  driver_revision text NULL,
+  cause text NOT NULL,
+  verifier text NOT NULL,
+  target text NOT NULL,
+  at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX save_invalidations_by_save ON save_invalidations (save_id);
+
+-- S9 Step 3 — bounded preservation at shutdown (OFF-001, OFF-002). One row per shutdown attempt on
+-- one incarnation. `deadline_at` is pinned the FIRST time TURN_OFF runs and is never re-derived:
+-- a controller that restarts mid-shutdown discovers the deadline it already owes rather than
+-- granting itself a fresh budget, which is the whole of OFF-002. Termination does not depend on any
+-- of this — it proceeds whether or not a Save was captured; the row is what makes the LOSS honest.
+CREATE TABLE shutdowns (
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  incarnation text NOT NULL,
+  session_id uuid NULL REFERENCES sessions(id),
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  deadline_at timestamptz NOT NULL,
+  -- pending -> captured | refused | ineligible | expired. Never blocks termination in any state.
+  capture_outcome text NOT NULL DEFAULT 'pending',
+  capture_detail text NULL,
+  save_id uuid NULL REFERENCES saves(id),
+  -- published | rejected_stale_expectation | rejected_frontier_not_ahead | not_attempted
+  anchor_outcome text NULL,
+  terminated_at timestamptz NULL,
+  PRIMARY KEY (workstream_id, incarnation)
+);
+
+REVOKE ALL ON saves, save_payloads, anchors, save_invalidations, shutdowns FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON shutdowns TO agora_product;
+
+-- Control plane: writes and reads Save metadata, publishes Anchors, records invalidations. No
+-- UPDATE or DELETE on saves (immutable) and NO grant of any kind on save_payloads.
+GRANT SELECT, INSERT ON saves TO agora_product;
+GRANT SELECT, INSERT, UPDATE ON anchors TO agora_product;
+GRANT SELECT, INSERT ON save_invalidations TO agora_product;
+
+-- Metadata reader: everything about a Save except its bytes.
+GRANT SELECT ON saves, anchors, save_invalidations TO agora_custody_meta;
+
+-- Payload transport (runtime-control): the bytes, and nothing else. It cannot read the metadata
+-- that decides which Save is current, and it cannot publish an Anchor.
+GRANT SELECT, INSERT, DELETE ON save_payloads TO agora_custody_payload;

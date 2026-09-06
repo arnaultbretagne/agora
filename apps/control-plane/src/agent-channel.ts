@@ -22,12 +22,13 @@ import {
   type DuplexByteStream,
 } from '@agora/acp'
 import { createAcpModelProjector, runIncremental } from '@agora/projections'
+import { workspaceRoot } from './workspace-root.js'
 
 /** The fixed workspace root every harness Session uses (S8 Step 2+ — verbs/start.ts and
  * session-probe.ts use the exact same literal; kept independently here since agent-channel.ts
  * predates workspace-root.ts and a shared import would be the only reason to touch this otherwise
  * stable S4 constant). */
-const WORKSPACE_ROOT = '/workspace'
+
 
 export interface ChannelConnection {
   readonly stream: DuplexByteStream
@@ -147,11 +148,11 @@ export class AgentChannels {
       },
     })
     channel.connection = connection
-    await connection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+    await connection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
     channel.acpSessionId =
       connected.existingContextId !== undefined
         ? await resumeExistingContext(connection, connected.existingContextId)
-        : ((await connection.agent.request(acp.methods.agent.session.new, { cwd: WORKSPACE_ROOT, mcpServers: [] })) as { sessionId: string }).sessionId
+        : ((await connection.agent.request(acp.methods.agent.session.new, { cwd: workspaceRoot(), mcpServers: [] })) as { sessionId: string }).sessionId
 
     const projectorClient = await this.#pool.connect()
     await projectorClient.query('SET ROLE agora_projector')
@@ -282,6 +283,6 @@ export class AgentChannels {
 /** `session/resume` never echoes a sessionId back (ResumeSessionResponse carries only modes/
  * configOptions) — the id to use afterward is the one we asked to resume, confirmed live. */
 async function resumeExistingContext(connection: acp.ClientConnection, contextId: string): Promise<string> {
-  await connection.agent.request(acp.methods.agent.session.resume, { sessionId: contextId, cwd: WORKSPACE_ROOT, mcpServers: [] })
+  await connection.agent.request(acp.methods.agent.session.resume, { sessionId: contextId, cwd: workspaceRoot(), mcpServers: [] })
   return contextId
 }

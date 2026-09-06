@@ -31,6 +31,13 @@ export interface ReserveCommand {
   readonly requestKey: string
   /** Set for a user retry that explicitly links the unresolved command it replaces. */
   readonly linkedPredecessor?: string | null
+  /**
+   * A command id chosen by the caller instead of generated here. Used by the opening Handoff (S9),
+   * whose descriptive URI embeds the command id and therefore has to know it BEFORE the bytes it
+   * names are rendered. Deriving it deterministically from the request key keeps the idempotency the
+   * random id already had: two processes completing the same descriptor collide on the unique key.
+   */
+  readonly id?: string
 }
 
 export class DispatchConflictError extends Error {
@@ -92,7 +99,7 @@ export async function reserveDispatch(client: pg.PoolClient, command: ReserveCom
     }
   }
 
-  const id = randomUUID()
+  const id = command.id ?? randomUUID()
   const inserted = await client.query(
     `INSERT INTO command_dispatches (id, workstream_id, session_id, kind, request, state, request_key, linked_predecessor)
      VALUES ($1, $2, $3, $4, $5::jsonb, 'reserved', $6, $7)

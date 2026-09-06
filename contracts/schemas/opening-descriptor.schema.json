@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/opening-descriptor.schema.json",
+  "title": "Opening descriptor",
+  "description": "The fixed description of a Session's opening range (W, H] (009_sync.md, continuity.md). H is pinned at Session birth and never re-sampled at REFILL dispatch; W is the restored Save's proven frontier, or 0 for a cross-seed opening. The handoff digest appears once the Handoff has been rendered, and is what a custody driver looks for as evidence of delivery — the digest, not the text, because equal content is not equal delivery.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["w", "h", "contextId", "seedPolicyRevision"],
+  "properties": {
+    "w": { "type": "integer", "minimum": 0 },
+    "h": { "type": "integer", "minimum": 0 },
+    "contextId": { "type": "string", "minLength": 1 },
+    "saveId": { "type": ["string", "null"], "description": "The Save this opening restored from, or null for a cross-seed opening where W is 0." },
+    "seedPolicyRevision": { "type": "string", "minLength": 1 },
+    "commandId": { "type": ["string", "null"], "description": "The one Handoff command reserved for this range; null while none has been reserved." },
+    "handoffDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+  }
+}

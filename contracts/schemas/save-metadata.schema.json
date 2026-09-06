@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/save-metadata.schema.json",
+  "title": "Save metadata",
+  "description": "The non-opaque record of one capture (ADR 0008, continuity.md). It describes bytes core never reads: what produced them, what format they are in, how to verify them, and what incorporation the driver could PROVE at the cut. There is deliberately no consumer, restoredInto or restoredAt member — a Save records what was captured, never who later used it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "workstreamId",
+    "sessionId",
+    "harnessId",
+    "formatId",
+    "formatVersion",
+    "driverRevision",
+    "imageDigest",
+    "byteLength",
+    "checksum",
+    "frontierW",
+    "seedPolicyRevision",
+    "podUid",
+    "processGeneration",
+    "contextId"
+  ],
+  "properties": {
+    "workstreamId": { "type": "string", "format": "uuid" },
+    "sessionId": { "type": "string", "format": "uuid", "description": "The Session that produced the capture. A restore always belongs to a NEW Session (CONT-003)." },
+    "harnessId": { "type": "string", "minLength": 1 },
+    "formatId": { "type": "string", "minLength": 1 },
+    "formatVersion": { "type": "integer", "minimum": 1 },
+    "driverRevision": { "type": "string", "minLength": 1, "description": "Bumped when capture, restore or proof semantics change, so an invalidation can exclude the exact Save/driver pair (CONT-008)." },
+    "imageDigest": { "type": "string", "minLength": 1 },
+    "byteLength": { "type": "integer", "minimum": 0 },
+    "checksum": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "frontierW": { "type": "integer", "minimum": 0, "description": "What the driver PROVED was incorporated at the quiescent cut — never a copy of the journal head (CONT-009)." },
+    "seedPolicyRevision": { "type": "string", "minLength": 1 },
+    "nativeOrigin": { "type": "object", "description": "Driver-supplied origin of the native state; opaque to core." },
+    "workspaceDeps": { "type": "object", "description": "Workspace dependencies the Save requires, by name and version. An unversioned or unavailable dependency rejects the exact resume (CONT-011)." },
+    "podUid": { "type": "string", "minLength": 1 },
+    "processGeneration": { "type": "integer", "minimum": 0 },
+    "contextId": { "type": "string", "minLength": 1 }
+  }
+}
