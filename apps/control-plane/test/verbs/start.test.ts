@@ -242,3 +242,44 @@ test('a non-START verb throws UnsupportedVerbError — the router\'s own mistake
     await assert.rejects(() => executor.execute('BUILD', context(randomUUID())), UnsupportedVerbError)
   })
 })
+
+test('S13: an adapter that never answers fails the verb instead of holding its client for ever', async () => {
+  // The live failure, exactly: `session/list` went out, the adapter answered nothing, and START held
+  // its pooled database client until the process died. Ten of those emptied the pool, and from then
+  // on every reconciliation tick blocked inside pool.connect() before running a single query — no
+  // error, no server-side activity, a silent worker with a claimed work row.
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await seedSession(db, workstreamId)
+    const runtimeControl = await startRuntimeControl([{ name: 'pod-name-1', forcedDeletion: false, incarnation: 'inc-1', podIP: '10.0.0.5' }], 0)
+    try {
+      // An agent that accepts the stream and answers nothing at all.
+      const silent = new TransformStream<Uint8Array, Uint8Array>()
+      const toAgent = new TransformStream<Uint8Array, Uint8Array>()
+      const logged: string[] = []
+      const executor = createStartExecutor({
+        productPool: db.pool,
+        runtimeControlBaseUrl: runtimeControl.url,
+        bridgePort: 8765,
+        requestTimeoutMs: 50,
+        logger: (message) => logged.push(message),
+        connect: async () => ({
+          connectionId: 'silent',
+          stream: { writable: toAgent.writable, readable: silent.readable },
+          close: async () => {},
+          closed: new Promise<void>(() => {}),
+        }),
+      })
+      // START reports rather than throws (the next tick retries with fresh evidence) — what matters
+      // is that it STOPS, and says why.
+      await executor.execute('START', context(workstreamId))
+      assert.match(logged.join('\n'), /did not answer within/)
+
+      // The borrowed client came back: the pool still hands one out, which is the whole point.
+      const client = await db.pool.connect()
+      client.release()
+    } finally {
+      runtimeControl.server.close()
+    }
+  })
+})

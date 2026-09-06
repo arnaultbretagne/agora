@@ -178,15 +178,16 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const executor: VerbExecutor = wired
       ? createVerbRouter(
           {
-            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
-            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
-            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, logger: (message) => console.log(message) }),
+            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
             ...(restoreHarnesses !== undefined
               ? {
                   RESTORE: createRestoreExecutor({
                     productPool,
                     runtimeControlBaseUrl,
                     bridgePort,
+                    requestTimeoutMs: settings.harness.adapterRequestTimeoutMs,
                     harnesses: restoreHarnesses,
                     placementTimeoutMs: settings.custody.placementTimeoutMs,
                     pollIntervalMs: settings.harness.custodyPollIntervalMs,

@@ -11,6 +11,15 @@ import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
 import { buildClientConnection, connectBridge, createPersist, initializeParams, type BridgeConnection } from '@agora/acp'
 import { workspaceRoot } from './workspace-root.js'
+import { within } from './deadline.js'
+
+export interface SessionProbeResult {
+  readonly connected: boolean
+  /** configId -> currentValue, straight off the resume response (S8 Step 3 reads this for model/effort; unused by session() itself). */
+  readonly configOptions: ReadonlyMap<string, string>
+}
+
+const DISCONNECTED: SessionProbeResult = { connected: false, configOptions: new Map() }
 
 export interface SessionProbeOptions {
   readonly productPool: pg.Pool
@@ -29,35 +38,6 @@ export interface SessionProbeOptions {
   readonly requestTimeoutMs?: number
 }
 
-/** Rejects if the promise has not settled inside the deadline. The probe's catch turns that into `disconnected`. */
-async function within<T>(work: Promise<T>, timeoutMs: number | undefined, what: string): Promise<T> {
-  if (timeoutMs === undefined) return work
-  let timer: NodeJS.Timeout | undefined
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${what} did not answer within ${String(timeoutMs)}ms`)), timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-export interface SessionProbeResult {
-  readonly connected: boolean
-  /** configId -> currentValue, straight off the resume response (S8 Step 3 reads this for model/effort; unused by session() itself). */
-  readonly configOptions: ReadonlyMap<string, string>
-}
-
-const DISCONNECTED: SessionProbeResult = { connected: false, configOptions: new Map() }
-
-/**
- * Resumes the workstream's bound ACP context to prove it is actually still live, right now — never
- * a cached record. Any failure (unreachable Pod, dead process, adapter rejects the resume) reports
- * `connected: false`; it is never thrown, this is an evidence read like any other in 002 Observation.
- */
 export async function probeSession(
   input: {
     readonly workstreamId: string
