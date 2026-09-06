@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/fact-acp-envelope.schema.json",
+  "title": "acp.envelope metadata payload",
+  "description": "Indexing metadata beside the envelope (ADR 0004). The canonical value of the fact is the complete raw NDJSON frame text bound as jsonb in the payload column itself; this schema therefore never validates the envelope, only the separate metadata payload carried beside it. Content equality is never a deduplication key: observation_id is the stable occurrence identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["direction", "rpc_kind", "observation_id", "connection_id"],
+  "properties": {
+    "direction": { "enum": ["client_to_agent", "agent_to_client"] },
+    "rpc_kind": { "enum": ["request", "response", "notification"] },
+    "method": { "type": ["string", "null"], "description": "Method of the request/notification; null for responses." },
+    "correlated_method": { "type": ["string", "null"], "description": "For responses, the method of the correlated request." },
+    "rpc_id": { "description": "JSON-RPC id as received (string or integer); null for notifications." },
+    "command_id": { "type": ["string", "null"], "format": "uuid", "description": "Dispatch this envelope belongs to (outbound prompts/cancels)." },
+    "connection_id": { "type": "string", "minLength": 1, "description": "Identity of the bridge connection the frame crossed." },
+    "observation_id": { "type": "string", "minLength": 1, "description": "Stable occurrence identity; two identical envelopes are two distinct occurrences." },
+    "frame_size": { "type": "integer", "minimum": 1, "description": "UTF-8 byte size of the raw frame." }
+  }
+}

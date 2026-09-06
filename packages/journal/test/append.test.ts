@@ -64,7 +64,7 @@ test('unregistered kinds are refused; session-scoped kinds require a session', a
         () => db.asRole(client, PRODUCT, () => appendFact(client, id, { kind: 'session.ended', payload: { reason: 'x' } })),
         (error: unknown) => error instanceof JournalError && error.code === 'session_scoped_required',
       )
-      assert.deepEqual(registeredKinds(), ['session.opened', 'session.ended', 'session.provenance'])
+      assert.deepEqual(registeredKinds(), ['session.opened', 'session.ended', 'session.provenance', 'acp.envelope'])
     } finally {
       client.release()
     }

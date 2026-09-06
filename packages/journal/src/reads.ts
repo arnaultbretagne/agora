@@ -6,6 +6,18 @@ import { JournalError } from './append.js'
 
 export type Queryer = pg.Pool | pg.PoolClient
 
+export interface AcpFactMetadata {
+  readonly direction: string | null
+  readonly rpcKind: string | null
+  readonly method: string | null
+  readonly correlatedMethod: string | null
+  readonly rpcId: unknown
+  readonly commandId: string | null
+  readonly connectionId: string | null
+  readonly observationId: string | null
+  readonly frameSize: number | null
+}
+
 export interface FactRecord {
   readonly workstreamId: string
   readonly seq: number
@@ -14,6 +26,8 @@ export interface FactRecord {
   readonly payload: unknown
   readonly causation: unknown
   readonly recordedAt: Date
+  /** Present when the fact row carries the S4 ACP indexing columns. */
+  readonly acp?: AcpFactMetadata
 }
 
 interface RawFactRow {
@@ -24,6 +38,15 @@ interface RawFactRow {
   readonly payload: unknown
   readonly causation: unknown
   readonly recorded_at: Date
+  readonly direction: string | null
+  readonly rpc_kind: string | null
+  readonly method: string | null
+  readonly correlated_method: string | null
+  readonly rpc_id: unknown
+  readonly command_id: string | null
+  readonly connection_id: string | null
+  readonly observation_id: string | null
+  readonly frame_size: number | null
 }
 
 function toRecord(row: RawFactRow): FactRecord {
@@ -35,13 +58,25 @@ function toRecord(row: RawFactRow): FactRecord {
     payload: row.payload,
     causation: row.causation,
     recordedAt: row.recorded_at,
+    acp: {
+      direction: row.direction,
+      rpcKind: row.rpc_kind,
+      method: row.method,
+      correlatedMethod: row.correlated_method,
+      rpcId: row.rpc_id,
+      commandId: row.command_id,
+      connectionId: row.connection_id,
+      observationId: row.observation_id,
+      frameSize: row.frame_size,
+    },
   }
 }
 
 /** Facts strictly after `afterSeq`, ascending — the projector runner's feed. */
 export async function factsFrom(client: Queryer, workstreamId: string, afterSeq: number, limit = 5_000): Promise<readonly FactRecord[]> {
   const result = await client.query<RawFactRow>(
-    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at
+    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at,
+            direction, rpc_kind, method, correlated_method, rpc_id, command_id, connection_id, observation_id, frame_size
      FROM workstream_facts WHERE workstream_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`,
     [workstreamId, afterSeq, limit],
   )
@@ -51,7 +86,8 @@ export async function factsFrom(client: Queryer, workstreamId: string, afterSeq:
 /** The inclusive [fromSeq, toSeq] range — the pagination unit for reads and, later, Handoff rendering. */
 export async function factsBetween(client: Queryer, workstreamId: string, fromSeq: number, toSeq: number): Promise<readonly FactRecord[]> {
   const result = await client.query<RawFactRow>(
-    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at
+    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at,
+            direction, rpc_kind, method, correlated_method, rpc_id, command_id, connection_id, observation_id, frame_size
      FROM workstream_facts WHERE workstream_id = $1 AND seq >= $2 AND seq <= $3 ORDER BY seq`,
     [workstreamId, fromSeq, toSeq],
   )
@@ -61,7 +97,8 @@ export async function factsBetween(client: Queryer, workstreamId: string, fromSe
 /** Reading a Session: facts referencing its session_id, in Workstream order. */
 export async function factsBySession(client: Queryer, workstreamId: string, sessionId: string): Promise<readonly FactRecord[]> {
   const result = await client.query<RawFactRow>(
-    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at
+    `SELECT workstream_id, seq, session_id, kind, payload, causation, recorded_at,
+            direction, rpc_kind, method, correlated_method, rpc_id, command_id, connection_id, observation_id, frame_size
      FROM workstream_facts WHERE workstream_id = $1 AND session_id = $2 ORDER BY seq`,
     [workstreamId, sessionId],
   )

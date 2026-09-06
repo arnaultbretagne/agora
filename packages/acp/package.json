@@ -1,0 +1,20 @@
+{
+  "name": "@agora/acp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
+  }
+}

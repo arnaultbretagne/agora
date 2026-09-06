@@ -136,6 +136,17 @@ Late/buffered frames retain their original request/connection attribution. A cap
 distinguish them must drain/reconnect before new work. Receipt time cannot relabel old work. Projections
 are deterministic disposable views with source references, never a second journal or live proof.
 
+Bridge capture rules (S4, verified against the pinned SDK — `packages/acp/README.md`):
+
+- One NDJSON frame carries exactly one JSON value encoded as UTF-8, with at most trailing
+  whitespace; anything else is a framing diagnostic, never a fact.
+- The frame ceiling is 32 MiB per frame. A peer that exceeds it fails the connection closed; the
+  buffer is never grown without bound.
+- Frame scanning resumes where the previous scan stopped — reassembly must not rescan from zero.
+- The bridge authenticates the ACP side before carrying frames. S4 development bridges share a
+  static secret; S8 replaces it with per-incarnation credentials. The bridge frames and
+  authenticates; it never translates ACP meaning.
+
 Current configuration comes from a fresh owner snapshot or a freshly verified, complete ordered
 stream continuing from such a snapshot for the same process/context. Lost continuity, reconnect or
 unknown buffered updates invalidates it. Updating a cached response's timestamp renews nothing.

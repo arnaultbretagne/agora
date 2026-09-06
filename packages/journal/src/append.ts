@@ -16,11 +16,30 @@ export class JournalError extends Error {
   }
 }
 
+export interface AcpEnvelopeMetadata {
+  readonly direction: 'client_to_agent' | 'agent_to_client'
+  readonly rpcKind: 'request' | 'response' | 'notification'
+  readonly method: string | null
+  readonly correlatedMethod: string | null
+  readonly rpcId: unknown
+  readonly commandId: string | null
+  readonly connectionId: string
+  readonly observationId: string
+  readonly frameSize: number
+}
+
 export interface AppendFactCommand {
   readonly sessionId?: string | null
   readonly kind: string
-  readonly payload: unknown
+  /**
+   * The structured payload. Mutually exclusive with `payloadRawText`: an ACP envelope's canonical
+   * value is the raw frame text, never a parsed-and-reserialized object (ADR 0004, findings §1).
+   */
+  readonly payload?: unknown
+  readonly payloadRawText?: string
   readonly causation?: unknown
+  /** ACP indexing metadata persisted beside the envelope (S4 columns). */
+  readonly acp?: AcpEnvelopeMetadata
 }
 
 export interface AppendedFact {
@@ -41,7 +60,11 @@ export async function appendFact(
   if (isSessionScopedKind(command.kind) && (command.sessionId === undefined || command.sessionId === null)) {
     throw new JournalError('session_scoped_required', `fact kind "${command.kind}" is session-scoped and requires a sessionId`)
   }
-  assertNoSecretPattern('payload', command.payload)
+  // The ACP envelope is the one exempt field: full passthrough is the point of ADR 0004, and its
+  // confidentiality rules are its own. Guard the metadata and causation as usual.
+  if (command.payloadRawText === undefined) {
+    assertNoSecretPattern('payload', command.payload)
+  }
   assertNoSecretPattern('causation', command.causation)
 
   const head = await client.query(
@@ -52,11 +75,31 @@ export async function appendFact(
     throw new JournalError('unknown_workstream', `no Workstream ${workstreamId}`)
   }
   const seq: number = head.rows[0]!['head_seq']
+  const payloadParam = command.payloadRawText ?? JSON.stringify(command.payload)
+  const acp = command.acp
   const inserted = await client.query(
-    `INSERT INTO workstream_facts (workstream_id, seq, session_id, kind, payload, causation, recorded_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, ${now})
+    `INSERT INTO workstream_facts
+       (workstream_id, seq, session_id, kind, payload, causation, recorded_at,
+        direction, rpc_kind, method, correlated_method, rpc_id, command_id, connection_id, observation_id, frame_size)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, ${now}, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
      RETURNING recorded_at`,
-    [workstreamId, seq, command.sessionId ?? null, command.kind, JSON.stringify(command.payload), command.causation === undefined ? null : JSON.stringify(command.causation)],
+    [
+      workstreamId,
+      seq,
+      command.sessionId ?? null,
+      command.kind,
+      payloadParam,
+      command.causation === undefined ? null : JSON.stringify(command.causation),
+      acp?.direction ?? null,
+      acp?.rpcKind ?? null,
+      acp?.method ?? null,
+      acp?.correlatedMethod ?? null,
+      acp?.rpcId === undefined || acp.rpcId === null ? null : JSON.stringify(acp.rpcId),
+      acp?.commandId ?? null,
+      acp?.connectionId ?? null,
+      acp?.observationId ?? null,
+      acp?.frameSize ?? null,
+    ],
   )
   return { seq, recordedAt: inserted.rows[0]!['recorded_at'] }
 }
