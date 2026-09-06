@@ -2,6 +2,7 @@
 // Usage (local adapter):
 //   node dist/src/cli.js --harness claude-code --adapter <path-to-adapter-entry.js> [--workspace /tmp]
 //     [--expect-adapter-name <name> --expect-adapter-version <version>] [--allow-model-spend]
+//     [--model-option-id model --effort-option-id reasoning_effort]   # what THIS harness calls them
 // Usage (live Pod bridge):
 //   node dist/src/cli.js --harness claude-code --bridge ws://<pod-ip>:<port>/ --token <p4 bridge token>
 //
@@ -22,6 +23,10 @@ async function main(): Promise<void> {
   const harnessId = flag('harness') ?? 'unknown-harness'
   const workspaceRoot = flag('workspace') ?? '/tmp'
   const allowModelSpend = has('allow-model-spend')
+  const configOptionIds =
+    flag('model-option-id') !== undefined || flag('effort-option-id') !== undefined
+      ? { model: flag('model-option-id') ?? 'model', effort: flag('effort-option-id') ?? 'effort' }
+      : undefined
   const expected = {
     ...(flag('expect-adapter-name') === undefined ? {} : { adapterName: flag('expect-adapter-name')! }),
     ...(flag('expect-adapter-version') === undefined ? {} : { adapterVersion: flag('expect-adapter-version')! }),
@@ -32,13 +37,13 @@ async function main(): Promise<void> {
   let target: ConformanceTarget
   let shutdown = (): void => {}
   if (adapter !== undefined) {
-    const spawned = spawnedAdapterTarget({ harnessId, command: 'node', args: [adapter], workspaceRoot, expected, allowModelSpend })
+    const spawned = spawnedAdapterTarget({ harnessId, command: 'node', args: [adapter], workspaceRoot, expected, allowModelSpend, ...(configOptionIds === undefined ? {} : { configOptionIds }) })
     target = spawned
     shutdown = spawned.shutdown
   } else if (bridge !== undefined) {
     const token = flag('token')
     if (token === undefined) throw new Error('--bridge requires --token (the P4 bridge token)')
-    target = bridgeTarget({ harnessId, url: bridge, token, workspaceRoot, expected, allowModelSpend })
+    target = bridgeTarget({ harnessId, url: bridge, token, workspaceRoot, expected, allowModelSpend, ...(configOptionIds === undefined ? {} : { configOptionIds }) })
   } else {
     throw new Error('one of --adapter <entry.js> or --bridge <ws url> is required')
   }

@@ -53,6 +53,36 @@ ones. Mutation/admission checks reject an obsolete selected revision immediately
 for the publication sweep to finish. An identical effective result needs provenance, not a new
 Session. An incompatible result remains visible and unrealized until its owner changes the cause.
 
+### Publication procedure
+
+Publishing a reviewed revision is one transaction followed by bounded, resumable work.
+
+**The transaction.** Record the new selection (one row: revision id and revision set) and open a
+publication for it. The two commit together, and that commit is the moment the previous revision
+becomes obsolete: from then on, a mutation or admission carrying the old revision id is rejected
+immediately, at the check, without waiting for any sweep to reach its Workstream. Publishing the
+same revision id twice discovers the existing publication instead of opening a second one, so a
+retried operator request cannot double the work.
+
+**Enumeration.** Walk the desired-state index — every Workstream, in id order — and record each as a
+target of this publication. Not the workset: a Workstream with no work row is exactly the case a
+workset scan misses, and an idle Workstream whose harness digest was re-pinned is exactly the case
+that matters. Enumeration is paginated, and the cursor advances in the same transaction as the page
+it describes, so an interrupted publication resumes at the last target actually written — never from
+the start, never skipping a page.
+
+**Re-enqueue.** Wake recorded targets in bounded batches, each with a fresh work generation. The
+fresh generation is what makes the wake real: an in-flight claim under the previous generation can no
+longer finalize over it. Publication authors no Intent and names no verb — it makes work due, and
+the rule tables then read fresh evidence under the new revision and select whatever that implies.
+
+**Resumption.** A publication that has not reached `complete` still owes wakes; a sweep resumes it.
+Enumeration must finish before any re-enqueue begins: a publication that does not yet know its full
+target list cannot claim to have woken it.
+
+**Authority.** Publication is an operator action taken as a service actor, not a product user
+action: it changes what every Workstream in the deployment is reconciled against.
+
 ## Work generations, claims and leases
 
 The coalescing workset has at most one row per Workstream. It refers to the latest immutable Intent

@@ -5,7 +5,7 @@ import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
-import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort, loadRestoreHarness, loadWorkspaceRoot } from './catalogue.js'
+import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort, loadRestoreHarnesses, loadSharedWorkspaceRoot, loadConfigOptionIds, loadConfigReadback, catalogueRevisionId } from './catalogue.js'
 import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
@@ -13,6 +13,8 @@ import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
 import { setWorkspaceRoot } from './workspace-root.js'
+import { publicationSweep } from '@agora/engine'
+import { advancePublication, unfinishedPublications } from '@agora/policy'
 import { createTurnOffExecutor } from './verbs/turn-off.js'
 import { createRestoreExecutor } from './verbs/restore.js'
 import { createRefillExecutor } from './verbs/refill.js'
@@ -21,6 +23,9 @@ import { RealChannelConnector } from './real-channel-connector.js'
 import type { PromptRecoveryOptions } from './recovery/context.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
+
+/** How often an interrupted publication is picked back up. Bounded work, rarely needed. */
+const PUBLICATION_SWEEP_INTERVAL_MS = 30_000
 
 /** Before HARNESS_DEFINITIONS_PATH/POLICY_CAPABILITIES_PATH/RUNTIME_CONTROL_URL/BROKER_URL are all configured, every field is unavailable — rules can only schedule work, never act, exactly as S2 always did. */
 class UnavailableObservationSource implements ObservationSource {
@@ -66,14 +71,18 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const capabilitiesPath = env.POLICY_CAPABILITIES_PATH
   const catalogue = harnessDefinitionsPath && capabilitiesPath ? loadCatalogueView(harnessDefinitionsPath, capabilitiesPath) : undefined
   const revisionSet = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath) : undefined
+  const revisionId = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionId(harnessDefinitionsPath, capabilitiesPath) : undefined
   const harnessDigests = harnessDefinitionsPath ? loadHarnessDigests(harnessDefinitionsPath) : undefined
-  // One harness in the reviewed catalogue today (S8/S9); per-harness Anchors are already the schema's
-  // shape, and CONT-007 exercises the multi-harness case in S10.
-  const restoreHarness = harnessDefinitionsPath ? loadRestoreHarness(harnessDefinitionsPath, 'claude-code') : undefined
+  // Every reviewed harness with a custody contract. Which one applies to a Workstream is its own
+  // Intent's answer, read per tick — Anchors are per (Workstream, harness), and A → B → A depends on
+  // a switch to B leaving A's Anchor exactly where it was (CONT-007).
+  const restoreHarnesses = harnessDefinitionsPath ? loadRestoreHarnesses(harnessDefinitionsPath) : undefined
   // Configured once, from the catalogue, before anything opens an ACP connection: this process and
   // the Pod's adapter must agree on the workspace root, or START creates contexts under one and the
   // custody driver looks for transcripts under another.
-  const declaredWorkspaceRoot = harnessDefinitionsPath ? loadWorkspaceRoot(harnessDefinitionsPath, 'claude-code') : undefined
+  const configOptionIds = harnessDefinitionsPath ? loadConfigOptionIds(harnessDefinitionsPath) : undefined
+  const configReadback = harnessDefinitionsPath ? loadConfigReadback(harnessDefinitionsPath) : undefined
+  const declaredWorkspaceRoot = harnessDefinitionsPath ? loadSharedWorkspaceRoot(harnessDefinitionsPath) : undefined
   if (declaredWorkspaceRoot !== undefined) setWorkspaceRoot(declaredWorkspaceRoot)
   const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
   const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
@@ -91,7 +100,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
         brokerBaseUrl,
         bridgePort,
         harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
-        ...(restoreHarness !== undefined ? { restoreHarness } : {}),
+        ...(restoreHarnesses !== undefined ? { restoreHarnesses } : {}),
+        ...(configOptionIds !== undefined ? { configOptionIds } : {}),
+        ...(configReadback !== undefined ? { configReadback } : {}),
         logger: (message) => console.log(message),
       })
     : new UnavailableObservationSource()
@@ -121,6 +132,11 @@ export async function run(options: MainOptions = {}): Promise<void> {
       channels,
       ...(catalogue ? { catalogue } : {}),
       ...(revisionSet ? { revisionSet } : {}),
+      ...(revisionId !== undefined ? { revisionId } : {}),
+      // The operator surface exists only where the deployment named who may use it.
+      ...(env.PUBLICATION_SERVICE_ACTOR !== undefined
+        ? { publication: { servicePrincipal: env.PUBLICATION_SERVICE_ACTOR, ...(revisionSet ? { revisionSet } : {}), logger: (message: string) => console.log(message) } }
+        : {}),
       ...(wired ? { admission: { observationSource, resolve } } : {}),
       ...(wired ? { recovery: { productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) } satisfies PromptRecoveryOptions } : {}),
     })
@@ -132,10 +148,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ? createVerbRouter(
           {
             START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
-            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
-            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
-            ...(restoreHarness !== undefined
-              ? { RESTORE: createRestoreExecutor({ productPool, runtimeControlBaseUrl, bridgePort, harness: restoreHarness, logger: (message) => console.log(message) }) }
+            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            ...(restoreHarnesses !== undefined
+              ? { RESTORE: createRestoreExecutor({ productPool, runtimeControlBaseUrl, bridgePort, harnesses: restoreHarnesses, logger: (message) => console.log(message) }) }
               : {}),
             REFILL: createRefillExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
           },
@@ -153,7 +169,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
             productPool,
             enginePool,
             capture: createRuntimeControlCaptureSource({ runtimeControlBaseUrl, logger: (message) => console.log(message) }),
-            harnessId: restoreHarness?.harnessId ?? 'claude-code',
+
             logger: (message) => console.log(message),
           }),
         )
@@ -175,7 +191,19 @@ export async function run(options: MainOptions = {}): Promise<void> {
       pollIntervalMs,
     })
     console.log(`reconciliation worker scanning every ${pollIntervalMs}ms${wired ? '' : ' (owners unwired: observation unavailable, no verb executor)'}`)
+
+    // A publication that was interrupted mid-enumeration still owes every Workstream it had not
+    // reached a wake. Resuming it is scheduling, not policy, so the sweep takes both halves as
+    // functions: the engine keeps no dependency on what a publication is.
+    const publications = setInterval(() => {
+      void publicationSweep(
+        () => unfinishedPublications(productPool),
+        (publicationId) => advancePublication(productPool, publicationId, { maxPasses: 20 }),
+      ).catch((error: unknown) => console.error('publication sweep failed', error))
+    }, PUBLICATION_SWEEP_INTERVAL_MS)
+    publications.unref?.()
     const stop = async (): Promise<void> => {
+      clearInterval(publications)
       await ticks.stop()
       await enginePool.end()
       await productPool.end()

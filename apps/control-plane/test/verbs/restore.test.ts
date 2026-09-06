@@ -17,6 +17,9 @@ const HARNESS: RestoreHarness = {
   workspaceDeps: {},
 }
 
+/** Which harness applies is the Workstream's own Intent's answer (CONT-007), so tests author one. */
+const HARNESSES = new Map<string, RestoreHarness>([['claude-code', HARNESS]])
+
 function context(workstreamId: string): VerbContext {
   return { workstreamId, intentSeq: 1, workGeneration: 1, claimToken: 'claim-1', rule: 'SESSION-002' }
 }
@@ -101,6 +104,11 @@ async function seed(
   try {
     return await db.asRole(client, 'agora_product', async () => {
       await client.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
+      await client.query(
+        `INSERT INTO workstream_intent_events (workstream_id, intent_seq, intent, request_key, principal, revision_set)
+         VALUES ($1, 1, $2::jsonb, $3, 'p', '{}'::jsonb)`,
+        [workstreamId, JSON.stringify({ power: 'on', harness: 'claude-code', model: 'sonnet', effort: 'high', capabilities: [] }), randomUUID()],
+      )
       await client.query('BEGIN')
       // The Session that produced the Save, and then the NEW Session a restore always belongs to
       // (CONT-003) — a different Pod, a different attribution, the same native context id.
@@ -146,7 +154,7 @@ test('CONT-003: the Save is placed, its native context resumed, and bound to the
         productPool: db.pool,
         runtimeControlBaseUrl: runtimeControl.url,
         bridgePort: 8765,
-        harness: HARNESS,
+        harnesses: HARNESSES,
         connect: fakeConnect(agent, connects),
       })
 
@@ -175,7 +183,7 @@ test('an unverified placement is never resumed, and nothing is invalidated by it
         productPool: db.pool,
         runtimeControlBaseUrl: runtimeControl.url,
         bridgePort: 8765,
-        harness: HARNESS,
+        harnesses: HARNESSES,
         placementTimeoutMs: 100,
         connect: fakeConnect(fakeAcpAgent(calls), []),
       })
@@ -202,7 +210,7 @@ test('CONT-008: a verified incompatibility invalidates the exact Save/driver pai
         productPool: db.pool,
         runtimeControlBaseUrl: runtimeControl.url,
         bridgePort: 8765,
-        harness: HARNESS,
+        harnesses: HARNESSES,
         connect: fakeConnect(fakeAcpAgent(calls), []),
       })
 
@@ -241,7 +249,7 @@ test('a Session that already holds a context is left alone', async () => {
         productPool: db.pool,
         runtimeControlBaseUrl: runtimeControl.url,
         bridgePort: 8765,
-        harness: HARNESS,
+        harnesses: HARNESSES,
         connect: fakeConnect(fakeAcpAgent({ resumed: [] }), []),
       })
 
@@ -256,7 +264,7 @@ test('a Session that already holds a context is left alone', async () => {
 
 test('RESTORE refuses any other verb rather than quietly doing nothing', async () => {
   await withTestDatabase(async (db) => {
-    const executor = createRestoreExecutor({ productPool: db.pool, runtimeControlBaseUrl: 'http://127.0.0.1:65533', bridgePort: 8765, harness: HARNESS })
+    const executor = createRestoreExecutor({ productPool: db.pool, runtimeControlBaseUrl: 'http://127.0.0.1:65533', bridgePort: 8765, harnesses: HARNESSES })
     await assert.rejects(executor.execute('START', context(randomUUID())), UnsupportedVerbError)
   })
 })

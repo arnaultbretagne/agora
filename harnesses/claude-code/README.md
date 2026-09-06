@@ -235,3 +235,24 @@ Measured run:
 What is still NOT proven here: the same chain on real Kubernetes behind the Broker relay with real
 OneCLI credentials. That is a deployment step, not remaining engineering, and it is the same open
 item S8 already records.
+
+
+## What the second harness changed here (S10)
+
+Two things in this README were true of claude-code and, it turned out, only of claude-code.
+
+**`initialize` is no longer sent per connection.** It is a process-level handshake, and
+`packages/harness-bridge` now performs it once when it spawns the adapter. This harness tolerated a
+second `initialize`; codex refuses one outright (`Already initialized`), and both accept `session/*`
+on a connection that never initialized — so the per-verb `initialize` was buying nothing and would
+have broken every codex verb after the first. Nothing about this harness's behaviour changed; one
+redundant round trip per verb disappeared.
+
+**The bridge, the launch seam and the custody agent moved to `packages/harness-bridge`.** They were
+generic already. What stays here is what is actually this harness's: the adapter command and the
+custody driver (`src/driver.ts`). The shared package's own tests run against a fake driver, because
+testing the protocol around a driver against a real one tests the harness instead.
+
+Re-running the conformance suite after those changes gives the same result as before, plus the new
+`identity/handshake-is-per-process` check: **10 passed, 0 failed, 3 skipped** (11 passed with
+`--allow-model-spend`).

@@ -24,6 +24,16 @@ jobs:
         run: |
           uid=$(docker run --rm --entrypoint id agora-harness-claude-code:ci -u)
           test "$uid" = "10001"
+      - name: 'Build harnesses/codex''s image (S10 Step 1: the second reviewed harness)'
+        run: docker build -f harnesses/codex/image/Dockerfile -t agora-harness-codex:ci .
+      - name: The pinned codex adapter reports its own version, and its CLI is present
+        run: |
+          docker run --rm --entrypoint node agora-harness-codex:ci \
+            /usr/local/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js --version
+      - name: The codex image runs as the same non-root numeric UID
+        run: |
+          uid=$(docker run --rm --entrypoint id agora-harness-codex:ci -u)
+          test "$uid" = "10001"
 
   verify:
     runs-on: ubuntu-latest

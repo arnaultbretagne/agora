@@ -60,3 +60,22 @@ export async function sweep(
   }
   return { source, woken, cursor: lastCursor }
 }
+
+/**
+ * The publication sweep (S10 Step 3). A catalogue publication durably records which Workstreams it
+ * owes a wake and how far it got; this resumes any that are unfinished, which is what makes a
+ * controller restart mid-publication cost a batch rather than a page of Workstreams that never
+ * hear about the new revision.
+ *
+ * The two functions are injected rather than imported so the engine keeps no dependency on the
+ * policy package — this sweep is scheduling, and what a publication IS belongs elsewhere.
+ */
+export async function publicationSweep(
+  unfinished: () => Promise<readonly { readonly id: string }[]>,
+  advance: (publicationId: string) => Promise<unknown>,
+  limit = 4,
+): Promise<{ readonly resumed: number }> {
+  const publications = (await unfinished()).slice(0, limit)
+  for (const publication of publications) await advance(publication.id)
+  return { resumed: publications.length }
+}

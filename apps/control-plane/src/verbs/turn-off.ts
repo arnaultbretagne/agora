@@ -16,7 +16,7 @@
 // that before this executor was ever called.
 import type pg from 'pg'
 import type { Verb } from '@agora/domain'
-import type { VerbContext, VerbExecutor } from '@agora/engine'
+import { loadLatestIntentEvent, type VerbContext, type VerbExecutor } from '@agora/engine'
 import { currentSession } from '@agora/journal'
 import { publishAnchor, recordSave, getAnchor, type PublishOutcome } from '@agora/custody'
 
@@ -62,6 +62,7 @@ export interface TurnOffOptions {
   readonly enginePool: pg.Pool
   /** Absent where no custody is deployed: TURN_OFF then behaves exactly as it did in S7. */
   readonly capture?: CaptureSource
+  /** Fallback harness id when the Workstream has no Intent to read one from. */
   readonly harnessId?: string
   readonly imageDigest?: string
   readonly seedPolicyRevision?: string
@@ -202,7 +203,11 @@ async function preserve(
   shutdown: ShutdownRecord,
   session: { sessionId: string; podUid: string; acpContextId: string | null; processGeneration: number } | null,
 ): Promise<void> {
-  const harnessId = options.harnessId ?? 'claude-code'
+  // The Anchor a shutdown advances is the one belonging to the harness this Workstream is actually
+  // running (CONT-007): capturing on codex must never publish over claude-code's Anchor.
+  const intent = await loadLatestIntentEvent(options.productPool, context.workstreamId)
+  const intentHarness = (intent?.intent as { harness?: unknown } | undefined)?.harness
+  const harnessId = typeof intentHarness === 'string' ? intentHarness : (options.harnessId ?? 'claude-code')
   const key = { workstreamId: shutdown.workstreamId, incarnation: shutdown.incarnation }
   const remainingMs = shutdown.deadlineAt.getTime() - now().getTime()
 

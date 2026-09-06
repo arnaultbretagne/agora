@@ -479,7 +479,31 @@ deterministic truncation, REFILL under the same reservation discipline as any pr
 limits, retention values (§4). These are named prerequisites in the specs; S9 is where they are
 written down and demonstrated.
 
-### S10 — Second harness, catalogue publication and A → B → A
+### S10 — Second harness, catalogue publication and A → B → A (merged; one item open)
+
+**Status.** Built, tested and merged, with the same single item open as S8 and S9: the run on real
+Kubernetes with real OneCLI credentials. A → B → A itself was run end to end against BOTH real
+adapters (`scripts/s10-a-b-a.mjs`), and the conformance suite scores the same on codex as on
+claude-code.
+
+The second harness earned its place by breaking two assumptions that had looked like facts:
+
+1. **`initialize` is a process-level handshake, not a per-connection one.** codex refuses a second
+   one (`Already initialized`); claude-code tolerates repeats, which is why nobody noticed. Agora
+   initialized on every verb's fresh connection. Both adapters accept `session/*` on a connection
+   that never initialized, so the handshake moved to the harness bridge, which owns the process and
+   now performs it exactly once.
+2. **An un-prompted codex context has no persisted state and cannot be resumed.** The observation
+   probe resumed the bound context every tick to read its configuration; for codex that fails
+   between START and the first prompt, which would have left the Workstream permanently short of
+   `live`. How a harness answers a configuration readback is now declared per harness, alongside
+   what it calls the `model` and `effort` options — codex calls effort `reasoning_effort`, and that
+   is a mapping in the reviewed definition, never a second Intent field.
+
+The conformance suite needed three fixes of its own, each one the suite assuming claude-code's
+behaviour rather than testing a requirement. A new check, `identity/handshake-is-per-process`,
+exists so the first of those cannot regress silently.
+
 
 **Goal.** Prove the design holds for more than one harness and that revision publication is a
 first-class wake.

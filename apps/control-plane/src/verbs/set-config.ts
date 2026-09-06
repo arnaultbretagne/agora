@@ -24,6 +24,8 @@ export interface SetConfigExecutorOptions {
   readonly enginePool: QueryClient
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
+  /** Per-harness option ids; absent, the Intent field name is used as-is (claude-code's own case). */
+  readonly configOptionIds?: ConfigOptionIds
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket. */
   readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
@@ -43,6 +45,9 @@ export class UnsupportedVerbError extends Error {
 }
 
 const CONFIG_ID: Partial<Record<Verb, 'model' | 'effort'>> = { SET_MODEL: 'model', SET_EFFORT: 'effort' }
+
+/** What each harness calls the two options the Intent names `model` and `effort` (S10 Step 1). */
+export type ConfigOptionIds = ReadonlyMap<string, { readonly model: string; readonly effort: string }>
 
 export function createSetConfigExecutor(options: SetConfigExecutorOptions): VerbExecutor {
   const connect = options.connect ?? connectBridge
@@ -93,8 +98,18 @@ async function runSetConfig(
       })
       const clientConnection = buildClientConnection(connection.stream, persist)
       try {
-        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
-        await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, { sessionId: session.acpContextId, configId, value: desiredValue })
+        // `initialize` is deliberately NOT sent here. It is a PROCESS-level handshake the harness bridge
+        // performs once when it spawns the adapter (packages/harness-bridge/src/handshake.ts): codex-acp
+        // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
+        // connection that never initialized — so re-initializing per verb bought nothing and broke one of
+        // the two harnesses.
+        // The Intent's field name is Agora's; the option id is the adapter's. Codex calls effort
+        // `reasoning_effort`, claude-code calls it `effort` — one mapping, in the reviewed
+        // definition, so no rule and no Intent field ever has to know which harness is running.
+        const harnessId = (intentEvent?.intent as { harness?: unknown } | undefined)?.harness
+        const ids = typeof harnessId === 'string' ? options.configOptionIds?.get(harnessId) : undefined
+        const adapterConfigId = ids?.[configId] ?? configId
+        await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, { sessionId: session.acpContextId, configId: adapterConfigId, value: desiredValue })
       } finally {
         clientConnection.close()
       }

@@ -89,7 +89,7 @@ test('probeSession: a successful resume reports connected and the parsed configO
     )
     assert.equal(result.connected, true)
     assert.deepEqual([...result.configOptions], [['model', 'sonnet'], ['effort', 'high']])
-    assert.equal(agent.counts.initializeCalls, 1)
+    assert.equal(agent.counts.initializeCalls, 0, 'the process-level handshake is the bridge\'s, done once at launch — codex refuses a second one')
     assert.equal(agent.counts.resumeCalls, 1)
 
     const facts = await db.pool.query('SELECT count(*)::int AS n FROM workstream_facts WHERE workstream_id = $1', [workstreamId])

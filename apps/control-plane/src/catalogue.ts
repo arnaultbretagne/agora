@@ -21,6 +21,8 @@ interface HarnessDefinitionsFile {
     readonly imageDigest: string
     readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
     readonly workspaceRoot?: string
+    readonly configOptionIds?: { readonly model: string; readonly effort: string }
+    readonly configReadback?: 'resume' | 'set-config-noop'
     readonly custody?: {
       readonly supportedFormats: readonly { readonly formatId: string; readonly formatVersion: number }[]
       readonly acceptedDriverRevisions: readonly string[]
@@ -45,6 +47,72 @@ export interface RestoreHarness {
 export function loadWorkspaceRoot(harnessDefinitionsPath: string, harnessId: string): string | undefined {
   const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
   return harnessFile.harnesses.find((h) => h.harnessId === harnessId)?.workspaceRoot
+}
+
+/**
+ * How this harness names the config options the registered Intent fields map onto (S10 Step 1).
+ * Codex calls the effort option `reasoning_effort`; claude-code calls it `effort`. That is a
+ * mapping in the reviewed definition, never a second Intent field: the Intent stays
+ * `model`/`effort` for every harness, and each definition says what its adapter calls them.
+ */
+export interface HarnessConfigOptionIds {
+  readonly model: string
+  readonly effort: string
+}
+
+export function loadConfigOptionIds(harnessDefinitionsPath: string): ReadonlyMap<string, HarnessConfigOptionIds> {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  const out = new Map<string, HarnessConfigOptionIds>()
+  for (const harness of harnessFile.harnesses) {
+    out.set(harness.harnessId, harness.configOptionIds ?? { model: 'model', effort: 'effort' })
+  }
+  return out
+}
+
+/**
+ * How a harness answers "what is your current configuration?". `resume` is the natural read;
+ * `set-config-noop` exists because codex does not persist a context until it has content, so
+ * resuming one that has never been prompted fails outright (measured, harnesses/codex/README.md).
+ */
+export function loadConfigReadback(harnessDefinitionsPath: string): ReadonlyMap<string, 'resume' | 'set-config-noop'> {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  return new Map(harnessFile.harnesses.map((harness) => [harness.harnessId, harness.configReadback ?? 'resume']))
+}
+
+export class DivergentWorkspaceRootsError extends Error {
+  constructor(readonly roots: readonly string[]) {
+    super(`the reviewed harnesses declare different workspace roots (${roots.join(', ')}); this process opens ACP against one root and cannot serve both`)
+    this.name = 'DivergentWorkspaceRootsError'
+  }
+}
+
+/**
+ * The one workspace root every reviewed harness agrees on. The control plane opens ACP against a
+ * single root per process (workspace-root.ts), so two harnesses declaring different roots is a
+ * configuration error to refuse at startup — not a value to pick between and be silently wrong about
+ * for whichever harness lost. Making it per-harness is a real change, and it belongs to whichever
+ * slice actually needs two roots.
+ */
+export function loadSharedWorkspaceRoot(harnessDefinitionsPath: string): string | undefined {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  const roots = [...new Set(harnessFile.harnesses.map((h) => h.workspaceRoot).filter((root): root is string => typeof root === 'string'))]
+  if (roots.length > 1) throw new DivergentWorkspaceRootsError(roots)
+  return roots[0]
+}
+
+export function loadRestoreHarnesses(harnessDefinitionsPath: string): ReadonlyMap<string, RestoreHarness> {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  const out = new Map<string, RestoreHarness>()
+  for (const harness of harnessFile.harnesses) {
+    if (harness.custody === undefined) continue
+    out.set(harness.harnessId, {
+      harnessId: harness.harnessId,
+      supportedFormats: harness.custody.supportedFormats,
+      acceptedDriverRevisions: harness.custody.acceptedDriverRevisions,
+      ...(harness.custody.workspaceDeps !== undefined ? { workspaceDeps: harness.custody.workspaceDeps } : {}),
+    })
+  }
+  return out
 }
 
 export function loadRestoreHarness(harnessDefinitionsPath: string, harnessId: string): RestoreHarness | undefined {
@@ -116,4 +184,13 @@ export function catalogueRevisionSet(harnessDefinitionsPath: string, capabilitie
   let hash = 0
   for (let i = 0; i < combined.length; i += 1) hash = (hash * 31 + combined.charCodeAt(i)) | 0
   return { catalogue: `s8-${hash.toString(16)}` }
+}
+
+/**
+ * The revision id a publication names, and the one a mutation is fenced against (S10 Step 3). It is
+ * the same signature the revision set carries — one value, so "is this process on the selected
+ * revision?" is a string comparison rather than a structural one nobody can reason about.
+ */
+export function catalogueRevisionId(harnessDefinitionsPath: string, capabilitiesPath: string): string {
+  return String(catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath)['catalogue'])
 }

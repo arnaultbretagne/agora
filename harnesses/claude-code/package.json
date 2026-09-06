@@ -10,8 +10,7 @@
     "test": "node --test \"dist/test/**/*.test.js\""
   },
   "dependencies": {
-    "@agora/acp": "0.0.0",
-    "ws": "8.21.3"
+    "@agora/harness-bridge": "0.0.0"
   },
   "devDependencies": {
     "@agora/custody": "0.0.0"

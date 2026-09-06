@@ -3,7 +3,7 @@
 // none failed, and every skip carries the reason it was skipped, so a report is readable as
 // evidence rather than as a score.
 import { CONFORMANCE_TABLE, type ConformanceRow, type ConformanceRowId } from './table.js'
-import { ALL_CHECKS, connectionFactory, type Check, type CheckResult } from './checks.js'
+import { ALL_CHECKS, connectionFactory, handshakeFactory, type Check, type CheckResult } from './checks.js'
 import type { ConformanceTarget } from './target.js'
 
 export interface RowReport {
@@ -25,7 +25,7 @@ export interface ConformanceReport {
 
 export async function runConformance(target: ConformanceTarget, checks: readonly Check[] = ALL_CHECKS): Promise<ConformanceReport> {
   const withConnection = connectionFactory(target)
-  const context = { target, withConnection }
+  const context = { target, withConnection, handshake: handshakeFactory(target, withConnection) }
   const results: CheckResult[] = []
   for (const check of checks) {
     try {
