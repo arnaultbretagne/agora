@@ -545,7 +545,38 @@ audit; metrics and dashboards; supply-chain review of every image (digest pinnin
 provenance); deployment packaging (Kustomize or Helm) per deployable; a security review pass
 over trust boundaries and log redaction.
 
-### S12 — Web plumbing completion
+### S12 — Web plumbing completion (merged)
+
+**Status.** Done and merged. `api.ts` is rewritten against the contract, the vocabulary allowlist is
+empty for the first time, and the UI expresses the product in the design's own terms: an Intent
+editor whose every value comes from the catalogue endpoint the server validates against, and a
+status line that is DERIVED on each render rather than read from a stored phase — because no phase
+exists.
+
+The three things the specs insist must be visible now are: a blocking cause verbatim with its rule
+id (a paraphrase is not actionable), an external restriction that says who can lift it rather than
+claiming we are working on it, and an ambiguous delivery that outranks everything and closes the
+composer — with no automatic resend, ever. Alongside them, the CONT-012 loss banner counts the facts
+newer than the newest recovery point and says the distinction that matters: Agora keeps them, the
+native context may not.
+
+Two endpoints were added to serve it — `GET /v1/catalogue` and `GET /v1/workstreams/{id}/sessions`.
+Their owning slices are closed, so they were added here rather than invented in the client, which is
+the choice the plan asks for in the order it asks for it.
+
+**Permissions round-trip, and the UI never reports a click as an outcome.** The pending list
+published only opaque ids, which no operator could answer, so it now carries the options the agent
+itself offered — and the control plane refuses an `optionId` outside that set rather than answering a
+closed question with an invented value. Pressing one shows *sent*; only the journaled, projected
+response frame turns it into an answer, quoted from the wire rather than from what this browser
+believes it did.
+
+**The accessibility pass found four real defects and fixed them:** a control claiming `role="button"`
+that answered no key, menus that could be opened by keyboard and not closed, selector triggers with
+no `aria-expanded`, and focus rings the shell never drew. What is deliberately NOT claimed is a
+screen-reader pass — that needs a person with a screen reader, and correct markup is not evidence of
+one.
+
 
 **Delivers.** `api.ts` rewritten against `contracts/api/control-plane.openapi.yaml` (removes the
 last vocabulary allowlist entry), Intent editor (harness, capabilities, model, effort),

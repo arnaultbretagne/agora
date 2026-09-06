@@ -34,51 +34,41 @@ import {
   ApiError,
   createWorkstream,
   decidePermission,
+  getCatalogue,
   getIntent,
   getWorkstream,
   listItems,
   listPendingPermissions,
+  listSessions,
   listWorkstreams,
   patchWorkstream,
   promptSession,
   putIntent,
   subscribeFeed,
-  type AgentConfigOptions,
-  type ConfigValue,
-  type EquipmentCatalogue,
-  type EquipmentResourceRequest,
+  type Catalogue,
   type FeedEvent,
   type IntentRequestBody,
-  type PublicAgent,
-  type RequestedConfigOption,
-  type Session,
-  type Workstream,
+  type PendingPermission,
+  type SessionsView,
   type WorkstreamIntentView,
-  type WorkstreamItem,
-  type WorkstreamTurn,
+  type WorkstreamRecord,
 } from './api.js'
 import { icons } from './icons.js'
 import { escapeHtml, renderMarkdown } from './markdown.js'
 import {
-  clampIndex,
-  currentSession,
-  effectiveConfig,
-  findConfigOption,
+  deriveStatus,
   groupWorkstreams,
   hasRunningTurn,
-  invocationTurnSpent,
-  launchableAgents,
+  lossExposureBanner,
   messagesFromItems,
+  permissionPrompts,
   planTranscript,
-  railIndexAt,
-  railIndexOf,
-  runtimeStateOfPhase,
-  STATE_LABELS,
   type ChatMessage,
-  type ConfigOption,
-  type ConfigSource,
+  type SubmittedPermission,
   type RenderedRow,
-  type RuntimeState,
+  type WorkstreamItem,
+  type WorkstreamStatus,
+  type WorkstreamTurn,
 } from './view-model.js'
 
 /**
@@ -93,7 +83,7 @@ const LIST_POLL_INTERVAL_MS = 6_000
 
 const MOBILE_QUERY = '(max-width: 700px)'
 
-type MenuKey = 'harness' | 'model' | 'agent' | 'equipment'
+type MenuKey = 'harness' | 'model' | 'effort' | 'capabilities'
 
 /**
  * A user turn the operator just sent, shown until the projector catches up with it.
@@ -115,38 +105,38 @@ interface PendingEcho {
 }
 
 const state = {
-  workstreams: new Map<string, Workstream>(),
-  /** Sessions per Workstream, from `GET /v1/workstreams/{id}` — the only source of a Session's phase, which the list endpoint does not carry. */
-  sessions: new Map<string, readonly Session[]>(),
+  workstreams: new Map<string, WorkstreamRecord>(),
+  /** Sessions and loss exposure for the OPEN Workstream (GET /v1/workstreams/{id}/sessions). */
+  sessionsView: null as SessionsView | null,
   /** The `updatedAt` a Workstream had when its detail was last fetched, so the poll refetches only what actually moved. */
   detailSeenAt: new Map<string, string>(),
   activeId: null as string | null,
   items: [] as WorkstreamItem[],
   turns: [] as WorkstreamTurn[],
   echoes: [] as PendingEcho[],
-  configOptions: [] as readonly ConfigOption[],
-  agents: [] as readonly PublicAgent[],
-  catalogue: undefined as EquipmentCatalogue | undefined,
+  /** The reviewed public values an Intent may name (GET /v1/catalogue). The browser selects; it never invents. */
+  catalogue: undefined as Catalogue | undefined,
+  /** True while a prompt this client sent is possibly-accepted-response-lost (CONT-005). */
+  deliveryUnknown: false,
+  /** Permission requests the agent is blocked on, with the options it offered (S12 Step 4). */
+  pendingPermissions: [] as PendingPermission[],
+  /** Answers this client has sent and not yet seen come back on the wire. Never treated as outcomes. */
+  submittedPermissions: [] as SubmittedPermission[],
   search: '',
   theme: localStorage.getItem('agora.theme') ?? 'light',
   sidebarOpen: localStorage.getItem('agora.sidebar') !== 'closed',
   openMenu: null as MenuKey | null,
   feedLive: false,
   /**
-   * What each Agent last advertised it can be configured with, keyed by `agentId` — the composer's
-   * only possible source of a model list, since ACP publishes options in a `session/new` response
-   * and a conversation that has not started has no such response to read.
+   * The Intent being composed. It is a COMPLETE desired state, always: authoring sends every field,
+   * because a partial Intent would be a patch, and a patch is a request to guess what the operator
+   * left out.
    */
-  agentConfig: new Map<string, AgentConfigOptions>(),
-  /** Agents whose empty run this page has already asked for, so a failing one is not re-requested on every render. */
-  probeRequested: new Set<string>(),
-  /** Draft selections for the NEXT Session — what the selectors offer before one exists, and what a persona/equipment change would launch. */
   draft: {
-    agentId: '',
-    persona: '',
-    equipment: [] as EquipmentResourceRequest[],
-    /** Model/effort choices made before any Session exists; sent with the create so the FIRST turn already runs on them. */
-    config: {} as Record<string, ConfigValue>,
+    harness: '',
+    capabilities: [] as string[],
+    model: '',
+    effort: '',
   },
   unsubscribeFeed: undefined as (() => void) | undefined,
   /** Latest Intent event and operational work view for the OPEN Workstream (S2 control plane). */
@@ -179,36 +169,52 @@ if (!$sidebar || !$main || !$scrim || !$app) throw new Error('unreachable: the a
  *  derived state                                                      *
  * ------------------------------------------------------------------ */
 
-function activeWorkstream(): Workstream | undefined {
+function activeWorkstream(): WorkstreamRecord | undefined {
   return state.activeId ? state.workstreams.get(state.activeId) : undefined
 }
 
-function activeSession(): Session | undefined {
-  return state.activeId ? currentSession(state.sessions.get(state.activeId) ?? []) : undefined
+/** The Session currently holding attribution, if any. There is no phase to read — one exists or it does not. */
+function activeSession(): SessionsView['sessions'][number] | undefined {
+  return state.sessionsView?.sessions.find((session) => session.attributionEndedAt === null)
 }
 
-function runtimeStateOf(workstreamId: string): RuntimeState {
-  return runtimeStateOfPhase(currentSession(state.sessions.get(workstreamId) ?? [])?.phase)
+/**
+ * The status shown wherever a Workstream is named. Derived on every render from the operational
+ * view and this client's own knowledge of an ambiguous send — never a stored phase, because none
+ * exists (ADR 0002/0003).
+ */
+function statusOf(): WorkstreamStatus {
+  return deriveStatus({
+    intent: state.intentView === null ? null : { work: state.intentView.work },
+    deliveryUnknown: state.deliveryUnknown,
+    observedAt: new Date(),
+  })
 }
 
-/** The Agent in force once a Session exists, the draft before that — the harness is frozen at Session creation, which is why the selector locks. */
-function selectedAgentId(): string {
-  return activeSession()?.agentId ?? state.draft.agentId
+/** The harness in force: the Intent's, or the draft's before one is authored. */
+function selectedHarness(): string {
+  return state.intentView?.intent.harness ?? state.draft.harness ?? ''
 }
 
-function selectedAgent(): PublicAgent | undefined {
-  const agentId = selectedAgentId()
-  return state.agents.find((agent) => agent.agentId === agentId)
+function selectedModel(): string {
+  return state.intentView?.intent.model ?? state.draft.model ?? ''
 }
 
-/** Falls back to the draft only when no Session exists: a Session's own `persona` is what it is actually running as, and an empty one means the harness default. */
-function selectedPersona(): string {
-  const session = activeSession()
-  return session ? (session.persona ?? '') : state.draft.persona
+function selectedEffort(): string {
+  return state.intentView?.intent.effort ?? state.draft.effort ?? ''
 }
 
-function agentLabel(agentId: string): string {
-  return state.agents.find((agent) => agent.agentId === agentId)?.label ?? agentId
+function selectedCapabilities(): readonly string[] {
+  return state.intentView?.intent.capabilities ?? state.draft.capabilities
+}
+
+function harnessEntry(harnessId: string): Catalogue['harnesses'][number] | undefined {
+  return state.catalogue?.harnesses.find((harness) => harness.id === harnessId)
+}
+
+/** The efforts valid for the SELECTED model — never a flat list, which could offer one the model does not have. */
+function effortsForSelection(): readonly string[] {
+  return harnessEntry(selectedHarness())?.models.find((model) => model.id === selectedModel())?.efforts ?? []
 }
 
 /* ------------------------------------------------------------------ *
@@ -251,7 +257,7 @@ function errorText(error: unknown): string {
  * ------------------------------------------------------------------ */
 
 function renderSidebar(): void {
-  const groups = groupWorkstreams([...state.workstreams.values()], state.search, new Date())
+  const groups = groupWorkstreams([...state.workstreams.values()].map((workstream) => ({ ...workstream, pinned: false })), state.search, new Date())
 
   $sidebar!.innerHTML = `
     <div class="sidebar-inner">
@@ -271,12 +277,15 @@ function renderSidebar(): void {
             <div class="group-label">${group.key === 'pinned' ? icons.star(11, true) : ''}<span>${group.label}</span></div>
             ${group.items
               .map((workstream) => {
-                const runtimeState = runtimeStateOf(workstream.id)
+                // Only the OPEN Workstream has a status: deriving one for every row would mean
+                // fetching an operational view per row, and showing a stale one is worse than
+                // showing none.
+                const open = workstream.id === state.activeId
+                const status = open ? statusOf() : undefined
                 return `
-              <button class="conv-item state-${runtimeState} ${workstream.id === state.activeId ? 'active' : ''}" data-conv="${escapeHtml(workstream.id)}">
-                <span class="conv-dot" title="${escapeHtml(STATE_LABELS[runtimeState])}"></span>
+              <button class="conv-item ${status ? `state-${status.kind}` : ''} ${open ? 'active' : ''}" data-conv="${escapeHtml(workstream.id)}">
+                <span class="conv-dot"${status ? ` title="${escapeHtml(status.label)}"` : ''}></span>
                 <span class="conv-title">${escapeHtml(workstream.title)}</span>
-                <span class="conv-star ${workstream.pinned ? 'pinned' : ''}" data-pin="${escapeHtml(workstream.id)}" role="button" aria-label="Épingler">${icons.star(14, workstream.pinned)}</span>
               </button>`
               })
               .join('')}
@@ -300,7 +309,16 @@ function renderSidebar(): void {
     renderSidebar()
   })
   $sidebar!.querySelector<HTMLElement>('#new-chat')?.addEventListener('click', newChat)
-  $sidebar!.querySelector<HTMLElement>('#identity')?.addEventListener('click', promptForPrincipal)
+  const identity = $sidebar!.querySelector<HTMLElement>('#identity')
+  identity?.addEventListener('click', promptForPrincipal)
+  // It says `role="button"` and takes focus, so it has to answer Enter and Space the way a button
+  // does — an element that claims a role and does not honour it is worse than an unlabelled div.
+  identity?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      promptForPrincipal()
+    }
+  })
 
   const search = $sidebar!.querySelector<HTMLInputElement>('#search')
   if (search) {
@@ -316,14 +334,7 @@ function renderSidebar(): void {
   }
   for (const node of $sidebar!.querySelectorAll<HTMLElement>('[data-conv]')) {
     node.addEventListener('click', (event) => {
-      if ((event.target as HTMLElement).closest('[data-pin]')) return
       void selectWorkstream(node.dataset['conv'] ?? '')
-    })
-  }
-  for (const node of $sidebar!.querySelectorAll<HTMLElement>('[data-pin]')) {
-    node.addEventListener('click', (event) => {
-      event.stopPropagation()
-      void togglePin(node.dataset['pin'] ?? '')
     })
   }
 }
@@ -361,9 +372,13 @@ function promptForPrincipal(): void {
  *  topbar                                                             *
  * ------------------------------------------------------------------ */
 
-function stateChip(workstreamId: string): string {
-  const runtimeState = runtimeStateOf(workstreamId)
-  return `<span class="chip state ${runtimeState}"><span class="dot"></span>${escapeHtml(STATE_LABELS[runtimeState])}</span>`
+/**
+ * The chip is the DERIVED status, not a stored phase. Its CSS class is the status kind, so an
+ * operator reading "Réconciliation en cours : …" and the colour beside it are reading one fact.
+ */
+function stateChip(): string {
+  const status = statusOf()
+  return `<span class="chip state ${status.kind}"><span class="dot"></span>${escapeHtml(status.label)}</span>`
 }
 
 function renderTopbar(): void {
@@ -381,7 +396,7 @@ function renderTopbar(): void {
       <span class="topbar-title" id="topbar-title" title="Double-clic pour renommer">${escapeHtml(workstream ? workstream.title : 'Nouvelle conversation')}</span>
     </div>
     <div class="topbar-right">
-      ${workstream ? stateChip(workstream.id) : ''}
+      ${workstream ? stateChip() : ''}
       ${workstream ? selectorsCluster() : ''}
       ${
         workstream
@@ -389,8 +404,8 @@ function renderTopbar(): void {
           : ''
       }
       ${
-        workstream && runtimeStateOf(workstream.id) !== 'dormant'
-          ? `<button class="icon-btn muted" id="stop-session" title="Arrêter la session (l’historique est conservé, la conversation reprend au prochain message)">${icons.power(17)}</button>`
+        workstream
+          ? `<button class="icon-btn muted" id="apply-intent" title="Enregistrer cette intention complète (harnais, capacités, modèle, effort)">Appliquer</button>`
           : ''
       }
       ${workstream ? `<button class="icon-btn muted" id="delete-conv" title="Supprimer la conversation">${icons.trash(17)}</button>` : ''}
@@ -399,7 +414,9 @@ function renderTopbar(): void {
   bar.querySelector<HTMLElement>('#menu-btn')?.addEventListener('click', () => setSidebar(true))
   bar.querySelector<HTMLElement>('#mobile-new')?.addEventListener('click', newChat)
   bar.querySelector<HTMLElement>('#power-toggle')?.addEventListener('click', () => void togglePower())
-  bar.querySelector<HTMLElement>('#stop-session')?.addEventListener('click', () => void stopSession(state.activeId))
+  // Applying keeps the power the Intent already has: this button changes the selections, not whether
+  // execution is wanted. Conflating the two is how an operator turns something on by editing a model.
+  bar.querySelector<HTMLElement>('#apply-intent')?.addEventListener('click', () => void authorIntent(state.intentView?.intent.power ?? 'off'))
   bar.querySelector<HTMLElement>('#delete-conv')?.addEventListener('click', () => void removeWorkstream(state.activeId))
   bar.querySelector<HTMLElement>('#topbar-title')?.addEventListener('dblclick', () => void renameWorkstream(state.activeId))
   if (workstream) wireSelectors(bar)
@@ -583,9 +600,12 @@ function selectorButton(
   label: string,
   options: { disabled?: boolean; title?: string } = {},
 ): string {
+  // `aria-expanded` and `aria-controls` are what make this a disclosure rather than a button whose
+  // effect is only visible to someone who can see the panel appear (S12 Step 5).
+  const expanded = state.openMenu !== null && `sel-${state.openMenu}` === id
   return `
     <div class="selector">
-      <button class="selector-btn" id="${id}" ${options.disabled ? 'disabled' : ''}${options.title ? ` title="${escapeHtml(options.title)}"` : ''}>
+      <button class="selector-btn" id="${id}" aria-haspopup="true" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${id}-menu" ${options.disabled ? 'disabled' : ''}${options.title ? ` title="${escapeHtml(options.title)}"` : ''}>
         ${iconName ? `<span class="sel-icon">${icons[iconName](14)}</span>` : ''}
         <span id="${id}-label">${escapeHtml(label)}</span>
         <span class="sel-chevron">${icons.chevronDown(13)}</span>
@@ -595,154 +615,87 @@ function selectorButton(
 }
 
 /**
- * The options the selectors work on: a live Agent's own advertisement when one is running, and
- * otherwise the memo of what the selected harness last advertised (`state.agentConfig`), which is
- * what makes the model choice reachable in a conversation that has not started yet.
- */
-function currentConfig(): { readonly source: ConfigSource; readonly options: readonly ConfigOption[] } {
-  const catalogue = state.agentConfig.get(selectedAgentId())
-  return effectiveConfig(state.configOptions, (catalogue?.options as readonly ConfigOption[] | undefined) ?? undefined, state.draft.config)
-}
-
-function modelOption(): ConfigOption | undefined {
-  return findConfigOption(currentConfig().options, 'model', 'model')
-}
-
-function effortOption(): ConfigOption | undefined {
-  return findConfigOption(currentConfig().options, 'thought_level', 'effort')
-}
-
-/** `Défaut` rather than a guessed value: before anything is chosen the harness's own default is what will run, and naming a specific model here would claim a decision nobody made. */
-function configValueName(option: ConfigOption | undefined): string {
-  if (!option) return '—'
-  if (option.currentValue === undefined || option.currentValue === null) return 'Défaut'
-  const current = String(option.currentValue)
-  return option.options?.find((value) => value.value === current)?.name ?? current
-}
-
-function equipmentLabel(): string {
-  if (state.draft.equipment.length === 0) return 'Aucun équipement'
-  const resources = asArray<EquipmentCatalogue['resources'][number]>(state.catalogue?.resources)
-  return state.draft.equipment
-    .map((requested) => {
-      const resource = resources.find((entry) => entry.resource === requested.resource)
-      const access = resource?.accessLevels.find((level) => level.access === requested.access)
-      return `${resource?.label ?? requested.resource} · ${access?.label ?? requested.access}`
-    })
-    .join(', ')
-}
-
-/**
- * The harness/model/persona/equipment cluster. It lives in the COMPOSER while no Session exists and
- * MOVES to the topbar once one does, which is why it is one function called from both places.
+ * The Intent editor's four selections, in one cluster (S12).
  *
- * The harness still locks once a Session exists — the Agent is frozen on it, and changing it means a
- * new Session. The MODEL no longer does. It used to be disabled until a live ACP connection existed,
- * on the reasoning that only a running harness can say what it offers; that is true of the values
- * but not of the choice, and it left the selector dead exactly where an operator most wants it (a
- * brand-new conversation) and again once the idle reaper took the Runtime back. The list now comes
- * from what the harness itself last advertised, and the choice is durable until something is running
- * to receive it (P12). It is only disabled when this client genuinely has nothing to show — an Agent
- * never launched and not yet probed — and then it says so rather than being silently grey.
+ * Every value comes from `GET /v1/catalogue` — the reviewed public values, the same ones the server
+ * validates an Intent against. The browser never invents a harness, a model, an effort or a
+ * capability; if it is not offered here it is refused there, which is why the two lists have one
+ * source rather than two that agree until they do not.
+ *
+ * Nothing locks. Changing a selection authors a NEW complete Intent, and what that implies —
+ * replacing a Pod, ending a Session, restoring an Anchor — is the rule tables' decision, not this
+ * cluster's. A disabled selector would be this file claiming to know that decision.
  */
 function selectorsCluster(): string {
-  const session = activeSession()
-  const agent = selectedAgent()
-  const persona = selectedPersona()
-  const config = currentConfig()
-  const catalogue = state.agentConfig.get(selectedAgentId())
-  const noOptions = config.options.length === 0
-  const reason =
-    catalogue?.state === 'probing'
-      ? 'Démarrage à vide du harness pour lire ses options…'
-      : catalogue?.state === 'unavailable'
-        ? `Options indisponibles : ${catalogue.detail ?? 'le démarrage à vide a échoué'}`
-        : 'Options inconnues tant que ce harness n’a jamais démarré.'
+  const harness = selectedHarness()
+  const model = selectedModel()
+  const effort = selectedEffort()
+  const capabilities = selectedCapabilities()
   return `
     <div class="selectors">
-      ${selectorButton('sel-harness', null, agentLabel(selectedAgentId()) || 'Harness', { disabled: Boolean(session) })}
-      ${selectorButton('sel-model', null, noOptions ? 'Modèle' : configValueName(modelOption()), {
-        disabled: noOptions,
-        ...(noOptions ? { title: reason } : {}),
-      })}
-      ${agent && agent.personas.length > 0 ? selectorButton('sel-agent', 'message', persona || 'Agent', {}) : ''}
-      ${selectorButton('sel-equipment', 'shield', equipmentLabel(), {})}
+      ${selectorButton('sel-harness', null, harness || 'Harness', { disabled: (state.catalogue?.harnesses.length ?? 0) === 0 })}
+      ${selectorButton('sel-model', null, model || 'Modèle', { disabled: harness === '' })}
+      ${selectorButton('sel-effort', null, effort || 'Effort', { disabled: model === '' })}
+      ${selectorButton('sel-capabilities', 'shield', capabilities.length === 0 ? 'Aucune capacité' : capabilities.join(', '), {})}
     </div>`
 }
 
 function wireSelectors(root: ParentNode): void {
   root.querySelector<HTMLElement>('#sel-harness')?.addEventListener('click', () => toggleMenu('harness'))
   root.querySelector<HTMLElement>('#sel-model')?.addEventListener('click', () => toggleMenu('model'))
-  root.querySelector<HTMLElement>('#sel-agent')?.addEventListener('click', () => toggleMenu('agent'))
-  root.querySelector<HTMLElement>('#sel-equipment')?.addEventListener('click', () => toggleMenu('equipment'))
-}
-
-/**
- * Effort is an ordered magnitude, so it renders as a rail rather than a list (the OLD UI's design):
- * coral fill and knob at the selected level, faint coral dots for the levels ahead, dark notches for
- * the ones crossed. The levels are whatever the harness advertises for this option — never a list
- * this client keeps.
- */
-function effortRail(option: ConfigOption): string {
-  const levels = option.options ?? []
-  const span = Math.max(1, levels.length - 1)
-  const index = railIndexOf(levels, option.currentValue)
-  const at = (position: number): string => `${(position / span) * 100}%`
-  const dots = levels
-    .map((_level, position) =>
-      position === index
-        ? ''
-        : `<div class="effort__dot" style="left:${at(position)};background:${position < index ? 'rgba(0,0,0,.28)' : 'rgba(204,120,92,.55)'}"></div>`,
-    )
-    .join('')
-  const label = escapeHtml(levels[index]?.name ?? String(option.currentValue ?? ''))
-  return `
-    <div class="effort">
-      <div class="effort__head">
-        <span class="effort__label">${escapeHtml(option.name)}</span>
-        <span class="effort__value">${label}</span>
-      </div>
-      <div class="effort__rail" tabindex="0" role="slider" aria-label="${escapeHtml(option.name)}"
-           aria-valuemin="0" aria-valuemax="${span}" aria-valuenow="${index}" aria-valuetext="${label}">
-        <div class="effort__track"></div>
-        <div class="effort__fill" style="width:${at(index)}"></div>
-        ${dots}
-        <div class="effort__knob" style="left:${at(index)}"></div>
-      </div>
-    </div>`
+  root.querySelector<HTMLElement>('#sel-effort')?.addEventListener('click', () => toggleMenu('effort'))
+  root.querySelector<HTMLElement>('#sel-capabilities')?.addEventListener('click', () => toggleMenu('capabilities'))
 }
 
 function toggleMenu(which: MenuKey): void {
   state.openMenu = state.openMenu === which ? null : which
   renderMenus()
+  syncSelectorExpansion()
+  // Opening with the keyboard has to put the caret somewhere inside what just opened, or the next
+  // Tab continues past the menu and the person never reaches the options they asked for.
+  if (state.openMenu === which) $main!.querySelector<HTMLElement>(`#sel-${which}-menu .menu-row`)?.focus()
 }
 
-function closeMenu(): void {
+/**
+ * Closes the open menu and returns focus to the control that opened it. `restoreFocus` is what a
+ * keyboard user needs and a mouse user never notices: dismissing a panel without it drops the caret
+ * back to the top of the document.
+ */
+function closeMenu(restoreFocus = false): void {
+  const which = state.openMenu
   state.openMenu = null
   renderMenus()
+  syncSelectorExpansion()
+  if (restoreFocus && which !== null) $main!.querySelector<HTMLElement>(`#sel-${which}`)?.focus()
+}
+
+/** The triggers are re-rendered far less often than the menus they control, so their state is synced in place. */
+function syncSelectorExpansion(): void {
+  for (const [key] of MENU_HOSTS) {
+    $main!.querySelector<HTMLElement>(`#sel-${key}`)?.setAttribute('aria-expanded', state.openMenu === key ? 'true' : 'false')
+  }
 }
 
 const MENU_HOSTS: readonly (readonly [MenuKey, string])[] = [
   ['harness', 'sel-harness-menu'],
   ['model', 'sel-model-menu'],
-  ['agent', 'sel-agent-menu'],
-  ['equipment', 'sel-equipment-menu'],
+  ['effort', 'sel-effort-menu'],
+  ['capabilities', 'sel-capabilities-menu'],
 ]
 
 /**
- * `attribute` is always a literal chosen in this file — never interpolated from engine or harness
+ * `attribute` is always a literal chosen in this file — never interpolated from engine or catalogue
  * data. Attribute NAMES sit outside anything `escapeHtml` can protect, so untrusted text there would
- * escape the attribute no matter how the value is quoted; `data-value` is the escape hatch for rows
- * that need to carry a second, arbitrary payload.
+ * escape the attribute no matter how the value is quoted.
  */
 function menuRow(
   attribute: string,
   value: string,
   name: string,
-  options: { selected: boolean; description?: string; icon?: 'shield' | 'message'; value?: string },
+  options: { selected: boolean; description?: string; icon?: 'shield' | 'message' },
 ): string {
   return `
-    <button class="menu-row ${options.selected ? 'selected' : ''}" ${attribute}="${escapeHtml(value)}"${options.value === undefined ? '' : ` data-value="${escapeHtml(options.value)}"`}>
+    <button class="menu-row ${options.selected ? 'selected' : ''}" ${attribute}="${escapeHtml(value)}">
       ${options.icon ? `<span class="row-icon">${icons[options.icon](16)}</span>` : ''}
       <span class="row-main">
         <span class="row-name">${escapeHtml(name)}</span>
@@ -762,15 +715,17 @@ function renderMenus(): void {
     }
     if (key === 'harness') renderHarnessMenu(host)
     if (key === 'model') renderModelMenu(host)
-    if (key === 'agent') renderPersonaMenu(host)
-    if (key === 'equipment') renderEquipmentMenu(host)
+    if (key === 'effort') renderEffortMenu(host)
+    if (key === 'capabilities') renderCapabilitiesMenu(host)
   }
 
   let backdrop = $main!.querySelector<HTMLElement>('.menu-backdrop')
   if (state.openMenu && !backdrop) {
     backdrop = document.createElement('div')
     backdrop.className = 'menu-backdrop'
-    backdrop.addEventListener('click', closeMenu)
+    // Click-to-dismiss is a mouse affordance; Escape (wired in `init`) is its keyboard equivalent,
+    // and a panel with only the former is a panel a keyboard user cannot get out of.
+    backdrop.addEventListener('click', () => closeMenu())
     $main!.append(backdrop)
   } else if (!state.openMenu && backdrop) {
     backdrop.remove()
@@ -778,21 +733,19 @@ function renderMenus(): void {
 }
 
 function renderHarnessMenu(host: HTMLElement): void {
-  const agents = launchableAgents(state.agents)
+  const harnesses = state.catalogue?.harnesses ?? []
   host.innerHTML = `
     <div class="menu"><div class="menu-label">Harness</div>
-      ${agents.map((agent) => menuRow('data-agent-id', agent.agentId, agent.label, { selected: agent.agentId === selectedAgentId(), description: agent.description })).join('')}
-      ${agents.length === 0 ? '<div class="menu-note">Aucun harness disponible.</div>' : ''}
+      ${harnesses.map((harness) => menuRow('data-harness', harness.id, harness.id, { selected: harness.id === selectedHarness() })).join('')}
+      ${harnesses.length === 0 ? '<div class="menu-note">Le catalogue ne publie aucun harness.</div>' : ''}
     </div>`
-  for (const node of host.querySelectorAll<HTMLElement>('[data-agent-id]')) {
+  for (const node of host.querySelectorAll<HTMLElement>('[data-harness]')) {
     node.addEventListener('click', () => {
-      // Switching harness clears the persona: personas are reviewed per Agent, so one Agent's name
-      // is not a name the next one would accept (the server refuses it with `persona_unavailable`).
-      state.draft.agentId = node.dataset['agentId'] ?? ''
-      state.draft.persona = ''
-      // Config options are the new harness's own vocabulary — one harness's `effort` values are not
-      // another's, and carrying them over would offer a model this Agent does not have.
-      state.draft.config = {}
+      // One harness's model names are not another's, so a harness change clears both — offering the
+      // previous model would offer a value the server is about to refuse.
+      state.draft.harness = node.dataset['harness'] ?? ''
+      state.draft.model = ''
+      state.draft.effort = ''
       state.openMenu = null
       renderComposer()
       renderTopbar()
@@ -802,135 +755,72 @@ function renderHarnessMenu(host: HTMLElement): void {
 }
 
 function renderModelMenu(host: HTMLElement): void {
-  const config = currentConfig()
-  const model = modelOption()
-  const effort = effortOption()
-  const others = config.options.filter((option) => option !== model && option !== effort && Array.isArray(option.options))
+  const models = harnessEntry(selectedHarness())?.models ?? []
   host.innerHTML = `
-    <div class="menu"><div class="menu-label">${escapeHtml(model?.name ?? 'Modèle')}</div>
-      ${
-        config.source === 'catalogue'
-          ? '<div class="menu-note">Ces options seront appliquées au démarrage de la session.</div>'
-          : ''
-      }
-      ${(model?.options ?? [])
-        .map((value) =>
-          menuRow('data-config-value', value.value, value.name, {
-            selected: model?.currentValue !== undefined && model.currentValue !== null && value.value === String(model.currentValue),
-          }),
-        )
-        .join('')}
-      ${effort ? `<div class="menu-sep"></div>${effortRail(effort)}` : ''}
-      ${others
-        .map((option, index) =>
-          [
-            '<div class="menu-sep"></div>',
-            `<div class="menu-label">${escapeHtml(option.name)}</div>`,
-            // The row carries the option's INDEX, never its id. An ACP option id is harness-supplied
-            // free text, and building an attribute NAME out of it (`data-other-${id}`) would put
-            // untrusted data outside any quoting `escapeHtml` can apply — an id containing a quote or
-            // a space escapes the attribute entirely. An index is generated here, so it cannot.
-            ...(option.options ?? []).map((value) =>
-              menuRow('data-other-index', String(index), value.name, {
-                selected: value.value === String(option.currentValue ?? ''),
-                value: value.value,
-              }),
-            ),
-          ].join(''),
-        )
-        .join('')}
+    <div class="menu"><div class="menu-label">Modèle</div>
+      ${models.map((model) => menuRow('data-model', model.id, model.id, { selected: model.id === selectedModel() })).join('')}
+      ${models.length === 0 ? '<div class="menu-note">Choisissez d’abord un harness.</div>' : ''}
     </div>`
-
-  for (const node of host.querySelectorAll<HTMLElement>('[data-config-value]')) {
-    // The panel stays open on purpose: effort is chosen right after the model, in the same decision.
-    node.addEventListener('click', () => void applyConfigOption(model?.id ?? 'model', node.dataset['configValue'] ?? ''))
-  }
-  for (const node of host.querySelectorAll<HTMLElement>('[data-other-index]')) {
-    const option = others[Number(node.dataset['otherIndex'])]
-    if (!option) continue
-    node.addEventListener('click', () => void applyConfigOption(option.id, node.dataset['value'] ?? ''))
-  }
-
-  const rail = host.querySelector<HTMLElement>('.effort__rail')
-  if (rail && effort) {
-    const levels = effort.options ?? []
-    const currentIndex = railIndexOf(levels, effort.currentValue)
-    const commit = (index: number): void => {
-      const level = levels[clampIndex(index, levels.length)]
-      if (level) void applyConfigOption(effort.id, level.value)
-    }
-    rail.addEventListener('click', (event) => {
-      const box = rail.getBoundingClientRect()
-      commit(railIndexAt((event.clientX - box.left) / box.width, levels.length))
+  for (const node of host.querySelectorAll<HTMLElement>('[data-model]')) {
+    node.addEventListener('click', () => {
+      state.draft.model = node.dataset['model'] ?? ''
+      // The efforts a model accepts are the model's own; keeping the previous one would offer a
+      // value that is valid for a model nobody selected any more.
+      state.draft.effort = ''
+      state.openMenu = null
+      renderComposer()
+      renderTopbar()
+      renderMenus()
     })
-    rail.addEventListener('keydown', (event) => {
-      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
-        event.preventDefault()
-        commit(currentIndex + 1)
-      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
-        event.preventDefault()
-        commit(currentIndex - 1)
-      }
+  }
+}
+
+function renderEffortMenu(host: HTMLElement): void {
+  const efforts = effortsForSelection()
+  host.innerHTML = `
+    <div class="menu"><div class="menu-label">Effort</div>
+      ${efforts.map((effort) => menuRow('data-effort', effort, effort, { selected: effort === selectedEffort() })).join('')}
+      ${efforts.length === 0 ? '<div class="menu-note">Choisissez d’abord un modèle.</div>' : ''}
+    </div>`
+  for (const node of host.querySelectorAll<HTMLElement>('[data-effort]')) {
+    node.addEventListener('click', () => {
+      state.draft.effort = node.dataset['effort'] ?? ''
+      state.openMenu = null
+      renderComposer()
+      renderTopbar()
+      renderMenus()
     })
   }
 }
 
 /**
- * The persona is a launch argument, so unlike the OLD system this cannot be changed in place — but
- * it is still never locked, because the engine has a real answer for changing it: open a new Session
- * with a Handoff, which keeps the conversation continuous. The note says that before the click, the
- * same way the OLD UI warned that re-equipping spawned a new run.
+ * Capabilities are a FLAT named set (ADR 0001, 006): no profiles, no combinations, no hierarchy —
+ * each is an independent fact the Broker either grants or does not. The menu is a multi-select for
+ * exactly that reason, and it names capabilities rather than the scopes or endpoints behind them,
+ * which are the Broker's alone to decide.
  */
-function renderPersonaMenu(host: HTMLElement): void {
-  const agent = selectedAgent()
-  const persona = selectedPersona()
+function renderCapabilitiesMenu(host: HTMLElement): void {
+  const available = state.catalogue?.capabilities ?? []
+  const chosen = selectedCapabilities()
   host.innerHTML = `
-    <div class="menu right"><div class="menu-label">Agent</div>
-      ${menuRow('data-persona', '', 'Défaut', { selected: !persona, description: 'Aucun agent', icon: 'message' })}
-      ${(agent?.personas ?? []).map((name) => menuRow('data-persona', name, name, { selected: name === persona, icon: 'message' })).join('')}
-      ${activeSession() ? '<div class="menu-note">Changer d’agent démarre une nouvelle session (l’historique est transféré).</div>' : ''}
-    </div>`
-  for (const node of host.querySelectorAll<HTMLElement>('[data-persona]')) {
-    node.addEventListener('click', () => void choosePersona(node.getAttribute('data-persona') ?? ''))
-  }
-}
-
-/**
- * Equipment (docs/specs/10): a closed catalogue of resources, each with the access levels the Broker
- * will actually grant. The browser names a resource and an access level and nothing else — never a
- * scope, a token or an endpoint, which are the Broker's alone to decide.
- *
- * The OLD UI offered named profiles; this engine has no such combination ("No combined profiles" —
- * capability facts are independent rows), so the menu offers each resource's levels directly, plus
- * the way back to none.
- */
-function renderEquipmentMenu(host: HTMLElement): void {
-  const catalogue = state.catalogue
-  const chosen = state.draft.equipment
-  host.innerHTML = `
-    <div class="menu right"><div class="menu-label">Équipement</div>
-      ${menuRow('data-equipment', '', 'Aucun équipement', { selected: chosen.length === 0, description: 'Conversation seule', icon: 'shield' })}
-      ${(catalogue?.resources ?? [])
-        .map((resource) =>
-          resource.accessLevels
-            .map((level) =>
-              menuRow('data-equipment', `${resource.resource}:${level.access}`, `${resource.label} · ${level.label}`, {
-                selected: chosen.some((entry) => entry.resource === resource.resource && entry.access === level.access),
-                description: level.description ?? resource.description,
-                icon: 'shield',
-              }),
-            )
-            .join(''),
-        )
+    <div class="menu right"><div class="menu-label">Capacités</div>
+      ${available
+        .map((capability) => menuRow('data-capability', capability, capability, { selected: chosen.includes(capability), icon: 'shield' }))
         .join('')}
-      ${
-        activeSession()
-          ? '<div class="menu-note">Changer l’équipement démarre une nouvelle session. L’API ne publie pas l’équipement en vigueur : cette sélection décrit la prochaine session.</div>'
-          : ''
-      }
+      ${available.length === 0 ? '<div class="menu-note">Le catalogue ne publie aucune capacité.</div>' : ''}
     </div>`
-  for (const node of host.querySelectorAll<HTMLElement>('[data-equipment]')) {
-    node.addEventListener('click', () => void chooseEquipment(node.getAttribute('data-equipment') ?? ''))
+  for (const node of host.querySelectorAll<HTMLElement>('[data-capability]')) {
+    node.addEventListener('click', () => {
+      const capability = node.dataset['capability'] ?? ''
+      const current = new Set(selectedCapabilities())
+      if (current.has(capability)) current.delete(capability)
+      else current.add(capability)
+      state.draft.capabilities = [...current].sort()
+      // The panel stays open: choosing a set is one decision made of several clicks.
+      renderComposer()
+      renderTopbar()
+      renderMenus()
+    })
   }
 }
 
@@ -938,11 +828,16 @@ function renderEquipmentMenu(host: HTMLElement): void {
  *  composer                                                           *
  * ------------------------------------------------------------------ */
 
-/** The sentence shown in place of the composer when the Workstream cannot take another turn, or `undefined` when it can — see `invocationTurnSpent` for why this case exists at all. */
+/**
+ * Why the composer is closed, or undefined when it is open.
+ *
+ * There is one reason, and it is CONT-005: a previous prompt may have been accepted and its response
+ * lost. Sending again could duplicate an external effect the first one already produced, so the
+ * composer says so rather than letting the operator find out.
+ */
 function composerLockReason(): string | undefined {
-  const workstream = activeWorkstream()
-  if (!workstream || !invocationTurnSpent(workstream.category, state.turns)) return undefined
-  return 'Invocation : un seul tour est permis, il a déjà eu lieu.'
+  const status = statusOf()
+  return status.blocksSending ? `${status.label} ${status.remediation ?? ''}`.trim() : undefined
 }
 
 /** The rendered DOM is the record of which composer is on screen, so no second copy of that state can drift from it. Re-renders only on an actual transition, because re-rendering steals focus mid-typing. */
@@ -994,13 +889,81 @@ function renderComposer(): void {
   wireSelectors(composer)
 }
 
+/**
+ * The banner: what the operator must be able to see without asking. A HOLD's cause and its
+ * remediation, an ambiguous delivery and its warning, and the native-loss exposure (CONT-012) —
+ * which is a real count of facts newer than the newest recovery point, not a mood.
+ */
+function renderBanner(): void {
+  const host = $main!.querySelector<HTMLElement>('.banner')
+  if (!host) return
+  if (!state.activeId) {
+    host.innerHTML = ''
+    return
+  }
+  const status = statusOf()
+  const loss = lossExposureBanner(state.sessionsView?.lossExposure ?? [])
+  const notes = [
+    status.kind === 'converged' || status.kind === 'no-intent' ? '' : `<div class="banner-row ${status.kind}">${escapeHtml(status.label)}${status.remediation ? ` <span class="banner-remediation">${escapeHtml(status.remediation)}</span>` : ''}</div>`,
+    loss === undefined ? '' : `<div class="banner-row loss">${escapeHtml(loss)}</div>`,
+  ].join('')
+  host.innerHTML = notes
+}
+
+/**
+ * The permission surface (S12 Step 4). It sits between the transcript and the composer because it
+ * is a question addressed to the operator right now, not part of the conversation's record — and
+ * because that is where the eye already is when something stops.
+ *
+ * Every option is a real `<button>` inside a `<section role="group">` labelled by the request, so
+ * the decision is reachable by keyboard and announced with the question it belongs to; the region
+ * is `aria-live="polite"` so a request that arrives while the operator is reading is spoken instead
+ * of appearing silently.
+ */
+function renderPermissions(): void {
+  const host = $main!.querySelector<HTMLElement>('.permissions')
+  if (!host) return
+  const prompts = permissionPrompts({
+    pending: state.pendingPermissions,
+    items: state.items,
+    submitted: state.submittedPermissions,
+  })
+  if (prompts.length === 0) {
+    host.innerHTML = ''
+    return
+  }
+  host.innerHTML = prompts
+    .map((prompt) => {
+      const labelId = `perm-label-${encodeURIComponent(prompt.permissionId)}`
+      const options = prompt.state !== 'asked'
+        ? ''
+        : `<div class="permission-options">${prompt.options
+            .map((option) => `<button class="permission-option" data-permission="${escapeHtml(prompt.permissionId)}" data-option="${escapeHtml(option.optionId)}">${escapeHtml(option.name)}</button>`)
+            .join('')}</div>`
+      return `<section class="permission ${prompt.state}" role="group" aria-labelledby="${escapeHtml(labelId)}">
+        <p class="permission-label" id="${escapeHtml(labelId)}">${escapeHtml(prompt.label)}</p>${options}
+      </section>`
+    })
+    .join('')
+
+  for (const button of host.querySelectorAll<HTMLElement>('.permission-option')) {
+    button.addEventListener('click', () => {
+      void answerPermission(button.dataset['permission'] ?? '', button.dataset['option'] ?? '')
+    })
+  }
+}
+
 function renderMain(): void {
   $main!.innerHTML = `
     <header class="topbar"></header>
+    <div class="banner" role="status" aria-live="polite"></div>
     <div class="messages"></div>
+    <div class="permissions" role="region" aria-label="Autorisations" aria-live="polite"></div>
     <div class="composer-wrap"></div>`
   renderTopbar()
+  renderBanner()
   renderMessages()
+  renderPermissions()
   renderComposer()
   renderMenus()
 }
@@ -1016,13 +979,16 @@ function newChat(): void {
   state.items = []
   state.turns = []
   state.echoes = []
-  state.configOptions = []
   state.intentView = null
-  state.draft.persona = ''
-  state.draft.equipment = []
+  state.sessionsView = null
+  state.deliveryUnknown = false
+  // A permission belongs to the channel it was asked on; neither the pending list nor an answer
+  // this client is still waiting on means anything for a different Workstream.
+  state.pendingPermissions = []
+  state.submittedPermissions = []
   // A draft belongs to the conversation it was typed into: carrying it across would silently
-  // reconfigure a Session the operator is no longer looking at.
-  state.draft.config = {}
+  // author an Intent for a Workstream the operator is no longer looking at.
+  state.draft = { harness: '', capabilities: [], model: '', effort: '' }
   if (isMobile()) {
     state.sidebarOpen = false
     applySidebar()
@@ -1047,13 +1013,16 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
   state.turns = []
   // Echoes belong to the Workstream they were typed into and cannot be recovered for any other.
   state.echoes = []
-  state.configOptions = []
-  state.draft.persona = ''
-  state.draft.equipment = []
-  // A draft belongs to the conversation it was typed into: carrying it across would silently
-  // reconfigure a Session the operator is no longer looking at.
-  state.draft.config = {}
   state.intentView = null
+  state.sessionsView = null
+  state.deliveryUnknown = false
+  // A permission belongs to the channel it was asked on; neither the pending list nor an answer
+  // this client is still waiting on means anything for a different Workstream.
+  state.pendingPermissions = []
+  state.submittedPermissions = []
+  // A draft belongs to the conversation it was typed into: carrying it across would silently
+  // author an Intent for a Workstream the operator is no longer looking at.
+  state.draft = { harness: '', capabilities: [], model: '', effort: '' }
   if (isMobile()) {
     state.sidebarOpen = false
     applySidebar()
@@ -1071,11 +1040,12 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
 async function loadWorkstream(workstreamId: string): Promise<void> {
   try {
     const record = await getWorkstream(workstreamId)
-    state.workstreams.set(workstreamId, toWorkstream(record))
+    state.workstreams.set(workstreamId, record)
     state.echoes = []
-    state.configOptions = []
     await refreshItems(workstreamId)
     await refreshIntent(workstreamId)
+    await refreshSessions(workstreamId)
+    await refreshPermissions(workstreamId)
     renderSidebar()
     renderMain()
     subscribe(workstreamId)
@@ -1084,10 +1054,12 @@ async function loadWorkstream(workstreamId: string): Promise<void> {
   }
 }
 
-function toLegacyItem(workstreamId: string, item: {
+/** The projected item, in the shape the transcript folds over. */
+function toItem(item: {
   readonly id: string
   readonly sessionId: string
   readonly kind: string
+  readonly entityKey: string
   readonly value: Record<string, unknown>
   readonly firstSeq: number
   readonly latestSeq: number
@@ -1095,16 +1067,12 @@ function toLegacyItem(workstreamId: string, item: {
 }): WorkstreamItem {
   return {
     id: item.id,
-    workstreamId,
     sessionId: item.sessionId,
-    turnId: null,
     kind: item.kind,
-    firstEventId: '',
-    latestEventId: '',
+    entityKey: item.entityKey,
     firstWorkstreamSeq: item.firstSeq,
     latestWorkstreamSeq: item.latestSeq,
     value: item.value,
-    contentSha256: '',
     updatedAt: item.updatedAt,
   }
 }
@@ -1112,9 +1080,82 @@ function toLegacyItem(workstreamId: string, item: {
 async function refreshItems(workstreamId: string): Promise<void> {
   const page = await listItems(workstreamId)
   if (state.activeId !== workstreamId) return
-  state.items = page.items.map((item) => toLegacyItem(workstreamId, item))
+  state.items = page.items.map((item) => toItem(item))
   renderMessages()
   syncComposerLock()
+}
+
+/**
+ * The requests the agent is blocked on. Polled off the live channel rather than the projection: a
+ * projected `pending` permission proves only that one was ASKED — the channel that could answer it
+ * may be long gone, and offering a button that resolves nothing is worse than showing nothing.
+ */
+async function refreshPermissions(workstreamId: string): Promise<void> {
+  try {
+    const page = await listPendingPermissions(workstreamId)
+    if (state.activeId !== workstreamId) return
+    state.pendingPermissions = [...asArray<PendingPermission>(page?.pending)]
+  } catch {
+    // 503 where the deployment runs without ACP channels, 404 for a Workstream with none. Neither
+    // is an operator-facing failure: there is simply nothing to decide.
+    state.pendingPermissions = []
+  }
+  renderPermissions()
+}
+
+/**
+ * Answers one request. What goes on screen afterwards is `sent`, not `granted`: the decision has
+ * left this browser, and the only thing that can say it took effect is the projected outcome
+ * (`permissionPrompts`), which arrives over the feed when the response frame is folded.
+ */
+async function answerPermission(permissionId: string, optionId: string): Promise<void> {
+  const workstreamId = state.activeId
+  const request = state.pendingPermissions.find((entry) => entry.permissionId === permissionId)
+  if (!workstreamId || request === undefined || optionId === '') return
+  const option = request.options.find((candidate) => candidate.optionId === optionId)
+
+  state.submittedPermissions = [
+    ...state.submittedPermissions.filter((entry) => entry.permissionId !== permissionId),
+    {
+      permissionId,
+      toolCallId: request.toolCallId,
+      title: request.title,
+      optionId,
+      optionName: option?.name ?? optionId,
+    },
+  ]
+  renderPermissions()
+
+  try {
+    await decidePermission(workstreamId, permissionId, optionId)
+  } catch (error) {
+    // The answer never left: drop the optimistic "sent" so the buttons come back rather than
+    // leaving the operator watching for an outcome that can never arrive.
+    state.submittedPermissions = state.submittedPermissions.filter((entry) => entry.permissionId !== permissionId)
+    toast(errorText(error), true)
+  }
+  await refreshPermissions(workstreamId)
+}
+
+/**
+ * The Sessions of the open Workstream, and with them the loss exposure CONT-012 insists must be
+ * visible: how much of the record is newer than the newest recovery point.
+ */
+async function refreshSessions(workstreamId: string): Promise<void> {
+  try {
+    const view = await listSessions(workstreamId)
+    if (state.activeId !== workstreamId) return
+    state.sessionsView = {
+      headSeq: view?.headSeq ?? 0,
+      sessions: asArray<SessionsView['sessions'][number]>(view?.sessions),
+      lossExposure: asArray<SessionsView['lossExposure'][number]>(view?.lossExposure),
+    }
+  } catch {
+    // A Workstream with no Sessions yet is not an operator-facing error.
+    state.sessionsView = null
+  }
+  renderTopbar()
+  renderBanner()
 }
 
 /** Feeds carry projector upserts and turn statuses; both are idempotent folds over item ids. */
@@ -1122,22 +1163,24 @@ function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
   if (event.operation === 'upsert' && event.itemId !== null) {
     const item: WorkstreamItem = {
       id: event.itemId,
-      workstreamId,
       sessionId: (event.payload['sessionId'] as string | undefined) ?? '',
-      turnId: null,
       kind: (event.payload['itemKind'] as string | undefined) ?? 'unknown',
-      firstEventId: '',
-      latestEventId: '',
+      entityKey: (event.payload['entityKey'] as string | undefined) ?? '',
       firstWorkstreamSeq: event.throughSeq,
       latestWorkstreamSeq: event.throughSeq,
       value: event.payload,
-      contentSha256: '',
       updatedAt: new Date().toISOString(),
     }
     const index = state.items.findIndex((existing) => existing.id === item.id)
     if (index >= 0) state.items[index] = item
     else state.items.push(item)
     scheduleMessagesRender()
+    // A permission item moving is the only warning that a request has appeared or been settled;
+    // the live list is what says whether it can still be answered here.
+    if (item.kind === 'permission') {
+      renderPermissions()
+      void refreshPermissions(workstreamId)
+    }
     return
   }
   if (event.operation === 'status') {
@@ -1147,19 +1190,12 @@ function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
     const index = state.turns.findIndex((turn) => turn.id === commandId)
     if (index >= 0) {
       const existing = state.turns[index]
-      if (existing) state.turns[index] = { ...existing, status, stopReason: (event.payload['stopReason'] as string | null) ?? existing.stopReason }
+      if (existing) state.turns[index] = { ...existing, status }
     } else {
       state.turns.push({
         id: commandId,
-        workstreamId,
-        sessionId: '',
-        turnOrdinal: state.turns.length + 1,
         purpose: 'user',
         status,
-        stopReason: (event.payload['stopReason'] as string | null) ?? null,
-        usage: null,
-        startedAt: new Date().toISOString(),
-        endedAt: null,
       })
     }
     renderMessages()
@@ -1194,31 +1230,54 @@ async function refreshIntent(workstreamId: string): Promise<void> {
     state.intentView = null
   }
   renderTopbar()
+  renderBanner()
 }
 
 /** The complete desired state S2 can author. S7's real catalogue replaces the fixed selections. */
-function stubIntent(power: 'on' | 'off'): IntentRequestBody {
-  return {
-    power,
-    harness: 'claude-code',
-    capabilities: ['workspace.read'],
-    model: 'model-a',
-    effort: 'default',
-    persona: 'default',
+/**
+ * The COMPLETE desired state, from what is on screen. Never a patch: the API takes a whole Intent,
+ * and a partial one would be a request for the server to guess what the operator left out.
+ *
+ * Turning power off keeps every other selection (001 Intent: "previously accepted retained
+ * selections can be carried in the complete off Intent"), so turning it back on does not silently
+ * land on a different model than the one that was running.
+ */
+function composedIntent(power: 'on' | 'off'): IntentRequestBody | { readonly missing: readonly string[] } {
+  const harness = selectedHarness()
+  const model = selectedModel()
+  const effort = selectedEffort()
+  const missing = [
+    ...(harness === '' ? ['harness'] : []),
+    ...(model === '' ? ['modèle'] : []),
+    ...(effort === '' ? ['effort'] : []),
+  ]
+  if (missing.length > 0) return { missing }
+  return { power, harness, capabilities: [...selectedCapabilities()], model, effort, persona: 'default' }
+}
+
+async function authorIntent(power: 'on' | 'off'): Promise<void> {
+  const workstreamId = state.activeId
+  if (!workstreamId) return
+  const intent = composedIntent(power)
+  if ('missing' in intent) {
+    // Named, not generic: an operator who is told "incomplete" has to guess which selector.
+    toast(`Intention incomplète : choisissez ${intent.missing.join(', ')}.`, true)
+    return
+  }
+  try {
+    const result = await putIntent(workstreamId, intent)
+    await refreshIntent(workstreamId)
+    await refreshSessions(workstreamId)
+    toast(result.status === 'created' ? `Intention enregistrée (power ${power}).` : 'Cette intention était déjà enregistrée.')
+  } catch (error) {
+    // 409 (a reused key with different content) and 422 (a value the catalogue does not offer) both
+    // arrive with a Problem `detail` that says which — showing it beats restating the status code.
+    toast(errorText(error), true)
   }
 }
 
 async function togglePower(): Promise<void> {
-  const workstreamId = state.activeId
-  if (!workstreamId) return
-  const target: 'on' | 'off' = state.intentView?.intent.power === 'on' ? 'off' : 'on'
-  try {
-    const result = await putIntent(workstreamId, stubIntent(target))
-    await refreshIntent(workstreamId)
-    toast(result.status === 'created' ? `Power ${target} demandé.` : 'Cette demande était déjà enregistrée.')
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  await authorIntent(state.intentView?.intent.power === 'on' ? 'off' : 'on')
 }
 
 async function doSend(): Promise<void> {
@@ -1236,57 +1295,15 @@ async function doSend(): Promise<void> {
   }
 }
 
-function draftConfigOptions(): readonly RequestedConfigOption[] {
-  return Object.entries(state.draft.config).map(([optionId, value]) => ({ optionId, value }))
-}
-
-/**
- * What a new Session for THIS conversation should be launched with: whatever is on screen.
- *
- * A persona or equipment change opens a new Session (both are frozen launch arguments), and without
- * this the conversation would silently drop back to the harness default model the moment the
- * operator changed something unrelated to it.
- */
-function carriedConfigOptions(): readonly RequestedConfigOption[] {
-  const config = currentConfig()
-  if (config.source === 'catalogue') return draftConfigOptions()
-  const carried: RequestedConfigOption[] = []
-  for (const option of [modelOption(), effortOption()]) {
-    if (!option || option.currentValue === undefined || option.currentValue === null) continue
-    const value = option.currentValue
-    if (typeof value === 'string' || typeof value === 'boolean') carried.push({ optionId: option.id, value })
-  }
-  return carried
-}
-
-/** Map a control-plane record onto the sidebar's Workstream shape; the fields S2 has no source for are neutral defaults, never invented facts. */
-function toWorkstream(record: {
-  readonly id: string
-  readonly title: string
-  readonly createdAt: string
-  readonly updatedAt: string
-}): Workstream {
-  return {
-    id: record.id,
-    category: 'discussion',
-    title: record.title,
-    pinned: false,
-    role: 'owner',
-    currentSessionId: null,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  }
-}
-
 async function startWorkstream(text: string): Promise<void> {
   const created = await createWorkstream({ title: text })
-  state.workstreams.set(created.id, toWorkstream(created))
+  state.workstreams.set(created.id, created)
   state.activeId = created.id
   state.items = []
   state.turns = []
   state.echoes = []
-  state.configOptions = []
   state.intentView = null
+  state.sessionsView = null
   renderSidebar()
   renderMain()
   await loadWorkstream(created.id)
@@ -1297,112 +1314,26 @@ async function sendPrompt(workstreamId: string, text: string): Promise<void> {
   renderMessages()
   try {
     const result = await promptSession(workstreamId, text)
+    // A send that was accepted clears the gate: whatever was ambiguous is no longer blocking.
+    state.deliveryUnknown = false
     // The optimistic running turn: its status updates arrive on the feed.
-    state.turns.push({
-      id: result.commandId,
-      workstreamId,
-      sessionId: '',
-      turnOrdinal: state.turns.length + 1,
-      purpose: 'user',
-      status: 'running',
-      stopReason: null,
-      usage: null,
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-    })
+    state.turns.push({ id: result.commandId, purpose: 'user', status: 'running' })
     syncComposerLock()
   } catch (error) {
     // The echo dies with the failure: the command was not even reserved.
     state.echoes = state.echoes.filter((echo) => echo.text !== text || state.items.some((item) => item.kind === 'message'))
+    // CONT-005: the server refuses because a PREVIOUS prompt may already have been accepted. That is
+    // not this send failing — it is the composer learning that it must not send at all until
+    // recovery resolves the earlier one. No automatic retry, ever.
+    if (error instanceof ApiError && error.problem.status === 409 && /delivery/i.test(error.problem.title)) {
+      state.deliveryUnknown = true
+      renderTopbar()
+      renderBanner()
+      syncComposerLock()
+    }
     renderMessages()
     throw error
   }
-}
-
-/**
- * One click, three situations, all of which used to be "nothing happens" or "an error":
- *
- *  - no Session yet — the choice is a draft, sent with the create so the first turn already runs on
- *    it (it used to `return` immediately, which is why the composer's selector did nothing);
- *  - a live Session — a real `session/set_config_option`, whose full response is authoritative;
- *  - a Session whose Runtime was reclaimed — the engine records it and applies it on the next
- *    resume, answering `pending` instead of the `runtime_unavailable` 409 that used to surface as a
- *    red toast.
- */
-async function applyConfigOption(optionId: string, value: string): Promise<void> {
-  // Every call site reads a `data-*` attribute with a `?? ''` fallback, so a row rendered without
-  // its value sends an empty string and the server answers "body must be {"value": "<non-empty
-  // string>"}" — which reaches the operator as a message about strings and says nothing about what
-  // actually went wrong. Reported live 2026-08-07 ("ça m'a mis un message d'erreur comme quoi la
-  // string était pas bonne"), and not reproducible afterwards, which is exactly why the failure
-  // needs to name itself rather than be inferred from the server's generic complaint.
-  if (!value) {
-    toast(`Option « ${optionId} » : aucune valeur à appliquer (le menu a été rendu sans valeur).`, true)
-    return
-  }
-
-  // Draft only: there is no live-session config path on this API.
-  state.draft.config[optionId] = value
-  renderComposer()
-  renderTopbar()
-  renderMenus()
-}
-
-/**
- * Both persona and equipment changes take this path, because on this engine they are the same act:
- * a new Session on the same Workstream, launched with the new envelope. `activate: true` is what
- * makes the engine treat it as a continuation (it computes the missing range and dispatches the
- * Handoff) rather than a restart.
- */
-async function relaunchSession(reason: string): Promise<void> {
-  closeMenu()
-  toast(`${reason} — le lancement de session n’existe pas sur cette API.`)
-}
-
-async function choosePersona(persona: string): Promise<void> {
-  if (persona === selectedPersona()) {
-    closeMenu()
-    return
-  }
-  state.draft.persona = persona
-  if (!activeSession()) {
-    closeMenu()
-    renderComposer()
-    renderTopbar()
-    renderMenus()
-    return
-  }
-  await relaunchSession('Nouvelle session avec cet agent…')
-}
-
-async function chooseEquipment(token: string): Promise<void> {
-  const [resource, access] = token.split(':')
-  const next: EquipmentResourceRequest[] = resource && access ? [{ resource, access }] : []
-  const unchanged =
-    next.length === state.draft.equipment.length && next.every((entry, index) => {
-      const previous = state.draft.equipment[index]
-      return previous?.resource === entry.resource && previous.access === entry.access
-    })
-  state.draft.equipment = next
-  if (!activeSession()) {
-    closeMenu()
-    renderComposer()
-    renderTopbar()
-    renderMenus()
-    return
-  }
-  if (unchanged) {
-    closeMenu()
-    return
-  }
-  await relaunchSession('Nouvelle session avec cet équipement…')
-}
-
-/** Pinning is not in the S2 control-plane contract: the button stays but says so, instead of failing silently or pretending. */
-async function togglePin(workstreamId: string): Promise<void> {
-  const workstream = state.workstreams.get(workstreamId)
-  if (!workstream) return
-  toast('L’épinglage n’est pas disponible sur l’API actuelle.', true)
 }
 
 async function renameWorkstream(workstreamId: string | null): Promise<void> {
@@ -1413,28 +1344,12 @@ async function renameWorkstream(workstreamId: string | null): Promise<void> {
   if (!title || title === workstream.title) return
   try {
     const updated = await patchWorkstream(workstreamId, { title })
-    state.workstreams.set(workstreamId, toWorkstream(updated))
+    state.workstreams.set(workstreamId, updated)
     renderSidebar()
     renderTopbar()
   } catch (error) {
     toast(errorText(error), true)
   }
-}
-
-/**
- * The manual twin of the engine's idle reaper: both end in the same durable suspension, so this is
- * "give the Runtime back", not "throw the conversation away". Custody is captured and the Anchor
- * committed before the Pod goes, so the next message resumes exactly where this left off — which is
- * why the confirm text promises the history stays and why this is a separate button from delete.
- *
- * It exists because waiting for the idle timeout is not always acceptable: Session Runtimes are
- * capped per namespace, and on 2026-08-07 four abandoned Sessions held every slot and made the
- * platform refuse all new work. An operator needs a way to hand a slot back immediately.
- */
-/** There is no imperative session lifecycle on this API: execution follows the Intent (power on/off). */
-async function stopSession(workstreamId: string | null): Promise<void> {
-  if (!workstreamId) return
-  toast('Les sessions suivent l’Intent (power on/off), pas d’arrêt manuel sur cette API.', true)
 }
 
 /** Deletion extinguishes execution first (continuity: storage and retention) and has no API in S4 — the button says so instead of failing silently. */
@@ -1456,12 +1371,11 @@ async function refreshList(): Promise<void> {
   const seen = new Set<string>()
   for (const record of records) {
     seen.add(record.id)
-    state.workstreams.set(record.id, toWorkstream(record))
+    state.workstreams.set(record.id, record)
   }
   for (const id of [...state.workstreams.keys()]) {
     if (seen.has(id)) continue
     state.workstreams.delete(id)
-    state.sessions.delete(id)
     state.detailSeenAt.delete(id)
   }
   renderSidebar()
@@ -1469,8 +1383,28 @@ async function refreshList(): Promise<void> {
 }
 
 async function reload(): Promise<void> {
-  // S2: no agent or equipment catalogue exists on this API yet, so the selectors stay empty and
-  // every legacy action that needs them fails with its own visible message.
+  try {
+    // The catalogue first: without it the Intent editor has nothing to offer, and offering values
+    // this client made up is exactly what the contract forbids.
+    //
+    // Coerced at the boundary, like every other collection here: a well-formed but EMPTY response is
+    // a real case (the boot test answers every request with one), and storing it verbatim would put
+    // `undefined.length` in a render path where the failure has no visible cause.
+    const catalogue = await getCatalogue()
+    state.catalogue = {
+      revisionId: catalogue?.revisionId ?? null,
+      capabilities: asArray<string>(catalogue?.capabilities),
+      harnesses: asArray<Catalogue['harnesses'][number]>(catalogue?.harnesses).map((harness) => ({
+        id: harness?.id ?? '',
+        models: asArray<Catalogue['harnesses'][number]['models'][number]>(harness?.models).map((model) => ({
+          id: model?.id ?? '',
+          efforts: asArray<string>(model?.efforts),
+        })),
+      })),
+    }
+  } catch (error) {
+    toast(errorText(error), true)
+  }
   try {
     await refreshList()
   } catch (error) {
@@ -1490,6 +1424,15 @@ async function init(): Promise<void> {
   matchMedia(MOBILE_QUERY).addEventListener('change', () => {
     renderSidebar()
     renderTopbar()
+  })
+
+  // Escape closes whatever is open, from anywhere — including from inside the menu, which is where
+  // the focus is when a keyboard user wants out of it.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.openMenu !== null) {
+      event.preventDefault()
+      closeMenu(true)
+    }
   })
 
   renderSidebar()

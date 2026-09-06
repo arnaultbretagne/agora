@@ -292,6 +292,20 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
         const ready = options.readiness === undefined ? { ready: true, reason: 'no owner connectivity to check in this mode' } : await options.readiness()
         return sendJson(res, ready.ready ? 200 : 503, ready)
       }
+      // S12: the reviewed public values a client may select from. The browser never invents an
+      // Intent field's value; it picks one of these, and the server validates against the same view.
+      if (segments[1] === 'catalogue') {
+        if (method !== 'GET') return sendProblem(res, 405, 'Method not allowed', 'the catalogue is read-only')
+        const harnesses = [...catalogue.harnesses].sort()
+        return sendJson(res, 200, {
+          revisionId: options.revisionId ?? null,
+          capabilities: [...catalogue.capabilities].sort(),
+          harnesses: harnesses.map((harness) => ({
+            id: harness,
+            models: catalogue.models(harness).map((model) => ({ id: model, efforts: catalogue.efforts(harness, model) })),
+          })),
+        })
+      }
       if (segments[1] === 'metrics' && method === 'GET') {
         if (options.metrics === undefined) return sendProblem(res, 404, 'Not found', 'this deployment exposes no metrics')
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' })
@@ -441,6 +455,55 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
         }
       }
 
+      // S12: the Sessions of a Workstream, with what the operator has to be able to see — the
+      // native-loss exposure CONT-012 names, which is a real number of facts, not a mood.
+      if (segments.length === 4 && segments[3] === 'sessions' && method === 'GET') {
+        const sessions = await productPool.query(
+          `SELECT id, ordinal, opened_at, opened_at_seq, cutoff_h, origin_w, origin_save_id, pod_uid, provenance,
+                  acp_context_id, process_generation, attribution_ended_at
+           FROM sessions WHERE workstream_id = $1 ORDER BY ordinal`,
+          [workstreamId],
+        )
+        const anchors = await productPool.query(
+          `SELECT a.harness_id, a.save_id, a.frontier_w, a.published_at, s.created_at
+           FROM anchors a JOIN saves s ON s.id = a.save_id WHERE a.workstream_id = $1`,
+          [workstreamId],
+        )
+        const head = await productPool.query('SELECT head_seq FROM workstreams WHERE id = $1', [workstreamId])
+        const headSeq = Number((head.rows[0] as { head_seq?: number } | undefined)?.head_seq ?? 0)
+        return sendJson(res, 200, {
+          headSeq,
+          sessions: sessions.rows.map((row) => {
+            const session = row as Record<string, unknown>
+            return {
+              id: session['id'],
+              ordinal: session['ordinal'],
+              openedAt: session['opened_at'],
+              openingRange: { w: Number(session['origin_w']), h: Number(session['cutoff_h']) },
+              restoredFromSaveId: session['origin_save_id'] ?? null,
+              podUid: session['pod_uid'],
+              provenance: session['provenance'],
+              contextId: session['acp_context_id'] ?? null,
+              processGeneration: session['process_generation'],
+              attributionEndedAt: session['attribution_ended_at'] ?? null,
+            }
+          }),
+          // CONT-012: how much of the record is newer than the newest recovery point. A live
+          // context with an old Anchor is normal; what is NOT acceptable is nobody being able to
+          // see how much would be lost if it ended now.
+          lossExposure: anchors.rows.map((row) => {
+            const anchor = row as Record<string, unknown>
+            return {
+              harnessId: anchor['harness_id'],
+              saveId: anchor['save_id'],
+              frontierW: Number(anchor['frontier_w']),
+              anchoredAt: anchor['published_at'],
+              factsSinceAnchor: Math.max(0, headSeq - Number(anchor['frontier_w'])),
+            }
+          }),
+        })
+      }
+
       if (segments.length === 4 && segments[3] === 'prompt' && method === 'POST') {
         return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission, recovery, options.revisionId)
       }
@@ -467,7 +530,9 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
       if (segments.length === 5 && segments[3] === 'permissions' && segments[4] === 'pending' && method === 'GET') {
         if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
-        return sendJson(res, 200, { pending: channels.pendingPermissionIds(workstreamId) })
+        // The options come with the request: an operator answers with what the agent offered, and a
+        // client that had only ids would have to invent the choices (S12 Step 4).
+        return sendJson(res, 200, { pending: channels.pendingPermissions(workstreamId) })
       }
       if (segments.length === 6 && segments[3] === 'permissions' && segments[5] === 'decision' && method === 'POST') {
         if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
@@ -477,7 +542,10 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
           return sendProblem(res, 422, 'Invalid decision', 'optionId must be a non-empty string')
         }
         const decided = channels.decidePermission(workstreamId, segments[4]!, optionId)
-        if (!decided) return sendProblem(res, 404, 'No pending permission', `no pending permission ${segments[4]} on this Workstream`)
+        if (decided === 'unknown') return sendProblem(res, 404, 'No pending permission', `no pending permission ${segments[4]} on this Workstream`)
+        if (decided === 'not_offered') {
+          return sendProblem(res, 422, 'Option not offered', `the agent did not offer option ${optionId} for this permission; answer with one it listed`)
+        }
         return sendJson(res, 200, { decided: true })
       }
       if (segments.length === 4 && segments[3] === 'cancel' && method === 'POST') {

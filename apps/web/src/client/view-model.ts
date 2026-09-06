@@ -10,43 +10,28 @@
  * what the engine actually publishes.
  */
 
-import type { PublicAgent, Session, WorkstreamItem, WorkstreamTurn } from './api.js'
-
-// ---------- Runtime state (the sidebar dot and the topbar chip) ----------
-
 /**
- * The OLD UI's four-state vocabulary, preserved because it is what the operator reads at a glance.
- * The nine-phase Session lifecycle (docs/specs/03) collapses onto it: everything that is not yet
- * usable is "starting", everything usable is "live", every resting or finished state is "en veille",
- * and only `failed` is an error. A Workstream with no Session at all is at rest, not broken.
+ * The shapes this module folds over. They are the UI's OWN view types, not the API's: the projected
+ * item the transcript reads and the turn the composer watches. Defining them here rather than
+ * importing them is deliberate — S12 removed the API's `Session.phase`, and a view model that
+ * imported a phase would be one field away from displaying it.
  */
-export type RuntimeState = 'dormant' | 'starting' | 'live' | 'error'
-
-export const STATE_LABELS: Readonly<Record<RuntimeState, string>> = {
-  dormant: 'En veille',
-  starting: 'Démarrage…',
-  live: 'Live',
-  error: 'Erreur',
+export interface WorkstreamItem {
+  readonly id: string
+  readonly sessionId: string
+  readonly kind: string
+  /** The projected entity's own key — a tool-call id for a permission, and the only tie back to the live request. */
+  readonly entityKey: string
+  readonly value: Record<string, unknown>
+  readonly firstWorkstreamSeq: number
+  readonly latestWorkstreamSeq: number
+  readonly updatedAt: string
 }
 
-export function runtimeStateOfPhase(phase: string | undefined): RuntimeState {
-  switch (phase) {
-    case 'requested':
-    case 'provisioning':
-      return 'starting'
-    case 'ready':
-    case 'busy':
-      return 'live'
-    case 'failed':
-      return 'error'
-    default:
-      return 'dormant'
-  }
-}
-
-/** The Session the UI speaks to: the one the engine marks current, which is the only one `POST /v1/sessions/{id}/prompts` accepts. */
-export function currentSession(sessions: readonly Session[]): Session | undefined {
-  return sessions.find((session) => session.current)
+export interface WorkstreamTurn {
+  readonly id: string
+  readonly status: string
+  readonly purpose: string
 }
 
 // ---------- History grouping ----------
@@ -415,7 +400,211 @@ export function railIndexOf(levels: readonly ConfigOptionValue[], currentValue: 
 
 // ---------- Agents ----------
 
-/** An Agent that is `unavailable`/`deprecated` is not offered: the server refuses to launch it (`agent_unavailable`), so showing it could only produce a 409 the operator cannot act on. */
-export function launchableAgents(agents: readonly PublicAgent[]): readonly PublicAgent[] {
-  return agents.filter((agent) => agent.availability === 'enabled')
+
+/* ------------------------------------------------------------------ *
+ *  S12: what the operator is told, and why                            *
+ * ------------------------------------------------------------------ */
+
+/**
+ * The status vocabulary. Every one of these is DERIVED, at render time, from the operational view
+ * and fresh projections — none of them is a stored phase, because no phase exists (ADR 0002/0003).
+ *
+ * `converged` says "as of <observation time>", never "ready": ready is a promise about the future,
+ * and this is a statement about a moment that has already passed.
+ */
+export type WorkstreamStatusKind = 'no-intent' | 'converged' | 'reconciling' | 'held' | 'delivery-unknown' | 'restricted'
+
+export interface WorkstreamStatus {
+  readonly kind: WorkstreamStatusKind
+  /** One line, already in the operator's language. Carries the rule id or cause where there is one. */
+  readonly label: string
+  /** Present when the cause is external and has a remediation the operator can act on (CAPS-004). */
+  readonly remediation?: string
+  /** True while nothing may be sent: an ambiguous delivery gates the next turn (CONT-005). */
+  readonly blocksSending: boolean
+}
+
+export interface StatusInputs {
+  /** The latest Intent view, or null when the Workstream has never been given one. */
+  readonly intent: { readonly work: { readonly blockingCause: string | null; readonly attemptCount: number } | null } | null
+  /** An unresolved possibly-accepted prompt, if the last send reported one. */
+  readonly deliveryUnknown: boolean
+  /** When the status was derived — shown with `converged`, because that claim is about a moment. */
+  readonly observedAt: Date
+}
+
+/**
+ * The one place a status is decided. Order matters and is not arbitrary: an ambiguous delivery is
+ * shown ahead of everything else because it is the only state where the operator's next action
+ * could duplicate an external effect, and an external restriction is shown ahead of ordinary
+ * reconciling because "we are working on it" is false when nothing will happen until someone
+ * outside changes something.
+ */
+export function deriveStatus(inputs: StatusInputs): WorkstreamStatus {
+  if (inputs.deliveryUnknown) {
+    return {
+      kind: 'delivery-unknown',
+      label: 'Livraison incertaine : un message a peut-être été reçu.',
+      remediation: 'Aucun renvoi automatique. Un renvoi manuel pourrait dupliquer un effet externe déjà produit.',
+      blocksSending: true,
+    }
+  }
+  if (inputs.intent === null) return { kind: 'no-intent', label: 'Aucune intention enregistrée.', blocksSending: false }
+
+  const cause = inputs.intent.work?.blockingCause ?? null
+  if (cause === null) {
+    return { kind: 'converged', label: `Convergé au ${inputs.observedAt.toISOString()}`, blocksSending: false }
+  }
+  // CAPS-004: an authority the organization has restricted. Nothing this deployment does will lift
+  // it, so saying "reconciling" would be a lie about who is acting.
+  if (cause.startsWith('capability_restricted') || cause.startsWith('external_restriction')) {
+    return {
+      kind: 'restricted',
+      label: `Restreint par la politique de l’organisation : ${cause}`,
+      remediation: 'La levée de cette restriction appartient à l’organisation, pas à ce déploiement.',
+      blocksSending: false,
+    }
+  }
+  if (cause.startsWith('HOLD') || cause.includes('hold')) {
+    return { kind: 'held', label: `En attente : ${cause}`, blocksSending: false }
+  }
+  return { kind: 'reconciling', label: `Réconciliation en cours : ${cause}`, blocksSending: false }
+}
+
+/* ---------- Permission decisions (S12 Step 4) ---------- */
+
+export interface PermissionOptionView {
+  readonly optionId: string
+  readonly name: string
+}
+
+/** A request the agent is blocked on, exactly as the live channel published it. */
+export interface PendingPermissionView {
+  readonly permissionId: string
+  readonly toolCallId: string | null
+  readonly title: string
+  readonly options: readonly PermissionOptionView[]
+}
+
+/** What this client has answered and is still waiting to see come back on the wire. */
+export interface SubmittedPermission {
+  readonly permissionId: string
+  readonly toolCallId: string | null
+  readonly title: string
+  readonly optionId: string
+  readonly optionName: string
+}
+
+/**
+ * `asked` — the agent is waiting on the operator.
+ * `sent` — an answer left this browser and has NOT been seen on the wire yet.
+ * `answered` — the response frame was journaled and projected; only now is there anything to report.
+ */
+export type PermissionPromptState = 'asked' | 'sent' | 'answered'
+
+export interface PermissionPrompt {
+  readonly permissionId: string
+  readonly title: string
+  readonly options: readonly PermissionOptionView[]
+  readonly state: PermissionPromptState
+  /** The line to show. For `answered` it describes the projected outcome, never the click. */
+  readonly label: string
+}
+
+interface PermissionInputs {
+  readonly pending: readonly PendingPermissionView[]
+  readonly items: readonly WorkstreamItem[]
+  readonly submitted: readonly SubmittedPermission[]
+}
+
+/**
+ * What the operator is shown about permissions, and — the whole point of this derivation — the
+ * refusal to show a decision as done because a button was pressed.
+ *
+ * Clicking "Allow" resolves a promise inside the control plane; the agent learns of it when the
+ * response frame is written to the connection, and the UI learns of it when the projector folds
+ * that frame into the `permission` item's `decided` status. Between those two moments the honest
+ * thing to say is "sent", and that is what `sent` means here. A UI that flipped straight to
+ * "granted" would be reporting its own intention as an outcome — the same class of claim
+ * `prompt_delivery_unknown` exists to prevent one step earlier in the protocol.
+ *
+ * The tie between a live request and its projected item is the tool-call id: the pending list says
+ * what may still be answered, the projection says what the answer turned out to be.
+ */
+export function permissionPrompts(inputs: PermissionInputs): PermissionPrompt[] {
+  const pendingIds = new Set(inputs.pending.map((request) => request.permissionId))
+  const decided = new Map<string, Record<string, unknown>>()
+  for (const item of inputs.items) {
+    if (item.kind !== 'permission' || item.value['status'] !== 'decided') continue
+    decided.set(item.entityKey, item.value)
+  }
+
+  const live = inputs.pending.map((request): PermissionPrompt => {
+    const sent = inputs.submitted.find((entry) => entry.permissionId === request.permissionId)
+    return sent === undefined
+      ? { permissionId: request.permissionId, title: request.title, options: request.options, state: 'asked', label: `Autorisation demandée : ${request.title}` }
+      // No options once an answer is out: a second click cannot reach the same request, and
+      // offering one would suggest the first is still undecided.
+      : { permissionId: request.permissionId, title: request.title, options: [], state: 'sent', label: `Réponse envoyée (${sent.optionName}) — en attente de sa prise en compte par le harnais.` }
+  })
+
+  // Answered ones this client is responsible for: it asked, so it reports what came back. A
+  // permission somebody else answered simply leaves the pending list; it is not this browser's to
+  // narrate, and the transcript deliberately shows no permission history (see `messagesFromItems`).
+  const settled = inputs.submitted
+    .filter((entry) => !pendingIds.has(entry.permissionId))
+    .map((entry): PermissionPrompt => {
+      const outcome = entry.toolCallId === null ? undefined : decided.get(entry.toolCallId)?.['outcome']
+      return {
+        permissionId: entry.permissionId,
+        title: entry.title,
+        options: [],
+        state: outcome === undefined ? 'sent' : 'answered',
+        label: outcome === undefined
+          ? `Réponse envoyée (${entry.optionName}) — en attente de sa prise en compte par le harnais.`
+          : `${entry.title} — ${describeOutcome(outcome, entry)}`,
+      }
+    })
+
+  return [...live, ...settled]
+}
+
+/**
+ * The outcome as the wire recorded it. `selected` is reported by the option that was actually
+ * carried, which is not necessarily the one this browser believes it sent — if they differ, the
+ * wire is right and saying so is the point of reading it back.
+ */
+function describeOutcome(outcome: unknown, submitted: SubmittedPermission): string {
+  const value = (outcome ?? {}) as { outcome?: unknown; optionId?: unknown }
+  if (value.outcome === 'cancelled') return 'annulée avant d’avoir été tranchée.'
+  if (value.outcome === 'selected') {
+    const optionId = typeof value.optionId === 'string' ? value.optionId : ''
+    const name = optionId === submitted.optionId ? submitted.optionName : optionId
+    return `réponse transmise au harnais : « ${name} ».`
+  }
+  return 'le harnais a répondu, sans dire ce qui a été retenu.'
+}
+
+export interface LossExposureView {
+  readonly harnessId: string
+  readonly factsSinceAnchor: number
+  readonly anchoredAt: string
+}
+
+/**
+ * The loss-exposure banner (CONT-012). A live context with an old Anchor is normal; what is not
+ * acceptable is nobody being able to see how much would be lost if it ended now. Returns undefined
+ * when there is nothing to say — an Anchor that covers everything, or no Anchor at all, which is a
+ * different statement and belongs to the status line, not a banner.
+ */
+export function lossExposureBanner(exposures: readonly LossExposureView[]): string | undefined {
+  const exposed = exposures.filter((exposure) => exposure.factsSinceAnchor > 0)
+  if (exposed.length === 0) return undefined
+  return exposed
+    .map(
+      (exposure) =>
+        `${exposure.harnessId} : ${String(exposure.factsSinceAnchor)} fait(s) postérieurs au dernier point de reprise (${exposure.anchoredAt}). ` +
+        'Ils sont conservés par Agora ; le contexte natif, lui, pourrait ne pas les retrouver.',
+    )
+    .join(' ')
 }

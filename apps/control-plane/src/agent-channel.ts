@@ -70,7 +70,41 @@ export type CancelOutcome = 'cancel_sent' | 'not_active'
 
 interface PendingPermission {
   readonly id: string
+  readonly view: PendingPermissionView
   readonly resolve: (decision: { outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }) => void
+}
+
+/**
+ * A permission request the agent is BLOCKED on, in the shape an operator has to answer it: the
+ * options the agent itself offered, by their own ids and names. The UI never invents an option —
+ * `session/request_permission` carries the only set the agent will accept, and answering with an
+ * `optionId` it did not offer is answering a different question (S12 Step 4).
+ *
+ * `toolCallId` is what ties this live request to the projected `permission` item, whose entity key
+ * is that same id: the pending list says what may be answered NOW, the projection says what the
+ * answer turned out to be.
+ */
+export interface PendingPermissionView {
+  readonly permissionId: string
+  readonly toolCallId: string | null
+  readonly title: string
+  readonly options: readonly { readonly optionId: string; readonly name: string; readonly kind: string | null }[]
+}
+
+/** The permission request's own words. Anything missing stays missing — a placeholder here would be the UI inventing a choice. */
+function permissionView(permissionId: string, params: unknown): PendingPermissionView {
+  const record = (params ?? {}) as { toolCall?: { toolCallId?: unknown; title?: unknown }; options?: unknown }
+  const toolCallId = typeof record.toolCall?.toolCallId === 'string' ? record.toolCall.toolCallId : null
+  const title = typeof record.toolCall?.title === 'string' ? record.toolCall.title : (toolCallId ?? permissionId)
+  const options = (Array.isArray(record.options) ? record.options : [])
+    .map((option) => option as { optionId?: unknown; name?: unknown; kind?: unknown })
+    .filter((option): option is { optionId: string; name?: unknown; kind?: unknown } => typeof option.optionId === 'string')
+    .map((option) => ({
+      optionId: option.optionId,
+      name: typeof option.name === 'string' ? option.name : option.optionId,
+      kind: typeof option.kind === 'string' ? option.kind : null,
+    }))
+  return { permissionId, toolCallId, title, options }
 }
 
 interface InnerChannel {
@@ -102,6 +136,11 @@ export class AgentChannels {
 
   pendingPermissionIds(workstreamId: string): readonly string[] {
     return [...(this.#channels.get(workstreamId)?.pendingPermissions.keys() ?? [])]
+  }
+
+  /** The pending requests with the options the agent offered — what an operator needs to answer one. */
+  pendingPermissions(workstreamId: string): readonly PendingPermissionView[] {
+    return [...(this.#channels.get(workstreamId)?.pendingPermissions.values() ?? [])].map((pending) => pending.view)
   }
 
   /** Opens (or reuses) the channel for the Workstream's current Session. */
@@ -141,7 +180,7 @@ export class AgentChannels {
       onPermissionRequest: async (params) => {
         const id = randomUUID()
         const decision = new Promise<{ outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }>((resolve) => {
-          pendingPermissions.set(id, { id, resolve })
+          pendingPermissions.set(id, { id, view: permissionView(id, params), resolve })
         })
         void decision.then(() => pendingPermissions.delete(id))
         return decision
@@ -238,11 +277,20 @@ export class AgentChannels {
     return 'cancel_sent'
   }
 
-  decidePermission(workstreamId: string, permissionId: string, optionId: string): boolean {
+  /**
+   * Answers a pending request with one of the options the agent OFFERED. An `optionId` that is not
+   * in that set is refused rather than forwarded: the agent asked a closed question, and sending it
+   * an answer it never listed is a protocol violation whose handling is the agent's business, not
+   * something to discover in production. (A request that offered no options at all is answered as
+   * asked — that is the agent's own shape, not an invented one.)
+   */
+  decidePermission(workstreamId: string, permissionId: string, optionId: string): 'decided' | 'unknown' | 'not_offered' {
     const pending = this.#channels.get(workstreamId)?.pendingPermissions.get(permissionId)
-    if (pending === undefined) return false
+    if (pending === undefined) return 'unknown'
+    const offered = pending.view.options
+    if (offered.length > 0 && !offered.some((option) => option.optionId === optionId)) return 'not_offered'
     pending.resolve({ outcome: { outcome: 'selected', optionId } })
-    return true
+    return 'decided'
   }
 
   async runProjectors(workstreamId: string): Promise<void> {

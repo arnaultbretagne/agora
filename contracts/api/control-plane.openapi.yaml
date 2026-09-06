@@ -105,6 +105,210 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/Invalid'
+  /catalogue:
+    get:
+      summary: The reviewed public values an Intent may name
+      description: >-
+        Every harness, model, effort and capability a client may select. The browser selects from
+        this and never invents a value; the server validates an Intent against the same view, so a
+        selection this endpoint did not offer is refused rather than quietly accepted. Efforts hang
+        off the model they apply to, because a flat list could offer one the selected model does not
+        have.
+      responses:
+        '200':
+          description: The catalogue
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [capabilities, harnesses]
+                properties:
+                  revisionId:
+                    type: [string, 'null']
+                    description: The catalogue revision this process resolves (SESSION-A11).
+                  capabilities:
+                    type: array
+                    items: { type: string }
+                    description: A FLAT named set — no profiles, no combinations, no hierarchy.
+                  harnesses:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, models]
+                      properties:
+                        id: { type: string }
+                        models:
+                          type: array
+                          items:
+                            type: object
+                            required: [id, efforts]
+                            properties:
+                              id: { type: string }
+                              efforts:
+                                type: array
+                                items: { type: string }
+
+  /workstreams/{id}/sessions:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: The Workstream's Sessions, and how much would be lost if execution ended now
+      description: >-
+        A Session is not a state machine: there is no phase here, only whether attribution has ended
+        (ADR 0002). `lossExposure` is CONT-012 made visible — a live context with an old Anchor is
+        normal, but nobody being able to see how much is newer than the newest recovery point is not.
+      responses:
+        '200':
+          description: Sessions and loss exposure
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [headSeq, sessions, lossExposure]
+                properties:
+                  headSeq: { type: integer }
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, ordinal, openedAt, openingRange, podUid, processGeneration]
+                      properties:
+                        id: { type: string, format: uuid }
+                        ordinal: { type: integer }
+                        openedAt: { type: string, format: date-time }
+                        openingRange:
+                          type: object
+                          required: [w, h]
+                          properties:
+                            w: { type: integer }
+                            h: { type: integer }
+                        restoredFromSaveId: { type: [string, 'null'], format: uuid }
+                        podUid: { type: string }
+                        provenance: { type: object }
+                        contextId: { type: [string, 'null'] }
+                        processGeneration: { type: integer }
+                        attributionEndedAt: { type: [string, 'null'], format: date-time }
+                  lossExposure:
+                    type: array
+                    items:
+                      type: object
+                      required: [harnessId, saveId, frontierW, anchoredAt, factsSinceAnchor]
+                      properties:
+                        harnessId: { type: string }
+                        saveId: { type: string, format: uuid }
+                        frontierW: { type: integer }
+                        anchoredAt: { type: string, format: date-time }
+                        factsSinceAnchor:
+                          type: integer
+                          description: Facts newer than the newest recovery point (CONT-012).
+
+  /workstreams/{id}/permissions/pending:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: The permission requests the agent is blocked on
+      description: >-
+        Live channel state, not a projection: a projected `permission` item proves only that a
+        request was ASKED, and the channel that could answer it may be gone. Each entry carries the
+        options the AGENT offered — a client answers with one of those and never invents an id, the
+        same rule the Intent editor follows for the catalogue. `toolCallId` is the entity key of the
+        projected `permission` item, which is where the outcome appears once the response frame is
+        journaled.
+      responses:
+        '200':
+          description: Pending requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pending]
+                properties:
+                  pending:
+                    type: array
+                    items:
+                      type: object
+                      required: [permissionId, toolCallId, title, options]
+                      properties:
+                        permissionId: { type: string }
+                        toolCallId: { type: [string, 'null'] }
+                        title: { type: string }
+                        options:
+                          type: array
+                          items:
+                            type: object
+                            required: [optionId, name, kind]
+                            properties:
+                              optionId: { type: string }
+                              name: { type: string }
+                              kind: { type: [string, 'null'] }
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          description: This deployment runs without ACP channels.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /workstreams/{id}/permissions/{permissionId}/decision:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: permissionId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Answer a pending permission request
+      description: >-
+        200 means the answer was handed to the connection, NOT that the agent acted on it. What the
+        agent was told is readable afterwards on the projected `permission` item, whose `outcome` is
+        folded from the response frame that was actually written; a client that showed "granted" on
+        the strength of this response would be reporting its own intention as an outcome.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [optionId]
+              properties:
+                optionId:
+                  type: string
+                  description: One of the options the agent offered for this request.
+      responses:
+        '200':
+          description: The decision was written to the connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decided]
+                properties:
+                  decided: { type: boolean }
+        '404':
+          description: No such pending request on this Workstream — it may already have been answered.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: >-
+            The agent did not offer that option. It asked a closed question, and an answer outside
+            the offered set is refused here rather than forwarded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /workstreams/{id}/intent:
     parameters:
       - $ref: '#/components/parameters/WorkstreamId'

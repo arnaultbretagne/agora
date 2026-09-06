@@ -323,7 +323,15 @@ export function createAcpModelProjector(options: AcpRunnerOptions = {}): Project
              value = EXCLUDED.value, content_sha256 = EXCLUDED.content_sha256, latest_seq = EXCLUDED.latest_seq, updated_at = now()`,
           [item.id, workstreamId, item.sessionId, item.itemKind, item.entityKey, JSON.stringify(item.value), contentSha256, item.firstSeq, item.latestSeq],
         )
-        await persistFeed(client, workstreamId, item.latestSeq, { operation: 'upsert', itemId: item.id, payload: { ...item.value, itemKind: item.itemKind, sessionId: item.sessionId } })
+        // `entityKey` travels with the event because it is the only thing that ties a projected item
+        // back to the live interaction it describes — a permission item to the request an operator is
+        // being asked to answer. The item id cannot do it: it is derived from the entity key, not the
+        // other way round.
+        await persistFeed(client, workstreamId, item.latestSeq, {
+          operation: 'upsert',
+          itemId: item.id,
+          payload: { ...item.value, itemKind: item.itemKind, sessionId: item.sessionId, entityKey: item.entityKey },
+        })
       }
       for (const turn of state.turns.values()) {
         const before = previous.turns.get(turn.commandId)
