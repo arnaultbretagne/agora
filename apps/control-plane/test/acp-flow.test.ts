@@ -4,7 +4,7 @@ import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession } from '@agora/journal'
 import type { ObservationSource } from '@agora/engine'
 import { createControlPlaneServer, type AdmissionCheckOptions } from '../src/http.js'
-import { AgentChannels } from '../src/agent-channel.js'
+import { AgentChannels, type ChannelConnector } from '../src/agent-channel.js'
 import type { AddressInfo } from 'node:net'
 
 const OWNER = { 'x-forwarded-email': 'owner@example.com' }
@@ -15,8 +15,8 @@ interface RunningApi {
   readonly close: () => Promise<void>
 }
 
-async function startApi(db: TestDatabase, promptDelayMs = 0, admission?: AdmissionCheckOptions): Promise<RunningApi> {
-  const channels = new AgentChannels({ pool: db.pool, nowSql: db.nowSql, promptDelayMs, logger: (message) => console.error(`[channel] ${message}`) })
+async function startApi(db: TestDatabase, promptDelayMs = 0, admission?: AdmissionCheckOptions, connector?: ChannelConnector): Promise<RunningApi> {
+  const channels = new AgentChannels({ pool: db.pool, nowSql: db.nowSql, promptDelayMs, logger: (message) => console.error(`[channel] ${message}`), ...(connector ? { connector } : {}) })
   const server = createControlPlaneServer({ productPool: db.pool, enginePool: db.pool, channels, nowSql: db.nowSql, ...(admission ? { admission } : {}) })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -231,6 +231,29 @@ test('S8 Step 4: a prompt is accepted once fresh evaluation converges (admission
       assert.ok(putIntent.status === 200 || putIntent.status === 201, `PUT intent failed: ${putIntent.status} ${await putIntent.text()}`)
       const response = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'p1' }, 'POST', { text: 'x' })
       assert.equal(response.status, 202)
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S8 Step 4b/5 prerequisite: an unreachable real bridge answers 503 and marks the dispatch unknown, never stuck reserved', async () => {
+  await withTestDatabase(async (db) => {
+    const { RealChannelConnector } = await import('../src/real-channel-connector.js')
+    // No bridge token bound at all (START never ran) — RealChannelConnector refuses to connect.
+    const connector = new RealChannelConnector({ productPool: db.pool, runtimeControlBaseUrl: 'http://127.0.0.1:1', bridgePort: 8765 })
+    const api = await startApi(db, 0, { observationSource: fakeObservationSource(true), resolve: RESOLVE }, connector)
+    try {
+      const workstreamId = await createWorkstreamWithSession(db, api.port)
+      const putIntent = await request(api.port, `/v1/workstreams/${workstreamId}/intent`, { ...OWNER, 'idempotency-key': 'intent-1' }, 'PUT', onIntent())
+      assert.ok(putIntent.status === 200 || putIntent.status === 201)
+      const response = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'p1' }, 'POST', { text: 'x' })
+      assert.equal(response.status, 503)
+      const problem = (await response.json()) as { title: string }
+      assert.match(problem.title, /Harness bridge/)
+      const dispatch = await db.pool.query('SELECT state FROM command_dispatches WHERE workstream_id = $1', [workstreamId])
+      assert.equal(dispatch.rowCount, 1, 'the reservation still happened — this is a committed dispatch, not a silently dropped one')
+      assert.equal(dispatch.rows[0]!['state'], 'unknown', 'never left stuck in reserved forever')
     } finally {
       await api.close()
     }

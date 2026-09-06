@@ -1,7 +1,13 @@
-// Live ACP channels for the control plane (S4): one channel per Workstream against the local
-// development harness. The channel owns the capture seam's database client (product authority)
-// and the projector client (projector authority), sends commands whose dispatch was already
-// reserved, and records the honest delivery states — never inventing them.
+// Live ACP channels for the control plane (S4, real bridge wiring in S8): one channel per
+// Workstream. The channel owns the capture seam's database client (product authority) and the
+// projector client (projector authority), sends commands whose dispatch was already reserved, and
+// records the honest delivery states — never inventing them. The transport itself is pluggable
+// (ChannelConnector): a dev/test connector wires the in-process fake agent (S4, still the default —
+// existing tests never pass one), a real connector (real-channel-connector.ts) resumes the
+// Workstream's own ACP context over the harness Pod's real bridge. Either way, `ensure()` never
+// calls session/new against an EXISTING context — only a connector reporting no `existingContextId`
+// (the dev fake agent, which owns no prior binding) ever gets a fresh one; the real connector always
+// resumes what START already bound (never a second, real session/new).
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
@@ -13,16 +19,50 @@ import {
   markDispatched,
   markResponded,
   markUnknown,
-  type DevHarness,
+  type DuplexByteStream,
 } from '@agora/acp'
 import { createAcpModelProjector, runIncremental } from '@agora/projections'
+
+/** The fixed workspace root every harness Session uses (S8 Step 2+ — verbs/start.ts and
+ * session-probe.ts use the exact same literal; kept independently here since agent-channel.ts
+ * predates workspace-root.ts and a shared import would be the only reason to touch this otherwise
+ * stable S4 constant). */
+const WORKSPACE_ROOT = '/workspace'
+
+export interface ChannelConnection {
+  readonly stream: DuplexByteStream
+  readonly close: () => void | Promise<void>
+  /** The ACP context to `session/resume`, already bound elsewhere (S8 START) — undefined only for
+   * a connector with no prior binding of its own (the dev fake agent), which then gets a fresh
+   * `session/new` instead. Never resolved by guessing; a real connector throws rather than omit it. */
+  readonly existingContextId?: string
+}
+
+export interface ChannelConnector {
+  connect(workstreamId: string): Promise<ChannelConnection>
+}
+
+/** S4's own default: an in-process fake ACP Agent, a fresh `session/new` every time (findings §7 —
+ * `startFakeAgent` behavior is otherwise unchanged, still the implicit default for every existing
+ * caller that never passes its own `connector`). */
+export class DevChannelConnector implements ChannelConnector {
+  constructor(private readonly promptDelayMs?: number) {}
+
+  async connect(): Promise<ChannelConnection> {
+    const harness = startFakeAgent({ promptDelayMs: this.promptDelayMs })
+    return { stream: harness.clientStream, close: () => harness.close() }
+  }
+}
 
 export interface ChannelManagerOptions {
   readonly pool: pg.Pool
   readonly nowSql?: string
   readonly logger?: (message: string) => void
-  /** Test hook: delays the fake agent's reply so interleavings are observable. */
+  /** Test hook: delays the fake agent's reply so interleavings are observable. Ignored by a real connector. */
   readonly promptDelayMs?: number
+  /** Defaults to DevChannelConnector (S4 behavior, unchanged) — apps/control-plane/src/main.ts wires
+   * the real one (real-channel-connector.ts) once the owners are configured. */
+  readonly connector?: ChannelConnector
 }
 
 interface PendingPermission {
@@ -35,7 +75,7 @@ interface InnerChannel {
   readonly sessionId: string
   readonly connectionId: string
   connection: acp.ClientConnection
-  readonly harness: DevHarness
+  close: () => void | Promise<void>
   acpSessionId: string
   readonly productClient: pg.PoolClient
   projectorClient: pg.PoolClient
@@ -48,13 +88,13 @@ export class AgentChannels {
   readonly #pool: pg.Pool
   readonly #nowSql: string
   readonly #logger: (message: string) => void
-  readonly #promptDelayMs: number | undefined
+  readonly #connector: ChannelConnector
 
   constructor(options: ChannelManagerOptions) {
     this.#pool = options.pool
     this.#nowSql = options.nowSql ?? 'now()'
     this.#logger = options.logger ?? (() => {})
-    this.#promptDelayMs = options.promptDelayMs
+    this.#connector = options.connector ?? new DevChannelConnector(options.promptDelayMs)
   }
 
   pendingPermissionIds(workstreamId: string): readonly string[] {
@@ -67,6 +107,7 @@ export class AgentChannels {
     if (existing && existing.sessionId === sessionId) return existing
     if (existing) await this.close(workstreamId)
 
+    const connected = await this.#connector.connect(workstreamId)
     const connectionId = randomUUID()
     const productClient = await this.#pool.connect()
     await productClient.query('SET ROLE agora_product')
@@ -78,13 +119,12 @@ export class AgentChannels {
       commandIdFor: (direction, method) =>
         direction === 'client_to_agent' && method === 'session/prompt' ? (this.#channels.get(workstreamId)?.currentCommandId ?? null) : null,
     })
-    const harness = startFakeAgent({ promptDelayMs: this.#promptDelayMs })
     const pendingPermissions = new Map<string, PendingPermission>()
     const channel: InnerChannel = {
       workstreamId,
       sessionId,
       connectionId,
-      harness,
+      close: connected.close,
       pendingPermissions,
       productClient,
       projectorClient: null as unknown as pg.PoolClient,
@@ -94,7 +134,7 @@ export class AgentChannels {
     }
     this.#channels.set(workstreamId, channel)
 
-    const connection = buildClientConnection(harness.clientStream, persist, {
+    const connection = buildClientConnection(connected.stream, persist, {
       onPermissionRequest: async (params) => {
         const id = randomUUID()
         const decision = new Promise<{ outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }>((resolve) => {
@@ -105,8 +145,11 @@ export class AgentChannels {
       },
     })
     channel.connection = connection
-    await connection.agent.request(acp.methods.agent.initialize, initializeParams('/workspace'))
-    channel.acpSessionId = ((await connection.agent.request(acp.methods.agent.session.new, { cwd: '/workspace', mcpServers: [] })) as { sessionId: string }).sessionId
+    await connection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+    channel.acpSessionId =
+      connected.existingContextId !== undefined
+        ? await resumeExistingContext(connection, connected.existingContextId)
+        : ((await connection.agent.request(acp.methods.agent.session.new, { cwd: WORKSPACE_ROOT, mcpServers: [] })) as { sessionId: string }).sessionId
 
     const projectorClient = await this.#pool.connect()
     await projectorClient.query('SET ROLE agora_projector')
@@ -201,9 +244,9 @@ export class AgentChannels {
     if (channel === undefined) return
     this.#channels.delete(workstreamId)
     // Closing OUR client connection is what rejects the in-flight request (the SDK rejects this
-    // connection's pending responses); closing only the harness would leave the turn hanging.
+    // connection's pending responses); closing only the transport would leave the turn hanging.
     channel.connection.close()
-    channel.harness.close()
+    await channel.close()
     // A client returned to the pool must not carry its SET ROLE: the next borrower would inherit
     // a restricted role silently (the exact failure class findings §5 warns about).
     await channel.productClient.query('RESET ROLE').catch(() => {})
@@ -217,4 +260,11 @@ export class AgentChannels {
       await this.close(workstreamId)
     }
   }
+}
+
+/** `session/resume` never echoes a sessionId back (ResumeSessionResponse carries only modes/
+ * configOptions) — the id to use afterward is the one we asked to resume, confirmed live. */
+async function resumeExistingContext(connection: acp.ClientConnection, contextId: string): Promise<string> {
+  await connection.agent.request(acp.methods.agent.session.resume, { sessionId: contextId, cwd: WORKSPACE_ROOT, mcpServers: [] })
+  return contextId
 }

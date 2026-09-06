@@ -8,11 +8,12 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import { validateIntentShape, type CatalogueView, type Intent, type RuleResolution } from '@agora/domain'
 import { authorIntent, loadLatestIntentEvent, withTransaction, type ObservationSource, type RevisionSet } from '@agora/engine'
-import { DispatchConflictError, reserveDispatch, replayDispatch } from '@agora/acp'
+import { DispatchConflictError, reserveDispatch, replayDispatch, markUnknown } from '@agora/acp'
 import type { AgentChannels } from './agent-channel.js'
 import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
 import { checkAdmission } from './admission.js'
+import { NoBridgeAvailableError } from './real-channel-connector.js'
 
 export interface AdmissionCheckOptions {
   readonly observationSource: ObservationSource
@@ -76,8 +77,9 @@ async function handlePrompt(
     }
   }
 
+  let reserved: { readonly reserved: { readonly id: string }; readonly sessionId: string } | undefined
   try {
-    const reserved = await withTransaction(productPool, async (client) => {
+    reserved = await withTransaction(productPool, async (client) => {
       // Admission revalidation happens in the reservation's own transaction: the current Session
       // and the no-turn-in-flight gate commit together with `reserved`, before any send.
       const current = await client.query(
@@ -88,12 +90,12 @@ async function handlePrompt(
         throw new Error('no_current_session')
       }
       const sessionId = current.rows[0]!['id'] as string
-      const reserved = await reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text }, requestKey: key })
-      return { reserved, sessionId }
+      const dispatch = await reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text }, requestKey: key })
+      return { reserved: dispatch, sessionId }
     })
     await channels.ensure(workstreamId, reserved.sessionId)
     void channels.prompt(workstreamId, reserved.reserved.id, text).catch((error: unknown) => {
-      console.error(`prompt flow for ${reserved.reserved.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      console.error(`prompt flow for ${reserved!.reserved.id} failed: ${error instanceof Error ? error.message : String(error)}`)
     })
     return sendJson(res, 202, { commandId: reserved.reserved.id, state: 'reserved' })
   } catch (error) {
@@ -104,6 +106,16 @@ async function handlePrompt(
       const existing = await replayDispatch(productPool, workstreamId, key)
       return sendJson(res, 200, { commandId: existing!.id, state: existing!.state })
     }
+    if (error instanceof NoBridgeAvailableError) {
+      // The dispatch already committed as `reserved` above (admission was granted moments ago, so
+      // this is a genuine race, not the common case) — leaving it there forever would starve any
+      // future turn (CONT-005 shape: an ambiguous/never-sent attempt must never sit inert). Marking
+      // it `unknown` here is honest: dispatch never actually reached the harness, but the DB state
+      // still needs an owner, and `unknown` is what the rest of this codebase already uses for
+      // "not proven either way".
+      if (reserved !== undefined) await markDispatchUnknown(productPool, reserved.reserved.id)
+      return sendProblem(res, 503, 'Harness bridge unavailable', error.message)
+    }
     void nowSql
     if (error instanceof Error && error.message === 'turn_in_flight') {
       return sendProblem(res, 409, 'Turn in flight', 'at most one prompt turn may be in flight per Workstream (findings §2.4)')
@@ -112,6 +124,20 @@ async function handlePrompt(
       return sendProblem(res, 409, 'Prompt delivery unknown', 'a previous prompt may have been accepted; its recovery must resolve before a new turn (CONT-005)')
     }
     throw error
+  }
+}
+
+async function markDispatchUnknown(productPool: pg.Pool, commandId: string): Promise<void> {
+  const client = await productPool.connect()
+  try {
+    await client.query('BEGIN')
+    await markUnknown(client, commandId)
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    console.error(`marking dispatch ${commandId} unknown failed: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    client.release()
   }
 }
 

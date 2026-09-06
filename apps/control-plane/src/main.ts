@@ -12,6 +12,7 @@ import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
+import { RealChannelConnector } from './real-channel-connector.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -91,7 +92,14 @@ export async function run(options: MainOptions = {}): Promise<void> {
   }
 
   if (mode === 'api' || mode === 'both') {
-    const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
+    // The real bridge connector once owners are configured — never the S4 dev fake agent in a
+    // real deployment. Unwired (no RUNTIME_CONTROL_URL/BROKER_URL/harness catalogue/bridgePort)
+    // keeps the dev connector, matching how observation/executor stay stubs in that same mode.
+    const channels = new AgentChannels({
+      pool: productPool,
+      logger: (message) => console.log(message),
+      ...(wired ? { connector: new RealChannelConnector({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) }) } : {}),
+    })
     const server = createControlPlaneServer({
       productPool,
       enginePool,
