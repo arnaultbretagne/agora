@@ -2,11 +2,13 @@ import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/d
 
 /**
  * Fresh observation reads per tick (engine contract "Tick and acquisition"): the worker builds one
- * reader per claimed row and never carries evidence across ticks. Implementations wrap the owners
- * that actually observe external systems; S2 ships only this scripted fake.
+ * reader per claimed row and never carries evidence across ticks. `reader()` itself is async — a
+ * real implementation (S8) fetches from the owners it wraps (runtime-control, broker) before
+ * returning; the returned ObservationReader's own methods stay synchronous, a plain snapshot of
+ * what was just fetched, never triggering another read mid-evaluation.
  */
 export interface ObservationSource {
-  reader(workstreamId: string): ObservationReader
+  reader(workstreamId: string): Promise<ObservationReader>
 }
 
 export type ScriptedField = Acquired<unknown> | (() => Acquired<unknown>)
@@ -29,7 +31,7 @@ export class FakeObservationSource implements ObservationSource {
     return this.readerCalls.filter((id) => id === workstreamId).length
   }
 
-  reader(workstreamId: string): ObservationReader {
+  async reader(workstreamId: string): Promise<ObservationReader> {
     this.readerCalls.push(workstreamId)
     const read = (field: ObservationFieldName): Acquired<unknown> => {
       const entry = this.#script[field]

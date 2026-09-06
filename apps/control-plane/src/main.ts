@@ -1,17 +1,25 @@
-// Control-plane process (S2): HTTP API and reconciliation worker in one process, with a mode flag
-// to run either alone. No external system is mutated before later slices: the worker observes
-// through a source that reports every field unavailable (no invented evidence, engine contract)
-// and carries no verb executor, so rules can only schedule work, never act.
-import { createPool, requireDatabaseUrl, createScan, startTickSource, type VerbExecutor } from '@agora/engine'
+// Control-plane process (S2, wired to the real owners in S8): HTTP API and reconciliation worker
+// in one process, with a mode flag to run either alone.
+import { createPool, requireDatabaseUrl, createScan, startTickSource, OwnerVerbRunner, type VerbExecutor } from '@agora/engine'
 import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
+import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort } from './catalogue.js'
+import { HttpObservationSource } from './observation-source.js'
+import { createHttpOwnerTransport } from './owner-transport.js'
+import { createSessionOpeningExecutor } from './session-opener.js'
+import { createStartExecutor } from './verbs/start.js'
+import { createSetConfigExecutor } from './verbs/set-config.js'
+import { createVerbRouter } from './verb-router.js'
+import { RealChannelConnector } from './real-channel-connector.js'
+import type { PromptRecoveryOptions } from './recovery/context.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
+/** Before HARNESS_DEFINITIONS_PATH/POLICY_CAPABILITIES_PATH/RUNTIME_CONTROL_URL/BROKER_URL are all configured, every field is unavailable — rules can only schedule work, never act, exactly as S2 always did. */
 class UnavailableObservationSource implements ObservationSource {
-  reader(): ObservationReader {
+  async reader(): Promise<ObservationReader> {
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
     return {
       power: () => read('observation.power'),
@@ -49,18 +57,85 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const productPool = createPool(databaseUrl)
   const enginePool = createPool(databaseUrl)
 
+  const harnessDefinitionsPath = env.HARNESS_DEFINITIONS_PATH
+  const capabilitiesPath = env.POLICY_CAPABILITIES_PATH
+  const catalogue = harnessDefinitionsPath && capabilitiesPath ? loadCatalogueView(harnessDefinitionsPath, capabilitiesPath) : undefined
+  const revisionSet = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath) : undefined
+  const harnessDigests = harnessDefinitionsPath ? loadHarnessDigests(harnessDefinitionsPath) : undefined
+  const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
+  const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
+
+  // Computed once, shared by the API side's admission checklist (S8 Step 4) and the worker's own
+  // reconciliation scan — both must agree on exactly the same fresh evidence and resolve.
+  const runtimeControlBaseUrl = env.RUNTIME_CONTROL_URL
+  const brokerBaseUrl = env.BROKER_URL
+  const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined && bridgePort !== undefined
+  const observationSource: ObservationSource = wired
+    ? new HttpObservationSource({
+        pool: enginePool,
+        productPool,
+        runtimeControlBaseUrl,
+        brokerBaseUrl,
+        bridgePort,
+        harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
+        logger: (message) => console.log(message),
+      })
+    : new UnavailableObservationSource()
+  // resolve.harnessDigest is a real, static catalogue lookup — resolve.capabilityGrants stays
+  // empty: computing it needs the SAME live OneCLI resolution only apps/broker's own compile step
+  // has (packages/policy compile()), and RuleResolution.capabilityGrants is synchronous (domain's
+  // evaluate() is called without awaiting it) — an explicit, documented gap, not a guess. CAPS rule
+  // rows that need it stay unavailable until a caching bridge exists (admission never converges
+  // through them either, honestly, rather than fabricating a grant read).
+  const resolve = {
+    harnessDigest: (harness: string) => harnessDigests?.find((d) => d.harnessId === harness)?.imageDigest ?? '',
+    capabilityGrants: () => new Set<never>(),
+  }
+
   if (mode === 'api' || mode === 'both') {
-    const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
-    const server = createControlPlaneServer({ productPool, enginePool, channels })
-    await new Promise<void>((resolve) => server.listen(port, '0.0.0.0', resolve))
+    // The real bridge connector once owners are configured — never the S4 dev fake agent in a
+    // real deployment. Unwired (no RUNTIME_CONTROL_URL/BROKER_URL/harness catalogue/bridgePort)
+    // keeps the dev connector, matching how observation/executor stay stubs in that same mode.
+    const channels = new AgentChannels({
+      pool: productPool,
+      logger: (message) => console.log(message),
+      ...(wired ? { connector: new RealChannelConnector({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) }) } : {}),
+    })
+    const server = createControlPlaneServer({
+      productPool,
+      enginePool,
+      channels,
+      ...(catalogue ? { catalogue } : {}),
+      ...(revisionSet ? { revisionSet } : {}),
+      ...(wired ? { admission: { observationSource, resolve } } : {}),
+      ...(wired ? { recovery: { productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) } satisfies PromptRecoveryOptions } : {}),
+    })
+    await new Promise<void>((ready) => server.listen(port, '0.0.0.0', ready))
     console.log(`control plane API listening on :${port}`)
   }
   if (mode === 'worker' || mode === 'both') {
+    const executor: VerbExecutor = wired
+      ? createVerbRouter(
+          {
+            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+          },
+          createSessionOpeningExecutor({
+            inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+            productPool,
+            enginePool,
+            runtimeControlBaseUrl,
+            logger: (message) => console.log(message),
+          }),
+        )
+      : new NoVerbExecutor()
+
     const scan = createScan({
       pool: enginePool,
-      observationSource: new UnavailableObservationSource(),
-      executor: new NoVerbExecutor(),
-      resolve: { harnessDigest: () => '', capabilityGrants: () => new Set() },
+      observationSource,
+      executor,
+      resolve,
       logger: (message) => console.log(message),
     })
     const ticks = await startTickSource({
@@ -71,7 +146,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
       },
       pollIntervalMs,
     })
-    console.log(`reconciliation worker scanning every ${pollIntervalMs}ms`)
+    console.log(`reconciliation worker scanning every ${pollIntervalMs}ms${wired ? '' : ' (owners unwired: observation unavailable, no verb executor)'}`)
     const stop = async (): Promise<void> => {
       await ticks.stop()
       await enginePool.end()

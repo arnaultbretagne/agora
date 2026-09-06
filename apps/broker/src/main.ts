@@ -3,8 +3,9 @@
 // identity resolution) — it never creates or deletes a workload, unlike runtime-control.
 import pg from 'pg'
 import { PgOwnerGate } from '@agora/owner-requests'
-import { loadEgressHostCatalogue } from '@agora/policy'
+import { loadEgressHostCatalogue, selectRevision } from '@agora/policy'
 import { HttpOneCliClient, type OneCliClient } from './onecli/client.js'
+import { OneCliCredentialResolver } from './onecli/resolver.js'
 import { createBrokerApi } from './owner-api.js'
 import { createRelay } from './relay/server.js'
 import { HttpK8sPodLookup } from './relay/k8s-pod-lookup.js'
@@ -35,8 +36,10 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
   const privateStore = new EncryptedPrivateStore(encryptionKey)
   const egressHosts = loadEgressHostCatalogue(env.POLICY_EGRESS_HOSTS_PATH ?? '/etc/agora/egress-hosts.json')
   const podLookup = new HttpK8sPodLookup({ namespace: env.AGORA_NAMESPACE ?? 'agora-runs' })
+  const catalogue = selectRevision(env)
+  const resolver = new OneCliCredentialResolver(client)
 
-  const controlServer = createBrokerApi({ client, gate, tunnels, privateStore })
+  const controlServer = createBrokerApi({ client, gate, tunnels, privateStore, catalogue, resolver })
   controlServer.listen(Number(env.PORT ?? 8443), '0.0.0.0', () => {
     console.log(`broker control API on :${env.PORT ?? 8443}`)
   })

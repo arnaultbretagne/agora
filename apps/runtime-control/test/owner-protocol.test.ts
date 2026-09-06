@@ -91,9 +91,9 @@ test('owner-api create_pod: the PodSpec comes from the reviewed catalogue, keyed
     await insertWorkstream(db.pool, workstreamId)
     const k8s = new FakeK8sClient()
     const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
-    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001 }
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
     const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
-    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog() })
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
@@ -126,15 +126,108 @@ test('owner-api create_pod: a 409 from a crash-then-retry resolves by discoverin
     k8s.seed(name, { apiVersion: 'v1', kind: 'Pod', metadata: { name, uid: 'uid-existing' }, spec: { containers: [{ image: `sha256:${'a'.repeat(64)}` }] } })
     k8s.failNextCreateWith409()
     const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
-    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001 }
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
     const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
-    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog() })
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {
       const result = await postOwnerRequest(port, request({ workstreamId }))
       assert.equal(result.kind, 'completed')
       assert.equal((result['result'] as { podUid: string }).podUid, 'uid-existing')
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('owner-api gate_release: mints a bridge token verifiable for exactly this incarnation, only once the seam actually releases', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  const { verifyBridgeToken } = await import('@agora/acp')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [] }]
+    const seams = new Map()
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams, gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      // create_pod registers the seam for this incarnation.
+      await postOwnerRequest(port, request({ workstreamId }))
+      const release = await postOwnerRequest(
+        port,
+        request({ workstreamId, operation: 'gate_release', attemptKey: 'attempt-release', payload: { sessionId: 'session-1' } }),
+      )
+      assert.equal(release.kind, 'completed')
+      const token = (release['result'] as { bridgeToken: string }).bridgeToken
+      assert.ok(typeof token === 'string' && token.length > 0)
+      assert.deepEqual(verifyBridgeToken(token, 'inc-1', 'test-secret').ok, true)
+      assert.equal(verifyBridgeToken(token, 'inc-1', 'wrong-secret').ok, false)
+      assert.equal(verifyBridgeToken(token, 'some-other-incarnation', 'test-secret').ok, false)
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('evidence: a live restartCount catches the seam up exactly once, then stays put on a later read (SESSION-A06)', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  const { LaunchSeam } = await import('../src/launch-seam.js')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const name = 'agora-' + workstreamId.slice(0, 8) + '-inc-1'
+    k8s.seed(name, {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name, uid: 'uid-1', creationTimestamp: new Date().toISOString() },
+      spec: { containers: [{ image: `sha256:${'a'.repeat(64)}` }] },
+      status: { phase: 'Running', containerStatuses: [{ imageID: `sha256:${'a'.repeat(64)}`, restartCount: 2 }] },
+    })
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const seams = new Map([[name, new LaunchSeam('inc-1')]])
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams, gate, harnesses: [], settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const first = (await (await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/evidence`)).json()) as { processGeneration: number; seam: { processGeneration: number } | null }
+      assert.equal(first.processGeneration, 2, 'catches up to the live restartCount in one read')
+      assert.equal(first.seam?.processGeneration, 2)
+
+      const second = (await (await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/evidence`)).json()) as { processGeneration: number }
+      assert.equal(second.processGeneration, 2, 'an unchanged restartCount never advances the seam again')
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('evidence: no seam yet (read before create_pod) is generation 0, not an error', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const name = 'agora-' + workstreamId.slice(0, 8) + '-inc-1'
+    k8s.seed(name, { apiVersion: 'v1', kind: 'Pod', metadata: { name, uid: 'uid-1' }, spec: { containers: [] }, status: { phase: 'Pending' } })
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses: [], settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const evidence = (await (await fetch(`http://127.0.0.1:${port}/v1/pods/${name}/evidence`)).json()) as { processGeneration: number; seam: unknown }
+      assert.equal(evidence.processGeneration, 0)
+      assert.equal(evidence.seam, null)
     } finally {
       server.close()
     }

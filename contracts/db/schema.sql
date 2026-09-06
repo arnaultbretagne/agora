@@ -151,12 +151,33 @@ CREATE TABLE sessions (
   pod_uid text NOT NULL,
   provenance jsonb NOT NULL,
   attribution_ended_at timestamptz NULL,
-  UNIQUE (workstream_id, ordinal),
-  UNIQUE (workstream_id, pod_uid)
+  -- S8: the bound live ACP context, set once START (or RESTORE, S9) verifies the adapter's own
+  -- returned context id and binds it to the Pod's current process generation (SESSION-A06: a
+  -- process restart bumps the generation, invalidating this exact row's context without a new
+  -- Session — observation.session reads process_generation fresh from runtime-control, never
+  -- from here, and treats a mismatch as `unusable`, not absent).
+  acp_context_id text NULL,
+  process_generation int NOT NULL DEFAULT 0,
+  -- The P4 bridge token minted at gate release (apps/runtime-control's gate_release response) —
+  -- the one credential this Session's control-plane connection needs to reconnect to the bridge.
+  -- Never the OneCLI bearer (that stays Broker-private, ADR 0009) and never sent anywhere but the
+  -- bridge's own WebSocket handshake.
+  bridge_token text NULL,
+  UNIQUE (workstream_id, ordinal)
 );
 
 CREATE UNIQUE INDEX sessions_one_current_per_workstream
   ON sessions (workstream_id) WHERE attribution_ended_at IS NULL;
+
+-- S8 Step 4b: at most one CURRENT (unended) Session per (Workstream, Pod) — openSession's own
+-- idempotency guard against the same BUILD's replayed response creating two rows. Deliberately NOT
+-- a plain UNIQUE(workstream_id, pod_uid): a hot Session boundary (execution.md "Hot Session
+-- boundaries") ends one Session's attribution and opens its successor on the SAME retained Pod —
+-- a flat constraint would forbid that legitimate case outright, not just the replay it exists to
+-- catch. sessions_one_current_per_workstream above already enforces "at most one current Session,
+-- full stop" — this index narrows that same guarantee to a given Pod specifically.
+CREATE UNIQUE INDEX sessions_one_current_per_workstream_pod
+  ON sessions (workstream_id, pod_uid) WHERE attribution_ended_at IS NULL;
 
 CREATE TABLE workstream_facts (
   workstream_id uuid NOT NULL REFERENCES workstreams(id),
@@ -223,7 +244,7 @@ REVOKE ALL ON sessions, workstream_facts, projection_checkpoints, projection_ses
 -- head, open and end Sessions. Facts and Sessions are immutable once written — no UPDATE, no
 -- DELETE on workstream_facts; only the attribution boundary on sessions may be closed.
 GRANT UPDATE (head_seq) ON workstreams TO agora_product;
-GRANT SELECT, INSERT, UPDATE (attribution_ended_at) ON sessions TO agora_product;
+GRANT SELECT, INSERT, UPDATE (attribution_ended_at, acp_context_id, process_generation, bridge_token) ON sessions TO agora_product;
 GRANT SELECT, INSERT ON workstream_facts TO agora_product;
 
 -- Projector: read canonical state, own the projection tables and their checkpoints. It never

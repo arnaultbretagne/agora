@@ -7,5 +7,12 @@
   "terminationGraceSeconds": 30,
   "inventoryFreshnessMs": 5000,
   "runtimeClassName": "sandboxed",
-  "runAsUser": 10001
+  "runAsUser": 10001,
+  "bridgeAuthSecretName": "agora-bridge-auth",
+  "bridgeAuthSecretKey": "BRIDGE_AUTH_SECRET",
+  "bridgePort": 8765,
+  "ownerApiBaseUrl": "http://runtime-control.agora-system.svc.cluster.local:8090",
+  "relayHost": "broker.agora-system.svc.cluster.local",
+  "relayPort": 8444,
+  "relayCaConfigMapName": "agora-onecli-ca"
 }

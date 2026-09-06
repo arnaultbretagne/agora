@@ -25,6 +25,8 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
   const harnesses = loadHarnessDefinitions(env.HARNESS_DEFINITIONS_PATH ?? '/etc/agora/harness-definitions.json')
   const databaseUrl = env.DATABASE_URL
   if (!databaseUrl) throw new Error('DATABASE_URL is required')
+  const bridgeAuthSecret = env.BRIDGE_AUTH_SECRET
+  if (!bridgeAuthSecret) throw new Error('BRIDGE_AUTH_SECRET is required')
 
   const pool = new pg.Pool({ connectionString: databaseUrl })
   const k8s = new HttpK8sClient({ namespace: settings.namespace })
@@ -33,7 +35,7 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
   const gate = new PgOwnerGate(pool, 'runtime-control')
   const wakes = new WakeLog()
 
-  const server = createOwnerApi({ k8s, obligations, seams, gate, harnesses, settings, wakes })
+  const server = createOwnerApi({ k8s, obligations, seams, gate, harnesses, settings, wakes, bridgeAuthSecret })
   server.listen(Number(env.PORT ?? 8090), '0.0.0.0', () => {
     console.log(`runtime-control owner API on :${env.PORT ?? 8090}`)
   })

@@ -241,8 +241,17 @@ export function promptSession(workstreamId: string, text: string): Promise<{ com
   })
 }
 
-export function cancelTurn(workstreamId: string): Promise<{ cancelled: boolean }> {
-  return request(`/v1/workstreams/${workstreamId}/cancel`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
+/**
+ * A cancel names the exact turn it means to stop (S8 Step 5): by the time it arrives, that turn may
+ * already have finished, and cancelling "whatever is active" would hit the next one. `cancelled`
+ * comes back false when the named turn was no longer the active one — a safe no-op, not an error.
+ */
+export function cancelTurn(workstreamId: string, commandId: string): Promise<{ cancelled: boolean }> {
+  return request(`/v1/workstreams/${workstreamId}/cancel`, {
+    method: 'POST',
+    headers: { 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify({ commandId }),
+  })
 }
 
 export function listPendingPermissions(workstreamId: string): Promise<{ pending: readonly string[] }> {

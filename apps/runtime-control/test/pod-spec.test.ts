@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import { describeK8sError } from '../src/k8s-client.js'
 import { withTestDatabase } from '@agora/testkit'
 import { buildPodSpec, loadHarnessDefinitions, RequestSuppliesPodInputError, type HarnessDefinition, type RuntimeSettings } from '../src/k8s-pod-spec.js'
+import { podName } from '../src/k8s-labels.js'
 import { inventoryWorkstream, isStartupDeadlineExpired } from '../src/inventory.js'
 import { LaunchSeam, admittedSpecDigest } from '../src/launch-seam.js'
 
@@ -21,6 +22,13 @@ const settings: RuntimeSettings = {
   inventoryFreshnessMs: 5000,
   runtimeClassName: 'sandboxed',
   runAsUser: 10001,
+  bridgeAuthSecretName: 'agora-bridge-auth',
+  bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET',
+  bridgePort: 8765,
+  ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090',
+  relayHost: 'broker.agora-system.svc.cluster.local',
+  relayPort: 8444,
+  relayCaConfigMapName: 'agora-onecli-ca',
 }
 
 test('the PodSpec is deterministic from the reviewed definition only', () => {
@@ -36,6 +44,30 @@ test('the PodSpec is deterministic from the reviewed definition only', () => {
   assert.equal(security['runAsNonRoot'], true)
   const again = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, harness, settings)
   assert.deepEqual(again, pod)
+})
+
+test('the Pod name agrees with owner-api.ts\'s own podName(workstreamId, incarnation) even for a long incarnation (S8 regression)', () => {
+  // A real engine-chosen incarnation is typically a UUID (36 chars), well past the 10 characters
+  // this file's metadata.name computation used to slice to internally, before podName()'s own
+  // 20-char cap ran — silently diverging from owner-api.ts's unsliced discovery name and breaking
+  // "discoverable by pre-recorded correlation" (engine.md) exactly when it mattered.
+  const workstreamId = '11111111-1111-4111-8111-111111111111'
+  const longIncarnation = '550e8400-e29b-41d4-a716-446655440000'
+  const pod = buildPodSpec({ workstreamId, attemptKey: 'k1', incarnation: longIncarnation, harnessId: 'claude-code' }, harness, settings)
+  const metadata = pod['metadata'] as { name: string }
+  assert.equal(metadata.name, podName(workstreamId, longIncarnation))
+})
+
+test('the container carries the bridge wiring for S8: incarnation, evidence URL, bridge port and the secret-sourced auth key', () => {
+  const pod = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, harness, settings)
+  const spec = pod['spec'] as { containers: Array<{ env: Array<{ name: string; value?: string; valueFrom?: { secretKeyRef: { name: string; key: string } } }>; ports: Array<{ containerPort: number }> }> }
+  const container = spec.containers[0]!
+  const env = Object.fromEntries(container.env.map((e) => [e.name, e]))
+  assert.equal(env['AGORA_INCARNATION']!.value, 'inc-1')
+  assert.ok(env['AGORA_EVIDENCE_URL']!.value!.endsWith(`/v1/pods/${podName('11111111-1111-4111-8111-111111111111', 'inc-1')}/evidence`))
+  assert.equal(env['BRIDGE_PORT']!.value, String(settings.bridgePort))
+  assert.deepEqual(env['BRIDGE_AUTH_SECRET']!.valueFrom!.secretKeyRef, { name: settings.bridgeAuthSecretName, key: settings.bridgeAuthSecretKey })
+  assert.deepEqual(container.ports, [{ containerPort: settings.bridgePort, name: 'bridge' }])
 })
 
 test('no request field may name an image, argv, env or PodSpec fragment', () => {
@@ -71,6 +103,27 @@ test('an inventory that could not list completely reports complete:false and sup
     assert.equal(inventory.complete, false)
     assert.equal(inventory.pods.length, 0)
     assert.equal(inventory.obligations.length, 0, 'an incomplete listing must not invent absence (OFF-006 shape)')
+  })
+})
+
+test('inventory: podIP is the kubelet-assigned address once scheduled, null before it (Pending)', async () => {
+  await withTestDatabase(async (db) => {
+    const pods = {
+      namespace: 'agora-runs',
+      listPods: async () => ({
+        items: [
+          { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'agora-w1-inc-1', uid: 'uid-1' }, spec: { nodeName: 'node-a' }, status: { phase: 'Running', podIP: '10.244.1.7' } },
+          { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'agora-w1-inc-2', uid: 'uid-2' }, spec: {}, status: { phase: 'Pending' } },
+        ],
+      }),
+      getNode: async () => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: 'node-a' }, status: { conditions: [{ type: 'Ready', status: 'True' }] } }),
+    }
+    const store = { async obligationsFor() { return [] } }
+    const inventory = await inventoryWorkstream(pods as never, store as never, 'w1')
+    const running = inventory.pods.find((p) => p.uid === 'uid-1')
+    const pending = inventory.pods.find((p) => p.uid === 'uid-2')
+    assert.equal(running?.podIP, '10.244.1.7')
+    assert.equal(pending?.podIP, null, 'no address before the kubelet schedules and assigns one')
   })
 })
 

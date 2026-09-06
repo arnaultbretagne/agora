@@ -1,0 +1,28 @@
+# S8 — the one narrow exception to 20-default-deny-networkpolicy.yaml's ingress default: control-
+# plane's START/SET_MODEL/SET_EFFORT verbs open a WebSocket to the harness Pod's own bridge server
+# (packages/acp's connectBridge, P4-authenticated) to drive its ACP session. Matches whatever labels
+# control-plane's Deployment carries (`app: control-plane`, agora-system namespace) — not itself
+# declared here, same as broker's and runtime-control's own Deployments (contracts/k8s only carries
+# namespace/RBAC/NetworkPolicy). Port must agree with runtime-settings.json's `bridgePort`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harness-ingress-from-control-plane
+  namespace: agora-runs
+spec:
+  podSelector:
+    matchLabels:
+      agora.dev/app: runtime-controlled
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agora-system
+          podSelector:
+            matchLabels:
+              app: control-plane
+      ports:
+        - port: 8765
+          protocol: TCP

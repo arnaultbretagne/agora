@@ -30,8 +30,12 @@ export async function openSession(
     throw new JournalError('unknown_workstream', `no Workstream ${workstreamId}`)
   }
 
+  // Only the CURRENT (unended) Session for this Pod counts as "the same BUILD's replayed response"
+  // — an ENDED one sharing this podUid is a hot boundary's predecessor (execution.md "Hot Session
+  // boundaries"), never a reason to resurrect it here (sessions_one_current_per_workstream_pod
+  // enforces there is at most one unended match to find).
   const existing = await client.query(
-    'SELECT id, ordinal, cutoff_h, opened_at_seq FROM sessions WHERE workstream_id = $1 AND pod_uid = $2',
+    'SELECT id, ordinal, cutoff_h, opened_at_seq FROM sessions WHERE workstream_id = $1 AND pod_uid = $2 AND attribution_ended_at IS NULL',
     [workstreamId, command.podUid],
   )
   if (existing.rowCount !== 0) {
@@ -65,6 +69,68 @@ export async function openSession(
   )
 
   return { sessionId, ordinal, cutoffH, openedAtSeq: appended.seq }
+}
+
+export interface AcpContextBinding {
+  readonly contextId: string
+  readonly processGeneration: number
+}
+
+/**
+ * Records the Session's live ACP context (S8 START/RESTORE) — operational, not a new immutable
+ * fact: observation.session's own fresh reads (runtime-control's process generation, a live ACP
+ * probe) are what actually prove liveness on any later tick; this row is only what START bound,
+ * so a reconnect can find the same context id to verify against, never a second source of truth.
+ */
+export async function bindAcpContext(client: pg.PoolClient, sessionId: string, binding: AcpContextBinding): Promise<void> {
+  await client.query('UPDATE sessions SET acp_context_id = $1, process_generation = $2 WHERE id = $3', [binding.contextId, binding.processGeneration, sessionId])
+}
+
+/** The P4 bridge token this Session's control-plane connection uses — persisted so a later reconnect (not just the process that received gate_release's response) can still authenticate. */
+export async function recordBridgeToken(client: pg.PoolClient, sessionId: string, token: string): Promise<void> {
+  await client.query('UPDATE sessions SET bridge_token = $1 WHERE id = $2', [token, sessionId])
+}
+
+export interface CurrentSession {
+  readonly sessionId: string
+  readonly podUid: string
+  readonly acpContextId: string | null
+  readonly processGeneration: number
+  readonly bridgeToken: string | null
+}
+
+/** The one Session with no ended attribution for this Workstream, if any — the only one START/CONFIG ever act on. */
+export async function currentSession(client: pg.Pool | pg.PoolClient, workstreamId: string): Promise<CurrentSession | null> {
+  const result = await client.query(
+    'SELECT id, pod_uid, acp_context_id, process_generation, bridge_token FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL',
+    [workstreamId],
+  )
+  if (result.rowCount === 0) return null
+  const row = result.rows[0]!
+  return { sessionId: row['id'], podUid: row['pod_uid'], acpContextId: row['acp_context_id'], processGeneration: row['process_generation'], bridgeToken: row['bridge_token'] }
+}
+
+export interface OpeningWindow {
+  /** The Session's own opening cutoff (CONT-001/002: "H" in that test's own vocabulary — the fact
+   * stream head at the exact moment cutoff_h was pinned, before the session.opened fact). */
+  readonly w: number
+  /**
+   * The opening descriptor's fixed H — "H was fixed before the new Session's facts, never sampled
+   * at REFILL dispatch" (009_sync.md). Only S9's restore path ever gives a Session an H that
+   * differs from its own W (a restored Save's own preceding cutoff); every S8 Session is the
+   * cross-seed case (`W = 0`, no restore machinery exists yet), so W and H are always the same
+   * value here — not an approximation, the literal fixed descriptor for this case (CONT-002: "a
+   * fresh Workstream pins the cutoff H = 0" uses "H" for exactly this field).
+   */
+  readonly h: number
+}
+
+/** The current Session's opening range (W, H], `null` when there is no current Session — sync has nothing to report without one, never a guessed range. */
+export async function currentOpeningWindow(client: pg.Pool | pg.PoolClient, workstreamId: string): Promise<OpeningWindow | null> {
+  const result = await client.query('SELECT cutoff_h FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL', [workstreamId])
+  if (result.rowCount === 0) return null
+  const w: number = result.rows[0]!['cutoff_h']
+  return { w, h: w }
 }
 
 export interface EndedAttribution {

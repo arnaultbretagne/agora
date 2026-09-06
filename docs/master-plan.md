@@ -382,7 +382,19 @@ ACP. BUILD and TURN_OFF gain their Broker parts. `packages/observation`: `grants
 **Open before merge.** Concrete capability→grant mappings for the first capabilities, OneCLI
 inventory/idempotency capabilities, relay authentication of the incarnation (§4).
 
-### S8 — First harness integration: claude-code
+### S8 — First harness integration: claude-code (merged; one item open)
+
+**Status.** Steps 1-6 are implemented, tested and merged (pull request #46): the image builds and is
+asserted in CI, START binds exactly one context with unknown-acceptance discovery,
+observation.session/model/effort/sync are live, SET_MODEL/SET_EFFORT drive the real context, the
+admission checklist gates every prompt dispatch, prompt delivery recovery resolves an ambiguous
+dispatch against the harness's own `session/load` replay (mechanism measured, not assumed), the hot
+Session boundary's database mechanism exists, and `harnesses/conformance` runs black-box against any
+harness (10 passed / 0 failed / 2 skipped against the real adapter). **Not done:** the first
+end-to-end run named in Evidence below — it needs the current code deployed on real Kubernetes with
+real OneCLI credentials, which is a deployment decision (the cluster's running `agora-*` workloads
+are the retired implementation's, not this codebase's) rather than remaining engineering. S8 is
+therefore NOT marked done.
 
 **Goal.** A live ACP context inside a Pod, its configuration read truthfully, the first user
 prompt admitted through the full chain.
@@ -406,8 +418,24 @@ image.
 `ENGINE-018`, plus the first end-to-end run: browser → Intent → Pod → exact grants → prompt →
 streamed answer → facts and projections.
 
-**Open before merge.** Adapter evidence for `set_config_option` and actual model/effort readback
-after resume; bridge authentication material; frame size limits (§4).
+**Open before merge.** Resolved: adapter evidence for `set_config_option` and actual model/effort
+readback after resume (P3, truthful — `harnesses/claude-code/README.md`); bridge authentication
+material (P4, implemented and tested); START/CONFIG/admission and the real bridge prompt path
+(`apps/control-plane`, all tested against a real ACP agent, not mocks at the ACP-message level);
+Step 5's prompt delivery recovery, whose mechanism was measured live against the pinned adapter
+(`session/load` replays the verbatim history — see the harness README's own Step 5 section) and
+implemented in `apps/control-plane/src/recovery/context.ts`. Still genuinely open: the hot Session
+boundary's own trigger — the database mechanism exists (`packages/journal`'s `commitHotBoundary`)
+but nothing in S8's own rule tables currently invokes it (CONFIG/CAPABILITIES changes are already
+handled live without ending the Session; S9's restore path looks like the first real trigger, not
+S8's own scope); the actual end-to-end run, which needs the built image deployed on real Kubernetes
+with real OneCLI credentials (CI's `harness-image` job now builds and asserts the image, but running
+the full chain is a deployment step beyond it). The conformance suite itself exists
+(`harnesses/conformance`, black-box over any harness's ACP surface) and was run against the real
+pinned adapter: 10 passed, 0 failed, 2 skipped — the skips being the relay row (needs a Pod) and one
+real finding, that a context with no content is not listed, so START cannot discover the orphan of a
+lost `session/new` (recorded in the harness README and at the point in `verbs/start.ts` where it
+matters).
 
 ### S9 — Native continuity: Saves, Anchors, restore and refill
 

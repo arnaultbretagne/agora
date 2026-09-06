@@ -12,6 +12,12 @@ export interface ClientCallbacks {
    * first, decisions later.
    */
   onPermissionRequest?(params: unknown): Promise<{ outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }>
+  /**
+   * A `session/update` notification from the agent. Observational only — the frame is already
+   * captured and committed by the persist seam before this runs, so a callback that throws can
+   * never lose a fact. S8 Step 5's recovery reads the `session/load` replay through this.
+   */
+  onSessionUpdate?(params: unknown): void
 }
 
 export function initializeParams(cwd: string): Record<string, unknown> {
@@ -41,5 +47,11 @@ export function buildClientConnection(
     }
     return callbacks.onPermissionRequest(request.params)
   })
+  if (callbacks.onSessionUpdate !== undefined) {
+    const onSessionUpdate = callbacks.onSessionUpdate
+    app.onNotification(acp.methods.client.session.update, (notification: { params: unknown }) => {
+      onSessionUpdate(notification.params)
+    })
+  }
   return app.connect(stream)
 }

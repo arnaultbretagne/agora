@@ -16,6 +16,8 @@ export interface PodInventoryEntry {
   readonly incarnation: string | null
   readonly forcedDeletion: boolean
   readonly creationTimestamp: string | null
+  /** null before the kubelet assigns one (Pending) — the ACP bridge is unreachable until then. */
+  readonly podIP: string | null
 }
 
 export interface RetirementObligation {
@@ -84,6 +86,7 @@ async function toPodEntry(pod: K8sObject, k8s: K8sClient): Promise<PodInventoryE
   const spec = pod['spec'] as { nodeName?: string; containers?: readonly { image?: string }[] } | undefined
   const status = pod['status'] as {
     phase?: string
+    podIP?: string
     containerStatuses?: readonly { imageID?: string; state?: { terminated?: ContainerState } }[]
   } | undefined
   const node = spec?.nodeName ?? null
@@ -100,6 +103,7 @@ async function toPodEntry(pod: K8sObject, k8s: K8sClient): Promise<PodInventoryE
     incarnation: metadata?.labels?.['agora.dev/incarnation'] ?? null,
     forcedDeletion: metadata?.deletionTimestamp !== undefined,
     creationTimestamp: metadata?.creationTimestamp ?? null,
+    podIP: status?.podIP ?? null,
   }
 }
 
