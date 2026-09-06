@@ -148,3 +148,29 @@ export function grantUnion(...sets: readonly ReadonlySet<Authorization>[]): Read
   }
   return union
 }
+
+/** The wire form of one Authorization — JSON has no Set, so `tools` travels as a sorted array. */
+export interface WireAuthorization {
+  readonly kind: GrantKind
+  readonly credential: string
+  readonly tools: readonly string[] | 'full'
+  readonly approval: ApprovalRequirement
+  readonly restrictions: readonly Restriction[]
+  readonly opaque?: Readonly<Record<string, unknown>>
+}
+
+export function toWireAuthorization(authorization: Authorization): WireAuthorization {
+  return { ...authorization, tools: authorization.tools === 'full' ? 'full' : [...authorization.tools].sort() }
+}
+
+export function fromWireAuthorization(wire: WireAuthorization): Authorization {
+  return { ...wire, tools: wire.tools === 'full' ? 'full' : new Set(wire.tools) }
+}
+
+export function toWireGrantSet(grants: ReadonlySet<Authorization>): readonly WireAuthorization[] {
+  return [...grants].map(toWireAuthorization)
+}
+
+export function fromWireGrantSet(wire: readonly WireAuthorization[]): ReadonlySet<Authorization> {
+  return new Set(wire.map(fromWireAuthorization))
+}
