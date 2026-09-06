@@ -164,14 +164,50 @@ export interface CustodyTransportOptions {
   readonly newStagingId?: () => string
 }
 
+/**
+ * A standing request for the Pod's driver to prove that its live native context incorporated an
+ * opening range. Unlike a capture, this is NOT answered once: continuity.md requires *bounded
+ * current* evidence, so the Pod re-answers it on every poll and the verdict carries the time it was
+ * taken. A verdict older than the reader's own freshness bound is not evidence.
+ */
+export interface ProofRequest {
+  readonly podName: string
+  readonly contextId: string
+  readonly processGeneration: number
+  readonly w: number
+  readonly h: number
+  readonly handoffDigest: string | null
+  readonly token: string
+}
+
+export type ProofVerdict = 'incorporated' | 'not_incorporated' | 'unprovable'
+
+export interface ProofReport {
+  readonly token: string
+  readonly verdict: ProofVerdict
+  readonly reason?: string
+}
+
+interface MutableProof {
+  request: ProofRequest
+  verdict: ProofVerdict | null
+  reason: string | null
+  takenAtMs: number
+}
+
 /** A capture token: same secret, different purpose string, so a placement token can never fetch a capture and back. */
 export function mintCaptureToken(podName: string, contextId: string, processGeneration: number, secret: string): string {
   return createHmac('sha256', secret).update(`custody-capture:${podName}:${contextId}:${String(processGeneration)}`).digest('hex')
 }
 
+export function mintProofToken(podName: string, contextId: string, digest: string | null, secret: string): string {
+  return createHmac('sha256', secret).update(`custody-proof:${podName}:${contextId}:${digest ?? 'none'}`).digest('hex')
+}
+
 export class CustodyTransport {
   readonly #placements = new Map<string, MutablePlacement>()
   readonly #captures = new Map<string, MutableCapture>()
+  readonly #proofs = new Map<string, MutableProof>()
   readonly #options: CustodyTransportOptions
 
   constructor(options: CustodyTransportOptions) {
@@ -378,6 +414,59 @@ export class CustodyTransport {
   /** Forgets a capture the control plane has given up on. */
   discardCapture(podName: string): boolean {
     return this.#captures.delete(podName)
+  }
+
+  /**
+   * Stands up (or refreshes) the proof request for this Pod. Asking for a DIFFERENT descriptor
+   * replaces the standing one and discards its verdict: a verdict about another range is not
+   * weaker evidence about this one, it is evidence about something else.
+   */
+  requestProof(request: Omit<ProofRequest, 'token'>, nowMs = Date.now()): ProofRequest {
+    const existing = this.#proofs.get(request.podName)
+    if (
+      existing !== undefined &&
+      existing.request.contextId === request.contextId &&
+      existing.request.processGeneration === request.processGeneration &&
+      existing.request.handoffDigest === request.handoffDigest &&
+      existing.request.w === request.w &&
+      existing.request.h === request.h
+    ) {
+      return existing.request
+    }
+    const full: ProofRequest = { ...request, token: mintProofToken(request.podName, request.contextId, request.handoffDigest, this.#options.secret) }
+    this.#proofs.set(request.podName, { request: full, verdict: null, reason: null, takenAtMs: nowMs })
+    return full
+  }
+
+  /** What the Pod is asked to prove, published on the evidence endpoint it already polls. */
+  proofRequest(podName: string): ProofRequest | null {
+    return this.#proofs.get(podName)?.request ?? null
+  }
+
+  submitProof(podName: string, report: ProofReport, nowMs = Date.now()): 'recorded' | 'unauthorized' | 'no_request' {
+    const proof = this.#proofs.get(podName)
+    if (proof === undefined) return 'no_request'
+    if (!tokenMatches(proof.request.token, report.token)) return 'unauthorized'
+    proof.verdict = report.verdict
+    proof.reason = report.reason ?? null
+    proof.takenAtMs = nowMs
+    return 'recorded'
+  }
+
+  /**
+   * The verdict, if one was taken recently enough and about exactly this descriptor. Returns null
+   * otherwise — an absent or stale verdict is "cannot tell", never "not incorporated".
+   */
+  proofOutcome(
+    podName: string,
+    descriptor: { readonly contextId: string; readonly handoffDigest: string | null; readonly maxAgeMs: number },
+    nowMs = Date.now(),
+  ): { readonly verdict: ProofVerdict; readonly reason: string | null } | null {
+    const proof = this.#proofs.get(podName)
+    if (proof === undefined || proof.verdict === null) return null
+    if (proof.request.contextId !== descriptor.contextId || proof.request.handoffDigest !== descriptor.handoffDigest) return null
+    if (nowMs - proof.takenAtMs > descriptor.maxAgeMs) return null
+    return { verdict: proof.verdict, reason: proof.reason }
   }
 
   /**

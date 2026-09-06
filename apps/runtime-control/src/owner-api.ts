@@ -99,6 +99,47 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
         return send(res, 200, { status: options.custody.status(parts[2]!), placement: options.custody.placement(parts[2]!) })
       }
 
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'request-proof' && req.method === 'POST') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody proofs')
+        const ask = (await body(req)) as { contextId?: unknown; processGeneration?: unknown; w?: unknown; h?: unknown; handoffDigest?: unknown }
+        if (typeof ask?.contextId !== 'string' || typeof ask.processGeneration !== 'number' || typeof ask.w !== 'number' || typeof ask.h !== 'number') {
+          return problem(res, 422, 'Invalid proof request', 'context_id, process_generation, w and h are required')
+        }
+        options.custody.requestProof({
+          podName: parts[2]!,
+          contextId: ask.contextId,
+          processGeneration: ask.processGeneration,
+          w: ask.w,
+          h: ask.h,
+          handoffDigest: typeof ask.handoffDigest === 'string' ? ask.handoffDigest : null,
+        })
+        return send(res, 202, { requested: true })
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'proof' && req.method === 'POST') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody proofs')
+        const report = (await body(req)) as { token?: unknown; verdict?: unknown; reason?: unknown }
+        if (typeof report?.token !== 'string' || (report.verdict !== 'incorporated' && report.verdict !== 'not_incorporated' && report.verdict !== 'unprovable')) {
+          return problem(res, 422, 'Invalid proof report', 'token and a verdict of incorporated|not_incorporated|unprovable are required')
+        }
+        const outcome = options.custody.submitProof(parts[2]!, {
+          token: report.token,
+          verdict: report.verdict,
+          ...(typeof report.reason === 'string' ? { reason: report.reason } : {}),
+        })
+        if (outcome === 'unauthorized') return problem(res, 403, 'Forbidden', 'the proof token does not match this Pod and descriptor')
+        if (outcome === 'no_request') return problem(res, 404, 'Not found', `no proof was requested for pod ${parts[2]}`)
+        return send(res, 200, { recorded: true })
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'proof-outcome' && req.method === 'GET') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody proofs')
+        const contextId = url.searchParams.get('contextId') ?? ''
+        const digestParam = url.searchParams.get('handoffDigest')
+        const maxAgeMs = Number(url.searchParams.get('maxAgeMs') ?? '5000')
+        return send(res, 200, options.custody.proofOutcome(parts[2]!, { contextId, handoffDigest: digestParam, maxAgeMs }))
+      }
+
       if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'capture' && req.method === 'POST') {
         return handleCustodyCapture(options, req, res, parts[2]!)
       }
@@ -177,6 +218,9 @@ async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, nam
     // And, at shutdown, what the control plane is asking this Pod's own driver to capture. It
     // arrives on the same poll: nothing is pushed into a Pod that may be moments from termination.
     custodyCapture: options.custody?.captureRequest(name) ?? null,
+    // And the standing proof request, re-answered on every poll: continuity.md wants bounded
+    // CURRENT evidence, so a verdict is only worth what its age says it is.
+    custodyProof: options.custody?.proofRequest(name) ?? null,
   })
 }
 

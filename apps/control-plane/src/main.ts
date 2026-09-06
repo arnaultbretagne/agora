@@ -14,6 +14,7 @@ import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
 import { createTurnOffExecutor } from './verbs/turn-off.js'
 import { createRestoreExecutor } from './verbs/restore.js'
+import { createRefillExecutor } from './verbs/refill.js'
 import { createRuntimeControlCaptureSource } from './capture-source.js'
 import { RealChannelConnector } from './real-channel-connector.js'
 import type { PromptRecoveryOptions } from './recovery/context.js'
@@ -130,6 +131,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
             ...(restoreHarness !== undefined
               ? { RESTORE: createRestoreExecutor({ productPool, runtimeControlBaseUrl, bridgePort, harness: restoreHarness, logger: (message) => console.log(message) }) }
               : {}),
+            REFILL: createRefillExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
           },
           // TURN_OFF wraps the owner path rather than replacing it: it pins the shutdown deadline,
           // cuts authority, attempts an eligible capture inside what is left of the budget, and then

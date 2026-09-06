@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
 import { buildClientConnection, connectBridge, createPersist, initializeParams, type BridgeConnection } from '@agora/acp'
-import { bindAcpContext, currentSession } from '@agora/journal'
+import { bindAcpContext, currentSession, recordRestoreOrigin } from '@agora/journal'
 import { getAnchor, getSave, invalidate, isExcluded, type Save } from '@agora/custody'
 import { normalizeAnchor } from '@agora/observation'
 import type { Verb } from '@agora/domain'
@@ -125,6 +125,10 @@ async function runRestore(
         // The context id is the Save's own — the transcript that was just placed IS that context.
         await clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: WORKSPACE_ROOT, mcpServers: [] })
         await bindAcpContext(client, session.sessionId, { contextId: save.contextId, processGeneration: currentGeneration })
+        // The opening range's lower bound: what this Save could PROVE the context had (CONT-009).
+        // REFILL's range starts here, so recording anything more optimistic would silently skip
+        // facts the context never saw.
+        await recordRestoreOrigin(client, session.sessionId, { originW: save.frontierW, saveId: save.id })
         options.logger?.(`restored Save ${save.id} into Session ${session.sessionId} at W=${String(save.frontierW)}`)
       } finally {
         clientConnection.close()

@@ -32,9 +32,49 @@ export interface CustodyAgentOptions {
   readonly onLog?: (message: string) => void
 }
 
+/** A standing request to prove the live context incorporated an opening range (S9 Step 5). */
+export interface ProofRequest {
+  readonly contextId: string
+  readonly processGeneration: number
+  readonly w: number
+  readonly h: number
+  readonly handoffDigest: string | null
+  readonly token: string
+}
+
 interface CustodyEvidence {
   readonly custody?: PlacementOffer | null
   readonly custodyCapture?: CaptureRequest | null
+  readonly custodyProof?: ProofRequest | null
+}
+
+/**
+ * Answers a standing proof request by asking THIS harness's driver, every time it is asked.
+ * Deliberately not cached: continuity.md wants bounded current evidence, and a cached verdict is a
+ * stored receipt — exactly what CONT-006 says never becomes live proof.
+ */
+export async function answerProofRequest(
+  options: { readonly custodyUrlBase: string; readonly harnessHome: string; readonly workspaceRoot: string },
+  request: ProofRequest,
+): Promise<'incorporated' | 'not_incorporated' | 'unprovable'> {
+  const driver = new ClaudeCodeCustodyDriver({ harnessHome: options.harnessHome, workspaceRoot: options.workspaceRoot })
+  const proof = await driver.proveOpening({
+    w: request.w,
+    h: request.h,
+    contextId: request.contextId,
+    ...(request.handoffDigest !== null ? { handoffDigest: request.handoffDigest } : {}),
+  })
+  const response = await fetch(`${options.custodyUrlBase}/proof`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      token: request.token,
+      verdict: proof.kind,
+      reason: proof.kind === 'incorporated' ? undefined : proof.reason,
+    }),
+  })
+  if (!response.ok) throw new Error(`posting the proof failed: HTTP ${String(response.status)}`)
+  return proof.kind
 }
 
 /**
@@ -134,6 +174,8 @@ export function startCustodyAgent(options: CustodyAgentOptions): { stop: () => v
             await placeOfferedSave(options, offer, log)
             placed = offer.saveId
           }
+          const proof = evidence.custodyProof ?? null
+          if (proof !== null) await answerProofRequest(options, proof)
           const request = evidence.custodyCapture ?? null
           if (request !== null && request.token !== answering) {
             answering = request.token

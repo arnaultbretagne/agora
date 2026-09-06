@@ -210,3 +210,26 @@ Retain producer definitions needed for running old images and declared compatibi
 native resume requires explicit fresh-context continuation. Exact retention values, seed policy and
 driver/workspace mechanisms remain implementation prerequisites to demonstrate in
 [acceptance](acceptance.md), not guarantees supplied by this design text.
+
+### Retention, first values (P14)
+
+Chosen, not derived — recorded here so a sweep can be written against a number instead of a feeling.
+Every one of them is a floor on how long something is kept, never a promise that it is deleted the
+moment it expires.
+
+| Material | Grace period | Why this one |
+|---|---|---|
+| A Save under an Anchor | Indefinite, while the Anchor names it | It is the recovery point. Deleting it is deleting the ability to resume. |
+| A Save an Anchor no longer names | **14 days** from the moment it stopped being named | Long enough for a human to notice a bad restore and ask for the previous one; short enough that a busy Workstream does not accumulate a month of transcripts. |
+| The latest successful Save of a retained producing Session | **14 days** past that Session's own retention | Keeps "what did that Session end with" answerable for as long as the Session itself is. |
+| Payload bytes with no Save row | **1 hour** | A capture that never committed its metadata. One hour covers a controller restart mid-shutdown; beyond that it is garbage nobody can identify. |
+| A staged placement that never verified | **1 hour** past the Pod's own termination | The Pod that would have placed it is gone; the bytes are still in the store under their Save and lose nothing. |
+| An invalidated (Save, driver revision) pair | The Save's own period, unchanged | An invalidation is evidence, not a deletion trigger: a corrected driver revision may still read those bytes (`CONT-008`). |
+
+An invalidation therefore never shortens retention, and a retention sweep never deletes material an
+Anchor or an authorized in-flight restore still needs — the two rules together are what stop a
+cleanup from quietly removing the recovery point it was meant to tidy around.
+
+**Workstream deletion** extinguishes execution FIRST: Pods and Agents gone, authority revoked,
+attribution ended. Only then are Saves, payloads and Anchors removed. Deleting a payload while a Pod
+could still be restoring from it would leave that Pod holding native state nothing can account for.

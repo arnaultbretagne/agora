@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agora.dev/schemas/handoff-command.schema.json",
+  "title": "Handoff command request",
+  "description": "The durable record of the ONE opening Handoff for a Session's fixed (W, H] (continuity.md — Handoff and seed policy). It is stored as the command_dispatches.request of a `handoff` command whose request key is derived from the range, so a crash-then-retry finds this command instead of reserving a second one. Recovery reads these fields; it never re-derives the range from whatever the journal head happens to be later.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["uri", "w", "h", "policyRevision", "digest"],
+  "properties": {
+    "uri": {
+      "type": "string",
+      "pattern": "^agora://workstreams/[0-9a-fA-F-]{36}/handoffs/[0-9a-fA-F-]{36}$",
+      "description": "The descriptive URI of the embedded resource content block. A resource LINK is not acceptable: it delivers no bytes."
+    },
+    "w": { "type": "integer", "minimum": 0 },
+    "h": { "type": "integer", "minimum": 0 },
+    "policyRevision": { "type": "string", "minLength": 1, "description": "The seed policy this rendering obeyed, e.g. handoff-seed-v1. A policy change gets a new revision id; it never silently re-seeds a live context." },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the complete rendered resource — the digest a custody driver looks for as evidence of delivery." },
+    "degraded": { "type": "boolean", "description": "True when the range did not fit and the policy's overflow path was taken; requires an explicit confirmation before dispatch." }
+  }
+}

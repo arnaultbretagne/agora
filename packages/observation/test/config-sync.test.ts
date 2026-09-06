@@ -13,13 +13,13 @@ test('normalizeModel/Effort: no snapshot (not live) is undefined, never a guesse
   assert.equal(normalizeEffort(null), null)
 })
 
-test('normalizeSync: the empty opening range (W = H) is always current', () => {
-  assert.equal(normalizeSync({ w: 0, h: 0 }), 'current')
-  assert.equal(normalizeSync({ w: 5, h: 5 }), 'current')
-})
+// normalizeSync's own contract now lives in sync.test.ts (S9); these keep the two cases this file
+// has always asserted, in the shape the evidence takes today.
+const empty = { delivery: 'none', proof: 'incorporated', lineageIntact: true } as const
 
-test('normalizeSync: a non-empty range (W < H) is unavailable in S8 — S9\'s native proof isn\'t wired yet, never guessed stale', () => {
-  assert.equal(normalizeSync({ w: 0, h: 5 }), null)
+test('normalizeSync: the empty opening range (W = H) is always current', () => {
+  assert.equal(normalizeSync({ descriptor: { w: 0, h: 0 }, ...empty }), 'current')
+  assert.equal(normalizeSync({ descriptor: { w: 5, h: 5 }, ...empty }), 'current')
 })
 
 test('normalizeSync: no descriptor at all is unavailable', () => {

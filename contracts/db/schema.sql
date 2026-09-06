@@ -163,6 +163,12 @@ CREATE TABLE sessions (
   -- Never the OneCLI bearer (that stays Broker-private, ADR 0009) and never sent anywhere but the
   -- bridge's own WebSocket handshake.
   bridge_token text NULL,
+  -- S9: the opening range's LOWER bound. 0 is the cross-seed (nothing was carried in); a restored
+  -- Save gives the frontier that Save could actually prove (CONT-009), never the journal head and
+  -- never the Save's own optimistic idea of what it contained. Together with cutoff_h it fixes the
+  -- opening range (W, H] once, at birth or at restore — never re-sampled at REFILL dispatch.
+  origin_w bigint NOT NULL DEFAULT 0,
+  origin_save_id uuid NULL,
   UNIQUE (workstream_id, ordinal)
 );
 
@@ -244,7 +250,7 @@ REVOKE ALL ON sessions, workstream_facts, projection_checkpoints, projection_ses
 -- head, open and end Sessions. Facts and Sessions are immutable once written — no UPDATE, no
 -- DELETE on workstream_facts; only the attribution boundary on sessions may be closed.
 GRANT UPDATE (head_seq) ON workstreams TO agora_product;
-GRANT SELECT, INSERT, UPDATE (attribution_ended_at, acp_context_id, process_generation, bridge_token) ON sessions TO agora_product;
+GRANT SELECT, INSERT, UPDATE (attribution_ended_at, acp_context_id, process_generation, bridge_token, origin_w, origin_save_id) ON sessions TO agora_product;
 GRANT SELECT, INSERT ON workstream_facts TO agora_product;
 
 -- Projector: read canonical state, own the projection tables and their checkpoints. It never
