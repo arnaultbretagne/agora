@@ -82,6 +82,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ? createSessionOpeningExecutor({
           inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
           productPool,
+          enginePool,
           runtimeControlBaseUrl,
           logger: (message) => console.log(message),
         })

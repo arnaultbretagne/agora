@@ -19,7 +19,8 @@ export function createHttpOwnerTransport(options: HttpOwnerTransportOptions): Ve
   }
 }
 
-async function sendOwnerRequest(baseUrl: string, request: OwnerRequest): Promise<OwnerResponse> {
+/** Exported for callers outside the routed transport (session-opener's own gate_release dispatch: not a tracked verb, just this one owner). */
+export async function sendOwnerRequest(baseUrl: string, request: OwnerRequest): Promise<OwnerResponse> {
   try {
     const res = await fetch(`${baseUrl}/v1/owner-requests`, {
       method: 'POST',

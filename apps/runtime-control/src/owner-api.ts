@@ -94,7 +94,9 @@ async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, nam
     uid: metadata?.uid ?? null,
     imageId: status?.containerStatuses?.[0]?.imageID ?? null,
     admittedDigest: spec?.containers?.[0]?.image ?? null,
-    processGeneration: 0,
+    // The seam is the one place a process restart is actually observed (LaunchSeam.processRestart) —
+    // a Pod with no seam yet (evidence read before create_pod's ensureSeam) is generation 0, not unknown.
+    processGeneration: options.seams.get(name)?.state().processGeneration ?? 0,
     startupDeadlineExpired: isStartupDeadlineExpired(metadata?.creationTimestamp ?? null, status?.phase ?? 'Unknown', new Date().toISOString(), options.settings.startupDeadlineSeconds),
     seam: options.seams.get(name)?.state() ?? null,
   })
