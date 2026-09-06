@@ -1,9 +1,22 @@
 # S8 — everything at build time (ADR 0006: complete harness images, nothing installed at startup).
 # Digests are pinned by the CI build step that publishes this image; this Dockerfile itself pins
 # versions, not digests, since a Dockerfile FROM line cannot self-reference its own build output.
-FROM node:22-bookworm-slim AS build
+#
+# Build context is the REPOSITORY ROOT, not this directory — npm workspaces hoists every
+# workspace's dependencies into one root node_modules and symlinks @agora/* packages to their
+# source directories (node_modules/@agora/acp -> ../../packages/acp); a harness-directory-only
+# context could never resolve those symlinks. `docker build -f harnesses/claude-code/image/Dockerfile .`
+# from the repo root (see .dockerignore for what that context excludes: .git, existing node_modules/
+# dist since this stage rebuilds both fresh, docs, coverage).
+FROM node:22-bookworm-slim AS workspace
 
-WORKDIR /build
+WORKDIR /workspace
+COPY . .
+RUN npm ci && npm run build --workspaces --if-present && npm prune --omit=dev
+
+FROM node:22-bookworm-slim AS adapter
+
+WORKDIR /adapter
 # Pinned exact versions — bumping either is a reviewed change, never a floating range.
 RUN npm install --global \
     @anthropic-ai/claude-code@2.1.261 \
@@ -22,16 +35,17 @@ FROM node:22-bookworm-slim
 RUN groupadd --gid 10001 harness \
     && useradd --uid 10001 --gid harness --no-create-home --shell /usr/sbin/nologin harness
 
-COPY --from=build /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=build /usr/local/bin/claude /usr/local/bin/claude
+COPY --from=adapter /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=adapter /usr/local/bin/claude /usr/local/bin/claude
 RUN ln -s /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js /usr/local/bin/claude-agent-acp \
     && chmod +x /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
 
-WORKDIR /app
-COPY dist/ ./dist/
-COPY package.json ./
-# node_modules of THIS package (ws, @agora/acp) — installed at image build, never at Pod startup.
-COPY node_modules/ ./node_modules/
+# The whole built workspace, not just this one package's dist — its node_modules/@agora/* symlinks
+# only resolve with packages/apps/harnesses actually present at the matching relative paths.
+# TODO(S11 hardening): prune this to exactly this harness's dependency closure; correctness first.
+WORKDIR /workspace
+COPY --from=workspace /workspace /workspace
+WORKDIR /workspace/harnesses/claude-code
 
 USER harness:harness
 ENTRYPOINT ["node", "dist/src/launch.js"]

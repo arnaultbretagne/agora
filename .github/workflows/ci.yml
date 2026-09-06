@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  harness-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Build harnesses/claude-code''s image (S8 Step 1 acceptance: image builds in CI)'
+        run: docker build -f harnesses/claude-code/image/Dockerfile -t agora-harness-claude-code:ci .
+      - name: The pinned CLI and adapter both report their own version (field-findings §2.2)
+        run: |
+          docker run --rm --entrypoint claude agora-harness-claude-code:ci --version
+          docker run --rm --entrypoint node agora-harness-claude-code:ci \
+            /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --cli --version
+      - name: Runs as a non-root numeric UID (S6 field-findings §4)
+        run: |
+          uid=$(docker run --rm --entrypoint id agora-harness-claude-code:ci -u)
+          test "$uid" = "10001"
+
   verify:
     runs-on: ubuntu-latest
     services:
