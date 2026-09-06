@@ -8,6 +8,14 @@
 // nothing can reach it inbound — which is exactly when a capture is asked for.
 import { ClaudeCodeCustodyDriver, CustodyRefusedError } from './driver.js'
 
+/** The offer runtime-control publishes when a Save is waiting to be placed for this Pod. */
+export interface PlacementOffer {
+  readonly saveId: string
+  readonly checksum: string
+  readonly byteLength: number
+  readonly token: string
+}
+
 export interface CaptureRequest {
   readonly contextId: string
   readonly processGeneration: number
@@ -25,7 +33,37 @@ export interface CustodyAgentOptions {
 }
 
 interface CustodyEvidence {
+  readonly custody?: PlacementOffer | null
   readonly custodyCapture?: CaptureRequest | null
+}
+
+/**
+ * Fetches an offered Save and places it with this harness's driver, then reports what actually
+ * landed on disk. Shared by the launch seam (a restore staged before the gate opens) and by the
+ * custody agent (a restore staged by RESTORE after the Pod is already running) — one placement
+ * path, so the two can never drift into placing things differently.
+ */
+export async function placeOfferedSave(
+  options: { readonly custodyUrlBase: string; readonly harnessHome: string; readonly workspaceRoot: string },
+  offer: PlacementOffer,
+  log: (message: string) => void,
+): Promise<void> {
+  const payload = await fetch(`${options.custodyUrlBase}/payload?token=${encodeURIComponent(offer.token)}`)
+  if (!payload.ok) throw new Error(`fetching Save ${offer.saveId} failed: HTTP ${String(payload.status)}`)
+  const bytes = new Uint8Array(await payload.arrayBuffer())
+
+  const driver = new ClaudeCodeCustodyDriver({ harnessHome: options.harnessHome, workspaceRoot: options.workspaceRoot })
+  const placement = await driver.restore(bytes)
+  log(`placed Save ${offer.saveId} at ${placement.path} (${String(placement.byteLength)} bytes)`)
+
+  // The report carries what the driver measured on disk, not what the offer claimed: runtime-control
+  // compares it against the Save metadata, and that comparison is what authorises the resume.
+  const report = await fetch(`${options.custodyUrlBase}/placement`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: offer.token, checksum: placement.checksum, byteLength: placement.byteLength, path: placement.path }),
+  })
+  if (!report.ok) throw new Error(`placement report for Save ${offer.saveId} was refused: HTTP ${String(report.status)}`)
 }
 
 /**
@@ -80,6 +118,7 @@ export function startCustodyAgent(options: CustodyAgentOptions): { stop: () => v
   const pollIntervalMs = options.pollIntervalMs ?? 1000
   let stopped = false
   let answering: string | null = null
+  let placed: string | null = null
 
   void (async () => {
     while (!stopped) {
@@ -87,6 +126,14 @@ export function startCustodyAgent(options: CustodyAgentOptions): { stop: () => v
         const response = await fetch(options.evidenceUrl)
         if (response.ok) {
           const evidence = (await response.json()) as CustodyEvidence
+          // A RESTORE staged after this Pod launched: the seam is long since open, so this loop is
+          // the only thing that will place it. The adapter reads the transcript at `session/resume`,
+          // not at launch, so placing it now is exactly as good as placing it before the gate.
+          const offer = evidence.custody ?? null
+          if (offer !== null && offer.saveId !== placed) {
+            await placeOfferedSave(options, offer, log)
+            placed = offer.saveId
+          }
           const request = evidence.custodyCapture ?? null
           if (request !== null && request.token !== answering) {
             answering = request.token

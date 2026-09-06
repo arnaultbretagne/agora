@@ -77,6 +77,28 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
         return handleCustodyPlacement(options, res, parts[2]!, (await body(req)) as PlacementReport)
       }
 
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'stage' && req.method === 'POST') {
+        // RESTORE asks for a placement. It passes the Save's OWN checksum and byte length, read
+        // under the metadata role it holds and this transport does not — which is what makes the
+        // later verification a comparison between two independent sources rather than an echo.
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody placements')
+        const ask = (await body(req)) as { saveId?: unknown; checksum?: unknown; byteLength?: unknown }
+        if (typeof ask?.saveId !== 'string' || typeof ask.checksum !== 'string' || typeof ask.byteLength !== 'number') {
+          return problem(res, 422, 'Invalid stage request', 'save_id, checksum and byte_length are required')
+        }
+        try {
+          options.custody.stage({ podName: parts[2]!, saveId: ask.saveId, checksum: ask.checksum, byteLength: ask.byteLength })
+        } catch (error) {
+          return problem(res, 409, 'Placement conflict', error instanceof Error ? error.message : String(error))
+        }
+        return send(res, 202, { staged: true })
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'placement-status' && req.method === 'GET') {
+        if (options.custody === undefined) return problem(res, 404, 'Not found', 'this runtime-control serves no custody placements')
+        return send(res, 200, { status: options.custody.status(parts[2]!), placement: options.custody.placement(parts[2]!) })
+      }
+
       if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 5 && parts[3] === 'custody' && parts[4] === 'capture' && req.method === 'POST') {
         return handleCustodyCapture(options, req, res, parts[2]!)
       }

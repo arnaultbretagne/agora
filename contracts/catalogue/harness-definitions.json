@@ -9,6 +9,11 @@
       "launchCommand": ["node", "dist/src/launch.js"],
       "harnessHome": "/home/agent",
       "workspaceRoot": "/home/agent/work",
+      "custody": {
+        "supportedFormats": [{ "formatId": "claude-code-transcript", "formatVersion": 1 }],
+        "acceptedDriverRevisions": ["claude-code-transcript-1"],
+        "workspaceDeps": {}
+      },
       "mounts": [
         { "name": "relay-ca", "mountPath": "/etc/agora/relay-ca", "readOnly": true },
         { "name": "harness-home", "mountPath": "/home/agent", "readOnly": false }

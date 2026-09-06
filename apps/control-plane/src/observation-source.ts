@@ -21,9 +21,12 @@ import {
   type BrokerFootprint,
   type PodObservation,
   type AcpConnectionEvidence,
+  normalizeAnchor,
+  type AnchorEvidence,
 } from '@agora/observation'
 import { fromWireGrantSet } from '@agora/domain'
 import { currentSession, currentOpeningWindow, type CurrentSession } from '@agora/journal'
+import { getAnchor, getSave, isExcluded } from '@agora/custody'
 import { probeSession, type SessionProbeOptions } from './session-probe.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
@@ -61,6 +64,12 @@ export interface HttpObservationSourceOptions {
   readonly bridgePort: number
   /** {harnessId: imageDigest} — the reviewed digest mapping construction checks admitted/running images against. */
   readonly harnessCatalogue: readonly { readonly imageDigest: string }[]
+  /**
+   * The deployed harness a Save would have to be restored into (S9 Step 4). Absent, observation.anchor
+   * stays unavailable — which is right, not conservative: without knowing which formats and driver
+   * revisions the target actually accepts, "compatible" would be a guess and "none" would be a lie.
+   */
+  readonly restoreHarness?: AnchorEvidence['harness']
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
@@ -71,11 +80,12 @@ export class HttpObservationSource implements ObservationSource {
 
   async reader(workstreamId: string): Promise<ObservationReader> {
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
-    const [k8sInventory, brokerInventory, session, openingWindow] = await Promise.all([
+    const [k8sInventory, brokerInventory, session, openingWindow, anchorEvidence] = await Promise.all([
       this.fetchK8sInventory(workstreamId),
       incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined),
       currentSession(this.options.productPool, workstreamId),
       currentOpeningWindow(this.options.productPool, workstreamId),
+      this.fetchAnchorEvidence(workstreamId),
     ])
 
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
@@ -134,7 +144,9 @@ export class HttpObservationSource implements ObservationSource {
         return { ok: true, value: normalizeConstructionWithBinding(pods) }
       },
       session: () => (sessionValue === null ? UNAVAILABLE : { ok: true, value: sessionValue }),
-      anchor: () => read('observation.anchor'),
+      // A fresh read every tick, never a cached verdict: an invalidation recorded a second ago has
+      // to be able to turn `compatible` into `none` before the next RESTORE is selected.
+      anchor: () => (anchorEvidence === null ? UNAVAILABLE : { ok: true, value: normalizeAnchor(anchorEvidence) }),
       sync: () => {
         const value = normalizeSync(openingWindow)
         return value === null ? UNAVAILABLE : { ok: true, value }
@@ -150,6 +162,21 @@ export class HttpObservationSource implements ObservationSource {
       grantsAttached: () => normalizeGrantsAttached(brokerInventory === undefined ? undefined : { attached: fromWireGrantSet(brokerInventory.attached as never) }),
       grantsEffective: () => normalizeGrantsEffective(brokerInventory === undefined ? undefined : { effective: fromWireGrantSet(brokerInventory.effective as never) }),
     }
+  }
+
+  /**
+   * The Anchor, its Save's non-opaque metadata and whether a verified invalidation excludes the
+   * pair — all read fresh. Returns null when there is no harness definition to judge against, which
+   * leaves the field unavailable rather than inventing a verdict.
+   */
+  private async fetchAnchorEvidence(workstreamId: string): Promise<AnchorEvidence | null> {
+    const harness = this.options.restoreHarness
+    if (harness === undefined || harness === null) return null
+    const anchor = await getAnchor(this.options.productPool, workstreamId, harness.harnessId)
+    if (anchor === null) return { save: null, harness, invalidated: false }
+    const save = await getSave(this.options.productPool, anchor.saveId)
+    if (save === null) return { save: null, harness, invalidated: false }
+    return { save, harness, invalidated: await isExcluded(this.options.productPool, save.id, save.driverRevision) }
   }
 
   private async fetchK8sInventory(workstreamId: string): Promise<WorkstreamInventory | undefined> {

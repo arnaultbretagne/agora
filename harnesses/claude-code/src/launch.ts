@@ -5,8 +5,7 @@
 // in the gate_release owner-response, never here: this process only needs to know the gate opened.
 import { spawn } from 'node:child_process'
 import { adapterProcessFrom, startBridgeServer, type BridgeServer } from './bridge-server.js'
-import { ClaudeCodeCustodyDriver } from './driver.js'
-import { startCustodyAgent } from './custody-agent.js'
+import { placeOfferedSave, startCustodyAgent, type PlacementOffer } from './custody-agent.js'
 
 export interface LaunchOptions {
   readonly evidenceUrl: string
@@ -20,14 +19,6 @@ export interface LaunchOptions {
   /** The Pod's own UID from the downward API — half of a Save's capture key, so never self-asserted. */
   readonly podUid?: string
   readonly onLog?: (message: string) => void
-}
-
-/** The custody offer runtime-control publishes on the evidence endpoint while the Pod waits (S9). */
-interface PlacementOffer {
-  readonly saveId: string
-  readonly checksum: string
-  readonly byteLength: number
-  readonly token: string
 }
 
 interface SeamEvidence {
@@ -62,7 +53,7 @@ export async function waitForGateRelease(options: Pick<LaunchOptions, 'evidenceU
             // it had. Say so on every poll rather than failing silently.
             log(`a Save is offered for this Pod but no custody paths were configured; the gate stays shut`)
           } else {
-            await placeSave(options.custody, offer, log)
+            await placeOfferedSave({ custodyUrlBase: options.custody.placementUrlBase, harnessHome: options.custody.harnessHome, workspaceRoot: options.custody.workspaceRoot }, offer, log)
             placed = offer.saveId
           }
         }
@@ -73,29 +64,6 @@ export async function waitForGateRelease(options: Pick<LaunchOptions, 'evidenceU
     }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
   }
-}
-
-async function placeSave(
-  custody: NonNullable<LaunchOptions['custody']>,
-  offer: PlacementOffer,
-  log: (message: string) => void,
-): Promise<void> {
-  const payload = await fetch(`${custody.placementUrlBase}/payload?token=${encodeURIComponent(offer.token)}`)
-  if (!payload.ok) throw new Error(`fetching Save ${offer.saveId} failed: HTTP ${String(payload.status)}`)
-  const bytes = new Uint8Array(await payload.arrayBuffer())
-
-  const driver = new ClaudeCodeCustodyDriver({ harnessHome: custody.harnessHome, workspaceRoot: custody.workspaceRoot })
-  const placement = await driver.restore(bytes)
-  log(`placed Save ${offer.saveId} at ${placement.path} (${String(placement.byteLength)} bytes)`)
-
-  // The report carries what the driver measured on disk, not what the offer claimed: runtime-control
-  // compares it against the Save metadata, and that comparison is what opens the gate.
-  const report = await fetch(`${custody.placementUrlBase}/placement`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token: offer.token, checksum: placement.checksum, byteLength: placement.byteLength, path: placement.path }),
-  })
-  if (!report.ok) throw new Error(`placement report for Save ${offer.saveId} was refused: HTTP ${String(report.status)}`)
 }
 
 export async function launch(options: LaunchOptions): Promise<BridgeServer> {

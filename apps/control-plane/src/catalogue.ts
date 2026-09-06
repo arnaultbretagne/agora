@@ -20,7 +20,36 @@ interface HarnessDefinitionsFile {
     readonly harnessId: string
     readonly imageDigest: string
     readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
+    readonly custody?: {
+      readonly supportedFormats: readonly { readonly formatId: string; readonly formatVersion: number }[]
+      readonly acceptedDriverRevisions: readonly string[]
+      readonly workspaceDeps?: Readonly<Record<string, string>>
+    }
   }[]
+}
+
+/** What a Save must be compatible with to be restorable into this harness (S9 Step 4). */
+export interface RestoreHarness {
+  readonly harnessId: string
+  readonly supportedFormats: readonly { readonly formatId: string; readonly formatVersion: number }[]
+  readonly acceptedDriverRevisions: readonly string[]
+  readonly workspaceDeps?: Readonly<Record<string, string>>
+}
+
+/**
+ * The custody half of the reviewed harness definition. A harness that declares none simply has no
+ * restorable Saves: observation.anchor stays unavailable for it rather than defaulting to something.
+ */
+export function loadRestoreHarness(harnessDefinitionsPath: string, harnessId: string): RestoreHarness | undefined {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  const harness = harnessFile.harnesses.find((h) => h.harnessId === harnessId)
+  if (harness?.custody === undefined) return undefined
+  return {
+    harnessId: harness.harnessId,
+    supportedFormats: harness.custody.supportedFormats,
+    acceptedDriverRevisions: harness.custody.acceptedDriverRevisions,
+    ...(harness.custody.workspaceDeps !== undefined ? { workspaceDeps: harness.custody.workspaceDeps } : {}),
+  }
 }
 
 export interface HarnessDigest {

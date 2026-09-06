@@ -5,7 +5,7 @@ import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
-import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort } from './catalogue.js'
+import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort, loadRestoreHarness } from './catalogue.js'
 import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
@@ -13,6 +13,7 @@ import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
 import { createTurnOffExecutor } from './verbs/turn-off.js'
+import { createRestoreExecutor } from './verbs/restore.js'
 import { createRuntimeControlCaptureSource } from './capture-source.js'
 import { RealChannelConnector } from './real-channel-connector.js'
 import type { PromptRecoveryOptions } from './recovery/context.js'
@@ -64,6 +65,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const catalogue = harnessDefinitionsPath && capabilitiesPath ? loadCatalogueView(harnessDefinitionsPath, capabilitiesPath) : undefined
   const revisionSet = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath) : undefined
   const harnessDigests = harnessDefinitionsPath ? loadHarnessDigests(harnessDefinitionsPath) : undefined
+  // One harness in the reviewed catalogue today (S8/S9); per-harness Anchors are already the schema's
+  // shape, and CONT-007 exercises the multi-harness case in S10.
+  const restoreHarness = harnessDefinitionsPath ? loadRestoreHarness(harnessDefinitionsPath, 'claude-code') : undefined
   const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
   const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
 
@@ -80,6 +84,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
         brokerBaseUrl,
         bridgePort,
         harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
+        ...(restoreHarness !== undefined ? { restoreHarness } : {}),
         logger: (message) => console.log(message),
       })
     : new UnavailableObservationSource()
@@ -122,6 +127,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
             START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
             SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
             SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+            ...(restoreHarness !== undefined
+              ? { RESTORE: createRestoreExecutor({ productPool, runtimeControlBaseUrl, bridgePort, harness: restoreHarness, logger: (message) => console.log(message) }) }
+              : {}),
           },
           // TURN_OFF wraps the owner path rather than replacing it: it pins the shutdown deadline,
           // cuts authority, attempts an eligible capture inside what is left of the budget, and then
@@ -137,6 +145,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
             productPool,
             enginePool,
             capture: createRuntimeControlCaptureSource({ runtimeControlBaseUrl, logger: (message) => console.log(message) }),
+            harnessId: restoreHarness?.harnessId ?? 'claude-code',
             logger: (message) => console.log(message),
           }),
         )
