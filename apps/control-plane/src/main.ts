@@ -76,8 +76,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const observationSource: ObservationSource = wired
       ? new HttpObservationSource({
           pool: enginePool,
+          productPool,
           runtimeControlBaseUrl,
           brokerBaseUrl,
+          bridgePort,
           harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
           logger: (message) => console.log(message),
         })

@@ -16,9 +16,9 @@ import { buildClientConnection, connectBridge, createPersist, initializeParams, 
 import { bindAcpContext, currentSession } from '@agora/journal'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
+import { WORKSPACE_ROOT } from '../workspace-root.js'
 
-/** The one fixed workspace root every harness Session uses (S8 Step 2/6 — no per-Session cwd yet). */
-export const WORKSPACE_ROOT = '/workspace'
+export { WORKSPACE_ROOT }
 
 export interface StartExecutorOptions {
   readonly productPool: pg.Pool

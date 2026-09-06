@@ -5,7 +5,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import pg from 'pg'
+import * as acp from '@agentclientprotocol/sdk'
 import { toWireGrantSet, type Authorization } from '@agora/domain'
+import { openSession, recordBridgeToken, bindAcpContext } from '@agora/journal'
+import type { DuplexByteStream } from '@agora/acp'
 import { HttpObservationSource } from '../src/observation-source.js'
 
 const SCHEMA_PATH = fileURLToPath(new URL('../../../../contracts/db/schema.sql', import.meta.url))
@@ -79,7 +82,7 @@ test('power: a Pod footprint alone reports on, even when the broker owner has no
     )
     const broker = await startJsonServer(() => undefined) // broker unreachable for this incarnation
     try {
-      const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
       const reader = await source.reader(workstreamId)
       assert.deepEqual(reader.power(), { ok: true, value: 'on' })
     } finally {
@@ -96,7 +99,7 @@ test('power: off requires both a complete empty Kubernetes listing and a read br
     const runtimeControl = await startJsonServer((path) => (path.startsWith('/v1/workstreams/') ? { pods: [], obligations: [], complete: true } : undefined))
     const broker = await startJsonServer(() => undefined)
     try {
-      const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
       const reader = await source.reader(workstreamId)
       // No prior BUILD attempt on record: currentIncarnation is undefined, so there is no broker
       // read to even attempt — the broker side of the footprint is vacuously "nothing", and with
@@ -113,7 +116,7 @@ test('power: an unreachable runtime-control makes power unavailable, never a gue
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
     await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
-    const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
     const reader = await source.reader(workstreamId)
     assert.deepEqual(reader.power(), { ok: false, reason: 'unavailable' })
   })
@@ -130,7 +133,7 @@ test('construction: a coherent Pod with a matching bound Agent contributes its d
     )
     const broker = await startJsonServer((path) => (path.startsWith('/v1/incarnations/') ? { agentId: 'a1', attached: [], effective: [] } : undefined))
     try {
-      const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [{ imageDigest: 'sha256:abc' }] })
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [{ imageDigest: 'sha256:abc' }] })
       const reader = await source.reader(workstreamId)
       const construction = reader.construction()
       assert.equal(construction.ok, true)
@@ -151,7 +154,7 @@ test('grantsAttached/Effective: reports the broker\'s own wire-format sets for t
     const wire = toWireGrantSet(new Set(desired))
     const broker = await startJsonServer((path) => (path.startsWith('/v1/incarnations/') ? { agentId: 'a1', attached: wire, effective: wire } : undefined))
     try {
-      const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
       const reader = await source.reader(workstreamId)
       const attached = reader.grantsAttached()
       assert.equal(attached.ok, true)
@@ -163,14 +166,173 @@ test('grantsAttached/Effective: reports the broker\'s own wire-format sets for t
   })
 })
 
-test('session/model/effort/anchor/sync stay unavailable — not yet produced by this slice, never invented', async () => {
+test('model/effort/anchor/sync stay unavailable — not yet produced by this slice, never invented', async () => {
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
     await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
-    const source = new HttpObservationSource({ pool, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
     const reader = await source.reader(workstreamId)
-    for (const field of [reader.session(), reader.model(), reader.effort(), reader.anchor(), reader.sync()]) {
+    for (const field of [reader.model(), reader.effort(), reader.anchor(), reader.sync()]) {
       assert.deepEqual(field, { ok: false, reason: 'unavailable' })
+    }
+  })
+})
+
+// observation.session is real, S8 Step 2 wiring — see the dedicated tests below (not a placeholder
+// like model/effort/anchor/sync above, even though "no Pod at all" also happens to read unavailable).
+test('session: no Pod at all reads unavailable (inapplicable, never inferred)', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const reader = await source.reader(workstreamId)
+    assert.deepEqual(reader.session(), { ok: false, reason: 'unavailable' })
+  })
+})
+
+test('session: a Running Pod with no bound context yet reads openable from Pod evidence alone', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await insertOwnerAttempt(pool, workstreamId, 'inc-1')
+    const runtimeControl = await startJsonServer((path) =>
+      path.startsWith('/v1/workstreams/') ? { pods: [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }], obligations: [], complete: true } : undefined,
+    )
+    const broker = await startJsonServer(() => undefined)
+    try {
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'openable' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+interface RuntimeControlWithEvidence {
+  readonly server: Server
+  readonly url: string
+}
+
+/** Same shape as startJsonServer's stub, plus the per-Pod evidence endpoint session()'s freshness
+ * check depends on (processGeneration) — kept separate since only the session tests below need it. */
+function startRuntimeControlWithEvidence(pods: readonly unknown[], processGeneration: number): Promise<RuntimeControlWithEvidence> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const url = req.url ?? ''
+      if (url.startsWith('/v1/workstreams/')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ pods, obligations: [], complete: true }))
+        return
+      }
+      if (url.endsWith('/evidence')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ processGeneration }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      resolve({ server, url: `http://127.0.0.1:${port}` })
+    })
+  })
+}
+
+/** A real ACP agent (the pinned SDK) over an in-process duplex — proves session-probe.ts's own
+ * ACP-level logic for real, the same reasoning as verbs/start.test.ts's identical helper (ADR 0001
+ * keeps this duplicated rather than shared with harnesses/claude-code's bridge-server tests). */
+function fakeAcpAgent(configOptions: readonly { id: string; currentValue: string }[] = []): { readonly clientStream: DuplexByteStream; readonly close: () => void } {
+  const aToB = new TransformStream<Uint8Array, Uint8Array>()
+  const bToA = new TransformStream<Uint8Array, Uint8Array>()
+  const clientStream: DuplexByteStream = { writable: aToB.writable, readable: bToA.readable }
+  const agentStream: DuplexByteStream = { writable: bToA.writable, readable: aToB.readable }
+  const agentApp = acp.agent({ name: 'test-fake-agent' })
+  agentApp.onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: false } }))
+  agentApp.onRequest(acp.methods.agent.session.resume, () => ({ configOptions: configOptions.map((o) => ({ ...o, type: 'select', name: o.id, options: [] })) }))
+  const agentConnection = agentApp.connect(acp.ndJsonStream(agentStream.writable, agentStream.readable))
+  return { clientStream, close: () => agentConnection.close?.() }
+}
+
+async function seedLiveSession(pool: pg.Pool, workstreamId: string, acpContextId: string, processGeneration: number): Promise<void> {
+  await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const opened = await openSession(client, workstreamId, { podUid: 'pod-a', provenance: {} })
+    await client.query('COMMIT')
+    await client.query('BEGIN')
+    await recordBridgeToken(client, opened.sessionId, 'bridge-token-1')
+    await client.query('COMMIT')
+    await client.query('BEGIN')
+    await bindAcpContext(client, opened.sessionId, { contextId: acpContextId, processGeneration })
+    await client.query('COMMIT')
+  } finally {
+    client.release()
+  }
+}
+
+test('session: a bound context at the current generation, verified by a fresh resume, reads live', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+    )
+    const broker = await startJsonServer(() => undefined)
+    const agent = fakeAcpAgent()
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async () => ({ connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }),
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'live' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+test('session: a context bound at an OLDER generation (the process restarted) reads unusable, without even attempting to resume it', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    // Evidence now reports generation 1 — a restart happened since ctx-1 was bound.
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      1,
+    )
+    const broker = await startJsonServer(() => undefined)
+    let connectCalls = 0
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async () => {
+          connectCalls += 1
+          throw new Error('should never be called: the generation mismatch is already conclusive')
+        },
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'unusable' })
+      assert.equal(connectCalls, 0)
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
     }
   })
 })
