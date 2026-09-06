@@ -63,28 +63,47 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
   const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
 
+  // Computed once, shared by the API side's admission checklist (S8 Step 4) and the worker's own
+  // reconciliation scan — both must agree on exactly the same fresh evidence and resolve.
+  const runtimeControlBaseUrl = env.RUNTIME_CONTROL_URL
+  const brokerBaseUrl = env.BROKER_URL
+  const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined && bridgePort !== undefined
+  const observationSource: ObservationSource = wired
+    ? new HttpObservationSource({
+        pool: enginePool,
+        productPool,
+        runtimeControlBaseUrl,
+        brokerBaseUrl,
+        bridgePort,
+        harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
+        logger: (message) => console.log(message),
+      })
+    : new UnavailableObservationSource()
+  // resolve.harnessDigest is a real, static catalogue lookup — resolve.capabilityGrants stays
+  // empty: computing it needs the SAME live OneCLI resolution only apps/broker's own compile step
+  // has (packages/policy compile()), and RuleResolution.capabilityGrants is synchronous (domain's
+  // evaluate() is called without awaiting it) — an explicit, documented gap, not a guess. CAPS rule
+  // rows that need it stay unavailable until a caching bridge exists (admission never converges
+  // through them either, honestly, rather than fabricating a grant read).
+  const resolve = {
+    harnessDigest: (harness: string) => harnessDigests?.find((d) => d.harnessId === harness)?.imageDigest ?? '',
+    capabilityGrants: () => new Set<never>(),
+  }
+
   if (mode === 'api' || mode === 'both') {
     const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
-    const server = createControlPlaneServer({ productPool, enginePool, channels, ...(catalogue ? { catalogue } : {}), ...(revisionSet ? { revisionSet } : {}) })
-    await new Promise<void>((resolve) => server.listen(port, '0.0.0.0', resolve))
+    const server = createControlPlaneServer({
+      productPool,
+      enginePool,
+      channels,
+      ...(catalogue ? { catalogue } : {}),
+      ...(revisionSet ? { revisionSet } : {}),
+      ...(wired ? { admission: { observationSource, resolve } } : {}),
+    })
+    await new Promise<void>((ready) => server.listen(port, '0.0.0.0', ready))
     console.log(`control plane API listening on :${port}`)
   }
   if (mode === 'worker' || mode === 'both') {
-    const runtimeControlBaseUrl = env.RUNTIME_CONTROL_URL
-    const brokerBaseUrl = env.BROKER_URL
-    const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined && bridgePort !== undefined
-
-    const observationSource: ObservationSource = wired
-      ? new HttpObservationSource({
-          pool: enginePool,
-          productPool,
-          runtimeControlBaseUrl,
-          brokerBaseUrl,
-          bridgePort,
-          harnessCatalogue: harnessDigests.map((d) => ({ imageDigest: d.imageDigest })),
-          logger: (message) => console.log(message),
-        })
-      : new UnavailableObservationSource()
     const executor: VerbExecutor = wired
       ? createVerbRouter(
           {
@@ -102,19 +121,11 @@ export async function run(options: MainOptions = {}): Promise<void> {
         )
       : new NoVerbExecutor()
 
-    // resolve.harnessDigest is a real, static catalogue lookup — resolve.capabilityGrants stays
-    // empty: computing it needs the SAME live OneCLI resolution only apps/broker's own compile
-    // step has (packages/policy compile()), and RuleResolution.capabilityGrants is synchronous
-    // (domain's evaluate() is called without awaiting it) — an explicit, documented gap, not a
-    // guess. CAPABILITIES rule rows that need it stay unavailable until a caching bridge exists.
     const scan = createScan({
       pool: enginePool,
       observationSource,
       executor,
-      resolve: {
-        harnessDigest: (harness) => harnessDigests?.find((d) => d.harnessId === harness)?.imageDigest ?? '',
-        capabilityGrants: () => new Set(),
-      },
+      resolve,
       logger: (message) => console.log(message),
     })
     const ticks = await startTickSource({

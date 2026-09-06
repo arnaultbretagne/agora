@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession } from '@agora/journal'
-import { createControlPlaneServer } from '../src/http.js'
+import type { ObservationSource } from '@agora/engine'
+import { createControlPlaneServer, type AdmissionCheckOptions } from '../src/http.js'
 import { AgentChannels } from '../src/agent-channel.js'
 import type { AddressInfo } from 'node:net'
 
@@ -14,9 +15,9 @@ interface RunningApi {
   readonly close: () => Promise<void>
 }
 
-async function startApi(db: TestDatabase, promptDelayMs = 0): Promise<RunningApi> {
+async function startApi(db: TestDatabase, promptDelayMs = 0, admission?: AdmissionCheckOptions): Promise<RunningApi> {
   const channels = new AgentChannels({ pool: db.pool, nowSql: db.nowSql, promptDelayMs, logger: (message) => console.error(`[channel] ${message}`) })
-  const server = createControlPlaneServer({ productPool: db.pool, enginePool: db.pool, channels, nowSql: db.nowSql })
+  const server = createControlPlaneServer({ productPool: db.pool, enginePool: db.pool, channels, nowSql: db.nowSql, ...(admission ? { admission } : {}) })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return {
@@ -28,6 +29,29 @@ async function startApi(db: TestDatabase, promptDelayMs = 0): Promise<RunningApi
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
   }
+}
+
+function fakeObservationSource(admitted: boolean): ObservationSource {
+  const ok = <T>(value: T) => ({ ok: true as const, value })
+  return {
+    reader: async () => ({
+      power: () => ok('on' as const),
+      construction: () => ok({ kind: 'set' as const, digests: new Set(['digest-a']), incoherent: false }),
+      session: () => ok(admitted ? ('live' as const) : ('openable' as const)),
+      anchor: () => ok('none' as const),
+      sync: () => ok('current' as const),
+      model: () => ok('model-a'),
+      effort: () => ok('default'),
+      grantsAttached: () => ok(new Set()),
+      grantsEffective: () => ok(new Set()),
+    }),
+  }
+}
+
+const RESOLVE = { harnessDigest: () => 'digest-a', capabilityGrants: () => new Set<never>() }
+
+function onIntent(): Record<string, unknown> {
+  return { power: 'on', harness: 'claude-code', capabilities: ['workspace.read'], model: 'model-a', effort: 'default', persona: 'default' }
 }
 
 function request(port: number, path: string, headers: Record<string, string> = {}, method = 'GET', body?: unknown): Promise<Response> {
@@ -159,6 +183,54 @@ test('a prompt without a current Session is refused with a visible problem', asy
       const problem = (await response.json()) as { title: string; detail: string }
       assert.match(problem.title, /Session/)
       assert.ok(problem.detail.length > 0)
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S8 Step 4: a prompt is refused with no current Intent, admission wired', async () => {
+  await withTestDatabase(async (db) => {
+    const api = await startApi(db, 0, { observationSource: fakeObservationSource(true), resolve: RESOLVE })
+    try {
+      const workstreamId = await createWorkstreamWithSession(db, api.port)
+      const response = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'p1' }, 'POST', { text: 'x' })
+      assert.equal(response.status, 409)
+      const problem = (await response.json()) as { title: string }
+      assert.match(problem.title, /Intent/)
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S8 Step 4: a prompt is refused when fresh evaluation has not converged (admission not granted)', async () => {
+  await withTestDatabase(async (db) => {
+    const api = await startApi(db, 0, { observationSource: fakeObservationSource(false), resolve: RESOLVE })
+    try {
+      const workstreamId = await createWorkstreamWithSession(db, api.port)
+      const putIntent = await request(api.port, `/v1/workstreams/${workstreamId}/intent`, { ...OWNER, 'idempotency-key': 'intent-1' }, 'PUT', onIntent())
+      assert.ok(putIntent.status === 200 || putIntent.status === 201, `PUT intent failed: ${putIntent.status} ${await putIntent.text()}`)
+      const response = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'p1' }, 'POST', { text: 'x' })
+      assert.equal(response.status, 409)
+      const problem = (await response.json()) as { title: string; detail: string }
+      assert.match(problem.title, /Admission/)
+      assert.match(problem.detail, /SESSION-00[23]/)
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+test('S8 Step 4: a prompt is accepted once fresh evaluation converges (admission granted)', async () => {
+  await withTestDatabase(async (db) => {
+    const api = await startApi(db, 0, { observationSource: fakeObservationSource(true), resolve: RESOLVE })
+    try {
+      const workstreamId = await createWorkstreamWithSession(db, api.port)
+      const putIntent = await request(api.port, `/v1/workstreams/${workstreamId}/intent`, { ...OWNER, 'idempotency-key': 'intent-1' }, 'PUT', onIntent())
+      assert.ok(putIntent.status === 200 || putIntent.status === 201, `PUT intent failed: ${putIntent.status} ${await putIntent.text()}`)
+      const response = await request(api.port, `/v1/workstreams/${workstreamId}/prompt`, { ...OWNER, 'idempotency-key': 'p1' }, 'POST', { text: 'x' })
+      assert.equal(response.status, 202)
     } finally {
       await api.close()
     }

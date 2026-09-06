@@ -6,12 +6,18 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
-import { validateIntentShape, type CatalogueView } from '@agora/domain'
-import { authorIntent, loadLatestIntentEvent, withTransaction, type RevisionSet } from '@agora/engine'
+import { validateIntentShape, type CatalogueView, type Intent, type RuleResolution } from '@agora/domain'
+import { authorIntent, loadLatestIntentEvent, withTransaction, type ObservationSource, type RevisionSet } from '@agora/engine'
 import { DispatchConflictError, reserveDispatch, replayDispatch } from '@agora/acp'
 import type { AgentChannels } from './agent-channel.js'
 import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
+import { checkAdmission } from './admission.js'
+
+export interface AdmissionCheckOptions {
+  readonly observationSource: ObservationSource
+  readonly resolve: RuleResolution
+}
 
 export interface ControlPlaneOptions {
   readonly productPool: pg.Pool
@@ -21,6 +27,10 @@ export interface ControlPlaneOptions {
   readonly nowSql?: string
   /** Live ACP channels (S4). Absent in worker-only deployments: prompts answer 503. */
   readonly channels?: AgentChannels
+  /** S8 Step 4: re-verified fresh at every prompt dispatch. Absent in deployments where the owners
+   * (runtime-control/broker) aren't wired either — there is nothing real to admit against yet, same
+   * as S2's stub-catalogue mode; prompts there skip the check rather than being permanently refused. */
+  readonly admission?: AdmissionCheckOptions
 }
 
 async function handlePrompt(
@@ -30,6 +40,7 @@ async function handlePrompt(
   channels: AgentChannels | undefined,
   workstreamId: string,
   nowSql?: string,
+  admission?: AdmissionCheckOptions,
 ): Promise<void> {
   if (channels === undefined) {
     return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
@@ -46,6 +57,23 @@ async function handlePrompt(
   const replayed = await replayDispatch(productPool, workstreamId, key)
   if (replayed !== null) {
     return sendJson(res, 200, { commandId: replayed.id, state: replayed.state })
+  }
+
+  // Admission checklist (execution.md — "Session birth and admission"), re-verified fresh for THIS
+  // dispatch — never trusting the reconciliation worker's last tick, which could be stale by now
+  // ("a database commit alone cannot reopen a stale path"). A replayed command above never reaches
+  // here — it was already admitted once, and re-checking a duplicate-key retry could wrongly refuse
+  // an already-accepted turn if conditions drifted since.
+  if (admission !== undefined) {
+    const intentEvent = await loadLatestIntentEvent(productPool, workstreamId)
+    const intent = intentEvent?.intent as Intent | undefined
+    if (intent === undefined) {
+      return sendProblem(res, 409, 'No current Intent', 'prompts require an authored Intent for this Workstream')
+    }
+    const decision = await checkAdmission(admission.observationSource, workstreamId, intent, admission.resolve)
+    if (!decision.admitted) {
+      return sendProblem(res, 409, 'Admission not granted', decision.reason)
+    }
   }
 
   try {
@@ -170,6 +198,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
   const productPool = options.productPool
   const enginePool = options.enginePool ?? options.productPool
   const channels = options.channels
+  const admission = options.admission
 
   return createServer((req, res) => {
     void (async () => {
@@ -312,7 +341,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
       }
 
       if (segments.length === 4 && segments[3] === 'prompt' && method === 'POST') {
-        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql)
+        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql, admission)
       }
       if (segments.length === 4 && segments[3] === 'items' && method === 'GET') {
         const items = await productPool.query(
