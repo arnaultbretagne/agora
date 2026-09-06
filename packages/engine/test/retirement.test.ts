@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import type pg from 'pg'
 import { withTestDatabase, RuntimeControlFake, type TestDatabase } from '@agora/testkit'
 import { OwnerClient } from '@agora/owner-requests'
-import { dispatchAttempt, hasUnresolvedAttempts, issueEpoch, reserveAttempt, retireTarget } from '../src/index.js'
+import { randomUUID } from 'node:crypto'
+import { currentIncarnation, dispatchAttempt, hasUnresolvedAttempts, issueEpoch, reserveAttempt, retireTarget } from '../src/index.js'
 
 const WORKSTREAM = '11111111-1111-4111-8111-111111111111'
 
@@ -167,6 +168,37 @@ test('ENGINE-018: the database reservation commits but the owner activation fail
       // A takeover (recovery) resolves the limbo: the epoch is re-issued and the attempt tracked.
       const issued = await db.asRole(failClient, 'agora_engine', () => issueEpoch(failClient, WORKSTREAM, 'worker-b', db.nowSql))
       assert.equal(issued.takeoverCount, 1)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('S13: a retired incarnation is never handed to the next BUILD', async () => {
+  // Live finding, and the worst kind — permanent and silent. The owner retires an incarnation when
+  // it cleans its Pod; the ENGINE was never told, so `currentIncarnation` kept returning it and
+  // BUILD created a new Pod under a dead incarnation. That create is allowed (a create targets a
+  // RESERVED slot; retirement only refuses positive work on CONCRETE targets), so a Pod really ran
+  // — and then `gate_release` on that concrete target was refused as `rejected_stale_epoch` for
+  // ever. The Pod sat at its launch seam until someone deleted the Workstream.
+  await withTestDatabase(async (db) => {
+    const client = await db.pool.connect()
+    try {
+      const workstreamId = randomUUID()
+      await db.asRole(client, 'agora_product', () =>
+        client.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()]),
+      )
+      await db.asRole(client, 'agora_engine', async () => {
+        await client.query(
+          `INSERT INTO owner_attempts (attempt_key, workstream_id, epoch, operation, target_kind, target_id, payload_digest, state, dispatch_owner, revision_set)
+           VALUES ('k1', $1, 1, 'create_pod', 'reserved', 'inc-dead', 'd', 'settled', 'w', '{}'::jsonb)`,
+          [workstreamId],
+        )
+      })
+
+      assert.equal(await currentIncarnation(db.pool, workstreamId), 'inc-dead', 'before retirement it is the current one')
+      await db.asRole(client, 'agora_engine', () => retireTarget(client, workstreamId, 'concrete', 'inc-dead', 'cleanup_pod:TURN_OFF'))
+      assert.equal(await currentIncarnation(db.pool, workstreamId), undefined, 'after retirement BUILD must mint a fresh one')
     } finally {
       client.release()
     }

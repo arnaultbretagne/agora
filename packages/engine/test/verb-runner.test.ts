@@ -120,22 +120,39 @@ test('GRANT carries the Intent\'s capability ids to the Broker', async () => {
   })
 })
 
-test('a retired target refuses a new positive verb (BUILD) at the engine, before ever reaching the owner', async () => {
+test('a retired incarnation is not rebuilt into — BUILD mints a fresh one, and work on the retired one is refused', async () => {
+  // This test used to assert that BUILD THROWS `target_retired` after its incarnation was retired.
+  // That describes a system which can never rebuild anything: every cleanup retires the
+  // incarnation, so the next BUILD would be refused for ever. The live deployment found the other
+  // half of the same mistake — the engine was not recording retirements at all, so BUILD happily
+  // rebuilt INTO the retired incarnation and every later operation on it was refused as stale.
+  //
+  // The rule is about the TARGET, not the verb: a retired target refuses further work; a new
+  // incarnation is a different target and is exactly what BUILD is for.
   await withTestDatabase(async (db) => {
     await setup(db)
     await withIntent(db, intent())
     const runtimeControl = new RuntimeControlFake()
     const runner = new OwnerVerbRunner({ pool: db.pool, transport: fakeTransport(runtimeControl, new BrokerFake()) })
-    let reservedTargetId: string | undefined
+    const seen: string[] = []
     const originalHandle = runtimeControl.handle.bind(runtimeControl)
     runtimeControl.handle = async (request: OwnerRequest) => {
-      reservedTargetId = request.target.id
+      seen.push(request.target.id)
       return originalHandle(request)
     }
     await runner.execute('BUILD', context({ workGeneration: 1 }))
+    const retired = seen[0]!
     const { retireTarget } = await import('../src/retirement.js')
-    await retireTarget(db.pool, WORKSTREAM, 'reserved', reservedTargetId!, 'test-retirement')
-    await assert.rejects(() => runner.execute('BUILD', context({ workGeneration: 2 })), /target_retired/)
+    await retireTarget(db.pool, WORKSTREAM, 'concrete', retired, 'cleanup_pod:TURN_OFF')
+
+    await runner.execute('BUILD', context({ workGeneration: 2 }))
+    assert.equal(seen.length, 2)
+    assert.notEqual(seen[1], retired, 'the retired incarnation is dead; a rebuild gets a fresh one')
+
+    // And once every incarnation is retired there is nothing left to act on: TURN_OFF says so
+    // explicitly rather than aiming at a dead target, which the owner would refuse as stale.
+    await retireTarget(db.pool, WORKSTREAM, 'concrete', seen[1]!, 'cleanup_pod:TURN_OFF')
+    await assert.rejects(() => runner.execute('TURN_OFF', context({ workGeneration: 3 })), MissingIncarnationError)
   })
 })
 

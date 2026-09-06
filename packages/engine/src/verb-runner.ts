@@ -8,8 +8,8 @@ import type pg from 'pg'
 import type { Verb } from '@agora/domain'
 import type { QueryClient } from './db.js'
 import type { VerbContext, VerbExecutor } from './verb-executor.js'
-import { payloadDigest, type OwnerRequest, type OwnerResponse, type OwnerTarget } from '@agora/owner-requests'
-import { isRetired } from './retirement.js'
+import { isCleanupOperation, payloadDigest, type OwnerRequest, type OwnerResponse, type OwnerTarget } from '@agora/owner-requests'
+import { isRetired, retireTarget } from './retirement.js'
 import { dispatchAttempt, hasUnresolvedAttempts, markAttemptUnknown, reopenAttemptForRecovery, reserveAttempt, unresolvedRepeatOf, type AttemptReservation } from './attempts.js'
 import { loadLatestIntentEvent } from './authoring.js'
 
@@ -74,9 +74,16 @@ async function incarnationForBuild(client: QueryClient, workstreamId: string): P
  */
 export async function currentIncarnation(client: QueryClient, workstreamId: string): Promise<string | undefined> {
   const result = await client.query(
-    `SELECT target_id FROM owner_attempts
-     WHERE workstream_id = $1 AND operation = 'create_pod' AND state IN ('settled', 'dispatched', 'unknown')
-     ORDER BY reserved_at DESC LIMIT 1`,
+    `SELECT target_id FROM owner_attempts a
+     WHERE a.workstream_id = $1 AND a.operation = 'create_pod' AND a.state IN ('settled', 'dispatched', 'unknown')
+       -- A RETIRED incarnation is not the current one, however recent it is. Reusing one was a
+       -- permanent wedge, live: BUILD re-created a Pod under an incarnation the owner had already
+       -- retired (allowed, because a create targets a RESERVED slot and retirement only blocks
+       -- positive work on CONCRETE targets), and then every later operation on it, gate_release
+       -- first of all, was refused as stale for ever. The Pod ran, the seam never opened, and
+       -- nothing anywhere said why.
+       AND NOT EXISTS (SELECT 1 FROM target_retirements r WHERE r.target_id = a.target_id)
+     ORDER BY a.reserved_at DESC LIMIT 1`,
     [workstreamId],
   )
   return (result.rows[0] as { target_id?: string } | undefined)?.target_id
@@ -208,6 +215,14 @@ export class OwnerVerbRunner implements VerbExecutor {
     // The runner never selects a different verb on failure: the attempt state carries the truth
     // (settled/unknown, already recorded by dispatchAttempt) and the engine's backoff/budget
     // machinery decides what happens next (ENGINE-011 shape) — this is observability only.
+    // A cleanup the owner completed retires the target HERE too. The owner records it in its own
+    // ledger (that is what refuses later positive work on it), but nothing was writing the engine's
+    // side, so `isRetired` never fired and `currentIncarnation` kept handing a dead incarnation to
+    // the next BUILD. Both halves have to know, and the engine's half is what stops it being
+    // chosen again in the first place.
+    if ((response.kind === 'completed' || response.kind === 'accepted') && isCleanupOperation(plan.operation)) {
+      await retireTarget(pool, context.workstreamId, plan.target.kind, plan.target.id, `${plan.operation}:${verb}`)
+    }
     if (!settled || response.kind === 'rejected_stale_epoch' || response.kind === 'rejected_key_mismatch' || response.kind === 'unknown') {
       this.options.logger?.(`verb ${verb} attempt ${reservation.attemptKey} -> ${response.kind}`)
     }
