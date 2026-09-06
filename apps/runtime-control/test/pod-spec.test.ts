@@ -106,6 +106,27 @@ test('an inventory that could not list completely reports complete:false and sup
   })
 })
 
+test('inventory: podIP is the kubelet-assigned address once scheduled, null before it (Pending)', async () => {
+  await withTestDatabase(async (db) => {
+    const pods = {
+      namespace: 'agora-runs',
+      listPods: async () => ({
+        items: [
+          { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'agora-w1-inc-1', uid: 'uid-1' }, spec: { nodeName: 'node-a' }, status: { phase: 'Running', podIP: '10.244.1.7' } },
+          { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'agora-w1-inc-2', uid: 'uid-2' }, spec: {}, status: { phase: 'Pending' } },
+        ],
+      }),
+      getNode: async () => ({ apiVersion: 'v1', kind: 'Node', metadata: { name: 'node-a' }, status: { conditions: [{ type: 'Ready', status: 'True' }] } }),
+    }
+    const store = { async obligationsFor() { return [] } }
+    const inventory = await inventoryWorkstream(pods as never, store as never, 'w1')
+    const running = inventory.pods.find((p) => p.uid === 'uid-1')
+    const pending = inventory.pods.find((p) => p.uid === 'uid-2')
+    assert.equal(running?.podIP, '10.244.1.7')
+    assert.equal(pending?.podIP, null, 'no address before the kubelet schedules and assigns one')
+  })
+})
+
 test('SESSION-A06: a process restart inside the Pod invalidates the evidence and retires the incarnation', () => {
   const seam = new LaunchSeam('inc-1')
   // Release REQUIRES the Session id: birth-then-release ordering — no session, no release.

@@ -88,17 +88,24 @@ async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, nam
   const pod = await options.k8s.getPod(name)
   if (pod === undefined) return problem(res, 404, 'Not found', `pod ${name} is gone`)
   const metadata = pod['metadata'] as { uid?: string; creationTimestamp?: string } | undefined
-  const status = pod['status'] as { phase?: string; containerStatuses?: readonly { imageID?: string }[] } | undefined
+  const status = pod['status'] as { phase?: string; containerStatuses?: readonly { imageID?: string; restartCount?: number }[] } | undefined
   const spec = pod['spec'] as { containers?: readonly { image?: string }[] } | undefined
+  const seam = options.seams.get(name)
+  // The seam is the one place a process restart is actually observed (LaunchSeam.processRestart) —
+  // a Pod with no seam yet (evidence read before create_pod's ensureSeam) is generation 0, not
+  // unknown. The kubelet's own restartCount is the real signal: catch the seam up to it here, on
+  // every evidence read, rather than trusting a separate poller never to miss one (SESSION-A06).
+  const liveRestartCount = status?.containerStatuses?.[0]?.restartCount ?? 0
+  if (seam !== undefined) {
+    while (seam.state().processGeneration < liveRestartCount) seam.processRestart()
+  }
   return send(res, 200, {
     uid: metadata?.uid ?? null,
     imageId: status?.containerStatuses?.[0]?.imageID ?? null,
     admittedDigest: spec?.containers?.[0]?.image ?? null,
-    // The seam is the one place a process restart is actually observed (LaunchSeam.processRestart) —
-    // a Pod with no seam yet (evidence read before create_pod's ensureSeam) is generation 0, not unknown.
-    processGeneration: options.seams.get(name)?.state().processGeneration ?? 0,
+    processGeneration: seam?.state().processGeneration ?? 0,
     startupDeadlineExpired: isStartupDeadlineExpired(metadata?.creationTimestamp ?? null, status?.phase ?? 'Unknown', new Date().toISOString(), options.settings.startupDeadlineSeconds),
-    seam: options.seams.get(name)?.state() ?? null,
+    seam: seam?.state() ?? null,
   })
 }
 
