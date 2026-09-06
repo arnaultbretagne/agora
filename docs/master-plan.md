@@ -355,10 +355,11 @@ force-deleted Pod retained as obligation.
 
 **Open before merge.** Physical fencing mechanism and startup/shutdown deadlines (§4).
 
-### S7 — Broker, OneCLI and exact capabilities
+### S7 — Broker, OneCLI and exact capabilities (done)
 
 **Goal.** The second real owner: one selective Agent per Pod incarnation, exact grant sets,
-attached versus effective inventories, the CONNECT relay confined by effective grants.
+attached versus effective inventories, the CONNECT relay confined by effective grants. Pull
+request #45.
 
 **Sources.** [ADR 0009](adr/0009-onecli-grant-authority.md), [ADR 0010](adr/0010-capabilities-are-onecli-grants.md),
 [001: capability compilation](specs/reconciliation/001_intent.md#capability-compilation),
