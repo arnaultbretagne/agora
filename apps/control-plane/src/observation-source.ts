@@ -14,6 +14,8 @@ import {
   normalizeGrantsAttached,
   normalizeGrantsEffective,
   normalizeSessionWithAcp,
+  normalizeModel,
+  normalizeEffort,
   harnessDigestForCatalogue,
   type BrokerFootprint,
   type PodObservation,
@@ -89,7 +91,15 @@ export class HttpObservationSource implements ObservationSource {
             startupDeadlineExpired: false, // same documented gap as construction() below
             harnessDigestFor: digestFor,
           }
-    const acpEvidence = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
+    const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
+    const sessionValue = normalizeSessionWithAcp({ pod: establishedPodObservation, startupDeadlineSeconds: 0, podAgeSeconds: 0, acp: acpEvidence })
+    // model/effort are only ever read off a snapshot taken while the Session was actually live —
+    // config.ts's own contract (a value handed to it is trusted as already fresh); a stale/absent
+    // probe means no snapshot at all, never a guessed or carried-over value.
+    const configSnapshot =
+      sessionValue === 'live' && configOptions !== null && configOptions.has('model') && configOptions.has('effort')
+        ? { model: configOptions.get('model')!, effort: configOptions.get('effort')! }
+        : null
 
     return {
       power: () => {
@@ -121,14 +131,17 @@ export class HttpObservationSource implements ObservationSource {
         }))
         return { ok: true, value: normalizeConstructionWithBinding(pods) }
       },
-      session: () => {
-        const value = normalizeSessionWithAcp({ pod: establishedPodObservation, startupDeadlineSeconds: 0, podAgeSeconds: 0, acp: acpEvidence })
-        return value === null ? UNAVAILABLE : { ok: true, value }
-      },
+      session: () => (sessionValue === null ? UNAVAILABLE : { ok: true, value: sessionValue }),
       anchor: () => read('observation.anchor'),
       sync: () => read('observation.sync'),
-      model: () => read('observation.model'),
-      effort: () => read('observation.effort'),
+      model: () => {
+        const value = normalizeModel(configSnapshot)
+        return value === null ? UNAVAILABLE : { ok: true, value }
+      },
+      effort: () => {
+        const value = normalizeEffort(configSnapshot)
+        return value === null ? UNAVAILABLE : { ok: true, value }
+      },
       grantsAttached: () => normalizeGrantsAttached(brokerInventory === undefined ? undefined : { attached: fromWireGrantSet(brokerInventory.attached as never) }),
       grantsEffective: () => normalizeGrantsEffective(brokerInventory === undefined ? undefined : { effective: fromWireGrantSet(brokerInventory.effective as never) }),
     }
@@ -165,19 +178,29 @@ export class HttpObservationSource implements ObservationSource {
    * `unusable`, not a silently-reopened `pending`. Only a MATCHING generation is worth an actual
    * live probe (session-probe.ts), the one path that can report `live`.
    */
-  private async fetchAcpEvidence(workstreamId: string, session: CurrentSession | null, pod: PodInventoryEntry | undefined): Promise<AcpConnectionEvidence | null> {
-    if (session === null || session.acpContextId === null || session.bridgeToken === null) return null
-    if (pod === undefined || pod.podIP === null) return null
+  private async fetchAcpEvidence(
+    workstreamId: string,
+    session: CurrentSession | null,
+    pod: PodInventoryEntry | undefined,
+  ): Promise<{ readonly acp: AcpConnectionEvidence | null; readonly configOptions: ReadonlyMap<string, string> | null }> {
+    const none = { acp: null, configOptions: null }
+    if (session === null || session.acpContextId === null || session.bridgeToken === null) return none
+    if (pod === undefined || pod.podIP === null) return none
     const currentProcessGeneration = await this.fetchProcessGeneration(pod.name)
-    if (currentProcessGeneration === undefined) return null // evidence unreachable — never guess connected/disconnected
+    if (currentProcessGeneration === undefined) return none // evidence unreachable — never guess connected/disconnected
     if (currentProcessGeneration !== session.processGeneration) {
-      return { connected: true, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration }
+      // The bound context belonged to a process that is provably gone — resuming it would be
+      // meaningless (no config snapshot to read from a dead process either).
+      return { acp: { connected: true, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration }, configOptions: null }
     }
     const probe = await probeSession(
       { workstreamId, sessionId: session.sessionId, podIP: pod.podIP, bridgeToken: session.bridgeToken, contextId: session.acpContextId },
       { productPool: this.options.productPool, bridgePort: this.options.bridgePort, ...(this.options.logger ? { logger: this.options.logger } : {}), ...(this.options.connect ? { connect: this.options.connect } : {}) },
     )
-    return { connected: probe.connected, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration }
+    return {
+      acp: { connected: probe.connected, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration },
+      configOptions: probe.connected ? probe.configOptions : null,
+    }
   }
 
   private async fetchProcessGeneration(podName: string): Promise<number | undefined> {

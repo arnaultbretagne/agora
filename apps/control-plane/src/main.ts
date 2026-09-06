@@ -10,6 +10,7 @@ import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
+import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
@@ -88,6 +89,8 @@ export async function run(options: MainOptions = {}): Promise<void> {
       ? createVerbRouter(
           {
             START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
+            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
           },
           createSessionOpeningExecutor({
             inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),

@@ -166,20 +166,30 @@ test('grantsAttached/Effective: reports the broker\'s own wire-format sets for t
   })
 })
 
-test('model/effort/anchor/sync stay unavailable — not yet produced by this slice, never invented', async () => {
+test('anchor/sync stay unavailable — not yet produced by this slice, never invented', async () => {
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
     await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
     const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
     const reader = await source.reader(workstreamId)
-    for (const field of [reader.model(), reader.effort(), reader.anchor(), reader.sync()]) {
+    for (const field of [reader.anchor(), reader.sync()]) {
       assert.deepEqual(field, { ok: false, reason: 'unavailable' })
     }
   })
 })
 
-// observation.session is real, S8 Step 2 wiring — see the dedicated tests below (not a placeholder
-// like model/effort/anchor/sync above, even though "no Pod at all" also happens to read unavailable).
+// observation.session/model/effort are real, S8 Step 2/3 wiring — see the dedicated tests below (not
+// a placeholder like anchor/sync above, even though "no Pod at all" also happens to read unavailable).
+test('model/effort: no live Session yet reads unavailable, never a guessed default', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
+    const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: 'http://127.0.0.1:65533', brokerBaseUrl: 'http://127.0.0.1:65533', harnessCatalogue: [] })
+    const reader = await source.reader(workstreamId)
+    assert.deepEqual(reader.model(), { ok: false, reason: 'unavailable' })
+    assert.deepEqual(reader.effort(), { ok: false, reason: 'unavailable' })
+  })
+})
 test('session: no Pod at all reads unavailable (inapplicable, never inferred)', async () => {
   await withTestDatabase(async (pool) => {
     const workstreamId = randomUUID()
@@ -330,6 +340,60 @@ test('session: a context bound at an OLDER generation (the process restarted) re
       const reader = await source.reader(workstreamId)
       assert.deepEqual(reader.session(), { ok: true, value: 'unusable' })
       assert.equal(connectCalls, 0)
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+test('model/effort: a live Session reads the fresh resume snapshot verbatim', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+    )
+    const broker = await startJsonServer(() => undefined)
+    const agent = fakeAcpAgent([
+      { id: 'model', currentValue: 'sonnet' },
+      { id: 'effort', currentValue: 'high' },
+    ])
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async () => ({ connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }),
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.model(), { ok: true, value: 'sonnet' })
+      assert.deepEqual(reader.effort(), { ok: true, value: 'high' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+test('model/effort: a stale (older-generation) context reads unavailable — never a carried-over snapshot', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      1,
+    )
+    const broker = await startJsonServer(() => undefined)
+    try {
+      const source = new HttpObservationSource({ pool, productPool: pool, bridgePort: 8765, runtimeControlBaseUrl: runtimeControl.url, brokerBaseUrl: broker.url, harnessCatalogue: [] })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.model(), { ok: false, reason: 'unavailable' })
+      assert.deepEqual(reader.effort(), { ok: false, reason: 'unavailable' })
     } finally {
       runtimeControl.server.close()
       broker.server.close()
