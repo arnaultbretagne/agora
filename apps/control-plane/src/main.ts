@@ -6,6 +6,7 @@ import { createPool, requireDatabaseUrl, createScan, startTickSource, type VerbE
 import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
+import { AgentChannels } from './agent-channel.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -49,7 +50,8 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const enginePool = createPool(databaseUrl)
 
   if (mode === 'api' || mode === 'both') {
-    const server = createControlPlaneServer({ productPool, enginePool })
+    const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
+    const server = createControlPlaneServer({ productPool, enginePool, channels })
     await new Promise<void>((resolve) => server.listen(port, '0.0.0.0', resolve))
     console.log(`control plane API listening on :${port}`)
   }
@@ -78,6 +80,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
     }
     process.on('SIGINT', () => void stop())
     process.on('SIGTERM', () => void stop())
+  } else if (mode === 'api') {
+    process.on('SIGINT', () => void process.exit(0))
+    process.on('SIGTERM', () => void process.exit(0))
   } else {
     process.on('SIGINT', () => void process.exit(0))
     process.on('SIGTERM', () => void process.exit(0))

@@ -16,11 +16,6 @@ export class ApiError extends Error {
   }
 }
 
-function authHeader(): Record<string, string> {
-  const principal = localStorage.getItem('agora.principal')
-  return principal ? { authorization: `Bearer ${principal}` } : {}
-}
-
 function idempotencyKey(): string {
   return crypto.randomUUID()
 }
@@ -28,7 +23,7 @@ function idempotencyKey(): string {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { ...authHeader(), ...(init.headers as Record<string, string> | undefined) },
+    headers: { ...(init.headers as Record<string, string> | undefined) },
   })
   if (res.status === 204) return undefined as T
   const body: unknown = await res.json()
@@ -219,32 +214,47 @@ export function getIntent(id: string): Promise<WorkstreamIntentView> {
 
 /* ---------- legacy product API (retired implementation) ---------- */
 
-export function legacyListWorkstreams(): Promise<{ items: readonly Workstream[]; nextCursor: string | null }> {
-  return request('/v1/workstreams')
+/* ---------- S4 conversation contract ---------- */
+
+export interface ConversationItem {
+  readonly id: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly entityKey: string
+  readonly value: Record<string, unknown>
+  readonly firstSeq: number
+  readonly latestSeq: number
+  readonly updatedAt: string
 }
 
-export function legacyGetWorkstream(id: string): Promise<WorkstreamDetail> {
-  return request(`/v1/workstreams/${id}`)
+
+/** The prompt is a command: the key replays the same command; 202 means reserved, not delivered. */
+export function listItems(workstreamId: string): Promise<{ readonly items: readonly ConversationItem[] }> {
+  return request(`/v1/workstreams/${workstreamId}/items`)
 }
 
-export function listItems(workstreamId: string): Promise<{ items: readonly WorkstreamItem[]; throughWorkstreamSeq: number; feedPosition: number }> {
-  return request(`/v1/workstreams/${workstreamId}/items?limit=200`)
+export function promptSession(workstreamId: string, text: string): Promise<{ commandId: string; state: string }> {
+  return request(`/v1/workstreams/${workstreamId}/prompt`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
+    body: JSON.stringify({ text }),
+  })
 }
 
-export function listTurns(workstreamId: string): Promise<{ turns: readonly WorkstreamTurn[] }> {
-  return request(`/v1/workstreams/${workstreamId}/turns?limit=200`)
+export function cancelTurn(workstreamId: string): Promise<{ cancelled: boolean }> {
+  return request(`/v1/workstreams/${workstreamId}/cancel`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
 }
 
-export function listAgents(): Promise<{ items: readonly PublicAgent[] }> {
-  return request('/v1/agents')
+export function listPendingPermissions(workstreamId: string): Promise<{ pending: readonly string[] }> {
+  return request(`/v1/workstreams/${workstreamId}/permissions/pending`)
 }
 
-export function getEquipmentCatalogue(): Promise<EquipmentCatalogue> {
-  return request('/v1/equipment-catalogue')
-}
-
-export function getSession(sessionId: string): Promise<Session> {
-  return request(`/v1/sessions/${sessionId}`)
+export function decidePermission(workstreamId: string, permissionId: string, optionId: string): Promise<{ decided: boolean }> {
+  return request(`/v1/workstreams/${workstreamId}/permissions/${encodeURIComponent(permissionId)}/decision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ optionId }),
+  })
 }
 
 /** Title and pin — the only two Workstream fields a human owns directly; everything else about a Workstream is derived from what actually happened to it. */
@@ -254,10 +264,6 @@ export function legacyPatchWorkstream(workstreamId: string, patch: { readonly ti
     headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
     body: JSON.stringify(patch),
   })
-}
-
-export function deleteWorkstream(workstreamId: string): Promise<{ commandId: string }> {
-  return request(`/v1/workstreams/${workstreamId}`, { method: 'DELETE', headers: { 'idempotency-key': idempotencyKey() } })
 }
 
 /** ACP's own union: a select takes a value id, a boolean option takes a state. */
@@ -299,38 +305,12 @@ export interface AgentConfigOptions {
 }
 
 /**
- * What an Agent last advertised it can be configured with — readable before any Session exists,
- * which is the whole point: ACP only publishes config options in a `session/new` response, so
- * without this the composer had nothing to offer and its model button was rendered disabled.
- */
-export function getAgentConfigOptions(agentId: string): Promise<AgentConfigOptions> {
-  return request(`/v1/agents/${encodeURIComponent(agentId)}/config-options`)
-}
-
-/** Asks the engine to run this Agent empty once (materialize → `session/new` → read → tear down) because nothing has ever launched it at this version. */
-export function probeAgentConfigOptions(agentId: string): Promise<AgentConfigOptions> {
-  return request(`/v1/agents/${encodeURIComponent(agentId)}/config-options/probe`, { method: 'POST' })
-}
-
-/**
  * Persona and equipment are both frozen on a Session's launch envelope, so changing either on a
  * running Workstream is not a mutation — it is a new Session, which is exactly what this opens.
  * With `activate: true` the engine also carries the history across (docs/specs/06), so the operator
  * sees one continuous conversation rather than a restart.
  */
-export function openSession(workstreamId: string, body: OpenSessionRequest): Promise<{ command: { commandId: string }; session: Session }> {
-  return request(`/v1/workstreams/${workstreamId}/sessions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
-    body: JSON.stringify(body),
-  })
-}
-
 /** Re-materializes a suspended/idle Session's Runtime. Required before prompting one whose ACP connection is gone — see `promptSession`'s `runtime_unavailable`. */
-export function activateSession(sessionId: string): Promise<{ commandId: string }> {
-  return request(`/v1/sessions/${sessionId}/activate`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
-}
-
 /**
  * The Agent answers with its FULL option set, not just the one that changed, because changing one
  * may change what the others accept — so the response replaces the client's copy wholesale rather
@@ -340,26 +320,6 @@ export function activateSession(sessionId: string): Promise<{ commandId: string 
  * recorded and delivered when it next resumes. That is a success, not a failure — the caller shows
  * the chosen value and says it takes effect on the next message.
  */
-export function setConfigOption(
-  sessionId: string,
-  optionId: string,
-  value: ConfigValue,
-): Promise<{ configOptions?: readonly unknown[]; pending?: boolean; detail?: string }> {
-  return request(`/v1/sessions/${sessionId}/config-options/${encodeURIComponent(optionId)}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ value }),
-  })
-}
-
-export function setMode(sessionId: string, modeId: string): Promise<unknown> {
-  return request(`/v1/sessions/${sessionId}/mode`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ modeId }),
-  })
-}
-
 export function legacyCreateWorkstream(
   body: CreateWorkstreamRequest,
 ): Promise<{ command: { commandId: string }; workstream: Workstream; session: Session }> {
@@ -370,32 +330,12 @@ export function legacyCreateWorkstream(
   })
 }
 
-export function promptSession(sessionId: string, content: readonly { type: string; text: string }[]): Promise<unknown> {
-  return request(`/v1/sessions/${sessionId}/prompts`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey() },
-    body: JSON.stringify({ content }),
-  })
-}
-
-export function suspendSession(sessionId: string): Promise<unknown> {
-  return request(`/v1/sessions/${sessionId}/suspend`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
-}
-
-export function cancelSession(sessionId: string): Promise<unknown> {
-  return request(`/v1/sessions/${sessionId}/cancel`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
-}
-
-export function closeSession(sessionId: string): Promise<unknown> {
-  return request(`/v1/sessions/${sessionId}/close`, { method: 'POST', headers: { 'idempotency-key': idempotencyKey() } })
-}
-
 export interface FeedEvent {
-  readonly workstreamId: string
   readonly position: number
-  readonly throughWorkstreamSeq: number
   readonly operation: 'upsert' | 'remove' | 'status' | 'reset'
+  readonly itemId: string | null
   readonly payload: Record<string, unknown>
+  readonly throughSeq: number
 }
 
 /**
@@ -419,7 +359,7 @@ export function subscribeFeed(
 
   async function connectOnce(): Promise<void> {
     controller = new AbortController()
-    const res = await fetch(`/v1/workstreams/${workstreamId}/feed?after=${after}`, { headers: authHeader(), signal: controller.signal })
+    const res = await fetch(`/v1/workstreams/${workstreamId}/feed?after=${after}`, { signal: controller.signal })
     if (!res.ok || !res.body) throw new Error(`feed connection failed: ${res.status}`)
     onStatus?.('connected')
     const reader = res.body.getReader()

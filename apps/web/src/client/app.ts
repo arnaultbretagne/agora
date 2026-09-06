@@ -32,22 +32,22 @@
 
 import {
   ApiError,
-  activateSession,
   createWorkstream,
-  deleteWorkstream,
+  decidePermission,
   getIntent,
   getWorkstream,
+  listItems,
+  listPendingPermissions,
   listWorkstreams,
-  openSession,
   patchWorkstream,
   promptSession,
   putIntent,
-  setConfigOption,
-  suspendSession,
+  subscribeFeed,
   type AgentConfigOptions,
   type ConfigValue,
   type EquipmentCatalogue,
   type EquipmentResourceRequest,
+  type FeedEvent,
   type IntentRequestBody,
   type PublicAgent,
   type RequestedConfigOption,
@@ -1064,24 +1064,126 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
 }
 
 /**
- * S2 surface: the Workstream record plus its latest Intent and operational work view. There are no
- * Sessions, items or feeds on this API yet — the transcript area stays empty and the power state is
- * what the operator can actually drive.
+ * The conversation surface: the Workstream record, its projected items and the resumable feed.
+ * The transcript is a projection of canonical facts, so it re-reads on select and then follows the
+ * feed; no session lifecycle call exists on this API (execution is Intent-driven).
  */
 async function loadWorkstream(workstreamId: string): Promise<void> {
   try {
     const record = await getWorkstream(workstreamId)
     state.workstreams.set(workstreamId, toWorkstream(record))
-    state.items = []
-    state.turns = []
     state.echoes = []
     state.configOptions = []
+    await refreshItems(workstreamId)
     await refreshIntent(workstreamId)
     renderSidebar()
     renderMain()
+    subscribe(workstreamId)
   } catch (error) {
     toast(errorText(error), true)
   }
+}
+
+function toLegacyItem(workstreamId: string, item: {
+  readonly id: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly value: Record<string, unknown>
+  readonly firstSeq: number
+  readonly latestSeq: number
+  readonly updatedAt: string
+}): WorkstreamItem {
+  return {
+    id: item.id,
+    workstreamId,
+    sessionId: item.sessionId,
+    turnId: null,
+    kind: item.kind,
+    firstEventId: '',
+    latestEventId: '',
+    firstWorkstreamSeq: item.firstSeq,
+    latestWorkstreamSeq: item.latestSeq,
+    value: item.value,
+    contentSha256: '',
+    updatedAt: item.updatedAt,
+  }
+}
+
+async function refreshItems(workstreamId: string): Promise<void> {
+  const page = await listItems(workstreamId)
+  if (state.activeId !== workstreamId) return
+  state.items = page.items.map((item) => toLegacyItem(workstreamId, item))
+  renderMessages()
+  syncComposerLock()
+}
+
+/** Feeds carry projector upserts and turn statuses; both are idempotent folds over item ids. */
+function applyFeedEvent(workstreamId: string, event: FeedEvent): void {
+  if (event.operation === 'upsert' && event.itemId !== null) {
+    const item: WorkstreamItem = {
+      id: event.itemId,
+      workstreamId,
+      sessionId: (event.payload['sessionId'] as string | undefined) ?? '',
+      turnId: null,
+      kind: (event.payload['itemKind'] as string | undefined) ?? 'unknown',
+      firstEventId: '',
+      latestEventId: '',
+      firstWorkstreamSeq: event.throughSeq,
+      latestWorkstreamSeq: event.throughSeq,
+      value: event.payload,
+      contentSha256: '',
+      updatedAt: new Date().toISOString(),
+    }
+    const index = state.items.findIndex((existing) => existing.id === item.id)
+    if (index >= 0) state.items[index] = item
+    else state.items.push(item)
+    scheduleMessagesRender()
+    return
+  }
+  if (event.operation === 'status') {
+    const commandId = event.payload['commandId'] as string | undefined
+    const status = event.payload['status'] as WorkstreamTurn['status'] | undefined
+    if (!commandId || !status) return
+    const index = state.turns.findIndex((turn) => turn.id === commandId)
+    if (index >= 0) {
+      const existing = state.turns[index]
+      if (existing) state.turns[index] = { ...existing, status, stopReason: (event.payload['stopReason'] as string | null) ?? existing.stopReason }
+    } else {
+      state.turns.push({
+        id: commandId,
+        workstreamId,
+        sessionId: '',
+        turnOrdinal: state.turns.length + 1,
+        purpose: 'user',
+        status,
+        stopReason: (event.payload['stopReason'] as string | null) ?? null,
+        usage: null,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+      })
+    }
+    renderMessages()
+    syncComposerLock()
+    return
+  }
+  if (event.operation === 'reset') {
+    void loadWorkstream(workstreamId)
+  }
+}
+
+function subscribe(workstreamId: string): void {
+  state.unsubscribeFeed?.()
+  state.unsubscribeFeed = subscribeFeed(
+    workstreamId,
+    0,
+    (event: FeedEvent) => {
+      if (state.activeId !== workstreamId) return
+      applyFeedEvent(workstreamId, event)
+    },
+    (status) => {
+      state.feedLive = status === 'connected'
+    },
+  )
 }
 
 async function refreshIntent(workstreamId: string): Promise<void> {
@@ -1191,27 +1293,28 @@ async function startWorkstream(text: string): Promise<void> {
 }
 
 async function sendPrompt(workstreamId: string, text: string): Promise<void> {
-  const session = activeSession()
-  if (!session) {
-    toast('Cette conversation n’a pas de session courante.', true)
-    return
-  }
   state.echoes.push({ id: `echo-${Date.now()}`, text, seq: state.echoes.length })
   renderMessages()
   try {
-    await promptSession(session.id, [{ type: 'text', text }])
+    const result = await promptSession(workstreamId, text)
+    // The optimistic running turn: its status updates arrive on the feed.
+    state.turns.push({
+      id: result.commandId,
+      workstreamId,
+      sessionId: '',
+      turnOrdinal: state.turns.length + 1,
+      purpose: 'user',
+      status: 'running',
+      stopReason: null,
+      usage: null,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    })
+    syncComposerLock()
   } catch (error) {
-    // `runtime_unavailable` is not a failure, it is a suspended Session: config and transcript live
-    // on the Agora Session, but the ACP connection lives on a Pod that may be long gone. Waking it
-    // is what the OLD system did implicitly on every send, so the operator should not have to know
-    // the difference.
-    if (error instanceof ApiError && error.problem.code === 'runtime_unavailable') {
-      toast('Réveil de la session…')
-      await activateSession(session.id)
-      await promptSession(session.id, [{ type: 'text', text }])
-      await loadWorkstream(workstreamId)
-      return
-    }
+    // The echo dies with the failure: the command was not even reserved.
+    state.echoes = state.echoes.filter((echo) => echo.text !== text || state.items.some((item) => item.kind === 'message'))
+    renderMessages()
     throw error
   }
 }
@@ -1238,33 +1341,11 @@ async function applyConfigOption(optionId: string, value: string): Promise<void>
     return
   }
 
-  const session = activeSession()
-  if (!session) {
-    state.draft.config[optionId] = value
-    renderComposer()
-    renderTopbar()
-    renderMenus()
-    return
-  }
-
-  try {
-    const result = await setConfigOption(session.id, optionId, value)
-    if (result.pending) {
-      // No Runtime to tell right now — but the choice IS durable, so it is shown as chosen rather
-      // than silently reverting to what the last live session happened to be on.
-      state.configOptions = state.configOptions.map((option) => (option.id === optionId ? { ...option, currentValue: value } : option))
-      toast('Réglage enregistré — il prendra effet au prochain message.')
-    } else if (Array.isArray(result.configOptions)) {
-      // The Agent hands back its whole option set, which is authoritative — including any OTHER
-      // option its answer changed. Trusting it beats patching the one entry this client asked about.
-      state.configOptions = result.configOptions as readonly ConfigOption[]
-    }
-    renderComposer()
-    renderTopbar()
-    renderMenus()
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  // Draft only: there is no live-session config path on this API.
+  state.draft.config[optionId] = value
+  renderComposer()
+  renderTopbar()
+  renderMenus()
 }
 
 /**
@@ -1274,27 +1355,8 @@ async function applyConfigOption(optionId: string, value: string): Promise<void>
  * Handoff) rather than a restart.
  */
 async function relaunchSession(reason: string): Promise<void> {
-  const workstreamId = state.activeId
-  const catalogue = state.catalogue
-  if (!workstreamId || !catalogue) return
-  const agentId = selectedAgentId()
-  const persona = state.draft.persona
   closeMenu()
-  toast(reason)
-  try {
-    const carried = carriedConfigOptions()
-    await openSession(workstreamId, {
-      agentId,
-      ...(persona ? { persona } : {}),
-      workspace: { workspaceRef: WORKSPACE_REF },
-      equipment: { catalogueVersion: catalogue.version, resources: state.draft.equipment },
-      activate: true,
-      ...(carried.length > 0 ? { configOptions: carried } : {}),
-    })
-    await loadWorkstream(workstreamId)
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  toast(`${reason} — le lancement de session n’existe pas sur cette API.`)
 }
 
 async function choosePersona(persona: string): Promise<void> {
@@ -1369,36 +1431,16 @@ async function renameWorkstream(workstreamId: string | null): Promise<void> {
  * capped per namespace, and on 2026-08-07 four abandoned Sessions held every slot and made the
  * platform refuse all new work. An operator needs a way to hand a slot back immediately.
  */
+/** There is no imperative session lifecycle on this API: execution follows the Intent (power on/off). */
 async function stopSession(workstreamId: string | null): Promise<void> {
   if (!workstreamId) return
-  const session = currentSession(state.sessions.get(workstreamId) ?? [])
-  if (!session) return
-  if (!confirm('Arrêter la session ? L’historique est conservé et la conversation reprendra au prochain message.')) return
-  try {
-    await suspendSession(session.id)
-    toast('Session arrêtée — elle reprendra au prochain message.')
-    await loadWorkstream(workstreamId)
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  toast('Les sessions suivent l’Intent (power on/off), pas d’arrêt manuel sur cette API.', true)
 }
 
+/** Deletion extinguishes execution first (continuity: storage and retention) and has no API in S4 — the button says so instead of failing silently. */
 async function removeWorkstream(workstreamId: string | null): Promise<void> {
   if (!workstreamId) return
-  if (!confirm('Supprimer définitivement cette conversation (historique compris) ?')) return
-  try {
-    await deleteWorkstream(workstreamId)
-    // Deletion is accepted asynchronously (202): the row is marked deleting and disappears from the
-    // list once the engine has torn its Sessions down. Dropping it locally now matches what the next
-    // poll will report and keeps the click from feeling ignored.
-    state.workstreams.delete(workstreamId)
-    state.sessions.delete(workstreamId)
-    state.detailSeenAt.delete(workstreamId)
-    if (state.activeId === workstreamId) newChat()
-    else renderSidebar()
-  } catch (error) {
-    toast(errorText(error), true)
-  }
+  toast('La suppression n’est pas disponible sur l’API actuelle.', true)
 }
 
 /* ------------------------------------------------------------------ *

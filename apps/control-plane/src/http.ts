@@ -1,12 +1,15 @@
-// Control-plane HTTP API (S2 Step 7): Workstreams and complete Intents over node:http, with
-// Problem+JSON errors whose detail is always populated (findings §6.8). Product data flows
-// through the product pool; the operational work view is read through the engine pool so the two
-// authority boundaries of contracts/db/schema.sql stay observable end to end.
-import { createServer, type IncomingMessage, type Server } from 'node:http'
+// Control-plane HTTP API (S2 Step 7 + S4): Workstreams, complete Intents, prompts, permission
+// decisions and the resumable feed, over node:http, with Problem+JSON errors whose detail is
+// always populated (findings §6.8). Product data flows through the product pool; the operational
+// work view is read through the engine pool so the authority boundaries of
+// contracts/db/schema.sql stay observable end to end.
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import { validateIntentShape, type CatalogueView } from '@agora/domain'
 import { authorIntent, loadLatestIntentEvent, withTransaction, type RevisionSet } from '@agora/engine'
+import { DispatchConflictError, reserveDispatch, replayDispatch } from '@agora/acp'
+import type { AgentChannels } from './agent-channel.js'
 import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
 
@@ -16,6 +19,109 @@ export interface ControlPlaneOptions {
   readonly catalogue?: CatalogueView
   readonly revisionSet?: RevisionSet
   readonly nowSql?: string
+  /** Live ACP channels (S4). Absent in worker-only deployments: prompts answer 503. */
+  readonly channels?: AgentChannels
+}
+
+async function handlePrompt(
+  req: IncomingMessage,
+  res: ServerResponse,
+  productPool: pg.Pool,
+  channels: AgentChannels | undefined,
+  workstreamId: string,
+  nowSql?: string,
+): Promise<void> {
+  if (channels === undefined) {
+    return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
+  }
+  const key = idempotencyKey(req)
+  if (key === null) return sendProblem(res, 400, 'Missing Idempotency-Key', 'the Idempotency-Key header is required')
+  const body = await readJsonBody(req)
+  if (!body.ok) return sendProblem(res, 400, 'Invalid JSON', 'the request body must be valid JSON')
+  const text = (body.body as Record<string, unknown>)?.['text']
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    return sendProblem(res, 422, 'Invalid prompt', 'text must be a non-empty string')
+  }
+
+  const replayed = await replayDispatch(productPool, workstreamId, key)
+  if (replayed !== null) {
+    return sendJson(res, 200, { commandId: replayed.id, state: replayed.state })
+  }
+
+  try {
+    const reserved = await withTransaction(productPool, async (client) => {
+      // Admission revalidation happens in the reservation's own transaction: the current Session
+      // and the no-turn-in-flight gate commit together with `reserved`, before any send.
+      const current = await client.query(
+        'SELECT id FROM sessions WHERE workstream_id = $1 AND attribution_ended_at IS NULL ORDER BY ordinal DESC LIMIT 1',
+        [workstreamId],
+      )
+      if (current.rowCount === 0) {
+        throw new Error('no_current_session')
+      }
+      const sessionId = current.rows[0]!['id'] as string
+      const reserved = await reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text }, requestKey: key })
+      return { reserved, sessionId }
+    })
+    await channels.ensure(workstreamId, reserved.sessionId)
+    void channels.prompt(workstreamId, reserved.reserved.id, text).catch((error: unknown) => {
+      console.error(`prompt flow for ${reserved.reserved.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    return sendJson(res, 202, { commandId: reserved.reserved.id, state: 'reserved' })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'no_current_session') {
+      return sendProblem(res, 409, 'No current Session', 'prompts require a current Session; power on through the Intent first')
+    }
+    if (error instanceof DispatchConflictError) {
+      const existing = await replayDispatch(productPool, workstreamId, key)
+      return sendJson(res, 200, { commandId: existing!.id, state: existing!.state })
+    }
+    void nowSql
+    if (error instanceof Error && error.message === 'turn_in_flight') {
+      return sendProblem(res, 409, 'Turn in flight', 'at most one prompt turn may be in flight per Workstream (findings §2.4)')
+    }
+    if (error instanceof Error && error.message === 'prompt_delivery_unknown') {
+      return sendProblem(res, 409, 'Prompt delivery unknown', 'a previous prompt may have been accepted; its recovery must resolve before a new turn (CONT-005)')
+    }
+    throw error
+  }
+}
+
+async function streamFeed(
+  req: IncomingMessage,
+  res: ServerResponse,
+  productPool: pg.Pool,
+  channels: AgentChannels | undefined,
+  workstreamId: string,
+): Promise<void> {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  let after = Number(url.searchParams.get('after') ?? '0')
+  if (!Number.isSafeInteger(after) || after < 0) after = 0
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+  res.write(':ok\n\n')
+  let stopped = false
+  req.on('close', () => {
+    stopped = true
+  })
+  while (!stopped) {
+    if (channels !== undefined) await channels.runProjectors(workstreamId).catch(() => {})
+    const rows = (await productPool.query(
+      'SELECT position, through_seq, operation, item_id, payload, created_at FROM feed_events WHERE workstream_id = $1 AND position > $2 ORDER BY position LIMIT 200',
+      [workstreamId, after],
+    )).rows
+    for (const row of rows) {
+      after = Number(row['position'])
+      const frame = {
+        position: row['position'],
+        operation: row['operation'],
+        itemId: row['item_id'],
+        payload: row['payload'],
+        throughSeq: row['through_seq'],
+      }
+      res.write(`data: ${JSON.stringify(frame)}\n\n`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
 }
 
 const PRINCIPAL_HEADER = 'x-forwarded-email'
@@ -63,6 +169,7 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
   const nowSql = options.nowSql
   const productPool = options.productPool
   const enginePool = options.enginePool ?? options.productPool
+  const channels = options.channels
 
   return createServer((req, res) => {
     void (async () => {
@@ -202,6 +309,51 @@ export function createControlPlaneServer(options: ControlPlaneOptions): Server {
                   },
           })
         }
+      }
+
+      if (segments.length === 4 && segments[3] === 'prompt' && method === 'POST') {
+        return handlePrompt(req, res, productPool, channels, workstreamId, nowSql)
+      }
+      if (segments.length === 4 && segments[3] === 'items' && method === 'GET') {
+        const items = await productPool.query(
+          'SELECT id, session_id, item_kind, entity_key, value, first_seq, latest_seq, updated_at FROM projection_items WHERE workstream_id = $1 ORDER BY first_seq',
+          [workstreamId],
+        )
+        return sendJson(res, 200, {
+          items: items.rows.map((row) => ({
+            id: row['id'],
+            sessionId: row['session_id'],
+            kind: row['item_kind'],
+            entityKey: row['entity_key'],
+            value: row['value'],
+            firstSeq: row['first_seq'],
+            latestSeq: row['latest_seq'],
+            updatedAt: row['updated_at'],
+          })),
+        })
+      }
+      if (segments.length === 4 && segments[3] === 'feed' && method === 'GET') {
+        return streamFeed(req, res, productPool, channels, workstreamId)
+      }
+      if (segments.length === 5 && segments[3] === 'permissions' && segments[4] === 'pending' && method === 'GET') {
+        if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
+        return sendJson(res, 200, { pending: channels.pendingPermissionIds(workstreamId) })
+      }
+      if (segments.length === 6 && segments[3] === 'permissions' && segments[5] === 'decision' && method === 'POST') {
+        if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
+        const body = await readJsonBody(req)
+        const optionId = (body.ok ? (body.body as Record<string, unknown>)?.['optionId'] : undefined) as unknown
+        if (typeof optionId !== 'string' || optionId.length === 0) {
+          return sendProblem(res, 422, 'Invalid decision', 'optionId must be a non-empty string')
+        }
+        const decided = channels.decidePermission(workstreamId, segments[4]!, optionId)
+        if (!decided) return sendProblem(res, 404, 'No pending permission', `no pending permission ${segments[4]} on this Workstream`)
+        return sendJson(res, 200, { decided: true })
+      }
+      if (segments.length === 4 && segments[3] === 'cancel' && method === 'POST') {
+        if (channels === undefined) return sendProblem(res, 503, 'No ACP channel', 'this deployment runs without ACP channels')
+        await channels.cancel(workstreamId)
+        return sendJson(res, 202, { cancelled: true })
       }
 
       return sendProblem(res, 405, 'Method not allowed', `${method} is not supported here`)

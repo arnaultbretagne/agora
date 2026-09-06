@@ -1,0 +1,11 @@
+{
+  "direction": "sideways",
+  "rpc_kind": "notification",
+  "method": "session/update",
+  "correlated_method": null,
+  "rpc_id": null,
+  "command_id": null,
+  "connection_id": "conn-1",
+  "observation_id": "obs-0002",
+  "frame_size": 210
+}

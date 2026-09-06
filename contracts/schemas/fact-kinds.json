@@ -43,6 +43,12 @@
       "sessionScoped": true,
       "payloadSchema": "https://agora.dev/schemas/fact-session-provenance.schema.json",
       "grounding": "ADR 0002 — Facts and related records: non-secret correlations (image digest, workload identity, runtime ids); ADR 0006"
+    },
+    {
+      "kind": "acp.envelope",
+      "sessionScoped": true,
+      "payloadSchema": "https://agora.dev/schemas/fact-acp-envelope.schema.json",
+      "grounding": "ADR 0004 — capture at the complete-envelope boundary: the payload column holds the raw frame text (jsonb), the schema validates only the indexing metadata beside it"
     }
   ]
 }
