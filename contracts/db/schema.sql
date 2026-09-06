@@ -422,34 +422,42 @@ CREATE INDEX retirement_obligations_workstream ON retirement_obligations (workst
 GRANT SELECT, INSERT, DELETE ON retirement_obligations TO agora_engine;
 GRANT SELECT ON retirement_obligations TO agora_product;
 
--- S6 operational — runtime-control's own owner record (engine.md — the owner request protocol;
--- P5, shared shape, per-owner persistence). Mirrors packages/owner-requests' OwnerRecord: last
--- accepted epoch per Workstream, one row per attempt key (idempotent replay by digest), and
+-- S6/S7 operational — every owner's own owner record (engine.md — the owner request protocol; P5,
+-- one shared shape, per-owner persistence: runtime-control S6, broker S7, keyed by `owner` so
+-- neither can see or collide with the other's rows). Mirrors packages/owner-requests' OwnerRecord:
+-- last accepted epoch per Workstream, one row per attempt key (idempotent replay by digest), and
 -- targets this owner has itself retired (positive operations refuse them forever; concrete-target
 -- cleanup stays authorized). Independent of the engine's own mutation_epochs/owner_attempts, which
--- record the dispatch side, not the owner's.
-CREATE TABLE runtime_control_epochs (
-  workstream_id uuid PRIMARY KEY REFERENCES workstreams(id),
-  epoch bigint NOT NULL
+-- record the dispatch side, not the owner's — packages/owner-requests' PgOwnerGate is the one
+-- implementation every owner embeds instead of re-deciding the contract.
+CREATE TABLE owner_record_epochs (
+  owner text NOT NULL,
+  workstream_id uuid NOT NULL REFERENCES workstreams(id),
+  epoch bigint NOT NULL,
+  PRIMARY KEY (owner, workstream_id)
 );
 
-CREATE TABLE runtime_control_attempts (
-  attempt_key text PRIMARY KEY,
+CREATE TABLE owner_record_attempts (
+  owner text NOT NULL,
+  attempt_key text NOT NULL,
   workstream_id uuid NOT NULL REFERENCES workstreams(id),
   payload_digest text NOT NULL,
   response jsonb NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner, attempt_key)
 );
 
-CREATE INDEX runtime_control_attempts_workstream ON runtime_control_attempts (workstream_id);
+CREATE INDEX owner_record_attempts_workstream ON owner_record_attempts (owner, workstream_id);
 
-CREATE TABLE runtime_control_retired_targets (
-  target_id text PRIMARY KEY,
+CREATE TABLE owner_record_retired_targets (
+  owner text NOT NULL,
+  target_id text NOT NULL,
   workstream_id uuid NOT NULL REFERENCES workstreams(id),
-  retired_at timestamptz NOT NULL DEFAULT now()
+  retired_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner, target_id)
 );
 
-GRANT SELECT, INSERT, UPDATE ON runtime_control_epochs TO agora_engine;
-GRANT SELECT, INSERT ON runtime_control_attempts TO agora_engine;
-GRANT SELECT, INSERT ON runtime_control_retired_targets TO agora_engine;
-GRANT SELECT ON runtime_control_epochs, runtime_control_attempts, runtime_control_retired_targets TO agora_product;
+GRANT SELECT, INSERT, UPDATE ON owner_record_epochs TO agora_engine;
+GRANT SELECT, INSERT ON owner_record_attempts TO agora_engine;
+GRANT SELECT, INSERT ON owner_record_retired_targets TO agora_engine;
+GRANT SELECT ON owner_record_epochs, owner_record_attempts, owner_record_retired_targets TO agora_product;

@@ -7,7 +7,7 @@ import { HttpK8sClient } from './k8s-client.js'
 import { PgObligationStore, sweepRetirementObligations } from './retirement.js'
 import { LaunchSeam } from './launch-seam.js'
 import { createOwnerApi } from './owner-api.js'
-import { PgOwnerGate } from './owner-gate.js'
+import { PgOwnerGate } from '@agora/owner-requests'
 import { loadHarnessDefinitions, loadRuntimeSettings, type RuntimeSettings } from './k8s-pod-spec.js'
 import { LABEL_APP, LABEL_WORKSTREAM } from './k8s-labels.js'
 import { WakeLog } from './wakes.js'
@@ -30,7 +30,7 @@ export function main(options: MainOptions = {}): { readonly stop: () => void } {
   const k8s = new HttpK8sClient({ namespace: settings.namespace })
   const obligations = new PgObligationStore(pool)
   const seams = new Map<string, LaunchSeam>()
-  const gate = new PgOwnerGate(pool)
+  const gate = new PgOwnerGate(pool, 'runtime-control')
   const wakes = new WakeLog()
 
   const server = createOwnerApi({ k8s, obligations, seams, gate, harnesses, settings, wakes })
