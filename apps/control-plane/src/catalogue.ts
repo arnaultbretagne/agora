@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs'
 import type { CatalogueView } from '@agora/domain'
 import type { RevisionSet } from '@agora/engine'
 
-// S2 stands in for the reviewed capability/harness catalogue that S7 delivers. It validates on
-// Intents against a small fixed vocabulary; ENGINE-017's retired-catalogue case is exercised with
-// an empty view in the engine tests. S7 replaces this stub.
+// S2 stood in with a small fixed vocabulary for Intent shape validation before any real catalogue
+// existed. ENGINE-017's retired-catalogue case is still exercised against an empty view in the
+// engine's own tests — this stub stays available for that, and as the default when no real
+// catalogue path is configured.
 export const STUB_CATALOGUE: CatalogueView = {
   harnesses: new Set(['claude-code']),
   capabilities: new Set(['provider.invoke', 'workspace.read']),
@@ -12,3 +14,46 @@ export const STUB_CATALOGUE: CatalogueView = {
 }
 
 export const STUB_REVISION_SET: RevisionSet = { catalogue: 'stub-s2' }
+
+interface HarnessDefinitionsFile {
+  readonly harnesses: readonly {
+    readonly harnessId: string
+    readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
+  }[]
+}
+
+interface CapabilitiesFile {
+  readonly capabilities: readonly { readonly id: string }[]
+}
+
+/**
+ * The real S8 CatalogueView, read straight from contracts/catalogue/{harness-definitions,
+ * capabilities}.json — plain JSON, not apps/runtime-control's own loader: control-plane cannot
+ * import that module (ADR 0001, deployable depending on deployable), and the harness/model
+ * catalogue and the capability catalogue are otherwise-independent reviewed files anyway.
+ */
+export function loadCatalogueView(harnessDefinitionsPath: string, capabilitiesPath: string): CatalogueView {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  const capabilitiesFile = JSON.parse(readFileSync(capabilitiesPath, 'utf8')) as CapabilitiesFile
+
+  const harnesses = new Set(harnessFile.harnesses.map((h) => h.harnessId))
+  const capabilities = new Set(capabilitiesFile.capabilities.map((c) => c.id))
+  const byHarness = new Map(harnessFile.harnesses.map((h) => [h.harnessId, h.models ?? {}]))
+
+  return {
+    harnesses,
+    capabilities,
+    models: (harness) => Object.keys(byHarness.get(harness) ?? {}),
+    efforts: (harness, model) => byHarness.get(harness)?.[model]?.efforts ?? [],
+  }
+}
+
+export function catalogueRevisionSet(harnessDefinitionsPath: string, capabilitiesPath: string): RevisionSet {
+  // A trivial content signature — enough to distinguish "the catalogue changed" for ENGINE-014's
+  // "an old attempt cannot resolve a new payload under the same idempotency key" without pulling
+  // in a hashing dependency here for two small files read once at process start.
+  const combined = readFileSync(harnessDefinitionsPath, 'utf8') + readFileSync(capabilitiesPath, 'utf8')
+  let hash = 0
+  for (let i = 0; i < combined.length; i += 1) hash = (hash * 31 + combined.charCodeAt(i)) | 0
+  return { catalogue: `s8-${hash.toString(16)}` }
+}

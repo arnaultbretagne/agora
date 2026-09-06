@@ -8,11 +8,12 @@ import { payloadDigest, type OwnerRequest, type OwnerResponse } from '@agora/own
 import type { K8sClient, HttpError } from './k8s-client.js'
 import { distinctLiveWorkstreamIds, inventoryWorkstream, isStartupDeadlineExpired } from './inventory.js'
 import type { RuntimeObligationStore } from './retirement.js'
-import type { LaunchSeam } from './launch-seam.js'
+import { LaunchSeam } from './launch-seam.js'
 import type { OwnerGate } from '@agora/owner-requests'
 import { buildPodSpec, type HarnessDefinition, type RuntimeSettings } from './k8s-pod-spec.js'
 import { podName } from './k8s-labels.js'
 import { WakeLog, readWakes } from './wakes.js'
+import { mintBridgeToken } from '@agora/acp'
 
 export interface OwnerApiOptions {
   readonly k8s: K8sClient
@@ -22,6 +23,8 @@ export interface OwnerApiOptions {
   readonly harnesses: readonly HarnessDefinition[]
   readonly settings: RuntimeSettings
   readonly wakes: WakeLog
+  /** P4: signs the bridge token minted at gate release — the same secret every harness Pod verifies against. */
+  readonly bridgeAuthSecret: string
 }
 
 function problem(res: ServerResponse, status: number, title: string, detail: string): void {
@@ -138,6 +141,7 @@ async function createPod(options: OwnerApiOptions, request: OwnerRequest): Promi
   try {
     const created = await options.k8s.createPod(spec)
     const uid = (created['metadata'] as { uid?: string } | undefined)?.uid ?? null
+    ensureSeam(options, name, request.target.id)
     return { kind: 'completed', result: { podName: name, podUid: uid } }
   } catch (error) {
     if ((error as HttpError).status === 409) {
@@ -146,11 +150,17 @@ async function createPod(options: OwnerApiOptions, request: OwnerRequest): Promi
       const existing = await options.k8s.getPod(name)
       if (existing !== undefined) {
         const uid = (existing['metadata'] as { uid?: string } | undefined)?.uid ?? null
+        ensureSeam(options, name, request.target.id)
         return { kind: 'completed', result: { podName: name, podUid: uid } }
       }
     }
     throw error
   }
+}
+
+/** One seam per Pod, keyed the same way evidence/gate_release look it up — never replaced once created (a seam already mid-release must not reset). */
+function ensureSeam(options: OwnerApiOptions, podName: string, incarnation: string): void {
+  if (!options.seams.has(podName)) options.seams.set(podName, new LaunchSeam(incarnation))
 }
 
 async function cleanupPod(options: OwnerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
@@ -166,11 +176,15 @@ async function cleanupPod(options: OwnerApiOptions, request: OwnerRequest): Prom
 
 function gateRelease(options: OwnerApiOptions, request: OwnerRequest): OwnerResponse {
   const sessionId = (request.payload as { sessionId?: string }).sessionId
-  const seam = options.seams.get(request.target.id)
+  const name = podName(request.workstreamId, request.target.id)
+  const seam = options.seams.get(name)
   if (seam === undefined || typeof sessionId !== 'string') {
     return { kind: 'unknown', detail: 'seam not established' }
   }
-  return seam.release(sessionId) ? { kind: 'completed', result: { released: true } } : { kind: 'unknown', detail: 'seam already bound to another Session' }
+  if (!seam.release(sessionId)) return { kind: 'unknown', detail: 'seam already bound to another Session' }
+  // P4: minted only once release actually succeeds — the incarnation is confirmed real at this point.
+  const bridgeToken = mintBridgeToken(request.target.id, options.bridgeAuthSecret)
+  return { kind: 'completed', result: { released: true, bridgeToken } }
 }
 
 /** Convenience for callers building a request outside the engine's own reservation path (tests). */

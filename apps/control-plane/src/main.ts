@@ -7,6 +7,7 @@ import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
+import { loadCatalogueView, catalogueRevisionSet } from './catalogue.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
 
@@ -49,9 +50,14 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const productPool = createPool(databaseUrl)
   const enginePool = createPool(databaseUrl)
 
+  const harnessDefinitionsPath = env.HARNESS_DEFINITIONS_PATH
+  const capabilitiesPath = env.POLICY_CAPABILITIES_PATH
+  const catalogue = harnessDefinitionsPath && capabilitiesPath ? loadCatalogueView(harnessDefinitionsPath, capabilitiesPath) : undefined
+  const revisionSet = harnessDefinitionsPath && capabilitiesPath ? catalogueRevisionSet(harnessDefinitionsPath, capabilitiesPath) : undefined
+
   if (mode === 'api' || mode === 'both') {
     const channels = new AgentChannels({ pool: productPool, logger: (message) => console.log(message) })
-    const server = createControlPlaneServer({ productPool, enginePool, channels })
+    const server = createControlPlaneServer({ productPool, enginePool, channels, ...(catalogue ? { catalogue } : {}), ...(revisionSet ? { revisionSet } : {}) })
     await new Promise<void>((resolve) => server.listen(port, '0.0.0.0', resolve))
     console.log(`control plane API listening on :${port}`)
   }

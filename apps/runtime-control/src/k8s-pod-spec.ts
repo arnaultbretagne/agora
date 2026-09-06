@@ -11,6 +11,10 @@ export interface HarnessDefinition {
   readonly imageDigest: string
   readonly launchCommand: readonly string[]
   readonly mounts: readonly { readonly name: string; readonly mountPath: string; readonly readOnly?: boolean }[]
+  /** P11: the named capability admission verifies is granted before the first prompt — model/provider access, never implicit (AUTH-009). */
+  readonly bootstrapCapability?: string
+  /** P11: the reviewed, curated model/effort catalogue — a deliberate subset of what the adapter actually offers (harnesses/claude-code/README.md). */
+  readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
 }
 
 export interface RuntimeSettings {
@@ -20,6 +24,16 @@ export interface RuntimeSettings {
   readonly inventoryFreshnessMs: number
   readonly runtimeClassName: string
   readonly runAsUser: number
+  /** The Secret (and its key) holding the P4 bridge signing secret — the same one runtime-control itself uses, mounted read-only into every harness Pod. */
+  readonly bridgeAuthSecretName: string
+  readonly bridgeAuthSecretKey: string
+  readonly bridgePort: number
+  readonly ownerApiBaseUrl: string
+  /** ADR 0009: the Pod's egress goes through the Broker relay only — never OneCLI or a provider directly, and never with the OneCLI bearer, which stays Broker-private. */
+  readonly relayHost: string
+  readonly relayPort: number
+  /** The ConfigMap (public — a CA certificate, not a secret) publishing OneCLI's gateway CA, so the Pod trusts the relay's TLS interception. */
+  readonly relayCaConfigMapName: string
 }
 
 export interface PodSpecInput {
@@ -38,13 +52,17 @@ export function loadRuntimeSettings(path: string): RuntimeSettings {
 }
 
 export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, settings: RuntimeSettings): K8sObject {
-  const activeDeadline = `agora.dev/startup-deadline`
-  void activeDeadline
+  // Not `.slice(0, 10)` here — podName() already caps its slot argument to 20 chars internally.
+  // Slicing again here first, to a DIFFERENT length, silently produced a Pod name that disagreed
+  // with owner-api.ts's own `podName(workstreamId, target.id)` (unsliced) whenever an incarnation
+  // ran past 10 characters — breaking "discoverable by pre-recorded correlation" exactly when it
+  // would matter most. Found while wiring S8's real incarnation values through for the first time.
+  const name = podName(input.workstreamId, input.incarnation)
   return {
     apiVersion: 'v1',
     kind: 'Pod',
     metadata: {
-      name: podName(input.workstreamId, input.incarnation.slice(0, 10)),
+      name,
       labels: requiredLabels({
         workstreamId: input.workstreamId,
         attemptKey: input.attemptKey,
@@ -64,6 +82,19 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
           image: harness.imageDigest,
           command: [...harness.launchCommand],
           imagePullPolicy: 'IfNotPresent',
+          ports: [{ containerPort: settings.bridgePort, name: 'bridge' }],
+          env: [
+            { name: 'AGORA_INCARNATION', value: input.incarnation },
+            { name: 'AGORA_EVIDENCE_URL', value: `${settings.ownerApiBaseUrl}/v1/pods/${name}/evidence` },
+            { name: 'BRIDGE_PORT', value: String(settings.bridgePort) },
+            { name: 'BRIDGE_AUTH_SECRET', valueFrom: { secretKeyRef: { name: settings.bridgeAuthSecretName, key: settings.bridgeAuthSecretKey } } },
+            // No credential in this URL — the relay identifies the Pod by its own source IP
+            // (P10) and holds the OneCLI bearer itself (ADR 0009). Uppercase and lowercase forms:
+            // not every HTTP client in the harness image honors only one casing.
+            { name: 'HTTPS_PROXY', value: `http://${settings.relayHost}:${settings.relayPort}` },
+            { name: 'https_proxy', value: `http://${settings.relayHost}:${settings.relayPort}` },
+            { name: 'NODE_EXTRA_CA_CERTS', value: '/etc/agora/relay-ca/ca.pem' },
+          ],
           securityContext: {
             runAsNonRoot: true,
             runAsUser: settings.runAsUser,
@@ -77,7 +108,11 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
           volumeMounts: harness.mounts.map((mount) => ({ name: mount.name, mountPath: mount.mountPath, readOnly: mount.readOnly ?? true })),
         },
       ],
-      volumes: harness.mounts.map((mount) => ({ name: mount.name, emptyDir: {} })),
+      // `emptyDir` here used to hand the Pod a directory with no content at all — the mount
+      // existed but the CA it's meant to hold never did. The relay-ca mount is a real ConfigMap
+      // (public: a CA certificate, never a secret) that an operator (or, once automated, the
+      // Broker) publishes from OneCLI's own gateway CA.
+      volumes: harness.mounts.map((mount) => (mount.name === 'relay-ca' ? { name: mount.name, configMap: { name: settings.relayCaConfigMapName } } : { name: mount.name, emptyDir: {} })),
     },
   }
 }
