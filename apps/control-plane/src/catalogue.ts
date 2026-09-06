@@ -20,6 +20,7 @@ interface HarnessDefinitionsFile {
     readonly harnessId: string
     readonly imageDigest: string
     readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
+    readonly workspaceRoot?: string
     readonly custody?: {
       readonly supportedFormats: readonly { readonly formatId: string; readonly formatVersion: number }[]
       readonly acceptedDriverRevisions: readonly string[]
@@ -40,6 +41,12 @@ export interface RestoreHarness {
  * The custody half of the reviewed harness definition. A harness that declares none simply has no
  * restorable Saves: observation.anchor stays unavailable for it rather than defaulting to something.
  */
+/** The workspace root the reviewed harness definition declares — the same one its PodSpec launches the adapter with. */
+export function loadWorkspaceRoot(harnessDefinitionsPath: string, harnessId: string): string | undefined {
+  const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
+  return harnessFile.harnesses.find((h) => h.harnessId === harnessId)?.workspaceRoot
+}
+
 export function loadRestoreHarness(harnessDefinitionsPath: string, harnessId: string): RestoreHarness | undefined {
   const harnessFile = JSON.parse(readFileSync(harnessDefinitionsPath, 'utf8')) as HarnessDefinitionsFile
   const harness = harnessFile.harnesses.find((h) => h.harnessId === harnessId)

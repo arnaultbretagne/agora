@@ -27,9 +27,9 @@ import { buildClientConnection, connectBridge, createPersist, initializeParams, 
 import { bindAcpContext, currentSession } from '@agora/journal'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
-import { WORKSPACE_ROOT } from '../workspace-root.js'
+import { workspaceRoot } from '../workspace-root.js'
 
-export { WORKSPACE_ROOT }
+export { workspaceRoot }
 
 export interface StartExecutorOptions {
   readonly productPool: pg.Pool
@@ -105,7 +105,7 @@ async function runStart(
       })
       const clientConnection = buildClientConnection(connection.stream, persist)
       try {
-        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
         const contextId = discoverFirst ? await discoverOrCreateContext(clientConnection) : await createContext(clientConnection)
         await bindAcpContext(client, session.sessionId, { contextId, processGeneration: currentGeneration })
       } finally {
@@ -121,14 +121,14 @@ async function runStart(
 }
 
 async function discoverOrCreateContext(connection: acp.ClientConnection): Promise<string> {
-  const listed = (await connection.agent.request(acp.methods.agent.session.list, { cwd: WORKSPACE_ROOT })) as { sessions?: readonly { sessionId?: string }[] }
+  const listed = (await connection.agent.request(acp.methods.agent.session.list, { cwd: workspaceRoot() })) as { sessions?: readonly { sessionId?: string }[] }
   const existing = listed.sessions?.[0]?.sessionId
   if (typeof existing === 'string') return existing // discovered a session/new that landed but whose response was lost — never a second session/new
   return createContext(connection)
 }
 
 async function createContext(connection: acp.ClientConnection): Promise<string> {
-  const created = (await connection.agent.request(acp.methods.agent.session.new, { cwd: WORKSPACE_ROOT, mcpServers: [] })) as { sessionId: string }
+  const created = (await connection.agent.request(acp.methods.agent.session.new, { cwd: workspaceRoot(), mcpServers: [] })) as { sessionId: string }
   return created.sessionId
 }
 

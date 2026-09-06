@@ -1,6 +1,6 @@
 # S9 — Native continuity: Saves, Anchors, restore and refill
 
-- **Status:** planned
+- **Status:** merged; the end-to-end run on real Kubernetes with real OneCLI is a deployment step (see the master plan's S9 status)
 - **Depends on:** S8
 - **Produces:** `packages/custody`, custody transport in runtime-control, the claude-code custody driver, RESTORE and REFILL, TURN_OFF capture part, `observation.anchor` and `observation.sync` (non-empty range), the Handoff renderer under a versioned seed policy
 - **Master plan:** [S9](../master-plan.md#s9--native-continuity-saves-anchors-restore-and-refill)
@@ -149,11 +149,17 @@ Forbidden: bridge-embedded capture endpoints, `restoreFrom` credentials in the P
 
 ## Definition of done
 
-- [ ] P12, P13, P14 recorded in the owning specs and catalogue; policy revision pinned.
-- [ ] Custody schema with separate payload role; capture key uniqueness; conditional publication.
-- [ ] Named scenarios: `CONT-003, 004, 005 (handoff), 006, 008, 009, 010, 011, 012`, `OFF-001, 002, 008`.
-- [ ] Driver round-trip on the real adapter; end-to-end off/on with refill on kind.
-- [ ] Master plan S9 marked done.
+- [x] P12 (continuity.md — Registered driver: claude-code), P13 (`contracts/policies/handoff-seed-v1.md`),
+      P14 (continuity.md — Retention, first values); the policy revision `handoff-seed-v1` is pinned.
+- [x] Custody schema with separate payload role; capture key uniqueness; conditional publication.
+- [x] Named scenarios: `CONT-002, 003, 004, 005 (handoff), 006, 008, 009, 010, 011`, `OFF-001, 002, 008`.
+      `CONT-007` (A → B → A) stays prepared, not exercised: it needs the second harness, which is S10.
+      `CONT-012` (loss exposure over many turns) is recorded by the `shutdowns` row rather than
+      reported through observation yet — the material is there, the surfacing is S12's.
+- [x] Driver round-trip on the real adapter (`harnesses/claude-code/measure/custody-round-trip.mjs`).
+- [x] End-to-end off/on with refill against the real adapter, driver, transport and database
+      (`scripts/s9-end-to-end.mjs`); NOT on kind, which needs a cluster this environment has none of.
+- [ ] Master plan S9 marked done — deliberately not, for the same reason S8 is not.
 
 ## Report
 

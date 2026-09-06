@@ -5,13 +5,14 @@ import type { ObservationSource } from '@agora/engine'
 import type { Acquired, ObservationFieldName, ObservationReader } from '@agora/domain'
 import { createControlPlaneServer } from './http.js'
 import { AgentChannels } from './agent-channel.js'
-import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort, loadRestoreHarness } from './catalogue.js'
+import { loadCatalogueView, catalogueRevisionSet, loadHarnessDigests, loadBridgePort, loadRestoreHarness, loadWorkspaceRoot } from './catalogue.js'
 import { HttpObservationSource } from './observation-source.js'
 import { createHttpOwnerTransport } from './owner-transport.js'
 import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { createVerbRouter } from './verb-router.js'
+import { setWorkspaceRoot } from './workspace-root.js'
 import { createTurnOffExecutor } from './verbs/turn-off.js'
 import { createRestoreExecutor } from './verbs/restore.js'
 import { createRefillExecutor } from './verbs/refill.js'
@@ -69,6 +70,11 @@ export async function run(options: MainOptions = {}): Promise<void> {
   // One harness in the reviewed catalogue today (S8/S9); per-harness Anchors are already the schema's
   // shape, and CONT-007 exercises the multi-harness case in S10.
   const restoreHarness = harnessDefinitionsPath ? loadRestoreHarness(harnessDefinitionsPath, 'claude-code') : undefined
+  // Configured once, from the catalogue, before anything opens an ACP connection: this process and
+  // the Pod's adapter must agree on the workspace root, or START creates contexts under one and the
+  // custody driver looks for transcripts under another.
+  const declaredWorkspaceRoot = harnessDefinitionsPath ? loadWorkspaceRoot(harnessDefinitionsPath, 'claude-code') : undefined
+  if (declaredWorkspaceRoot !== undefined) setWorkspaceRoot(declaredWorkspaceRoot)
   const runtimeSettingsPath = env.RUNTIME_SETTINGS_PATH
   const bridgePort = runtimeSettingsPath ? loadBridgePort(runtimeSettingsPath) : undefined
 

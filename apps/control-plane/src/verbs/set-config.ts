@@ -17,7 +17,7 @@ import { currentSession } from '@agora/journal'
 import { loadLatestIntentEvent, type QueryClient } from '@agora/engine'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
-import { WORKSPACE_ROOT } from '../workspace-root.js'
+import { workspaceRoot } from '../workspace-root.js'
 
 export interface SetConfigExecutorOptions {
   readonly productPool: pg.Pool
@@ -93,7 +93,7 @@ async function runSetConfig(
       })
       const clientConnection = buildClientConnection(connection.stream, persist)
       try {
-        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
         await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, { sessionId: session.acpContextId, configId, value: desiredValue })
       } finally {
         clientConnection.close()

@@ -25,7 +25,7 @@ import {
   type BridgeConnection,
 } from '@agora/acp'
 import { currentSession } from '@agora/journal'
-import { WORKSPACE_ROOT } from '../workspace-root.js'
+import { workspaceRoot } from '../workspace-root.js'
 
 export interface PromptRecoveryOptions {
   readonly productPool: pg.Pool
@@ -184,8 +184,8 @@ async function loadReplay(
         },
       })
       try {
-        await connection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
-        await connection.agent.request(acp.methods.agent.session.load, { sessionId: input.contextId, cwd: WORKSPACE_ROOT, mcpServers: [] })
+        await connection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
+        await connection.agent.request(acp.methods.agent.session.load, { sessionId: input.contextId, cwd: workspaceRoot(), mcpServers: [] })
       } finally {
         connection.close()
       }

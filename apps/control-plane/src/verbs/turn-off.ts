@@ -243,54 +243,81 @@ async function preserve(
 
   const captured = attempt.capture
   try {
-    await client.query('BEGIN')
-    const previous = await getAnchor(client, context.workstreamId, harnessId)
-    const recorded = await recordSave(
-      client,
-      {
-        podUid: live.podUid,
-        processGeneration: captured.processGeneration,
-        contextId: captured.contextId,
-        frontierW: captured.frontierW,
-        driverRevision: captured.driverRevision,
-      },
-      {
+    // Three commits, in this order, because `save_payloads` references `saves`: the metadata has to
+    // be visible to the transport's own connection before the bytes can be written under it, and the
+    // Anchor must not name a Save whose bytes are not there yet.
+    //
+    // Each gap is survivable in exactly one direction. A crash after the first leaves a Save with no
+    // payload that no Anchor names — harmless material the retention sweep drops (P14), and a Save
+    // RESTORE would treat as an unreachable payload, which is an outage and invalidates nothing
+    // (CONT-008). A crash after the second leaves usable bytes the Anchor has not been advanced to:
+    // the previous Anchor still stands, which is precisely the conservative outcome.
+    const metadataClient = await options.productPool.connect()
+    let saveId: string
+    try {
+      await metadataClient.query('BEGIN')
+      const recorded = await recordSave(
+        metadataClient,
+        {
+          podUid: live.podUid,
+          processGeneration: captured.processGeneration,
+          contextId: captured.contextId,
+          frontierW: captured.frontierW,
+          driverRevision: captured.driverRevision,
+        },
+        {
+          workstreamId: context.workstreamId,
+          sessionId: live.sessionId,
+          harnessId,
+          formatId: captured.formatId,
+          formatVersion: captured.formatVersion,
+          imageDigest: options.imageDigest ?? 'unknown',
+          byteLength: captured.byteLength,
+          checksum: captured.checksum,
+          seedPolicyRevision: options.seedPolicyRevision ?? 'handoff-seed-v1',
+          nativeOrigin: captured.nativeOrigin,
+          workspaceDeps: captured.workspaceDeps,
+        },
+      )
+      await metadataClient.query('COMMIT')
+      saveId = recorded.save.id
+    } catch (error) {
+      await metadataClient.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      metadataClient.release()
+    }
+
+    await capture.commitPayload({ workstreamId: context.workstreamId, incarnation: shutdown.incarnation, stagingId: captured.stagingId, saveId })
+
+    const anchorClient = await options.productPool.connect()
+    let publication: PublishOutcome
+    try {
+      await anchorClient.query('BEGIN')
+      const previous = await getAnchor(anchorClient, context.workstreamId, harnessId)
+      publication = await publishAnchor(anchorClient, {
         workstreamId: context.workstreamId,
-        sessionId: live.sessionId,
-        harnessId: harnessId,
-        formatId: captured.formatId,
-        formatVersion: captured.formatVersion,
-        imageDigest: options.imageDigest ?? 'unknown',
-        byteLength: captured.byteLength,
-        checksum: captured.checksum,
-        seedPolicyRevision: options.seedPolicyRevision ?? 'handoff-seed-v1',
-        nativeOrigin: captured.nativeOrigin,
-        workspaceDeps: captured.workspaceDeps,
-      },
-    )
-
-    // The bytes are bound to the Save only once the metadata exists — a payload with no Save is
-    // garbage the retention sweep can drop; a Save with no payload would be a promise we cannot keep.
-    await capture.commitPayload({ workstreamId: context.workstreamId, incarnation: shutdown.incarnation, stagingId: captured.stagingId, saveId: recorded.save.id })
-
-    const publication: PublishOutcome = await publishAnchor(client, {
-      workstreamId: context.workstreamId,
-      harnessId: harnessId,
-      saveId: recorded.save.id,
-      frontierW: captured.frontierW,
-      expectedPrevious: previous?.saveId ?? null,
-    })
-    await client.query('COMMIT')
+        harnessId,
+        saveId,
+        frontierW: captured.frontierW,
+        expectedPrevious: previous?.saveId ?? null,
+      })
+      await anchorClient.query('COMMIT')
+    } catch (error) {
+      await anchorClient.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      anchorClient.release()
+    }
 
     await recordOutcome(client, key, {
       captureOutcome: 'captured',
-      saveId: recorded.save.id,
+      saveId,
       anchorOutcome: publication.kind,
       captureDetail: publication.kind === 'published' ? null : `the Save was committed but the Anchor was not advanced (${publication.kind})`,
     })
-    log(`shutdown preserved Save ${recorded.save.id} for ${shutdown.incarnation}; anchor ${publication.kind}`)
+    log(`shutdown preserved Save ${saveId} for ${shutdown.incarnation}; anchor ${publication.kind}`)
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {})
     // A failed commit preserves nothing and invalidates nothing. The old Anchor stands, and the
     // loss is recorded rather than inferred later from an absence.
     await recordOutcome(client, key, { captureOutcome: 'refused', captureDetail: `committing the Save failed: ${error instanceof Error ? error.message : String(error)}` })

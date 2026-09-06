@@ -16,7 +16,7 @@ import { getAnchor, getSave, invalidate, isExcluded, type Save } from '@agora/cu
 import { normalizeAnchor } from '@agora/observation'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
-import { WORKSPACE_ROOT } from '../workspace-root.js'
+import { workspaceRoot } from '../workspace-root.js'
 
 export interface RestoreHarness {
   readonly harnessId: string
@@ -121,9 +121,9 @@ async function runRestore(
       })
       const clientConnection = buildClientConnection(connection.stream, persist)
       try {
-        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+        await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
         // The context id is the Save's own — the transcript that was just placed IS that context.
-        await clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: WORKSPACE_ROOT, mcpServers: [] })
+        await clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: workspaceRoot(), mcpServers: [] })
         await bindAcpContext(client, session.sessionId, { contextId: save.contextId, processGeneration: currentGeneration })
         // The opening range's lower bound: what this Save could PROVE the context had (CONT-009).
         // REFILL's range starts here, so recording anything more optimistic would silently skip

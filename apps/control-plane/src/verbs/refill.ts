@@ -15,7 +15,7 @@ import { currentSession } from '@agora/journal'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
 import { completeOpeningDescriptor } from '../descriptor.js'
-import { WORKSPACE_ROOT } from '../workspace-root.js'
+import { workspaceRoot } from '../workspace-root.js'
 
 export interface RefillExecutorOptions {
   readonly productPool: pg.Pool
@@ -135,7 +135,7 @@ async function runRefill(
     })
     const clientConnection = buildClientConnection(connection.stream, persist)
     try {
-      await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(WORKSPACE_ROOT))
+      await clientConnection.agent.request(acp.methods.agent.initialize, initializeParams(workspaceRoot()))
       await mark(options.productPool, commandId, markDispatched)
       try {
         // An embedded resource, not a resource link: a link does not deliver bytes, and the whole

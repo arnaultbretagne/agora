@@ -192,3 +192,46 @@ missing digest is `unprovable`, never `not_incorporated`: native compaction remo
 evidence (`CONT-006`), and reading its absence as "never delivered" would authorise a resend.
 Until the renderer exists there is no digest to look for, so the captured frontier is the
 conservative floor — `frontierW = 0` — never the journal head (`CONT-009`).
+
+## The off/on cycle, end to end (S9 Step 6)
+
+`scripts/s9-end-to-end.mjs` runs the whole custody cycle against the real pieces this environment
+has — the pinned adapter, this harness's driver and custody agent, runtime-control's owner API and
+custody transport, PostgreSQL with its custody roles, and the control plane's own TURN_OFF, RESTORE
+and REFILL — with only Kubernetes and OneCLI stubbed. It spends two model calls:
+
+```sh
+npm run build
+DATABASE_URL=postgres://… ADAPTER_PATH=<…/claude-agent-acp/dist/index.js> node scripts/s9-end-to-end.mjs
+```
+
+Measured run:
+
+```text
+=== power off — TURN_OFF captures, publishes the Anchor, and terminates regardless
+  ✓ the Save was captured        ✓ the Anchor advanced      ✓ the Pod was terminated
+  ✓ authority was cut before the Pod went
+  ✓ the payload is in the store (12889 bytes)   ✓ and it carries no credential
+=== power on — a NEW Session in a NEW home restores the Save and resumes the context
+  ✓ the restore belongs to the NEW Session (CONT-003)
+  ✓ and resumed the Save's own native context id
+=== REFILL delivers exactly the facts appended while off
+  ✓ one handoff command exists   ✓ delivered and answered   ✓ under the pinned seed policy
+=== the restored context still knows the codeword
+  ✓ "CLAFOUTIS-8813"
+```
+
+**What it caught on its first run**, which is why it exists rather than a unit test standing in:
+
+1. The control plane hardcoded the ACP `cwd` as `/workspace` while the PodSpec launches the adapter
+   in the harness definition's own `workspaceRoot`, and the driver derives the transcript's
+   directory slug from THAT. In a cluster this would have shown up as `session/resume` refusing a
+   `cwd` that does not exist in the Pod. The workspace root is now configured once, from the
+   catalogue, and read everywhere.
+2. `save_payloads` references `saves`, so the bytes cannot be written under a Save whose metadata is
+   still inside an uncommitted transaction. TURN_OFF now commits the metadata, binds the payload,
+   then publishes the Anchor — three ordered steps, each gap survivable in exactly one direction.
+
+What is still NOT proven here: the same chain on real Kubernetes behind the Broker relay with real
+OneCLI credentials. That is a deployment step, not remaining engineering, and it is the same open
+item S8 already records.

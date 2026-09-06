@@ -9,7 +9,6 @@ import { openSession, recordBridgeToken, currentSession } from '@agora/journal'
 import { invalidationsFor, recordSave } from '@agora/custody'
 import type { VerbContext } from '@agora/engine'
 import { createRestoreExecutor, UnsupportedVerbError, type RestoreHarness } from '../../src/verbs/restore.js'
-import { WORKSPACE_ROOT } from '../../src/workspace-root.js'
 
 const HARNESS: RestoreHarness = {
   harnessId: 'claude-code',
