@@ -27,13 +27,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: agora-control-plane
+          - name: agora-engine-control-plane
             dockerfile: apps/control-plane/image/Dockerfile
-          - name: agora-runtime-control
+          - name: agora-engine-runtime-control
             dockerfile: apps/runtime-control/image/Dockerfile
-          - name: agora-broker
+          - name: agora-engine-broker
             dockerfile: apps/broker/image/Dockerfile
-          - name: agora-web
+          - name: agora-engine-web
             dockerfile: apps/web/image/Dockerfile
           - name: agora-harness-claude-code
             dockerfile: harnesses/claude-code/image/Dockerfile

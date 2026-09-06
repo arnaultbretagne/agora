@@ -23,6 +23,15 @@ export interface HarnessDefinition {
   readonly bootstrapCapability?: string
   /** P11: the reviewed, curated model/effort catalogue — a deliberate subset of what the adapter actually offers (harnesses/claude-code/README.md). */
   readonly models?: Readonly<Record<string, { readonly efforts: readonly string[] }>>
+  /**
+   * Reviewed, non-secret environment this harness's adapter needs to select the right auth MODE —
+   * `CLAUDE_CODE_OAUTH_TOKEN=onecli-managed`, codex's `SSL_CERT_FILE` (a Rust binary ignores
+   * NODE_EXTRA_CA_CERTS). Catalogue content, never request-suppliable, and never a credential: the
+   * bearer stays Broker-private (ADR 0009) and OneCLI injects it upstream.
+   */
+  readonly podEnv?: Readonly<Record<string, string>>
+  /** Files the adapter expects to find in its HOME before it starts, written by the bridge. Markers, not credentials (field findings §2.2, §2.3). */
+  readonly credentialStubs?: readonly { readonly path: string; readonly content: string }[]
 }
 
 export interface RuntimeSettings {
@@ -58,6 +67,27 @@ export function loadHarnessDefinitions(path: string): readonly HarnessDefinition
 export function loadRuntimeSettings(path: string): RuntimeSettings {
   return JSON.parse(readFileSync(path, 'utf8')) as RuntimeSettings
 }
+
+/**
+ * Names a harness definition may not supply: every one of them is decided by this file from
+ * trusted inputs, and letting the catalogue overwrite one would turn a reviewed value into a
+ * negotiable one (ADR 0006).
+ */
+const RESERVED_ENV = new Set([
+  'AGORA_INCARNATION',
+  'AGORA_EVIDENCE_URL',
+  'HOME',
+  'AGORA_HARNESS_HOME',
+  'AGORA_WORKSPACE_ROOT',
+  'AGORA_CUSTODY_URL',
+  'AGORA_POD_UID',
+  'AGORA_CREDENTIAL_STUBS',
+  'BRIDGE_PORT',
+  'BRIDGE_AUTH_SECRET',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'NODE_EXTRA_CA_CERTS',
+])
 
 export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, settings: RuntimeSettings): K8sObject {
   // Not `.slice(0, 10)` here — podName() already caps its slot argument to 20 chars internally.
@@ -116,6 +146,17 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
             { name: 'HTTPS_PROXY', value: `http://${settings.relayHost}:${settings.relayPort}` },
             { name: 'https_proxy', value: `http://${settings.relayHost}:${settings.relayPort}` },
             { name: 'NODE_EXTRA_CA_CERTS', value: '/etc/agora/relay-ca/ca.pem' },
+            // The stubs travel as data the bridge writes into HOME before spawning the adapter.
+            // Empty for a harness that declares none, and absent from the spec entirely rather
+            // than present-and-empty, so a diff of two PodSpecs says which harness needs one.
+            ...(harness.credentialStubs !== undefined && harness.credentialStubs.length > 0
+              ? [{ name: 'AGORA_CREDENTIAL_STUBS', value: JSON.stringify(harness.credentialStubs) }]
+              : []),
+            // Last, and from the reviewed catalogue only: a harness definition may ADD to this
+            // environment, never redefine what the spec above already decided.
+            ...Object.entries(harness.podEnv ?? {})
+              .filter(([name]) => !RESERVED_ENV.has(name))
+              .map(([name, value]) => ({ name, value })),
           ],
           securityContext: {
             runAsNonRoot: true,

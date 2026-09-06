@@ -12,14 +12,14 @@ resources:
   - ../../../contracts/k8s
 
 images:
-  - name: ghcr.io/arnaultbretagne/agora-control-plane
-    newName: ghcr.io/arnaultbretagne/agora-control-plane
+  - name: ghcr.io/arnaultbretagne/agora-engine-control-plane
+    newName: ghcr.io/arnaultbretagne/agora-engine-control-plane
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/arnaultbretagne/agora-runtime-control
-    newName: ghcr.io/arnaultbretagne/agora-runtime-control
+  - name: ghcr.io/arnaultbretagne/agora-engine-runtime-control
+    newName: ghcr.io/arnaultbretagne/agora-engine-runtime-control
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/arnaultbretagne/agora-broker
-    newName: ghcr.io/arnaultbretagne/agora-broker
+  - name: ghcr.io/arnaultbretagne/agora-engine-broker
+    newName: ghcr.io/arnaultbretagne/agora-engine-broker
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   - name: ghcr.io/onecli/onecli
     newName: ghcr.io/onecli/onecli

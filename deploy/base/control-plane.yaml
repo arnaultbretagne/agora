@@ -45,7 +45,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: control-plane
-          image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
+          image: ghcr.io/arnaultbretagne/agora-engine-control-plane:overlay-pins-this-by-digest
           # `--api-only` is the flag main.ts actually parses; `AGORA_MODE` is its env equivalent.
           # An unrecognised argument would have left BOTH deployments running BOTH modes, which is
           # what this manifest said before anything ran it.
@@ -119,7 +119,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: control-plane
-          image: ghcr.io/arnaultbretagne/agora-control-plane:overlay-pins-this-by-digest
+          image: ghcr.io/arnaultbretagne/agora-engine-control-plane:overlay-pins-this-by-digest
           args: ['--worker-only']
           env:
             - name: DATABASE_URL

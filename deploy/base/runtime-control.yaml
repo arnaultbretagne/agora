@@ -36,7 +36,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: runtime-control
-          image: ghcr.io/arnaultbretagne/agora-runtime-control:overlay-pins-this-by-digest
+          image: ghcr.io/arnaultbretagne/agora-engine-runtime-control:overlay-pins-this-by-digest
           env:
             - name: PORT
               value: '8090'

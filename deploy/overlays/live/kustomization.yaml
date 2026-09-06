@@ -1,0 +1,53 @@
+# The live overlay: what actually runs on the g4 cluster.
+#
+# Two things distinguish it from `dev/`. It pins real published digests — every image in this file
+# exists in the registry and was built by a named workflow run. And it does NOT deploy OneCLI: this
+# cluster already runs one, with the agents, grants, gateway CA and encryption key that make
+# credential injection work at all. A second, empty OneCLI would answer every request and inject
+# nothing, which is the failure mode hardest to read from inside a harness Pod.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - ../../../contracts/k8s
+  - postgres.yaml
+
+images:
+  - name: ghcr.io/arnaultbretagne/agora-engine-control-plane
+    newName: ghcr.io/arnaultbretagne/agora-engine-control-plane
+    digest: PINNED_BY_THE_PUBLISH_RUN
+  - name: ghcr.io/arnaultbretagne/agora-engine-runtime-control
+    newName: ghcr.io/arnaultbretagne/agora-engine-runtime-control
+    digest: PINNED_BY_THE_PUBLISH_RUN
+  - name: ghcr.io/arnaultbretagne/agora-engine-broker
+    newName: ghcr.io/arnaultbretagne/agora-engine-broker
+    digest: PINNED_BY_THE_PUBLISH_RUN
+  - name: ghcr.io/arnaultbretagne/agora-engine-web
+    newName: ghcr.io/arnaultbretagne/agora-engine-web
+    digest: PINNED_BY_THE_PUBLISH_RUN
+
+patches:
+  # OneCLI runs in agora-onecli on this cluster and is reached there (see the Broker's ONECLI_URL
+  # in base). These three deletions are what "reuse the existing one" looks like in kustomize.
+  - target: { kind: Deployment, name: onecli }
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: onecli
+      $patch: delete
+  - target: { kind: Service, name: onecli }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: onecli
+      $patch: delete
+  - target: { kind: PersistentVolumeClaim, name: onecli-data }
+    patch: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: onecli-data
+      $patch: delete

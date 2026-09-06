@@ -1,7 +1,7 @@
 {
   "$id": "https://agora.dev/catalogue/harness-definitions.json",
   "title": "Harness definitions (P11 first values, S8)",
-  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest stays a placeholder until CI's image build publishes the real one (no Docker in the environment this was authored in \u2014 see harnesses/claude-code/README.md). The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) \u2014 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again. 'harnessHome' is the harness's HOME and the only writable path in the Pod (an emptyDir, fsGroup-owned by runAsUser): the adapter writes its transcript there and S9 custody reads and places it there; the root filesystem stays read-only. The codex entry maps the registered Intent fields onto THIS adapter's own option ids (configOptionIds): intent.model is codex's `model`, intent.effort is its `reasoning_effort` \u2014 a mapping in the definition, never a new Intent field (measured, harnesses/codex/README.md).",
+  "note": "Reviewed mapping harness_id -> pinned image digest, launch command, mounts, model/effort catalogue and bootstrap authority. Nothing here is request-suppliable (ADR 0006). imageDigest stays a placeholder until CI's image build publishes the real one (no Docker in the environment this was authored in \u2014 see harnesses/claude-code/README.md). The model list is a REVIEWED, curated subset of what the adapter actually offers (measured live, harnesses/claude-code/README.md) \u2014 'default' is deliberately excluded: it is an alias for whatever the account's current default happens to be, not a stable per-model identity Intent authoring can pin to. Revisit whenever the account's model roster changes; a model retired upstream must be removed here before an Intent can be authored against it again. 'harnessHome' is the harness's HOME and the only writable path in the Pod (an emptyDir, fsGroup-owned by runAsUser): the adapter writes its transcript there and S9 custody reads and places it there; the root filesystem stays read-only. The codex entry maps the registered Intent fields onto THIS adapter's own option ids (configOptionIds): intent.model is codex's `model`, intent.effort is its `reasoning_effort` \u2014 a mapping in the definition, never a new Intent field (measured, harnesses/codex/README.md). 'podEnv' and 'credentialStubs' are the reviewed, NON-SECRET markers each adapter needs to select its auth mode (field findings \u00a72.2, \u00a72.3): the real bearer is attached by the Broker's relay and never reaches the Pod (ADR 0009). They are catalogue content, never request-suppliable, and the PodSpec refuses any name it decides itself.",
   "harnesses": [
     {
       "harnessId": "claude-code",
@@ -73,7 +73,10 @@
         "model": "model",
         "effort": "effort"
       },
-      "configReadback": "resume"
+      "configReadback": "resume",
+      "podEnv": {
+        "CLAUDE_CODE_OAUTH_TOKEN": "onecli-managed"
+      }
     },
     {
       "harnessId": "codex",
@@ -145,7 +148,16 @@
         "model": "model",
         "effort": "reasoning_effort"
       },
-      "configReadback": "set-config-noop"
+      "configReadback": "set-config-noop",
+      "podEnv": {
+        "SSL_CERT_FILE": "/etc/agora/relay-ca/ca.pem"
+      },
+      "credentialStubs": [
+        {
+          "path": ".codex/auth.json",
+          "content": "{\"OPENAI_API_KEY\": null, \"auth_mode\": \"chatgpt\", \"tokens\": {\"access_token\": \"onecli-managed\", \"refresh_token\": \"onecli-managed\", \"id_token\": \"onecli-managed\", \"account_id\": \"onecli-managed\"}, \"last_refresh\": \"2026-01-01T00:00:00.000Z\"}"
+        }
+      ]
     }
   ]
 }

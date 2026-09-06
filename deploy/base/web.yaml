@@ -38,7 +38,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: web
-          image: ghcr.io/arnaultbretagne/agora-web:overlay-pins-this-by-digest
+          image: ghcr.io/arnaultbretagne/agora-engine-web:overlay-pins-this-by-digest
           env:
             - name: PORT
               value: '8080'
