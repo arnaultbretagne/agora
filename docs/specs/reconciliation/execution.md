@@ -57,6 +57,15 @@ allow policy. Unknown/stale mappings close access. Restriction closes affected r
 tunnels independently of ACP or Save capture. An accepted remote operation may still complete;
 revocation cannot retract returned data or establish rollback.
 
+Relay incarnation identity (P10, chosen at S7): the connecting Pod's own source IP, resolved
+against the fresh Kubernetes Pod inventory (read-only get/list, scoped to the Pod's namespace) —
+the measured baseline (field-findings §3.3), retained because this cluster provides no service mesh
+or other workload-identity primitive the Pod cannot itself forge; the CNI is what the Pod cannot
+subvert. A `::ffff:`-mapped IPv4 source address is normalized before matching `status.podIP`. No
+matching Pod, or a Pod without both the Workstream and incarnation labels, resolves to no identity —
+the CONNECT is refused, never attributed to a default or a guess. Revisit if the deployment ever
+gains a stronger, cryptographically bound workload identity.
+
 ## Session birth and admission
 
 Every established Pod gets a new Agora Session before native launch or any ACP envelope, including

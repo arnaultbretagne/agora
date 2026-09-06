@@ -59,7 +59,7 @@ class StatefulOneCliClient implements OneCliClient {
     if ([...this.#agents.values()].some((a) => a.identifier === identifier)) throw Object.assign(new Error('exists'), { status: 409 })
     const id = `agent-${this.#nextId++}`
     const createdAt = new Date().toISOString()
-    this.#agents.set(id, { id, name, identifier, isDefault: false, createdAt })
+    this.#agents.set(id, { id, name, identifier, accessToken: `aoc_${id}`, isDefault: false, createdAt })
     return { id, name, identifier, createdAt }
   }
   async deleteAgent(agentId: string): Promise<void> {
@@ -182,6 +182,48 @@ test('owner-api detach_grant: narrows an over-broad connection to the desired sc
       const result = await post(port, request({ operation: 'detach_grant', target: { kind: 'concrete', id: 'incarnation-2' }, payload: { grants: toWireGrantSet(new Set(desired)) } }))
       assert.equal(result.kind, 'completed')
       assert.deepEqual(client.connections.get('c1')!.allow, ['get_repo'])
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('owner-api attach_grant: captures the Agent\'s gateway bearer into the private store — never a Pod-visible response field', async () => {
+  await withTestDatabase(async (pool) => {
+    await insertWorkstream(pool, WORKSTREAM_ID)
+    const client = new StatefulOneCliClient()
+    const { EncryptedPrivateStore } = await import('../src/private-store.js')
+    const privateStore = new EncryptedPrivateStore('test-key')
+    const gate = new PgOwnerGate(pool, 'broker')
+    const server = createBrokerApi({ client, gate, privateStore })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await post(port, request({ target: { kind: 'concrete', id: 'incarnation-bearer' }, payload: { grants: [] } }))
+      assert.equal(result.kind, 'completed')
+      assert.ok(privateStore.get('incarnation-bearer')?.startsWith('aoc_'))
+      assert.equal(JSON.stringify(result).includes('aoc_'), false, 'the bearer never appears in the owner-request response')
+    } finally {
+      server.close()
+    }
+  })
+})
+
+test('owner-api cleanup_agent: erases the private-store bearer along with the Agent', async () => {
+  await withTestDatabase(async (pool) => {
+    await insertWorkstream(pool, WORKSTREAM_ID)
+    const client = new StatefulOneCliClient()
+    const { EncryptedPrivateStore } = await import('../src/private-store.js')
+    const privateStore = new EncryptedPrivateStore('test-key')
+    const gate = new PgOwnerGate(pool, 'broker')
+    const server = createBrokerApi({ client, gate, privateStore })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      await post(port, request({ target: { kind: 'concrete', id: 'incarnation-cleanup' }, payload: { grants: [] } }))
+      assert.ok(privateStore.get('incarnation-cleanup') !== undefined)
+      await post(port, request({ operation: 'cleanup_agent', target: { kind: 'concrete', id: 'incarnation-cleanup' }, attemptKey: 'cleanup-1' }))
+      assert.equal(privateStore.get('incarnation-cleanup'), undefined)
     } finally {
       server.close()
     }

@@ -7,16 +7,19 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { fromWireGrantSet, toWireGrantSet } from '@agora/domain'
 import type { OwnerGate } from '@agora/owner-requests'
 import type { OwnerRequest, OwnerResponse } from '@agora/owner-requests'
-import { ensureAgent, retireAgent } from './agents.js'
+import { agentIdentifierFor, ensureAgent, retireAgent } from './agents.js'
 import { attachDesiredGrants, revokeExcessGrants } from './grants.js'
 import { readConsistentInventory } from './inventory.js'
 import type { OneCliClient } from './onecli/client.js'
+import type { PrivateStore } from './private-store.js'
 
 export interface BrokerApiOptions {
   readonly client: OneCliClient
   readonly gate: OwnerGate
   /** REVOKE closes the relay before narrowing/detaching authority (003 verbs) — optional only for tests that never open a tunnel. */
   readonly tunnels?: { terminateAll(incarnation: string): number }
+  /** Where the relay reads the Agent's gateway bearer from — optional only for tests that never exercise the relay. */
+  readonly privateStore?: PrivateStore
 }
 
 function problem(res: ServerResponse, status: number, title: string, detail: string): void {
@@ -93,11 +96,22 @@ async function attachGrant(options: BrokerApiOptions, request: OwnerRequest): Pr
   const grants = (request.payload as { grants?: unknown }).grants
   if (!Array.isArray(grants)) return { kind: 'unknown', detail: 'payload.grants must be the compiled desired grant set' }
   const agent = await ensureAgent(options.client, request.target.id)
+  await storeBearerFor(options, request.target.id, agent.id)
   const desired = fromWireGrantSet(grants as never)
   const inventory = await readConsistentInventory(options.client, agent.id)
   if (inventory === undefined) return { kind: 'unknown', detail: 'attached/effective did not settle to a consistent pair' }
   await attachDesiredGrants(options.client, agent.id, desired)
   return { kind: 'completed', result: { agentId: agent.id } }
+}
+
+/** The Agent's gateway bearer never reaches the Pod (ADR 0009) — captured once here, from the trusted Broker, into the encrypted private store the relay reads from. */
+async function storeBearerFor(options: BrokerApiOptions, incarnation: string, agentId: string): Promise<void> {
+  if (options.privateStore === undefined) return
+  if (options.privateStore.get(incarnation) !== undefined) return // already captured — never re-read a token unnecessarily
+  const identifier = agentIdentifierFor(incarnation)
+  const agents = await options.client.listAgents()
+  const bearer = agents.find((a) => a.id === agentId && a.identifier === identifier)?.accessToken
+  if (bearer !== undefined) options.privateStore.put(incarnation, bearer)
 }
 
 async function detachGrant(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
@@ -114,6 +128,7 @@ async function detachGrant(options: BrokerApiOptions, request: OwnerRequest): Pr
 async function cleanupAgent(options: BrokerApiOptions, request: OwnerRequest): Promise<OwnerResponse> {
   options.tunnels?.terminateAll(request.target.id)
   await retireAgent(options.client, request.target.id)
+  options.privateStore?.delete(request.target.id)
   await options.gate.retire(request.workstreamId, request.target.id)
   return { kind: 'completed', result: { retired: request.target.id } }
 }
