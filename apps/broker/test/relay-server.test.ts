@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:net'
 import { connect as connectTcp } from 'node:net'
 import { test } from 'node:test'
+import { agentIdentifierFor } from '../src/agents.js'
 import { EncryptedPrivateStore } from '../src/private-store.js'
 import { createRelay } from '../src/relay/server.js'
 import { TunnelRegistry } from '../src/relay/tunnels.js'
@@ -47,9 +48,14 @@ function pod(workstreamId: string, incarnation: string): K8sObject {
 }
 
 class FakeOneCliClient implements OneCliClient {
-  constructor(private readonly effective: EffectiveCredentials) {}
+  constructor(
+    private readonly effective: EffectiveCredentials,
+    private readonly agents: readonly OneCliAgent[] = [],
+  ) {}
+  listAgentsCalls = 0
   async listAgents(): Promise<readonly OneCliAgent[]> {
-    return []
+    this.listAgentsCalls += 1
+    return this.agents
   }
   async createAgent(): Promise<{ id: string; name: string; identifier: string; createdAt: string }> {
     throw new Error('not exercised')
@@ -215,6 +221,41 @@ test('terminating an incarnation\'s tunnels actually closes the open socket (REV
     tunnels.terminateAll('inc-1')
     await closed
     assert.equal(tunnels.openCountFor('inc-1'), 0)
+  } finally {
+    relay.close()
+    gateway.server.close()
+  }
+})
+
+test('relay: a Broker restart does not strand a live incarnation — the bearer is re-read from OneCLI on a cache miss', async () => {
+  const gateway = await startFakeGateway()
+  // A Broker that has just restarted: the encrypted private store is empty, and the incarnation it
+  // serves has been running for hours. Before this, every CONNECT was denied `credential_unavailable`
+  // for the life of that Pod, and the harness reported "Failed to authenticate. API Error: 403".
+  const privateStore = new EncryptedPrivateStore('test-key')
+  const client = new FakeOneCliClient(
+    { agentId: 'a1', mode: 'selective', secrets: [{ kind: 'secret', id: 's1', host: 'api.anthropic.com', status: 'usable' }], connections: [] },
+    [{ id: 'a1', name: 'agora inc-1', identifier: agentIdentifierFor('inc-1'), accessToken: VALID_BEARER, isDefault: false, createdAt: '2026-01-01T00:00:00.000Z' }],
+  )
+  const relay = createRelay({
+    podLookup: new FakePodLookup({ '127.0.0.1': pod('w1', 'inc-1') }),
+    client,
+    privateStore,
+    egressHosts,
+    tunnels: new TunnelRegistry(),
+    gatewayHost: '127.0.0.1',
+    gatewayPort: gateway.port,
+    boundAgentFor: async () => 'a1',
+  })
+  await new Promise<void>((resolve) => relay.listen(0, '127.0.0.1', resolve))
+  const relayPort = (relay.address() as { port: number }).port
+  try {
+    const socket = connectTcp(relayPort, '127.0.0.1')
+    await new Promise<void>((resolve) => socket.on('connect', resolve))
+    socket.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n')
+    assert.match(await readOneChunk(socket), /^HTTP\/1\.1 200/)
+    assert.equal(privateStore.get('inc-1'), VALID_BEARER, 'and it is kept, so the next CONNECT costs no control call')
+    socket.destroy()
   } finally {
     relay.close()
     gateway.server.close()
