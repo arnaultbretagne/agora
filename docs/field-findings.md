@@ -134,19 +134,38 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
   and the ONECLI-SPIKE report already said it: the Pod receives "a Claude placeholder required to
   make Claude Code select OAuth mode", and the successful call was `POST /v1/messages?beta=true`
   with one injection.
-- A Claude Code OAuth access token is **rotated by Claude Code itself**: registering the value from
-  `~/.claude/.credentials.json` works until the local CLI refreshes, after which Anthropic answers
-  `OAuth access token has been revoked` for the old one. A copied access token is a snapshot; only
-  a credential OneCLI can refresh itself is durable.
+- **The Claude credential is the LONG-LIVED token that already lives in OneCLI. Do not fabricate a
+  new one.** The secret named `Anthropic Token` (type `anthropic`, host `api.anthropic.com`,
+  `metadata.authMode = oauth`, created 2026-08-06) is the operator's static Claude Max token, the
+  one the retired platform kept as the SOPS secret `claude-oauth-token`. It was registered once with
+  `POST /v1/secrets {type:"anthropic", value:<token>}` and OneCLI selected OAuth mode from the
+  `sk-ant-oat` prefix by itself — `plans/08-equipment-and-broker.md`, follow-up of 2026-08-05, which
+  is also where the retired implementation proved it end to end through `getContainerConfig`. That
+  is the whole mechanism: **register once, then never touch it again**; the Pod gets the placeholder
+  and the gateway does the rest. Two hours were spent here re-deriving it instead of reading that
+  paragraph.
+- A Claude Code OAuth access token copied out of `~/.claude/.credentials.json` is **not** that
+  credential and is not a substitute: it is a snapshot that Claude Code itself rotates, after which
+  Anthropic answers `OAuth access token has been revoked`. Registering one produces a second
+  `anthropic` secret, which is worse than useless — the Broker's resolver takes credentials
+  `uniqueBy` type and DROPS a type that has more than one, so the capability stops resolving
+  altogether.
+- **That token now exists in exactly one place: OneCLI's own database.** The SOPS secret
+  `claude-oauth-token` was retired with the old platform and is in neither infra-k8s nor the cluster
+  (checked 2026-09-07). Its encrypted row plus `secret-encryption-key` — the latter kept in
+  infra-k8s's `apps/agora-onecli/onecli-data-dr.secrets.yaml` — are the only surviving copies. It is
+  recoverable ONLY from a CNPG/R2 point-in-time restore, which is a real procedure and now written
+  down (runbook, "Recover a deleted OneCLI secret"), because it had to be used.
 - `DELETE /v1/secrets/{id}` removed a different secret than the one the request named, or its audit
   row records the wrong id: one delete was issued for the Anthropic secret and the single
   `delete/secret` audit row names the Codex one, with both rows gone afterwards. Treat secret
-  deletion in this product as unverified until re-read, and take a database backup first.
-- OneCLI can hold a provider credential, grant it to an Agent, report it `usable` in
-  `effective-credentials`, and still refuse it at the gateway with
-  `access_restricted: … this agent does not have access` — for EVERY agent including its own
-  default. The app-level account attachment is a separate thing from the secret grant, and it is an
-  interactive action in the OneCLI UI.
+  deletion in this product as unverified until re-read, and take a database backup first — and
+  given the point above, do not delete a provider secret at all without a specific reason to.
+- `access_restricted: … this agent does not have access — ask the user to attach the account to this
+  agent` is NOT, on its own, evidence that an app-level account attachment is missing. It was seen
+  here for every agent including OneCLI's own default, and the cause was the wrong
+  `secret-encryption-key` (previous bullet), not attachment state. The gateway log distinguishes the
+  two; its HTTP answer does not.
 
 ### 2.3 codex
 
