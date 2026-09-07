@@ -144,6 +144,9 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const channels = new AgentChannels({
       pool: productPool,
       logger: (message) => console.log(message),
+      // Which harnesses re-attach with `session/resume` — codex does not, and resuming one of its
+      // contexts before it has content fails outright.
+      ...(configReadback !== undefined ? { configReadback } : {}),
       ...(wired ? { connector: new RealChannelConnector({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message: string) => console.log(message) }) } : {}),
     })
     const server = createControlPlaneServer({

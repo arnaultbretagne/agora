@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import { validateIntentShape, type CatalogueView, type Intent, type RuleResolution } from '@agora/domain'
 import { authorIntent, loadLatestIntentEvent, withTransaction, type ObservationSource, type RevisionSet } from '@agora/engine'
-import { DispatchConflictError, reserveDispatch, replayDispatch, markNeverSent, markUnknown } from '@agora/acp'
+import { DispatchConflictError, reserveDispatch, replayDispatch, markNeverSent } from '@agora/acp'
 import type { AgentChannels } from './agent-channel.js'
 import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
@@ -141,24 +141,7 @@ async function handlePrompt(
       // counts `reserved` as in flight, so leaving it inert makes the Workstream unpromptable for
       // ever. `markNeverSent` only accepts `reserved` — a dispatch that did reach the wire is
       // `unknown`, and the channel's own failure path owns that case.
-      // The connect is INSIDE the try: this runs after the response was already sent, so a pool
-      // that has since closed (a shutting-down process, a finished test) must be a logged no-op and
-      // never an unhandled rejection.
-      try {
-        const client = await productPool.connect()
-        try {
-          await client.query('BEGIN')
-          await markNeverSent(client, reserved!.reserved.id)
-          await client.query('COMMIT')
-        } catch (settleError: unknown) {
-          await client.query('ROLLBACK').catch(() => {})
-          throw settleError
-        } finally {
-          client.release()
-        }
-      } catch (settleError: unknown) {
-        console.error(`could not settle the unsent dispatch ${reserved!.reserved.id}: ${settleError instanceof Error ? settleError.message : String(settleError)}`)
-      }
+      await settleUnsentDispatch(productPool, reserved!.reserved.id)
     })
     return sendJson(res, 202, { commandId: reserved.reserved.id, state: 'reserved' })
   } catch (error) {
@@ -169,14 +152,18 @@ async function handlePrompt(
       const existing = await replayDispatch(productPool, workstreamId, key)
       return sendJson(res, 200, { commandId: existing!.id, state: existing!.state })
     }
+    // EVERY remaining path failed BEFORE the send started — opening the channel, resolving the Pod,
+    // anything between the reservation and `session/prompt`. The reservation must not survive it:
+    // the one-turn gate counts `reserved` as in flight, so an inert one makes the Workstream
+    // unpromptable for ever. Found live twice — once through the bridge, once through this path,
+    // which used to leave the row untouched and answer 500.
+    //
+    // `rejected_before_acceptance`, not `unknown`, including for the unavailable bridge: nothing
+    // reached the harness, and that is exactly what "provably never sent" means. `unknown` would
+    // additionally gate the NEXT prompt on CONT-005 recovery for a turn that demonstrably never
+    // left this process.
+    if (reserved !== undefined) await settleUnsentDispatch(productPool, reserved.reserved.id)
     if (error instanceof NoBridgeAvailableError) {
-      // The dispatch already committed as `reserved` above (admission was granted moments ago, so
-      // this is a genuine race, not the common case) — leaving it there forever would starve any
-      // future turn (CONT-005 shape: an ambiguous/never-sent attempt must never sit inert). Marking
-      // it `unknown` here is honest: dispatch never actually reached the harness, but the DB state
-      // still needs an owner, and `unknown` is what the rest of this codebase already uses for
-      // "not proven either way".
-      if (reserved !== undefined) await markDispatchUnknown(productPool, reserved.reserved.id)
       return sendProblem(res, 503, 'Harness bridge unavailable', error.message)
     }
     void nowSql
@@ -186,7 +173,35 @@ async function handlePrompt(
     if (error instanceof Error && error.message === 'prompt_delivery_unknown') {
       return sendProblem(res, 409, 'Prompt delivery unknown', 'a previous prompt may have been accepted; its recovery must resolve before a new turn (CONT-005)')
     }
+    // Nothing else knows what this was: say so here rather than letting a bare 500 carry no cause.
+    console.error(`prompt for ${workstreamId} failed before dispatch: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
     throw error
+  }
+}
+
+/**
+ * Settles a reservation whose send never started: `rejected_before_acceptance`, which is what
+ * "provably never sent" means, and which stops it counting as a turn in flight.
+ *
+ * Never throws. It runs on failure paths — sometimes after the response has already gone out — so a
+ * pool that has since closed, or a row someone else already moved on, must be a logged no-op rather
+ * than a second failure on top of the first.
+ */
+async function settleUnsentDispatch(productPool: pg.Pool, commandId: string): Promise<void> {
+  try {
+    const client = await productPool.connect()
+    try {
+      await client.query('BEGIN')
+      await markNeverSent(client, commandId)
+      await client.query('COMMIT')
+    } catch (error: unknown) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      client.release()
+    }
+  } catch (error: unknown) {
+    console.error(`could not settle the unsent dispatch ${commandId}: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -199,19 +214,6 @@ async function hasUnresolvedPrompt(productPool: pg.Pool, workstreamId: string): 
   return (result.rowCount ?? 0) > 0
 }
 
-async function markDispatchUnknown(productPool: pg.Pool, commandId: string): Promise<void> {
-  const client = await productPool.connect()
-  try {
-    await client.query('BEGIN')
-    await markUnknown(client, commandId)
-    await client.query('COMMIT')
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {})
-    console.error(`marking dispatch ${commandId} unknown failed: ${error instanceof Error ? error.message : String(error)}`)
-  } finally {
-    client.release()
-  }
-}
 
 async function streamFeed(
   req: IncomingMessage,
