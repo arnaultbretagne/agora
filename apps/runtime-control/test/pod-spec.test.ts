@@ -243,3 +243,30 @@ test('S13: no activeDeadlineSeconds — it would kill a healthy Pod, not a slow-
   assert.equal(spec['terminationGracePeriodSeconds'], settings.terminationGraceSeconds, 'the grace period is a real bound and stays')
   assert.equal(isStartupDeadlineExpired('2026-09-06T22:00:00Z', 'Pending', '2026-09-06T22:05:00Z', settings.startupDeadlineSeconds), true, 'the startup deadline is observed, not enforced by the kubelet')
 })
+
+test('S13: codex\'s auth stub is shape-correct and carries no credential at all', () => {
+  // The retired implementation proved this live (agents/codex/SPIKE.md): the CLI parses
+  // ~/.codex/auth.json BEFORE any network call and refuses to start without a decodable `id_token`
+  // — so a bare marker is not enough, and a real token is not needed either. Every identifying
+  // value here is the literal marker; the gateway injects the real credential on the way out.
+  const definitions = loadHarnessDefinitions(new URL('../../../../contracts/catalogue/harness-definitions.json', import.meta.url).pathname)
+  const codex = definitions.find((definition) => definition.harnessId === 'codex')
+  const stub = codex?.credentialStubs?.find((entry) => entry.path === '.codex/auth.json')
+  assert.ok(stub, 'codex needs its auth.json stub')
+
+  const auth = JSON.parse(stub.content) as { auth_mode: string; OPENAI_API_KEY: unknown; tokens: Record<string, string> }
+  assert.equal(auth.auth_mode, 'chatgpt')
+  assert.equal(auth.OPENAI_API_KEY, null)
+  for (const field of ['access_token', 'refresh_token', 'account_id']) {
+    assert.equal(auth.tokens[field], 'onecli-managed', `${field} must be the marker, never a credential`)
+  }
+
+  // The id_token is a JWT the CLI can decode, and every claim in it is the marker too.
+  const [, payload] = auth.tokens['id_token']!.split('.')
+  const claims = JSON.parse(Buffer.from(payload!, 'base64url').toString('utf8')) as Record<string, unknown>
+  assert.equal(claims['sub'], 'onecli-managed')
+  const openai = claims['https://api.openai.com/auth'] as Record<string, string>
+  assert.equal(openai['chatgpt_user_id'], 'onecli-managed')
+  assert.equal(openai['chatgpt_account_id'], 'onecli-managed')
+  assert.doesNotMatch(stub.content, /sk-|eyJhbGciOiJSUzI1NiI/, 'nothing in the stub may look like a real bearer')
+})
