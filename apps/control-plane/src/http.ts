@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import { validateIntentShape, type CatalogueView, type Intent, type RuleResolution } from '@agora/domain'
 import { authorIntent, loadLatestIntentEvent, withTransaction, type ObservationSource, type RevisionSet } from '@agora/engine'
-import { DispatchConflictError, reserveDispatch, replayDispatch, markUnknown } from '@agora/acp'
+import { DispatchConflictError, reserveDispatch, replayDispatch, markNeverSent, markUnknown } from '@agora/acp'
 import type { AgentChannels } from './agent-channel.js'
 import { sendJson, sendProblem } from './problem.js'
 import { STUB_CATALOGUE, STUB_REVISION_SET } from './catalogue.js'
@@ -135,8 +135,30 @@ async function handlePrompt(
       return { reserved: dispatch, sessionId }
     })
     await channels.ensure(workstreamId, reserved.sessionId)
-    void channels.prompt(workstreamId, reserved.reserved.id, text).catch((error: unknown) => {
+    void channels.prompt(workstreamId, reserved.reserved.id, text).catch(async (error: unknown) => {
       console.error(`prompt flow for ${reserved!.reserved.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      // A reservation whose send never started must not sit there: the one-turn-per-Workstream gate
+      // counts `reserved` as in flight, so leaving it inert makes the Workstream unpromptable for
+      // ever. `markNeverSent` only accepts `reserved` — a dispatch that did reach the wire is
+      // `unknown`, and the channel's own failure path owns that case.
+      // The connect is INSIDE the try: this runs after the response was already sent, so a pool
+      // that has since closed (a shutting-down process, a finished test) must be a logged no-op and
+      // never an unhandled rejection.
+      try {
+        const client = await productPool.connect()
+        try {
+          await client.query('BEGIN')
+          await markNeverSent(client, reserved!.reserved.id)
+          await client.query('COMMIT')
+        } catch (settleError: unknown) {
+          await client.query('ROLLBACK').catch(() => {})
+          throw settleError
+        } finally {
+          client.release()
+        }
+      } catch (settleError: unknown) {
+        console.error(`could not settle the unsent dispatch ${reserved!.reserved.id}: ${settleError instanceof Error ? settleError.message : String(settleError)}`)
+      }
     })
     return sendJson(res, 202, { commandId: reserved.reserved.id, state: 'reserved' })
   } catch (error) {

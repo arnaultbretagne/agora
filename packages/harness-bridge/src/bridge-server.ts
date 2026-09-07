@@ -67,22 +67,46 @@ export function startBridgeServer(options: BridgeServerOptions): BridgeServer {
     },
   })
 
+  // ONE attached client at a time. The adapter answers by JSON-RPC id, and every ACP connection
+  // numbers its own requests from 0 — so with two sockets attached, both receive every frame and a
+  // response to one connection's request 0 is delivered to the other's request 0 as well. Live,
+  // that produced `Got response to unknown request 0` in the control plane and left a prompt
+  // dispatch reserved for ever, which the one-turn-per-Workstream gate then read as a turn in
+  // flight: the Workstream could never be prompted again.
+  //
+  // The newest connection wins, and the previous one is closed rather than left half-listening:
+  // connect-act-disconnect is the caller's own model (verbs/start.ts), a dropped connection is
+  // already retriable everywhere, and the adapter process itself is untouched — which is the whole
+  // point of it outliving any single socket.
+  let attached: { readonly socket: WebSocket; readonly onData: (chunk: Buffer) => void } | null = null
+
   wss.on('connection', (socket: WebSocket) => {
     if (adapterExited) {
       socket.close(1011, 'adapter process is gone')
       return
     }
+    if (attached !== null) {
+      log('a second bridge connection arrived: closing the previous one, which the adapter can no longer be answering for')
+      options.adapter.stdout.off('data', attached.onData)
+      attached.socket.close(1012, 'superseded by a newer bridge connection')
+      attached = null
+    }
     const onAdapterData = (chunk: Buffer): void => {
       if (socket.readyState === socket.OPEN) socket.send(chunk)
     }
+    attached = { socket, onData: onAdapterData }
     options.adapter.stdout.on('data', onAdapterData)
     socket.on('message', (data: Buffer) => {
       options.adapter.stdin.write(data)
     })
     // Detaches this connection's relay only — the adapter process is untouched. A reconnect
     // attaches a fresh listener to the same still-running process (same process_generation).
-    socket.on('close', () => options.adapter.stdout.off('data', onAdapterData))
-    socket.on('error', () => options.adapter.stdout.off('data', onAdapterData))
+    const detach = (): void => {
+      options.adapter.stdout.off('data', onAdapterData)
+      if (attached?.socket === socket) attached = null
+    }
+    socket.on('close', detach)
+    socket.on('error', detach)
   })
 
   return {

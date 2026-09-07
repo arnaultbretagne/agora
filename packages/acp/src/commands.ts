@@ -145,6 +145,19 @@ export async function markRejectedBeforeAcceptance(client: pg.PoolClient, comman
 }
 
 /**
+ * A reservation whose send never even started: provably never sent, so it settles as
+ * `rejected_before_acceptance` and stops counting as a turn in flight.
+ *
+ * Restricted to `reserved` on purpose — a `dispatched` one DID reach the wire and may have been
+ * accepted, which is `unknown`, not this. Without this exit a prompt whose channel failed to open
+ * sat `reserved` for ever and the one-turn-per-Workstream gate refused every later prompt: found
+ * live, on a Workstream that could not be prompted again.
+ */
+export async function markNeverSent(client: pg.PoolClient, commandId: string): Promise<boolean> {
+  return transition(client, commandId, ['reserved'], 'rejected_before_acceptance', true)
+}
+
+/**
  * Recovery-only exits from `unknown` (S8 Step 5 — engine.md "Prompt delivery and context
  * creation"). Deliberately separate from markResponded/markRejectedBeforeAcceptance, which only
  * accept `dispatched`/`reserved`: an `unknown` may only be resolved by evidence gathered from the
