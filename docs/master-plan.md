@@ -583,6 +583,60 @@ last vocabulary allowlist entry), Intent editor (harness, capabilities, model, e
 unknown-delivery and HOLD causes surfaced to the operator, native-loss exposure display
 (`CONT-012`), accessibility pass, browser boot test kept.
 
+### S13 — First real deployment (merged; two provider-account items open)
+
+**Status.** Deployed and running on the g4 cluster. `kubectl apply -k deploy/overlays/live` brings up
+the control plane (API + worker), runtime-control, the Broker and the web surface against a CNPG
+database of their own, with every image published by digest, SBOM'd and provenance-attested by the
+`publish` workflow. `/v1/readyz` reaches its owners. A Workstream authored through the product API
+reconciles all the way: **BUILD → GRANT → START → SET_MODEL → converged**, with a real harness Pod,
+a real OneCLI grant, a real ACP context, and the work row finalized. A prompt travels the whole
+path — product API, engine dispatch, ACP over the bridge, the adapter, the CLI, the Broker's relay,
+OneCLI's TLS-intercepting gateway, the provider — and the answer comes back, is journaled,
+projected, and served to the client.
+
+**Nothing in this repository could be deployed before it, and almost nothing worked when it could.**
+Every defect below was found by running it, in this order, each one hiding the next:
+
+| What was wrong | What it cost |
+|---|---|
+| no Dockerfiles for three of four deployables; CI pushed nothing | nothing to deploy |
+| kustomize load restrictions, duplicate namespace/ServiceAccount ids, an overlay `namespace:` that renamed a namespace OBJECT | `apply -k` aborted before producing an object |
+| `args: ['api']`, a `MODE` env nothing reads, every Broker env name invented, the Broker's token switched off | both deployments would run both modes; the Broker would refuse every request or throw at boot |
+| a bare `sha256:…` as an image reference | not a pullable reference at all |
+| no `CLAUDE_CODE_OAUTH_TOKEN` / `SSL_CERT_FILE` / codex `auth.json` in the PodSpec | both adapters start and refuse — indistinguishable from a Pod that never scheduled |
+| PodSecurity "restricted" (no `capabilities.drop`, no `seccompProfile`) | the API server refused the Pod outright |
+| `activeDeadlineSeconds` set to the STARTUP deadline | every harness Pod killed after two minutes of healthy work |
+| an empty `imageId` read as an image id | every Pod destroyed mid-pull, for ever |
+| `NetworkPolicy` allowing neither runtime-control egress nor the real control-plane labels | the Pod could not reach its seam; the bridge WebSocket was dropped by the CNI |
+| ENGINE-008 recovery never implemented: an `unknown` attempt was never re-asked | the first owner error wedged the Workstream permanently |
+| a Session whose Pod was replaced never ended | `sessions_one_current_per_workstream` refused every later Session for ever |
+| the engine never recorded the retirements the owner recorded | BUILD rebuilt into a retired incarnation, and every later operation on it was refused as stale |
+| no deadline on any owner call, adapter call, or pool checkout; a hung scan cleared no flag | a silent worker with a claimed row, twice; then an exhausted pool that blocked every tick before its first query |
+| a double close of the bridge socket threw from a WebSocket handler | the worker crash-looped |
+| **every inbound bridge frame was empty** (`new Uint8Array(blob)` — Node delivers binary as a Blob) | the entire ACP path had never worked over a real socket: 63 requests journaled, zero responses |
+| the workspace root did not exist | the adapter refused every session |
+| `resolve.capabilityGrants` returned the empty set | no Pod ever received a credential — CAPS passed at "nothing desired" |
+| a non-empty opening range with no Handoff was undecidable | a fresh Session on a Workstream with history could never converge |
+| a 15s adapter timeout | cut off a call that legitimately took 21.5s on a cold adapter, orphaning contexts |
+
+Two more were in the cluster rather than the code, and are fixed in `infra-k8s`: OneCLI's ingress
+policy named only the retired implementation's Broker (a DROP, so the call hung rather than failed),
+and the `agora-onecli-ca` ConfigMap still held the pre-cutover CA, so every provider call failed with
+"Self-signed certificate detected" — a message that names neither the file nor OneCLI.
+
+**Open, and both are OneCLI account state rather than code:** the Anthropic credential exists in
+OneCLI and is granted to the Agent, but the gateway answers `access_restricted` for every agent
+including its own default — the account is not attached at the app level, and attaching it is an
+interactive action in the OneCLI UI. And codex's own CLI refuses the reviewed `auth.json` marker
+stub with "Authentication required": its token carries an `accountId` the marker does not, so the
+shape a stub needs is version-specific and has to be measured against the pinned adapter.
+
+**Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
+SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;
+`deploy/overlays/live` with real digests and a CNPG cluster; and the twenty-odd corrections above,
+each with a test that fails without it.
+
 ---
 
 ## 4. Prerequisite register
