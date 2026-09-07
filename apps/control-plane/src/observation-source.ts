@@ -27,7 +27,7 @@ import {
   type HandoffDeliveryState,
   type DriverProof,
 } from '@agora/observation'
-import { fromWireGrantSet } from '@agora/domain'
+import { fromWireGrantSet, type Authorization } from '@agora/domain'
 import { currentSession, currentOpeningWindow, type CurrentSession, type OpeningWindow } from '@agora/journal'
 import { openingRequestKey } from './descriptor.js'
 import { getAnchor, getSave, isExcluded } from '@agora/custody'
@@ -100,6 +100,50 @@ export interface HttpObservationSourceOptions {
 export class HttpObservationSource implements ObservationSource {
   constructor(private readonly options: HttpObservationSourceOptions) {}
 
+  /**
+   * The desired authorization set per capability-id list, refreshed by `reader()` before every
+   * evaluation and read back SYNCHRONOUSLY by the rule tables' `resolve.capabilityGrants`.
+   *
+   * Keyed by the sorted capability ids because that is exactly what the answer depends on — the
+   * reviewed catalogue plus this project's live credentials — so one entry serves every Workstream
+   * asking the same question, whatever order a scan visits them in.
+   */
+  readonly #desiredGrants = new Map<string, ReadonlySet<Authorization>>()
+
+  /**
+   * What the rule tables ask for synchronously. It THROWS when there is no fresh answer, and that is
+   * deliberate: an empty set means "this Workstream wants no authority", which is a completely
+   * different claim from "the Broker did not answer". The empty-set stub that used to stand here is
+   * why no Pod on the live cluster ever received a credential — every CAPS row read
+   * nothing-desired-nothing-attached and passed.
+   */
+  desiredGrants(capabilityIds: readonly string[]): ReadonlySet<Authorization> {
+    const key = [...capabilityIds].sort().join(',')
+    const grants = this.#desiredGrants.get(key)
+    if (grants === undefined) {
+      throw new Error(`the desired authorization set for [${key}] is unavailable: the Broker did not answer, and an empty set would mean something else entirely`)
+    }
+    return grants
+  }
+
+  private async refreshDesiredGrants(capabilityIds: readonly string[]): Promise<void> {
+    const key = [...capabilityIds].sort().join(',')
+    try {
+      const query = new URLSearchParams({ capabilityIds: capabilityIds.join(',') })
+      const res = await fetch(`${this.options.brokerBaseUrl}/v1/capability-grants?${query.toString()}`, this.deadline())
+      if (!res.ok) {
+        this.#desiredGrants.delete(key)
+        this.options.logger?.(`desired grants for [${key}] unavailable: broker answered HTTP ${String(res.status)}`)
+        return
+      }
+      const body = (await res.json()) as { grants?: unknown }
+      this.#desiredGrants.set(key, fromWireGrantSet(body.grants as never))
+    } catch (error) {
+      this.#desiredGrants.delete(key)
+      this.options.logger?.(`desired grants for [${key}] unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   /** The per-call deadline, as fetch options. Absent means unbounded, which only a test should choose. */
   private deadline(): { readonly signal?: AbortSignal } {
     return this.options.requestTimeoutMs === undefined ? {} : { signal: AbortSignal.timeout(this.options.requestTimeoutMs) }
@@ -130,6 +174,10 @@ export class HttpObservationSource implements ObservationSource {
             startupDeadlineExpired: false, // same documented gap as construction() below
             harnessDigestFor: digestFor,
           }
+    // Refreshed before the rules run, because `resolve.capabilityGrants` is synchronous and must
+    // never answer "nothing is desired" when the truth is "we could not ask".
+    const intentForGrants = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { capabilities?: unknown } | undefined
+    await this.refreshDesiredGrants(Array.isArray(intentForGrants?.capabilities) ? (intentForGrants.capabilities as readonly string[]) : [])
     const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
     // Read back under the ids THIS harness uses: codex reports effort as `reasoning_effort`, and
     // looking for `effort` there would silently produce "no snapshot" — which reads as an

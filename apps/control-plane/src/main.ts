@@ -124,9 +124,16 @@ export async function run(options: MainOptions = {}): Promise<void> {
   // evaluate() is called without awaiting it) — an explicit, documented gap, not a guess. CAPS rule
   // rows that need it stay unavailable until a caching bridge exists (admission never converges
   // through them either, honestly, rather than fabricating a grant read).
+  // `capabilityGrants` is the Broker's answer, refreshed by the observation read that runs
+  // immediately before each evaluation, and it THROWS when there is none. The empty-set stub that
+  // used to be here made every CAPS row read "nothing desired, nothing attached" and pass: GRANT
+  // was never selected, no harness Pod ever received a credential, and the first live one sat
+  // waiting on a provider call the relay had no authority to make. An unanswered question and an
+  // empty answer are not the same thing, and only one of them is safe to act on.
   const resolve = {
     harnessDigest: (harness: string) => harnessDigests?.find((d) => d.harnessId === harness)?.imageDigest ?? '',
-    capabilityGrants: () => new Set<never>(),
+    capabilityGrants: (capabilities: ReadonlySet<string>) =>
+      observationSource instanceof HttpObservationSource ? observationSource.desiredGrants([...capabilities]) : new Set<never>(),
   }
 
   if (mode === 'api' || mode === 'both') {

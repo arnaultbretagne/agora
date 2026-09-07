@@ -56,6 +56,25 @@ export function createBrokerApi(options: BrokerApiOptions): Server {
         return send(res, 200, { agentId: agent.id, attached: toWireGrantSet(inventory.attached), effective: toWireGrantSet(inventory.effective) })
       }
 
+      // The DESIRED authorization set for a capability list — the same compile attach_grant runs,
+      // exposed as a read. The control plane cannot compute it: turning a reviewed credentialRef
+      // into this project's live OneCLI ids needs the resolver, and only the Broker holds the
+      // control key. Without this read its `resolve.capabilityGrants` returned the EMPTY SET, so
+      // every CAPS row saw "nothing desired, nothing attached" and PASSED — GRANT was never
+      // selected, no Pod ever received a credential, and the first live harness sat waiting on a
+      // provider call the relay had no authority to make.
+      if (parts[0] === 'v1' && parts[1] === 'capability-grants' && parts.length === 2 && req.method === 'GET') {
+        const ids = (url.searchParams.get('capabilityIds') ?? '').split(',').map((id) => id.trim()).filter((id) => id.length > 0)
+        await options.resolver.refresh()
+        const compiled = compile(ids, options.catalogue, options.resolver)
+        if (compiled.kind === 'denied') {
+          // A capability that cannot be compiled is NOT an empty grant set: answering 200 with
+          // nothing desired would look exactly like "this Workstream wants no authority".
+          return problem(res, 409, 'Capability denied', `${compiled.reason}: ${compiled.detail}`)
+        }
+        return send(res, 200, { capabilityIds: ids, grants: toWireGrantSet(compiled.grants) })
+      }
+
       if (parts[0] === 'v1' && parts[1] === 'owner-requests' && req.method === 'POST') {
         return handleOwnerRequest(options, res, (await body(req)) as OwnerRequest)
       }
