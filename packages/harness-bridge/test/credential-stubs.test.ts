@@ -33,3 +33,22 @@ test('a malformed stub is refused loudly rather than written as something else',
   assert.throws(() => parseCredentialStubs('[{"content":"x"}]'), /needs a path/)
   assert.throws(() => parseCredentialStubs('[{"path":"x","content":{"not":"a string"}}]'), /needs string content/)
 })
+
+test('S13: the workspace root is created before the adapter is asked to work in it', async () => {
+  // It lives inside the harness-home emptyDir, which starts EMPTY, and the adapter refuses every
+  // session with "`cwd` does not exist on the machine running the agent". That was the first thing
+  // a live adapter said back once frames could reach the control plane at all.
+  const { runHarness } = await import('../src/entrypoint.js')
+  const home = mkdtempSync(join(tmpdir(), 'agora-home-'))
+  const workspaceRoot = join(home, 'work')
+  await assert.rejects(
+    () =>
+      runHarness(
+        { adapterCommand: ['node', '-e', ''], driverFor: () => ({}) as never },
+        { AGORA_WORKSPACE_ROOT: workspaceRoot, AGORA_HARNESS_HOME: home } as NodeJS.ProcessEnv,
+      ),
+    /AGORA_INCARNATION/,
+    'it still refuses to launch without its identity — the point is what it did BEFORE failing',
+  )
+  assert.equal(statSync(workspaceRoot).isDirectory(), true)
+})
