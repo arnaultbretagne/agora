@@ -22,6 +22,7 @@ import {
   type DuplexByteStream,
 } from '@agora/acp'
 import { createAcpModelProjector, runIncremental } from '@agora/projections'
+import { loadLatestIntentEvent } from '@agora/engine'
 import { workspaceRoot } from './workspace-root.js'
 
 /** The fixed workspace root every harness Session uses (S8 Step 2+ — verbs/start.ts and
@@ -56,6 +57,19 @@ export class DevChannelConnector implements ChannelConnector {
 }
 
 export interface ChannelManagerOptions {
+  /**
+   * How each harness's contexts behave on attach, by harness id — the same reviewed fact the
+   * catalogue already states as `configReadback`.
+   *
+   * `resume` re-attaches with `session/resume`. `set-config-noop` means this adapter does not
+   * persist a context until it has content, so resuming one that has never been prompted fails
+   * outright — codex answers `Internal error: no rollout found for thread id`, which is precisely
+   * what stopped every first prompt to a codex Workstream on the live cluster. For those, the bound
+   * context is used as it is: the connector has already verified the binding belongs to the CURRENT
+   * process generation, and that is exactly the condition under which the adapter still holds it in
+   * memory. A generation change is refused earlier, and START rebinds.
+   */
+  readonly configReadback?: ReadonlyMap<string, 'resume' | 'set-config-noop'>
   readonly pool: pg.Pool
   readonly nowSql?: string
   readonly logger?: (message: string) => void
@@ -126,12 +140,23 @@ export class AgentChannels {
   readonly #nowSql: string
   readonly #logger: (message: string) => void
   readonly #connector: ChannelConnector
+  readonly #configReadback: ReadonlyMap<string, 'resume' | 'set-config-noop'> | undefined
 
   constructor(options: ChannelManagerOptions) {
     this.#pool = options.pool
     this.#nowSql = options.nowSql ?? 'now()'
     this.#logger = options.logger ?? (() => {})
     this.#connector = options.connector ?? new DevChannelConnector(options.promptDelayMs)
+    this.#configReadback = options.configReadback
+  }
+
+  /** Whether THIS Workstream's harness re-attaches with `session/resume` (see `configReadback`). Absent knowledge resumes, which is the S8 behaviour. */
+  async #attachesByResume(workstreamId: string): Promise<boolean> {
+    const readback = this.#configReadback
+    if (readback === undefined || readback.size === 0) return true
+    const intent = (await loadLatestIntentEvent(this.#pool, workstreamId))?.intent as { harness?: unknown } | undefined
+    const harness = typeof intent?.harness === 'string' ? intent.harness : undefined
+    return harness === undefined || (readback.get(harness) ?? 'resume') === 'resume'
   }
 
   pendingPermissionIds(workstreamId: string): readonly string[] {
@@ -194,7 +219,9 @@ export class AgentChannels {
     // the two harnesses.
     channel.acpSessionId =
       connected.existingContextId !== undefined
-        ? await resumeExistingContext(connection, connected.existingContextId)
+        ? (await this.#attachesByResume(workstreamId))
+          ? await resumeExistingContext(connection, connected.existingContextId)
+          : connected.existingContextId
         : ((await connection.agent.request(acp.methods.agent.session.new, { cwd: workspaceRoot(), mcpServers: [] })) as { sessionId: string }).sessionId
 
     const projectorClient = await this.#pool.connect()
