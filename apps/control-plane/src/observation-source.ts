@@ -278,6 +278,21 @@ export class HttpObservationSource implements ObservationSource {
     const lineageIntact = acpEvidence !== null && acpEvidence.connected && acpEvidence.contextProcessGeneration === acpEvidence.currentProcessGeneration
     if (!lineageIntact) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact: false }
 
+    // NO HANDOFF EXISTS for this range, and no command is outstanding: then nothing has ever
+    // carried those facts into the context, and `not_incorporated` is a fact about the record, not
+    // a guess about the transcript. The driver cannot say this — asked to look for a digest that
+    // does not exist, it can only answer `unprovable`, which is exactly what it did on the first
+    // live deployment: a fresh Session on a Workstream with history sat at
+    // `acquisition:observation.sync` for ever, because the one thing that could have unblocked it
+    // (REFILL) needs `stale`, and `stale` needs a proof nobody could produce.
+    //
+    // Safety is unchanged: `stale` still needs BOTH halves, and the delivery half is checked here
+    // rather than assumed — a `dispatched` or `unknown` Handoff keeps the answer unprovable, so a
+    // possibly-accepted prompt is never resent (CONT-005/CONT-006).
+    if (digest === null && (delivery.state === 'none' || delivery.state === 'rejected_before_acceptance')) {
+      return { descriptor, delivery: delivery.state, proof: 'not_incorporated', lineageIntact }
+    }
+
     const proof = await this.fetchDriverProof(pod.name, session, openingWindow, digest)
     if (proof === null) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact }
     return { descriptor, delivery: delivery.state, proof, lineageIntact }

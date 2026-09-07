@@ -16,7 +16,7 @@
   "relayPort": 8444,
   "relayCaConfigMapName": "agora-onecli-ca",
   "engine": {
-    "claimLeaseMs": 30000,
+    "claimLeaseMs": 90000,
     "claimLimit": 10,
     "tickPollIntervalMs": 5000,
     "sweepIntervalMs": 30000,
@@ -44,13 +44,13 @@
     "seamPollIntervalMs": 1000,
     "custodyPollIntervalMs": 1000,
     "adapterHandshakeTimeoutMs": 30000,
-    "adapterRequestTimeoutMs": 15000
+    "adapterRequestTimeoutMs": 60000
   },
   "rationale": {
     "startupDeadlineSeconds": "A Pod that has not reached Running in two minutes is not slow, it is stuck: image pull plus adapter start was measured well inside it.",
     "terminationGraceSeconds": "Enough for the adapter to flush its transcript after SIGTERM; the shutdown budget below is what actually bounds preservation.",
     "inventoryFreshnessMs": "How stale an owner inventory may be before a read is retaken. Shorter than one tick, so a tick never acts on evidence older than itself.",
-    "engine.claimLeaseMs": "One claim covers a whole verb execution including an owner round trip. Long enough that a healthy worker never loses its own row mid-action, short enough that a dead worker's row is retried within a tick or two.",
+    "engine.claimLeaseMs": "One claim covers a whole verb execution including an owner round trip AND, for the ACP verbs, an adapter call that can take a minute on a cold adapter (measured: claude-agent-acp's own sdk-initialize took 21.5s on a fresh Pod). It must exceed harness.adapterRequestTimeoutMs, or a lease expires under a worker that is still legitimately waiting.",
     "engine.claimLimit": "Rows per scan. Bounded work per pass is what keeps one busy Workstream from starving the rest (ENGINE-016).",
     "engine.tickPollIntervalMs": "The floor on how often due work is noticed when no NOTIFY arrives. NOTIFY is the fast path; this is the one that survives a lost notification.",
     "engine.sweepIntervalMs": "Recovery sweeps re-enqueue Workstreams no wake reached. Rare by design: a sweep that runs often is hiding a missing wake hook.",
@@ -72,6 +72,6 @@
     "harness.custodyPollIntervalMs": "How often a Pod asks whether a capture, placement or proof is wanted. Also the floor on how fast a shutdown can get its answer.",
     "harness.adapterHandshakeTimeoutMs": "How long the bridge waits for the adapter's own initialize before declaring the process unusable.",
     "engine.ownerRequestTimeoutMs": "How long ONE owner call may take before the caller gives up and reports the field unavailable. It must stay under claimLeaseMs: an owner that never answers used to hang a tick for ever with the work row still claimed, which stops that Workstream reconciling at all \u2014 found live when a NetworkPolicy dropped (rather than refused) the Broker's packets.",
-    "harness.adapterRequestTimeoutMs": "How long one ACP request to a harness adapter may take. An adapter that accepts a connection and never answers is indistinguishable from a slow one until this expires; without it a single unresponsive Pod froze the tick that probed it."
+    "harness.adapterRequestTimeoutMs": "How long one ACP control call may take. MEASURED on the live cluster: the first session/new on a fresh adapter spent 21.5s inside the harness's own sdk-initialize, so 15s cut off a call that was working \u2014 and a lost session/new response leaves an orphan context behind (two were created before this was raised). A minute covers a cold start with room; a prompt turn is never bounded by this."
   }
 }
