@@ -173,7 +173,7 @@ Three states, three different lines, worth telling apart:
 |---|---|---|
 | `access_restricted` | `decryption failed` | wrong encryption key — restore `/app/data` |
 | `access_restricted` | nothing | genuinely no grant for that agent |
-| `credential_not_found` | nothing | the credential is stored in a shape this gateway will not use — re-enter it |
+| `credential_not_found` | nothing | usually the REQUEST, not the credential: an OAuth-mode secret is injected by REPLACING an `Authorization: Bearer` header, so a probe sent without one has nothing to replace. Retry it with the harness's own placeholder (`Bearer onecli-managed`) before suspecting the credential |
 | upstream 401 with `injections_applied=N` | `token refresh failed` | injection works; the provider token is expired — sign in again |
 
 ## Check the harness Pods' trust anchor after ANY OneCLI change
