@@ -141,6 +141,41 @@ curl -fsS -XPUT http://control-plane…:8080/v1/workstreams/<id>/intent \
   -H 'content-type: application/json' -d '<the same complete Intent>'
 ```
 
+## When a harness cannot reach a provider: read the GATEWAY's log, not its answer
+
+OneCLI's gateway answers the caller with `access_restricted` — *"credentials exist in OneCLI but
+this agent does not have access. Ask the user to attach the account to this agent"* — for a
+situation that has nothing to do with grants. Its own log says what actually happened:
+
+```sh
+kubectl -n agora-onecli logs deploy/onecli | grep -iE "decrypt|skipping secret|credential not found"
+```
+
+```
+WARN onecli_gateway::connect: app connection decrypt failed (wrong key or format mismatch)
+WARN onecli_gateway::connect: skipping secret: decryption failed  host_pattern=api.anthropic.com
+```
+
+That is a **wrong `secret-encryption-key`**, not a missing grant. It happened here: the g4 cutover
+restored OneCLI's database from its CNPG backup and gave it a fresh `/app/data`, so OneCLI generated
+a new key and every stored credential became ciphertext nobody could read. Checking grants proves
+nothing — `GET /v1/agents/{id}/grants` and `/v1/policy/effective-app-permissions` both said *allow*,
+for every agent including OneCLI's own default, while the gateway refused all of them.
+
+The key lives on OneCLI's volume, and infra-k8s keeps an encrypted capture of it
+(`apps/agora-onecli/onecli-data-dr.secrets.yaml`). **A database restore alone is not a restore**:
+restore that volume too, before starting OneCLI, or it will generate a fresh key and orphan
+everything.
+
+Three states, three different lines, worth telling apart:
+
+| Gateway says | Log says | Means |
+|---|---|---|
+| `access_restricted` | `decryption failed` | wrong encryption key — restore `/app/data` |
+| `access_restricted` | nothing | genuinely no grant for that agent |
+| `credential_not_found` | nothing | the credential is stored in a shape this gateway will not use — re-enter it |
+| upstream 401 with `injections_applied=N` | `token refresh failed` | injection works; the provider token is expired — sign in again |
+
 ## Check the harness Pods' trust anchor after ANY OneCLI change
 
 Every harness Pod mounts `agora-onecli-ca` as its only trust anchor for the relay's TLS
