@@ -122,6 +122,10 @@ spec:
           image: ghcr.io/arnaultbretagne/agora-engine-control-plane:overlay-pins-this-by-digest
           args: ['--worker-only']
           env:
+            # The engine's counters are incremented HERE, not in the API process, so the worker
+            # serves them itself — the API's registry is empty in this topology.
+            - name: METRICS_PORT
+              value: '8081'
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: agora-database, key: CONTROL_PLANE_URL }
@@ -137,6 +141,9 @@ spec:
               value: http://runtime-control.agora-system.svc.cluster.local:8090
             - name: BROKER_URL
               value: http://broker.agora-system.svc.cluster.local:8091
+          ports:
+            - name: metrics
+              containerPort: 8081
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: '1', memory: 512Mi }
