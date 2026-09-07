@@ -279,7 +279,7 @@ test('S8 Step 4: a prompt is accepted once fresh evaluation converges (admission
   })
 })
 
-test('S8 Step 4b/5 prerequisite: an unreachable real bridge answers 503 and marks the dispatch unknown, never stuck reserved', async () => {
+test('S8 Step 4b/5 prerequisite: an unreachable real bridge answers 503 and settles the dispatch as never-sent, not stuck reserved', async () => {
   await withTestDatabase(async (db) => {
     const { RealChannelConnector } = await import('../src/real-channel-connector.js')
     // No bridge token bound at all (START never ran) — RealChannelConnector refuses to connect.
@@ -295,7 +295,12 @@ test('S8 Step 4b/5 prerequisite: an unreachable real bridge answers 503 and mark
       assert.match(problem.title, /Harness bridge/)
       const dispatch = await db.pool.query('SELECT state FROM command_dispatches WHERE workstream_id = $1', [workstreamId])
       assert.equal(dispatch.rowCount, 1, 'the reservation still happened — this is a committed dispatch, not a silently dropped one')
-      assert.equal(dispatch.rows[0]!['state'], 'unknown', 'never left stuck in reserved forever')
+      // `rejected_before_acceptance`, not `unknown`: nothing reached the harness, which is exactly
+      // what "provably never sent" means. `unknown` was the earlier choice and it cost something
+      // real — it ALSO gates the next prompt on CONT-005 recovery, for a turn that demonstrably
+      // never left this process. What matters either way is that it is never left `reserved`, which
+      // the one-turn gate reads as a turn in flight for ever.
+      assert.equal(dispatch.rows[0]!['state'], 'rejected_before_acceptance', 'never left stuck in reserved forever')
     } finally {
       await api.close()
     }
