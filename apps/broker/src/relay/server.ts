@@ -5,6 +5,7 @@
 // store bearer as password — field-findings §3.2); the Pod never sees that credential.
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { connect as connectTcp, type Socket } from 'node:net'
+import { agentIdentifierFor } from '../agents.js'
 import type { OneCliClient } from '../onecli/client.js'
 import type { PrivateStore } from '../private-store.js'
 import { decideConnect } from './decision.js'
@@ -37,6 +38,19 @@ export function createRelay(options: RelayOptions): Server {
   return server
 }
 
+/** Re-reads this incarnation's Agent bearer from OneCLI into the private store. Never creates an Agent. */
+async function refillBearer(options: RelayOptions, incarnation: string, agentId: string): Promise<void> {
+  try {
+    const identifier = agentIdentifierFor(incarnation)
+    const agents = await options.client.listAgents()
+    const bearer = agents.find((agent) => agent.id === agentId && agent.identifier === identifier)?.accessToken
+    if (bearer !== undefined) options.privateStore.put(incarnation, bearer)
+  } catch {
+    // Left to the decision below, which denies with `credential_unavailable` — the honest answer
+    // when OneCLI cannot be read right now.
+  }
+}
+
 async function handleConnect(options: RelayOptions, req: IncomingMessage, clientSocket: Socket, head: Buffer): Promise<void> {
   const targetHostPort = req.url ?? ''
   const targetHost = targetHostPort.split(':')[0] ?? ''
@@ -50,6 +64,15 @@ async function handleConnect(options: RelayOptions, req: IncomingMessage, client
   const identity = sourceIp !== undefined ? await resolveIdentity(options.podLookup, sourceIp) : undefined
   const agentId = identity !== undefined ? await options.boundAgentFor(identity.incarnation) : undefined
   const effective = agentId !== undefined ? await safeEffectiveCredentials(options.client, agentId) : undefined
+  // The private store is in memory, and OneCLI's Agent listing is where its content came from in the
+  // first place (owner-api's storeBearerFor). So a miss is a cache miss, not a fact about the world:
+  // restarting the Broker used to leave every LIVE incarnation unable to relay for ever —
+  // `relay denied api.anthropic.com:443: credential_unavailable`, surfacing inside the harness as
+  // "Failed to authenticate. API Error: 403", which names neither the Broker nor its restart.
+  // Re-reading is the same trusted hop that filled it, with no rotation and nothing new to trust.
+  if (identity !== undefined && agentId !== undefined && options.privateStore.get(identity.incarnation) === undefined) {
+    await refillBearer(options, identity.incarnation, agentId)
+  }
   const bearerAvailable = identity !== undefined && options.privateStore.get(identity.incarnation) !== undefined
 
   const decision = decideConnect({ identity, agentId, effective, bearerAvailable, targetHost, egressHosts: options.egressHosts })

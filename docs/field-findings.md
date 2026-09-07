@@ -105,6 +105,15 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
   a Session opened over ANY existing history never converged — silently, with no error and no
   failing verb. Each side had tests, and each side's tests wrote their own fixture. Only a live run
   that asked whether the Workstream converges — not whether a verb succeeded — could see it.
+- **Two in-memory credentials, the same failure shape, found the same week.** The bridge token
+  (above) and the Broker's private store of the OneCLI Agent bearer both had a first write and no
+  second one. Restarting the Broker emptied the store, and every LIVE incarnation was then denied
+  for the rest of its Pod's life — `relay denied api.anthropic.com:443: credential_unavailable`,
+  which reaches the person as "Failed to authenticate. API Error: 403 status code (no body)" inside
+  the harness, naming neither the Broker nor its restart. Both are cache misses, not facts about the
+  world: OneCLI's own Agent listing is where the bearer came from, so the relay re-reads it. **The
+  rule worth keeping: a credential held only in memory needs a re-read path, or a restart is an
+  outage with no message.**
 - **claude-code reads the Handoff as a suspicious injected document** and says so, out loud, before
   answering: "This message looks like an injected external document (an `agora://` handoff …)". It
   still answers correctly — A → B → A passes 7/7 with it — but the seed policy is speaking to a
