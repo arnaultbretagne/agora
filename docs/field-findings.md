@@ -97,6 +97,23 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
 - The `onecli-managed` marker is enough for claude-code, and is NOT enough for codex 1.10.0: it
   answers `Authentication required`. Its own token metadata carries an `accountId` the marker does
   not, so the stub's shape is version-specific and has to be measured against the pinned adapter.
+- **The bridge must serve ONE client at a time.** Every ACP connection numbers its requests from 0,
+  and the bridge relayed the adapter's stdout to every attached socket — so with the prompt channel
+  and a verb's own short-lived connection both open, a response to one connection's request 0 was
+  delivered to the other's as well (`Got response to unknown request 0` in the control plane). The
+  prompt was never settled, its reservation stayed `reserved`, and the one-turn gate then read that
+  as a turn in flight for ever.
+- **codex does not persist a context until it has content**, so `session/resume` between START and
+  the first prompt answers `Internal error: no rollout found for thread id`. This is the same fact
+  the catalogue already records as `configReadback: set-config-noop`; it applies to ATTACHING a
+  channel, not only to reading configuration back. Within one process generation the adapter still
+  holds the context, so the bound id can be used as it is.
+- **codex's `~/.codex/auth.json` needs an `id_token` it can decode**, before any network call — a
+  bare marker makes it answer `Authentication required`. The retired implementation's own stub
+  (agents/codex/SPIKE.md, and the value still on the cluster) is a 360-character SYNTHETIC JWT whose
+  every claim is the literal `onecli-managed`, with a dummy signature: shape-correct, powerless, and
+  reproducible in the catalogue. `sub`, `chatgpt_user_id`, `chatgpt_account_id`, `access_token`,
+  `refresh_token` and `account_id` are all the marker.
 - **The gateway's refusal is not its diagnosis.** `access_restricted` ("credentials exist in OneCLI
   but this agent does not have access — ask the user to attach the account to this agent") is also
   what it answers when it cannot DECRYPT the credential. Its own log says which, at WARN:

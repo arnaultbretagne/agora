@@ -651,10 +651,26 @@ error messages said:
     `Authorization` header to replace. That is precisely what the Claude placeholder exists for, and
     the ONECLI-SPIKE report had said so from the start; the probe was wrong, not the credential.
 
-What remains is operational rather than structural: a Claude Code access token copied into OneCLI is
-revoked as soon as the local CLI refreshes it, so the durable form is a credential OneCLI can
-refresh itself. codex's own CLI still refuses the reviewed `auth.json` marker stub with
-"Authentication required" — its token metadata carries an `accountId` the marker does not.
+**Both harnesses answer.** claude-code and codex each reach 9/9, with a real model answer, a Save
+with its Anchor and a restore onto the same native context. codex took three more defects, each
+found by running it:
+
+  - the bridge relayed the adapter's stdout to EVERY attached socket while every ACP connection
+    numbers its requests from 0, so responses crossed between connections (`Got response to unknown
+    request 0`). One client is attached at a time now, the newest wins.
+  - a prompt whose send never started left its reservation `reserved`, which the
+    one-turn-per-Workstream gate reads as a turn in flight — the Workstream became unpromptable for
+    ever. Every pre-send failure now settles it as `rejected_before_acceptance`.
+  - codex does not persist a context until it has content, so resuming one between START and the
+    first prompt fails outright. The catalogue already said so per harness (`configReadback`), and
+    the channel now reuses that fact rather than resuming unconditionally.
+
+And the stub itself came from the retired implementation's own spike: `~/.codex/auth.json` needs an
+`id_token` the CLI can decode, with every value in it the literal marker `onecli-managed` — no
+credential at all, since the gateway injects the real one.
+
+What remains is operational: a Claude Code access token copied into OneCLI is revoked as soon as the
+local CLI refreshes it, so the durable form is a credential OneCLI can refresh itself.
 
 **Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
 SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;
