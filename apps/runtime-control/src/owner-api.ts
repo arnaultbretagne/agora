@@ -11,7 +11,7 @@ import type { RuntimeObligationStore } from './retirement.js'
 import { LaunchSeam } from './launch-seam.js'
 import type { OwnerGate } from '@agora/owner-requests'
 import { buildPodSpec, type HarnessDefinition, type RuntimeSettings } from './k8s-pod-spec.js'
-import { podName } from './k8s-labels.js'
+import { LABEL_INCARNATION, podName } from './k8s-labels.js'
 import { WakeLog, readWakes } from './wakes.js'
 import { mintBridgeToken } from '@agora/acp'
 import type { CustodyTransport, PlacementReport } from './custody-transport.js'
@@ -59,6 +59,10 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
 
       if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 4 && parts[3] === 'evidence' && req.method === 'GET') {
         return handleEvidence(options, res, parts[2]!)
+      }
+
+      if (parts[0] === 'v1' && parts[1] === 'workstreams' && parts[3] === 'incarnations' && parts.length === 6 && parts[5] === 'bridge-token' && req.method === 'POST') {
+        return handleBridgeTokenRenewal(options, res, parts[2]!, parts[4]!)
       }
 
       if (parts[0] === 'v1' && parts[1] === 'pods' && parts.length === 4 && parts[3] === 'fence' && req.method === 'POST') {
@@ -188,6 +192,33 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
       else res.destroy()
     })
   })
+}
+
+/**
+ * Mints a fresh bridge token for a Pod that is STILL THERE (P4 renewal).
+ *
+ * The mint at gate release is bound to one incarnation and lives an hour, but the incarnation does
+ * not: a Workstream left powered on outlives its token and then cannot be reached at all — the live
+ * cluster produced exactly that, an endless RESTORE loop against a perfectly healthy Pod, because
+ * nothing ever minted a second token. Renewal is deliberately NOT a replay of `gate_release`: the
+ * seam is in-memory, so a runtime-control restart would refuse to renew precisely when a long-lived
+ * Session needs it most. What is verified instead is the fact that matters and survives a restart —
+ * a Pod with this name and this incarnation exists and is running. The token is worthless anywhere
+ * else: it names one incarnation, and only that Pod's own bridge accepts it.
+ */
+async function handleBridgeTokenRenewal(options: OwnerApiOptions, res: ServerResponse, workstreamId: string, incarnation: string): Promise<void> {
+  const name = podName(workstreamId, incarnation)
+  const pod = await options.k8s.getPod(name)
+  if (pod === undefined) return problem(res, 404, 'Not found', `pod ${name} is gone`)
+  const labels = (pod['metadata'] as { labels?: Record<string, string> } | undefined)?.labels ?? {}
+  // The label carries the incarnation verbatim (requiredLabels), and it is what disambiguates:
+  // podName truncates and sanitizes, so two incarnations can share a name but never a label.
+  if (labels[LABEL_INCARNATION] !== incarnation) {
+    return problem(res, 404, 'Not found', `pod ${name} does not carry incarnation ${incarnation}`)
+  }
+  const phase = (pod['status'] as { phase?: string } | undefined)?.phase ?? 'Unknown'
+  if (phase !== 'Running') return problem(res, 409, 'Not running', `pod ${name} is ${phase}`)
+  return send(res, 200, { bridgeToken: mintBridgeToken(incarnation, options.bridgeAuthSecret) })
 }
 
 async function handleEvidence(options: OwnerApiOptions, res: ServerResponse, name: string): Promise<void> {

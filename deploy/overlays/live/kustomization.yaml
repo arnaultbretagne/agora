@@ -16,16 +16,16 @@ resources:
 images:
   - name: ghcr.io/arnaultbretagne/agora-engine-control-plane
     newName: ghcr.io/arnaultbretagne/agora-engine-control-plane
-    digest: sha256:98537c83feaaac01aff0aee9d7d4b8e6995e64f0286dd36d1fcfe10b2579eb5e
+    digest: sha256:4e1c2327714b3e7a5dd4a2fed7269f177ba1d2457bd958674f1bd7f551ba091e
   - name: ghcr.io/arnaultbretagne/agora-engine-runtime-control
     newName: ghcr.io/arnaultbretagne/agora-engine-runtime-control
-    digest: sha256:44743426f4747f6d990400d58f832b31d1f291e312c0bc25cc06c0aca48b326d
+    digest: sha256:4dd017d7b818ed3c00726cfe2d3a695addc5134cec7a0c1e2f06bb5751e3068f
   - name: ghcr.io/arnaultbretagne/agora-engine-broker
     newName: ghcr.io/arnaultbretagne/agora-engine-broker
-    digest: sha256:2d4293f77c4c185f38c6ae56a5a30de4884129cae319bdda2bb854c8168e653d
+    digest: sha256:02a522358bb1e35cc41b2e7474ed78f828132f48d3fe7dc6d83771d21de5757d
   - name: ghcr.io/arnaultbretagne/agora-engine-web
     newName: ghcr.io/arnaultbretagne/agora-engine-web
-    digest: sha256:3a5f46deabbea2daeab82ba1657dd4de167a52f486d5ceddf949615609311828
+    digest: sha256:a7d69fcf058aeb19f436817fee19a2857bc7b6866014e1c82c06ad8e988ea6de
 
 patches:
   # OneCLI runs in agora-onecli on this cluster and is reached there (see the Broker's ONECLI_URL

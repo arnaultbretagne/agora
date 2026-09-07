@@ -8,7 +8,7 @@ import pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
 import { toWireGrantSet, type Authorization } from '@agora/domain'
 import { openSession, recordBridgeToken, bindAcpContext } from '@agora/journal'
-import type { DuplexByteStream } from '@agora/acp'
+import { mintBridgeToken, type DuplexByteStream } from '@agora/acp'
 import { HttpObservationSource } from '../src/observation-source.js'
 
 const SCHEMA_PATH = fileURLToPath(new URL('../../../../contracts/db/schema.sql', import.meta.url))
@@ -244,10 +244,17 @@ interface RuntimeControlWithEvidence {
 
 /** Same shape as startJsonServer's stub, plus the per-Pod evidence endpoint session()'s freshness
  * check depends on (processGeneration) — kept separate since only the session tests below need it. */
-function startRuntimeControlWithEvidence(pods: readonly unknown[], processGeneration: number): Promise<RuntimeControlWithEvidence> {
+function startRuntimeControlWithEvidence(pods: readonly unknown[], processGeneration: number, onRenewal?: () => void): Promise<RuntimeControlWithEvidence> {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
       const url = req.url ?? ''
+      // P4 renewal: runtime-control mints a fresh token for an incarnation whose Pod is still there.
+      if (url.endsWith('/bridge-token')) {
+        onRenewal?.()
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ bridgeToken: mintBridgeToken('inc-1', BRIDGE_SECRET) }))
+        return
+      }
       if (url.startsWith('/v1/workstreams/')) {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ pods, obligations: [], complete: true }))
@@ -284,7 +291,9 @@ function fakeAcpAgent(configOptions: readonly { id: string; currentValue: string
   return { clientStream, close: () => agentConnection.close?.() }
 }
 
-async function seedLiveSession(pool: pg.Pool, workstreamId: string, acpContextId: string, processGeneration: number): Promise<void> {
+const BRIDGE_SECRET = 'observation-source-test-secret'
+
+async function seedLiveSession(pool: pg.Pool, workstreamId: string, acpContextId: string, processGeneration: number, bridgeToken = mintBridgeToken('inc-1', BRIDGE_SECRET)): Promise<void> {
   await pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
   const client = await pool.connect()
   try {
@@ -292,7 +301,7 @@ async function seedLiveSession(pool: pg.Pool, workstreamId: string, acpContextId
     const opened = await openSession(client, workstreamId, { podUid: 'pod-a', provenance: {} })
     await client.query('COMMIT')
     await client.query('BEGIN')
-    await recordBridgeToken(client, opened.sessionId, 'bridge-token-1')
+    await recordBridgeToken(client, opened.sessionId, bridgeToken)
     await client.query('COMMIT')
     await client.query('BEGIN')
     await bindAcpContext(client, opened.sessionId, { contextId: acpContextId, processGeneration })
@@ -307,7 +316,7 @@ test('session: a bound context at the current generation, verified by a fresh re
     const workstreamId = randomUUID()
     await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
     const runtimeControl = await startRuntimeControlWithEvidence(
-      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
       0,
     )
     const broker = await startJsonServer(() => undefined)
@@ -337,7 +346,7 @@ test('session: a context bound at an OLDER generation (the process restarted) re
     await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
     // Evidence now reports generation 1 — a restart happened since ctx-1 was bound.
     const runtimeControl = await startRuntimeControlWithEvidence(
-      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
       1,
     )
     const broker = await startJsonServer(() => undefined)
@@ -370,7 +379,7 @@ test('model/effort: a live Session reads the fresh resume snapshot verbatim', as
     const workstreamId = randomUUID()
     await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
     const runtimeControl = await startRuntimeControlWithEvidence(
-      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
       0,
     )
     const broker = await startJsonServer(() => undefined)
@@ -403,7 +412,7 @@ test('model/effort: a stale (older-generation) context reads unavailable — nev
     const workstreamId = randomUUID()
     await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
     const runtimeControl = await startRuntimeControlWithEvidence(
-      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: null, forcedDeletion: false, podIP: '10.0.0.1' }],
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
       1,
     )
     const broker = await startJsonServer(() => undefined)
@@ -412,6 +421,53 @@ test('model/effort: a stale (older-generation) context reads unavailable — nev
       const reader = await source.reader(workstreamId)
       assert.deepEqual(reader.model(), { ok: false, reason: 'unavailable' })
       assert.deepEqual(reader.effort(), { ok: false, reason: 'unavailable' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+test('session: an EXPIRED bridge token is renewed before the probe, not read as a dead Session', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    // The state the live cluster reached: the Pod is healthy, the context is bound, and the token
+    // minted at gate release an hour ago is spent. Left alone, every connection is refused `403`,
+    // the probe reads disconnected, SESSION-002 selects RESTORE, and the restore reuses the same
+    // dead token — three Workstreams restored themselves once a second for two hours.
+    const spent = mintBridgeToken('inc-1', BRIDGE_SECRET, 3600, Date.now() - 7200_000)
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0, spent)
+    let renewals = 0
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+      () => {
+        renewals += 1
+      },
+    )
+    const broker = await startJsonServer(() => undefined)
+    const agent = fakeAcpAgent()
+    const tokensUsed: string[] = []
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async (options: { readonly token: string }) => {
+          tokensUsed.push(options.token)
+          return { connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }
+        },
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'live' })
+      assert.equal(renewals, 1, 'runtime-control was asked for a fresh token')
+      assert.deepEqual(tokensUsed.length, 1)
+      assert.notEqual(tokensUsed[0], spent, 'and the probe connected with the NEW one, not the spent one')
+      const stored = (await pool.query('SELECT bridge_token FROM sessions WHERE workstream_id = $1', [workstreamId])).rows[0] as { bridge_token: string }
+      assert.equal(stored.bridge_token, tokensUsed[0], 'the renewed token is persisted, so the tick\'s verbs use it too')
     } finally {
       runtimeControl.server.close()
       broker.server.close()

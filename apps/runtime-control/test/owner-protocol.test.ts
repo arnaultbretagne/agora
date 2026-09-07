@@ -81,6 +81,11 @@ class FakeK8sClient implements K8sClient {
   seed(name: string, pod: K8sObject): void {
     this.#pods.set(name, pod)
   }
+
+  setPodStatus(name: string, status: Record<string, unknown>): void {
+    const pod = this.#pods.get(name)
+    if (pod !== undefined) this.#pods.set(name, { ...pod, status })
+  }
 }
 
 test('owner-api create_pod: the PodSpec comes from the reviewed catalogue, keyed by the reserved target', async () => {
@@ -349,3 +354,41 @@ async function postOwnerRequest(port: number, req: OwnerRequest): Promise<{ kind
   })
   return (await res.json()) as { kind: string; [key: string]: unknown }
 }
+
+test('owner-api bridge-token: a still-running incarnation gets a FRESH token, and a Pod that is gone gets none', async () => {
+  const { createOwnerApi } = await import('../src/owner-api.js')
+  const { WakeLog } = await import('../src/wakes.js')
+  const { verifyBridgeToken, bridgeTokenExpiry } = await import('@agora/acp')
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    await insertWorkstream(db.pool, workstreamId)
+    const k8s = new FakeK8sClient()
+    const gate = new PgOwnerGate(db.pool as never, 'runtime-control')
+    const settings = { namespace: 'agora-runs', startupDeadlineSeconds: 120, terminationGraceSeconds: 30, inventoryFreshnessMs: 5000, runtimeClassName: 'sandboxed', runAsUser: 10001, bridgeAuthSecretName: 'agora-bridge-auth', bridgeAuthSecretKey: 'BRIDGE_AUTH_SECRET', bridgePort: 8765, ownerApiBaseUrl: 'http://runtime-control.agora-system.svc.cluster.local:8090', relayHost: 'broker.agora-system.svc.cluster.local', relayPort: 8444, relayCaConfigMapName: 'agora-onecli-ca' }
+    const harnesses = [{ harnessId: 'claude-code', imageDigest: `sha256:${'a'.repeat(64)}`, launchCommand: ['/entry'], mounts: [], harnessHome: '/home/agent', workspaceRoot: '/home/agent/work' }]
+    const server = createOwnerApi({ k8s, obligations: fakeObligations(), seams: new Map(), gate, harnesses, settings, wakes: new WakeLog(), bridgeAuthSecret: 'test-secret' })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      await postOwnerRequest(port, request({ workstreamId }))
+      const name = `agora-${workstreamId.slice(0, 8)}-inc-1`
+      const created = (await k8s.getPod(name))!
+      // The Pod the Kubernetes API would report: running, carrying its incarnation label.
+      k8s.setPodStatus(name, { phase: 'Running' })
+
+      const renewed = await fetch(`http://127.0.0.1:${String(port)}/v1/workstreams/${workstreamId}/incarnations/inc-1/bridge-token`, { method: 'POST' })
+      assert.equal(renewed.status, 200)
+      const token = ((await renewed.json()) as { bridgeToken: string }).bridgeToken
+      assert.deepEqual(verifyBridgeToken(token, 'inc-1', 'test-secret').ok, true, 'the renewed token is valid for this incarnation')
+      assert.ok(bridgeTokenExpiry(token)! > Math.floor(Date.now() / 1000), 'and it is not born expired — which is the whole point')
+      assert.deepEqual(verifyBridgeToken(token, 'inc-2', 'test-secret'), { ok: false, reason: 'wrong_incarnation' }, 'it names one incarnation and no other')
+      void created
+
+      // The renewal is a claim about the world, not a favour: no Pod, no token.
+      const gone = await fetch(`http://127.0.0.1:${String(port)}/v1/workstreams/${workstreamId}/incarnations/inc-9/bridge-token`, { method: 'POST' })
+      assert.equal(gone.status, 404)
+    } finally {
+      server.close()
+    }
+  })
+})

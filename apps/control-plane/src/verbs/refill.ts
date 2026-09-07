@@ -76,6 +76,7 @@ async function runRefill(
   let commandId: string | null = null
   let text = ''
   let uri = ''
+  let digest = ''
   try {
     await client.query('SET ROLE agora_product')
     await client.query('BEGIN')
@@ -112,6 +113,7 @@ async function runRefill(
     commandId = completed.dispatch.id
     text = completed.handoff.text
     uri = completed.handoff.uri
+    digest = completed.handoff.digest
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})
@@ -144,9 +146,20 @@ async function runRefill(
       try {
         // An embedded resource, not a resource link: a link does not deliver bytes, and the whole
         // point is that the context receives the content (continuity.md).
+        //
+        // The text block in front of it is not decoration. continuity.md proves a non-empty range
+        // incorporated only when "the Handoff command's own recorded digest appears in the
+        // transcript as a received user message" — and the digest is taken OVER the resource text,
+        // so it can never appear inside it. Sent alone, the resource made that proof unsatisfiable:
+        // every driver answered `unprovable`, observation.sync stayed unavailable, and any Session
+        // opened over existing history never converged. Found live, on the first A → B → A run
+        // against the cluster; no unit test could see it, because each half was correct on its own.
         await clientConnection.agent.request(acp.methods.agent.session.prompt, {
           sessionId: session.acpContextId,
-          prompt: [{ type: 'resource', resource: { uri, mimeType: 'text/plain', text } }],
+          prompt: [
+            { type: 'text', text: `agora handoff ${uri} sha256=${digest}` },
+            { type: 'resource', resource: { uri, mimeType: 'text/plain', text } },
+          ],
         })
         await mark(options.productPool, commandId, markResponded)
       } catch (error) {

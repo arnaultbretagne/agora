@@ -28,9 +28,10 @@ import {
   type DriverProof,
 } from '@agora/observation'
 import { fromWireGrantSet, type Authorization } from '@agora/domain'
-import { currentSession, currentOpeningWindow, type CurrentSession, type OpeningWindow } from '@agora/journal'
+import { currentSession, currentOpeningWindow, recordBridgeToken, type CurrentSession, type OpeningWindow } from '@agora/journal'
 import { openingRequestKey } from './descriptor.js'
 import { getAnchor, getSave, isExcluded } from '@agora/custody'
+import { bridgeTokenNeedsRenewal } from '@agora/acp'
 import { probeSession, type SessionProbeOptions } from './session-probe.js'
 
 const UNAVAILABLE: Acquired<never> = { ok: false, reason: 'unavailable' }
@@ -390,6 +391,48 @@ export class HttpObservationSource implements ObservationSource {
    * `unusable`, not a silently-reopened `pending`. Only a MATCHING generation is worth an actual
    * live probe (session-probe.ts), the one path that can report `live`.
    */
+  /**
+   * The bridge token this Session can actually connect with, renewed here if the stored one is
+   * spent (P4). Every consumer — the probe below, and START/RESTORE/SET_MODEL/REFILL, which re-read
+   * the Session row inside the same tick — is served by refreshing it in this one place, on the
+   * path that already runs before any of them.
+   *
+   * The token is minted once, at gate release, and lives an hour; a Session does not end when it
+   * expires. Left as it was, a Workstream powered on for longer simply became unreachable: the
+   * bridge answered `403 expired`, the probe read that as disconnected, `SESSION-002` selected
+   * RESTORE, and the restore reused the same dead token — three live Workstreams restored themselves
+   * roughly once a second for two hours against Pods that were perfectly healthy the whole time.
+   */
+  private async usableBridgeToken(workstreamId: string, session: CurrentSession, pod: PodInventoryEntry): Promise<string | null> {
+    if (!bridgeTokenNeedsRenewal(session.bridgeToken)) return session.bridgeToken
+    if (pod.incarnation === null) return null
+    try {
+      const res = await fetch(`${this.options.runtimeControlBaseUrl}/v1/workstreams/${workstreamId}/incarnations/${pod.incarnation}/bridge-token`, {
+        ...this.deadline(),
+        method: 'POST',
+      })
+      if (!res.ok) {
+        this.options.logger?.(`bridge token renewal for session ${session.sessionId} refused: ${String(res.status)}`)
+        return null
+      }
+      const renewed = ((await res.json()) as { bridgeToken?: unknown }).bridgeToken
+      if (typeof renewed !== 'string') return null
+      const client = await this.options.productPool.connect()
+      try {
+        await client.query('SET ROLE agora_product')
+        await recordBridgeToken(client, session.sessionId, renewed)
+      } finally {
+        await client.query('RESET ROLE').catch(() => {})
+        client.release()
+      }
+      this.options.logger?.(`bridge token renewed for session ${session.sessionId}`)
+      return renewed
+    } catch (error) {
+      this.options.logger?.(`bridge token renewal for session ${session.sessionId} failed: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
+  }
+
   private async fetchAcpEvidence(
     workstreamId: string,
     session: CurrentSession | null,
@@ -398,6 +441,8 @@ export class HttpObservationSource implements ObservationSource {
     const none = { acp: null, configOptions: null }
     if (session === null || session.acpContextId === null || session.bridgeToken === null) return none
     if (pod === undefined || pod.podIP === null) return none
+    const bridgeToken = await this.usableBridgeToken(workstreamId, session, pod)
+    if (bridgeToken === null) return none // the Pod could not issue one — never guess connected/disconnected
     const currentProcessGeneration = await this.fetchProcessGeneration(pod.name)
     if (currentProcessGeneration === undefined) return none // evidence unreachable — never guess connected/disconnected
     if (currentProcessGeneration !== session.processGeneration) {
@@ -416,7 +461,7 @@ export class HttpObservationSource implements ObservationSource {
         workstreamId,
         sessionId: session.sessionId,
         podIP: pod.podIP,
-        bridgeToken: session.bridgeToken,
+        bridgeToken,
         contextId: session.acpContextId,
         ...(readback !== undefined ? { configReadback: readback } : {}),
         ...(typeof intent?.model === 'string' ? { desiredModel: intent.model } : {}),

@@ -38,9 +38,22 @@ Anchor on power off, a restore on power on, and the same native context id acros
 It spends real model calls and creates a real Pod, deliberately, and leaves the Workstream off.
 
 A failing step names itself, which is the point: "a prompt is answered BY THE MODEL" failing while
-the other eight pass means the provider account is not attached in OneCLI — the gateway refuses a
-credential that has no app connection, for every agent including its own default, and the refusal is
-quoted verbatim in the transcript.
+the other eight pass is a credential problem and nothing else — the whole engine works and the
+gateway refused the call. Read OneCLI's own log before believing its answer to the caller
+("When a harness cannot reach a provider", below).
+
+Both harnesses are proven this way, `HARNESS=claude-code` and `HARNESS=codex` (with `MODEL` and
+`CAPABILITY` to match). The companion script goes one step further and proves they share a
+Workstream without sharing a context:
+
+```sh
+CONTROL_PLANE_URL=http://control-plane…:8080 OWNER=<a principal> node scripts/s13-live-a-b-a.mjs
+```
+
+A plants a codeword and is powered off; B comes up on its own fresh context and must NOT know it;
+A comes back on ITS anchor, resumes the same native context id, and still does. Four real model
+calls across two real Pods. It is the same story `scripts/s10-a-b-a.mjs` tells against stubs, with
+nothing stubbed.
 
 ## Publish a catalogue revision
 
@@ -148,6 +161,31 @@ thing between a bad delete and re-authenticating a subscription by hand.
 5. `kubectl -n agora-onecli rollout restart deploy/onecli`, then prove it with the live check —
    `HARNESS=claude-code node scripts/s13-live-end-to-end.mjs` must reach step 6 with a real answer.
    Nothing short of a model answer proves a credential.
+
+## A Workstream that restores itself over and over
+
+```sh
+kubectl -n agora-system logs deploy/control-plane-worker | grep -c 'executed RESTORE'
+```
+
+Thousands of them in an hour, always the same Workstreams, always preceded by `session probe for …
+failed`, is one Workstream burning the worker's every tick — and since the worker is single, every
+OTHER Workstream stalls behind it. That is how it was found: a live A → B → A run timed out waiting
+for a harness that was never the problem.
+
+`SESSION-002` selecting RESTORE is correct behaviour for an unusable Session; the question is why the
+Session reads unusable when the Pod is healthy. Ask the Pod directly, from the worker:
+
+```sh
+kubectl -n agora-runs get pod <pod> -o jsonpath='{.status.podIP}'
+kubectl -n agora-system exec deploy/control-plane-worker -- node -e "…"   # TCP connect to :8765
+```
+
+An open port with a refused upgrade is a token problem, not a network one. Historically it was an
+expired bridge token that nothing renewed (field findings §2.2b); renewal is automatic now, and the
+worker says so — `bridge token renewed for session …`. If a renewal is refused instead, the line
+names the HTTP status runtime-control answered with, and the cause is there: no Pod by that name, or
+a Pod that is no longer `Running`.
 
 ## Drain a node
 
