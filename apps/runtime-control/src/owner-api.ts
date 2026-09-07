@@ -11,7 +11,7 @@ import type { RuntimeObligationStore } from './retirement.js'
 import { LaunchSeam } from './launch-seam.js'
 import type { OwnerGate } from '@agora/owner-requests'
 import { buildPodSpec, type HarnessDefinition, type RuntimeSettings } from './k8s-pod-spec.js'
-import { incarnationLabel, LABEL_INCARNATION, podName } from './k8s-labels.js'
+import { LABEL_INCARNATION, podName } from './k8s-labels.js'
 import { WakeLog, readWakes } from './wakes.js'
 import { mintBridgeToken } from '@agora/acp'
 import type { CustodyTransport, PlacementReport } from './custody-transport.js'
@@ -211,7 +211,9 @@ async function handleBridgeTokenRenewal(options: OwnerApiOptions, res: ServerRes
   const pod = await options.k8s.getPod(name)
   if (pod === undefined) return problem(res, 404, 'Not found', `pod ${name} is gone`)
   const labels = (pod['metadata'] as { labels?: Record<string, string> } | undefined)?.labels ?? {}
-  if (labels[LABEL_INCARNATION] !== incarnationLabel(workstreamId, incarnation)) {
+  // The label carries the incarnation verbatim (requiredLabels), and it is what disambiguates:
+  // podName truncates and sanitizes, so two incarnations can share a name but never a label.
+  if (labels[LABEL_INCARNATION] !== incarnation) {
     return problem(res, 404, 'Not found', `pod ${name} does not carry incarnation ${incarnation}`)
   }
   const phase = (pod['status'] as { phase?: string } | undefined)?.phase ?? 'Unknown'

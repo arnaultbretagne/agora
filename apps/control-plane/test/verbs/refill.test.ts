@@ -17,7 +17,7 @@ function context(workstreamId: string): VerbContext {
 
 interface Prompted {
   readonly sessionId: string
-  readonly prompts: { sessionId: string; blocks: readonly { type?: string; resource?: { uri?: string; text?: string } }[] }[]
+  readonly prompts: { sessionId: string; blocks: readonly { type?: string; text?: string; resource?: { uri?: string; text?: string } }[] }[]
 }
 
 function fakeAcpAgent(seen: Prompted['prompts'], options: { failPrompt?: boolean } = {}): { readonly clientStream: DuplexByteStream; readonly close: () => void } {
@@ -28,7 +28,7 @@ function fakeAcpAgent(seen: Prompted['prompts'], options: { failPrompt?: boolean
   const agentApp = acp.agent({ name: 'test-fake-agent' })
   agentApp.onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }))
   agentApp.onRequest(acp.methods.agent.session.prompt, ({ params }) => {
-    const request = params as { sessionId: string; prompt: readonly { type?: string; resource?: { uri?: string; text?: string } }[] }
+    const request = params as { sessionId: string; prompt: readonly { type?: string; text?: string; resource?: { uri?: string; text?: string } }[] }
     seen.push({ sessionId: request.sessionId, blocks: request.prompt })
     if (options.failPrompt === true) throw new Error('the response never came back')
     return { stopReason: 'end_turn' }
@@ -118,10 +118,23 @@ test('REFILL delivers the range as an embedded resource, once, and records the r
 
       assert.equal(prompts.length, 1)
       assert.equal(prompts[0]!.sessionId, 'ctx-1')
-      const block = prompts[0]!.blocks[0]!
+      const block = prompts[0]!.blocks.find((b) => b.type === 'resource')!
       assert.equal(block.type, 'resource', 'an embedded resource — a link would not deliver bytes')
       assert.match(String(block.resource?.uri), /^agora:\/\/workstreams\/.+\/handoffs\/.+$/)
       assert.match(String(block.resource?.text), /user: message 0/)
+
+      // The digest travels WITH the resource, in the message the transcript records. It is taken
+      // over the resource text, so it cannot be inside it — and continuity.md proves a non-empty
+      // range incorporated only by finding that digest in a received user message. Without this
+      // block every driver answers `unprovable` and the Workstream never converges (found live).
+      const recorded = await db.pool.query('SELECT request FROM command_dispatches WHERE workstream_id = $1 AND request_key = $2', [
+        workstreamId,
+        openingRequestKey(sessionId, { w: 0, h: 4, saveId: null }),
+      ])
+      const digest = (recorded.rows[0] as { request: { digest?: string } }).request.digest
+      assert.equal(typeof digest, 'string')
+      const carried = prompts[0]!.blocks.some((b) => b.type === 'text' && String(b.text).includes(String(digest)))
+      assert.ok(carried, 'the Handoff digest is delivered in the same user message as the resource')
 
       const dispatch = await replayDispatch(db.pool, workstreamId, openingRequestKey(sessionId, { w: 0, h: 4, saveId: null }))
       assert.equal(dispatch?.state, 'responded')
@@ -183,7 +196,7 @@ test('a restored Session refills only the tail its Save could not prove', async 
 
       await executor.execute('REFILL', context(workstreamId))
 
-      const text = String(prompts[0]!.blocks[0]!.resource?.text)
+      const text = String(prompts[0]!.blocks.find((b) => b.type === 'resource')!.resource?.text)
       assert.match(text, /range=\(2,5\]/)
       assert.ok(!text.includes('message 0'), 'facts the Save proved are not sent again')
       assert.match(text, /message 3/)
@@ -302,7 +315,7 @@ test('a degraded rendering is not dispatched without a confirmation', async () =
       })
       await confirmed.execute('REFILL', context(workstreamId))
       assert.equal(prompts.length, 1)
-      assert.match(String(prompts[0]!.blocks[0]!.resource?.text), /fidelity=degraded/)
+      assert.match(String(prompts[0]!.blocks.find((b) => b.type === 'resource')!.resource?.text), /fidelity=degraded/)
       assert.ok(sessionId.length > 0)
     } finally {
       runtimeControl.server.close()

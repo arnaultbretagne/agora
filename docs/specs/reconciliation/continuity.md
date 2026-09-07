@@ -159,6 +159,14 @@ ACP embedded resource content. Its descriptive URI is
 `agora://workstreams/{workstream_id}/handoffs/{command_id}`. The pinned integration must support the
 content form; a resource link alone does not deliver bytes. Correctness needs no custom ACP metadata.
 
+**The digest is delivered with the resource, in the same user message.** Incorporation is proven by
+finding the command's recorded digest in a received user message (above), and the digest is taken
+over the resource's own bytes — so it can never appear inside them. The Handoff turn therefore
+carries a plain ACP text block naming the URI and that digest alongside the embedded resource.
+Without it the two halves of this contract are individually correct and jointly unsatisfiable: every
+driver answers `unprovable`, `observation.sync` stays unavailable, and a Session opened over any
+existing history never converges. That was the live behaviour before this sentence existed.
+
 Rendering folds canonical facts or uses a projector proved complete through `H`. Source facts keep
 their identity; the product synchronization item references them rather than duplicating history.
 No unversioned Web cache supplies the range.

@@ -5,10 +5,13 @@
 // every Pod, credential, gateway hop and Save round-trip is the real one.
 //
 //   A  = claude-code: plant a codeword, then power off — a Save is captured and A's Anchor advances
-//   B  = codex:       the Intent switches harness; B has no Anchor of its own, so it starts from
-//                     nothing and must NOT know the codeword. A's Anchor is not touched.
-//   A' = claude-code: the Intent switches back; A's own Anchor is found, its native context resumed,
-//                     and the codeword comes back — from the harness, not from Agora's transcript.
+//   B  = codex:       the Intent switches harness. B has no Anchor of its own, so it opens a FRESH
+//                     native context — and still knows the codeword, because the Workstream's record
+//                     follows the Workstream: SYNC finds the range unincorporated and REFILL hands it
+//                     over. That is the distinction this proves. The record is the Workstream's; the
+//                     native context is the harness's, and A's Anchor is not touched.
+//   A' = claude-code: the Intent switches back; A's own Anchor is found, its native context resumed
+//                     (the SAME context id), and the codeword is still there.
 //
 //   CONTROL_PLANE_URL=http://10.98.22.96:8080 OWNER=you@example.com node scripts/s13-live-a-b-a.mjs
 //
@@ -74,8 +77,8 @@ async function switchTo(side, key) {
 
 /**
  * Asks, and returns only what THIS session answered after the ask. The Workstream's items outlive
- * every Session in it — including the prompt whose own text carries the codeword — so a check that
- * reads them all would find the codeword B never learned.
+ * every Session in it — including the prompt whose own text carries the codeword — so reading them
+ * all would answer with the question rather than with the model.
  */
 async function ask(session, text, key) {
   const before = ((await api(`/v1/workstreams/${workstreamId}/items`)).body?.items ?? []).map((item) => item.id)
@@ -132,10 +135,11 @@ try {
 
 if (b !== undefined) {
   try {
-    const answer = await ask(b, 'What codeword did I ask you to remember? If you were never told one, say NONE.', `aba-askb-${run}`)
-    record('B does NOT know A’s codeword', !answer.includes(codeword), answer.slice(0, 80).replaceAll('\n', ' '))
+    const answer = await ask(b, 'What codeword was I given earlier in this workstream? Reply with exactly that word and nothing else.', `aba-askb-${run}`)
+    // Not A's context — A's RECORD, handed over by REFILL. B never touched A's native state.
+    record('B receives the record through a Handoff, on its own context', answer.includes(codeword), answer.slice(0, 80).replaceAll('\n', ' '))
   } catch {
-    record('B does NOT know A’s codeword', false, 'no answer')
+    record('B receives the record through a Handoff, on its own context', false, 'no answer')
   }
   // B goes down on its own terms before A is asked for again: the point of the next step is that A
   // finds ITS anchor, not that the engine happened to be mid-replacement.
