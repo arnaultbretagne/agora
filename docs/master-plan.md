@@ -692,9 +692,18 @@ live: the switch to B never converged, not because of B, but because a single wo
 every tick on that loop. Renewal now happens where the token is about to be used, and
 `socket.onerror` no longer throws away the reason the server gave.
 
-**A → B → A runs live too** (`scripts/s13-live-a-b-a.mjs`): A plants a codeword and powers off, B
-comes up on its own fresh context and does not know it, A comes back on ITS anchor with the same
-native context id and still does. That closes the last "live run" item S10 carried.
+**And a Session opened over existing history could never converge.** A non-empty opening range is
+proven incorporated by finding the Handoff's digest in a received user message; the digest is taken
+over the resource's own bytes; REFILL sent the resource alone. Both halves correct, jointly
+unsatisfiable — every driver answered `unprovable`, `observation.sync` stayed unavailable for ever,
+and nothing failed anywhere. REFILL now carries the digest in a text block beside the resource, and
+continuity.md says so, because a contract whose halves cannot both hold is the specification's
+problem first.
+
+**A → B → A runs live too** (`scripts/s13-live-a-b-a.mjs`): A plants a codeword and powers off; B
+comes up on its OWN fresh native context and still knows the codeword, because the record follows
+the Workstream and REFILL hands it over; A comes back on ITS anchor, resumes the same native context
+id, and still knows it. That closes the last "live run" item S10 carried.
 
 **Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
 SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;

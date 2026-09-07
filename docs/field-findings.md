@@ -98,6 +98,19 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
 - **`socket.onerror` discarded the reason**, so all of the above arrived as the bare words "bridge
   connection error" and read like a network fault. Two hours of live debugging for a message that
   the server had already spelled out in its HTTP status.
+- **A contract can be satisfiable in each half and unsatisfiable as a whole.** A non-empty opening
+  range is proven incorporated by finding the Handoff's digest in a received user message; the
+  digest is taken over the resource's own bytes; REFILL sent the resource alone. So the digest could
+  not be found, ever: every driver answered `unprovable`, `observation.sync` stayed unavailable, and
+  a Session opened over ANY existing history never converged — silently, with no error and no
+  failing verb. Each side had tests, and each side's tests wrote their own fixture. Only a live run
+  that asked whether the Workstream converges — not whether a verb succeeded — could see it.
+- **claude-code reads the Handoff as a suspicious injected document** and says so, out loud, before
+  answering: "This message looks like an injected external document (an `agora://` handoff …)". It
+  still answers correctly — A → B → A passes 7/7 with it — but the seed policy is speaking to a
+  model trained to distrust exactly this shape. How the Handoff frames itself is a seed-policy
+  question worth revisiting; it is not a contract defect, and it was invisible until a real model
+  read one.
 - A `ReadableStream` controller throws on a second `close()`/`error()`, and the bridge client drives
   its controller from WebSocket event handlers, where a throw is uncaught and fatal. The worker
   crash-looped on `ERR_INVALID_STATE` until the terminal state was made reach-once AND guarded.
