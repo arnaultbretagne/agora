@@ -112,3 +112,37 @@ test('bridge-server: once the adapter process exits, a new connection is refused
     await server.stop()
   }
 })
+
+test('S13: only ONE client is attached at a time — a second connection supersedes the first, and frames never reach both', async () => {
+  // The adapter answers by JSON-RPC id, and every ACP connection numbers its requests from 0. With
+  // two sockets attached, both received every frame: live, a response to one connection's request 0
+  // was delivered to the other's request 0 as well, the control plane logged
+  // `Got response to unknown request 0`, and the prompt whose answer went astray stayed `reserved`
+  // for ever — which the one-turn-per-Workstream gate then read as a turn in flight, so that
+  // Workstream could never be prompted again.
+  const adapter = fakeAdapter()
+  const server = startBridgeServer({ port: 0, incarnation: INCARNATION, bridgeAuthSecret: SECRET, adapter })
+  try {
+    const token = mintBridgeToken(INCARNATION, SECRET)
+    const first = await connectWs(server.address(), token)
+    const firstClosed = new Promise<number>((resolve) => first.on('close', (code: number) => resolve(code)))
+    const firstFrames: string[] = []
+    first.on('message', (data: Buffer) => firstFrames.push(data.toString()))
+
+    const second = await connectWs(server.address(), token)
+    assert.equal(await firstClosed, 1012, 'the superseded connection is closed, not left half-listening')
+
+    adapter.stdout.write('{"jsonrpc":"2.0","id":0,"result":{}}\n')
+    assert.match(await nextMessage(second), /"id":0/)
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(firstFrames, [], 'the superseded connection receives nothing at all')
+
+    // And the adapter itself is untouched — that is the whole point of it outliving a socket.
+    const received = new Promise<Buffer>((resolve) => adapter.stdin.once('data', resolve))
+    second.send('{"jsonrpc":"2.0","id":1,"method":"session/list"}\n')
+    assert.match((await received).toString(), /session\/list/)
+    second.close()
+  } finally {
+    await server.stop()
+  }
+})

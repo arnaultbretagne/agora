@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import type pg from 'pg'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession } from '@agora/journal'
-import { createPersist, journalDuplexStream } from '../src/index.js'
+import { createPersist, journalDuplexStream, markDispatched, markNeverSent, reserveDispatch } from '../src/index.js'
 
 const PRODUCT = 'agora_product'
 
@@ -123,6 +123,37 @@ test('outbound commit is ordered before the transport write', async () => {
       const committedAt = events.indexOf('persist:committed')
       const forwardAt = events.indexOf('forward')
       assert.ok(committedAt !== -1 && forwardAt !== -1 && committedAt < forwardAt, `commit must precede forward: ${events.join(',')}`)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+test('S13: a reservation whose send never started settles as never-sent, and stops gating the next turn', async () => {
+  // Live: a prompt whose channel failed to open stayed `reserved`, and the one-turn-per-Workstream
+  // gate counts `reserved` as in flight — so that Workstream could never be prompted again. The
+  // restriction to `reserved` is the point: a dispatch that DID reach the wire is `unknown`.
+  await withTestDatabase(async (db) => {
+    const client = await db.pool.connect()
+    try {
+      const workstreamId = await db.asRole(client, PRODUCT, () => setup(db, client))
+      const sessionId = (await client.query('SELECT id FROM sessions WHERE workstream_id = $1', [workstreamId])).rows[0]!['id'] as string
+      const first = await db.asRole(client, PRODUCT, () =>
+        reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text: 'one' }, requestKey: 'k1' }),
+      )
+      // While it sits reserved, a second prompt is refused: that is the gate doing its job.
+      await assert.rejects(
+        () => db.asRole(client, PRODUCT, () => reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text: 'two' }, requestKey: 'k2' })),
+        /turn_in_flight/,
+      )
+
+      assert.equal(await db.asRole(client, PRODUCT, () => markNeverSent(client, first.id)), true)
+      const settled = await db.asRole(client, PRODUCT, () => reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text: 'two' }, requestKey: 'k2' }))
+      assert.equal(settled.state, 'reserved', 'the next turn is admitted once the unsent one is settled')
+
+      // And a dispatch that reached the wire is NOT eligible for this exit.
+      await db.asRole(client, PRODUCT, () => markDispatched(client, settled.id))
+      assert.equal(await db.asRole(client, PRODUCT, () => markNeverSent(client, settled.id)), false)
     } finally {
       client.release()
     }

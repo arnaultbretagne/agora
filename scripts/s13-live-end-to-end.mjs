@@ -23,6 +23,12 @@ const harness = process.env.HARNESS ?? 'claude-code'
 const model = process.env.MODEL ?? 'sonnet'
 const effort = process.env.EFFORT ?? 'default'
 const capability = process.env.CAPABILITY ?? 'provider.anthropic'
+// Budgets, because the two harnesses are not equally fast to come up: claude-code converges in
+// well under a minute, codex spends ~20s inside its own adapter initialise on top of the image
+// pull and the Handoff seed. A budget that fits the fast one reports the slow one as broken, which
+// is a lie about the system rather than a measurement of it.
+const convergenceBudgetMs = Number(process.env.CONVERGENCE_BUDGET_MS ?? 600_000)
+const promptBudgetMs = Number(process.env.PROMPT_BUDGET_MS ?? 300_000)
 const codeword = `MIRABELLE-${Math.floor(Math.random() * 100000)}`
 const run = Date.now().toString(36)
 
@@ -75,7 +81,7 @@ try {
   // `work: null` is the engine saying there is nothing left to do for this Workstream. It is not a
   // promise about the future — a new Intent or a drifting observation puts work back — which is why
   // every later step re-reads rather than trusting this one.
-  await until('the Workstream converges', async () => (await api(`/v1/workstreams/${workstreamId}/intent`)).body?.work === null)
+  await until('the Workstream converges', async () => (await api(`/v1/workstreams/${workstreamId}/intent`)).body?.work === null, convergenceBudgetMs)
   record('it reconciles to convergence', true, 'work: null')
 } catch (error) {
   const view = await api(`/v1/workstreams/${workstreamId}/intent`)
@@ -101,7 +107,7 @@ try {
       const text = messages.map((m) => (m.value.content ?? []).map((b) => b.text ?? '').join('')).join('\n')
       return text.length > 0 ? text : false
     },
-    180_000,
+    promptBudgetMs,
   )
 } catch {
   answer = ''
