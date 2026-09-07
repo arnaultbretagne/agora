@@ -382,7 +382,16 @@ ACP. BUILD and TURN_OFF gain their Broker parts. `packages/observation`: `grants
 **Open before merge.** Concrete capability→grant mappings for the first capabilities, OneCLI
 inventory/idempotency capabilities, relay authentication of the incarnation (§4).
 
-### S8 — First harness integration: claude-code (merged; one item open)
+### S8 — First harness integration: claude-code (merged; live run done in S13)
+
+**The open item S8, S9, S10 and S11 each recorded — "the run on real Kubernetes with real OneCLI
+credentials" — is CLOSED (S13, 2026-09-07).** On the g4 cluster a Workstream reconciled
+BUILD → GRANT → START → SET_MODEL → converged against a real harness Pod, was captured into a Save
+on TURN_OFF (12 052 bytes, Anchor published), and on power-on was RESTORED from that Save into a new
+Pod that resumed the same native context. What is still open is narrower and is not this
+repository's: a provider ACCOUNT attachment inside OneCLI, and codex's version-specific auth stub —
+both recorded under S13. Everything each of these four slices left "to be proved live" is proved,
+except that a model's own answer needs that account.
 
 **Status.** Steps 1-6 are implemented, tested and merged (pull request #46): the image builds and is
 asserted in CI, START binds exactly one context with unknown-acceptance discovery,
@@ -437,7 +446,7 @@ real finding, that a context with no content is not listed, so START cannot disc
 lost `session/new` (recorded in the harness README and at the point in `verbs/start.ts` where it
 matters).
 
-### S9 — Native continuity: Saves, Anchors, restore and refill (merged; one item open)
+### S9 — Native continuity: Saves, Anchors, restore and refill (merged; live run done in S13)
 
 **Status.** Everything below is built, tested and merged. The one thing not done is the same one
 S8 leaves open and for the same reason: the run on real Kubernetes with real OneCLI credentials,
@@ -479,7 +488,7 @@ deterministic truncation, REFILL under the same reservation discipline as any pr
 limits, retention values (§4). These are named prerequisites in the specs; S9 is where they are
 written down and demonstrated.
 
-### S10 — Second harness, catalogue publication and A → B → A (merged; one item open)
+### S10 — Second harness, catalogue publication and A → B → A (merged; live run done in S13 for claude-code)
 
 **Status.** Built, tested and merged, with the same single item open as S8 and S9: the run on real
 Kubernetes with real OneCLI credentials. A → B → A itself was run end to end against BOTH real
@@ -515,7 +524,7 @@ revision publication with durable enumeration of affected Workstreams and bounde
 **Evidence.** `CONT-007`, `SESSION-A11`, `ENGINE-014` (revision change mid-tick), image
 upgrade replaces a live Pod after a bounded Save.
 
-### S11 — Operations, retention and hardening (merged, partially)
+### S11 — Operations, retention and hardening (merged; deployment done in S13)
 
 **Status.** Done and merged: the pinned settings and their falsification tests, retention and the
 Workstream deletion pipeline, telemetry with an allow-list redaction test, `/v1/metrics` and
