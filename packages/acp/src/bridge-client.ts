@@ -80,18 +80,35 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   let terminated = false
   const incoming = new ReadableStream<Uint8Array>({
     start(controller) {
+      // The flag catches OUR double calls; the try/catch catches the stream reaching a terminal
+      // state some other way — a consumer cancelling, the ndJson pipeline finishing — which our
+      // flag cannot see because the state belongs to the stream, not to us. The first version of
+      // this fix kept only the flag, and the worker crash-looped again on the very same line.
       incomingController.enqueue = (chunk) => {
-        if (!terminated) controller.enqueue(chunk)
+        if (terminated) return
+        try {
+          controller.enqueue(chunk)
+        } catch {
+          terminated = true
+        }
       }
       incomingController.close = () => {
         if (terminated) return
         terminated = true
-        controller.close()
+        try {
+          controller.close()
+        } catch {
+          // Already terminal. Nothing to report: the reader has, by definition, stopped reading.
+        }
       }
       incomingController.error = (reason) => {
         if (terminated) return
         terminated = true
-        controller.error(reason)
+        try {
+          controller.error(reason)
+        } catch {
+          // Same: the stream is already terminal, and this reason has nowhere left to go.
+        }
       }
     },
   })
