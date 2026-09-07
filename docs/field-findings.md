@@ -84,6 +84,20 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
   frame was therefore empty: the adapter answered, the socket received it, and the ACP client saw
   nothing. 63 `session/list` requests are journaled from the live cluster with not one response
   beside them. No in-process test can produce this; only a real socket does.
+- **A bridge token expires; a Session does not.** The token is minted once, at gate release, and
+  lives an hour. Nothing renewed it, so a Workstream left powered on simply stopped being reachable:
+  the Pod's bridge refused the upgrade with `403 expired`, the session probe read that as
+  disconnected, `SESSION-002` selected RESTORE, and RESTORE reused the same dead token. Three
+  Workstreams restored themselves roughly once a second for two hours against Pods that were healthy
+  the whole time, and the only symptom in the worker's log was one line repeated 4000 times. Short
+  runs never show it — every end-to-end script powers off inside the hour. Renewal now happens where
+  the token is about to be used (observation, before the probe), against a runtime-control endpoint
+  that re-mints for an incarnation whose Pod is still running; the seam is deliberately not consulted,
+  because it lives in memory and a runtime-control restart would refuse to renew exactly when a
+  long-lived Session needs it.
+- **`socket.onerror` discarded the reason**, so all of the above arrived as the bare words "bridge
+  connection error" and read like a network fault. Two hours of live debugging for a message that
+  the server had already spelled out in its HTTP status.
 - A `ReadableStream` controller throws on a second `close()`/`error()`, and the bridge client drives
   its controller from WebSocket event handlers, where a throw is uncaught and fatal. The worker
   crash-looped on `ERR_INVALID_STATE` until the terminal state was made reach-once AND guarded.

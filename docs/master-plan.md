@@ -682,10 +682,24 @@ retired — and the live check passes 9/9 on it. Two lessons, both in field find
 retired implementation's evidence before re-deriving anything about OneCLI, and keep exactly one
 secret per provider type, since the Broker drops an ambiguous type entirely.
 
+**A Workstream that stays on outlives its bridge token, and that was fatal.** The token is minted
+once at gate release and lives an hour; nothing renewed it. Every end-to-end script powers off well
+inside that hour, so the deployment looked healthy while a Workstream simply left running became
+unreachable: `403 expired` on every connection, read as a disconnected Session, `SESSION-002`
+selecting RESTORE, and RESTORE reusing the same dead token — three Workstreams restoring themselves
+about once a second for two hours against Pods that were fine. It was found by running A → B → A
+live: the switch to B never converged, not because of B, but because a single worker was spending
+every tick on that loop. Renewal now happens where the token is about to be used, and
+`socket.onerror` no longer throws away the reason the server gave.
+
+**A → B → A runs live too** (`scripts/s13-live-a-b-a.mjs`): A plants a codeword and powers off, B
+comes up on its own fresh context and does not know it, A comes back on ITS anchor with the same
+native context id and still does. That closes the last "live run" item S10 carried.
+
 **Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
 SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;
-`deploy/overlays/live` with real digests and a CNPG cluster; and the twenty-odd corrections above,
-each with a test that fails without it.
+`deploy/overlays/live` with real digests and a CNPG cluster; bridge-token renewal; and the
+twenty-odd corrections above, each with a test that fails without it.
 
 ---
 

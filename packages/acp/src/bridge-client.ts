@@ -60,8 +60,13 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   }
 
   socket.onopen = () => opened?.()
-  socket.onerror = () => {
-    const error = new Error('bridge connection error')
+  socket.onerror = (event: unknown) => {
+    // The reason is in the event, and dropping it costs hours: an expired bridge token is refused
+    // with `403`, which arrived here as the bare words "bridge connection error" and was read as a
+    // network fault for two hours of live debugging. Whatever the runtime gives us — an ErrorEvent's
+    // `error`, its `message` — is worth more than nothing.
+    const cause = (event as { error?: { message?: unknown }; message?: unknown } | null)?.error?.message ?? (event as { message?: unknown } | null)?.message
+    const error = new Error(typeof cause === 'string' && cause.length > 0 ? `bridge connection error: ${cause}` : 'bridge connection error')
     failed?.(error)
     incomingController.error(error)
     notifyLoss()

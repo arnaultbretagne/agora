@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mintBridgeToken, verifyBridgeToken } from '../src/bridge-auth.js'
+import { bridgeTokenExpiry, bridgeTokenNeedsRenewal, mintBridgeToken, verifyBridgeToken } from '../src/bridge-auth.js'
 
 const SECRET = 'shared-secret'
 
@@ -39,4 +39,21 @@ test('a tampered payload (same signature) is refused', () => {
   const tamperedPayload = Buffer.from(JSON.stringify({ incarnation: 'inc-2', exp: 9999999999 })).toString('base64url')
   assert.deepEqual(verifyBridgeToken(`${tamperedPayload}.${signature}`, 'inc-2', SECRET), { ok: false, reason: 'bad_signature' })
   void payload
+})
+
+test('a token is due for renewal before it expires, not after — the holder never starts work with a spent one', () => {
+  const mintedAt = Date.parse('2026-01-01T00:00:00.000Z')
+  const token = mintBridgeToken('inc-1', SECRET, 3600, mintedAt)
+  assert.equal(bridgeTokenNeedsRenewal(token, 300, mintedAt), false)
+  // 55 minutes in: 5 minutes left, which is exactly the margin — renew.
+  assert.equal(bridgeTokenNeedsRenewal(token, 300, mintedAt + 55 * 60_000), true)
+  // And long after expiry, which is the state the live cluster was stuck in for two hours.
+  assert.equal(bridgeTokenNeedsRenewal(token, 300, mintedAt + 7200_000), true)
+})
+
+test('a missing or unreadable token is due for renewal, never treated as valid', () => {
+  assert.equal(bridgeTokenNeedsRenewal(null), true)
+  assert.equal(bridgeTokenNeedsRenewal(undefined), true)
+  assert.equal(bridgeTokenNeedsRenewal('not-a-token'), true)
+  assert.equal(bridgeTokenExpiry('not-a-token'), null)
 })
