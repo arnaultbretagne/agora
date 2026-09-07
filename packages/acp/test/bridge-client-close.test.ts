@@ -66,3 +66,31 @@ test('S13: a stream that reached its terminal state elsewhere still does not thr
     http.close()
   }
 })
+
+test('S13: a BINARY frame from the bridge arrives with its bytes — the default delivers a Blob, and reading it as bytes silently yields none', async () => {
+  // The bug that made every ACP interaction time out on the live cluster. Node's WebSocket hands
+  // binary messages over as a Blob unless `binaryType` says otherwise, and `new Uint8Array(blob)`
+  // does not throw — it returns a ZERO-LENGTH array. So the adapter answered, the socket received
+  // the answer, and the client saw nothing at all: 63 requests journaled, not one response.
+  const http = createServer()
+  const wss = new WebSocketServer({ server: http })
+  wss.on('connection', (socket) => {
+    // Exactly how the harness bridge relays the adapter: a Buffer, i.e. a binary frame.
+    socket.send(Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"sessions":[]}}\n', 'utf8'))
+  })
+  await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
+  const port = (http.address() as { port: number }).port
+
+  try {
+    const connection = await connectBridge({ url: `ws://127.0.0.1:${port}/`, token: mintBridgeToken('inc-1', 'secret') })
+    const reader = connection.stream.readable.getReader()
+    const { value } = await reader.read()
+    assert.ok(value !== undefined && value.byteLength > 0, 'the frame must arrive with its bytes, not as an empty array')
+    assert.match(new TextDecoder().decode(value), /"sessions"/)
+    await reader.cancel().catch(() => undefined)
+    await connection.close()
+  } finally {
+    wss.close()
+    http.close()
+  }
+})

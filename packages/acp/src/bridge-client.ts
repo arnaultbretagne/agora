@@ -25,6 +25,13 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   const socket = new WebSocket(options.url, {
     headers: { authorization: `Bearer ${options.token}`, 'x-agora-connection-id': connectionId },
   } as never)
+  // WITHOUT THIS, EVERY INBOUND FRAME IS SILENTLY EMPTY. Node's WebSocket delivers binary messages
+  // as a Blob by default, and `new Uint8Array(blob)` does not throw — it produces a ZERO-LENGTH
+  // array. So the bridge relayed the adapter's answers, the socket received them, and the ACP
+  // client saw nothing: every request timed out, no response was ever journaled, and the harness
+  // looked like an adapter that would not answer. Sixty-three `session/list` requests were recorded
+  // on the live cluster with not one response before this line existed.
+  socket.binaryType = 'arraybuffer'
 
   let notifyLoss = (): void => {
     if (!lost) {
@@ -68,8 +75,12 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   }
   socket.onmessage = (event: WebSocketEventMap['message']) => {
     const data = event.data
-    if (typeof data === 'string') incomingController.enqueue(new TextEncoder().encode(data))
-    else incomingController.enqueue(new Uint8Array(data as ArrayBuffer))
+    if (typeof data === 'string') return incomingController.enqueue(new TextEncoder().encode(data))
+    if (data instanceof ArrayBuffer) return incomingController.enqueue(new Uint8Array(data))
+    if (ArrayBuffer.isView(data)) return incomingController.enqueue(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+    // A Blob (or anything else) means `binaryType` did not take effect on this runtime. Enqueuing
+    // it would produce an empty frame and a silent hang; erroring says so at once.
+    incomingController.error(new Error(`bridge frame arrived as ${Object.prototype.toString.call(data)}, which cannot be read synchronously`))
   }
 
   // A socket can be errored and then closed, or closed twice, and a ReadableStream controller
