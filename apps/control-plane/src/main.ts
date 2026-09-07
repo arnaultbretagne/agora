@@ -12,6 +12,7 @@ import { createSessionOpeningExecutor } from './session-opener.js'
 import { createStartExecutor } from './verbs/start.js'
 import { createSetConfigExecutor } from './verbs/set-config.js'
 import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { createVerbRouter } from './verb-router.js'
 import { setWorkspaceRoot } from './workspace-root.js'
 import { publicationSweep, readPinnedSettings, assertSettingsCoherent } from '@agora/engine'
@@ -176,6 +177,26 @@ export async function run(options: MainOptions = {}): Promise<void> {
     })
     await new Promise<void>((ready) => server.listen(port, '0.0.0.0', ready))
     log.info('api.listening', { count: port })
+  }
+  if (mode === 'worker') {
+    // The worker is where every engine counter is incremented, and in the deployed topology it is a
+    // DIFFERENT PROCESS from the API that serves `/v1/metrics` — so the API answered with an empty
+    // registry and the engine's own numbers were unobservable anywhere. Found by scraping the live
+    // deployment. A metrics-only listener, nothing else: this process serves no product API.
+    const metricsPort = Number(env.METRICS_PORT ?? 8081)
+    createServer((req, res) => {
+      const path = (req.url ?? '/').split('?')[0]
+      if (path === '/v1/metrics') {
+        res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' })
+        return void res.end(metrics.render())
+      }
+      if (path === '/v1/healthz') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return void res.end(JSON.stringify({ ok: true }))
+      }
+      res.writeHead(404)
+      res.end()
+    }).listen(metricsPort, '0.0.0.0', () => log.info('worker.metrics.listening', { count: metricsPort }))
   }
   if (mode === 'worker' || mode === 'both') {
     if (settings === undefined) {
