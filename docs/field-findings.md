@@ -97,6 +97,23 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
 - The `onecli-managed` marker is enough for claude-code, and is NOT enough for codex 1.10.0: it
   answers `Authentication required`. Its own token metadata carries an `accountId` the marker does
   not, so the stub's shape is version-specific and has to be measured against the pinned adapter.
+- **The gateway's refusal is not its diagnosis.** `access_restricted` ("credentials exist in OneCLI
+  but this agent does not have access — ask the user to attach the account to this agent") is also
+  what it answers when it cannot DECRYPT the credential. Its own log says which, at WARN:
+  `skipping secret: decryption failed (wrong key or format mismatch)`. Cause here: the g4 cutover
+  restored the database and gave OneCLI a fresh `/app/data`, so it generated a new
+  `secret-encryption-key` and every stored credential became unreadable. Restoring the original key
+  from infra-k8s's own SOPS capture fixed it — GitHub and OpenAI inject again
+  (`injections_applied=2`). A database restore alone is not a restore.
+- An `anthropic`-type secret is NOT enough for this pinned build to serve `api.anthropic.com`. A
+  freshly created secret (`POST /v1/secrets`, correct type and hostPattern), granted to the agent
+  (`PUT …/grants/secrets/…`), present in the newest published policy generation and reported
+  `usable` by `effective-credentials`, still yields `credential_not_found` at the gateway after a
+  restart. Whatever this build wants for that host, it is not that — measured, not inferred.
+- `DELETE /v1/secrets/{id}` removed a different secret than the one the request named, or its audit
+  row records the wrong id: one delete was issued for the Anthropic secret and the single
+  `delete/secret` audit row names the Codex one, with both rows gone afterwards. Treat secret
+  deletion in this product as unverified until re-read, and take a database backup first.
 - OneCLI can hold a provider credential, grant it to an Agent, report it `usable` in
   `effective-credentials`, and still refuse it at the gateway with
   `access_restricted: … this agent does not have access` — for EVERY agent including its own
