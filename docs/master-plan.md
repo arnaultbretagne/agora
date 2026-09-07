@@ -592,7 +592,7 @@ last vocabulary allowlist entry), Intent editor (harness, capabilities, model, e
 unknown-delivery and HOLD causes surfaced to the operator, native-loss exposure display
 (`CONT-012`), accessibility pass, browser boot test kept.
 
-### S13 — First real deployment (merged; two provider-account items open)
+### S13 — First real deployment (merged; runs end to end)
 
 **Status.** Deployed and running on the g4 cluster. `kubectl apply -k deploy/overlays/live` brings up
 the control plane (API + worker), runtime-control, the Broker and the web surface against a CNPG
@@ -634,12 +634,27 @@ policy named only the retired implementation's Broker (a DROP, so the call hung 
 and the `agora-onecli-ca` ConfigMap still held the pre-cutover CA, so every provider call failed with
 "Self-signed certificate detected" — a message that names neither the file nor OneCLI.
 
-**Open, and both are OneCLI account state rather than code:** the Anthropic credential exists in
-OneCLI and is granted to the Agent, but the gateway answers `access_restricted` for every agent
-including its own default — the account is not attached at the app level, and attaching it is an
-interactive action in the OneCLI UI. And codex's own CLI refuses the reviewed `auth.json` marker
-stub with "Authentication required": its token carries an `accountId` the marker does not, so the
-shape a stub needs is version-specific and has to be measured against the pinned adapter.
+**It runs end to end.** `scripts/s13-live-end-to-end.mjs` reports 9/9 against the live cluster,
+including a real model answer travelling the whole path — product API, engine dispatch, ACP over the
+bridge, the adapter, the CLI, the Broker's relay, OneCLI's TLS-intercepting gateway, Anthropic — and
+coming back journaled, projected and served to the client, followed by a Save with its Anchor and a
+restore that resumes the same native context.
+
+Two credential problems stood between the deployment and that result, and NEITHER was what the
+error messages said:
+
+  - OneCLI's gateway answers `access_restricted` ("attach the account to this agent") when it cannot
+    DECRYPT a credential. The g4 cutover had restored the database without `/app/data`, so OneCLI
+    generated a new `secret-encryption-key`. Restoring the original from infra-k8s's own encrypted
+    capture fixed every provider at once.
+  - It then answers `credential_not_found` for an OAuth-mode secret when the REQUEST carries no
+    `Authorization` header to replace. That is precisely what the Claude placeholder exists for, and
+    the ONECLI-SPIKE report had said so from the start; the probe was wrong, not the credential.
+
+What remains is operational rather than structural: a Claude Code access token copied into OneCLI is
+revoked as soon as the local CLI refreshes it, so the durable form is a credential OneCLI can
+refresh itself. codex's own CLI still refuses the reviewed `auth.json` marker stub with
+"Authentication required" — its token metadata carries an `accountId` the marker does not.
 
 **Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
 SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;

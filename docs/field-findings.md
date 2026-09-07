@@ -105,11 +105,22 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
   `secret-encryption-key` and every stored credential became unreadable. Restoring the original key
   from infra-k8s's own SOPS capture fixed it — GitHub and OpenAI inject again
   (`injections_applied=2`). A database restore alone is not a restore.
-- An `anthropic`-type secret is NOT enough for this pinned build to serve `api.anthropic.com`. A
-  freshly created secret (`POST /v1/secrets`, correct type and hostPattern), granted to the agent
-  (`PUT …/grants/secrets/…`), present in the newest published policy generation and reported
-  `usable` by `effective-credentials`, still yields `credential_not_found` at the gateway after a
-  restart. Whatever this build wants for that host, it is not that — measured, not inferred.
+- **An OAuth-mode Anthropic secret is injected only into a request that already carries an
+  `Authorization: Bearer` header.** OneCLI REPLACES that header; with no auth header at all there is
+  nothing to replace and the gateway answers `credential_not_found` — which reads like a missing
+  credential and is not one. That is exactly what the Claude placeholder is for
+  (`CLAUDE_CODE_OAUTH_TOKEN=onecli-managed`, §2.2): the CLI selects OAuth mode and sends
+  `Authorization: Bearer onecli-managed`, and the gateway swaps in the real token
+  (`injections_applied=1`). `x-api-key` is the other half of the same rule — an API-key secret
+  (`sk-ant-api…`) is injected there instead.
+  A probe that omits the placeholder proves nothing about the credential. This cost hours here,
+  and the ONECLI-SPIKE report already said it: the Pod receives "a Claude placeholder required to
+  make Claude Code select OAuth mode", and the successful call was `POST /v1/messages?beta=true`
+  with one injection.
+- A Claude Code OAuth access token is **rotated by Claude Code itself**: registering the value from
+  `~/.claude/.credentials.json` works until the local CLI refreshes, after which Anthropic answers
+  `OAuth access token has been revoked` for the old one. A copied access token is a snapshot; only
+  a credential OneCLI can refresh itself is durable.
 - `DELETE /v1/secrets/{id}` removed a different secret than the one the request named, or its audit
   row records the wrong id: one delete was issued for the Anthropic secret and the single
   `delete/secret` audit row names the Codex one, with both rows gone afterwards. Treat secret
