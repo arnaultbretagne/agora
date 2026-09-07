@@ -6,7 +6,7 @@ import * as acp from '@agentclientprotocol/sdk'
 import type { DuplexByteStream } from '@agora/acp'
 import { withTestDatabase, type TestDatabase } from '@agora/testkit'
 import { openSession, recordBridgeToken, bindAcpContext } from '@agora/journal'
-import { reserveDispatch } from '@agora/acp'
+import { mintBridgeToken, reserveDispatch } from '@agora/acp'
 import { AgentChannels } from '../src/agent-channel.js'
 import { RealChannelConnector, NoBridgeAvailableError } from '../src/real-channel-connector.js'
 
@@ -15,10 +15,16 @@ interface RuntimeControlStub {
   readonly url: string
 }
 
-function startRuntimeControl(pods: readonly unknown[], processGeneration: number): Promise<RuntimeControlStub> {
+function startRuntimeControl(pods: readonly unknown[], processGeneration: number, onRenewal?: () => void): Promise<RuntimeControlStub> {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
       const url = req.url ?? ''
+      if (url.endsWith('/bridge-token')) {
+        onRenewal?.()
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ bridgeToken: mintBridgeToken('inc-1', 'channel-test-secret') }))
+        return
+      }
       if (url.startsWith('/v1/workstreams/')) {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ pods, obligations: [], complete: true }))
@@ -64,7 +70,7 @@ function fakeAcpAgent(): { readonly clientStream: DuplexByteStream; readonly clo
   return { clientStream, close: () => agentConnection.close?.(), resumeCalls }
 }
 
-async function seedLiveSession(db: TestDatabase, workstreamId: string, acpContextId: string, processGeneration: number): Promise<string> {
+async function seedLiveSession(db: TestDatabase, workstreamId: string, acpContextId: string, processGeneration: number, bridgeToken = mintBridgeToken('inc-1', 'channel-test-secret')): Promise<string> {
   await db.pool.query('INSERT INTO workstreams (id, owner_principal, title, create_request_key) VALUES ($1, $2, $3, $4)', [workstreamId, 'p', 't', randomUUID()])
   const client = await db.pool.connect()
   try {
@@ -72,7 +78,7 @@ async function seedLiveSession(db: TestDatabase, workstreamId: string, acpContex
     const opened = await openSession(client, workstreamId, { podUid: 'pod-a', provenance: {} })
     await client.query('COMMIT')
     await client.query('BEGIN')
-    await recordBridgeToken(client, opened.sessionId, 'bridge-token-1')
+    await recordBridgeToken(client, opened.sessionId, bridgeToken)
     await client.query('COMMIT')
     await client.query('BEGIN')
     await bindAcpContext(client, opened.sessionId, { contextId: acpContextId, processGeneration })
@@ -87,7 +93,7 @@ test('RealChannelConnector: resumes the already-bound context, never a fresh ses
   await withTestDatabase(async (db) => {
     const workstreamId = randomUUID()
     const sessionId = await seedLiveSession(db, workstreamId, 'ctx-1', 0)
-    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5' }], 0)
+    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5', incarnation: 'inc-1' }], 0)
     try {
       const agent = fakeAcpAgent()
       const connector = new RealChannelConnector({
@@ -115,7 +121,7 @@ test('RealChannelConnector: a real prompt turn round-trips through the bridge an
   await withTestDatabase(async (db) => {
     const workstreamId = randomUUID()
     const sessionId = await seedLiveSession(db, workstreamId, 'ctx-1', 0)
-    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5' }], 0)
+    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5', incarnation: 'inc-1' }], 0)
     try {
       const agent = fakeAcpAgent()
       const connector = new RealChannelConnector({
@@ -164,10 +170,47 @@ test('RealChannelConnector: a stale (older-generation) binding refuses rather th
   await withTestDatabase(async (db) => {
     const workstreamId = randomUUID()
     await seedLiveSession(db, workstreamId, 'ctx-1', 0)
-    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5' }], 1)
+    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5', incarnation: 'inc-1' }], 1)
     try {
       const connector = new RealChannelConnector({ productPool: db.pool, runtimeControlBaseUrl: runtimeControl.url, bridgePort: 8765 })
       await assert.rejects(() => connector.connect(workstreamId), NoBridgeAvailableError)
+    } finally {
+      runtimeControl.server.close()
+    }
+  })
+})
+
+test('a prompt arriving after the token expired renews it rather than failing: a converged Workstream never ticked', async () => {
+  await withTestDatabase(async (db) => {
+    const workstreamId = randomUUID()
+    // Converged for two hours, then someone types. Nothing ran a tick in between, so the observation
+    // never had a chance to renew — this path is the only thing standing between the person and a
+    // `403 expired` from the Pod's bridge.
+    const spent = mintBridgeToken('inc-1', 'channel-test-secret', 3600, Date.now() - 7200_000)
+    const sessionId = await seedLiveSession(db, workstreamId, 'ctx-1', 0, spent)
+    let renewals = 0
+    const runtimeControl = await startRuntimeControl([{ name: 'pod-1', forcedDeletion: false, podIP: '10.0.0.5', incarnation: 'inc-1' }], 0, () => {
+      renewals += 1
+    })
+    try {
+      const agent = fakeAcpAgent()
+      const used: string[] = []
+      const connector = new RealChannelConnector({
+        productPool: db.pool,
+        runtimeControlBaseUrl: runtimeControl.url,
+        bridgePort: 8765,
+        connect: async (options) => {
+          used.push(options.token)
+          return { connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }
+        },
+      })
+      const connection = await connector.connect(workstreamId)
+      await connection.close()
+      assert.equal(renewals, 1)
+      assert.equal(used.length, 1)
+      assert.notEqual(used[0], spent, 'the channel connected with the renewed token')
+      const stored = (await db.pool.query('SELECT bridge_token FROM sessions WHERE id = $1', [sessionId])).rows[0] as { bridge_token: string }
+      assert.equal(stored.bridge_token, used[0])
     } finally {
       runtimeControl.server.close()
     }

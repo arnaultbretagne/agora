@@ -7,6 +7,7 @@
 import type pg from 'pg'
 import { connectBridge, type BridgeConnection } from '@agora/acp'
 import { currentSession } from '@agora/journal'
+import { usableBridgeToken } from './bridge-token.js'
 import type { ChannelConnection, ChannelConnector } from './agent-channel.js'
 
 export interface RealChannelConnectorOptions {
@@ -22,6 +23,7 @@ interface PodInventoryEntry {
   readonly name: string
   readonly forcedDeletion: boolean
   readonly podIP: string | null
+  readonly incarnation: string | null
 }
 
 /** Never a silent fallback to "no channel" — the caller (AgentChannels.ensure(), ultimately
@@ -52,8 +54,17 @@ export class RealChannelConnector implements ChannelConnector {
     if (currentGeneration !== session.processGeneration) {
       throw this.refused(workstreamId, 'the bound context is not the current process generation (a restart happened; START must rebind first)')
     }
+    // A converged Workstream does not tick, and nothing else here renews: a prompt arriving after
+    // an hour of quiet is exactly where a spent bridge token surfaces, and it surfaces to a person.
+    const token = await usableBridgeToken(
+      { productPool: this.options.productPool, runtimeControlBaseUrl: this.options.runtimeControlBaseUrl, ...(this.options.logger ? { logger: this.options.logger } : {}) },
+      workstreamId,
+      session,
+      pod.incarnation,
+    )
+    if (token === null) throw this.refused(workstreamId, 'the bridge token is spent and runtime-control would not renew it for this incarnation')
     const connect = this.options.connect ?? connectBridge
-    const bridge = await connect({ url: `ws://${pod.podIP}:${this.options.bridgePort}/`, token: session.bridgeToken })
+    const bridge = await connect({ url: `ws://${pod.podIP}:${this.options.bridgePort}/`, token })
     return { stream: bridge.stream, close: () => bridge.close(), existingContextId: session.acpContextId }
   }
 
