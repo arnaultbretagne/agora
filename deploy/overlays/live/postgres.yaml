@@ -1,33 +1,109 @@
-# The engine's own PostgreSQL (S13). A cluster of its own rather than a database inside the one the
-# retired implementation still runs on: the schema in contracts/db/schema.sql owns its roles
-# cluster-globally, and role separation is the whole point of them.
+# The product's database. One cluster, in the engine's own namespace, called what the product is
+# called: `agora-pg`. It carried `agora-engine-` while the retired implementation still owned that
+# name; it does not any more.
 #
 # `enableSuperuserAccess` is on because applying the schema CREATEs roles and GRANTs across them,
 # which the application owner cannot do. It is the operator's connection, used once at install and
 # for the role passwords — not something any workload holds: no deployable's connection string
 # names it.
 #
-# No barman/S3 backup here yet. The other clusters on this host back up to R2 and this one should
-# too before it holds anything that cannot be replayed — but a backup destination is an environment
-# decision, and inventing one silently would be worse than saying it is missing.
+# It backs up, because everything it holds is unreplayable: the Workstream journal IS the record,
+# and a Save is a native transcript no harness can reconstruct. Every other stateful app on this
+# host archives to the same R2 bucket under its own prefix, with a daily backup and a restore drill.
+# `cnpg-s3-creds` is distributed into this namespace by infra-k8s's ResourceSet
+# (apps/shared/cnpg-s3-creds.yaml) — the key itself lives once, in flux-system.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: agora-engine-pg
+  name: agora-pg
   namespace: agora-system
+  annotations:
+    cnpg.io/skipEmptyWalArchiveCheck: enabled
 spec:
   instances: 1
   imageName: ghcr.io/cloudnative-pg/postgresql:17.4
   enableSuperuserAccess: true
   enablePDB: true
   primaryUpdateStrategy: unsupervised
+  monitoring:
+    enablePodMonitor: true
   bootstrap:
     initdb:
       database: agora
       owner: agora_owner
+      secret:
+        name: agora-owner-pg
   storage:
     size: 10Gi
     storageClass: local-path
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: '2', memory: 1Gi }
+
+  # The workload login roles, with passwords the environment owns rather than ones CNPG invents:
+  # the connection strings in `agora-database` are then reproducible from the same encrypted source,
+  # instead of existing only inside a cluster nobody can rebuild.
+  #
+  # The NOLOGIN group roles they join (agora_engine, agora_product, agora_projector,
+  # agora_custody_meta, agora_custody_payload) are created by contracts/db/schema.sql, not here. On
+  # a cold cluster these `inRoles` therefore dangle until the schema has been applied once, and CNPG
+  # reports the roles as failed in the meantime. That is expected and self-heals on the next
+  # reconcile; the `_login` suffix exists only so a login role never collides with a group role.
+  managed:
+    roles:
+      - name: agora_owner
+        login: true
+        createdb: true
+        # Role creation needs CREATEROLE explicitly — owning the database does not confer it.
+        createrole: true
+        passwordSecret:
+          name: agora-owner-pg
+      - name: agora_cp_login
+        login: true
+        inRoles: [agora_engine, agora_product, agora_projector]
+        passwordSecret:
+          name: agora-cp-login-pg
+      - name: agora_rc_login
+        login: true
+        inRoles: [agora_custody_meta, agora_engine]
+        passwordSecret:
+          name: agora-rc-login-pg
+      - name: agora_payload_login
+        login: true
+        inRoles: [agora_custody_payload]
+        passwordSecret:
+          name: agora-payload-login-pg
+
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://bretagne-pg-backups/agora
+      # Explicit, and it matters: this prefix also holds the retired implementation's history under
+      # `agora-product/`, and the channels-era cluster's under `agora-pg/`. Two clusters sharing a
+      # serverName interleave base backups and WAL from unrelated timelines into one barman server,
+      # which corrupts the store for both — so `agora-pg/` must be purged before this cluster ever
+      # writes to it, and that purge is part of decommissioning the retired stack.
+      serverName: agora-pg
+      endpointURL: https://938f9d4cdcf888eddea773d0f68615bc.r2.cloudflarestorage.com
+      s3Credentials:
+        accessKeyId: { name: cnpg-s3-creds, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: cnpg-s3-creds, key: SECRET_ACCESS_KEY }
+      wal:
+        compression: snappy
+    # Long enough to survive a weekend and a bad Monday. Save payloads are large and this is one
+    # node with one local disk, so it is not a number to raise without watching the bucket.
+    retentionPolicy: "7d"
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: agora-pg-daily
+  namespace: agora-system
+spec:
+  # Six fields, seconds first (robfig/cron) — a five-field expression silently runs hourly. 03:45,
+  # after stremio and OneCLI at 03:30, so no two base backups contend on this single node.
+  schedule: "0 45 3 * * *"
+  # Back up on creation too, so a fresh cluster is never backup-less until the first nightly slot.
+  immediate: true
+  cluster:
+    name: agora-pg
+  backupOwnerReference: self
