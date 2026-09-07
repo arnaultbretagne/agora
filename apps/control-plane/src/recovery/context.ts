@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
+import { within } from '../deadline.js'
 import {
   attemptedPrompts,
   buildClientConnection,
@@ -31,6 +32,8 @@ export interface PromptRecoveryOptions {
   readonly productPool: pg.Pool
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
+  /** Deadline for the bridge connect and this control call (P7 — harness.adapterRequestTimeoutMs). A PROMPT is never bounded this way: a model answering for minutes is working, not hung. */
+  readonly requestTimeoutMs?: number
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket. */
   readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
@@ -189,7 +192,11 @@ async function loadReplay(
         // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
         // connection that never initialized — so re-initializing per verb bought nothing and broke one of
         // the two harnesses.
-        await connection.agent.request(acp.methods.agent.session.load, { sessionId: input.contextId, cwd: workspaceRoot(), mcpServers: [] })
+        await within(
+          connection.agent.request(acp.methods.agent.session.load, { sessionId: input.contextId, cwd: workspaceRoot(), mcpServers: [] }),
+          options.requestTimeoutMs,
+          'session/load',
+        )
       } finally {
         connection.close()
       }

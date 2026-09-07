@@ -77,6 +77,32 @@ Sources: `agents/claude-code/SPIKE.md` (`claude-agent-acp` 0.64.2, 2026-08-05),
 - Observed egress: `api.anthropic.com` only for function; `http-intake.logs.us5.datadoghq.com`
   (telemetry) was blocked with no functional effect. Keep telemetry hosts off the allow-list.
 
+### 2.2b The bridge, over a real socket (2026-09-07, first live deployment)
+
+- **Node's WebSocket delivers a binary message as a `Blob` unless `binaryType = 'arraybuffer'` is
+  set, and `new Uint8Array(blob)` does not throw — it returns a ZERO-LENGTH array.** Every inbound
+  frame was therefore empty: the adapter answered, the socket received it, and the ACP client saw
+  nothing. 63 `session/list` requests are journaled from the live cluster with not one response
+  beside them. No in-process test can produce this; only a real socket does.
+- A `ReadableStream` controller throws on a second `close()`/`error()`, and the bridge client drives
+  its controller from WebSocket event handlers, where a throw is uncaught and fatal. The worker
+  crash-looped on `ERR_INVALID_STATE` until the terminal state was made reach-once AND guarded.
+- **claude-agent-acp's first control call on a cold adapter takes ~21.5s** (its own log:
+  `[session/create] phase=sdk-initialize durationMs=21500`). A 15s deadline cut off a call that was
+  working, and a lost `session/new` response leaves an orphan context behind — two were created
+  before this was measured. The pinned deadline is now 60s, under a 90s claim lease.
+- The workspace root does not exist in a fresh Pod: the harness home is an `emptyDir`, and the
+  adapter refuses every session with "`cwd` does not exist on the machine running the agent". The
+  bridge creates it before launching.
+- The `onecli-managed` marker is enough for claude-code, and is NOT enough for codex 1.10.0: it
+  answers `Authentication required`. Its own token metadata carries an `accountId` the marker does
+  not, so the stub's shape is version-specific and has to be measured against the pinned adapter.
+- OneCLI can hold a provider credential, grant it to an Agent, report it `usable` in
+  `effective-credentials`, and still refuse it at the gateway with
+  `access_restricted: … this agent does not have access` — for EVERY agent including its own
+  default. The app-level account attachment is a separate thing from the secret grant, and it is an
+  interactive action in the OneCLI UI.
+
 ### 2.3 codex
 
 - One file matters for resume: `$HOME/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<sessionId>.jsonl`.

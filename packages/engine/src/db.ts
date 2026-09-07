@@ -12,8 +12,15 @@ export function requireDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
   return url
 }
 
-export function createPool(connectionString: string, max = 10): pg.Pool {
-  return new pg.Pool({ connectionString, max })
+/**
+ * `connectionTimeoutMillis` is not tuning: without it, `pool.connect()` on an exhausted pool waits
+ * FOR EVER. One leaked client per failed verb was enough to empty the pool on the live cluster, and
+ * from then on every tick blocked before it ran a single query — no error, no server-side activity,
+ * nothing to see. A bounded wait turns that into an error the caller reports, which is how the
+ * engine already treats "we could not read it".
+ */
+export function createPool(connectionString: string, max = 10, connectionTimeoutMillis = 10_000): pg.Pool {
+  return new pg.Pool({ connectionString, max, connectionTimeoutMillis })
 }
 
 export async function withTransaction<T>(pool: pg.Pool, run: (client: pg.PoolClient) => Promise<T>): Promise<T> {

@@ -18,12 +18,15 @@ import { loadLatestIntentEvent, type QueryClient } from '@agora/engine'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
 import { workspaceRoot } from '../workspace-root.js'
+import { within } from '../deadline.js'
 
 export interface SetConfigExecutorOptions {
   readonly productPool: pg.Pool
   readonly enginePool: QueryClient
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
+  /** Deadline for the bridge connect and this control call (P7 — harness.adapterRequestTimeoutMs). */
+  readonly requestTimeoutMs?: number
   /** Per-harness option ids; absent, the Intent field name is used as-is (claude-code's own case). */
   readonly configOptionIds?: ConfigOptionIds
   readonly logger?: (message: string) => void
@@ -109,7 +112,11 @@ async function runSetConfig(
         const harnessId = (intentEvent?.intent as { harness?: unknown } | undefined)?.harness
         const ids = typeof harnessId === 'string' ? options.configOptionIds?.get(harnessId) : undefined
         const adapterConfigId = ids?.[configId] ?? configId
-        await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, { sessionId: session.acpContextId, configId: adapterConfigId, value: desiredValue })
+        await within(
+          clientConnection.agent.request(acp.methods.agent.session.setConfigOption, { sessionId: session.acpContextId, configId: adapterConfigId, value: desiredValue }),
+          options.requestTimeoutMs,
+          'set_session_config',
+        )
       } finally {
         clientConnection.close()
       }

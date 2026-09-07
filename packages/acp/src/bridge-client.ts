@@ -25,6 +25,13 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   const socket = new WebSocket(options.url, {
     headers: { authorization: `Bearer ${options.token}`, 'x-agora-connection-id': connectionId },
   } as never)
+  // WITHOUT THIS, EVERY INBOUND FRAME IS SILENTLY EMPTY. Node's WebSocket delivers binary messages
+  // as a Blob by default, and `new Uint8Array(blob)` does not throw — it produces a ZERO-LENGTH
+  // array. So the bridge relayed the adapter's answers, the socket received them, and the ACP
+  // client saw nothing: every request timed out, no response was ever journaled, and the harness
+  // looked like an adapter that would not answer. Sixty-three `session/list` requests were recorded
+  // on the live cluster with not one response before this line existed.
+  socket.binaryType = 'arraybuffer'
 
   let notifyLoss = (): void => {
     if (!lost) {
@@ -68,15 +75,52 @@ export function connectBridge(options: BridgeClientOptions): Promise<BridgeConne
   }
   socket.onmessage = (event: WebSocketEventMap['message']) => {
     const data = event.data
-    if (typeof data === 'string') incomingController.enqueue(new TextEncoder().encode(data))
-    else incomingController.enqueue(new Uint8Array(data as ArrayBuffer))
+    if (typeof data === 'string') return incomingController.enqueue(new TextEncoder().encode(data))
+    if (data instanceof ArrayBuffer) return incomingController.enqueue(new Uint8Array(data))
+    if (ArrayBuffer.isView(data)) return incomingController.enqueue(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+    // A Blob (or anything else) means `binaryType` did not take effect on this runtime. Enqueuing
+    // it would produce an empty frame and a silent hang; erroring says so at once.
+    incomingController.error(new Error(`bridge frame arrived as ${Object.prototype.toString.call(data)}, which cannot be read synchronously`))
   }
 
+  // A socket can be errored and then closed, or closed twice, and a ReadableStream controller
+  // THROWS on the second close/error — from a WebSocket event handler, where the throw is uncaught
+  // and kills the process. That is not theoretical: the control-plane worker crash-looped on
+  // `ERR_INVALID_STATE: Controller is already closed` the first time a verb closed a bridge while
+  // its socket was already closing. The stream's terminal state is reached once, here.
+  let terminated = false
   const incoming = new ReadableStream<Uint8Array>({
     start(controller) {
-      incomingController.enqueue = (chunk) => controller.enqueue(chunk)
-      incomingController.close = () => controller.close()
-      incomingController.error = (reason) => controller.error(reason)
+      // The flag catches OUR double calls; the try/catch catches the stream reaching a terminal
+      // state some other way — a consumer cancelling, the ndJson pipeline finishing — which our
+      // flag cannot see because the state belongs to the stream, not to us. The first version of
+      // this fix kept only the flag, and the worker crash-looped again on the very same line.
+      incomingController.enqueue = (chunk) => {
+        if (terminated) return
+        try {
+          controller.enqueue(chunk)
+        } catch {
+          terminated = true
+        }
+      }
+      incomingController.close = () => {
+        if (terminated) return
+        terminated = true
+        try {
+          controller.close()
+        } catch {
+          // Already terminal. Nothing to report: the reader has, by definition, stopped reading.
+        }
+      }
+      incomingController.error = (reason) => {
+        if (terminated) return
+        terminated = true
+        try {
+          controller.error(reason)
+        } catch {
+          // Same: the stream is already terminal, and this reason has nowhere left to go.
+        }
+      }
     },
   })
 

@@ -7,6 +7,7 @@
 // always the half nobody is currently looking at.
 import type { CustodyDriver } from '@agora/custody'
 import { launch, type LaunchOptions } from './launch.js'
+import { mkdirSync } from 'node:fs'
 import { parseCredentialStubs, writeCredentialStubs } from './credential-stubs.js'
 import type { BridgeServer } from './bridge-server.js'
 
@@ -54,6 +55,13 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv, harness: HarnessEntrypoin
  * never leaves the Broker (ADR 0009).
  */
 export async function runHarness(harness: HarnessEntrypoint, env: NodeJS.ProcessEnv = process.env): Promise<BridgeServer> {
+  // The workspace root has to EXIST before the adapter is asked to work in it. It lives inside the
+  // harness-home emptyDir, which starts empty, and claude-agent-acp refuses every session with
+  // "`cwd` does not exist on the machine running the agent" — the first thing the live deployment
+  // heard back from an adapter once frames could reach it at all. Creating it here, rather than in
+  // the PodSpec, keeps it where the harness's own contract already says the root is.
+  const workspaceRoot = env.AGORA_WORKSPACE_ROOT
+  if (workspaceRoot !== undefined) mkdirSync(workspaceRoot, { recursive: true })
   const home = env.AGORA_HARNESS_HOME ?? env.HOME
   const stubs = parseCredentialStubs(env.AGORA_CREDENTIAL_STUBS)
   if (stubs.length > 0) {

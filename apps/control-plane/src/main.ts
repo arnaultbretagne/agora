@@ -111,6 +111,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
         ...(configOptionIds !== undefined ? { configOptionIds } : {}),
         ...(configReadback !== undefined ? { configReadback } : {}),
         ...(settings !== undefined ? { syncProofMaxAgeMs: settings.custody.syncProofMaxAgeMs } : {}),
+        // Every owner read and every adapter probe is bounded (P7). Unbounded, one component that
+        // accepts a connection and answers nothing freezes the tick that asked — with the work row
+        // still claimed, so that Workstream stops reconciling entirely. Found live, twice.
+        ...(settings !== undefined ? { requestTimeoutMs: settings.engine.ownerRequestTimeoutMs, adapterRequestTimeoutMs: settings.harness.adapterRequestTimeoutMs } : {}),
         logger: (message) => console.log(message),
       })
     : new UnavailableObservationSource()
@@ -120,9 +124,16 @@ export async function run(options: MainOptions = {}): Promise<void> {
   // evaluate() is called without awaiting it) — an explicit, documented gap, not a guess. CAPS rule
   // rows that need it stay unavailable until a caching bridge exists (admission never converges
   // through them either, honestly, rather than fabricating a grant read).
+  // `capabilityGrants` is the Broker's answer, refreshed by the observation read that runs
+  // immediately before each evaluation, and it THROWS when there is none. The empty-set stub that
+  // used to be here made every CAPS row read "nothing desired, nothing attached" and pass: GRANT
+  // was never selected, no harness Pod ever received a credential, and the first live one sat
+  // waiting on a provider call the relay had no authority to make. An unanswered question and an
+  // empty answer are not the same thing, and only one of them is safe to act on.
   const resolve = {
     harnessDigest: (harness: string) => harnessDigests?.find((d) => d.harnessId === harness)?.imageDigest ?? '',
-    capabilityGrants: () => new Set<never>(),
+    capabilityGrants: (capabilities: ReadonlySet<string>) =>
+      observationSource instanceof HttpObservationSource ? observationSource.desiredGrants([...capabilities]) : new Set<never>(),
   }
 
   if (mode === 'api' || mode === 'both') {
@@ -174,15 +185,16 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const executor: VerbExecutor = wired
       ? createVerbRouter(
           {
-            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, logger: (message) => console.log(message) }),
-            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
-            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            START: createStartExecutor({ productPool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, logger: (message) => console.log(message) }),
+            SET_MODEL: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
+            SET_EFFORT: createSetConfigExecutor({ productPool, enginePool, runtimeControlBaseUrl, bridgePort, requestTimeoutMs: settings.harness.adapterRequestTimeoutMs, ...(configOptionIds !== undefined ? { configOptionIds } : {}), logger: (message) => console.log(message) }),
             ...(restoreHarnesses !== undefined
               ? {
                   RESTORE: createRestoreExecutor({
                     productPool,
                     runtimeControlBaseUrl,
                     bridgePort,
+                    requestTimeoutMs: settings.harness.adapterRequestTimeoutMs,
                     harnesses: restoreHarnesses,
                     placementTimeoutMs: settings.custody.placementTimeoutMs,
                     pollIntervalMs: settings.harness.custodyPollIntervalMs,
@@ -197,7 +209,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
           // lets the same cleanup_pod through it always would have (S9 Step 3).
           createTurnOffExecutor({
             inner: createSessionOpeningExecutor({
-              inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl }), logger: (message) => console.log(message) }),
+              inner: new OwnerVerbRunner({ pool: enginePool, transport: createHttpOwnerTransport({ runtimeControlBaseUrl, brokerBaseUrl, requestTimeoutMs: settings.engine.ownerRequestTimeoutMs }), logger: (message) => console.log(message) }),
               productPool,
               enginePool,
               runtimeControlBaseUrl,
@@ -226,6 +238,10 @@ export async function run(options: MainOptions = {}): Promise<void> {
     const ticks = await startTickSource({
       pool: enginePool,
       connectionString: databaseUrl,
+      // A scan that has not returned within one claim lease is presumed stalled: whatever it still
+      // holds, the lease releases. Without this a single hung scan silently ended reconciliation
+      // for this whole process — twice, live, before every owner call was bounded.
+      stallBudgetMs: settings.engine.claimLeaseMs,
       scan: async () => {
         const summary = await scan()
         metrics.increment(METRIC.ticks, 'Reconciliation scans run')

@@ -126,6 +126,57 @@ export async function supersedeAttempt(client: QueryClient, attemptKey: string):
   return (result.rowCount ?? 0) === 1
 }
 
+/**
+ * The unresolved attempt this exact request would be a repeat of, if there is one (ENGINE-008).
+ *
+ * The protocol's whole recovery story is re-asking with the SAME key: "owners … return the recorded
+ * result for a reused key with the same digest", and "retrying with a fresh key … is not an
+ * implementation option". Nothing was doing that. An attempt whose owner call did not settle —
+ * a 500, a dropped connection, a worker that died between dispatch and settle — sat in `unknown`
+ * for ever, and because an unresolved positive attempt blocks the next one, the Workstream stopped
+ * reconciling permanently. The first live deployment hit it on its first Pod.
+ *
+ * The digest is what makes a repeat a repeat. A different payload under the same target is a
+ * DIFFERENT request: it is not this attempt's answer to wait for, and it stays blocked (which is
+ * the honest outcome — the earlier one may still have been accepted).
+ */
+export async function unresolvedRepeatOf(
+  client: QueryClient,
+  command: { readonly workstreamId: string; readonly operation: string; readonly target: OwnerTarget; readonly payloadDigest: string },
+): Promise<AttemptReservation | undefined> {
+  const result = await client.query(
+    `SELECT attempt_key, epoch, payload_digest, state FROM owner_attempts
+     WHERE workstream_id = $1 AND operation = $2 AND target_kind = $3 AND target_id = $4
+       AND payload_digest = $5 AND state IN ('dispatched', 'unknown')
+     ORDER BY reserved_at DESC LIMIT 1`,
+    [command.workstreamId, command.operation, command.target.kind, command.target.id, command.payloadDigest],
+  )
+  const row = result.rows[0] as { attempt_key: string; epoch: number; payload_digest: string; state: AttemptState } | undefined
+  if (row === undefined) return undefined
+  return {
+    attemptKey: row.attempt_key,
+    workstreamId: command.workstreamId,
+    epoch: row.epoch,
+    operation: command.operation,
+    target: command.target,
+    payloadDigest: row.payload_digest,
+    state: row.state,
+  }
+}
+
+/**
+ * Puts an unresolved attempt back in `reserved` so it can be re-asked under its own key.
+ * `dispatchAttempt` only moves `reserved -> dispatched`, and this is the one transition that may
+ * walk an attempt backwards — it is a re-ask of the same question, not a new one.
+ */
+export async function reopenAttemptForRecovery(client: QueryClient, attemptKey: string): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE owner_attempts SET state = 'reserved', settled_at = NULL WHERE attempt_key = $1 AND state IN ('dispatched', 'unknown')`,
+    [attemptKey],
+  )
+  return (result.rowCount ?? 0) === 1
+}
+
 /** True while any attempt of the Workstream is possibly accepted — off convergence is blocked. */
 export async function hasUnresolvedAttempts(client: QueryClient, workstreamId: string): Promise<boolean> {
   const result = await client.query(

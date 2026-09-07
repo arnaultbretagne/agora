@@ -28,6 +28,7 @@ import { bindAcpContext, currentSession } from '@agora/journal'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
 import { workspaceRoot } from '../workspace-root.js'
+import { within } from '../deadline.js'
 
 export { workspaceRoot }
 
@@ -35,6 +36,13 @@ export interface StartExecutorOptions {
   readonly productPool: pg.Pool
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
+  /**
+   * How long the bridge connect and each ACP CONTROL call may take (P7 —
+   * harness.adapterRequestTimeoutMs). Unbounded, a `session/list` that is never answered holds this
+   * verb's database client for ever; ten of those empty the pool and every later tick blocks in
+   * `pool.connect()`. That is the state the first live deployment reached.
+   */
+  readonly requestTimeoutMs?: number
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket. */
   readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
@@ -92,7 +100,7 @@ async function runStart(
   const discoverFirst = session.acpContextId === null
 
   const bridgeUrl = `ws://${pod.podIP}:${options.bridgePort}/`
-  const connection = await connect({ url: bridgeUrl, token: session.bridgeToken })
+  const connection = await within(connect({ url: bridgeUrl, token: session.bridgeToken }), options.requestTimeoutMs, 'the bridge')
   try {
     const client = await options.productPool.connect()
     try {
@@ -110,7 +118,9 @@ async function runStart(
         // answers a second one with "Already initialized", and both pinned adapters accept `session/*` on a
         // connection that never initialized — so re-initializing per verb bought nothing and broke one of
         // the two harnesses.
-        const contextId = discoverFirst ? await discoverOrCreateContext(clientConnection) : await createContext(clientConnection)
+        const contextId = discoverFirst
+          ? await within(discoverOrCreateContext(clientConnection), options.requestTimeoutMs, 'session/list')
+          : await within(createContext(clientConnection), options.requestTimeoutMs, 'session/new')
         await bindAcpContext(client, session.sessionId, { contextId, processGeneration: currentGeneration })
       } finally {
         clientConnection.close()
@@ -120,7 +130,7 @@ async function runStart(
       client.release()
     }
   } finally {
-    await connection.close()
+    await within(Promise.resolve(connection.close()), options.requestTimeoutMs, 'the bridge close').catch(() => {})
   }
 }
 

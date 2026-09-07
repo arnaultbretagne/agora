@@ -11,14 +11,7 @@ import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
 import { buildClientConnection, connectBridge, createPersist, initializeParams, type BridgeConnection } from '@agora/acp'
 import { workspaceRoot } from './workspace-root.js'
-
-export interface SessionProbeOptions {
-  readonly productPool: pg.Pool
-  readonly bridgePort: number
-  readonly logger?: (message: string) => void
-  /** Test seam: production uses connectBridge against the real WebSocket. */
-  readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
-}
+import { within } from './deadline.js'
 
 export interface SessionProbeResult {
   readonly connected: boolean
@@ -28,11 +21,23 @@ export interface SessionProbeResult {
 
 const DISCONNECTED: SessionProbeResult = { connected: false, configOptions: new Map() }
 
-/**
- * Resumes the workstream's bound ACP context to prove it is actually still live, right now — never
- * a cached record. Any failure (unreachable Pod, dead process, adapter rejects the resume) reports
- * `connected: false`; it is never thrown, this is an evidence read like any other in 002 Observation.
- */
+export interface SessionProbeOptions {
+  readonly productPool: pg.Pool
+  readonly bridgePort: number
+  readonly logger?: (message: string) => void
+  /** Test seam: production uses connectBridge against the real WebSocket. */
+  readonly connect?: (options: { readonly url: string; readonly token: string }) => Promise<BridgeConnection>
+  /**
+   * How long the connect and the one ACP request may take (P7 — harness.adapterRequestTimeoutMs).
+   *
+   * An adapter that accepts the WebSocket and then answers nothing is indistinguishable from a slow
+   * one, and this probe runs INSIDE a reconciliation tick that holds the Workstream's claim: without
+   * a deadline, one unresponsive Pod stops that Workstream reconciling for ever. A probe that times
+   * out reports `disconnected`, which is what "we could not read it" has always meant here.
+   */
+  readonly requestTimeoutMs?: number
+}
+
 export async function probeSession(
   input: {
     readonly workstreamId: string
@@ -52,7 +57,7 @@ export async function probeSession(
   if (input.podIP === null) return DISCONNECTED
   const connect = options.connect ?? connectBridge
   try {
-    const connection = await connect({ url: `ws://${input.podIP}:${options.bridgePort}/`, token: input.bridgeToken })
+    const connection = await within(connect({ url: `ws://${input.podIP}:${options.bridgePort}/`, token: input.bridgeToken }), options.requestTimeoutMs, 'the bridge')
     try {
       const client = await options.productPool.connect()
       try {
@@ -79,16 +84,24 @@ export async function probeSession(
           // already matches, and exactly the mutation CONFIG would perform when it does not.
           const readback =
             input.configReadback === 'set-config-noop' && input.desiredModel !== undefined
-              ? ((await clientConnection.agent.request(acp.methods.agent.session.setConfigOption, {
-                  sessionId: input.contextId,
-                  configId: input.modelOptionId ?? 'model',
-                  value: input.desiredModel,
-                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
-              : ((await clientConnection.agent.request(acp.methods.agent.session.resume, {
-                  sessionId: input.contextId,
-                  cwd: workspaceRoot(),
-                  mcpServers: [],
-                })) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+              ? ((await within(
+                  clientConnection.agent.request(acp.methods.agent.session.setConfigOption, {
+                    sessionId: input.contextId,
+                    configId: input.modelOptionId ?? 'model',
+                    value: input.desiredModel,
+                  }),
+                  options.requestTimeoutMs,
+                  'set_session_config',
+                )) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
+              : ((await within(
+                  clientConnection.agent.request(acp.methods.agent.session.resume, {
+                    sessionId: input.contextId,
+                    cwd: workspaceRoot(),
+                    mcpServers: [],
+                  }),
+                  options.requestTimeoutMs,
+                  'session/resume',
+                )) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] })
           const resumed = readback
           const configOptions = new Map<string, string>()
           for (const option of resumed.configOptions ?? []) {
@@ -103,7 +116,9 @@ export async function probeSession(
         client.release()
       }
     } finally {
-      await connection.close()
+      // Bounded, like everything else here: a close that never resolves is a tick that never ends,
+      // and this one runs in a `finally`, so it would swallow the result we already have.
+      await within(Promise.resolve(connection.close()), options.requestTimeoutMs, 'the bridge close').catch(() => {})
     }
   } catch (error) {
     options.logger?.(`session probe for ${input.workstreamId} failed: ${error instanceof Error ? error.message : String(error)}`)

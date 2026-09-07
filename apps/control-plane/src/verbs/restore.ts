@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import type pg from 'pg'
 import * as acp from '@agentclientprotocol/sdk'
+import { within } from '../deadline.js'
 import { buildClientConnection, connectBridge, createPersist, initializeParams, type BridgeConnection } from '@agora/acp'
 import { bindAcpContext, currentSession, recordRestoreOrigin } from '@agora/journal'
 import { getAnchor, getSave, invalidate, isExcluded, type Save } from '@agora/custody'
@@ -29,6 +30,8 @@ export interface RestoreExecutorOptions {
   readonly productPool: pg.Pool
   readonly runtimeControlBaseUrl: string
   readonly bridgePort: number
+  /** Deadline for the bridge connect and this control call (P7 — harness.adapterRequestTimeoutMs). */
+  readonly requestTimeoutMs?: number
   /**
    * The deployed harness definitions, by id. Which one applies is the Workstream's own Intent's
    * answer, not this executor's: Anchors are per (Workstream, harness), so a Workstream on codex
@@ -130,7 +133,11 @@ async function runRestore(
         // connection that never initialized — so re-initializing per verb bought nothing and broke one of
         // the two harnesses.
         // The context id is the Save's own — the transcript that was just placed IS that context.
-        await clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: workspaceRoot(), mcpServers: [] })
+        await within(
+          clientConnection.agent.request(acp.methods.agent.session.resume, { sessionId: save.contextId, cwd: workspaceRoot(), mcpServers: [] }),
+          options.requestTimeoutMs,
+          'session/resume',
+        )
         await bindAcpContext(client, session.sessionId, { contextId: save.contextId, processGeneration: currentGeneration })
         // The opening range's lower bound: what this Save could PROVE the context had (CONT-009).
         // REFILL's range starts here, so recording anything more optimistic would silently skip

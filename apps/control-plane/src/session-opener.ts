@@ -13,7 +13,7 @@
 import type pg from 'pg'
 import type { Verb } from '@agora/domain'
 import type { VerbContext, VerbExecutor } from '@agora/engine'
-import { openSession, currentSession, recordBridgeToken } from '@agora/journal'
+import { openSession, currentSession, endAttribution, recordBridgeToken } from '@agora/journal'
 import { payloadDigest, type OwnerRequest } from '@agora/owner-requests'
 import { sendOwnerRequest } from './owner-transport.js'
 
@@ -51,10 +51,27 @@ export function createSessionOpeningExecutor(options: SessionOpenerOptions): Ver
   }
 }
 
+/**
+ * Opens the Session for THIS Pod, ending the previous one's attribution first if it belonged to a
+ * Pod that no longer exists.
+ *
+ * A Session is opened for one Pod and named by its uid; when that Pod is gone the Session cannot be
+ * used for anything, and nothing was ending it. `sessions_one_current_per_workstream` then refused
+ * every subsequent open with a unique-violation, so a Workstream that lost a Pod could never get
+ * another Session — permanently, and reported only as "session opening after BUILD failed" in a log
+ * line nobody reads. The first live deployment produced exactly that state within ten minutes.
+ *
+ * Ending it here is not bookkeeping: `session.ended` is a fact, so the record says the Session ended
+ * because its Pod was replaced, and the next Session's opening window starts after it.
+ */
 async function openTheSession(productPool: pg.Pool, workstreamId: string, pod: PodInventoryEntry): Promise<string> {
   const client = await productPool.connect()
   try {
     await client.query('BEGIN')
+    const current = await currentSession(client, workstreamId)
+    if (current !== null && current.podUid !== pod.uid) {
+      await endAttribution(client, workstreamId, current.sessionId, 'pod_replaced')
+    }
     const opened = await openSession(client, workstreamId, { podUid: pod.uid, provenance: { incarnation: pod.incarnation } })
     await client.query('COMMIT')
     return opened.sessionId

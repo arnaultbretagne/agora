@@ -115,8 +115,17 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
       // The root filesystem stays read-only, so the ONE writable place is the harness-home emptyDir
       // — and an emptyDir is root-owned unless an fsGroup is set. Without this the adapter cannot
       // write the transcript it is later captured from, and a restore would have nowhere to land.
-      securityContext: { fsGroup: settings.runAsUser },
-      activeDeadlineSeconds: settings.startupDeadlineSeconds,
+      // `seccompProfile` and the container's `capabilities.drop` below are what the Pod Security
+      // Standard "restricted" requires, and the API server refuses the Pod outright without them —
+      // found the first time this spec met a cluster that enforces it. They belong here anyway:
+      // this Pod runs someone else's model output, and dropping every capability is the floor.
+      securityContext: { fsGroup: settings.runAsUser, seccompProfile: { type: 'RuntimeDefault' } },
+      // NO `activeDeadlineSeconds`. It bounds the Pod's WHOLE life, not its startup, so setting it
+      // to the startup deadline killed every harness Pod after two minutes of perfectly healthy
+      // work — with `DeadlineExceeded`, which reads like a hung launch rather than a policy. The
+      // startup deadline is an OBSERVATION (`isStartupDeadlineExpired`, inventory.ts): the engine
+      // decides what a Pod that never reached Running means, because only the engine knows whether
+      // anything is waiting on it.
       terminationGracePeriodSeconds: settings.terminationGraceSeconds,
       containers: [
         {
@@ -163,6 +172,8 @@ export function buildPodSpec(input: PodSpecInput, harness: HarnessDefinition, se
             runAsUser: settings.runAsUser,
             allowPrivilegeEscalation: false,
             readOnlyRootFilesystem: true,
+            capabilities: { drop: ['ALL'] },
+            seccompProfile: { type: 'RuntimeDefault' },
           },
           resources: {
             limits: { cpu: '1', memory: '1Gi' },

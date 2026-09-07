@@ -98,13 +98,22 @@ async function toPodEntry(pod: K8sObject, k8s: K8sClient): Promise<PodInventoryE
     node,
     nodeReady,
     containersTerminated: (status?.containerStatuses ?? []).every((state) => state.state?.terminated !== undefined) && (status?.containerStatuses?.length ?? 0) > 0,
-    imageId: status?.containerStatuses?.[0]?.imageID ?? null,
+    // The kubelet publishes a container status with an EMPTY imageID while the image is still
+    // being pulled. Empty is not an image id — it is the absence of one — and passing it on as a
+    // string made the construction observation read "a Pod running an image the catalogue does not
+    // know", which selects TURN_OFF. Every harness Pod was destroyed mid-pull, so no image slower
+    // to pull than one tick could ever converge. Found on the first live deployment.
+    imageId: emptyToNull(status?.containerStatuses?.[0]?.imageID),
     admittedDigest: spec?.containers?.[0]?.image ?? null,
     incarnation: metadata?.labels?.['agora.dev/incarnation'] ?? null,
     forcedDeletion: metadata?.deletionTimestamp !== undefined,
     creationTimestamp: metadata?.creationTimestamp ?? null,
     podIP: status?.podIP ?? null,
   }
+}
+
+function emptyToNull(value: string | undefined): string | null {
+  return value === undefined || value === '' ? null : value
 }
 
 async function readNodeReady(k8s: K8sClient, nodeName: string): Promise<boolean | null> {

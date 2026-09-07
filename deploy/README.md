@@ -11,8 +11,9 @@ limits and PodDisruptionBudgets, plus the catalogue mounted as a ConfigMap. `ove
 image digests and pulls in `contracts/k8s/` — the namespace, RBAC and NetworkPolicies that are
 reviewed contracts rather than deployment details.
 
-**Secrets are never in this repository**, not even as placeholders. Four are referenced by name and
-created out of band:
+**Secrets are never in this repository**, not even as placeholders. These are referenced by name and
+created out of band — plus `ghcr-pull`, a `kubernetes.io/dockerconfigjson` registry credential that
+must exist in BOTH `agora-system` and `agora-runs`, because the images are private packages:
 
 | Secret | Keys | Held by |
 |---|---|---|

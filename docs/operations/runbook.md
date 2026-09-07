@@ -109,6 +109,40 @@ kubectl -n agora-system rollout restart deploy/control-plane-worker   # move it 
 Harness Pods in `agora-runs` are `restartPolicy: Never` and are not rescheduled. Draining a node
 carrying one ends that incarnation; the Workstream rebuilds, restoring from its Anchor if it has one.
 
+## Resume a Workstream whose retry budget is exhausted
+
+`blocking_cause = action_exhausted:<VERB>` means five attempts failed and the engine stopped
+repeating an unchanged action (`ENGINE-011`). The bounded recheck keeps the row visible; it does not
+retry, deliberately. Only **a new Intent or a materially changed source/revision** resets it, which
+is the specification's rule and not an implementation shortcut.
+
+So after fixing an external cause — a NetworkPolicy, a credential, a stale CA — author the Intent
+again (the same values, a new `Idempotency-Key`). Nothing else will make the Workstream try:
+
+```sh
+curl -fsS -XPUT http://control-plane…:8080/v1/workstreams/<id>/intent \
+  -H "x-forwarded-email: <owner>" -H 'idempotency-key: resume-<date>' \
+  -H 'content-type: application/json' -d '<the same complete Intent>'
+```
+
+## Check the harness Pods' trust anchor after ANY OneCLI change
+
+Every harness Pod mounts `agora-onecli-ca` as its only trust anchor for the relay's TLS
+interception. OneCLI generates that CA into `/app/data`, so a new volume — a restore, a migration, a
+recreated PVC — silently produces a new one, and the ConfigMap keeps the old.
+
+The symptom names nothing useful: every provider call fails inside the agent with *"API Error:
+Unable to connect to API: Self-signed certificate detected. Check your proxy or corporate SSL
+certificates"*. It has now happened three times.
+
+```sh
+kubectl -n agora-onecli exec deploy/onecli -- cat /app/data/gateway/ca.pem | openssl x509 -noout -dates
+kubectl -n agora-runs get cm agora-onecli-ca -o jsonpath='{.data.ca\.pem}' | openssl x509 -noout -dates
+```
+
+The two `notBefore` dates must match. They are the check after every OneCLI change, and the first
+thing to look at when a harness cannot reach a provider.
+
 ## Handle an unresolved retirement obligation
 
 An obligation stays open when a Pod was force-deleted and its node cannot be proved to have stopped

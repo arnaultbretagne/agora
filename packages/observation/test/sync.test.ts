@@ -46,3 +46,22 @@ test('no descriptor is no value', () => {
   assert.equal(normalizeSync(null), null)
   assert.equal(normalizeSync(evidence({ descriptor: null })), null)
 })
+
+test('S13: a non-empty opening range with no Handoff at all is stale, and REFILL is what unblocks it', () => {
+  // Live: a fresh Session on a Workstream that already had history sat at
+  // `acquisition:observation.sync` for ever. The range was non-empty, no Handoff had been rendered
+  // for it, and the driver — asked to look for a digest that does not exist — could only answer
+  // `unprovable`. The one verb that could have fixed it, REFILL, needs `stale`.
+  //
+  // The control plane knows what the driver cannot: whether a Handoff exists at all. When none does
+  // and nothing is outstanding, `not_incorporated` is a fact about the record.
+  assert.equal(
+    normalizeSync({ descriptor: { w: 0, h: 3145 }, delivery: 'none', proof: 'not_incorporated', lineageIntact: true }),
+    'stale',
+  )
+
+  // And the safety half is untouched: a Handoff that MIGHT have been accepted keeps it undecidable,
+  // whatever the driver says, so nothing is ever resent (CONT-005).
+  assert.equal(normalizeSync({ descriptor: { w: 0, h: 3145 }, delivery: 'unknown', proof: 'not_incorporated', lineageIntact: true }), null)
+  assert.equal(normalizeSync({ descriptor: { w: 0, h: 3145 }, delivery: 'dispatched', proof: 'not_incorporated', lineageIntact: true }), null)
+})

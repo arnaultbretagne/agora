@@ -216,3 +216,30 @@ test('S13: the reviewed catalogue carries the markers both pinned adapters actua
   assert.equal(codex?.credentialStubs?.[0]?.path, '.codex/auth.json')
   assert.match(codex?.credentialStubs?.[0]?.content ?? '', /onecli-managed/, 'a marker, never a credential')
 })
+
+test('S13: the PodSpec satisfies the "restricted" Pod Security Standard, which a real cluster enforces', () => {
+  // The API server REFUSED this Pod on the first live deployment:
+  //   violates PodSecurity "restricted:latest": unrestricted capabilities … seccompProfile …
+  // Both are floor-level hardening for a container that runs a model's output, and both were
+  // absent while four weaker properties were carefully asserted.
+  const pod = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, harness, settings)
+  const spec = pod['spec'] as Record<string, unknown>
+  const podSecurity = spec['securityContext'] as Record<string, unknown>
+  const container = (spec['containers'] as Array<Record<string, unknown>>)[0]!
+  const security = container['securityContext'] as Record<string, unknown>
+
+  assert.deepEqual(security['capabilities'], { drop: ['ALL'] })
+  assert.deepEqual(security['seccompProfile'], { type: 'RuntimeDefault' })
+  assert.deepEqual(podSecurity['seccompProfile'], { type: 'RuntimeDefault' })
+})
+
+test('S13: no activeDeadlineSeconds — it would kill a healthy Pod, not a slow-starting one', () => {
+  // It bounds the Pod's whole life. Set to the startup deadline (120s), every harness Pod died
+  // mid-conversation with DeadlineExceeded. What "it never started" MEANS is an engine decision,
+  // and inventory.ts already makes it.
+  const pod = buildPodSpec({ workstreamId: '11111111-1111-4111-8111-111111111111', attemptKey: 'k1', incarnation: 'inc-1', harnessId: 'claude-code' }, harness, settings)
+  const spec = pod['spec'] as Record<string, unknown>
+  assert.equal('activeDeadlineSeconds' in spec, false)
+  assert.equal(spec['terminationGracePeriodSeconds'], settings.terminationGraceSeconds, 'the grace period is a real bound and stays')
+  assert.equal(isStartupDeadlineExpired('2026-09-06T22:00:00Z', 'Pending', '2026-09-06T22:05:00Z', settings.startupDeadlineSeconds), true, 'the startup deadline is observed, not enforced by the kubelet')
+})

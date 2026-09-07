@@ -27,7 +27,7 @@ import {
   type HandoffDeliveryState,
   type DriverProof,
 } from '@agora/observation'
-import { fromWireGrantSet } from '@agora/domain'
+import { fromWireGrantSet, type Authorization } from '@agora/domain'
 import { currentSession, currentOpeningWindow, type CurrentSession, type OpeningWindow } from '@agora/journal'
 import { openingRequestKey } from './descriptor.js'
 import { getAnchor, getSave, isExcluded } from '@agora/custody'
@@ -83,6 +83,15 @@ export interface HttpObservationSourceOptions {
   readonly configReadback?: ReadonlyMap<string, 'resume' | 'set-config-noop'>
   /** How recent a driver verdict must be to count as current evidence (P7, continuity.md: bounded). */
   readonly syncProofMaxAgeMs?: number
+  /**
+   * How long ONE owner read may take (P7 — engine.ownerRequestTimeoutMs). Every fetch below carries
+   * it: an owner that accepts the connection and answers nothing must make a field UNAVAILABLE,
+   * which the rule tables already handle honestly, rather than freeze the tick that asked. Live, a
+   * dropped packet (a NetworkPolicy denial, which never refuses) did exactly that.
+   */
+  readonly requestTimeoutMs?: number
+  /** How long one ACP request to the Pod's adapter may take (P7 — harness.adapterRequestTimeoutMs). */
+  readonly adapterRequestTimeoutMs?: number
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
@@ -90,6 +99,55 @@ export interface HttpObservationSourceOptions {
 
 export class HttpObservationSource implements ObservationSource {
   constructor(private readonly options: HttpObservationSourceOptions) {}
+
+  /**
+   * The desired authorization set per capability-id list, refreshed by `reader()` before every
+   * evaluation and read back SYNCHRONOUSLY by the rule tables' `resolve.capabilityGrants`.
+   *
+   * Keyed by the sorted capability ids because that is exactly what the answer depends on — the
+   * reviewed catalogue plus this project's live credentials — so one entry serves every Workstream
+   * asking the same question, whatever order a scan visits them in.
+   */
+  readonly #desiredGrants = new Map<string, ReadonlySet<Authorization>>()
+
+  /**
+   * What the rule tables ask for synchronously. It THROWS when there is no fresh answer, and that is
+   * deliberate: an empty set means "this Workstream wants no authority", which is a completely
+   * different claim from "the Broker did not answer". The empty-set stub that used to stand here is
+   * why no Pod on the live cluster ever received a credential — every CAPS row read
+   * nothing-desired-nothing-attached and passed.
+   */
+  desiredGrants(capabilityIds: readonly string[]): ReadonlySet<Authorization> {
+    const key = [...capabilityIds].sort().join(',')
+    const grants = this.#desiredGrants.get(key)
+    if (grants === undefined) {
+      throw new Error(`the desired authorization set for [${key}] is unavailable: the Broker did not answer, and an empty set would mean something else entirely`)
+    }
+    return grants
+  }
+
+  private async refreshDesiredGrants(capabilityIds: readonly string[]): Promise<void> {
+    const key = [...capabilityIds].sort().join(',')
+    try {
+      const query = new URLSearchParams({ capabilityIds: capabilityIds.join(',') })
+      const res = await fetch(`${this.options.brokerBaseUrl}/v1/capability-grants?${query.toString()}`, this.deadline())
+      if (!res.ok) {
+        this.#desiredGrants.delete(key)
+        this.options.logger?.(`desired grants for [${key}] unavailable: broker answered HTTP ${String(res.status)}`)
+        return
+      }
+      const body = (await res.json()) as { grants?: unknown }
+      this.#desiredGrants.set(key, fromWireGrantSet(body.grants as never))
+    } catch (error) {
+      this.#desiredGrants.delete(key)
+      this.options.logger?.(`desired grants for [${key}] unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** The per-call deadline, as fetch options. Absent means unbounded, which only a test should choose. */
+  private deadline(): { readonly signal?: AbortSignal } {
+    return this.options.requestTimeoutMs === undefined ? {} : { signal: AbortSignal.timeout(this.options.requestTimeoutMs) }
+  }
 
   async reader(workstreamId: string): Promise<ObservationReader> {
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
@@ -116,6 +174,10 @@ export class HttpObservationSource implements ObservationSource {
             startupDeadlineExpired: false, // same documented gap as construction() below
             harnessDigestFor: digestFor,
           }
+    // Refreshed before the rules run, because `resolve.capabilityGrants` is synchronous and must
+    // never answer "nothing is desired" when the truth is "we could not ask".
+    const intentForGrants = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { capabilities?: unknown } | undefined
+    await this.refreshDesiredGrants(Array.isArray(intentForGrants?.capabilities) ? (intentForGrants.capabilities as readonly string[]) : [])
     const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
     // Read back under the ids THIS harness uses: codex reports effort as `reasoning_effort`, and
     // looking for `effort` there would silently produce "no snapshot" — which reads as an
@@ -216,6 +278,21 @@ export class HttpObservationSource implements ObservationSource {
     const lineageIntact = acpEvidence !== null && acpEvidence.connected && acpEvidence.contextProcessGeneration === acpEvidence.currentProcessGeneration
     if (!lineageIntact) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact: false }
 
+    // NO HANDOFF EXISTS for this range, and no command is outstanding: then nothing has ever
+    // carried those facts into the context, and `not_incorporated` is a fact about the record, not
+    // a guess about the transcript. The driver cannot say this — asked to look for a digest that
+    // does not exist, it can only answer `unprovable`, which is exactly what it did on the first
+    // live deployment: a fresh Session on a Workstream with history sat at
+    // `acquisition:observation.sync` for ever, because the one thing that could have unblocked it
+    // (REFILL) needs `stale`, and `stale` needs a proof nobody could produce.
+    //
+    // Safety is unchanged: `stale` still needs BOTH halves, and the delivery half is checked here
+    // rather than assumed — a `dispatched` or `unknown` Handoff keeps the answer unprovable, so a
+    // possibly-accepted prompt is never resent (CONT-005/CONT-006).
+    if (digest === null && (delivery.state === 'none' || delivery.state === 'rejected_before_acceptance')) {
+      return { descriptor, delivery: delivery.state, proof: 'not_incorporated', lineageIntact }
+    }
+
     const proof = await this.fetchDriverProof(pod.name, session, openingWindow, digest)
     if (proof === null) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact }
     return { descriptor, delivery: delivery.state, proof, lineageIntact }
@@ -252,10 +329,11 @@ export class HttpObservationSource implements ObservationSource {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ contextId: session.acpContextId, processGeneration: session.processGeneration, w: window.w, h: window.h, handoffDigest }),
+        ...this.deadline(),
       })
       const query = new URLSearchParams({ contextId: session.acpContextId ?? '', maxAgeMs: String(this.options.syncProofMaxAgeMs ?? 5_000) })
       if (handoffDigest !== null) query.set('handoffDigest', handoffDigest)
-      const response = await fetch(`${base}/proof-outcome?${query.toString()}`)
+      const response = await fetch(`${base}/proof-outcome?${query.toString()}`, this.deadline())
       if (!response.ok) return null
       const outcome = (await response.json()) as { verdict?: DriverProof } | null
       return outcome?.verdict ?? null
@@ -283,7 +361,7 @@ export class HttpObservationSource implements ObservationSource {
 
   private async fetchK8sInventory(workstreamId: string): Promise<WorkstreamInventory | undefined> {
     try {
-      const res = await fetch(`${this.options.runtimeControlBaseUrl}/v1/workstreams/${workstreamId}`)
+      const res = await fetch(`${this.options.runtimeControlBaseUrl}/v1/workstreams/${workstreamId}`, this.deadline())
       if (!res.ok) return undefined
       return (await res.json()) as WorkstreamInventory
     } catch (error) {
@@ -294,7 +372,7 @@ export class HttpObservationSource implements ObservationSource {
 
   private async fetchBrokerInventory(incarnation: string): Promise<IncarnationInventory | undefined> {
     try {
-      const res = await fetch(`${this.options.brokerBaseUrl}/v1/incarnations/${incarnation}`)
+      const res = await fetch(`${this.options.brokerBaseUrl}/v1/incarnations/${incarnation}`, this.deadline())
       if (!res.ok) return undefined
       return (await res.json()) as IncarnationInventory
     } catch (error) {
@@ -344,7 +422,13 @@ export class HttpObservationSource implements ObservationSource {
         ...(typeof intent?.model === 'string' ? { desiredModel: intent.model } : {}),
         ...(optionIds !== undefined ? { modelOptionId: optionIds.model } : {}),
       },
-      { productPool: this.options.productPool, bridgePort: this.options.bridgePort, ...(this.options.logger ? { logger: this.options.logger } : {}), ...(this.options.connect ? { connect: this.options.connect } : {}) },
+      {
+        productPool: this.options.productPool,
+        bridgePort: this.options.bridgePort,
+        ...(this.options.adapterRequestTimeoutMs !== undefined ? { requestTimeoutMs: this.options.adapterRequestTimeoutMs } : {}),
+        ...(this.options.logger ? { logger: this.options.logger } : {}),
+        ...(this.options.connect ? { connect: this.options.connect } : {}),
+      },
     )
     return {
       acp: { connected: probe.connected, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration },
@@ -354,7 +438,7 @@ export class HttpObservationSource implements ObservationSource {
 
   private async fetchProcessGeneration(podName: string): Promise<number | undefined> {
     try {
-      const res = await fetch(`${this.options.runtimeControlBaseUrl}/v1/pods/${podName}/evidence`)
+      const res = await fetch(`${this.options.runtimeControlBaseUrl}/v1/pods/${podName}/evidence`, this.deadline())
       if (!res.ok) return undefined
       const evidence = (await res.json()) as { processGeneration?: number }
       return typeof evidence.processGeneration === 'number' ? evidence.processGeneration : undefined

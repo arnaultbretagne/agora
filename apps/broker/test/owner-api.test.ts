@@ -307,3 +307,31 @@ test('owner-api cleanup_agent: deletes the Agent and retires the target for futu
     }
   })
 })
+
+test('S13: the desired grant set for a capability list is readable, because the control plane cannot compute it', async () => {
+  // Turning a reviewed credentialRef into this project's live OneCLI ids needs the resolver, and
+  // only the Broker holds the control key. Without this read the control plane's own
+  // `resolve.capabilityGrants` returned the EMPTY SET — so every CAPS row saw "nothing desired,
+  // nothing attached" and passed, GRANT was never selected, and the first live harness Pod waited
+  // for ever on a provider call the relay had no authority to make.
+  await withTestDatabase(async (pool) => {
+    await insertWorkstream(pool, WORKSTREAM_ID)
+    const server = createBrokerApi({ client: new StatefulOneCliClient(), gate: new PgOwnerGate(pool, 'broker'), catalogue: CATALOGUE, resolver: identityResolver })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/capability-grants?capabilityIds=test.secret`)
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { capabilityIds: readonly string[]; grants: readonly unknown[] }
+      assert.deepEqual(body.capabilityIds, ['test.secret'])
+      assert.equal(body.grants.length, 1, 'the reviewed mapping compiles to exactly one authorization')
+
+      // A capability nobody reviewed is REFUSED, not answered with an empty set: to a rule table
+      // those two are indistinguishable, and only one of them is safe to act on.
+      const denied = await fetch(`http://127.0.0.1:${port}/v1/capability-grants?capabilityIds=nobody.reviewed.this`)
+      assert.equal(denied.status, 409)
+    } finally {
+      server.close()
+    }
+  })
+})
