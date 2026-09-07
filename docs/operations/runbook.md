@@ -86,16 +86,17 @@ credential injection or the first TLS handshake through the relay.
 
 | Asset | Where | What its loss breaks |
 |---|---|---|
-| PostgreSQL database | `agora-onecli/DATABASE_URL` | every Agent, grant and stored secret |
+| PostgreSQL database | CNPG cluster `onecli-pg` in `agora-onecli`, continuously archived to R2 (`s3://bretagne-pg-backups/onecli`) | every Agent, grant and stored secret |
 | `/app/data` | the `onecli-data` PVC | the gateway CA — every already-running Pod's `NODE_EXTRA_CA_CERTS` stops validating |
-| `SECRET_ENCRYPTION_KEY` | `agora-onecli` secret | the restored database cannot be decrypted; the rows are there and unreadable |
+| `secret-encryption-key` (inside `/app/data`, mirrored to the `agora-onecli` secret) | infra-k8s `apps/agora-onecli/onecli-data-dr.secrets.yaml`, SOPS/age | the restored database cannot be decrypted; the rows are there and unreadable |
 
-**Back up:**
+**Back up:** the database backs itself up (CNPG scheduled backup + WAL archiving to R2 — check
+`kubectl -n agora-onecli get backups`). The other two are captured by hand into infra-k8s's SOPS file
+and must be re-captured after ANY change to `/app/data`:
 
 ```sh
-kubectl -n agora-system exec deploy/onecli-postgres -- pg_dump -Fc onecli > onecli-$(date +%F).dump
-kubectl -n agora-system exec deploy/onecli -- tar czf - /app/data > onecli-data-$(date +%F).tgz
-kubectl -n agora-system get secret agora-onecli -o jsonpath='{.data.SECRET_ENCRYPTION_KEY}' | base64 -d > onecli-key   # store it where the other two are not
+kubectl -n agora-onecli exec deploy/onecli -- cat /app/data/secret-encryption-key   # into the SOPS file, never into a shell history
+kubectl -n agora-onecli exec deploy/onecli -- cat /app/data/ca.crt                  # same file; also mirrored to the agora-runs CA ConfigMap
 ```
 
 **Restore, in this order:** the key first (nothing else is readable without it), then the database,
@@ -105,9 +106,48 @@ then `/app/data`, then restart OneCLI. Then prove it rather than assume it:
 - the CA in `/app/data` matches the `agora-onecli-ca` ConfigMap the harness Pods mount — if it does
   not, every running Pod's egress is failing TLS validation and only new Pods will work.
 
-**This drill has not been performed against the live cluster from this repository.** It is written
-from the measured asset list (field findings §3.2), and performing it is a deployment action for an
-operator, not something to run unattended.
+**A database restore alone is not a restore.** The g4 cutover moved the database and gave OneCLI a
+fresh `/app/data`; it generated a NEW encryption key and every stored credential became undecryptable
+while looking perfectly present. The gateway reported that as `access_restricted … attach the
+account`, which is the wrong diagnosis; the cure was putting the original key back
+(field findings §2.2).
+
+## Recover a deleted OneCLI secret
+
+Performed for real on 2026-09-07, after a `DELETE /v1/secrets/{id}` took the long-lived Claude Max
+token with it. That token exists nowhere else (field findings §2.2), so this procedure is the only
+thing between a bad delete and re-authenticating a subscription by hand.
+
+1. **Find a backup older than the deletion** and a target time a few minutes before it:
+   `kubectl -n agora-onecli get backups` (each names its `beginWal`/`stoppedAt`).
+2. **Restore into a throwaway pod, never over the live cluster.** Copy
+   `infra-k8s/apps/agora-onecli/restore-test.yaml` — it already has the barman env, the R2 endpoint
+   and the `tmp` emptyDir the read-only root filesystem needs — and set
+   `recovery_target_time` to that target. Start the restored instance on port 5433 over a unix
+   socket in `/tmp`; it is a promoted timeline of its own and touches nothing.
+3. **Copy the row out of the pod, not through the live database.** The Cilium policy on `onecli-pg`
+   admits only OneCLI itself, the CNPG operator and the cluster's own instances, so the recovery pod
+   CANNOT reach the live database — a `psql "$LIVE_URI"` there hangs until it times out. Do not widen
+   the policy for a one-off. Have the job `\copy` the row to a file and hold, then:
+
+   ```sh
+   kubectl -n agora-onecli exec <recovery-pod> -- cat /tmp/anthropic.tsv > row.tsv    # ciphertext, never printed
+   { cat head.sql; cat row.tsv; printf '\\.\n'; cat tail.sql; } |
+     kubectl -n agora-onecli exec -i onecli-pg-1 -c postgres -- psql -d onecli -f -
+   ```
+
+   where `head.sql` opens a transaction and `create temporary table incoming (like secrets including
+   defaults) on commit drop; \copy incoming (<the 15 columns>) from stdin`, and `tail.sql` does the
+   `insert … select … on conflict (id) do nothing; commit;`. **`including defaults` matters**: the
+   live schema has since gained a NOT NULL `value_source` that the backup's row does not carry, and
+   only the default fills it.
+4. **Leave exactly one secret per provider type.** The Broker resolves credentials `uniqueBy` type
+   and drops an ambiguous type entirely, so a duplicate is not harmless: re-point
+   `policy_rule_targets.secret_id` (and `agent_secrets`, `budgets` if used) to the restored id, then
+   delete the duplicate.
+5. `kubectl -n agora-onecli rollout restart deploy/onecli`, then prove it with the live check —
+   `HARNESS=claude-code node scripts/s13-live-end-to-end.mjs` must reach step 6 with a real answer.
+   Nothing short of a model answer proves a credential.
 
 ## Drain a node
 
@@ -175,6 +215,13 @@ Three states, three different lines, worth telling apart:
 | `access_restricted` | nothing | genuinely no grant for that agent |
 | `credential_not_found` | nothing | usually the REQUEST, not the credential: an OAuth-mode secret is injected by REPLACING an `Authorization: Bearer` header, so a probe sent without one has nothing to replace. Retry it with the harness's own placeholder (`Bearer onecli-managed`) before suspecting the credential |
 | upstream 401 with `injections_applied=N` | `token refresh failed` | injection works; the provider token is expired — sign in again |
+
+A fifth state never reaches the gateway at all: **two secrets of the same provider type**. The Broker
+takes credentials `uniqueBy` type and drops a type that is ambiguous, so the capability simply stops
+resolving and the Workstream blocks before any request is made. Registering a "fresh" token beside
+the existing one is therefore not a harmless experiment — check
+`select id, name, type from secrets` first, and keep exactly one per type
+(field findings §2.2).
 
 ## Check the harness Pods' trust anchor after ANY OneCLI change
 

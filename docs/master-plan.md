@@ -669,8 +669,18 @@ And the stub itself came from the retired implementation's own spike: `~/.codex/
 `id_token` the CLI can decode, with every value in it the literal marker `onecli-managed` — no
 credential at all, since the gateway injects the real one.
 
-What remains is operational: a Claude Code access token copied into OneCLI is revoked as soon as the
-local CLI refreshes it, so the durable form is a credential OneCLI can refresh itself.
+**The Claude credential is the one that was already there.** Chasing the two errors above ended in
+registering a token copied from this host's `~/.claude/.credentials.json` — a snapshot the local CLI
+revokes as soon as it refreshes — and in deleting the long-lived Claude Max token OneCLI had held
+since 2026-08-06 as unusable. It was not unusable; the probes were wrong. The retired implementation
+had already written down the whole mechanism (`plans/08-equipment-and-broker.md`, follow-up of
+2026-08-05): register the static token once with `POST /v1/secrets {type:"anthropic"}`, let OneCLI
+detect OAuth mode from the `sk-ant-oat` prefix, and give the Pod nothing but the placeholder. The
+deleted row was recovered by a CNPG point-in-time restore from R2 — the procedure is now in the
+runbook, because that token exists in no other place since the old platform's SOPS secret was
+retired — and the live check passes 9/9 on it. Two lessons, both in field findings §2.2: read the
+retired implementation's evidence before re-deriving anything about OneCLI, and keep exactly one
+secret per provider type, since the Broker drops an ambiguous type entirely.
 
 **Delivers.** Dockerfiles for control-plane, runtime-control and broker; a `publish` workflow with
 SBOM and provenance attestation (closing S11's supply-chain item); `deploy/base/web.yaml`;
