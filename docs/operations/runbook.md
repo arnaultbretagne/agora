@@ -26,6 +26,22 @@ curl -fsS http://control-plane.agora-system.svc.cluster.local:8080/v1/readyz
 `readyz` is not a liveness check. It reaches runtime-control on every call and reports the failure
 if it cannot: an API that answers while it cannot reach its owners takes requests it can only refuse.
 
+## Prove the deployment end to end
+
+```sh
+CONTROL_PLANE_URL=http://control-plane…:8080 OWNER=<a principal> node scripts/s13-live-end-to-end.mjs
+```
+
+Nine steps, each reported on its own line: the catalogue, a Workstream, a complete Intent,
+convergence, a Session with a bound ACP context, **an answer from the model**, a Save with its
+Anchor on power off, a restore on power on, and the same native context id across the two Sessions.
+It spends real model calls and creates a real Pod, deliberately, and leaves the Workstream off.
+
+A failing step names itself, which is the point: "a prompt is answered BY THE MODEL" failing while
+the other eight pass means the provider account is not attached in OneCLI — the gateway refuses a
+credential that has no app connection, for every agent including its own default, and the refusal is
+quoted verbatim in the transcript.
+
 ## Publish a catalogue revision
 
 Editing `contracts/catalogue/*` and re-applying the overlay produces a new ConfigMap name (the
