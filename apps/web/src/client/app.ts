@@ -1427,6 +1427,11 @@ async function flushPendingPrompt(): Promise<void> {
     // Held again rather than lost: the next refresh tries once more, and the composer keeps saying
     // the message is still waiting.
     state.pendingPrompt = text
+    // "Admission not granted" is not a failure, it is "not yet": this client's view of convergence
+    // is up to one poll old, and the server re-derives it at the instant of the send. Putting a red
+    // toast on screen for a race that resolves itself in six seconds would teach the operator to
+    // ignore toasts. Anything else is still worth saying out loud.
+    if (error instanceof ApiError && error.problem.status === 409 && /admission/i.test(error.problem.title)) return
     toast(errorText(error), true)
   }
 }
