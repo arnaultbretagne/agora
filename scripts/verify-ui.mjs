@@ -80,22 +80,50 @@ try {
   record('sending creates the Workstream from the composer', true, codeword)
 
   // Convergence then a real answer: one Pod pulled, one credential injected, one model call.
-  await page.waitForFunction(
-    (word) => document.querySelector('.messages-inner')?.textContent?.includes(word) ?? false,
-    codeword,
-    { timeout: 900_000, polling: 2000 },
-  )
-  const answered = await page.waitForFunction(
-    (word) => {
-      const text = document.querySelector('.messages-inner')?.textContent ?? ''
-      const after = text.slice(text.indexOf(word) + word.length)
-      return after.includes(word) ? after : false
-    },
-    codeword,
-    { timeout: 900_000, polling: 2000 },
-  ).then((h) => h.jsonValue()).catch(() => null)
-  record('the model answers, in the transcript on screen', answered !== null, String(answered ?? '').replace(/\s+/g, ' ').slice(0, 90))
+  //
+  // What is asserted here is the TRANSCRIPT, not a substring. An earlier version of this check
+  // looked for the codeword twice anywhere in the DOM and passed while the screen showed the answer
+  // ABOVE the question — the operator's own message was in no projection at all and the browser was
+  // drawing it from a local echo. A check that cannot see the order of a conversation cannot say the
+  // conversation renders.
+  const transcript = await page
+    .waitForFunction(
+      () => {
+        const rows = [...document.querySelectorAll('.messages-inner [data-role]')].map((node) => ({
+          role: node.getAttribute('data-role'),
+          text: (node.textContent ?? '').trim(),
+        }))
+        const agent = rows.find((row) => row.role === 'agent' && row.text.length > 0)
+        return agent !== undefined && rows.length >= 2 ? rows : false
+      },
+      null,
+      { timeout: 900_000, polling: 2000 },
+    )
+    .then((handle) => handle.jsonValue())
+    .catch(() => null)
+  const rows = transcript ?? []
+  const firstUser = rows.findIndex((row) => row.role === 'user')
+  const firstAgent = rows.findIndex((row) => row.role === 'agent')
+  record('the question is in the transcript, before the answer', firstUser >= 0 && firstAgent > firstUser, rows.map((row) => `${row.role}:${row.text.slice(0, 24)}`).join(' | ').slice(0, 110))
+  record('the question is the one that was typed', (rows[firstUser]?.text ?? '').includes(codeword), (rows[firstUser]?.text ?? '(none)').slice(0, 70))
+  record('the model answers, in the transcript on screen', (rows[firstAgent]?.text ?? '').includes(codeword), (rows[firstAgent]?.text ?? '(none)').replace(/\s+/g, ' ').slice(0, 80))
   await page.screenshot({ path: `${shots}/03-answer.png`, fullPage: true })
+
+  // A reload proves the record, not the browser's memory of it: the echo used to vanish here.
+  await page.reload({ waitUntil: 'networkidle' })
+  const afterReload = await page
+    .waitForFunction(
+      (word) => {
+        const rows = [...document.querySelectorAll('.messages-inner [data-role]')].map((node) => ({ role: node.getAttribute('data-role'), text: (node.textContent ?? '').trim() }))
+        return rows.some((row) => row.role === 'user' && row.text.includes(word)) ? rows : false
+      },
+      codeword,
+      { timeout: 120_000, polling: 2000 },
+    )
+    .then((handle) => handle.jsonValue())
+    .catch(() => null)
+  record('the conversation survives a reload', afterReload !== null, afterReload === null ? 'the question is gone after F5' : `${String(afterReload.length)} rows`)
+  await page.screenshot({ path: `${shots}/03b-reload.png`, fullPage: true })
 
   const power = (await page.textContent('#power-toggle'))?.trim() ?? ''
   record('the topbar reports the Workstream powered on', power.includes('ON'), power)

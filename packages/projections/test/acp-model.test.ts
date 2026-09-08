@@ -150,12 +150,19 @@ test('initialize → session/new → session/prompt round-trips with every envel
       ])
 
       const items = (await db.pool.query('SELECT item_kind, value FROM projection_items WHERE workstream_id = $1 ORDER BY first_seq', [workstreamId])).rows as Array<Record<string, unknown>>
-      assert.deepEqual(items.map((item) => item['item_kind']), ['message', 'permission'])
-      const messageValue = items[0]!['value'] as { role: string; completed: boolean; content: Array<{ type: string; text?: string }> }
+      // BOTH halves of the conversation, in the order they were said. The operator's own message
+      // used to be in no projection at all — the record kept the agent's answers and not the
+      // questions, and the browser filled the gap with a local echo that rendered after the answer
+      // and disappeared on reload.
+      assert.deepEqual(items.map((item) => item['item_kind']), ['message', 'message', 'permission'])
+      const asked = items[0]!['value'] as { role: string; completed: boolean; content: Array<{ type: string; text?: string }> }
+      assert.equal(asked.role, 'user')
+      assert.equal(asked.content.map((block) => block.text ?? '').join(''), 'bonjour')
+      const messageValue = items[1]!['value'] as { role: string; completed: boolean; content: Array<{ type: string; text?: string }> }
       assert.equal(messageValue.role, 'agent')
       assert.equal(messageValue.completed, true)
       assert.equal(messageValue.content.map((block) => block.text ?? '').join(''), 'hello from the fake agent')
-      assert.equal((items[1]!['value'] as Record<string, unknown>)['status'], 'decided')
+      assert.equal((items[2]!['value'] as Record<string, unknown>)['status'], 'decided')
 
       const turns = (await db.pool.query('SELECT status, stop_reason FROM projection_turns WHERE workstream_id = $1', [workstreamId])).rows
       assert.deepEqual(turns.map((row) => [row['status'], row['stop_reason']]), [['completed', 'end_turn']])
