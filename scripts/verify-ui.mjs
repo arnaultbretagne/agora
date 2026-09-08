@@ -48,8 +48,11 @@ try {
   record('the shell loads and renders', true, await page.title())
   await page.screenshot({ path: `${shots}/01-shell.png` })
 
-  const identity = (await page.textContent('#identity'))?.trim() ?? ''
-  record('it shows who the gate says we are', identity.includes(owner.split('@')[0]) || identity.includes(owner), identity.slice(0, 60))
+  // What the footer must NOT do is claim an identity it cannot know: in production the browser sends
+  // nothing and oauth2-proxy forwards the verified one, so "Session SSO" is the honest answer and an
+  // email rendered there would be this client inventing it.
+  const identity = (await page.textContent('#identity'))?.replace(/\s+/g, ' ').trim() ?? ''
+  record('the identity shown is the one the browser can actually know', identity.includes('Session SSO'), identity.slice(0, 60))
 
   // The catalogue has to have arrived for the selectors to be usable at all.
   await page.click('#sel-harness')
