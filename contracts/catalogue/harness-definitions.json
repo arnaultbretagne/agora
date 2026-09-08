@@ -59,14 +59,7 @@
           ]
         },
         "haiku": {
-          "efforts": [
-            "default",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+            "efforts": ["default"]
         }
       },
       "configOptionIds": {
