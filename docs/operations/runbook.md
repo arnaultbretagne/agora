@@ -92,6 +92,26 @@ verified by the Pod. Rotating it invalidates every LIVE Pod's token:
 
 Rotate deliberately, not casually: the cost is one context replacement per live Workstream.
 
+## Back up and restore the product database
+
+`agora-pg` (namespace `agora-system`) holds the only copy of everything the product cannot
+reconstruct: the Workstream journal is the record itself, and a Save is a native transcript no
+harness can produce again. It archives WAL continuously to `s3://bretagne-pg-backups/agora` under
+serverName `agora-pg`, takes a base backup nightly at 03:45, and keeps 7 days.
+
+```sh
+kubectl -n agora-system get scheduledbackup,backup      # LAST BACKUP is the number that matters
+kubectl -n agora-system get cluster agora-pg -o jsonpath='{.status.conditions}'
+```
+
+**A backup nobody has restored is a hypothesis.** The drill is the same shape as every other cluster
+on this host (`infra-k8s/apps/agora-system/restore-test.yaml`): restore into a throwaway pod at a
+chosen point in time, read the data there, and destroy it. Never restore over the live cluster.
+
+The connection strings are reproducible: the login roles' passwords are CNPG `managed.roles` backed
+by secrets in infra-k8s, not values CNPG invented, so `agora-database` can be rebuilt from the same
+encrypted source rather than existing only inside a running cluster.
+
 ## Back up and restore OneCLI
 
 Three assets, all three required. Any one missing and the restore looks fine until the first
