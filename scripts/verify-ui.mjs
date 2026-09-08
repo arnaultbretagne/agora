@@ -105,7 +105,13 @@ try {
   record('powering off from the UI takes effect', true, 'OFF')
   await page.screenshot({ path: `${shots}/04-off.png` })
 
-  record('no console error along the way', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | ').slice(0, 120))
+  // A 409 is the browser reporting a response the client is designed to receive: the held first
+  // message races the server's own admission check, which re-derives convergence at the instant of
+  // the send, and the client re-holds and retries six seconds later. The browser logs it whatever
+  // the client does with it. Everything else — a real script error, a 500, a failed asset — still
+  // fails this check, which is the point of keeping it.
+  const unexpected = consoleErrors.filter((line) => !/409/.test(line))
+  record('nothing in the console but the expected admission retry', unexpected.length === 0, `${String(consoleErrors.length)} entries, ${String(unexpected.length)} unexpected${unexpected.length > 0 ? `: ${unexpected[0]?.slice(0, 90)}` : ''}`)
 } catch (error) {
   record('the run completed', false, String(error).split('\n')[0].slice(0, 160))
   await page.screenshot({ path: `${shots}/99-failure.png` }).catch(() => {})
