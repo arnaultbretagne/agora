@@ -141,6 +141,16 @@ const state = {
   unsubscribeFeed: undefined as (() => void) | undefined,
   /** Latest Intent event and operational work view for the OPEN Workstream (S2 control plane). */
   intentView: null as WorkstreamIntentView | null,
+  /**
+   * The first message of a brand-new conversation, held until it can actually be delivered.
+   *
+   * Starting a conversation from the composer is one gesture but three server-side steps: create the
+   * Workstream, author the complete Intent, and prompt. Only the third can be refused for a reason
+   * that resolves by waiting — a Pod has to be built, a credential granted, a Session opened — so
+   * the message waits here instead of being dropped. It used to be dropped: the text became the
+   * title and nothing else, which looked from the operator's side like a send that did nothing.
+   */
+  pendingPrompt: null as string | null,
 }
 
 const isMobile = (): boolean => matchMedia(MOBILE_QUERY).matches
@@ -837,6 +847,11 @@ function renderCapabilitiesMenu(host: HTMLElement): void {
  */
 function composerLockReason(): string | undefined {
   const status = statusOf()
+  // A held first message outranks the generic reason: what the operator needs to know is that their
+  // text is not lost and what it is waiting for.
+  if (state.pendingPrompt !== null) {
+    return `Votre message part dès que la session est prête. ${status.blocksSending ? `${status.label} ${status.remediation ?? ''}`.trim() : status.label}`.trim()
+  }
   return status.blocksSending ? `${status.label} ${status.remediation ?? ''}`.trim() : undefined
 }
 
@@ -1077,6 +1092,16 @@ function toItem(item: {
   }
 }
 
+/** The open Workstream's own views, re-read on the same beat as the list, then anything held is sent. */
+async function refreshOpenWorkstream(): Promise<void> {
+  const workstreamId = state.activeId
+  if (workstreamId === null) return
+  await refreshIntent(workstreamId)
+  await refreshSessions(workstreamId)
+  syncComposerLock()
+  await flushPendingPrompt()
+}
+
 async function refreshItems(workstreamId: string): Promise<void> {
   const page = await listItems(workstreamId)
   if (state.activeId !== workstreamId) return
@@ -1295,7 +1320,19 @@ async function doSend(): Promise<void> {
   }
 }
 
+/**
+ * One gesture, three steps: the Workstream, its complete Intent (powered on — asking for a
+ * conversation is asking for a live one), and the message itself, which is held until the engine can
+ * accept it. The equipment is checked FIRST, before anything is created: a conversation with no
+ * Intent is a row the operator then has to clean up by hand.
+ */
 async function startWorkstream(text: string): Promise<void> {
+  const intent = composedIntent('on')
+  if ('missing' in intent) {
+    toast(`Intention incomplète : choisissez ${intent.missing.join(', ')}.`, true)
+    restoreComposerText(text)
+    return
+  }
   const created = await createWorkstream({ title: text })
   state.workstreams.set(created.id, created)
   state.activeId = created.id
@@ -1304,9 +1341,47 @@ async function startWorkstream(text: string): Promise<void> {
   state.echoes = []
   state.intentView = null
   state.sessionsView = null
+  state.pendingPrompt = text
   renderSidebar()
   renderMain()
+  try {
+    await putIntent(created.id, intent)
+  } catch (error) {
+    // The Workstream exists and the message is still held: the operator can retry with `Appliquer`
+    // rather than losing what they typed.
+    toast(errorText(error), true)
+  }
   await loadWorkstream(created.id)
+}
+
+/** Puts text back where the operator typed it, when the send could not happen at all. */
+function restoreComposerText(text: string): void {
+  const input = $main!.querySelector<HTMLTextAreaElement>('#input')
+  if (!input) return
+  input.value = text
+  input.dispatchEvent(new Event('input'))
+  input.focus()
+}
+
+/**
+ * Delivers the held first message once the Workstream can actually take it — which is exactly when
+ * the rule tables say CONVERGED, the same condition the server's own admission check applies. Called
+ * after every refresh of the open Workstream, so it happens on its own rather than on a click.
+ */
+async function flushPendingPrompt(): Promise<void> {
+  const text = state.pendingPrompt
+  const workstreamId = state.activeId
+  if (text === null || workstreamId === null) return
+  if (statusOf().kind !== 'converged') return
+  state.pendingPrompt = null
+  try {
+    await sendPrompt(workstreamId, text)
+  } catch (error) {
+    // Held again rather than lost: the next refresh tries once more, and the composer keeps saying
+    // the message is still waiting.
+    state.pendingPrompt = text
+    toast(errorText(error), true)
+  }
 }
 
 async function sendPrompt(workstreamId: string, text: string): Promise<void> {
@@ -1443,6 +1518,12 @@ async function init(): Promise<void> {
     void refreshList().catch(() => {
       // The poll is best-effort: a transient failure must not put a toast on screen every 6 seconds.
     })
+    // And the OPEN Workstream's own state, which the feed does not carry: the feed publishes items
+    // and turn statuses, while power, the blocking cause, the loss exposure and whether a Session
+    // exists all live on the Intent and Sessions views. Polling only the list left an operator
+    // watching a screen that did not move while the engine built a Pod, granted a credential and
+    // opened a Session — with a composer still locked on a reason from a minute ago.
+    void refreshOpenWorkstream().catch(() => {})
   }, LIST_POLL_INTERVAL_MS)
 }
 
