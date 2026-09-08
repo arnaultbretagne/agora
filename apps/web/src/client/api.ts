@@ -23,8 +23,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A key unique to one attempt. `crypto.randomUUID` exists only in a SECURE CONTEXT — over plain
+ * http on anything but localhost it is `undefined`, and every mutating call then died on a
+ * TypeError before it left the browser: pressing send did nothing, silently, with no request to
+ * find in any log. Production is https and never sees that, which is exactly what makes it the kind
+ * of failure nobody discovers until someone reaches the app another way.
+ *
+ * `getRandomValues` is available regardless, so the fallback is a real v4 UUID and not a weaker
+ * key. Only the last resort is time-and-random, and it is still unique enough for a key that only
+ * has to distinguish one operator's attempts.
+ */
 function idempotencyKey(): string {
-  return crypto.randomUUID()
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

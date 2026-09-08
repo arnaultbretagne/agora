@@ -39,8 +39,17 @@ const context = await browser.newContext({
 })
 const page = await context.newPage()
 const consoleErrors = []
+const failedCalls = []
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()))
 page.on('pageerror', (e) => consoleErrors.push(String(e)))
+// The product API's own refusals, with their bodies. Without this a failed send is invisible: the
+// toast that reports it is gone in four seconds, long before any screenshot, and the console line
+// the browser writes says only "409" with no path and no reason.
+page.on('response', async (response) => {
+  if (response.status() < 400 || !response.url().includes('/v1/')) return
+  const body = await response.text().catch(() => '')
+  failedCalls.push(`${String(response.status())} ${response.request().method()} ${new URL(response.url()).pathname} ${body.slice(0, 160)}`)
+})
 
 try {
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60_000 })
@@ -77,7 +86,14 @@ try {
 
   await page.fill('#input', `Answer with exactly one short sentence including this word verbatim: ${codeword}`)
   await page.click('#send')
-  record('sending creates the Workstream from the composer', true, codeword)
+  // Asserted, not assumed. This line used to record `true` unconditionally, and passed on a run
+  // where the send did nothing at all: no Workstream, no Intent, no prompt, and an error toast that
+  // had vanished four seconds later.
+  const created = await page
+    .waitForFunction(() => document.querySelector('#power-toggle') !== null && document.querySelector('.topbar-title')?.textContent !== 'Nouvelle conversation', null, { timeout: 60_000, polling: 500 })
+    .then(() => true)
+    .catch(() => false)
+  record('sending creates the Workstream from the composer', created, created ? codeword : `refused: ${failedCalls[0] ?? 'no failed call seen'}`)
 
   // Convergence then a real answer: one Pod pulled, one credential injected, one model call.
   //
@@ -140,11 +156,13 @@ try {
   // fails this check, which is the point of keeping it.
   const unexpected = consoleErrors.filter((line) => !/409/.test(line))
   record('nothing in the console but the expected admission retry', unexpected.length === 0, `${String(consoleErrors.length)} entries, ${String(unexpected.length)} unexpected${unexpected.length > 0 ? `: ${unexpected[0]?.slice(0, 90)}` : ''}`)
+  const unexpectedCalls = failedCalls.filter((line) => !line.startsWith('409'))
+  record('no API refusal but the expected admission retry', unexpectedCalls.length === 0, unexpectedCalls.slice(0, 2).join(' | ').slice(0, 150) || `${String(failedCalls.length)} refusals, all 409`)
 } catch (error) {
   record('the run completed', false, String(error).split('\n')[0].slice(0, 160))
   await page.screenshot({ path: `${shots}/99-failure.png` }).catch(() => {})
 } finally {
-  writeFileSync(`${shots}/console.log`, consoleErrors.join('\n'))
+  writeFileSync(`${shots}/console.log`, [...consoleErrors, ...failedCalls].join('\n'))
   await browser.close()
 }
 
