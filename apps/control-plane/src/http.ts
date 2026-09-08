@@ -80,6 +80,20 @@ async function handlePrompt(
     return sendProblem(res, 422, 'Invalid prompt', 'text must be a non-empty string')
   }
 
+  // Every step of this path is timed and reported on the way out. Not instrumentation for its own
+  // sake: a prompt re-runs the WHOLE rule evaluation against fresh evidence — including a live
+  // round trip to the harness — before it is accepted, and whether that is affordable is a question
+  // about milliseconds, which nobody could answer from the outside. Measured on the live cluster,
+  // one message cost between 330 ms and 1.1 s before the model saw a word of it.
+  const started = Date.now()
+  const marks: string[] = []
+  let last = started
+  const mark = (what: string): void => {
+    const now = Date.now()
+    marks.push(`${what}=${String(now - last)}ms`)
+    last = now
+  }
+
   const replayed = await replayDispatch(productPool, workstreamId, key)
   if (replayed !== null) {
     return sendJson(res, 200, { commandId: replayed.id, state: replayed.state })
@@ -96,7 +110,9 @@ async function handlePrompt(
     if (intent === undefined) {
       return sendProblem(res, 409, 'No current Intent', 'prompts require an authored Intent for this Workstream')
     }
+    mark('intent')
     const decision = await checkAdmission(admission.observationSource, workstreamId, intent, admission.resolve)
+    mark('admission')
     if (!decision.admitted) {
       return sendProblem(res, 409, 'Admission not granted', decision.reason)
     }
@@ -134,7 +150,9 @@ async function handlePrompt(
       const dispatch = await reserveDispatch(client, { workstreamId, sessionId, kind: 'prompt', request: { text }, requestKey: key })
       return { reserved: dispatch, sessionId }
     })
+    mark('reserve')
     await channels.ensure(workstreamId, reserved.sessionId)
+    mark('channel')
     void channels.prompt(workstreamId, reserved.reserved.id, text).catch(async (error: unknown) => {
       console.error(`prompt flow for ${reserved!.reserved.id} failed: ${error instanceof Error ? error.message : String(error)}`)
       // A reservation whose send never started must not sit there: the one-turn-per-Workstream gate
@@ -143,6 +161,7 @@ async function handlePrompt(
       // `unknown`, and the channel's own failure path owns that case.
       await settleUnsentDispatch(productPool, reserved!.reserved.id)
     })
+    console.log(`prompt ${reserved.reserved.id} accepted in ${String(Date.now() - started)}ms (${marks.join(' ')})`)
     return sendJson(res, 202, { commandId: reserved.reserved.id, state: 'reserved' })
   } catch (error) {
     if (error instanceof Error && error.message === 'no_current_session') {

@@ -100,8 +100,13 @@ export async function run(options: MainOptions = {}): Promise<void> {
   const runtimeControlBaseUrl = env.RUNTIME_CONTROL_URL
   const brokerBaseUrl = env.BROKER_URL
   const wired = runtimeControlBaseUrl !== undefined && brokerBaseUrl !== undefined && harnessDigests !== undefined && bridgePort !== undefined
+  // Declared before the observation source so the probe can reach the open prompt channel, and
+  // assigned after it because the channels need the source's own connector. The bridge serves one
+  // client at a time: without this the probe's own connection evicts a turn in flight.
+  let channels: AgentChannels | undefined
   const observationSource: ObservationSource = wired
     ? new HttpObservationSource({
+        requestOnOpenChannel: (workstreamId, method, params) => channels?.request(workstreamId, method, params) ?? null,
         pool: enginePool,
         productPool,
         runtimeControlBaseUrl,
@@ -141,7 +146,7 @@ export async function run(options: MainOptions = {}): Promise<void> {
     // The real bridge connector once owners are configured — never the S4 dev fake agent in a
     // real deployment. Unwired (no RUNTIME_CONTROL_URL/BROKER_URL/harness catalogue/bridgePort)
     // keeps the dev connector, matching how observation/executor stay stubs in that same mode.
-    const channels = new AgentChannels({
+    channels = new AgentChannels({
       pool: productPool,
       logger: (message) => console.log(message),
       // Which harnesses re-attach with `session/resume` — codex does not, and resuming one of its

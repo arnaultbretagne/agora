@@ -36,6 +36,41 @@ export interface SessionProbeOptions {
    * out reports `disconnected`, which is what "we could not read it" has always meant here.
    */
   readonly requestTimeoutMs?: number
+  /**
+   * Issues the readback on a connection that is ALREADY open to this Pod, when there is one.
+   *
+   * The harness bridge serves one client at a time — it has to, because every ACP connection numbers
+   * its requests from zero and two attached sockets cross each other's answers. So a probe that
+   * opens its OWN connection evicts whatever was attached, and what is usually attached is the
+   * prompt channel: the third message of a conversation died 2ms after being sent, marked `unknown`,
+   * and CONT-005 then gated the Workstream for good. Measured on the live cluster, three turns in a
+   * row, which is a conversation.
+   *
+   * Reusing the open connection is not an optimisation. It is the only way this probe and a turn in
+   * flight can coexist at all.
+   */
+  readonly requestOnOpenChannel?: (workstreamId: string, method: string, params: Record<string, unknown>) => Promise<unknown> | null
+}
+
+/**
+ * The one call that reads this harness's current configuration back, per S10 Step 1: `session/resume`
+ * returns every option's current value, but codex does not persist a context until it has content,
+ * so for a `set-config-noop` harness the read is its own `set_session_config` — idempotent when the
+ * value already matches, and exactly the mutation CONFIG would perform when it does not.
+ */
+function readbackCall(input: {
+  readonly configReadback?: 'resume' | 'set-config-noop'
+  readonly desiredModel?: string
+  readonly modelOptionId?: string
+  readonly contextId: string
+}): { readonly method: string; readonly params: Record<string, unknown> } {
+  if (input.configReadback === 'set-config-noop' && input.desiredModel !== undefined) {
+    return {
+      method: acp.methods.agent.session.setConfigOption,
+      params: { sessionId: input.contextId, configId: input.modelOptionId ?? 'model', value: input.desiredModel },
+    }
+  }
+  return { method: acp.methods.agent.session.resume, params: { sessionId: input.contextId, cwd: workspaceRoot(), mcpServers: [] } }
 }
 
 export async function probeSession(
@@ -55,6 +90,25 @@ export async function probeSession(
   options: SessionProbeOptions,
 ): Promise<SessionProbeResult> {
   if (input.podIP === null) return DISCONNECTED
+  // The open channel first, always: see `requestOnOpenChannel`.
+  const onOpen = options.requestOnOpenChannel
+  if (onOpen !== undefined) {
+    const readback = readbackCall(input)
+    const pending = onOpen(input.workstreamId, readback.method, readback.params)
+    if (pending !== null) {
+      try {
+        const answered = (await within(pending, options.requestTimeoutMs, readback.method)) as { configOptions?: readonly { id?: unknown; currentValue?: unknown }[] }
+        const configOptions = new Map<string, string>()
+        for (const option of answered.configOptions ?? []) {
+          if (typeof option.id === 'string' && typeof option.currentValue === 'string') configOptions.set(option.id, option.currentValue)
+        }
+        return { connected: true, configOptions }
+      } catch (error) {
+        options.logger?.(`session probe for ${input.workstreamId} failed on the open channel: ${error instanceof Error ? error.message : String(error)}`)
+        return DISCONNECTED
+      }
+    }
+  }
   const connect = options.connect ?? connectBridge
   try {
     const connection = await within(connect({ url: `ws://${input.podIP}:${options.bridgePort}/`, token: input.bridgeToken }), options.requestTimeoutMs, 'the bridge')

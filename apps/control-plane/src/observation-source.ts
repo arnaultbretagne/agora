@@ -96,6 +96,12 @@ export interface HttpObservationSourceOptions {
   readonly logger?: (message: string) => void
   /** Test seam: production uses connectBridge against the real WebSocket (probeSession's own default). */
   readonly connect?: SessionProbeOptions['connect']
+  /**
+   * The open prompt channel, when there is one. The probe reads the configuration back on it rather
+   * than opening a second connection to a bridge that serves one client at a time — which evicted
+   * the channel and killed turns in flight.
+   */
+  readonly requestOnOpenChannel?: SessionProbeOptions['requestOnOpenChannel']
 }
 
 export class HttpObservationSource implements ObservationSource {
@@ -447,6 +453,7 @@ export class HttpObservationSource implements ObservationSource {
         ...(this.options.adapterRequestTimeoutMs !== undefined ? { requestTimeoutMs: this.options.adapterRequestTimeoutMs } : {}),
         ...(this.options.logger ? { logger: this.options.logger } : {}),
         ...(this.options.connect ? { connect: this.options.connect } : {}),
+        ...(this.options.requestOnOpenChannel ? { requestOnOpenChannel: this.options.requestOnOpenChannel } : {}),
       },
     )
     return {
