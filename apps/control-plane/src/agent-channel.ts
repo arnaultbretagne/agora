@@ -159,6 +159,18 @@ export class AgentChannels {
     return harness === undefined || (readback.get(harness) ?? 'resume') === 'resume'
   }
 
+  /**
+   * Issues one request on the connection this Workstream already has open, or `null` when it has
+   * none. The observation probe uses it so that reading a context's configuration does not require
+   * a SECOND connection to a bridge that serves one client at a time — which would evict the prompt
+   * channel and kill a turn in flight (session-probe.ts says what that cost).
+   */
+  request(workstreamId: string, method: string, params: Record<string, unknown>): Promise<unknown> | null {
+    const channel = this.#channels.get(workstreamId)
+    if (channel === undefined) return null
+    return channel.connection.agent.request(method as never, params as never) as Promise<unknown>
+  }
+
   pendingPermissionIds(workstreamId: string): readonly string[] {
     return [...(this.#channels.get(workstreamId)?.pendingPermissions.keys() ?? [])]
   }

@@ -513,3 +513,79 @@ test('a model whose harness offers NO effort control reads model and effort, nev
     }
   })
 })
+
+test('the probe reads the configuration on the OPEN channel and never opens a second connection', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+    )
+    const broker = await startJsonServer(() => undefined)
+    let connects = 0
+    let onChannel = 0
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        // The bridge serves ONE client at a time. A probe that opens its own connection evicts
+        // whatever is attached — and what is usually attached is the prompt channel, so the turn in
+        // flight dies and CONT-005 gates the Workstream. Measured live on the third message of a
+        // conversation, which is to say: on a conversation.
+        connect: async () => {
+          connects += 1
+          throw new Error('the probe must not open a second connection while a channel is open')
+        },
+        requestOnOpenChannel: (_workstreamId, _method, _params) => {
+          onChannel += 1
+          return Promise.resolve({ configOptions: [{ id: 'model', currentValue: 'sonnet' }, { id: 'effort', currentValue: 'high' }] })
+        },
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'live' })
+      assert.deepEqual(reader.model(), { ok: true, value: 'sonnet' })
+      assert.deepEqual(reader.effort(), { ok: true, value: 'high' })
+      assert.equal(onChannel, 1, 'read on the connection that was already open')
+      assert.equal(connects, 0, 'and no second connection was opened')
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
+
+test('with no channel open the probe still connects on its own', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+    )
+    const broker = await startJsonServer(() => undefined)
+    const agent = fakeAcpAgent([{ id: 'model', currentValue: 'sonnet' }, { id: 'effort', currentValue: 'high' }])
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async () => ({ connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }),
+        requestOnOpenChannel: () => null,
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'live' })
+      assert.deepEqual(reader.model(), { ok: true, value: 'sonnet' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
