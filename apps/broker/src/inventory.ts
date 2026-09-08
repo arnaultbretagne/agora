@@ -12,16 +12,43 @@ export interface ConsistentInventory {
   readonly effective: ReadonlySet<Authorization>
 }
 
-export async function readConsistentInventory(client: OneCliClient, agentId: string, maxAttempts = 3): Promise<ConsistentInventory | undefined> {
-  let before = await client.getAgentGrants(agentId)
+export async function readConsistentInventory(
+  client: OneCliClient,
+  agentId: string,
+  maxAttempts = 3,
+  onTiming?: (message: string) => void,
+): Promise<ConsistentInventory | undefined> {
+  // Three OneCLI calls minimum — grants, effective credentials, grants again — and up to seven when
+  // the two grant reads disagree and the loop retries. Each is a round trip to a third-party service
+  // with its own database, and this whole thing runs inside every reconciliation tick AND every
+  // prompt's admission check. Measured from the control plane: 106 ms when it settles first time,
+  // 492 ms when it does not. That variance IS the retry, and the spans say so rather than implying
+  // it: without them, "the broker is slow" and "the broker read three times" look identical.
+  const started = Date.now()
+  const spans: string[] = []
+  const timed = async <T>(what: string, work: Promise<T>): Promise<T> => {
+    const from = Date.now()
+    try {
+      return await work
+    } finally {
+      spans.push(`${what}=${String(Date.now() - from)}ms`)
+    }
+  }
+  const report = (outcome: string): void => {
+    onTiming?.(`onecli inventory for ${agentId} ${outcome} in ${String(Date.now() - started)}ms (${spans.join(' ')})`)
+  }
+
+  let before = await timed('grants', client.getAgentGrants(agentId))
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const effective = await client.getEffectiveCredentials(agentId)
-    const after = await client.getAgentGrants(agentId)
+    const effective = await timed(`effective#${String(attempt + 1)}`, client.getEffectiveCredentials(agentId))
+    const after = await timed(`grants#${String(attempt + 1)}`, client.getAgentGrants(agentId))
     if (grantsEqual(before, after)) {
+      report(`settled after ${String(attempt + 1)} attempt(s)`)
       return { attached: normalizeAttached(after), effective: normalizeEffective(after, effective) }
     }
     before = after
   }
+  report('never settled')
   return undefined
 }
 

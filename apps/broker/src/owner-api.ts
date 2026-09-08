@@ -50,8 +50,10 @@ export function createBrokerApi(options: BrokerApiOptions): Server {
 
       if (parts[0] === 'v1' && parts[1] === 'incarnations' && parts.length === 3 && req.method === 'GET') {
         const incarnation = parts[2]!
+        const ensureStarted = Date.now()
         const agent = await ensureAgent(options.client, incarnation)
-        const inventory = await readConsistentInventory(options.client, agent.id)
+        const ensureMs = Date.now() - ensureStarted
+        const inventory = await readConsistentInventory(options.client, agent.id, 3, (message) => console.log(`${message} [ensure-agent=${String(ensureMs)}ms]`))
         if (inventory === undefined) return problem(res, 503, 'Inconsistent read', 'attached/effective did not settle to a consistent pair within budget')
         return send(res, 200, { agentId: agent.id, attached: toWireGrantSet(inventory.attached), effective: toWireGrantSet(inventory.effective) })
       }
