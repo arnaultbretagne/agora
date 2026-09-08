@@ -16,16 +16,16 @@ resources:
 images:
   - name: ghcr.io/arnaultbretagne/agora-engine-control-plane
     newName: ghcr.io/arnaultbretagne/agora-engine-control-plane
-    digest: sha256:df3ca37bd6894100b7a02d47769591491d4a394cab6e04eec8753a3b76485701
+    digest: sha256:78c3c692f290856b5ade2a47e2ab1053e3317c18047f5656603cec89ddd0004e
   - name: ghcr.io/arnaultbretagne/agora-engine-runtime-control
     newName: ghcr.io/arnaultbretagne/agora-engine-runtime-control
-    digest: sha256:437f55d2ec8ce82e194947bb598a4b1c9dbdae99c6c9e89ca9cc885c4e1b720d
+    digest: sha256:cc9f6ef9e20b9208b5e97643938e6e3b19a00f6b9a8053e4f19f44226c2d5115
   - name: ghcr.io/arnaultbretagne/agora-engine-broker
     newName: ghcr.io/arnaultbretagne/agora-engine-broker
-    digest: sha256:1406204c3e1baa26d6a0e0695167ebaba4ec635c930ff8cddfb9fa73c83189ee
+    digest: sha256:f0f70a8c4a14ec86fd414cbcf7fb9733ed7f050c3d28dcb7b146a5a0b02b2983
   - name: ghcr.io/arnaultbretagne/agora-engine-web
     newName: ghcr.io/arnaultbretagne/agora-engine-web
-    digest: sha256:c4a6405f4787bcb4744526d00db9f62c591626c8457a2e60181fd8d0e88009d5
+    digest: sha256:d98e62f00d82373bea84e9ba34006d1b8ebdfe4f56231407a5b0b5dbd6281eb7
 
 patches:
   # The environment owns the namespaces, because it owns their security posture: PodSecurity
