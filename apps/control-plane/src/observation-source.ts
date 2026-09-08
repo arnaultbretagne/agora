@@ -157,7 +157,21 @@ export class HttpObservationSource implements ObservationSource {
   }
 
   async reader(workstreamId: string): Promise<ObservationReader> {
+    // Every read timed, and the whole thing reported on the way out. This runs on every
+    // reconciliation tick AND inside every prompt's admission check, so "what does a message cost
+    // before the model sees it" is exactly the sum of these — and no one could answer it from
+    // outside the process. Measured live, admission alone was 117-593 ms per message.
+    const readStarted = Date.now()
+    const spans: string[] = []
+    let previous = readStarted
+    const span = (what: string): void => {
+      const now = Date.now()
+      spans.push(`${what}=${String(now - previous)}ms`)
+      previous = now
+    }
+
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
+    span('incarnation')
     const [k8sInventory, brokerInventory, session, openingWindow, anchorEvidence] = await Promise.all([
       this.fetchK8sInventory(workstreamId),
       incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined),
@@ -165,6 +179,9 @@ export class HttpObservationSource implements ObservationSource {
       currentOpeningWindow(this.options.productPool, workstreamId),
       this.fetchAnchorEvidence(workstreamId),
     ])
+    // One span for the five: they run in parallel, so charging them separately would invent time
+    // that was never spent in sequence.
+    span('pods+broker+session+window+anchor')
 
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
     const digestFor = harnessDigestForCatalogue(this.options.harnessCatalogue)
@@ -184,15 +201,21 @@ export class HttpObservationSource implements ObservationSource {
     // Refreshed before the rules run, because `resolve.capabilityGrants` is synchronous and must
     // never answer "nothing is desired" when the truth is "we could not ask".
     const intentForGrants = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { capabilities?: unknown } | undefined
+    span('intent')
     await this.refreshDesiredGrants(Array.isArray(intentForGrants?.capabilities) ? (intentForGrants.capabilities as readonly string[]) : [])
+    span('grants')
     const { acp: acpEvidence, configOptions } = await this.fetchAcpEvidence(workstreamId, session, establishedPod)
+    span('acp-probe')
     // Read back under the ids THIS harness uses: codex reports effort as `reasoning_effort`, and
     // looking for `effort` there would silently produce "no snapshot" — which reads as an
     // unavailable observation, which stalls CONFIG forever rather than failing visibly.
     const observedHarness = (await loadLatestIntentEvent(this.options.productPool, workstreamId))?.intent as { harness?: unknown } | undefined
     const optionIds =
       (typeof observedHarness?.harness === 'string' ? this.options.configOptionIds?.get(observedHarness.harness) : undefined) ?? { model: 'model', effort: 'effort' }
+    span('option-ids')
     const syncEvidence = await this.fetchSyncEvidence(workstreamId, session, openingWindow, establishedPod, acpEvidence)
+    span('sync-proof')
+    this.options.logger?.(`observation for ${workstreamId} read in ${String(Date.now() - readStarted)}ms (${spans.join(' ')})`)
     const sessionValue = normalizeSessionWithAcp({ pod: establishedPodObservation, startupDeadlineSeconds: 0, podAgeSeconds: 0, acp: acpEvidence })
     // model/effort are only ever read off a snapshot taken while the Session was actually live —
     // config.ts's own contract (a value handed to it is trusted as already fresh); a stale/absent
@@ -291,7 +314,9 @@ export class HttpObservationSource implements ObservationSource {
     }
     if (session === null || session.acpContextId === null || pod === undefined) return null
 
+    const deliveryStarted = Date.now()
     const delivery = await this.fetchHandoffDelivery(workstreamId, session, openingWindow)
+    const deliveryMs = Date.now() - deliveryStarted
     const digest = delivery.digest
     const lineageIntact = acpEvidence !== null && acpEvidence.connected && acpEvidence.contextProcessGeneration === acpEvidence.currentProcessGeneration
     if (!lineageIntact) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact: false }
@@ -311,7 +336,9 @@ export class HttpObservationSource implements ObservationSource {
       return { descriptor, delivery: delivery.state, proof: 'not_incorporated', lineageIntact }
     }
 
+    const proofStarted = Date.now()
     const proof = await this.fetchDriverProof(pod.name, session, openingWindow, digest)
+    this.options.logger?.(`  sync proof for ${workstreamId}: handoff-lookup=${String(deliveryMs)}ms driver-proof=${String(Date.now() - proofStarted)}ms`)
     if (proof === null) return { descriptor, delivery: delivery.state, proof: 'unprovable', lineageIntact }
     return { descriptor, delivery: delivery.state, proof, lineageIntact }
   }
@@ -423,7 +450,9 @@ export class HttpObservationSource implements ObservationSource {
       pod.incarnation,
     )
     if (bridgeToken === null) return none // the Pod could not issue one — never guess connected/disconnected
+    const evidenceStarted = Date.now()
     const currentProcessGeneration = await this.fetchProcessGeneration(pod.name)
+    const evidenceMs = Date.now() - evidenceStarted
     if (currentProcessGeneration === undefined) return none // evidence unreachable — never guess connected/disconnected
     if (currentProcessGeneration !== session.processGeneration) {
       // The bound context belonged to a process that is provably gone — resuming it would be
@@ -436,6 +465,7 @@ export class HttpObservationSource implements ObservationSource {
     const harnessId = typeof intent?.harness === 'string' ? intent.harness : undefined
     const readback = harnessId === undefined ? undefined : this.options.configReadback?.get(harnessId)
     const optionIds = harnessId === undefined ? undefined : this.options.configOptionIds?.get(harnessId)
+    const probeStarted = Date.now()
     const probe = await probeSession(
       {
         workstreamId,
@@ -456,6 +486,7 @@ export class HttpObservationSource implements ObservationSource {
         ...(this.options.requestOnOpenChannel ? { requestOnOpenChannel: this.options.requestOnOpenChannel } : {}),
       },
     )
+    this.options.logger?.(`  acp evidence for ${workstreamId}: pod-evidence=${String(evidenceMs)}ms readback=${String(Date.now() - probeStarted)}ms`)
     return {
       acp: { connected: probe.connected, contextId: session.acpContextId, contextProcessGeneration: session.processGeneration, currentProcessGeneration },
       configOptions: probe.connected ? probe.configOptions : null,
