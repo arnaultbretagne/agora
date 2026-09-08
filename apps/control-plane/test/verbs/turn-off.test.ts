@@ -50,6 +50,26 @@ const CAPTURED: CaptureAttempt = {
   },
 }
 
+/** The same capture, with the driver's own conservative frontier set to what a real driver reports. */
+function withDriverFloor(frontierW: number): CaptureAttempt {
+  return {
+    kind: 'captured',
+    capture: {
+      stagingId: 'staging-1',
+      checksum: `sha256:${'a'.repeat(64)}`,
+      byteLength: 13063,
+      formatId: 'claude-code-transcript',
+      formatVersion: 1,
+      driverRevision: 'claude-code-transcript-1',
+      frontierW,
+      nativeOrigin: { podUid: 'pod-uid-1' },
+      workspaceDeps: {},
+      contextId: 'ctx-1',
+      processGeneration: 0,
+    },
+  }
+}
+
 async function seed(db: TestDatabase, options: { bindContext?: boolean } = {}): Promise<{ workstreamId: string; sessionId: string; incarnation: string }> {
   const workstreamId = randomUUID()
   const incarnation = `inc-${randomUUID().slice(0, 8)}`
@@ -248,5 +268,59 @@ test('a verb that is not TURN_OFF passes straight through', async () => {
     await executor.execute('BUILD', context(workstreamId))
 
     assert.deepEqual(inner.verbs, ['BUILD'])
+  })
+})
+
+test('the Save frontier is what the CONTEXT provably holds, not the driver-alone floor', async () => {
+  await withTestDatabase(async (db) => {
+    const { workstreamId, sessionId } = await seed(db)
+    // Facts that came off this Session's own ACP stream: they passed through this context by
+    // construction. Before this, the Save was anchored at the driver's conservative 0 (claude-code
+    // can only prove a Handoff digest from a transcript), so the loss exposure the operator reads —
+    // journal head minus the anchored frontier — reported the whole conversation as possibly lost
+    // straight after the clean shutdown that captured it. Seen live, in the UI, as
+    // "47 fait(s) postérieurs au dernier point de reprise".
+    for (const seq of [11, 12, 13, 14, 15, 16, 17]) {
+      await db.pool.query(
+        `INSERT INTO workstream_facts (workstream_id, seq, session_id, kind, payload, direction, rpc_kind)
+         VALUES ($1, $2, $3, 'acp.envelope', '{}'::jsonb, 'outbound', 'request')`,
+        [workstreamId, seq, sessionId],
+      )
+    }
+    const inner = new RecordingInner()
+    const capture = new StubCapture(() => withDriverFloor(0))
+    const executor = createTurnOffExecutor({ inner, productPool: db.pool, enginePool: db.pool, capture, imageDigest: `sha256:${'b'.repeat(64)}` })
+
+    await executor.execute('TURN_OFF', context(workstreamId))
+
+    const row = (await db.pool.query('SELECT * FROM shutdowns WHERE workstream_id = $1', [workstreamId])).rows[0]!
+    const save = (await db.pool.query('SELECT * FROM saves WHERE id = $1', [row['save_id']])).rows[0]!
+    assert.equal(Number(save['frontier_w']), 17, 'the newest fact off this Session\'s own stream')
+    const anchor = await getAnchor(db.pool, workstreamId, 'claude-code')
+    assert.equal(anchor?.frontierW, 17, 'and the Anchor carries it, which is what the loss exposure counts from')
+  })
+})
+
+test('a Session whose opening range was never established keeps the driver floor', async () => {
+  await withTestDatabase(async (db) => {
+    const { workstreamId, sessionId } = await seed(db)
+    // A cutoff above the origin with no restore behind it: this context opened over a record it may
+    // never have received, and its own stream says nothing about the gap below. Claiming the newest
+    // own-stream position here would hide exactly what CONT-006 refuses to guess about.
+    await db.pool.query('UPDATE sessions SET cutoff_h = 5, origin_w = 0, origin_save_id = NULL WHERE id = $1', [sessionId])
+    await db.pool.query(
+      `INSERT INTO workstream_facts (workstream_id, seq, session_id, kind, payload, direction, rpc_kind)
+       VALUES ($1, 19, $2, 'acp.envelope', '{}'::jsonb, 'outbound', 'request')`,
+      [workstreamId, sessionId],
+    )
+    const inner = new RecordingInner()
+    const capture = new StubCapture(() => withDriverFloor(0))
+    const executor = createTurnOffExecutor({ inner, productPool: db.pool, enginePool: db.pool, capture, imageDigest: `sha256:${'b'.repeat(64)}` })
+
+    await executor.execute('TURN_OFF', context(workstreamId))
+
+    const row = (await db.pool.query('SELECT * FROM shutdowns WHERE workstream_id = $1', [workstreamId])).rows[0]!
+    const save = (await db.pool.query('SELECT * FROM saves WHERE id = $1', [row['save_id']])).rows[0]!
+    assert.equal(Number(save['frontier_w']), 0, 'unproven base, conservative floor')
   })
 })

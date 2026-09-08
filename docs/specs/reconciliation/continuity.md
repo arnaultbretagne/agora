@@ -95,6 +95,21 @@ needs a versioned workspace dependency this driver did not record is rejected ra
 (`CONT-011`). Extending the driver to reference an immutable snapshot is a change to this contract,
 not a driver implementation detail.
 
+**The captured frontier, and who can prove it.** A Save's frontier is the journal position its
+context provably holds. The driver proves it from the transcript alone and therefore reports a
+conservative floor — for a transcript-based driver, `W = 0`, because a Handoff digest is the only
+thing a transcript can be searched for. The **control plane** can prove more, and by provenance
+rather than by reading anything: a fact journaled FROM this Session's own ACP stream passed through
+this context. So the recorded frontier is raised to the newest such fact, and only from a base the
+context is known to hold — an opening range that was empty (vacuously incorporated, `CONT-002`) or a
+restore, whose Save carries its own proven frontier. A Session that opened over a non-empty range
+that was never established keeps the driver's floor: the gap below its own stream is exactly what
+must not be guessed at (`CONT-006`).
+
+This is not cosmetic. Loss exposure counts the facts newer than the anchored frontier, so a frontier
+stuck at the floor reports the entire record as possibly lost immediately after a clean shutdown
+that captured all of it — a warning that is always on, and therefore says nothing.
+
 **Proving the exact opening input and lineage.** The driver proves incorporation of an opening
 descriptor `(W, H]` from the transcript alone:
 

@@ -17,7 +17,7 @@
 import type pg from 'pg'
 import type { Verb } from '@agora/domain'
 import { loadLatestIntentEvent, type VerbContext, type VerbExecutor } from '@agora/engine'
-import { currentSession } from '@agora/journal'
+import { currentSession, currentOpeningWindow } from '@agora/journal'
 import { publishAnchor, recordSave, getAnchor, type PublishOutcome } from '@agora/custody'
 
 export interface CaptureAttempt {
@@ -262,6 +262,22 @@ async function preserve(
     // RESTORE would treat as an unreachable payload, which is an outage and invalidates nothing
     // (CONT-008). A crash after the second leaves usable bytes the Anchor has not been advanced to:
     // the previous Anchor still stands, which is precisely the conservative outcome.
+    // What the CONTEXT provably holds, which the driver alone cannot say.
+    //
+    // The driver reports a conservative floor (0 for claude-code): from a transcript it can prove
+    // delivery of a Handoff digest and nothing else. But the loss exposure the operator reads counts
+    // facts newer than that frontier — so every Save anchored at 0 reported the entire journal as
+    // possibly lost, for ever, immediately after a clean shutdown that captured all of it. A banner
+    // that always cries wolf is worse than no banner.
+    //
+    // The control plane can prove more, and by provenance rather than by reading anything: a fact
+    // journaled FROM this Session's own ACP stream passed through this context. So the frontier is
+    // raised to the newest such fact — but only from a base the context is known to hold: the range
+    // it restored from, or nothing at all when its opening range was empty (CONT-002 — vacuously
+    // incorporated). A Session that opened over an unproven non-empty range keeps the driver's
+    // floor, because there the gap below its own stream is exactly what is not established.
+    const provenFrontierW = await provenFrontier(options.productPool, context.workstreamId, live.sessionId, captured.frontierW)
+
     const metadataClient = await options.productPool.connect()
     let saveId: string
     try {
@@ -272,7 +288,7 @@ async function preserve(
           podUid: live.podUid,
           processGeneration: captured.processGeneration,
           contextId: captured.contextId,
-          frontierW: captured.frontierW,
+          frontierW: provenFrontierW,
           driverRevision: captured.driverRevision,
         },
         {
@@ -309,7 +325,7 @@ async function preserve(
         workstreamId: context.workstreamId,
         harnessId,
         saveId,
-        frontierW: captured.frontierW,
+        frontierW: provenFrontierW,
         expectedPrevious: previous?.saveId ?? null,
       })
       await anchorClient.query('COMMIT')
@@ -364,4 +380,23 @@ async function currentIncarnationOf(enginePool: pg.Pool, workstreamId: string): 
     [workstreamId],
   )
   return (result.rows[0] as { target_id?: string } | undefined)?.target_id
+}
+
+/**
+ * The journal position this Session's context provably holds, at least. Never guesses: it takes the
+ * newest fact that came off this Session's own ACP stream, and only when the base below it is
+ * established — an empty opening range (nothing to hold) or a restore (a Save's own proven
+ * frontier). Otherwise the driver's floor stands.
+ */
+async function provenFrontier(pool: pg.Pool, workstreamId: string, sessionId: string, driverFloor: number): Promise<number> {
+  const window = await currentOpeningWindow(pool, workstreamId)
+  if (window === null) return driverFloor
+  const baseEstablished = window.h <= window.w || window.saveId !== null
+  if (!baseEstablished) return driverFloor
+  const result = await pool.query(
+    "SELECT COALESCE(MAX(seq), 0) AS seq FROM workstream_facts WHERE workstream_id = $1 AND session_id = $2 AND kind = 'acp.envelope'",
+    [workstreamId, sessionId],
+  )
+  const ownStream = Number((result.rows[0] as { seq: string | number } | undefined)?.seq ?? 0)
+  return Math.max(driverFloor, window.w, ownStream)
 }
