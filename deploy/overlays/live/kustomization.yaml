@@ -28,6 +28,25 @@ images:
     digest: sha256:88973981740898f8721ed8bf97110385d25667266fb3cda954e3cc4bbbd26d04
 
 patches:
+  # The environment owns the namespaces, because it owns their security posture: PodSecurity
+  # enforcement, the platform profile label, the LimitRange and the quota are decisions about this
+  # cluster, not about the product. infra-k8s declares both (apps/agora-system, apps/agora-runs) and
+  # this overlay must not fight it — two GitOps sources reconciling one object take turns undoing
+  # each other for ever. `dev/` still creates them, so it stands alone.
+  - target: { kind: Namespace, name: agora-system }
+    patch: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: agora-system
+      $patch: delete
+  - target: { kind: Namespace, name: agora-runs }
+    patch: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: agora-runs
+      $patch: delete
   # OneCLI runs in agora-onecli on this cluster and is reached there (see the Broker's ONECLI_URL
   # in base). These three deletions are what "reuse the existing one" looks like in kustomize.
   - target: { kind: Deployment, name: onecli }
