@@ -153,12 +153,17 @@ test('unavailable evidence reschedules with an acquisition blocking cause, never
         'observation.construction': () => ({ ok: false as const, reason: 'unavailable' as const }),
       })
       const executor = new RecordingVerbExecutor()
+      // Taken before the scan, not after: the bounded recheck is a few seconds out, and a slow runner
+      // can spend longer than that between the scan and this assertion — which made the test fail on
+      // correct behaviour. What is being asserted is that the row was pushed FORWARD rather than left
+      // claimed or turned into a verb, and that is what this compares against.
+      const beforeScan = Date.now()
       const summary = await createScan(workerOptions(db, source, executor))()
       assert.equal(summary.acquisition, 1)
       assert.equal(executor.calls.length, 0)
       const row = await workRow(client, id)
       assert.equal(row!['blocking_cause'], 'acquisition:observation.construction')
-      assert.ok(((row!['due_at'] as Date)).getTime() > Date.now())
+      assert.ok(((row!['due_at'] as Date)).getTime() > beforeScan, 'rescheduled forward: a bounded recheck, not a held claim')
     } finally {
       client.release()
     }
@@ -179,13 +184,18 @@ test('a HOLD reschedules with a bounded due time and clears the claim', async ()
         'observation.session': ok('pending'),
       })
       const executor = new RecordingVerbExecutor()
+      // Taken before the scan, not after: the bounded recheck is a few seconds out, and a slow runner
+      // can spend longer than that between the scan and this assertion — which made the test fail on
+      // correct behaviour. What is being asserted is that the row was pushed FORWARD rather than left
+      // claimed or turned into a verb, and that is what this compares against.
+      const beforeScan = Date.now()
       const summary = await createScan(workerOptions(db, source, executor))()
       assert.equal(summary.hold, 1)
       assert.equal(executor.calls.length, 0)
       const row = await workRow(client, id)
       assert.equal(row!['claim_token'], null)
       const holdDelay = backoffDelayMs(POLICY, 1)
-      assert.ok(((row!['due_at'] as Date)).getTime() > Date.now())
+      assert.ok(((row!['due_at'] as Date)).getTime() > beforeScan, 'rescheduled forward: a bounded recheck, not a held claim')
       assert.ok(((row!['due_at'] as Date)).getTime() < Date.now() + holdDelay + 5_000)
     } finally {
       client.release()
