@@ -96,6 +96,10 @@ button { font-family: var(--font-sans); }
 }
 .icon-btn:hover { background: var(--app-hover); }
 .icon-btn.muted { color: var(--app-muted); }
+/* A button carrying a word cannot be a 34px square: `Appliquer` and the power state overflowed
+   their fixed box and drew on top of each other in the top bar. */
+.icon-btn.labelled { width: auto; min-width: 34px; padding: 0 10px; gap: 6px; font: inherit; }
+.power-label { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
 
 .new-chat {
   margin: 12px 12px 8px;

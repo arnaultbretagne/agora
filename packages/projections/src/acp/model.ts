@@ -10,7 +10,7 @@ import { stableStringify } from '../hash.js'
 import type { Projector } from '../projector.js'
 
 export const ACP_MODEL_NAME = 'acp-model'
-export const ACP_MODEL_VERSION = '1'
+export const ACP_MODEL_VERSION = '2'
 
 const ITEM_ID_NAMESPACE = '3f9a1c72-8b4d-4c6e-9a10-5b6c7d8e9f01'
 const TURN_ID_NAMESPACE = '8d0c2f64-93e1-4f5a-b2ab-6c7d8e9f0a1b'
@@ -99,24 +99,66 @@ function putTurn(state: AcpModelState, turn: AcpTurn): AcpModelState {
   return { ...state, turns }
 }
 
+/**
+ * What the operator actually said, or `null` when the turn was not one of theirs.
+ *
+ * A Handoff is delivered as a `session/prompt` too — it is how a fresh context is told what the
+ * Workstream already holds — and it is Agora talking to the harness, not a person talking to the
+ * agent. It carries an `agora://…/handoffs/…` embedded resource, and that is what distinguishes it.
+ * Rendering it in the transcript would put the whole prior conversation back on screen as if the
+ * operator had pasted it.
+ */
+function promptText(envelope: Envelope): string | null {
+  const blocks = (envelope.params as { prompt?: readonly Record<string, unknown>[] } | undefined)?.prompt
+  if (!Array.isArray(blocks)) return null
+  const isHandoff = blocks.some((block) => {
+    const uri = (block['resource'] as { uri?: unknown } | undefined)?.uri
+    return typeof uri === 'string' && uri.startsWith('agora://') && uri.includes('/handoffs/')
+  })
+  if (isHandoff) return null
+  const text = blocks
+    .filter((block) => block['type'] === 'text' && typeof block['text'] === 'string')
+    .map((block) => block['text'] as string)
+    .join('')
+  return text.length > 0 ? text : null
+}
+
 function foldAcpFact(state: AcpModelState, fact: FactRecord): AcpModelState {
   const envelope = fact.payload as Envelope
   if (fact.sessionId === null) return state
 
-  // Outbound prompt request: opens the turn keyed by its command dispatch.
+  // Outbound prompt request: opens the turn keyed by its command dispatch, AND records what was
+  // said. Both halves matter. Until the second one existed, the operator's own messages were in no
+  // projection at all: the record held the agent's side of every conversation and not the question
+  // it answered. The browser drew the missing half from a local optimistic echo, which is why it
+  // appeared BELOW the answer and vanished on reload — a transcript that reads backwards and then
+  // forgets. `user_message_chunk` is not a substitute: it exists only if the agent chooses to replay
+  // the message back, and claude-code does not.
   if (fact.acp?.rpcKind === 'request' && fact.acp.direction === 'client_to_agent' && fact.acp.method === 'session/prompt') {
-    if (fact.acp.commandId !== null && !state.turns.has(fact.acp.commandId)) {
-      return putTurn(state, {
-        sessionId: fact.sessionId,
-        commandId: fact.acp.commandId,
-        status: 'running',
-        stopReason: null,
-        usage: null,
-        firstSeq: fact.seq,
-        latestSeq: fact.seq,
-      })
-    }
-    return state
+    const next =
+      fact.acp.commandId !== null && !state.turns.has(fact.acp.commandId)
+        ? putTurn(state, {
+            sessionId: fact.sessionId,
+            commandId: fact.acp.commandId,
+            status: 'running',
+            stopReason: null,
+            usage: null,
+            firstSeq: fact.seq,
+            latestSeq: fact.seq,
+          })
+        : state
+    const said = promptText(envelope)
+    if (said === null) return next
+    const entityKey = `user:${fact.acp.commandId ?? `seq:${String(fact.seq)}`}`
+    return putItem(next, {
+      id: deriveItemId(fact.sessionId, 'message', entityKey),
+      sessionId: fact.sessionId,
+      itemKind: 'message',
+      entityKey,
+      value: { role: 'user', completed: true, content: [{ type: 'text', text: said }] },
+      firstSeq: fact.seq,
+      latestSeq: fact.seq,
+    })
   }
   // Correlated response to a prompt: closes the running turn with its stop reason and usage.
   if (fact.acp?.rpcKind === 'response' && fact.acp.direction === 'agent_to_client' && fact.acp.correlatedMethod === 'session/prompt') {

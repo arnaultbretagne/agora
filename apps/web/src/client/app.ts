@@ -410,12 +410,12 @@ function renderTopbar(): void {
       ${workstream ? selectorsCluster() : ''}
       ${
         workstream
-          ? `<button class="icon-btn muted" id="power-toggle" title="Power ${power === 'on' ? 'off' : 'on'} — ${escapeHtml(powerTitle)}">${icons.power(17)}<span class="power-label">${power === 'on' ? 'ON' : 'OFF'}</span></button>`
+          ? `<button class="icon-btn muted labelled" id="power-toggle" title="Power ${power === 'on' ? 'off' : 'on'} — ${escapeHtml(powerTitle)}">${icons.power(17)}<span class="power-label">${power === 'on' ? 'ON' : 'OFF'}</span></button>`
           : ''
       }
       ${
         workstream
-          ? `<button class="icon-btn muted" id="apply-intent" title="Enregistrer cette intention complète (harnais, capacités, modèle, effort)">Appliquer</button>`
+          ? `<button class="icon-btn muted labelled" id="apply-intent" title="Enregistrer cette intention complète (harnais, capacités, modèle, effort)">Appliquer</button>`
           : ''
       }
       ${workstream ? `<button class="icon-btn muted" id="delete-conv" title="Supprimer la conversation">${icons.trash(17)}</button>` : ''}
@@ -1329,10 +1329,31 @@ async function doSend(): Promise<void> {
   try {
     if (!state.activeId) await startWorkstream(text)
     else if (state.intentView === null) await equipAndHold(state.activeId, text)
+    else if (state.intentView.intent.power !== 'on') await powerOnAndHold(state.activeId, text)
     else await sendPrompt(state.activeId, text)
   } catch (error) {
     toast(errorText(error), true)
   }
+}
+
+/**
+ * Writing to a conversation that is off asks for it back. Anything else makes the operator perform
+ * the reconciliation by hand: before this, sending into a powered-off conversation reached a Pod
+ * that does not exist and answered with the transport's own words — "the harness bridge is not
+ * reachable" — which describes the machine's problem, not theirs, and left the message nowhere.
+ */
+async function powerOnAndHold(workstreamId: string, text: string): Promise<void> {
+  state.pendingPrompt = text
+  syncComposerLock()
+  await authorIntent('on')
+  await refreshIntent(workstreamId)
+  if (state.intentView?.intent.power !== 'on') {
+    state.pendingPrompt = null
+    syncComposerLock()
+    restoreComposerText(text)
+    return
+  }
+  syncComposerLock()
 }
 
 /** Authors the composed Intent for an existing conversation that has none, and holds the message. */

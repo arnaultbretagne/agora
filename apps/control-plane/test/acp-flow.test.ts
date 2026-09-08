@@ -163,7 +163,15 @@ test('prompt: reserved then sent, permission decided, message projected; a secon
 
       await waitFor(async () => (await (await request(api.port, `/v1/workstreams/${workstreamId}/items`, { ...OWNER })).json() as { items: Array<{ kind: string }> }).items.some((item) => item.kind === 'message'))
       const items = (await (await request(api.port, `/v1/workstreams/${workstreamId}/items`, { ...OWNER })).json()) as { items: Array<{ kind: string; value: Record<string, unknown> }> }
-      const message = items.items.find((item) => item.kind === 'message')
+      // BOTH halves, in the order they were said. The operator's own message is projected from the
+      // outbound `session/prompt` — before this it was in no projection at all, and the browser drew
+      // it from a local echo that rendered after the answer and vanished on reload.
+      const messages = items.items.filter((item) => item.kind === 'message')
+      const said = (item: { value: Record<string, unknown> } | undefined): string =>
+        ((item?.value['content'] as Array<{ text?: string }> | undefined) ?? []).map((block) => block.text ?? '').join('')
+      assert.deepEqual(messages.map((item) => item.value['role']), ['user', 'agent'])
+      assert.equal(said(messages[0]), 'bonjour', 'the question, as it was asked')
+      const message = messages[1]
       const content = message?.value['content'] as Array<{ type: string; text?: string }>
       assert.equal(content.map((block) => block.text ?? '').join(''), 'hello from the fake agent')
 
