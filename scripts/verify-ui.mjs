@@ -52,7 +52,7 @@ page.on('response', async (response) => {
 })
 
 try {
-  await page.goto(base, { waitUntil: 'networkidle', timeout: 60_000 })
+  await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60_000 })
   await page.waitForSelector('#new-chat', { timeout: 30_000 })
   record('the shell loads and renders', true, await page.title())
   await page.screenshot({ path: `${shots}/01-shell.png` })
@@ -126,7 +126,9 @@ try {
   await page.screenshot({ path: `${shots}/03-answer.png`, fullPage: true })
 
   // A reload proves the record, not the browser's memory of it: the echo used to vanish here.
-  await page.reload({ waitUntil: 'networkidle' })
+  // NOT `networkidle`: the app holds the feed open, so the network is never idle and the reload
+  // times out on a page that loaded perfectly well.
+  await page.reload({ waitUntil: 'domcontentloaded' })
   const afterReload = await page
     .waitForFunction(
       (word) => {
