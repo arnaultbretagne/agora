@@ -95,6 +95,7 @@ async function handlePrompt(
   }
 
   const replayed = await replayDispatch(productPool, workstreamId, key)
+  mark('replay-check')
   if (replayed !== null) {
     return sendJson(res, 200, { commandId: replayed.id, state: replayed.state })
   }
@@ -124,11 +125,13 @@ async function handlePrompt(
   // gates. Recovery never re-sends anything; it only settles the ambiguous record.
   if (recovery !== undefined && (await hasUnresolvedPrompt(productPool, workstreamId))) {
     const verdict = await recoverPromptDelivery(recovery, workstreamId)
+    mark('delivery-recovery')
     if (verdict.kind === 'unresolved') {
       return sendProblem(res, 409, 'Prompt delivery unknown', `a previous prompt may have been accepted and recovery could not resolve it: ${verdict.reason} (CONT-005)`)
     }
   }
 
+  mark('gate-checks')
   if (!(await isRevisionCurrent(productPool, revisionId ?? null))) {
     // ENGINE-014: rejected immediately, not after the publication sweep reaches this Workstream.
     return sendProblem(res, 409, 'Obsolete revision', `this worker resolves catalogue revision ${String(revisionId)}, which is no longer the selected one`)
