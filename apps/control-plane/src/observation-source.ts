@@ -191,9 +191,20 @@ export class HttpObservationSource implements ObservationSource {
     // model/effort are only ever read off a snapshot taken while the Session was actually live —
     // config.ts's own contract (a value handed to it is trusted as already fresh); a stale/absent
     // probe means no snapshot at all, never a guessed or carried-over value.
+    // Read independently, because they are independent facts. Requiring BOTH to be present made
+    // `observation.model` unreadable whenever the harness offered no effort control — and
+    // claude-code offers none for `haiku`: its option list is `mode, model` where sonnet's is
+    // `effort, mode, model`. A Workstream on haiku therefore blocked for ever on
+    // `acquisition:observation.model` while the adapter was cheerfully reporting the model.
+    //
+    // An ABSENT effort option, on a live context whose option list we hold, is not an unread value:
+    // it is the adapter saying this model has no effort control. `default` is the product's own name
+    // for "whatever the harness does by itself", so that is what it reads — and the reviewed
+    // catalogue offers exactly `default` for such a model, so no other Intent can be authored.
+    const live = sessionValue === 'live' && configOptions !== null
     const configSnapshot =
-      sessionValue === 'live' && configOptions !== null && configOptions.has(optionIds.model) && configOptions.has(optionIds.effort)
-        ? { model: configOptions.get(optionIds.model)!, effort: configOptions.get(optionIds.effort)! }
+      live && configOptions.has(optionIds.model)
+        ? { model: configOptions.get(optionIds.model)!, effort: configOptions.get(optionIds.effort) ?? 'default' }
         : null
 
     return {

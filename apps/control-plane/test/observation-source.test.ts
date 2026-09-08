@@ -474,3 +474,42 @@ test('session: an EXPIRED bridge token is renewed before the probe, not read as 
     }
   })
 })
+
+test('a model whose harness offers NO effort control reads model and effort, never blocks on either', async () => {
+  await withTestDatabase(async (pool) => {
+    const workstreamId = randomUUID()
+    await seedLiveSession(pool, workstreamId, 'ctx-1', 0)
+    // claude-code's own option list for `haiku`: `mode, model` — no `effort`, where sonnet has one.
+    // Requiring both made observation.model unreadable, so a Workstream on haiku sat for ever on
+    // `acquisition:observation.model` while the adapter was reporting the model perfectly well.
+    const runtimeControl = await startRuntimeControlWithEvidence(
+      [{ uid: 'u1', name: 'pod-1', phase: 'Running', imageId: null, admittedDigest: null, incarnation: 'inc-1', forcedDeletion: false, podIP: '10.0.0.1' }],
+      0,
+    )
+    const broker = await startJsonServer(() => undefined)
+    const agent = fakeAcpAgent([
+      { id: 'mode', currentValue: 'default' },
+      { id: 'model', currentValue: 'haiku' },
+    ])
+    try {
+      const source = new HttpObservationSource({
+        pool,
+        productPool: pool,
+        bridgePort: 8765,
+        runtimeControlBaseUrl: runtimeControl.url,
+        brokerBaseUrl: broker.url,
+        harnessCatalogue: [],
+        connect: async () => ({ connectionId: 'c1', stream: agent.clientStream, close: async () => agent.close(), closed: Promise.resolve() }),
+      })
+      const reader = await source.reader(workstreamId)
+      assert.deepEqual(reader.session(), { ok: true, value: 'live' })
+      assert.deepEqual(reader.model(), { ok: true, value: 'haiku' })
+      // Not "unknown": the adapter's own option list says this model has no effort control, and
+      // `default` is what the product calls the harness's own behaviour.
+      assert.deepEqual(reader.effort(), { ok: true, value: 'default' })
+    } finally {
+      runtimeControl.server.close()
+      broker.server.close()
+    }
+  })
+})
