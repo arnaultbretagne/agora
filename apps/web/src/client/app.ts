@@ -875,7 +875,7 @@ function renderComposer(): void {
     <div class="composer">
       <textarea id="input" rows="1" placeholder="Écrivez votre demande…"></textarea>
       <div class="composer-row">
-        ${activeWorkstream() ? '' : selectorsCluster()}
+        ${needsIntent() ? selectorsCluster() : ''}
         <button class="send-btn" id="send" aria-label="Envoyer">${icons.send(18)}</button>
       </div>
     </div>`
@@ -1305,6 +1305,20 @@ async function togglePower(): Promise<void> {
   await authorIntent(state.intentView?.intent.power === 'on' ? 'off' : 'on')
 }
 
+/**
+ * True while the equipment still has to be composed: a conversation that does not exist yet, and —
+ * the case this was missing — one that exists with no Intent recorded against it.
+ *
+ * Those exist. Anything that creates a Workstream and then fails to author its Intent leaves one,
+ * and until this the UI offered no way back: the selectors rendered only for a conversation that
+ * did not exist yet, so an Intent-less one could not be equipped, and every message sent into it
+ * came back "Aucune intention enregistrée" with nothing on screen to act on. A dead end reached by
+ * pressing send.
+ */
+function needsIntent(): boolean {
+  return activeWorkstream() === undefined || state.intentView === null
+}
+
 async function doSend(): Promise<void> {
   const input = $main!.querySelector<HTMLTextAreaElement>('textarea')
   const text = (input?.value ?? '').trim()
@@ -1314,10 +1328,38 @@ async function doSend(): Promise<void> {
 
   try {
     if (!state.activeId) await startWorkstream(text)
+    else if (state.intentView === null) await equipAndHold(state.activeId, text)
     else await sendPrompt(state.activeId, text)
   } catch (error) {
     toast(errorText(error), true)
   }
+}
+
+/** Authors the composed Intent for an existing conversation that has none, and holds the message. */
+async function equipAndHold(workstreamId: string, text: string): Promise<void> {
+  const intent = composedIntent('on')
+  if ('missing' in intent) {
+    toast(`Intention incomplète : choisissez ${intent.missing.join(', ')}.`, true)
+    restoreComposerText(text)
+    return
+  }
+  state.pendingPrompt = text
+  syncComposerLock()
+  try {
+    await putIntent(workstreamId, intent)
+  } catch (error) {
+    // Holding a message behind an Intent that was never recorded is the dead end again, one step
+    // further in: the composer would lock on "waiting" for something that is not coming. Give the
+    // text back and let the operator see the selectors.
+    state.pendingPrompt = null
+    toast(errorText(error), true)
+    syncComposerLock()
+    restoreComposerText(text)
+    return
+  }
+  await refreshIntent(workstreamId)
+  await refreshSessions(workstreamId)
+  syncComposerLock()
 }
 
 /**
@@ -1347,9 +1389,14 @@ async function startWorkstream(text: string): Promise<void> {
   try {
     await putIntent(created.id, intent)
   } catch (error) {
-    // The Workstream exists and the message is still held: the operator can retry with `Appliquer`
-    // rather than losing what they typed.
+    // The Workstream exists but has no Intent. Give the text back rather than holding it behind
+    // something that is not coming: the composer keeps its selectors for an Intent-less
+    // conversation, so sending again authors it.
+    state.pendingPrompt = null
     toast(errorText(error), true)
+    await loadWorkstream(created.id)
+    restoreComposerText(text)
+    return
   }
   await loadWorkstream(created.id)
 }
