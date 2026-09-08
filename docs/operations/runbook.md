@@ -55,6 +55,30 @@ A comes back on ITS anchor, resumes the same native context id, and still does. 
 calls across two real Pods. It is the same story `scripts/s10-a-b-a.mjs` tells against stubs, with
 nothing stubbed.
 
+## Prove the operator surface
+
+The API answering is not the product working. Nothing else in the repository can see the difference:
+the bundle test proves `app.js` loads, the server tests prove `/v1/*` answers, and neither notices
+that pressing send does nothing.
+
+```sh
+npm i -D playwright && npx playwright install --with-deps chromium   # not a repo dependency
+kubectl -n agora-system port-forward svc/web 18080:8080 &
+UI_URL=http://127.0.0.1:18080 OWNER=<a principal> node scripts/verify-ui.mjs
+```
+
+A real browser loads the app, chooses equipment through the menus, sends a message, waits for the
+model's answer to appear **in the transcript on screen**, and powers the Workstream off from the
+topbar. Screenshots land in `./ui-shots`. The `x-forwarded-email` header it sets is exactly what
+oauth2-proxy sets after a successful login — pointing `UI_URL` at the public host instead correctly
+gets you the identity provider, which is its own thing worth checking:
+
+```sh
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://agora.bretagne.dev/
+# 302 https://id.bretagne.dev/authorize?... — and a forged x-forwarded-email gets the same 302,
+# never the API: the gate is what makes that header mean anything.
+```
+
 ## Publish a catalogue revision
 
 Editing `contracts/catalogue/*` and re-applying the overlay produces a new ConfigMap name (the
