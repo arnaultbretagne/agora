@@ -155,8 +155,25 @@ export class HttpK8sClient implements K8sClient {
     return generate()
   }
 
+  /**
+   * Every Kubernetes call, timed, with anything slow said out loud. The Pod inventory measured
+   * 175-796 ms from the control plane for what a shell does in 53 ms, and the variance said waiting
+   * rather than work — but "the apiserver was slow" and "this process was busy" are the same
+   * duration from outside, so the request itself has to be the thing that reports.
+   */
   private call(method: string, path: string, body?: unknown): Promise<K8sObject> {
-    return new Promise((resolve, reject) => {
+    const started = Date.now()
+    const done = <T>(value: T): T => {
+      const elapsed = Date.now() - started
+      if (elapsed >= 100) console.log(`k8s ${method} ${path.split('?')[0] ?? path} took ${String(elapsed)}ms`)
+      return value
+    }
+    return new Promise<K8sObject>((resolveRaw, rejectRaw) => {
+      const resolve = (value: K8sObject): void => resolveRaw(done(value))
+      const reject = (error: unknown): void => {
+        done(null)
+        rejectRaw(error)
+      }
       const data = body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined
       const req = request(
         {

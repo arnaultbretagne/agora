@@ -43,10 +43,24 @@ export interface ObligationStore {
   record(input: { podName: string; workstreamId: string; reason: string; deadline: Date; nodeName: string | null }): Promise<void>
 }
 
-export async function inventoryWorkstream(k8s: K8sClient, obligations: ObligationStore, workstreamId: string): Promise<WorkstreamInventory> {
+/**
+ * Timed in three parts, because this one call is the single most expensive thing a prompt does.
+ *
+ * Measured from the control plane: 175-796 ms for what is, from a shell, a 53 ms request — and the
+ * variance (×4.5 between two consecutive turns, same Pod, seconds apart) says waiting rather than
+ * work. There are at least two Kubernetes round trips in here, not one: the Pod list, and then a
+ * NODE read per Pod for its readiness. Which of them carries the time is what these spans answer.
+ */
+export async function inventoryWorkstream(
+  k8s: K8sClient,
+  obligations: ObligationStore,
+  workstreamId: string,
+  onTiming?: (message: string) => void,
+): Promise<WorkstreamInventory> {
   let pods: readonly K8sObject[]
   let resourceVersion: string | null = null
   let complete = true
+  const listStarted = Date.now()
   try {
     const list = await k8s.listPods(`${LABEL_WORKSTREAM}=${workstreamId}`)
     pods = list.items
@@ -55,11 +69,19 @@ export async function inventoryWorkstream(k8s: K8sClient, obligations: Obligatio
     complete = false
     pods = []
   }
+  const listMs = Date.now() - listStarted
+  const entriesStarted = Date.now()
   const entries = await Promise.all(pods.map((pod) => toPodEntry(pod, k8s)))
+  const entriesMs = Date.now() - entriesStarted
+  const obligationsStarted = Date.now()
+  const owed = complete ? await obligations.obligationsFor(workstreamId) : []
+  onTiming?.(
+    `inventory ${workstreamId} in ${String(Date.now() - listStarted)}ms (list-pods=${String(listMs)}ms node-reads=${String(entriesMs)}ms for ${String(pods.length)} pod(s) obligations=${String(Date.now() - obligationsStarted)}ms)`,
+  )
   return {
     workstreamId,
     pods: entries,
-    obligations: complete ? await obligations.obligationsFor(workstreamId) : [],
+    obligations: owed,
     observedAt: new Date().toISOString(),
     resourceVersion,
     complete,

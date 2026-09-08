@@ -53,7 +53,7 @@ export function createOwnerApi(options: OwnerApiOptions): Server {
       const parts = url.pathname.split('/').filter((p) => p.length > 0)
 
       if (parts[0] === 'v1' && parts[1] === 'workstreams' && parts.length === 3 && req.method === 'GET') {
-        const inventory = await inventoryWorkstream(options.k8s, options.obligations, parts[2]!)
+        const inventory = await inventoryWorkstream(options.k8s, options.obligations, parts[2]!, (message) => console.log(message))
         return send(res, 200, inventory)
       }
 
