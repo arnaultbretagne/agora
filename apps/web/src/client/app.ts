@@ -987,9 +987,27 @@ function renderMain(): void {
  *  actions                                                            *
  * ------------------------------------------------------------------ */
 
+/**
+ * Which conversation is open, across a reload. The client already persists the theme, the sidebar
+ * and the principal this way; not persisting this one meant every refresh landed on an empty
+ * "Nouvelle conversation" and the transcript looked lost — it was not, the client had simply
+ * forgotten where it was.
+ */
+const OPEN_KEY = 'agora.open'
+
+function rememberOpen(workstreamId: string | null): void {
+  try {
+    if (workstreamId === null) localStorage.removeItem(OPEN_KEY)
+    else localStorage.setItem(OPEN_KEY, workstreamId)
+  } catch {
+    // A browser that refuses storage still works; it just forgets where it was.
+  }
+}
+
 function newChat(): void {
   unsubscribe()
   state.activeId = null
+  rememberOpen(null)
   state.openMenu = null
   state.items = []
   state.turns = []
@@ -1023,6 +1041,7 @@ async function selectWorkstream(workstreamId: string): Promise<void> {
   if (!workstreamId) return
   unsubscribe()
   state.activeId = workstreamId
+  rememberOpen(workstreamId)
   state.openMenu = null
   state.items = []
   state.turns = []
@@ -1405,6 +1424,7 @@ async function startWorkstream(text: string): Promise<void> {
   state.intentView = null
   state.sessionsView = null
   state.pendingPrompt = text
+  rememberOpen(created.id)
   renderSidebar()
   renderMain()
   try {
@@ -1560,6 +1580,16 @@ async function reload(): Promise<void> {
   }
   renderSidebar()
   renderMain()
+  // Back where the operator was. Only if it still exists: a Workstream deleted from another tab
+  // must not leave this one pointed at nothing.
+  let remembered: string | null = null
+  try {
+    remembered = localStorage.getItem(OPEN_KEY)
+  } catch {
+    remembered = null
+  }
+  if (remembered !== null && state.workstreams.has(remembered)) await selectWorkstream(remembered)
+  else if (remembered !== null) rememberOpen(null)
 }
 
 async function init(): Promise<void> {
