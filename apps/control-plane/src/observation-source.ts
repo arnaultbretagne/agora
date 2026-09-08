@@ -172,16 +172,37 @@ export class HttpObservationSource implements ObservationSource {
 
     const incarnation = await currentIncarnation(this.options.pool, workstreamId)
     span('incarnation')
+    // Each of the five timed on its own AND the wall time of the group: they run in parallel, so the
+    // sum is not the cost — but which one is slowest is exactly the question, and one span for all
+    // five could not answer it. Measured live, the group took 184-358 ms while the same reads timed
+    // individually came to 90 ms, and the difference had no name.
+    const parallelStarted = Date.now()
+    const each: string[] = []
+    const timed = async <T>(what: string, work: Promise<T>): Promise<T> => {
+      const from = Date.now()
+      try {
+        return await work
+      } finally {
+        each.push(`${what}=${String(Date.now() - from)}ms`)
+      }
+    }
     const [k8sInventory, brokerInventory, session, openingWindow, anchorEvidence] = await Promise.all([
-      this.fetchK8sInventory(workstreamId),
-      incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined),
-      currentSession(this.options.productPool, workstreamId),
-      currentOpeningWindow(this.options.productPool, workstreamId),
-      this.fetchAnchorEvidence(workstreamId),
+      timed('pods', this.fetchK8sInventory(workstreamId)),
+      timed('broker', incarnation !== undefined ? this.fetchBrokerInventory(incarnation) : Promise.resolve(undefined)),
+      timed('session', currentSession(this.options.productPool, workstreamId)),
+      timed('window', currentOpeningWindow(this.options.productPool, workstreamId)),
+      timed('anchor', this.fetchAnchorEvidence(workstreamId)),
     ])
-    // One span for the five: they run in parallel, so charging them separately would invent time
-    // that was never spent in sequence.
-    span('pods+broker+session+window+anchor')
+    span('parallel-wall')
+    // The product pool's own state at that instant. If the five reads take longer together than
+    // apart, waiting for a client is the first thing to rule out — three of them take one each, and
+    // the anchor read takes four in sequence.
+    const productPool = this.options.productPool as unknown as { totalCount?: number; idleCount?: number; waitingCount?: number }
+    spans.push(
+      `[${each.join(' ')}]`,
+      `pool=${String(productPool.totalCount ?? -1)}/${String(productPool.idleCount ?? -1)}idle/${String(productPool.waitingCount ?? -1)}waiting`,
+    )
+    void parallelStarted
 
     const read = (_field: ObservationFieldName): Acquired<never> => UNAVAILABLE
     const digestFor = harnessDigestForCatalogue(this.options.harnessCatalogue)
@@ -392,6 +413,10 @@ export class HttpObservationSource implements ObservationSource {
   private async fetchAnchorEvidence(workstreamId: string): Promise<AnchorEvidence | null> {
     const harnesses = this.options.restoreHarnesses
     if (harnesses === undefined || harnesses.size === 0) return null
+    // Four sequential round trips, each taking its own client from the pool: the Intent, the Anchor,
+    // its Save, and the exclusion check. Timed as a whole by its caller; the breakdown is here
+    // because "the anchor read" being slow and "the pool being busy" look identical from outside.
+    const anchorStarted = Date.now()
     const intent = await loadLatestIntentEvent(this.options.productPool, workstreamId)
     const harnessId = (intent?.intent as { harness?: unknown } | undefined)?.harness
     if (typeof harnessId !== 'string') return null
@@ -401,7 +426,9 @@ export class HttpObservationSource implements ObservationSource {
     if (anchor === null) return { save: null, harness, invalidated: false }
     const save = await getSave(this.options.productPool, anchor.saveId)
     if (save === null) return { save: null, harness, invalidated: false }
-    return { save, harness, invalidated: await isExcluded(this.options.productPool, save.id, save.driverRevision) }
+    const invalidated = await isExcluded(this.options.productPool, save.id, save.driverRevision)
+    this.options.logger?.(`  anchor evidence for ${workstreamId}: 4 sequential reads in ${String(Date.now() - anchorStarted)}ms`)
+    return { save, harness, invalidated }
   }
 
   private async fetchK8sInventory(workstreamId: string): Promise<WorkstreamInventory | undefined> {
