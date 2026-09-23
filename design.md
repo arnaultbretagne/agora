@@ -33,7 +33,7 @@ l'historique indépendamment de la durée de vie des processus et de l'infrastru
 | Historique durable | Retrouver les demandes, réponses, outils et erreurs après fermeture du navigateur ou redémarrage d'Agora. |
 | Exécution à la demande | Ouvrir une exécution avec un harness et une configuration choisis parmi les options autorisées. |
 | Interaction | Envoyer un message, suivre les sorties, répondre aux permissions ACP et demander l'annulation d'un tour. |
-| Arrêt | Fermer l'admission de nouveaux messages et demander l'arrêt de l'exécution. Montrer si le nettoyage reste en attente. |
+| Arrêt | Fermer l'admission de nouveaux messages et demander l'arrêt de l'exécution. Retirer le sandbox de l'UI dès que la suppression est acceptée. |
 | Reconnexion | Retrouver une exécution encore vivante sans créer un second contexte ni renvoyer le dernier message. |
 | Reprise après perte | Expliquer ce qui est récupérable et permettre une continuation explicite. |
 | Choix du harness | Utiliser une interface commune, sans prétendre que tous les harnesses ont les mêmes capacités de reprise ou de configuration. |
@@ -59,6 +59,9 @@ possède les credentials et applique les restrictions de leur utilisation.
 
 Agora configure ces intégrations avec des valeurs autorisées. Il ne réimplémente
 ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance globale.
+
+L'[interface Agora ↔ Agent Sandbox](agent-sandbox.md) précise les opérations et les
+délais retenus : bail de 10 minutes, renouvellement chaque minute, tour limité à 1 heure.
 
 ## Historique et exécution
 
