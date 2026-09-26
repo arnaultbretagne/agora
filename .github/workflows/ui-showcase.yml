@@ -1,0 +1,93 @@
+# Banc d'essai de l'interface (showcase/) : construit, vérifie et publie l'image servie sur
+# agora-test.bretagne.dev. Publiée par digest, comme les images du moteur : le déploiement
+# (infra-k8s, apps/agora-test) épingle le digest, jamais un tag.
+name: ui-showcase
+
+on:
+  push:
+    branches: [spike/ui-showcase]
+    paths: [showcase/**, .github/workflows/ui-showcase.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/agora-ui-showcase
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Typecheck and build
+        working-directory: showcase
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: showcase
+          file: showcase/image/Dockerfile
+          load: true
+          tags: agora-ui-showcase:test
+          cache-from: type=gha,scope=agora-ui-showcase
+          cache-to: type=gha,mode=max,scope=agora-ui-showcase
+
+      # Le conteneur doit démarrer comme dans le cluster : non-root, racine en lecture seule.
+      - name: Serve it read-only and probe it
+        run: |
+          docker run -d --name showcase --read-only --tmpfs /tmp -p 8080:8080 \
+            --user 101:101 --cap-drop ALL agora-ui-showcase:test
+          for i in $(seq 1 20); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
+          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsSI http://localhost:8080/ | grep -qi 'content-security-policy'
+          curl -fsS http://localhost:8080/workstreams/inconnu | grep -q '<div id="root">'
+          docker logs showcase
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: showcase
+          file: showcase/image/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:spike
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=agora-ui-showcase
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the digest
+        run: |
+          {
+            echo '### agora-ui-showcase'
+            echo ''
+            echo '```'
+            echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
