@@ -33,6 +33,8 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+          # La CSP servie n'autorise que des polices 'self' : aucune ne doit être inlinée.
+          ! grep -l "data:font" dist/assets/*.css
 
       - uses: docker/setup-buildx-action@v3
 

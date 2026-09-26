@@ -6,4 +6,6 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': path.resolve(__dirname, './src') } },
+  // Les polices restent des fichiers : la CSP servie (font-src 'self') refuse les data: URI.
+  build: { assetsInlineLimit: (file) => (file.endsWith('.woff2') ? false : undefined) },
 })
