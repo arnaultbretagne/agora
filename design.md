@@ -63,6 +63,9 @@ ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance 
 L'[interface Agora ↔ Agent Sandbox](agent-sandbox.md) précise les opérations et les
 délais retenus : bail de 10 minutes, renouvellement chaque minute, tour limité à 1 heure.
 
+L'[interface Agora ↔ assistant-ui](assistant-ui.md) précise le fil, les commandes et
+les composants retenus : projection ACP en base, un flux unique repris par position.
+
 ## Historique et exécution
 
 Proposition : conserver deux notions produit simples.
