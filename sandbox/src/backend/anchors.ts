@@ -1,6 +1,6 @@
 // Where Agora keeps anchors (sandbox-backend.md, "Qui fait quoi ?"): durable and on Agora's side —
-// a volume of the back-end in the lab, Agora's database later. One payload file and one metadata
-// file per anchor; the payload is stored byte-exact and never read by the back-end.
+// a volume of the back-end in the lab, Agora's database later. The bundle the Pod pushed is kept
+// byte-exact, next to what Agora knows about it.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -10,9 +10,11 @@ export interface AnchorMeta {
   readonly harness: string
   readonly pool: string
   readonly format: string
-  readonly sessionId: string
-  readonly checksum: string
+  /** The session noted on the claim when the Pod ended: the one a restore resumes. */
+  readonly sessionId: string | null
+  readonly files: readonly { readonly path: string; readonly byteLength: number }[]
   readonly byteLength: number
+  readonly stable: boolean
   readonly sandbox: string
   readonly reason: string
   readonly createdAt: string
@@ -27,13 +29,13 @@ export class AnchorStore {
     this.dir = dir
   }
 
-  async save(meta: Omit<AnchorMeta, 'id' | 'createdAt'>, bytes: Uint8Array): Promise<AnchorMeta> {
+  async save(meta: Omit<AnchorMeta, 'id' | 'createdAt'>, bundle: Uint8Array): Promise<AnchorMeta> {
     await mkdir(this.dir, { recursive: true })
     const now = new Date()
     const stamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 14)
     const full: AnchorMeta = { ...meta, id: `anc-${stamp}-${randomBytes(3).toString('hex')}`, createdAt: now.toISOString() }
-    await writeFile(join(this.dir, `${full.id}.bin.partial`), bytes)
-    await rename(join(this.dir, `${full.id}.bin.partial`), join(this.dir, `${full.id}.bin`))
+    await writeFile(join(this.dir, `${full.id}.bundle.partial`), bundle)
+    await rename(join(this.dir, `${full.id}.bundle.partial`), join(this.dir, `${full.id}.bundle`))
     await writeFile(join(this.dir, `${full.id}.json`), JSON.stringify(full, null, 2))
     return full
   }
@@ -47,7 +49,9 @@ export class AnchorStore {
     }
     const metas: AnchorMeta[] = []
     for (const name of names.filter((entry) => entry.endsWith('.json'))) {
-      metas.push(JSON.parse(await readFile(join(this.dir, name), 'utf8')) as AnchorMeta)
+      const meta = JSON.parse(await readFile(join(this.dir, name), 'utf8')) as AnchorMeta
+      // Anchors pulled by the first version of the lab (one transcript, no file list) are not bundles.
+      if (Array.isArray(meta.files)) metas.push(meta)
     }
     return metas.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
@@ -55,16 +59,17 @@ export class AnchorStore {
   async meta(id: string): Promise<AnchorMeta | null> {
     if (!ID.test(id)) return null
     try {
-      return JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as AnchorMeta
+      const meta = JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as AnchorMeta
+      return Array.isArray(meta.files) ? meta : null
     } catch {
       return null
     }
   }
 
-  async bytes(id: string): Promise<Uint8Array | null> {
+  async bundle(id: string): Promise<Uint8Array | null> {
     if (!ID.test(id)) return null
     try {
-      return new Uint8Array(await readFile(join(this.dir, `${id}.bin`)))
+      return new Uint8Array(await readFile(join(this.dir, `${id}.bundle`)))
     } catch {
       return null
     }

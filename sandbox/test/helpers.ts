@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { startBridge, type Bridge } from '../src/bridge/server.ts'
-import { mockLayout } from '../src/shared/transcript.ts'
+import { nativeDir } from '../src/shared/anchor.ts'
 
 export const MOCK_AGENT = join(import.meta.dirname, '..', 'src', 'mock-agent', 'main.ts')
 
@@ -19,7 +19,8 @@ export interface LabBridge {
   readonly url: string
 }
 
-export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', home = mkdtempSync(join(tmpdir(), 'bridge-'))): Promise<LabBridge> {
+export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', options: { home?: string; ringLines?: number } = {}): Promise<LabBridge> {
+  const home = options.home ?? mkdtempSync(join(tmpdir(), 'bridge-'))
   const workspace = join(home, 'work')
   const bridge = await startBridge({
     port: 0,
@@ -28,7 +29,10 @@ export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', hom
     workspace,
     podName,
     publicKey,
-    layout: mockLayout(home, workspace),
+    harness: 'mock',
+    nativeDir: nativeDir('mock', home, workspace),
+    ...(options.ringLines === undefined ? {} : { ringLines: options.ringLines }),
+    adapterStopMs: 1000,
     log: () => {},
   })
   return { bridge, home, workspace, url: `127.0.0.1:${String(bridge.port())}` }

@@ -1,5 +1,5 @@
 // The back-end contract (sandbox-backend.md), against real bridges running the mock agent and an
-// in-memory Kubernetes API.
+// in-memory Kubernetes API whose controller destroys claims at their deadline.
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import { AnchorStore } from '../src/backend/anchors.ts'
-import { createApi } from '../src/backend/http.ts'
-import { ANNOTATION, SandboxManager, type Limits, type ManagerEvent } from '../src/backend/manager.ts'
-import { FakeKube } from './fake-kube.ts'
+import { createAnchorReceiver, createApi } from '../src/backend/http.ts'
+import { ANNOTATION, SandboxManager, type Limits } from '../src/backend/manager.ts'
+import { FakeKube, NAMESPACE } from './fake-kube.ts'
 import { Collector, keys } from './helpers.ts'
 
 const { privateKey, publicKey } = keys()
@@ -23,39 +23,40 @@ interface Lab {
   readonly manager: SandboxManager
   readonly anchors: AnchorStore
   readonly base: string
-  readonly events: ManagerEvent[]
+  readonly receiver: string
 }
 
-async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?: Partial<Limits>; maxActive?: number } = {}): Promise<Lab> {
+async function listen(server: ReturnType<typeof createApi>): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  cleanups.push(async () => {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  return `127.0.0.1:${String((server.address() as AddressInfo).port)}`
+}
+
+async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?: Partial<Limits>; maxActive?: number; renewSeconds?: number } = {}): Promise<Lab> {
   const kube = options.kube ?? new FakeKube(publicKey)
+  if (options.kube === undefined) cleanups.push(() => kube.closeAll())
   const anchors = options.anchors ?? new AnchorStore(mkdtempSync(join(tmpdir(), 'anchors-')))
   const manager = new SandboxManager({
     kube,
     anchors,
     signingKey: privateKey,
-    defaults: { leaseSeconds: 600, idleSeconds: 3600, turnCapSeconds: 3600, ...options.defaults },
-    renewSeconds: 60,
+    defaults: { leaseSeconds: 30, turnCapSeconds: 3600, ...options.defaults },
+    renewSeconds: options.renewSeconds ?? 60,
     maxActive: options.maxActive ?? 4,
-    startupTimeoutSeconds: 300,
-    stopTurnWaitMs: 5000,
     bridgePort: 8080,
     bridgeAddress: kube.address,
     tickMs: 200,
     log: () => {},
   })
-  const events: ManagerEvent[] = []
-  manager.subscribe((event) => events.push(event))
   await manager.start()
-  const server = createApi({ manager, anchors, lab: true, onRestart: () => {} })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const base = `127.0.0.1:${String((server.address() as AddressInfo).port)}`
-  cleanups.push(async () => {
-    await manager.stop()
-    server.closeAllConnections()
-    await new Promise((resolve) => server.close(resolve))
-  })
-  if (options.kube === undefined) cleanups.push(() => kube.closeAll())
-  return { kube, manager, anchors, base, events }
+  cleanups.push(() => manager.stop())
+  const base = await listen(createApi({ manager, anchors, lab: true, onRestart: () => {} }))
+  const receiver = await listen(createAnchorReceiver({ manager, namespace: NAMESPACE, verify: (token) => kube.reviewToken(token) }))
+  kube.anchorUrl = `http://${receiver}/anchors`
+  return { kube, manager, anchors, base, receiver }
 }
 
 async function post(target: Lab, path: string, body?: unknown): Promise<Record<string, unknown>> {
@@ -81,6 +82,10 @@ function view(target: Lab, name: string) {
   return target.manager.snapshot().sandboxes.find((sandbox) => sandbox.name === name)
 }
 
+function ending(target: Lab, name: string, timeoutMs = 15_000) {
+  return until(() => target.manager.snapshot().history.find((entry) => entry.name === name), timeoutMs)
+}
+
 async function ready(target: Lab, pool = 'mock-test', extra: Record<string, unknown> = {}): Promise<string> {
   const created = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool, ...extra })
   assert.equal(created.accepted, true, JSON.stringify(created))
@@ -99,16 +104,20 @@ async function consumer(target: Lab, name: string, after?: number): Promise<Coll
 async function session(client: Collector): Promise<string> {
   const attached = await client.until(() => client.messages.find((m) => (m.event as { type?: string } | undefined)?.type === 'attached'))
   const cwd = (attached.event as { sandbox: { bridge: { workspace: string } } }).sandbox.bridge.workspace
-  client.send({ jsonrpc: '2.0', id: 1, method: 'session/new', params: { cwd, mcpServers: [] } })
-  return ((await client.response(1)).result as { sessionId: string }).sessionId
+  client.send({ jsonrpc: '2.0', id: 'new', method: 'session/new', params: { cwd, mcpServers: [] } })
+  return ((await client.response('new')).result as { sessionId: string }).sessionId
 }
 
 function prompt(client: Collector, id: number, sessionId: string, text: string): void {
   client.send({ jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text }] } })
 }
 
+function deadlinesOf(target: Lab, name: string): { shutdownTime: string; at: number }[] {
+  return target.kube.deadlines.filter((entry) => entry.name === name)
+}
+
 describe('back-end', () => {
-  it('creates idempotently, refuses what the catalogue and the quota do not allow', async () => {
+  it('creates idempotently, refuses what the catalogue, the bounds and the quota do not allow', async () => {
     const target = await lab({ maxActive: 2 })
     const requestId = crypto.randomUUID()
     const [first, second] = await Promise.all([
@@ -117,38 +126,25 @@ describe('back-end', () => {
     ])
     assert.equal(first!.name, second!.name)
     assert.equal(target.kube.claims.size, 1)
-
-    const outside = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'pool-inexistant' })
-    assert.equal(outside.accepted, false)
-    assert.match(outside.reason as string, /hors catalogue/)
-
-    const bounds = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'mock-test', limits: { idleSeconds: 5 } })
-    assert.match(bounds.reason as string, /hors bornes/)
-
+    assert.match((await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'pool-inexistant' })).reason as string, /hors catalogue/)
+    assert.match((await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'mock-test', limits: { turnCapSeconds: 5 } })).reason as string, /hors bornes/)
     await ready(target)
-    const over = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'mock-test' })
-    assert.equal(over.status, 429)
+    assert.equal((await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'mock-test' })).status, 429)
   })
 
-  it('answers initialize locally, records the session and follows a turn on the claim', async () => {
+  it('answers initialize locally, records the session, and follows a turn on the claim', async () => {
     const target = await lab()
     const name = await ready(target)
     const client = await consumer(target, name)
     client.send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: 1 } })
-    const init = await client.response(0)
-    assert.equal((init.result as { agentInfo: { name: string } }).agentInfo.name, 'agora-mock-agent')
-
+    assert.equal(((await client.response(0)).result as { agentInfo: { name: string } }).agentInfo.name, 'agora-mock-agent')
     const sessionId = await session(client)
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.sessionId] === sessionId)
 
     prompt(client, 2, sessionId, '/sleep 1')
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
-    assert.equal(view(target, name)?.state, 'en tour')
-
     prompt(client, 3, sessionId, 'trop tôt')
-    const refused = await client.response(3)
-    assert.match(String((refused.error as { message: string }).message), /un tour est déjà en cours/)
-
+    assert.match(String(((await client.response(3)).error as { message: string }).message), /un tour est déjà en cours/)
     assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn] === undefined)
     assert.equal(view(target, name)?.state, 'prêt')
@@ -167,45 +163,82 @@ describe('back-end', () => {
     assert.equal(view(target, name)?.turn, null)
   })
 
-  it('cancels a turn, and stopping during one cancels, captures, then deletes', async () => {
-    const target = await lab()
+  it('re-arms only during a turn, then grants one lease after its end and nothing more', async () => {
+    const target = await lab({ renewSeconds: 1 })
+    const name = await ready(target)
+    const client = await consumer(target, name)
+    const sessionId = await session(client)
+    const before = deadlinesOf(target, name).length
+    prompt(client, 2, sessionId, '/sleep 3')
+    await client.response(2)
+    const during = deadlinesOf(target, name).slice(before)
+    // Admission, at least one renewal, and the grant at the end of the turn.
+    assert.ok(during.length >= 3, JSON.stringify(during))
+    const granted = during.at(-1)!
+    assert.ok(Math.abs(Date.parse(granted.shutdownTime) - (granted.at + 30_000)) < 1500)
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    assert.equal(deadlinesOf(target, name).length, before + during.length, 'renouvelé hors tour')
+  })
+
+  it('caps a turn at its maximum: the infrastructure destroys it, the Pod pushes its anchor', async () => {
+    const target = await lab({ defaults: { turnCapSeconds: 2 }, renewSeconds: 1 })
+    const name = await ready(target)
+    const client = await consumer(target, name)
+    const sessionId = await session(client)
+    prompt(client, 2, sessionId, '/sleep 60')
+    const end = await ending(target, name)
+    assert.match(end.reason, /tour en cours à l’échéance/)
+    assert.notEqual(end.anchor, null, String(end.anchorError))
+    const bundle = new TextDecoder().decode((await target.anchors.bundle(end.anchor!.id))!)
+    assert.match(bundle, /agora-anchor\/1/)
+  })
+
+  it('lets the lease run out after a turn: destroyed by the infrastructure, anchor received', async () => {
+    const target = await lab({ defaults: { leaseSeconds: 4 } })
     const name = await ready(target)
     const client = await consumer(target, name)
     const sessionId = await session(client)
     prompt(client, 2, sessionId, 'mirabelle')
     await client.response(2)
-    prompt(client, 3, sessionId, '/sleep 30')
-    await until(() => view(target, name)?.state === 'en tour')
-    client.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } })
-    assert.deepEqual((await client.response(3)).result, { stopReason: 'cancelled' })
+    const end = await ending(target, name)
+    assert.equal(end.reason, 'échéance après le dernier tour')
+    assert.equal(end.anchor?.sessionId, sessionId)
+    assert.deepEqual(end.anchor?.files.map((file) => file.path), [`${sessionId}.jsonl`])
+  })
 
-    prompt(client, 4, sessionId, '/sleep 30')
+  it('stops by no longer renewing, cancels a turn in flight, and never deletes', async () => {
+    const target = await lab({ defaults: { leaseSeconds: 4 } })
+    const name = await ready(target)
+    const client = await consumer(target, name)
+    const sessionId = await session(client)
+    prompt(client, 2, sessionId, 'avant')
+    await client.response(2)
+    prompt(client, 3, sessionId, '/sleep 60')
     await until(() => view(target, name)?.state === 'en tour')
+    const patches = deadlinesOf(target, name).length
     const stopped = await post(target, `/api/sandboxes/${name}/stop`)
     assert.equal(stopped.accepted, true)
-    assert.equal(stopped.reason, 'arrêt demandé')
-    const anchor = stopped.anchor as { id: string; sessionId: string }
-    assert.equal(anchor.sessionId, sessionId)
-    assert.equal(view(target, name), undefined)
-    const bytes = new TextDecoder().decode((await target.anchors.bytes(anchor.id))!)
-    assert.match(bytes, /mirabelle/)
-    await until(() => !target.kube.claims.has(name))
+    assert.deepEqual((await client.response(3)).result, { stopReason: 'cancelled' })
+    assert.equal(view(target, name)?.state, 'arrêté')
+    assert.match((await post(target, `/api/sandboxes/${name}/stop`)).reason as string, /déjà demandé/)
+    const end = await ending(target, name)
+    assert.equal(deadlinesOf(target, name).length, patches, 'renouvelé après l’arrêt')
+    assert.equal(end.reason, 'arrêt demandé')
+    assert.match(new TextDecoder().decode((await target.anchors.bundle(end.anchor!.id))!), /YXZhbnQ|avant/)
   })
 
   it('restores an anchor into a new sandbox that remembers', async () => {
-    const target = await lab()
+    const target = await lab({ defaults: { leaseSeconds: 4 } })
     const source = await ready(target)
     const client = await consumer(target, source)
     const sessionId = await session(client)
     prompt(client, 2, sessionId, 'quetsche')
     await client.response(2)
-    const stopped = await post(target, `/api/sandboxes/${source}/stop`)
-    const anchorId = (stopped.anchor as { id: string }).id
+    await post(target, `/api/sandboxes/${source}/stop`)
+    const anchorId = (await ending(target, source)).anchor!.id
+    assert.match((await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'claude-test', anchorId })).reason as string, /harness/)
 
-    const mismatched = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'claude-test', anchorId })
-    assert.match(mismatched.reason as string, /harness/)
-
-    const restored = await ready(target, 'mock-test', { anchorId })
+    const restored = await ready(target, 'mock-test', { anchorId, limits: { leaseSeconds: 60 } })
     await until(() => view(target, restored)?.restored)
     assert.equal(view(target, restored)?.sessionId, sessionId)
     const back = await consumer(target, restored)
@@ -223,7 +256,6 @@ describe('back-end', () => {
     const permission = await client.until(() => client.acp().find((message) => message.method === 'session/request_permission'))
     const seen = Math.max(...client.messages.filter((m) => typeof m.seq === 'number').map((m) => m.seq as number))
     client.close()
-
     const back = await consumer(target, name, seen - 1)
     const replayed = await back.until(() => back.acp().find((message) => message.method === 'session/request_permission'))
     assert.equal(replayed.id, permission.id)
@@ -254,59 +286,53 @@ describe('back-end', () => {
     prompt(client, 2, sessionId, '/sleep 2')
     await until(() => kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
     await first.manager.stop()
-
     const second = await lab({ kube, anchors })
     await until(() => view(second, name)?.state === 'en tour')
     await until(() => view(second, name)?.state === 'prêt', 8000)
     assert.match(String(view(second, name)?.lastTurn?.outcome), /end_turn/)
-    assert.equal(kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn], undefined)
   })
 
-  it('deletes after inactivity or a too-long turn, anchor first', async () => {
-    const target = await lab({ defaults: { idleSeconds: 1, turnCapSeconds: 2 } })
-    const idle = await ready(target)
-    const client = await consumer(target, idle)
-    const sessionId = await session(client)
-    prompt(client, 2, sessionId, 'une ligne')
-    await client.response(2)
-    const removal = await until(() => target.manager.snapshot().history.find((entry) => entry.name === idle), 8000)
-    assert.equal(removal.reason, 'inactivité')
-    assert.notEqual(removal.anchor, null)
-
-    const long = await ready(target)
-    const other = await consumer(target, long)
-    const otherSession = await session(other)
-    prompt(other, 2, otherSession, '/sleep 60')
-    const capped = await until(() => target.manager.snapshot().history.find((entry) => entry.name === long), 10_000)
-    assert.equal(capped.reason, 'tour trop long')
-    assert.notEqual(capped.anchor, null)
-  })
-
-  it('declares a sandbox lost when its adapter dies or its Pod is replaced', async () => {
-    const target = await lab()
-    const crashed = await ready(target)
-    const client = await consumer(target, crashed)
+  it('stops renewing a sandbox whose adapter died; its anchor still leaves with the Pod', async () => {
+    const target = await lab({ defaults: { leaseSeconds: 4 } })
+    const name = await ready(target)
+    const client = await consumer(target, name)
     const sessionId = await session(client)
     prompt(client, 2, sessionId, 'avant la chute')
     await client.response(2)
     prompt(client, 3, sessionId, '/crash')
-    const lost = await until(() => target.manager.snapshot().history.find((entry) => entry.name === crashed))
-    assert.equal(lost.reason, 'adaptateur perdu')
-    assert.notEqual(lost.anchor, null, String(lost.anchorError))
-
-    const replaced = await ready(target)
-    assert.equal((await post(target, `/api/lab/sandboxes/${replaced}/delete-pod`)).accepted, true)
-    const gone = await until(() => target.manager.snapshot().history.find((entry) => entry.name === replaced), 10_000)
-    assert.equal(gone.reason, 'processus remplacé')
+    await until(() => view(target, name)?.state === 'perdu')
+    const end = await ending(target, name)
+    assert.match(end.reason, /perdu/)
+    assert.notEqual(end.anchor, null, String(end.anchorError))
   })
 
-  it('forgets a sandbox the infrastructure deleted, without an anchor', async () => {
+  it('declares a sandbox lost when its Pod was replaced', async () => {
     const target = await lab()
     const name = await ready(target)
-    target.kube.expire(name)
-    const removal = await until(() => target.manager.snapshot().history.find((entry) => entry.name === name))
-    assert.equal(removal.anchor, null)
-    assert.match(removal.reason, /hors du back-end/)
+    await target.kube.replacePod(view(target, name)!.pod!)
+    await until(() => view(target, name)?.state === 'perdu')
+    assert.match(String(view(target, name)?.reason), /processus remplacé/)
+  })
+
+  it('refuses an anchor pushed without a valid projected token', async () => {
+    const target = await lab()
+    const body = JSON.stringify({ format: 'agora-anchor/1', harness: 'mock', files: [], stable: true })
+    for (const headers of [{}, { authorization: 'Bearer faux' }] as Record<string, string>[]) {
+      const response = await fetch(`http://${target.receiver}/anchors`, { method: 'POST', body, headers })
+      assert.equal(response.status, 401)
+    }
+    assert.equal((await fetch(`http://${target.receiver}/anchors`, { method: 'POST', body, headers: { authorization: 'Bearer pod:inconnu' } })).status, 404)
+    assert.deepEqual(await target.anchors.list(), [])
+  })
+
+  it('forgets a claim that disappears without any push', async () => {
+    const target = await lab({ defaults: { leaseSeconds: 1 } })
+    const created = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'pool-inexistant-ailleurs' })
+    assert.equal(created.accepted, false)
+    const claim = await post(target, '/api/sandboxes', { requestId: crypto.randomUUID(), pool: 'mock-test' })
+    const end = await ending(target, claim.name as string)
+    assert.equal(end.anchor, null)
+    assert.match(String(end.anchorError), /aucun fichier natif|aucun anchor/)
   })
 
   it('probes the bridge with bad tokens', async () => {

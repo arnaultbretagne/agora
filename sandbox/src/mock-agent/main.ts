@@ -6,9 +6,9 @@
 // the ACP 1.5.0 schema (@agentclientprotocol/sdk 1.5.0).
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { mockLayout } from '../shared/transcript.ts'
+import { nativeDir } from '../shared/anchor.ts'
 
 type Id = string | number
 interface Message {
@@ -63,7 +63,7 @@ function request(method: string, params: Record<string, unknown>): Promise<Messa
 }
 
 function transcriptPath(session: Session): string {
-  return mockLayout(home, session.cwd).pathFor(session.id)
+  return join(nativeDir('mock', home, session.cwd), `${session.id}.jsonl`)
 }
 
 function remember(session: Session, role: 'user' | 'agent', text: string): void {

@@ -1,11 +1,12 @@
 // The bridge (sandbox-image.md). It spawns the ACP adapter once, initializes it once, then relays
 // its stdio to ONE WebSocket client, numbering every line the adapter writes. It never interprets
-// ACP: lines are relayed and buffered byte-for-byte. Two HTTP routes capture and restore the anchor.
+// ACP: lines are relayed and buffered byte-for-byte. When the Pod ends (SIGTERM), it stops the
+// adapter and hands back the native files en bloc for the entrypoint to push to Agora.
 //
 // Carried over from the previous implementation's packages/harness-bridge (arnaultbretagne/agora
 // main): one client at a time, newest wins — every ACP connection numbers its requests from 0, so two
-// attached clients steal each other's responses; and `initialize` done by whoever owns the process,
-// because codex-acp refuses a second one ("Already initialized").
+// attached clients steal each other's responses; `initialize` done by whoever owns the process,
+// because codex-acp refuses a second one ("Already initialized"); the adapter outlives any socket.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -13,7 +14,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { bearerOf, verifyBridgeToken } from '../shared/token.ts'
-import { AnchorRefused, captureTranscript, MAX_ANCHOR_BYTES, restoreTranscript, type TranscriptLayout } from '../shared/transcript.ts'
+import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from '../shared/anchor.ts'
 
 export interface BridgeOptions {
   readonly port: number
@@ -22,16 +23,21 @@ export interface BridgeOptions {
   readonly workspace: string
   readonly podName: string
   readonly publicKey: KeyObject
-  readonly layout: TranscriptLayout
+  readonly harness: string
+  /** The harness's native directory for this workspace: what an anchor holds. */
+  readonly nativeDir: string
   readonly ringLines?: number
   readonly ringBytes?: number
   readonly initializeTimeoutMs?: number
+  readonly adapterStopMs?: number
   readonly log?: (message: string) => void
 }
 
 export interface Bridge {
   readonly instance: string
   port(): number
+  /** The end of the Pod: close the relay, stop the adapter, read the native files en bloc. */
+  terminate(): Promise<Bundle>
   close(): Promise<void>
 }
 
@@ -57,8 +63,10 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const child: ChildProcess = spawn(command, args, { cwd: options.workspace, stdio: ['pipe', 'pipe', 'inherit'] })
 
   const adapter = { alive: true, exitCode: null as number | null, signal: null as string | null }
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
   let initializeResult: unknown = null
   let initializeError: unknown = null
+  let terminating = false
   let seq = 0
   const ring: Line[] = []
   let ringSize = 0
@@ -122,8 +130,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     adapter.signal = signal
     log(`adaptateur terminé code=${String(code)} signal=${String(signal)}`)
     onInitialize(new Error(`l'adaptateur est mort avant de répondre à initialize (code ${String(code)})`))
-    // The bridge stays up: /anchor still answers so Agora can capture what the harness wrote.
-    client?.close(1011, 'adaptateur terminé')
+    // The bridge stays up: the native files still leave with the Pod, at SIGTERM.
+    if (!terminating) client?.close(1011, 'adaptateur terminé')
   })
   child.on('error', (error) => {
     log(`lancement de l'adaptateur impossible : ${error.message}`)
@@ -151,6 +159,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       initialize: initializeResult,
       initializeError,
       adapter: { ...adapter },
+      terminating,
       lastSeq: seq,
       firstRetainedSeq: ring[0]?.seq ?? seq + 1,
     }
@@ -170,7 +179,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://bridge')
     if (url.pathname === '/healthz') {
-      const ready = adapter.alive && initializeResult !== null
+      const ready = adapter.alive && initializeResult !== null && !terminating
       res.writeHead(ready ? 200 : 503, { 'content-type': 'text/plain' })
       res.end(ready ? 'ACP servable\n' : 'ACP non servable\n')
       return
@@ -180,33 +189,19 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
     if (url.pathname === '/info' && req.method === 'GET') return json(res, 200, describe())
 
-    if (url.pathname === '/anchor' && req.method === 'GET') {
-      const sessionId = url.searchParams.get('sessionId')
-      if (sessionId === null) return json(res, 400, { reason: 'sessionId manquant' })
-      const capture = await captureTranscript(options.layout, sessionId)
-      res.writeHead(200, {
-        'content-type': 'application/octet-stream',
-        'x-anchor-format': capture.format,
-        'x-anchor-checksum': capture.checksum,
-        'x-anchor-session': capture.sessionId,
-        'content-length': String(capture.bytes.byteLength),
-      })
-      res.end(Buffer.from(capture.bytes.buffer, capture.bytes.byteOffset, capture.bytes.byteLength))
-      log(`anchor capturé : session ${sessionId}, ${String(capture.bytes.byteLength)} octets`)
-      return
-    }
-
     if (url.pathname === '/anchor' && req.method === 'PUT') {
+      if (terminating) return json(res, 503, { reason: 'Pod en fin de vie' })
       const chunks: Buffer[] = []
       let size = 0
       for await (const chunk of req) {
         size += (chunk as Buffer).byteLength
-        if (size > MAX_ANCHOR_BYTES) throw new AnchorRefused(409, `l'anchor dépasse ${String(MAX_ANCHOR_BYTES)} octets`)
+        // base64 inflates by a third, plus the JSON around it.
+        if (size > MAX_ANCHOR_BYTES * 1.4) throw new AnchorRefused(413, "l'anchor est trop gros")
         chunks.push(chunk as Buffer)
       }
-      const placement = await restoreTranscript(options.layout, new Uint8Array(Buffer.concat(chunks)))
-      log(`anchor restauré : session ${placement.sessionId} → ${placement.path}`)
-      return json(res, 200, placement)
+      const placed = await writeBundle(options.nativeDir, parseBundle(new Uint8Array(Buffer.concat(chunks))))
+      log(`anchor restauré : ${String(placed.length)} fichier(s) dans ${options.nativeDir}`)
+      return json(res, 200, { files: placed })
     }
 
     json(res, 404, { reason: 'route inconnue' })
@@ -214,7 +209,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   const server: Server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
-      if (error instanceof AnchorRefused) return json(res, error.status, { reason: error.reason })
+      if (error instanceof AnchorRefused) return json(res, error.status, { reason: error.message })
       log(`erreur sur ${String(req.method)} ${String(req.url)} : ${error instanceof Error ? error.message : String(error)}`)
       if (!res.headersSent) json(res, 500, { reason: error instanceof Error ? error.message : String(error) })
       else res.destroy()
@@ -231,6 +226,10 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     const auth = authorized(req)
     if (!auth.ok) {
       socket.end(`HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${auth.reason}\n`)
+      return
+    }
+    if (terminating) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nPod en fin de vie\n')
       return
     }
     wss.handleUpgrade(req, socket, head, (peer) => attach(peer, url.searchParams.get('after')))
@@ -264,7 +263,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         peer.close(1003, 'messages binaires refusés')
         return
       }
-      if (!adapter.alive) return
+      if (!adapter.alive || terminating) return
       const text = data.toString().replace(/\n+$/, '')
       child.stdin?.write(`${text}\n`)
     })
@@ -279,9 +278,37 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const info = initializeResult as { agentInfo?: { name?: string; version?: string } }
   log(`prêt : instance ${instance}, ${String(info.agentInfo?.name)}@${String(info.agentInfo?.version)}, port ${String((server.address() as { port: number }).port)}`)
 
+  let terminated: Promise<Bundle> | null = null
+
   return {
     instance,
     port: () => (server.address() as { port: number }).port,
+    terminate: () => {
+      terminated ??= (async () => {
+        terminating = true
+        log('fin du Pod : relais fermé, arrêt de l’adaptateur')
+        if (client !== null && client.readyState === client.OPEN) {
+          client.send(JSON.stringify({ terminating: { at: new Date().toISOString() } }))
+          client.close(1001, 'Pod en fin de vie')
+        }
+        if (adapter.alive) {
+          child.kill('SIGTERM')
+          const stopMs = options.adapterStopMs ?? 5000
+          const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), stopMs))])
+          if (!stopped) {
+            log(`adaptateur toujours là après ${String(stopMs)} ms : SIGKILL`)
+            child.kill('SIGKILL')
+            await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+          }
+        }
+        try {
+          return await readBundle(options.harness, options.nativeDir)
+        } catch (error) {
+          return { format: 'agora-anchor/1', harness: options.harness, files: [], stable: false, error: error instanceof Error ? error.message : String(error) }
+        }
+      })()
+      return terminated
+    },
     close: async () => {
       client?.close(1001, 'arrêt du bridge')
       if (adapter.alive) child.kill('SIGTERM')

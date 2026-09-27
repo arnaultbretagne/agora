@@ -6,7 +6,10 @@ import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
 import type { AnchorStore } from './anchors.ts'
+import type { PodIdentity } from './kube.ts'
 import type { CommandResult, SandboxManager } from './manager.ts'
+import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle } from '../shared/anchor.ts'
+import { bearerOf } from '../shared/token.ts'
 
 export interface HttpOptions {
   readonly manager: SandboxManager
@@ -71,10 +74,13 @@ export function createApi(options: HttpOptions): Server {
 
     const anchorContent = /^\/api\/anchors\/([^/]+)\/content$/.exec(path)
     if (method === 'GET' && anchorContent !== null) {
-      const bytes = await anchors.bytes(anchorContent[1]!)
+      const bytes = await anchors.bundle(anchorContent[1]!)
       if (bytes === null) return json(res, 404, { accepted: false, reason: 'anchor inconnu' })
-      res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'content-disposition': `inline; filename="${anchorContent[1]!}.jsonl"` })
-      res.end(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength))
+      // The native files, one after the other, readable in a browser tab.
+      const bundle = parseBundle(bytes)
+      const text = bundle.files.map((file) => `===== ${file.path} (${file.checksum})\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n')
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(text)
       return
     }
 
@@ -90,13 +96,10 @@ export function createApi(options: HttpOptions): Server {
       if (labPrefix === undefined && verb === 'stop') return reply(res, await manager.stopSandbox(name!))
       if (labPrefix !== undefined && options.lab) {
         if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!))
-        if (verb === 'pause-renewal') return reply(res, manager.lab.pauseRenewal(name!, true))
-        if (verb === 'resume-renewal') return reply(res, manager.lab.pauseRenewal(name!, false))
         if (verb === 'probe-auth') {
           const result = await manager.lab.probeAuth(name!)
           return result.accepted ? json(res, 200, { accepted: true, results: result.value }) : reply(res, result)
         }
-        if (verb === 'delete-pod') return reply(res, await manager.lab.deletePod(name!))
       }
     }
     if (method === 'POST' && path === '/api/lab/restart' && options.lab) {
@@ -142,4 +145,49 @@ export function createApi(options: HttpOptions): Server {
   })
 
   return server
+}
+
+export interface AnchorReceiverOptions {
+  readonly manager: SandboxManager
+  /** The namespace of the sandboxes: a token from anywhere else is refused. */
+  readonly namespace: string
+  /** TokenReview of the Pod's projected ServiceAccount token (audience agora-anchors). */
+  readonly verify: (token: string) => Promise<PodIdentity | null>
+}
+
+/**
+ * The only route the sandboxes reach (sandbox-backend.md, "La réception de l'anchor"), on its own
+ * port so that the network policy opens this and nothing else of the back-end to them.
+ */
+export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
+  return createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? '/', 'http://backend')
+      if (url.pathname === '/healthz') {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end('ok\n')
+        return
+      }
+      if (req.method !== 'POST' || url.pathname !== '/anchors') return json(res, 404, { accepted: false, reason: 'route inconnue' })
+      const token = bearerOf(req.headers.authorization)
+      const pod = token === undefined ? null : await options.verify(token).catch(() => null)
+      if (pod === null) return json(res, 401, { accepted: false, reason: 'jeton projeté absent ou refusé' })
+      if (pod.namespace !== options.namespace) return json(res, 403, { accepted: false, reason: `namespace ${pod.namespace} refusé` })
+      const chunks: Buffer[] = []
+      let size = 0
+      for await (const chunk of req) {
+        size += (chunk as Buffer).byteLength
+        if (size > MAX_ANCHOR_BYTES * 1.4) return json(res, 413, { accepted: false, reason: "l'anchor est trop gros" })
+        chunks.push(chunk as Buffer)
+      }
+      const raw = new Uint8Array(Buffer.concat(chunks))
+      const bundle = parseBundle(raw)
+      const result = await options.manager.receiveAnchor(pod.podName, bundle, raw)
+      reply(res, result)
+    })().catch((error: unknown) => {
+      const status = error instanceof AnchorRefused ? error.status : 500
+      if (!res.headersSent) json(res, status, { accepted: false, reason: error instanceof Error ? error.message : String(error) })
+      else res.destroy()
+    })
+  })
 }

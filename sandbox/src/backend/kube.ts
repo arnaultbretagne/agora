@@ -1,6 +1,7 @@
-// The Kubernetes calls of agent-sandbox.md ("Les quatre opérations") and nothing else. Plain REST
-// over fetch: the ServiceAccount token is re-read on every call (projected tokens rotate), and the
-// cluster CA is trusted through NODE_EXTRA_CA_CERTS, set on the Deployment.
+// The Kubernetes calls of agent-sandbox.md ("Les opérations") and nothing else: Agora never
+// deletes anything — the infrastructure destroys at the deadline. Plain REST over fetch: the
+// ServiceAccount token is re-read on every call (projected tokens rotate), and the cluster CA is
+// trusted through NODE_EXTRA_CA_CERTS, set on the Deployment.
 import { readFile } from 'node:fs/promises'
 
 export const CLAIMS = '/apis/extensions.agents.x-k8s.io/v1beta1'
@@ -60,12 +61,18 @@ export interface KubeApi {
   createClaim(claim: Json): Promise<Claim>
   getClaim(name: string): Promise<Claim | null>
   patchClaim(name: string, patch: Json): Promise<Claim>
-  deleteClaim(name: string, uid: string): Promise<'accepted' | 'absent'>
   listPools(selector: string): Promise<Pool[]>
   getTemplate(name: string): Promise<Json | null>
   getSandbox(name: string): Promise<Json | null>
   getPod(name: string): Promise<Json | null>
-  deletePod(name: string): Promise<void>
+  /** Who holds this projected ServiceAccount token, as the API server sees it (TokenReview). */
+  reviewToken(token: string, audience: string): Promise<PodIdentity | null>
+}
+
+export interface PodIdentity {
+  readonly namespace: string
+  readonly podName: string
+  readonly podUid: string
 }
 
 export interface HttpKubeOptions {
@@ -156,18 +163,6 @@ export class HttpKube implements KubeApi {
     return this.expect<Claim>(await this.call('PATCH', this.url(CLAIMS, 'sandboxclaims', name), patch, 'application/merge-patch+json'), 200)
   }
 
-  async deleteClaim(name: string, uid: string): Promise<'accepted' | 'absent'> {
-    const response = await this.call('DELETE', this.url(CLAIMS, 'sandboxclaims', name), {
-      apiVersion: 'v1',
-      kind: 'DeleteOptions',
-      propagationPolicy: 'Foreground',
-      preconditions: { uid },
-    })
-    if (response.status === 404) return 'absent'
-    await this.expect<Json>(response, 200, 202)
-    return 'accepted'
-  }
-
   async listPools(selector: string): Promise<Pool[]> {
     const list = await this.expect<{ items: Pool[] }>(
       await this.call('GET', this.url(CLAIMS, 'sandboxwarmpools', '', `?labelSelector=${encodeURIComponent(selector)}`)),
@@ -194,8 +189,23 @@ export class HttpKube implements KubeApi {
     return this.getOptional(this.url('/api/v1', 'pods', name))
   }
 
-  async deletePod(name: string): Promise<void> {
-    const response = await this.call('DELETE', this.url('/api/v1', 'pods', name))
-    if (response.status !== 404) await this.expect<Json>(response, 200, 202)
+  async reviewToken(token: string, audience: string): Promise<PodIdentity | null> {
+    const review = await this.expect<{ status?: { authenticated?: boolean; audiences?: string[]; user?: { username?: string; extra?: Record<string, string[]> } } }>(
+      await this.call('POST', `${this.options.apiBase}/apis/authentication.k8s.io/v1/tokenreviews`, {
+        apiVersion: 'authentication.k8s.io/v1',
+        kind: 'TokenReview',
+        spec: { token, audiences: [audience] },
+      }),
+      200,
+      201,
+    )
+    const status = review.status
+    if (status?.authenticated !== true || !(status.audiences ?? []).includes(audience)) return null
+    // system:serviceaccount:<namespace>:<name>, plus the Pod the token is bound to.
+    const namespace = /^system:serviceaccount:([^:]+):/.exec(status.user?.username ?? '')?.[1]
+    const podName = status.user?.extra?.['authentication.kubernetes.io/pod-name']?.[0]
+    const podUid = status.user?.extra?.['authentication.kubernetes.io/pod-uid']?.[0]
+    if (namespace === undefined || podName === undefined || podUid === undefined) return null
+    return { namespace, podName, podUid }
   }
 }

@@ -1,6 +1,6 @@
-// The image entrypoint (sandbox-image.md, "Démarrage, dans le pool"). Everything it reads is fixed
-// by the image or the template — never by a claim, which would force a cold start.
-import { layoutFor } from '../shared/transcript.ts'
+// The image entrypoint (sandbox-image.md). Everything it reads is fixed by the image or the
+// template — never by a claim, which would force a cold start.
+import { nativeDir, pushBundle } from '../shared/anchor.ts'
 import { publicKeyFrom } from '../shared/token.ts'
 import { startBridge } from './server.ts'
 
@@ -12,19 +12,31 @@ function required(name: string): string {
 
 const home = required('HOME')
 const workspace = process.env.BRIDGE_WORKSPACE ?? '/home/harness/work'
-const adapterCommand = JSON.parse(required('BRIDGE_ADAPTER')) as string[]
+const harness = required('BRIDGE_DRIVER')
+const log = (message: string): void => console.log(`[bridge] ${message}`)
 
 const bridge = await startBridge({
   port: Number(process.env.BRIDGE_PORT ?? 8080),
-  adapterCommand,
+  adapterCommand: JSON.parse(required('BRIDGE_ADAPTER')) as string[],
   workspace,
   podName: required('POD_NAME'),
   publicKey: publicKeyFrom(required('BRIDGE_PUBLIC_KEY')),
-  layout: layoutFor(required('BRIDGE_DRIVER'), home, workspace),
+  harness,
+  nativeDir: nativeDir(harness, home, workspace),
+  log,
 })
 
-for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-  process.on(signal, () => {
-    void bridge.close().finally(() => process.exit(0))
-  })
-}
+// The end of the Pod (sandbox-image.md, "À la fin du Pod"): the infrastructure deletes it at the
+// deadline, and the grace period is for this — stop the adapter, push the native files, leave.
+process.on('SIGTERM', () => {
+  void (async () => {
+    const bundle = await bridge.terminate()
+    const url = process.env.AGORA_ANCHOR_URL
+    if (url === undefined || url === '') log('AGORA_ANCHOR_URL absent : anchor non poussé')
+    else await pushBundle(url, process.env.AGORA_TOKEN_FILE ?? '/var/run/agora/token', bundle, { log })
+    process.exit(0)
+  })()
+})
+process.on('SIGINT', () => {
+  void bridge.close().finally(() => process.exit(0))
+})

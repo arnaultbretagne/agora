@@ -1,13 +1,14 @@
 // The sandbox back-end (sandbox-backend.md). It holds ONE connection per bridge, follows turns by
-// watching the ACP traffic it relays, renews each claim's safety deadline, decides deletions and
-// captures the anchor right before each one. Everything it must know after a restart is written on
-// the claim itself (agent-sandbox.md, "Ce qu'Agora écrit sur le claim"): this process keeps no
-// other state about living sandboxes.
+// watching the ACP traffic it relays, and re-arms each claim's deadline while a turn runs
+// (agent-sandbox.md: min(now + lease, turn start + max turn)). It never deletes anything: the
+// infrastructure destroys at the deadline, and the Pod pushes its anchor on the way out.
+// Everything it must know after a restart is written on the claim itself.
 import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { WebSocket } from 'ws'
 import type { AnchorMeta, AnchorStore } from './anchors.ts'
 import { KubeError, WatchGone, type Claim, type KubeApi, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '../shared/token.ts'
+import type { Bundle } from '../shared/anchor.ts'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
 export const MANAGER = 'agora-sandbox-backend'
@@ -22,6 +23,7 @@ export const ANNOTATION = {
   sessionId: 'agora.bretagne.dev/session-id',
   turn: 'agora.bretagne.dev/turn',
   idleSince: 'agora.bretagne.dev/idle-since',
+  stopped: 'agora.bretagne.dev/stopped',
 } as const
 const SELECTOR = `${MANAGED_BY}=${MANAGER}`
 const RING_LIMIT = 2000
@@ -31,13 +33,11 @@ const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRej
 
 export interface Limits {
   readonly leaseSeconds: number
-  readonly idleSeconds: number
   readonly turnCapSeconds: number
 }
 
 export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   leaseSeconds: [60, 600],
-  idleSeconds: [30, 3600],
   turnCapSeconds: [30, 3600],
 }
 
@@ -48,8 +48,6 @@ export interface ManagerOptions {
   readonly defaults: Limits
   readonly renewSeconds: number
   readonly maxActive: number
-  readonly startupTimeoutSeconds: number
-  readonly stopTurnWaitMs: number
   readonly bridgePort: number
   /** Test seam: where to reach a sandbox's bridge. Defaults to its first Pod IP. */
   readonly bridgeAddress?: (podIP: string, podName: string) => string
@@ -77,15 +75,10 @@ interface Hello {
   readonly replayFrom: number | null
 }
 
-interface Stopping {
-  readonly reason: string
-  readonly at: string
-  promise?: Promise<Removal>
-}
-
-export interface Removal {
+export interface Ending {
   readonly name: string
   readonly pool: string
+  /** Why the deadline was reached: stop asked, turn limit, end of lease after a turn… */
   readonly reason: string
   readonly anchor: AnchorMeta | null
   readonly anchorError: string | null
@@ -104,8 +97,6 @@ interface SandboxRecord {
   readonly pool: string
   readonly requestId: string
   readonly createdAt: number
-  /** When this process first saw the claim: after a restart, startup delays count from here. */
-  readonly firstSeenAt: number
   readonly limits: Limits
   readonly restoreAnchor: string | null
   // From the claim, refreshed on every event.
@@ -115,12 +106,14 @@ interface SandboxRecord {
   podName: string | null
   podIP: string | null
   shutdownTime: string | null
+  ending: boolean
   // Written on the claim by the back-end; read from it only once, when the record is first built.
   instance: string | null
   sessionId: string | null
   turn: Turn | null
   idleSince: string | null
   restored: boolean
+  stopped: { reason: string; at: string } | null
   // Live, in this process only.
   launchType: string | null
   podDetail: string | null
@@ -134,17 +127,16 @@ interface SandboxRecord {
   consumerPending: Map<string, { method: string; sessionId: string | null }>
   permissions: Set<string>
   ownPending: Map<string, (message: AcpMessage) => void>
-  turnWaiters: (() => void)[]
   admitting: boolean
   restoring: boolean
-  renewalPaused: boolean
   lastRenewedAt: number
   renewals: number
   lastTurn: { outcome: string; endedAt: string } | null
+  anchor: AnchorMeta | null
+  anchorError: string | null
   error: string | null
   lost: string | null
   uncertain: string | null
-  stopping: Stopping | null
 }
 
 interface AcpMessage {
@@ -157,7 +149,7 @@ interface AcpMessage {
 
 export type ManagerEvent =
   | { readonly type: 'sandbox'; readonly sandbox: SandboxView }
-  | { readonly type: 'removed'; readonly removal: Removal }
+  | { readonly type: 'ended'; readonly ending: Ending }
   | { readonly type: 'anchor'; readonly anchor: AnchorMeta }
   | { readonly type: 'log'; readonly entry: LogEntry }
 
@@ -194,7 +186,7 @@ export class SandboxManager {
   private readonly options: ManagerOptions
   private readonly records = new Map<string, SandboxRecord>()
   private readonly gone = new Set<string>()
-  private readonly history: Removal[] = []
+  private readonly history: Ending[] = []
   private readonly logs: LogEntry[] = []
   private readonly listeners = new Set<(event: ManagerEvent) => void>()
   private readonly foreignKey = generateKeyPairSync('ed25519').privateKey
@@ -244,9 +236,7 @@ export class SandboxManager {
             version = list.resourceVersion
             const seen = new Set(list.items.map((claim) => claim.metadata.name))
             for (const claim of list.items) this.upsert(claim)
-            for (const record of [...this.records.values()]) {
-              if (!seen.has(record.name) && record.stopping === null) this.finalize(record, 'supprimé hors du back-end', null, 'aucune capture : Agora n\'a pas décidé cette suppression')
-            }
+            for (const record of [...this.records.values()]) if (!seen.has(record.name)) this.claimGone(record)
           } catch (listError) {
             this.log(null, `LIST impossible : ${String(listError)}`)
           }
@@ -263,9 +253,7 @@ export class SandboxManager {
     if (event.type === 'BOOKMARK') return version
     if (event.type === 'DELETED') {
       const record = this.records.get(event.object.metadata.name)
-      if (record !== undefined && record.uid === event.object.metadata.uid && record.stopping === null) {
-        this.finalize(record, 'supprimé hors du back-end (échéance de secours ?)', null, "aucune capture : Agora n'a pas décidé cette suppression")
-      }
+      if (record !== undefined && record.uid === event.object.metadata.uid) this.claimGone(record)
       return version
     }
     this.upsert(event.object)
@@ -279,15 +267,8 @@ export class SandboxManager {
     if (this.gone.has(uid)) return
     let record = this.records.get(name)
     if (record !== undefined && record.uid !== uid) {
-      // Same name, another object: the old one is over for us.
-      this.finalize(record, 'remplacé par un autre objet du même nom', null, 'aucune capture')
+      this.claimGone(record)
       record = undefined
-    }
-    if (claim.metadata.deletionTimestamp !== undefined) {
-      if (record !== undefined && record.stopping === null) {
-        this.finalize(record, 'supprimé hors du back-end (échéance de secours ?)', null, "aucune capture : Agora n'a pas décidé cette suppression")
-      }
-      return
     }
     if (record === undefined) {
       record = this.newRecord(claim)
@@ -297,10 +278,15 @@ export class SandboxManager {
     record.ready = ready?.status === 'True'
     record.readyReason = ready?.reason ?? ''
     record.readyMessage = ready?.message ?? ''
-    record.podName = claim.status?.sandbox?.name ?? null
-    record.podIP = claim.status?.sandbox?.podIPs?.[0] ?? null
+    record.podName = claim.status?.sandbox?.name ?? record.podName
+    // The Pod stays reachable during its grace period even once the claim forgets its address.
+    record.podIP = claim.status?.sandbox?.podIPs?.[0] ?? record.podIP
     record.shutdownTime = claim.spec?.lifecycle?.shutdownTime ?? null
-    if (!record.ready && TERMINAL_CLAIM_REASONS.has(record.readyReason) && record.error === null) {
+    if (claim.metadata.deletionTimestamp !== undefined && !record.ending) {
+      record.ending = true
+      this.log(record.name, `l'infrastructure supprime le claim (${this.endReason(record)}) : anchor attendu du Pod`)
+    }
+    if (!record.ready && !record.ending && TERMINAL_CLAIM_REASONS.has(record.readyReason) && record.error === null) {
       record.error = `${record.readyReason} : ${record.readyMessage}`
       this.log(record.name, `le claim n'aboutira pas : ${record.error}`)
     }
@@ -334,14 +320,17 @@ export class SandboxManager {
         return null
       }
     }
+    const limits = parse<Partial<Limits>>(annotations[ANNOTATION.limits]) ?? {}
     return {
       name: claim.metadata.name,
       uid: claim.metadata.uid,
       pool: claim.metadata.labels?.[POOL_LABEL] ?? claim.spec?.warmPoolRef?.name ?? '?',
       requestId: annotations[ANNOTATION.requestId] ?? '',
       createdAt: Date.parse(claim.metadata.creationTimestamp ?? new Date().toISOString()),
-      firstSeenAt: Date.now(),
-      limits: { ...this.options.defaults, ...(parse<Partial<Limits>>(annotations[ANNOTATION.limits]) ?? {}) },
+      limits: {
+        leaseSeconds: limits.leaseSeconds ?? this.options.defaults.leaseSeconds,
+        turnCapSeconds: limits.turnCapSeconds ?? this.options.defaults.turnCapSeconds,
+      },
       restoreAnchor: annotations[ANNOTATION.restoreAnchor] ?? null,
       ready: false,
       readyReason: '',
@@ -349,11 +338,13 @@ export class SandboxManager {
       podName: null,
       podIP: null,
       shutdownTime: null,
+      ending: false,
       instance: annotations[ANNOTATION.instance] ?? null,
       sessionId: annotations[ANNOTATION.sessionId] ?? null,
       turn: parse<Turn>(annotations[ANNOTATION.turn]),
       idleSince: annotations[ANNOTATION.idleSince] ?? null,
       restored: annotations[ANNOTATION.restored] !== undefined,
+      stopped: parse<{ reason: string; at: string }>(annotations[ANNOTATION.stopped]),
       launchType: null,
       podDetail: null,
       bridge: null,
@@ -366,17 +357,16 @@ export class SandboxManager {
       consumerPending: new Map(),
       permissions: new Set(),
       ownPending: new Map(),
-      turnWaiters: [],
       admitting: false,
       restoring: false,
-      renewalPaused: false,
       lastRenewedAt: 0,
       renewals: 0,
       lastTurn: null,
+      anchor: null,
+      anchorError: null,
       error: null,
       lost: null,
       uncertain: null,
-      stopping: null,
     }
   }
 
@@ -397,7 +387,7 @@ export class SandboxManager {
 
   private ensureBridge(record: SandboxRecord): void {
     if (this.stopped || !record.ready || record.podIP === null || record.podName === null) return
-    if (record.bridge !== null || record.reconnectTimer !== null || record.stopping !== null || record.lost !== null) return
+    if (record.bridge !== null || record.reconnectTimer !== null || record.ending || record.lost !== null) return
     // In this process's lifetime, pick up exactly after the last frame seen. After a restart, the
     // position noted at the start of the turn in flight — or live, when no turn is in flight.
     const after = record.lastSeq > 0 ? record.lastSeq : record.turn !== null ? record.turn.seq : null
@@ -415,23 +405,30 @@ export class SandboxManager {
     if (record.bridge !== socket) return
     record.bridge = null
     record.bridgeState = 'aucune'
-    if (this.records.get(record.name) !== record || record.stopping !== null || this.stopped) return
+    if (this.records.get(record.name) !== record || this.stopped) return
     this.log(record.name, `connexion au bridge fermée (${String(code)}${reason === '' ? '' : ` ${reason}`})`)
-    if (code === 1011) {
-      record.lost = "l'adaptateur est mort"
-      void this.reap(record, 'adaptateur perdu')
-      return
+    if (code === 1011) this.lose(record, "l'adaptateur est mort")
+    else if (!record.ending && record.lost === null) {
+      record.reconnectTimer = setTimeout(() => {
+        record.reconnectTimer = null
+        this.ensureBridge(record)
+      }, 2000)
     }
-    record.reconnectTimer = setTimeout(() => {
-      record.reconnectTimer = null
-      this.ensureBridge(record)
-    }, 2000)
+    this.emitRecord(record)
+  }
+
+  /** No live context any more: the deadline is no longer re-armed (sandbox-backend.md, "L'échéance"). */
+  private lose(record: SandboxRecord, reason: string): void {
+    if (record.lost !== null) return
+    record.lost = reason
+    if (record.turn !== null) record.uncertain = 'la fin du tour est partie avec le processus'
+    this.log(record.name, `perdu : ${reason} ; plus de renouvellement, fin à l'échéance ${String(record.shutdownTime)}`)
     this.emitRecord(record)
   }
 
   private onBridgeMessage(record: SandboxRecord, socket: WebSocket, text: string): void {
     if (record.bridge !== socket) return
-    let message: { hello?: Hello; seq?: number; acp?: string }
+    let message: { hello?: Hello; seq?: number; acp?: string; terminating?: unknown }
     try {
       message = JSON.parse(text) as typeof message
     } catch {
@@ -439,6 +436,12 @@ export class SandboxManager {
     }
     if (message.hello !== undefined) this.onHello(record, message.hello)
     else if (typeof message.seq === 'number' && typeof message.acp === 'string') this.onFrame(record, message.seq, message.acp)
+    else if (message.terminating !== undefined) {
+      // The Pod is being destroyed: no reconnection, its anchor is on the way.
+      record.ending = true
+      this.log(record.name, 'le Pod a reçu SIGTERM : il pousse son anchor')
+      this.toConsumer(record, { event: { type: 'terminating' } })
+    }
   }
 
   private onHello(record: SandboxRecord, hello: Hello): void {
@@ -447,21 +450,18 @@ export class SandboxManager {
     if (record.instance === null) {
       record.instance = hello.instance
       record.idleSince ??= new Date().toISOString()
-      void this.annotate(record, { [ANNOTATION.instance]: hello.instance, [ANNOTATION.idleSince]: record.idleSince })
+      void this.annotate(record, { [ANNOTATION.instance]: hello.instance, [ANNOTATION.idleSince]: record.idleSince }).catch(() => {})
       this.log(record.name, `bridge joint : instance ${hello.instance}, ${String(hello.initialize?.agentInfo?.name)}@${String(hello.initialize?.agentInfo?.version)}`)
     } else if (record.instance !== hello.instance) {
-      record.lost = `processus remplacé : instance ${hello.instance}, attendue ${record.instance}`
-      if (record.turn !== null) record.uncertain = 'la fin du tour est partie avec le processus'
-      this.log(record.name, record.lost)
-      void this.reap(record, 'processus remplacé')
+      record.bridge?.close(1000, 'processus remplacé')
+      this.lose(record, `processus remplacé : instance ${hello.instance}, attendue ${record.instance}`)
       return
     } else {
       this.log(record.name, `bridge rejoint${hello.replayFrom === null ? '' : `, rejeu depuis ${String(hello.replayFrom)}`}${hello.gap ? ', AVEC UN TROU' : ''}`)
     }
     if (hello.gap && record.turn !== null) record.uncertain = 'des trames du tour ont été perdues (trou au rejeu)'
     if (!hello.adapter.alive) {
-      record.lost = `l'adaptateur est mort (code ${String(hello.adapter.exitCode)})`
-      void this.reap(record, 'adaptateur perdu')
+      this.lose(record, `l'adaptateur est mort (code ${String(hello.adapter.exitCode)})`)
       return
     }
     this.toConsumer(record, { event: { type: 'bridge', instance: hello.instance, gap: hello.gap, replayFrom: hello.replayFrom } })
@@ -489,7 +489,7 @@ export class SandboxManager {
         record.ownPending.delete(key)
         own(message)
       }
-      if (record.turn !== null && idKey(record.turn.requestId) === key) this.endTurn(record, message)
+      if (record.turn !== null && idKey(record.turn.requestId) === key) void this.endTurn(record, message)
       const pending = record.consumerPending.get(key)
       if (pending !== undefined) {
         record.consumerPending.delete(key)
@@ -504,23 +504,33 @@ export class SandboxManager {
     }
   }
 
-  private endTurn(record: SandboxRecord, message: AcpMessage): void {
+  /** A confirmed end: 10 more minutes without renewal (agent-sandbox.md, "Entre deux tours"). */
+  private async endTurn(record: SandboxRecord, message: AcpMessage): Promise<void> {
     const outcome = message.error !== undefined ? `erreur : ${String(message.error.message)}` : `fin : ${String(message.result?.stopReason)}`
     record.turn = null
     record.uncertain = null
     record.permissions.clear()
     record.idleSince = new Date().toISOString()
     record.lastTurn = { outcome, endedAt: record.idleSince }
-    void this.annotate(record, { [ANNOTATION.turn]: null, [ANNOTATION.idleSince]: record.idleSince })
-    for (const wake of record.turnWaiters.splice(0)) wake()
-    this.log(record.name, `tour clos (${outcome})`)
+    const grant = record.stopped === null && record.lost === null && !record.ending
+    const shutdownTime = iso(Date.now() + record.limits.leaseSeconds * 1000)
+    this.log(record.name, `tour clos (${outcome})${grant ? `, échéance ${shutdownTime} sans renouvellement` : ''}`)
     this.emitRecord(record)
+    try {
+      await this.annotate(record, { [ANNOTATION.turn]: null, [ANNOTATION.idleSince]: record.idleSince }, grant ? { shutdownTime } : undefined)
+      if (grant) {
+        record.shutdownTime = shutdownTime
+        this.emitRecord(record)
+      }
+    } catch {
+      // Logged by annotate; the deadline already granted stands.
+    }
   }
 
   private setSession(record: SandboxRecord, sessionId: string): void {
     if (record.sessionId === sessionId) return
     record.sessionId = sessionId
-    void this.annotate(record, { [ANNOTATION.sessionId]: sessionId })
+    void this.annotate(record, { [ANNOTATION.sessionId]: sessionId }).catch(() => {})
     this.log(record.name, `session ${sessionId}`)
     this.emitRecord(record)
   }
@@ -532,7 +542,7 @@ export class SandboxManager {
         ...(lifecycle === undefined ? {} : { spec: { lifecycle } }),
       })
     } catch (error) {
-      this.log(record.name, `annotation refusée : ${error instanceof Error ? error.message : String(error)}`)
+      this.log(record.name, `PATCH refusé : ${error instanceof Error ? error.message : String(error)}`)
       throw error
     }
   }
@@ -560,28 +570,30 @@ export class SandboxManager {
     record.restoring = true
     this.emitRecord(record)
     try {
-      const bytes = await this.options.anchors.bytes(anchorId)
-      if (bytes === null) throw new Error(`anchor ${anchorId} introuvable`)
+      const meta = await this.options.anchors.meta(anchorId)
+      const bundle = await this.options.anchors.bundle(anchorId)
+      if (meta === null || bundle === null) throw new Error(`anchor ${anchorId} introuvable`)
+      if (meta.sessionId === null) throw new Error(`l'anchor ${anchorId} ne connaît pas sa session`)
       const response = await fetch(`http://${this.address(record)}/anchor`, {
         method: 'PUT',
-        body: bytes as unknown as BodyInit,
-        headers: { authorization: `Bearer ${this.token(record)}`, 'content-type': 'application/octet-stream' },
+        body: bundle as unknown as BodyInit,
+        headers: { authorization: `Bearer ${this.token(record)}`, 'content-type': 'application/json' },
         signal: AbortSignal.timeout(30_000),
       })
-      const placement = (await response.json()) as { sessionId?: string; reason?: string; path?: string }
-      if (!response.ok || placement.sessionId === undefined) throw new Error(`dépôt refusé (${String(response.status)}) : ${String(placement.reason)}`)
-      this.log(record.name, `anchor ${anchorId} déposé : ${String(placement.path)}`)
+      const placement = (await response.json()) as { files?: unknown[]; reason?: string }
+      if (!response.ok) throw new Error(`dépôt refusé (${String(response.status)}) : ${String(placement.reason)}`)
+      this.log(record.name, `anchor ${anchorId} déposé : ${String(placement.files?.length)} fichier(s)`)
 
       const capabilities = record.hello?.initialize?.agentCapabilities
       const method = capabilities?.sessionCapabilities?.resume != null ? 'session/resume' : capabilities?.loadSession === true ? 'session/load' : null
       if (method === null) throw new Error("l'agent n'annonce ni session/resume ni session/load")
-      const answer = await this.ownRequest(record, method, { sessionId: placement.sessionId, cwd: record.hello?.workspace, mcpServers: [] }, 60_000)
+      const answer = await this.ownRequest(record, method, { sessionId: meta.sessionId, cwd: record.hello?.workspace, mcpServers: [] }, 60_000)
       if (answer.error !== undefined) throw new Error(`${method} refusé : ${String(answer.error.message)}`)
 
       record.restored = true
-      record.sessionId = placement.sessionId
-      await this.annotate(record, { [ANNOTATION.restored]: new Date().toISOString(), [ANNOTATION.sessionId]: placement.sessionId })
-      this.log(record.name, `reprise par ${method} de la session ${placement.sessionId}`)
+      record.sessionId = meta.sessionId
+      await this.annotate(record, { [ANNOTATION.restored]: new Date().toISOString(), [ANNOTATION.sessionId]: meta.sessionId })
+      this.log(record.name, `reprise par ${method} de la session ${meta.sessionId}`)
     } catch (error) {
       record.error = `restauration impossible : ${error instanceof Error ? error.message : String(error)}`
       this.log(record.name, record.error)
@@ -664,8 +676,7 @@ export class SandboxManager {
   private async admitPrompt(record: SandboxRecord, socket: WebSocket, message: AcpMessage, id: Id, text: string): Promise<void> {
     const { state } = this.state(record)
     const refusal =
-      record.stopping !== null ? 'arrêt décidé'
-      : record.admitting ? "un prompt est déjà en cours d'admission"
+      record.admitting ? "un prompt est déjà en cours d'admission"
       : record.turn !== null ? 'un tour est déjà en cours'
       : state !== 'prêt' ? `sandbox ${state}`
       : null
@@ -674,7 +685,7 @@ export class SandboxManager {
     record.admitting = true
     const now = Date.now()
     const turn: Turn = { startedAt: new Date(now).toISOString(), requestId: id, seq: record.lastSeq, sessionId: (message.params?.sessionId as string | undefined) ?? null }
-    const shutdownTime = iso(now + record.limits.leaseSeconds * 1000)
+    const shutdownTime = iso(Math.min(now + record.limits.leaseSeconds * 1000, now + record.limits.turnCapSeconds * 1000))
     try {
       // One PATCH: the turn is written and its deadline accepted before the prompt leaves.
       await this.annotate(record, { [ANNOTATION.turn]: JSON.stringify(turn) }, { shutdownTime })
@@ -683,9 +694,9 @@ export class SandboxManager {
       return this.answer(record, socket, id, { error: { code: -32000, message: `refusé : échéance non acceptée (${error instanceof Error ? error.message : String(error)})` } })
     }
     record.admitting = false
-    if (!this.bridgeOpen(record) || record.stopping !== null) {
+    if (!this.bridgeOpen(record) || record.stopped !== null) {
       void this.annotate(record, { [ANNOTATION.turn]: null }).catch(() => {})
-      return this.answer(record, socket, id, { error: { code: -32000, message: 'refusé : bridge perdu pendant l’admission' } })
+      return this.answer(record, socket, id, { error: { code: -32000, message: 'refusé : bridge perdu ou arrêt pendant l’admission' } })
     }
     record.turn = turn
     record.shutdownTime = shutdownTime
@@ -693,30 +704,21 @@ export class SandboxManager {
     record.renewals += 1
     record.uncertain = null
     record.bridge?.send(text)
-    this.log(record.name, `tour ouvert (requête ${JSON.stringify(id)}, position ${String(turn.seq)})`)
+    this.log(record.name, `tour ouvert (requête ${JSON.stringify(id)}, position ${String(turn.seq)}), échéance ${shutdownTime}`)
     this.emitRecord(record)
   }
 
-  // ---------------------------------------------------------------- lease, deadlines, deletion
+  // ---------------------------------------------------------------- the deadline
 
   private async tick(): Promise<void> {
     const now = Date.now()
     for (const record of [...this.records.values()]) {
-      if (record.stopping !== null) continue
       try {
-        if (!record.renewalPaused && now - record.lastRenewedAt >= this.options.renewSeconds * 1000) await this.renew(record, now)
-        const inService = record.hello !== null
-        const waitingSince = Math.max(record.createdAt, record.firstSeenAt)
-        if (!inService && now - waitingSince > this.options.startupTimeoutSeconds * 1000 && record.lost === null) {
-          void this.reap(record, 'démarrage trop long')
-        } else if (record.turn !== null && now - Date.parse(record.turn.startedAt) > record.limits.turnCapSeconds * 1000) {
-          void this.reap(record, 'tour trop long')
-        } else if (record.turn === null && inService && !record.restoring && record.idleSince !== null && now - Date.parse(record.idleSince) > record.limits.idleSeconds * 1000) {
-          void this.reap(record, 'inactivité')
-        } else if (record.error !== null && now - waitingSince > 60_000 && !inService) {
-          void this.reap(record, `erreur : ${record.error}`)
-        }
-        if (!record.ready && record.podName !== null) await this.diagnose(record)
+        // Every minute (agent-sandbox.md); a lease shorter than three minutes, possible in the lab,
+        // is re-armed three times per lease so the renewal never races the deadline.
+        const every = Math.min(this.options.renewSeconds, record.limits.leaseSeconds / 3) * 1000
+        if (this.renews(record) && now - record.lastRenewedAt >= every) await this.renew(record, now)
+        if (!record.ready && !record.ending && record.podName !== null) await this.diagnose(record)
         if (record.launchType === null && record.podName !== null) await this.readLaunchType(record)
       } catch (error) {
         this.log(record.name, `tick : ${error instanceof Error ? error.message : String(error)}`)
@@ -724,8 +726,16 @@ export class SandboxManager {
     }
   }
 
+  /** Re-armed only during a turn, and never once stopped, lost or already being destroyed. */
+  private renews(record: SandboxRecord): boolean {
+    return record.turn !== null && record.stopped === null && record.lost === null && !record.ending
+  }
+
   private async renew(record: SandboxRecord, now: number): Promise<void> {
-    const shutdownTime = iso(now + record.limits.leaseSeconds * 1000)
+    const turn = record.turn
+    if (turn === null) return
+    const shutdownTime = iso(Math.min(now + record.limits.leaseSeconds * 1000, Date.parse(turn.startedAt) + record.limits.turnCapSeconds * 1000))
+    if (shutdownTime === record.shutdownTime) return
     try {
       await this.options.kube.patchClaim(record.name, { metadata: { uid: record.uid }, spec: { lifecycle: { shutdownTime } } })
       record.shutdownTime = shutdownTime
@@ -750,100 +760,68 @@ export class SandboxManager {
     }
   }
 
-  private waitTurnEnd(record: SandboxRecord, timeoutMs: number): Promise<boolean> {
-    if (record.turn === null) return Promise.resolve(true)
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs)
-      record.turnWaiters.push(() => {
-        clearTimeout(timer)
-        resolve(true)
-      })
-    })
+  private endReason(record: SandboxRecord): string {
+    if (record.stopped !== null) return record.stopped.reason
+    if (record.lost !== null) return `perdu : ${record.lost}`
+    if (record.turn !== null) return 'tour en cours à l’échéance (limite du tour ou fin non vue)'
+    return 'échéance après le dernier tour'
   }
 
-  /** Close sends, cancel the turn in flight, capture the anchor, then delete (sandbox-backend.md). */
-  reap(record: SandboxRecord, reason: string): Promise<Removal> {
-    if (record.stopping?.promise !== undefined) return record.stopping.promise
-    const stopping: Stopping = { reason, at: new Date().toISOString() }
-    record.stopping = stopping
-    this.log(record.name, `suppression décidée : ${reason}`)
-    this.emitRecord(record)
-    stopping.promise = (async () => {
-      if (record.turn !== null && this.bridgeOpen(record)) {
-        record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: record.turn.sessionId } }))
-        this.log(record.name, 'session/cancel envoyé, attente de la fin du tour')
-        const ended = await this.waitTurnEnd(record, this.options.stopTurnWaitMs)
-        if (!ended) this.log(record.name, `le tour n'a pas fini en ${String(this.options.stopTurnWaitMs)} ms`)
-      }
+  // ---------------------------------------------------------------- the anchor pushed by the Pod
 
-      let anchor: AnchorMeta | null = null
-      let anchorError: string | null = null
-      if (record.sessionId === null) anchorError = 'aucune session ouverte'
-      else if (record.podIP === null || record.podName === null) anchorError = 'Pod injoignable'
-      else {
-        try {
-          const response = await fetch(`http://${this.address(record)}/anchor?sessionId=${encodeURIComponent(record.sessionId)}`, {
-            headers: { authorization: `Bearer ${this.token(record)}` },
-            signal: AbortSignal.timeout(20_000),
-          })
-          if (response.ok) {
-            const bytes = new Uint8Array(await response.arrayBuffer())
-            anchor = await this.options.anchors.save(
-              {
-                harness: (await this.pools()).find((pool) => pool.name === record.pool)?.harness ?? '?',
-                pool: record.pool,
-                format: response.headers.get('x-anchor-format') ?? '?',
-                sessionId: response.headers.get('x-anchor-session') ?? record.sessionId,
-                checksum: response.headers.get('x-anchor-checksum') ?? '?',
-                byteLength: bytes.byteLength,
-                sandbox: record.name,
-                reason,
-              },
-              bytes,
-            )
-            this.log(record.name, `anchor ${anchor.id} capturé (${String(anchor.byteLength)} octets)`)
-            this.emit({ type: 'anchor', anchor })
-          } else {
-            anchorError = `capture refusée (${String(response.status)}) : ${String(((await response.json().catch(() => ({}))) as { reason?: string }).reason)}`
-          }
-        } catch (error) {
-          anchorError = `capture impossible : ${error instanceof Error ? error.message : String(error)}`
-        }
-      }
-      if (anchorError !== null) this.log(record.name, `pas d'anchor : ${anchorError}`)
-
-      record.bridge?.close(1000, 'suppression')
-      for (let attempt = 1; ; attempt++) {
-        try {
-          const outcome = await this.options.kube.deleteClaim(record.name, record.uid)
-          this.log(record.name, outcome === 'accepted' ? 'suppression acceptée' : 'claim déjà absent')
-          break
-        } catch (error) {
-          this.log(record.name, `suppression refusée (essai ${String(attempt)}) : ${error instanceof Error ? error.message : String(error)}`)
-          if (attempt >= 5) break
-          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
-        }
-      }
-      return this.finalize(record, reason, anchor, anchorError)
-    })()
-    return stopping.promise
+  /** sandbox-backend.md, "La réception de l'anchor": the Pod is already authenticated by TokenReview. */
+  async receiveAnchor(podName: string, bundle: Bundle, raw: Uint8Array): Promise<CommandResult<{ anchorId: string | null }>> {
+    const record = [...this.records.values()].find((candidate) => candidate.podName === podName)
+    if (record === undefined) return refused(`aucun claim connu pour le Pod ${podName}`, 404)
+    const files = bundle.files.map((file) => ({ path: file.path, byteLength: Buffer.from(file.content, 'base64').byteLength }))
+    if (files.length === 0) {
+      record.anchorError = bundle.error ?? 'aucun fichier natif (pas de session écrite)'
+      this.log(record.name, `anchor vide reçu : ${record.anchorError}`)
+    } else {
+      const anchor = await this.options.anchors.save(
+        {
+          harness: bundle.harness,
+          pool: record.pool,
+          format: bundle.format,
+          sessionId: record.sessionId,
+          files,
+          byteLength: files.reduce((total, file) => total + file.byteLength, 0),
+          stable: bundle.stable,
+          sandbox: record.name,
+          reason: this.endReason(record),
+        },
+        raw,
+      )
+      record.anchor = anchor
+      record.anchorError = null
+      this.log(record.name, `anchor ${anchor.id} reçu du Pod : ${String(files.length)} fichier(s), ${String(anchor.byteLength)} octets${bundle.stable ? '' : ', NON stabilisé'}`)
+      this.emit({ type: 'anchor', anchor })
+    }
+    this.finish(record)
+    return { accepted: true, value: { anchorId: record.anchor?.id ?? null } }
   }
 
-  private finalize(record: SandboxRecord, reason: string, anchor: AnchorMeta | null, anchorError: string | null): Removal {
-    const removal: Removal = { name: record.name, pool: record.pool, reason, anchor, anchorError, at: new Date().toISOString() }
+  /** The claim is gone from Kubernetes: whatever was received is all there will be. */
+  private claimGone(record: SandboxRecord): void {
+    if (record.anchor === null && record.anchorError === null) record.anchorError = 'aucun anchor reçu avant la disparition du claim'
+    this.finish(record)
+  }
+
+  private finish(record: SandboxRecord): Ending {
+    const ending: Ending = { name: record.name, pool: record.pool, reason: this.endReason(record), anchor: record.anchor, anchorError: record.anchorError, at: new Date().toISOString() }
     if (this.records.get(record.name) === record) this.records.delete(record.name)
-    if (this.gone.has(record.uid)) return removal
+    if (this.gone.has(record.uid)) return ending
     this.gone.add(record.uid)
     if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
-    record.bridge?.close(1000, 'suppression')
+    record.bridge?.close(1000, 'fin du sandbox')
     record.bridge = null
-    record.consumer?.close(4001, `sandbox supprimé : ${reason}`)
-    for (const wake of record.turnWaiters.splice(0)) wake()
-    this.history.unshift(removal)
+    record.consumer?.close(4001, `sandbox terminé : ${ending.reason}`)
+    for (const [, resolve] of record.ownPending) resolve({ error: { message: 'sandbox terminé' } })
+    this.history.unshift(ending)
     this.history.splice(HISTORY_LIMIT)
-    this.log(record.name, `retiré : ${reason}`)
-    this.emit({ type: 'removed', removal })
-    return removal
+    this.log(record.name, `terminé (${ending.reason}) ; ${ending.anchor === null ? `sans anchor : ${String(ending.anchorError)}` : `anchor ${ending.anchor.id}`}`)
+    this.emit({ type: 'ended', ending })
+    return ending
   }
 
   // ---------------------------------------------------------------- commands
@@ -870,7 +848,7 @@ export class SandboxManager {
 
   async create(input: { requestId?: unknown; pool?: unknown; anchorId?: unknown; limits?: Partial<Record<keyof Limits, unknown>> }): Promise<CommandResult<{ name: string; existing: boolean }>> {
     const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : ''
-    if (requestId === '' || requestId.length > 200) return refused("identifiant de demande manquant ou trop long", 400)
+    if (requestId === '' || requestId.length > 200) return refused('identifiant de demande manquant ou trop long', 400)
     const poolName = typeof input.pool === 'string' ? input.pool : ''
     const name = claimName(requestId)
 
@@ -901,7 +879,7 @@ export class SandboxManager {
       anchorId = meta.id
     }
 
-    const active = [...this.records.values()].filter((record) => record.stopping === null).length
+    const active = [...this.records.values()].filter((record) => !record.ending).length
     if (active >= this.options.maxActive) return refused(`quota atteint : ${String(active)} sandboxes actifs sur ${String(this.options.maxActive)}`, 429)
 
     const now = Date.now()
@@ -925,8 +903,6 @@ export class SandboxManager {
     try {
       const created = await this.options.kube.createClaim(claim)
       this.upsert(created)
-      const record = this.records.get(name)
-      if (record !== undefined) record.lastRenewedAt = now
       this.log(name, `claim créé sur ${pool.name}${anchorId === null ? '' : `, restauration de ${anchorId}`}`)
       return { accepted: true, value: { name, existing: false } }
     } catch (error) {
@@ -942,11 +918,25 @@ export class SandboxManager {
     }
   }
 
-  async stopSandbox(name: string): Promise<CommandResult<Removal>> {
+  /** Stop: close sends, cancel the turn, stop re-arming. The infrastructure destroys at the deadline. */
+  async stopSandbox(name: string): Promise<CommandResult<{ name: string; shutdownTime: string | null }>> {
     const record = this.records.get(name)
     if (record === undefined) return refused(`sandbox inconnu : ${name}`, 404)
-    if (record.stopping !== null) return refused(`arrêt déjà en cours (${record.stopping.reason})`)
-    return { accepted: true, value: await this.reap(record, 'arrêt demandé') }
+    if (record.stopped !== null) return refused(`arrêt déjà demandé (${record.stopped.at})`)
+    if (record.ending) return refused("l'infrastructure supprime déjà ce sandbox")
+    record.stopped = { reason: 'arrêt demandé', at: new Date().toISOString() }
+    try {
+      await this.annotate(record, { [ANNOTATION.stopped]: JSON.stringify(record.stopped) })
+    } catch (error) {
+      record.stopped = null
+      return refused(`PATCH refusé : ${error instanceof Error ? error.message : String(error)}`, 502)
+    }
+    if (record.turn !== null && this.bridgeOpen(record)) {
+      record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: record.turn.sessionId } }))
+    }
+    this.log(name, `arrêt demandé : plus de renouvellement, fin à l'échéance ${String(record.shutdownTime)}`)
+    this.emitRecord(record)
+    return { accepted: true, value: { name, shutdownTime: record.shutdownTime } }
   }
 
   // ---------------------------------------------------------------- lab hooks (sandbox-backend.md, "Le banc")
@@ -959,14 +949,6 @@ export class SandboxManager {
       record.bridge.terminate()
       this.log(name, 'banc : connexion au bridge coupée')
       return { accepted: true, value: 'coupée' }
-    },
-    pauseRenewal: (name: string, paused: boolean): CommandResult<string> => {
-      const record = this.records.get(name)
-      if (record === undefined) return refused(`sandbox inconnu : ${name}`, 404)
-      record.renewalPaused = paused
-      this.log(name, paused ? 'banc : renouvellement suspendu' : 'banc : renouvellement repris')
-      this.emitRecord(record)
-      return { accepted: true, value: paused ? 'suspendu' : 'repris' }
     },
     probeAuth: async (name: string): Promise<CommandResult<{ case: string; info: number; acp: number }[]>> => {
       const record = this.records.get(name)
@@ -1001,21 +983,15 @@ export class SandboxManager {
       // The witness connection took the bridge over; the back-end reconnects on its own.
       return { accepted: true, value: results }
     },
-    deletePod: async (name: string): Promise<CommandResult<string>> => {
-      const record = this.records.get(name)
-      if (record === undefined || record.podName === null) return refused('sandbox inconnu ou sans Pod', 404)
-      await this.options.kube.deletePod(record.podName)
-      this.log(name, `banc : Pod ${record.podName} supprimé seul`)
-      return { accepted: true, value: record.podName }
-    },
   }
 
   // ---------------------------------------------------------------- views and events
 
   private state(record: SandboxRecord): { state: string; reason: string } {
-    if (record.stopping !== null) return { state: 'arrêt', reason: record.stopping.reason }
+    if (record.ending) return { state: 'fin de vie', reason: `${this.endReason(record)} ; anchor attendu du Pod` }
     if (record.error !== null) return { state: 'erreur', reason: record.error }
     if (record.lost !== null) return { state: 'perdu', reason: record.lost }
+    if (record.stopped !== null) return { state: 'arrêté', reason: `plus de renouvellement, fin à l'échéance` }
     if (!record.ready) return { state: 'démarrage', reason: [record.readyReason, record.readyMessage, record.podDetail].filter((part) => part !== '' && part !== null).join(' — ') }
     if (!this.bridgeOpen(record)) return { state: 'connexion', reason: `bridge : ${record.bridgeState}` }
     if (record.restoring) return { state: 'restauration', reason: `anchor ${String(record.restoreAnchor)}` }
@@ -1039,8 +1015,8 @@ export class SandboxManager {
       podIP: record.podIP,
       podDetail: record.podDetail,
       shutdownTime: record.shutdownTime,
+      renewing: this.renews(record),
       limits: record.limits,
-      renewalPaused: record.renewalPaused,
       lastRenewedAt: record.lastRenewedAt === 0 ? null : new Date(record.lastRenewedAt).toISOString(),
       renewals: record.renewals,
       bridge: {
@@ -1055,6 +1031,7 @@ export class SandboxManager {
       turn: record.turn,
       lastTurn: record.lastTurn,
       idleSince: record.idleSince,
+      stopped: record.stopped,
       lastSeq: record.lastSeq,
       restoreAnchor: record.restoreAnchor,
       restored: record.restored,
@@ -1063,12 +1040,8 @@ export class SandboxManager {
     }
   }
 
-  snapshot(): { sandboxes: SandboxView[]; history: Removal[]; logs: LogEntry[] } {
+  snapshot(): { sandboxes: SandboxView[]; history: Ending[]; logs: LogEntry[] } {
     return { sandboxes: [...this.records.values()].map((record) => this.view(record)), history: [...this.history], logs: [...this.logs] }
-  }
-
-  has(name: string): boolean {
-    return this.records.has(name)
   }
 
   subscribe(listener: (event: ManagerEvent) => void): () => void {

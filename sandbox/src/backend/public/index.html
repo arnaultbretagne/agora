@@ -43,7 +43,6 @@
 </div>
 <div class="row">
   <label>Bail (s) <input id="leaseSeconds" size="5" placeholder="600"></label>
-  <label>Inactivité (s) <input id="idleSeconds" size="5" placeholder="3600"></label>
   <label>Tour max (s) <input id="turnCapSeconds" size="5" placeholder="3600"></label>
   <button id="create">Créer</button>
   <button id="createTwice" title="Deux POST avec le même identifiant">Créer 2× (même identifiant)</button>
@@ -100,7 +99,7 @@
   <tbody id="anchors"></tbody>
 </table>
 
-<h2>Suppressions</h2>
+<h2>Fins (destruction par l'infrastructure)</h2>
 <table>
   <thead><tr><th>Date</th><th>Nom</th><th>Pool</th><th>Raison</th><th>Anchor</th></tr></thead>
   <tbody id="history"></tbody>
@@ -136,8 +135,8 @@ function connectEvents() {
       renderAll()
     } else if (event.type === 'sandbox') {
       state.sandboxes.set(event.sandbox.name, event.sandbox); renderSandboxes()
-    } else if (event.type === 'removed') {
-      state.sandboxes.delete(event.removal.name); state.history.unshift(event.removal); renderSandboxes(); renderHistory()
+    } else if (event.type === 'ended') {
+      state.sandboxes.delete(event.ending.name); state.history.unshift(event.ending); renderSandboxes(); renderHistory()
     } else if (event.type === 'anchor') {
       state.anchors.unshift(event.anchor); renderAnchors()
     } else if (event.type === 'log') {
@@ -172,7 +171,7 @@ function renderSandboxes() {
       <td>${esc(s.launchType ?? '?')}</td>
       <td class="mono">${esc(s.pod)}<br>${esc(s.podIP)}${s.podDetail ? `<br><span class="muted">${esc(s.podDetail)}</span>` : ''}</td>
       <td class="mono" data-deadline="${esc(s.shutdownTime)}">${secondsLeft(s.shutdownTime)}<br><span class="muted">${esc(s.shutdownTime)}</span></td>
-      <td>${s.renewals}${s.renewalPaused ? '<br><b class="err">suspendu</b>' : ''}<br><span class="muted">bail ${s.limits.leaseSeconds} / inact. ${s.limits.idleSeconds} / tour ${s.limits.turnCapSeconds}</span></td>
+      <td>${s.renewals}${s.renewing ? '<br><b class="ok">ré-armé (tour)</b>' : '<br><span class="muted">pas ré-armé</span>'}<br><span class="muted">bail ${s.limits.leaseSeconds} / tour ${s.limits.turnCapSeconds}</span></td>
       <td class="mono wrap">${esc(s.instance)}<br><span class="muted">bridge ${esc(s.bridge.state)} ${esc(s.bridge.agent ? s.bridge.agent.name + '@' + s.bridge.agent.version : '')}</span></td>
       <td class="mono wrap">${esc(s.sessionId)}</td>
       <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>depuis ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">inactif depuis ${esc(s.idleSince)}</span>`}</td>
@@ -181,9 +180,8 @@ function renderSandboxes() {
         <button data-select="${esc(s.name)}">ACP</button>
         <button data-stop="${esc(s.name)}">Arrêter</button><br>
         <button data-lab="drop-bridge" data-name="${esc(s.name)}">couper bridge</button>
-        <button data-lab="${s.renewalPaused ? 'resume-renewal' : 'pause-renewal'}" data-name="${esc(s.name)}">${s.renewalPaused ? 'reprendre renouv.' : 'suspendre renouv.'}</button><br>
+<br>
         <button data-lab="probe-auth" data-name="${esc(s.name)}">sonder jeton</button>
-        <button data-lab="delete-pod" data-name="${esc(s.name)}">suppr. Pod seul</button>
       </td>
     </tr>`).join('')
   $('sandboxes').innerHTML = rows || '<tr><td colspan="13" class="muted">aucun</td></tr>'
@@ -227,7 +225,7 @@ function newRequestId() { $('requestId').value = uuid() }
 
 function limits() {
   const out = {}
-  for (const key of ['leaseSeconds', 'idleSeconds', 'turnCapSeconds']) if ($(key).value.trim() !== '') out[key] = $(key).value.trim()
+  for (const key of ['leaseSeconds', 'turnCapSeconds']) if ($(key).value.trim() !== '') out[key] = $(key).value.trim()
   return out
 }
 
@@ -374,7 +372,7 @@ $('sendRaw').onclick = () => { try { const m = JSON.parse($('raw').value); send(
 // ---------------------------------------------------------------- les cas
 const CASES = [
   ['Créer depuis un pool chaud', 'Créer sur un pool dont le stock est prêt.', 'Prêt en moins d’une seconde, lancement warm.'],
-  ['Créer avec un pool vide', 'Créer plus de sandboxes que le stock (ou juste après, avant le réapprovisionnement).', 'Prêt en quelques secondes, lancement cold.'],
+  ['Créer au-delà du stock chaud', 'Créer plusieurs sandboxes d’affilée.', 'Prêt en quelques secondes, lancement cold.'],
   ['Créer deux fois, même identifiant', '« Créer 2× (même identifiant) ».', 'Même nom deux fois, un seul sandbox.'],
   ['Pool hors catalogue, quota', 'Pool « pool-inexistant » ; ou créer au-delà du quota.', 'Refusé avec la raison.'],
   ['Relais ACP', 'ACP → initialize, session/new, session/prompt.', 'initialize répondu en local, trames numérotées, tour clos.'],
@@ -384,16 +382,16 @@ const CASES = [
   ['Consommateur déconnecté pendant un tour', '/sleep 30, Déconnecter, attendre, reconnecter après la dernière position.', 'Trames manquées rejouées, fin du tour visible.'],
   ['Connexion au bridge coupée', '/sleep 30 puis « couper bridge ».', 'Reconnexion avec rejeu, tour clos sans trou (journal).'],
   ['Back-end redémarré pendant un tour', '/sleep 60 puis « Redémarrer le back-end ».', 'Au retour, le tour est retrouvé puis clos.'],
-  ['Bail renouvelé', 'Regarder la colonne Échéance.', 'Remonte chaque minute, en tour comme en attente.'],
-  ['Renouvellement suspendu', 'Créer avec bail 60, puis « suspendre renouv. ».', 'Disparaît à l’échéance, suppression sans anchor.'],
-  ['Inactivité', 'Créer avec inactivité 30, faire un tour, attendre.', 'Capture puis suppression, anchor listé.'],
-  ['Tour trop long', 'Créer avec tour max 30, puis /sleep 120.', 'Annulation, capture, suppression.'],
-  ['Arrêter', '« Arrêter » sur un sandbox prêt.', 'Capture, suppression, disparition de la liste.'],
-  ['Arrêter pendant un tour', '/sleep 60 puis « Arrêter ».', 'Annulation, capture, suppression.'],
+  ['Échéance pendant un tour', '/sleep 150 et regarder la colonne Échéance.', 'Avance chaque minute, jamais au-delà de début + tour max.'],
+  ['Fin de tour', 'Un tour court, puis regarder l’échéance.', 'Maintenant + bail, puis plus aucun renouvellement.'],
+  ['Échéance entre deux tours', 'Créer avec bail 60, un tour, attendre.', 'Détruit par l’infrastructure, anchor reçu du Pod.'],
+  ['Tour trop long', 'Créer avec tour max 30, puis /sleep 120.', 'Détruit à début + 30 s, anchor reçu du Pod.'],
+  ['Arrêter', '« Arrêter » sur un sandbox prêt (bail 60 pour ne pas attendre).', 'Plus de renouvellement, fin à l’échéance, anchor reçu.'],
+  ['Arrêter pendant un tour', '/sleep 60 puis « Arrêter ».', 'Tour annulé, puis comme ci-dessus.'],
   ['Restaurer un anchor', 'Anchors → restaurer → Créer, puis ACP et /recall.', 'Même session, l’agent se souvient.'],
-  ['Adaptateur mort', 'Un tour, puis /crash.', 'Perdu, anchor capturé quand même, suppression.'],
-  ['Pod supprimé seul', '« suppr. Pod seul ».', 'Nouvelle instance détectée, sandbox perdu puis supprimé.'],
+  ['Adaptateur mort', 'Un tour, puis /crash.', 'Perdu, plus de renouvellement, anchor reçu à la fin du Pod.'],
   ['Jetons refusés', '« sonder jeton ».', '401 partout sauf le témoin.'],
+  ['Poussée sans jeton projeté', 'Hors page : POST sur le port 8081 sans jeton valide.', '401, rien n’est stocké.'],
   ['Harness réel', 'Pool claude-code : initialize, session/new, un prompt, Arrêter, restaurer.', 'initialize réel ; sans credential le prompt échoue.'],
 ]
 $('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
