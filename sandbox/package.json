@@ -1,0 +1,20 @@
+{
+  "name": "agora-sandbox",
+  "private": true,
+  "type": "module",
+  "description": "Back-end des sandboxes d'Agora : bridge d'image, agent mock, back-end et banc (sandbox-backend.md).",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3"
+  }
+}

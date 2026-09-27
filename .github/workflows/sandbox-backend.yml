@@ -1,0 +1,112 @@
+# Back-end des sandboxes (sandbox/) : vérifie, puis construit et publie les trois images du banc
+# (sandbox-image.md, sandbox-backend.md). Publiées par digest : infra-k8s épingle le digest dans les
+# templates (agora-sandboxes) et dans le déploiement du banc (agora-lab), jamais un tag.
+name: sandbox-backend
+
+on:
+  push:
+    branches: [spike/sandbox-backend]
+    paths: [sandbox/**, .github/workflows/sandbox-backend.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Typecheck and test
+        working-directory: sandbox
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          node --test --test-concurrency=1 test/*.test.ts
+
+  image:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mock, claude-code, backend]
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/agora-sandbox-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: sandbox
+          file: sandbox/images/Dockerfile
+          target: ${{ matrix.target }}
+          load: true
+          tags: agora-sandbox-${{ matrix.target }}:test
+          cache-from: type=gha,scope=agora-sandbox-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=agora-sandbox-${{ matrix.target }}
+
+      # Un sandbox doit démarrer comme dans le cluster : non-root, racine en lecture seule, HOME en
+      # tmpfs, et n'être prêt qu'une fois l'adaptateur réel initialisé.
+      - name: Start a sandbox read-only and probe it
+        if: matrix.target != 'backend'
+        run: |
+          openssl genpkey -algorithm ed25519 -out key.pem
+          openssl pkey -in key.pem -pubout -out pub.pem
+          docker run -d --name sandbox --read-only --tmpfs /home/harness:uid=10001,gid=10001 --tmpfs /tmp \
+            --cap-drop ALL -e POD_NAME=sbx-ci -e BRIDGE_PUBLIC_KEY="$(cat pub.pem)" -p 8080:8080 \
+            agora-sandbox-${{ matrix.target }}:test
+          for i in $(seq 1 60); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
+          curl -fsS http://localhost:8080/healthz
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
+          docker logs sandbox
+
+      - name: Start the back-end image far enough to fail on its configuration
+        if: matrix.target == 'backend'
+        run: |
+          docker run --rm --read-only --cap-drop ALL agora-sandbox-backend:test 2>&1 | tee out.txt || true
+          grep -q 'SANDBOX_NAMESPACE est requis' out.txt
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: sandbox
+          file: sandbox/images/Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:spike
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=agora-sandbox-${{ matrix.target }}
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the digest
+        run: |
+          {
+            echo '### agora-sandbox-${{ matrix.target }}'
+            echo ''
+            echo '```'
+            echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
