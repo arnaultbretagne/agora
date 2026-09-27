@@ -2,18 +2,17 @@
 
 Contrat à implémenter — une image par harness, construite par Agora.
 
-**L'image démarre l'adaptateur ACP et l'initialise une fois. Elle l'expose à Agora
-seul, par un WebSocket numéroté, et par deux routes pour l'anchor. Le bridge relaie
-ACP sans l'interpréter.**
+**L'image démarre l'adaptateur ACP, l'initialise une fois et le relaie à Agora par un
+WebSocket. Au SIGTERM, elle arrête l'adaptateur et pousse l'anchor vers Agora.**
 
 Suite de [l'interface Agora ↔ Agent Sandbox](agent-sandbox.md).
 
 ## Qui fait quoi ?
 
-- **Agora** construit l'image : adaptateur ACP épinglé, bridge, driver d'anchor du harness.
+- **Agora** construit l'image : adaptateur ACP épinglé, bridge, dossier natif du harness.
 - **infra-k8s** la référence par digest dans un template et fournit ce que le template exige.
-- **Le bridge** lance l'adaptateur, numérote ses lignes, les relaie, capture et restaure
-  l'anchor. Il ne lit jamais le contenu ACP.
+- **Le bridge** lance l'adaptateur, relaie ses lignes sans les lire, pousse l'anchor à la
+  fin du Pod et restaure celui qu'Agora lui dépose.
 
 ## Démarrage, dans le pool
 
@@ -22,90 +21,88 @@ Suite de [l'interface Agora ↔ Agent Sandbox](agent-sandbox.md).
 3. Envoyer `initialize` une seule fois (`fs` et `terminal` à *non*), garder la réponse.
 4. Répondre prêt sur `/healthz`.
 
-Tout cela se passe avant le claim, sans utilisateur ni credential. `initialize` est
-une poignée de main du processus : codex refuse la seconde. Le back-end ne la renvoie
-donc jamais : il donne à ses clients la réponse gardée par le bridge.
+Tout cela se passe avant le claim, sans utilisateur ni credential. codex refuse un second
+`initialize` : le back-end ne le renvoie jamais et sert la réponse gardée par le bridge.
 
 ## Les routes
 
-Port **8080**. Toutes les routes sauf `/healthz` exigent le jeton.
+Port **8080**. Toutes les routes sauf `/healthz` exigent le jeton d'Agora.
 
 | Route | Rôle |
 | --- | --- |
 | `GET /healthz` | 200 si l'adaptateur vit et a répondu à `initialize`, 503 sinon. C'est la readiness du Pod. |
 | `GET /info` | Instance, Pod, workspace, réponse d'`initialize`, état de l'adaptateur, dernière position. |
 | `GET /acp` | WebSocket : le relais ACP. |
-| `GET /anchor?sessionId=…` | Capture l'anchor de cette session. |
-| `PUT /anchor` | Restaure un anchor. |
+| `PUT /anchor` | Restaure un anchor avant la reprise de la session. |
 
 ## Qui peut parler au bridge
 
-`Authorization: Bearer <jeton>`. Le jeton est signé **Ed25519** par Agora. Il nomme
-le sandbox visé et expire après **60 secondes**. Le bridge le vérifie avec la clé
-publique d'Agora, puis compare le nom à celui de son propre Pod. Un jeton pour un
-autre sandbox, expiré ou mal signé est refusé en 401.
-
-La clé publique n'est pas un secret : **le sandbox ne contient aucun secret.** En plus
-du jeton, la NetworkPolicy n'admet en entrée que le back-end d'Agora.
+`Authorization: Bearer <jeton>`, signé **Ed25519** par Agora. Le jeton nomme le sandbox
+visé et expire après **60 secondes**. Le bridge le vérifie avec la clé publique d'Agora et
+compare le nom à celui de son propre Pod. En plus, la NetworkPolicy n'admet en entrée que
+le back-end d'Agora.
 
 ## Le relais
 
 | Règle | Détail |
 | --- | --- |
-| Un seul client | La connexion la plus récente gagne ; l'ancienne est fermée (code 4000). Toutes les connexions ACP numérotent leurs requêtes depuis 0 : deux clients se voleraient leurs réponses. |
-| Premier message | `hello` : instance, Pod, workspace, réponse d'`initialize`, état de l'adaptateur, première position rejouée, et `gap` si des lignes demandées sont perdues. |
-| Vers le client | Chaque ligne de l'adaptateur devient `{seq, acp}` : `seq` strictement croissant pour l'instance, `acp` la ligne brute, jamais réinterprétée. |
-| Vers l'adaptateur | Chaque message texte du client est une ligne ACP brute. Un message binaire ferme la connexion. |
+| Un seul client | La connexion la plus récente gagne ; l'ancienne est fermée (4000). Toutes les connexions ACP numérotent leurs requêtes depuis 0 : deux clients se voleraient leurs réponses. |
+| Premier message | `hello` : instance, Pod, workspace, réponse d'`initialize`, état de l'adaptateur, rejeu et `gap`. |
+| Vers le client | Chaque ligne de l'adaptateur devient `{seq, acp}` : `seq` croît pour l'instance, `acp` est la ligne brute. |
+| Vers l'adaptateur | Chaque message texte du client est une ligne ACP brute. |
 | Sans client | Les lignes sont gardées : les 2 000 dernières, 16 Mio au plus. |
-| Rejeu | `?after=N` rejoue tout ce qui suit la position N, puis passe au direct. N trop ancien : on rejoue ce qui reste, avec `gap`. Sans `after`, pas de rejeu. |
+| Rejeu | `?after=N` rejoue ce qui suit la position N, avec `gap` s'il en manque. |
 
-La position `(instance, seq)` identifie chaque trame. Un redémarrage d'Agora pendant
-un tour se rattrape en rejouant depuis la position notée au début du tour.
+Si l'adaptateur meurt, le bridge reste vivant : `/healthz` passe à 503, `hello` et `/info`
+donnent le code de sortie, et l'anchor partira au SIGTERM.
 
-## Si l'adaptateur meurt
+## À la fin du Pod
 
-Le bridge reste vivant. `/healthz` passe à 503, `hello` et `/info` donnent le code
-de sortie, et le WebSocket est fermé (1011). **`/anchor` répond encore** : Agora
-capture ce que le harness avait écrit, puis supprime le sandbox.
+À l'échéance, l'infrastructure supprime le Pod : le bridge reçoit SIGTERM et dispose du
+délai de grâce du template, 30 secondes.
 
-Si le bridge lui-même meurt, le Pod s'arrête (`restartPolicy: Never`) et l'anchor
-est perdu.
+1. Fermer le relais et refuser toute nouvelle connexion.
+2. Arrêter l'adaptateur : SIGTERM, puis SIGKILL après 5 secondes.
+3. Lire en bloc les fichiers natifs du harness, stables entre deux lectures à 250 ms d'écart.
+4. Les pousser vers Agora, trois essais au plus.
+5. Sortir.
+
+Sans aucun fichier natif (aucune session ouverte), le bridge pousse un anchor vide :
+Agora sait ainsi qu'il n'y avait rien à garder.
 
 ## L'anchor
 
-Le travail S9 est repris tel quel : un seul fichier natif par session, capturé et
-restauré à l'octet près. Le driver de chaque harness sait où est ce fichier
+Le travail S9 est repris : les fichiers natifs du harness, et rien d'autre. Ni
+`.claude.json`, ni fichier d'authentification, ni réglage global
 (`harnesses/claude-code/src/driver.ts`, `docs/field-findings.md` §2.2 sur `main`).
 
-| Harness | Fichier natif | Reprise |
+| Harness | Dossier natif, sauvegardé en bloc | Reprise |
 | --- | --- | --- |
-| claude-code | `$HOME/.claude/projects/<slug du workspace>/<sessionId>.jsonl` | `session/resume` |
-| codex | `$HOME/.codex/sessions/<a>/<m>/<j>/rollout-<horodatage>-<sessionId>.jsonl` | `session/resume` — driver à porter |
-| mock (banc) | `$HOME/.mock-agent/sessions/<slug du workspace>/<sessionId>.jsonl` | `session/resume` ou `session/load` |
+| claude-code | `$HOME/.claude/projects/<slug du workspace>/` | `session/resume` |
+| codex | `$HOME/.codex/sessions/` | `session/resume` — à porter |
+| mock (banc) | `$HOME/.mock-agent/sessions/<slug du workspace>/` | `session/resume` ou `session/load` |
 
 Le slug est celui de claude-code : chaque caractère hors `[A-Za-z0-9-]` devient `-`.
 C'est pourquoi le workspace est le même chemin dans toutes les images.
 
 | Geste | Règle |
 | --- | --- |
-| **Capture** | Le fichier doit rester identique entre deux lectures à 250 ms d'écart, dans un budget de 10 s. Sinon, 409 avec la raison. Pas de fichier (session encore vide) : 404. Au-delà de 32 Mio : 409. Réponse : les octets, avec `x-anchor-format`, `x-anchor-checksum` (sha256) et `x-anchor-session`. |
-| **Restauration** | Le driver lit le `sessionId` dans le contenu : une seule valeur, sinon 409. Il écrit à côté, relit, compare le checksum, puis renomme. Réponse : chemin, taille, checksum, `sessionId`. |
-| **Exclusions** | Rien d'autre n'est capturé : ni `.claude.json`, ni fichier d'authentification, ni réglage global. |
-
-L'adaptateur lit le fichier au moment de `session/resume`, pas à son démarrage : un Pod
-du pool, déjà lancé, peut donc recevoir un anchor.
+| **Poussée** | `POST` vers `AGORA_ANCHOR_URL`. Le corps liste chaque fichier : chemin relatif au dossier natif, checksum sha256, contenu. 32 Mio au plus. |
+| **Identité du Pod** | `Authorization: Bearer` + le jeton de ServiceAccount projeté par le kubelet (audience `agora-anchors`), relu à chaque poussée. |
+| **Restauration** | `PUT /anchor` avec le même corps. Chaque fichier est écrit à côté, relu, comparé, puis renommé. L'adaptateur lit le fichier au `session/resume`, pas au démarrage : un Pod du pool, déjà lancé, peut le recevoir. |
 
 ## Ce que le template fournit
 
 | Élément | Valeur |
 | --- | --- |
-| `POD_NAME` | downward API, `metadata.name` : le nom attendu dans le jeton |
+| `POD_NAME` | downward API, `metadata.name` : le nom attendu dans le jeton d'Agora |
 | `BRIDGE_PUBLIC_KEY` | clé publique d'Agora, depuis la ConfigMap `agora-bridge-key` |
+| `AGORA_ANCHOR_URL` | la route de réception des anchors d'Agora |
+| Jeton projeté | volume `serviceAccountToken`, audience `agora-anchors`, monté sur `/var/run/agora/token` |
 | Port | 8080 |
 | Readiness | `GET /healthz` |
 | `HOME` | `emptyDir` monté sur `/home/harness` |
-| Utilisateur | 10001, racine en lecture seule, aucune capacité, pas de jeton de ServiceAccount |
-| `terminationGracePeriodSeconds` | 5 |
+| Utilisateur | 10001, racine en lecture seule, aucune capacité |
+| `terminationGracePeriodSeconds` | 30 |
 
-**À préciser :** les credentials du harness (Agent Vault) restent hors de ce contrat,
-et le driver codex est à porter.
+**À préciser :** les credentials du harness (Agent Vault), le dossier natif de codex.
