@@ -304,8 +304,24 @@ export class SandboxManager {
       record.error = `${record.readyReason} : ${record.readyMessage}`
       this.log(record.name, `le claim n'aboutira pas : ${record.error}`)
     }
+    if (record.launchType === null && record.podName !== null) void this.readLaunchType(record)
     this.ensureBridge(record)
     this.emitRecord(record)
+  }
+
+  /** Warm or cold, as Agent Sandbox labels the Sandbox it bound (`agents.x-k8s.io/launch-type`). */
+  private async readLaunchType(record: SandboxRecord): Promise<void> {
+    try {
+      const sandbox = await this.options.kube.getSandbox(record.podName ?? '')
+      const labels = (sandbox?.metadata as { labels?: Record<string, string> } | undefined)?.labels
+      const launchType = labels?.['agents.x-k8s.io/launch-type'] ?? null
+      if (launchType !== null && record.launchType === null) {
+        record.launchType = launchType
+        this.emitRecord(record)
+      }
+    } catch {
+      // The tick tries again.
+    }
   }
 
   private newRecord(claim: Claim): SandboxRecord {
@@ -701,12 +717,7 @@ export class SandboxManager {
           void this.reap(record, `erreur : ${record.error}`)
         }
         if (!record.ready && record.podName !== null) await this.diagnose(record)
-        if (record.launchType === null && record.podName !== null) {
-          const sandbox = await this.options.kube.getSandbox(record.podName)
-          const labels = (sandbox?.metadata as { labels?: Record<string, string> } | undefined)?.labels
-          record.launchType = labels?.['agents.x-k8s.io/launch-type'] ?? null
-          if (record.launchType !== null) this.emitRecord(record)
-        }
+        if (record.launchType === null && record.podName !== null) await this.readLaunchType(record)
       } catch (error) {
         this.log(record.name, `tick : ${error instanceof Error ? error.message : String(error)}`)
       }
