@@ -84,6 +84,10 @@ sans renouvellement. Un nouveau prompt relance le bail si le sandbox est encore 
   encore. `cold` n'arrive que si le pool n'a plus rien.
 - **Réseau d'une VM Kata :** les réponses du proxy DNS de Cilium n'y arrivent pas. Aucune
   règle FQDN pour les sandboxes : du DNS simple, et des plages d'adresses.
+- **Horloge d'une VM Kata :** l'image invitée lance chrony vers les serveurs NTS d'Ubuntu
+  (TCP 4460), que la politique réseau rejette en boucle. Synchro désactivée
+  (`systemd.mask=chrony.service` dans les paramètres noyau de Kata) : l'heure vient de
+  kvm-clock, qui suit l'hôte.
 
 ## L'image
 
