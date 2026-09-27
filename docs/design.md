@@ -60,11 +60,9 @@ possède les credentials et applique les restrictions de leur utilisation.
 Agora configure ces intégrations avec des valeurs autorisées. Il ne réimplémente
 ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance globale.
 
-L'[interface Agora ↔ Agent Sandbox](agent-sandbox.md) précise les opérations et les
-délais retenus : bail de secours de 10 minutes renouvelé chaque minute, suppression
-décidée par Agora après capture de l'anchor, tour limité à 1 heure. Le
-[contrat de l'image](sandbox-image.md) et [l'API du back-end](sandbox-backend.md)
-le complètent.
+Le [back-end des sandboxes](backend.md) précise l'interface avec Agent Sandbox, l'image
+et l'API d'Agora : bail de 10 minutes, renouvellement chaque minute pendant un tour, tour
+limité à 1 heure, destruction par l'infrastructure seule, anchor poussé par le Pod.
 
 L'[interface Agora ↔ assistant-ui](assistant-ui.md) précise le fil, les commandes et
 les composants retenus : projection ACP en base, un flux unique repris par position.
