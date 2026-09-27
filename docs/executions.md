@@ -347,9 +347,9 @@ ré-armé trois fois par bail.
 | # | Cas | Attendu | Mesuré |
 | --- | --- | --- | --- |
 | 1 | Créer depuis un pool chaud | Prêt en moins d'une seconde, lancement `warm`. | Prêt en 0,29 s, `warm`. |
-| 2 | Créer au-delà du stock chaud | Prêt en quelques secondes, lancement `cold`. | Deux `cold` en 5,4 s, un `warm` en 0,61 s. |
+| 2 | Créer au-delà du stock chaud | Prêt en quelques secondes : `cold`, ou `warm` sur un Sandbox du pool encore en démarrage. | Un `warm` en 0,55 s, puis deux `cold` en 3,8 et 4,9 s ; au passage précédent, deux `warm` en 2,9 s. |
 | 3 | Créer deux fois avec le même identifiant | Même exécution, un seul claim. | Même nom, un seul claim. |
-| 4 | Pool hors catalogue, quota atteint | Refusé, avec la raison. | 400 « pool hors catalogue » ; 429 « quota atteint : 6 sur 6 ». |
+| 4 | Pool hors catalogue, quota atteint | Refusé, avec la raison. | 400 « pool hors catalogue » ; 429 « quota atteint : 6 exécutions actives sur 6 ». |
 | 5 | Relais : `initialize`, `session/new`, prompt | Réponse d'`initialize` du bridge, trames numérotées, tour clos. | `initialize` local, positions 1 → 3, `end_turn`. |
 | 6 | Second prompt pendant un tour | Refusé par une erreur JSON-RPC. | « refusé : un tour est déjà en cours ». |
 | 7 | Annuler un tour | Fin `cancelled`, exécution prête. | `cancelled`, exécution prête. |
@@ -363,7 +363,7 @@ ré-armé trois fois par bail.
 | 15 | Tour trop long | Détruit à début + durée maximale ; l'anchor arrive. | Détruit à début + 30 s ; anchor poussé. |
 | 16 | Arrêter | Plus de renouvellement, destruction à l'échéance, anchor reçu. | *Arrêté*, détruit à l'échéance ; anchor avec le texte du tour. |
 | 17 | Arrêter pendant un tour | Tour annulé, puis comme 16. | Tour `cancelled`, détruit à l'échéance ; anchor poussé. |
-| 18 | Restaurer un anchor | Nouvelle exécution, même session, l'agent se souvient. | Prêt en 0,52 s, session reprise, souvenir intact. |
+| 18 | Restaurer un anchor | Nouvelle exécution, même session, l'agent se souvient. | Prêt en 0,37 s, session reprise, souvenir intact. |
 | 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. | *Perdu* ; anchor poussé malgré l'adaptateur mort. |
 | 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. | 401 partout ; jeton valide 200 / 101. |
 | 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. | 401 sans jeton, 401 avec un faux. |
