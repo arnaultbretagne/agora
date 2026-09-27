@@ -1,0 +1,16 @@
+{
+  "name": "@agora/mock-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "L'agent ACP sans modèle du banc, avec un vrai fichier natif.",
+  "exports": {
+    "./agent": "./src/agent.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agora/sandbox-bridge": "0.0.0"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@agora/sandbox-backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Le back-end des sandboxes d'Agora et la page du banc.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "@agora/sandbox-bridge": "0.0.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agora/sandbox-testkit": "0.0.0"
+  }
+}

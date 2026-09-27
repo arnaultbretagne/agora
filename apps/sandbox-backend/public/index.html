@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc sandboxes</title>
+<style>
+  body { font: 13px/1.35 system-ui, sans-serif; margin: 12px; background: #fff; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #ccc; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 3px 5px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  code, pre, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  pre { background: #f6f6f6; border: 1px solid #ddd; padding: 6px; max-height: 420px; overflow: auto; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
+  button { font-size: 12px; margin: 1px; }
+  input, select, textarea { font-size: 12px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+  .muted { color: #666; }
+  .err { color: #b00; }
+  .ok { color: #070; }
+  .state { font-weight: bold; }
+  .sel { background: #ffd; }
+  .panel { border: 1px solid #999; padding: 8px; margin-top: 6px; }
+  .perm { background: #fee; border: 1px solid #c66; padding: 6px; margin: 4px 0; }
+  td.wrap { max-width: 280px; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Banc du back-end des sandboxes</h1>
+<div class="row">
+  <span>Flux d'état : <b id="sse">…</b></span>
+  <button id="restart" title="POST /api/lab/restart">Redémarrer le back-end</button>
+  <span class="muted">Contrat : docs/backend.md (branche feat/sandbox-backend)</span>
+</div>
+
+<h2>Créer un sandbox</h2>
+<div class="row">
+  <label>Pool <select id="pool"></select></label>
+  <label>Identifiant de demande <input id="requestId" size="38"></label>
+  <button id="newId">nouvel identifiant</button>
+  <label>Anchor à restaurer <select id="anchor"><option value="">aucun</option></select></label>
+</div>
+<div class="row">
+  <label>Bail (s) <input id="leaseSeconds" size="5" placeholder="600"></label>
+  <label>Tour max (s) <input id="turnCapSeconds" size="5" placeholder="3600"></label>
+  <button id="create">Créer</button>
+  <button id="createTwice" title="Deux POST avec le même identifiant">Créer 2× (même identifiant)</button>
+</div>
+<pre id="createResult" class="muted">—</pre>
+<div id="pools" class="muted"></div>
+
+<h2>Sandboxes vivants</h2>
+<table>
+  <thead><tr><th>Nom</th><th>Pool</th><th>État</th><th>Raison</th><th>Lancement</th><th>Pod / Service</th><th>Échéance</th><th>Renouv.</th><th>Instance</th><th>Session</th><th>Tour</th><th>Seq</th><th>Actions</th></tr></thead>
+  <tbody id="sandboxes"></tbody>
+</table>
+
+<div class="panel" id="acpPanel">
+  <b>Relais ACP</b> — sandbox : <b id="acpName">aucun (bouton ACP d'une ligne)</b> — connexion : <b id="acpConn">fermée</b> — dernière position reçue : <b id="acpSeq">0</b>
+  <div class="row">
+    <button id="acpConnect">Connecter (en direct)</button>
+    <button id="acpResume">Reconnecter après ma dernière position</button>
+    <button id="acpClose">Déconnecter</button>
+    <label><input type="checkbox" id="hideChunks" checked> masquer les fragments de texte</label>
+    <button id="acpClear">vider</button>
+  </div>
+  <div class="row">
+    <button data-acp="initialize">initialize</button>
+    <button data-acp="new">session/new</button>
+    <label>session <input id="sessionId" size="38"></label>
+    <button data-acp="resume">session/resume</button>
+    <button data-acp="load">session/load</button>
+    <button data-acp="cancel">session/cancel</button>
+  </div>
+  <div class="row">
+    <input id="promptText" size="50" value="bonjour">
+    <button data-acp="prompt">session/prompt</button>
+    <span class="muted">rapides :</span>
+    <button data-quick="/sleep 30">/sleep 30</button>
+    <button data-quick="/silence 20">/silence 20</button>
+    <button data-quick="/permission">/permission</button>
+    <button data-quick="/tool">/tool</button>
+    <button data-quick="/big 64">/big 64</button>
+    <button data-quick="/recall">/recall</button>
+    <button data-quick="/crash">/crash</button>
+  </div>
+  <div id="permissions"></div>
+  <div class="row">
+    <textarea id="raw" rows="2" cols="90">{"jsonrpc":"2.0","id":99,"method":"session/prompt","params":{"sessionId":"","prompt":[{"type":"text","text":"brut"}]}}</textarea>
+    <button id="sendRaw">envoyer tel quel</button>
+  </div>
+  <pre id="acpLog"></pre>
+</div>
+
+<h2>Anchors stockés</h2>
+<table>
+  <thead><tr><th>Id</th><th>Harness</th><th>Pool</th><th>Session</th><th>Taille</th><th>Checksum</th><th>Sandbox</th><th>Raison</th><th>Date</th><th></th></tr></thead>
+  <tbody id="anchors"></tbody>
+</table>
+
+<h2>Fins (destruction par l'infrastructure)</h2>
+<table>
+  <thead><tr><th>Date</th><th>Nom</th><th>Pool</th><th>Raison</th><th>Anchor</th></tr></thead>
+  <tbody id="history"></tbody>
+</table>
+
+<h2>Sondage du jeton</h2>
+<pre id="probe" class="muted">—</pre>
+
+<h2>Journal du back-end</h2>
+<pre id="logs"></pre>
+
+<h2>Les cas à valider (docs/backend.md)</h2>
+<table>
+  <thead><tr><th>#</th><th>Cas</th><th>Comment le jouer ici</th><th>Attendu</th></tr></thead>
+  <tbody id="cases"></tbody>
+</table>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map() }
+
+// ---------------------------------------------------------------- flux d'état
+function connectEvents() {
+  const source = new EventSource('/api/events')
+  source.onopen = () => { $('sse').textContent = 'connecté'; $('sse').className = 'ok' }
+  source.onerror = () => { $('sse').textContent = 'coupé, reconnexion…'; $('sse').className = 'err' }
+  source.onmessage = (message) => {
+    const event = JSON.parse(message.data)
+    if (event.type === 'snapshot') {
+      state.sandboxes = new Map(event.sandboxes.map((s) => [s.name, s]))
+      state.history = event.history; state.logs = event.logs; state.anchors = event.anchors
+      renderAll()
+    } else if (event.type === 'sandbox') {
+      state.sandboxes.set(event.sandbox.name, event.sandbox); renderSandboxes()
+    } else if (event.type === 'ended') {
+      state.sandboxes.delete(event.ending.name); state.history.unshift(event.ending); renderSandboxes(); renderHistory()
+    } else if (event.type === 'anchor') {
+      state.anchors.unshift(event.anchor); renderAnchors()
+    } else if (event.type === 'log') {
+      state.logs.unshift(event.entry); state.logs.length = Math.min(state.logs.length, 300); renderLogs()
+    }
+  }
+}
+
+async function loadPools() {
+  const response = await fetch('/api/pools')
+  const { pools } = await response.json()
+  state.pools = pools
+  $('pool').innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.harness)})</option>`).join('') + '<option value="pool-inexistant">pool-inexistant (hors catalogue)</option>'
+  $('pools').innerHTML = 'Catalogue : ' + pools.map((p) => `<b>${esc(p.name)}</b> — harness ${esc(p.harness)}, stock ${p.readyReplicas}/${p.replicas}, <code>${esc(p.image)}</code>`).join(' · ')
+}
+
+function renderAll() { renderSandboxes(); renderAnchors(); renderHistory(); renderLogs() }
+
+function secondsLeft(iso) {
+  if (!iso) return '—'
+  const s = Math.round((Date.parse(iso) - Date.now()) / 1000)
+  return `${s} s`
+}
+
+function renderSandboxes() {
+  const rows = [...state.sandboxes.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((s) => `
+    <tr class="${s.name === state.selected ? 'sel' : ''}">
+      <td class="mono">${esc(s.name)}<br><span class="muted">${esc(s.requestId)}</span></td>
+      <td>${esc(s.pool)}</td>
+      <td class="state">${esc(s.state)}${s.pendingPermissions ? `<br><span class="err">${s.pendingPermissions} permission(s)</span>` : ''}${s.consumer ? '<br><span class="muted">consommateur</span>' : ''}</td>
+      <td class="wrap">${esc(s.reason)}${s.lastTurn ? `<br><span class="muted">dernier tour : ${esc(s.lastTurn.outcome)}</span>` : ''}${s.restoreAnchor ? `<br><span class="muted">restauration ${esc(s.restoreAnchor)} : ${s.restored ? 'faite' : 'à faire'}</span>` : ''}</td>
+      <td>${esc(s.launchType ?? '?')}</td>
+      <td class="mono">${esc(s.pod)}<br>${esc(s.service)}${s.podDetail ? `<br><span class="muted">${esc(s.podDetail)}</span>` : ''}</td>
+      <td class="mono" data-deadline="${esc(s.shutdownTime)}">${secondsLeft(s.shutdownTime)}<br><span class="muted">${esc(s.shutdownTime)}</span></td>
+      <td>${s.renewals}${s.renewing ? '<br><b class="ok">ré-armé (tour)</b>' : '<br><span class="muted">pas ré-armé</span>'}<br><span class="muted">bail ${s.limits.leaseSeconds} / tour ${s.limits.turnCapSeconds}</span></td>
+      <td class="mono wrap">${esc(s.instance)}<br><span class="muted">bridge ${esc(s.bridge.state)} ${esc(s.bridge.agent ? s.bridge.agent.name + '@' + s.bridge.agent.version : '')}</span></td>
+      <td class="mono wrap">${esc(s.sessionId)}</td>
+      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>depuis ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">inactif depuis ${esc(s.idleSince)}</span>`}</td>
+      <td>${s.lastSeq}</td>
+      <td>
+        <button data-select="${esc(s.name)}">ACP</button>
+        <button data-stop="${esc(s.name)}">Arrêter</button><br>
+        <button data-lab="drop-bridge" data-name="${esc(s.name)}">couper bridge</button>
+<br>
+        <button data-lab="probe-auth" data-name="${esc(s.name)}">sonder jeton</button>
+      </td>
+    </tr>`).join('')
+  $('sandboxes').innerHTML = rows || '<tr><td colspan="13" class="muted">aucun</td></tr>'
+}
+
+function renderAnchors() {
+  $('anchor').innerHTML = '<option value="">aucun</option>' + state.anchors.map((a) => `<option value="${esc(a.id)}">${esc(a.id)} — ${esc(a.harness)} — ${esc(a.sessionId)}</option>`).join('')
+  $('anchors').innerHTML = state.anchors.map((a) => `
+    <tr><td class="mono">${esc(a.id)}</td><td>${esc(a.harness)}</td><td>${esc(a.pool)}</td><td class="mono">${esc(a.sessionId)}</td><td>${a.byteLength}</td>
+    <td class="mono">${esc(a.checksum.slice(0, 19))}…</td><td class="mono">${esc(a.sandbox)}</td><td>${esc(a.reason)}</td><td>${esc(a.createdAt)}</td>
+    <td><a href="/api/anchors/${esc(a.id)}/content" target="_blank">voir</a> <button data-restore="${esc(a.id)}" data-pool="${esc(a.pool)}">restaurer</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">aucun</td></tr>'
+}
+
+function renderHistory() {
+  $('history').innerHTML = state.history.map((h) => `
+    <tr><td>${esc(h.at)}</td><td class="mono">${esc(h.name)}</td><td>${esc(h.pool)}</td><td>${esc(h.reason)}</td>
+    <td>${h.anchor ? `<span class="ok">${esc(h.anchor.id)}</span> (${h.anchor.byteLength} o)` : `<span class="err">aucun</span> : ${esc(h.anchorError)}`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">aucune</td></tr>'
+}
+
+function renderLogs() {
+  $('logs').textContent = state.logs.map((l) => `${l.at}  ${l.sandbox ?? '-'}  ${l.message}`).join('\n')
+}
+
+setInterval(() => {
+  for (const cell of document.querySelectorAll('[data-deadline]')) {
+    const first = cell.firstChild
+    if (first && first.nodeType === 3) first.textContent = secondsLeft(cell.dataset.deadline)
+  }
+}, 1000)
+
+// ---------------------------------------------------------------- commandes
+// crypto.randomUUID n'existe qu'en contexte sécurisé : la page doit aussi marcher en HTTP direct.
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+function newRequestId() { $('requestId').value = uuid() }
+
+function limits() {
+  const out = {}
+  for (const key of ['leaseSeconds', 'turnCapSeconds']) if ($(key).value.trim() !== '') out[key] = $(key).value.trim()
+  return out
+}
+
+async function post(path, body) {
+  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const data = await response.json().catch(() => ({}))
+  return { status: response.status, ...data }
+}
+
+async function create(times) {
+  const body = { requestId: $('requestId').value, pool: $('pool').value, anchorId: $('anchor').value || undefined, limits: limits() }
+  const results = await Promise.all(Array.from({ length: times }, () => post('/api/sandboxes', body)))
+  $('createResult').textContent = results.map((r) => JSON.stringify(r)).join('\n')
+  $('createResult').className = results.every((r) => r.accepted) ? 'ok' : 'err'
+  newRequestId()
+}
+
+document.addEventListener('click', async (event) => {
+  const target = event.target
+  if (!(target instanceof HTMLElement)) return
+  if (target.dataset.select) selectSandbox(target.dataset.select)
+  if (target.dataset.stop) {
+    target.disabled = true
+    const r = await post(`/api/sandboxes/${target.dataset.stop}/stop`)
+    $('createResult').textContent = 'Arrêt : ' + JSON.stringify(r)
+  }
+  if (target.dataset.lab) {
+    const r = await post(`/api/lab/sandboxes/${target.dataset.name}/${target.dataset.lab}`)
+    if (target.dataset.lab === 'probe-auth') {
+      $('probe').textContent = r.accepted ? r.results.map((x) => `${x.case.padEnd(32)}  /info → ${x.info}   /acp → ${x.acp}`).join('\n') : JSON.stringify(r)
+    } else $('createResult').textContent = `${target.dataset.lab} : ${JSON.stringify(r)}`
+  }
+  if (target.dataset.restore) {
+    $('anchor').value = target.dataset.restore
+    const pool = state.pools.find((p) => p.name === target.dataset.pool) ? target.dataset.pool : state.pools[0]?.name
+    if (pool) $('pool').value = pool
+    $('createResult').textContent = `Anchor ${target.dataset.restore} choisi : cliquez « Créer ».`
+  }
+  if (target.dataset.quick) { $('promptText').value = target.dataset.quick; acp('prompt') }
+  if (target.dataset.acp) acp(target.dataset.acp)
+  if (target.dataset.permission) answerPermission(target.dataset.permission, target.dataset.option)
+})
+
+$('newId').onclick = newRequestId
+$('create').onclick = () => create(1)
+$('createTwice').onclick = () => create(2)
+$('restart').onclick = async () => { $('createResult').textContent = JSON.stringify(await post('/api/lab/restart')) }
+
+// ---------------------------------------------------------------- relais ACP
+function selectSandbox(name) {
+  if (state.selected !== name) { closeAcp(); state.lastSeq = 0; $('acpLog').textContent = ''; state.permissions.clear(); renderPermissions() }
+  state.selected = name
+  $('acpName').textContent = name
+  const s = state.sandboxes.get(name)
+  if (s?.sessionId) $('sessionId').value = s.sessionId
+  renderSandboxes()
+  openAcp(false)
+}
+
+function logLine(direction, text) {
+  const pre = $('acpLog')
+  pre.textContent += `${direction} ${text}\n`
+  if (pre.textContent.length > 400000) pre.textContent = pre.textContent.slice(-300000)
+  pre.scrollTop = pre.scrollHeight
+}
+
+function openAcp(resume) {
+  if (!state.selected) return
+  closeAcp()
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+  const url = `${scheme}://${location.host}/api/sandboxes/${state.selected}/acp${resume ? `?after=${state.lastSeq}` : ''}`
+  const ws = new WebSocket(url)
+  state.ws = ws
+  $('acpConn').textContent = 'connexion…'
+  ws.onopen = () => { $('acpConn').textContent = resume ? `ouverte (reprise après ${state.lastSeq})` : 'ouverte (direct)'; $('acpConn').className = 'ok' }
+  ws.onclose = (e) => { if (state.ws === ws) { $('acpConn').textContent = `fermée (${e.code} ${e.reason})`; $('acpConn').className = 'err'; state.ws = null } }
+  ws.onmessage = (message) => {
+    const data = JSON.parse(message.data)
+    if (typeof data.seq === 'number') {
+      state.lastSeq = Math.max(state.lastSeq, data.seq); $('acpSeq').textContent = state.lastSeq
+      onAcp(data.acp, `← ${String(data.seq).padStart(5)}`)
+    } else if (typeof data.local === 'string') onAcp(data.local, '← local')
+    else if (data.event) {
+      if (data.event.type === 'sandbox') return
+      logLine('· event', JSON.stringify(data.event))
+    }
+  }
+}
+
+function onAcp(line, prefix) {
+  let m = null
+  try { m = JSON.parse(line) } catch { /* affiché brut */ }
+  if (m && m.method === 'session/request_permission') { state.permissions.set(JSON.stringify(m.id), m); renderPermissions() }
+  if (m && m.method === 'session/update' && m.params?.update?.sessionUpdate === 'agent_message_chunk' && $('hideChunks').checked) {
+    logLine(prefix, `[texte] ${m.params.update.content?.text?.slice(0, 120).replace(/\n/g, '⏎')}`)
+    return
+  }
+  if (m && m.result && m.result.sessionId) $('sessionId').value = m.result.sessionId
+  logLine(prefix, line.length > 2000 ? line.slice(0, 2000) + '…' : line)
+}
+
+function closeAcp() { if (state.ws) { const ws = state.ws; state.ws = null; ws.close(); $('acpConn').textContent = 'fermée'; $('acpConn').className = '' } }
+
+function send(message) {
+  if (!state.ws || state.ws.readyState !== 1) { logLine('!', 'relais non connecté'); return }
+  const text = JSON.stringify(message)
+  state.ws.send(text)
+  logLine('→', text)
+}
+
+function acp(kind) {
+  const s = state.sandboxes.get(state.selected)
+  const cwd = s?.bridge?.workspace ?? '/home/harness/work'
+  const sessionId = $('sessionId').value.trim()
+  const id = state.nextId++
+  if (kind === 'initialize') send({ jsonrpc: '2.0', id, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } } })
+  if (kind === 'new') send({ jsonrpc: '2.0', id, method: 'session/new', params: { cwd, mcpServers: [] } })
+  if (kind === 'resume') send({ jsonrpc: '2.0', id, method: 'session/resume', params: { sessionId, cwd, mcpServers: [] } })
+  if (kind === 'load') send({ jsonrpc: '2.0', id, method: 'session/load', params: { sessionId, cwd, mcpServers: [] } })
+  if (kind === 'cancel') send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } })
+  if (kind === 'prompt') send({ jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: $('promptText').value }] } })
+}
+
+function renderPermissions() {
+  $('permissions').innerHTML = [...state.permissions.entries()].map(([key, m]) => `
+    <div class="perm">Permission demandée (requête ${esc(key)}) : ${esc(m.params?.toolCall?.title)} —
+    ${(m.params?.options ?? []).map((o) => `<button data-permission="${esc(key)}" data-option="${esc(o.optionId)}">${esc(o.name)} (${esc(o.kind)})</button>`).join(' ')}
+    <button data-permission="${esc(key)}" data-option="">annulée</button></div>`).join('')
+}
+
+function answerPermission(key, optionId) {
+  const m = state.permissions.get(key)
+  if (!m) return
+  send({ jsonrpc: '2.0', id: m.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } })
+  state.permissions.delete(key); renderPermissions()
+}
+
+$('acpConnect').onclick = () => openAcp(false)
+$('acpResume').onclick = () => openAcp(true)
+$('acpClose').onclick = closeAcp
+$('acpClear').onclick = () => { $('acpLog').textContent = '' }
+$('sendRaw').onclick = () => { try { const m = JSON.parse($('raw').value); send(m) } catch (e) { logLine('!', 'JSON invalide : ' + e.message) } }
+
+// ---------------------------------------------------------------- les cas
+const CASES = [
+  ['Créer depuis un pool chaud', 'Créer sur un pool dont le stock est prêt.', 'Prêt en moins d’une seconde, lancement warm.'],
+  ['Créer au-delà du stock chaud', 'Créer plusieurs sandboxes d’affilée.', 'Prêt en quelques secondes, lancement cold.'],
+  ['Créer deux fois, même identifiant', '« Créer 2× (même identifiant) ».', 'Même nom deux fois, un seul sandbox.'],
+  ['Pool hors catalogue, quota', 'Pool « pool-inexistant » ; ou créer au-delà du quota.', 'Refusé avec la raison.'],
+  ['Relais ACP', 'ACP → initialize, session/new, session/prompt.', 'initialize répondu en local, trames numérotées, tour clos.'],
+  ['Second prompt pendant un tour', '/sleep 30 puis session/prompt aussitôt.', 'Erreur JSON-RPC « refusé : un tour est déjà en cours ».'],
+  ['Annuler un tour', '/sleep 30 puis session/cancel.', 'stopReason cancelled, sandbox prêt.'],
+  ['Permission, consommateur parti puis revenu', '/permission, Déconnecter, « Reconnecter après ma dernière position ».', 'La demande est rejouée ; répondre débloque le tour.'],
+  ['Consommateur déconnecté pendant un tour', '/sleep 30, Déconnecter, attendre, reconnecter après la dernière position.', 'Trames manquées rejouées, fin du tour visible.'],
+  ['Connexion au bridge coupée', '/sleep 30 puis « couper bridge ».', 'Reconnexion avec rejeu, tour clos sans trou (journal).'],
+  ['Back-end redémarré pendant un tour', '/sleep 60 puis « Redémarrer le back-end ».', 'Au retour, le tour est retrouvé puis clos.'],
+  ['Échéance pendant un tour', '/sleep 150 et regarder la colonne Échéance.', 'Avance chaque minute, jamais au-delà de début + tour max.'],
+  ['Fin de tour', 'Un tour court, puis regarder l’échéance.', 'Maintenant + bail, puis plus aucun renouvellement.'],
+  ['Échéance entre deux tours', 'Créer avec bail 60, un tour, attendre.', 'Détruit par l’infrastructure, anchor reçu du Pod.'],
+  ['Tour trop long', 'Créer avec tour max 30, puis /sleep 120.', 'Détruit à début + 30 s, anchor reçu du Pod.'],
+  ['Arrêter', '« Arrêter » sur un sandbox prêt (bail 60 pour ne pas attendre).', 'Plus de renouvellement, fin à l’échéance, anchor reçu.'],
+  ['Arrêter pendant un tour', '/sleep 60 puis « Arrêter ».', 'Tour annulé, puis comme ci-dessus.'],
+  ['Restaurer un anchor', 'Anchors → restaurer → Créer, puis ACP et /recall.', 'Même session, l’agent se souvient.'],
+  ['Adaptateur mort', 'Un tour, puis /crash.', 'Perdu, plus de renouvellement, anchor reçu à la fin du Pod.'],
+  ['Jetons refusés', '« sonder jeton ».', '401 partout sauf le témoin.'],
+  ['Poussée sans jeton projeté', 'Hors page : POST sur le port 8081 sans jeton valide.', '401, rien n’est stocké.'],
+  ['Harness réel', 'Pool claude-code : initialize, session/new, un prompt, Arrêter, restaurer.', 'initialize réel ; sans credential le prompt échoue.'],
+]
+$('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
+
+newRequestId()
+connectEvents()
+loadPools().catch((e) => { $('pools').textContent = 'catalogue indisponible : ' + e.message })
+</script>
+</body>
+</html>

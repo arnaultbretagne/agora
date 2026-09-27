@@ -1,12 +1,11 @@
-# Back-end des sandboxes (sandbox/) : vérifie, puis construit et publie les trois images du banc
-# (sandbox-image.md, sandbox-backend.md). Publiées par digest : infra-k8s épingle le digest dans les
-# templates (agora-sandboxes) et dans le déploiement du banc (agora-lab), jamais un tag.
+# The sandbox back-end (docs/backend.md): checks every workspace, then builds and publishes the three
+# images by digest. infra-k8s pins the digests (apps/agora-sandboxes, apps/agora-lab), never a tag.
 name: sandbox-backend
 
 on:
   push:
-    branches: [spike/sandbox-backend]
-    paths: [sandbox/**, .github/workflows/sandbox-backend.yml]
+    branches: [feat/sandbox-backend]
+    paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/sandbox-backend.yml]
   workflow_dispatch:
 
 permissions:
@@ -23,12 +22,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Typecheck and test
-        working-directory: sandbox
+      - name: Typecheck and test every workspace
         run: |
           npm ci --no-audit --no-fund
-          npm run typecheck
-          node --test --test-concurrency=1 test/*.test.ts
+          npm run check
 
   image:
     needs: check
@@ -36,9 +33,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [mock, claude-code, backend]
+        include:
+          - { name: backend, dockerfile: apps/sandbox-backend/Dockerfile, sandbox: false }
+          - { name: mock, dockerfile: harnesses/mock/Dockerfile, sandbox: true }
+          - { name: claude-code, dockerfile: harnesses/claude-code/Dockerfile, sandbox: true }
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/agora-sandbox-${{ matrix.target }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/agora-sandbox-${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -46,31 +46,30 @@ jobs:
       - name: Build the image locally
         uses: docker/build-push-action@v6
         with:
-          context: sandbox
-          file: sandbox/images/Dockerfile
-          target: ${{ matrix.target }}
+          context: .
+          file: ${{ matrix.dockerfile }}
           load: true
-          tags: agora-sandbox-${{ matrix.target }}:test
-          cache-from: type=gha,scope=agora-sandbox-${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=agora-sandbox-${{ matrix.target }}
+          tags: agora-sandbox-${{ matrix.name }}:test
+          cache-from: type=gha,scope=agora-sandbox-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=agora-sandbox-${{ matrix.name }}
 
-      # Un sandbox doit démarrer comme dans le cluster : non-root, racine en lecture seule, HOME en
-      # tmpfs, et n'être prêt qu'une fois l'adaptateur réel initialisé.
+      # A sandbox starts as in the cluster: non-root, read-only root, HOME on tmpfs, and is ready
+      # only once the real adapter answered initialize.
       - name: Start a sandbox read-only and probe it
-        if: matrix.target != 'backend'
+        if: matrix.sandbox
         run: |
           openssl genpkey -algorithm ed25519 -out key.pem
           openssl pkey -in key.pem -pubout -out pub.pem
           docker run -d --name sandbox --read-only --tmpfs /home/harness:uid=10001,gid=10001 --tmpfs /tmp \
             --cap-drop ALL -e POD_NAME=sbx-ci -e BRIDGE_PUBLIC_KEY="$(cat pub.pem)" -p 8080:8080 \
-            agora-sandbox-${{ matrix.target }}:test
+            agora-sandbox-${{ matrix.name }}:test
           for i in $(seq 1 60); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
           curl -fsS http://localhost:8080/healthz
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
           docker logs sandbox
 
-      - name: Start the back-end image far enough to fail on its configuration
-        if: matrix.target == 'backend'
+      - name: Start the back-end far enough to fail on its configuration
+        if: ${{ !matrix.sandbox }}
         run: |
           docker run --rm --read-only --cap-drop ALL agora-sandbox-backend:test 2>&1 | tee out.txt || true
           grep -q 'SANDBOX_NAMESPACE est requis' out.txt
@@ -84,16 +83,15 @@ jobs:
       - id: push
         uses: docker/build-push-action@v6
         with:
-          context: sandbox
-          file: sandbox/images/Dockerfile
-          target: ${{ matrix.target }}
+          context: .
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:spike
+            ${{ env.IMAGE }}:sandbox-backend
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=agora-sandbox-${{ matrix.target }}
+          cache-from: type=gha,scope=agora-sandbox-${{ matrix.name }}
 
       - uses: actions/attest-build-provenance@v2
         with:
@@ -104,7 +102,7 @@ jobs:
       - name: Record the digest
         run: |
           {
-            echo '### agora-sandbox-${{ matrix.target }}'
+            echo '### agora-sandbox-${{ matrix.name }}'
             echo ''
             echo '```'
             echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"

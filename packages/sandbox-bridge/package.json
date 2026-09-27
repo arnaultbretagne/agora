@@ -1,0 +1,22 @@
+{
+  "name": "@agora/sandbox-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Le bridge de l'image d'un sandbox, le jeton d'Agora et le format de l'anchor.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./token": "./src/token.ts",
+    "./anchor": "./src/anchor.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agora/sandbox-testkit": "0.0.0"
+  }
+}
