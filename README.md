@@ -6,7 +6,6 @@ précédentes n'est reprise sans être écrite ici.
 
 | Dossier | Contenu |
 | --- | --- |
-| [docs/](docs/) | La conception : produit, back-end des sandboxes, interface. |
+| [docs/](docs/) | La conception : produit, exécutions, interface. |
 
-Le code du back-end des sandboxes se développe sur la branche `feat/sandbox-backend`,
-partie de celle-ci.
+Le code des exécutions se développe sur la branche `feat/executions`, partie de celle-ci.

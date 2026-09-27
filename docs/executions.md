@@ -1,12 +1,14 @@
-# Le back-end des sandboxes
+# Les exécutions
 
 Contrat à implémenter — Agent Sandbox **v1.0.3**, runtime **Kata**.
 
 **Agora demande un sandbox, échange en ACP et fixe son échéance.
 Agent Sandbox alloue les ressources et les détruit.**
 
-Ce document réunit l'interface avec Agent Sandbox, le contrat de l'image, l'API du
-back-end, les décisions prises et les cas validés.
+Une **exécution** est un harness qui tourne dans un sandbox obtenu d'Agent Sandbox. Agora
+ne crée aucun sandbox : il demande l'exécution, lui parle en ACP, fixe son échéance, reçoit
+son anchor et peut la reprendre depuis un anchor. Ce document réunit l'interface avec Agent
+Sandbox, le contrat de l'image, ce que fait Agora, les décisions prises et les cas validés.
 
 ## Qui fait quoi ?
 
@@ -15,8 +17,8 @@ back-end, les décisions prises et les cas validés.
 - **Agent Sandbox** entretient le stock chaud, attribue les sandboxes, expose leur état et les détruit.
 - **Le bridge**, dans l'image, lance l'adaptateur ACP, le relaie sans le lire et pousse
   l'anchor quand le Pod se termine.
-- **Le back-end** d'Agora crée les claims, relaie ACP en suivant les tours, ré-arme
-  l'échéance pendant un tour et stocke les anchors. Il ne supprime jamais rien.
+- **Agora** (paquet `packages/executions`) crée les claims, relaie ACP en suivant les
+  tours, ré-arme l'échéance pendant un tour et stocke les anchors. Il ne supprime jamais rien.
 
 Le processus ACP et le serveur WS démarrent dans le pool. Chaque attribution déclenche
 son réapprovisionnement ; un sandbox utilisé n'est jamais remis en stock.
@@ -93,7 +95,7 @@ sans renouvellement. Un nouveau prompt relance le bail si le sandbox est encore 
 4. Répondre prêt sur `/healthz`.
 
 Tout cela se passe avant le claim, sans utilisateur ni credential. codex refuse un second
-`initialize` : le back-end ne le renvoie jamais et sert la réponse gardée par le bridge.
+`initialize` : Agora ne le renvoie jamais et sert la réponse gardée par le bridge.
 
 ### Les routes du bridge
 
@@ -109,7 +111,7 @@ Port **8080**. Toutes les routes sauf `/healthz` exigent le jeton d'Agora.
 Le jeton est signé **Ed25519** par Agora, nomme le sandbox visé et expire après
 **60 secondes**. Le bridge le vérifie avec la clé publique d'Agora et compare le nom à
 celui de son propre Pod : le sandbox ne contient aucun secret. En plus, la NetworkPolicy
-n'admet en entrée que le back-end d'Agora.
+n'admet en entrée qu'Agora.
 
 ### Le relais
 
@@ -178,23 +180,23 @@ C'est pourquoi le workspace est le même chemin dans toutes les images.
 Un template et un pool par image, nommés d'après son digest. Changer d'image, c'est un
 nouveau template et un nouveau pool, jamais une modification en place.
 
-## Le back-end
+## Côté Agora
 
 ### L'API
 
 | Route | Rôle |
 | --- | --- |
 | `GET /api/pools` | Le catalogue : les `SandboxWarmPool` portant le label `agora.bretagne.dev/harness`. |
-| `GET /api/sandboxes` | Les sandboxes vivants et les fins récentes. |
-| `GET /api/events` | Flux SSE : l'état complet au départ, puis chaque sandbox changé, entier. |
-| `POST /api/sandboxes` | Créer : identifiant de demande, pool, anchor à restaurer (optionnel), réglages. |
-| `POST /api/sandboxes/{nom}/stop` | Arrêter : fermer les envois, annuler le tour, cesser de renouveler. |
-| `GET /api/sandboxes/{nom}/acp` | WebSocket : le relais ACP du consommateur. |
+| `GET /api/executions` | Les exécutions vivantes et les fins récentes. |
+| `GET /api/events` | Flux SSE : l'état complet au départ, puis chaque exécution changée, entière. |
+| `POST /api/executions` | Créer : identifiant de demande, pool, anchor à restaurer (optionnel), réglages. |
+| `POST /api/executions/{nom}/stop` | Arrêter : fermer les envois, annuler le tour, cesser de renouveler. |
+| `GET /api/executions/{nom}/acp` | WebSocket : le relais ACP du consommateur. |
 | `GET /api/anchors` | Les anchors stockés. |
 | `GET /api/anchors/{id}/content` | Le contenu d'un anchor. |
 | `POST /anchors`, port **8081** | Recevoir l'anchor poussé par un Pod. Seul port ouvert aux sandboxes. |
 
-Chaque commande répond *acceptée* ou *refusée, avec la raison*. Les réglages d'un sandbox
+Chaque commande répond *acceptée* ou *refusée, avec la raison*. Les réglages d'une exécution
 ont des bornes : de 60 à 600 s pour le bail, de 30 à 3 600 s pour la durée d'un tour.
 
 ### L'échéance
@@ -208,7 +210,7 @@ ont des bornes : de 60 à 600 s pour le bail, de 30 à 3 600 s pour la durée d'
 | Arrêt demandé | Plus rien ; `session/cancel` si un tour est en cours |
 | Adaptateur perdu, processus remplacé | Plus rien |
 
-### Les états d'un sandbox
+### Les états d'une exécution
 
 | État | Sens | Ce qui le prouve |
 | --- | --- | --- |
@@ -223,7 +225,7 @@ ont des bornes : de 60 à 600 s pour le bail, de 30 à 3 600 s pour la durée d'
 | **erreur** | Le claim n'aboutira pas. | Raison du claim, par exemple `WarmPoolNotFound`. |
 | **fin de vie** | L'infrastructure supprime le claim ; l'anchor est attendu. | `deletionTimestamp` sur le claim. |
 
-Le sandbox quitte la liste quand son anchor est reçu ou quand son claim a disparu ; la
+L'exécution quitte la liste quand son anchor est reçu ou quand son claim a disparu ; la
 ligne de fin garde l'anchor, ou la raison de son absence.
 
 ### Le relais du consommateur
@@ -232,31 +234,31 @@ Le consommateur est demain le journal d'Agora, aujourd'hui le banc.
 
 | Règle | Détail |
 | --- | --- |
-| Reçu | Les trames `{seq, acp}` du bridge ; `{local}`, les réponses du back-end lui-même (`initialize`, refus) ; des `{event}` d'état. |
-| Reprise | `?after=N` rejoue ce que le back-end a encore en mémoire après N, avec `gap` s'il en manque. |
-| `session/prompt` | Refusé par une erreur JSON-RPC si le sandbox n'est pas prêt, si un tour est en cours, ou s'il est arrêté. |
+| Reçu | Les trames `{seq, acp}` du bridge ; `{local}`, les réponses d'Agora lui-même (`initialize`, refus) ; des `{event}` d'état. |
+| Reprise | `?after=N` rejoue ce qu'Agora a encore en mémoire après N, avec `gap` s'il en manque. |
+| `session/prompt` | Refusé par une erreur JSON-RPC si l'exécution n'est pas prête, si un tour est en cours, ou si elle est arrêtée. |
 | Session | La réponse de `session/new`, `session/load` ou `session/resume` fixe la session qu'un anchor reprendra. |
 | Permissions | `session/request_permission` va au consommateur et attend sa réponse, même s'il est parti. |
-| Identifiants | Les requêtes du back-end portent des identifiants `agora-…`, jamais numériques. |
+| Identifiants | Les requêtes d'Agora portent des identifiants `agora-…`, jamais numériques. |
 
 ### La réception d'un anchor
 
-Le back-end fait valider le jeton projeté par l'API Kubernetes (`TokenReview`, audience
+Agora fait valider le jeton projeté par l'API Kubernetes (`TokenReview`, audience
 `agora-anchors`), en tire le namespace et le Pod, retrouve le claim de ce Pod et stocke
 l'anchor avec la session notée sur le claim. Un jeton refusé : 401 ; un Pod sans claim :
 404 ; rien n'est stocké. Sans poussée avant la disparition du claim, la fin est notée
-sans anchor. Le stockage est un volume du back-end ; la base d'Agora ensuite.
+sans anchor. Le stockage est un volume du banc ; la base d'Agora ensuite.
 
 ### Ce qu'Agora écrit sur le claim
 
-Le claim porte tout ce qu'il faut pour reprendre après un redémarrage du back-end.
+Le claim porte tout ce qu'il faut pour reprendre après un redémarrage d'Agora.
 
 | Clé | Contenu |
 | --- | --- |
-| label `app.kubernetes.io/managed-by` | `agora-sandbox-backend` : ce qu'Agora liste et surveille |
+| label `app.kubernetes.io/managed-by` | `agora` : ce qu'Agora liste et surveille |
 | label `agora.bretagne.dev/pool` | le pool demandé |
 | `agora.bretagne.dev/request-id` | l'identifiant de demande |
-| `agora.bretagne.dev/limits` | bail et durée de tour de ce sandbox |
+| `agora.bretagne.dev/limits` | bail et durée de tour de cette exécution |
 | `agora.bretagne.dev/restore-anchor`, `…/restored` | l'anchor à restaurer, puis la date de reprise |
 | `agora.bretagne.dev/instance` | l'instance de bridge vue à la première connexion |
 | `agora.bretagne.dev/session-id` | la session qu'un anchor reprendra |
@@ -270,9 +272,9 @@ tour se clôt. Un trou : *incertain*. Une autre instance : *perdu*.
 
 ### Restauration
 
-Créer avec un anchor. Une fois le bridge joint, le back-end dépose l'anchor (`PUT /anchor`)
+Créer avec un anchor. Une fois le bridge joint, Agora dépose l'anchor (`PUT /anchor`)
 puis envoie `session/resume`, ou `session/load` si l'agent n'annonce pas
-`sessionCapabilities.resume`. Un échec laisse le sandbox en *erreur*.
+`sessionCapabilities.resume`. Un échec laisse l'exécution en *erreur*.
 
 ### Les droits
 
@@ -282,21 +284,21 @@ puis envoie `session/resume`, ou `session/load` si l'agent n'annonce pas
 | `sandboxwarmpools`, `sandboxtemplates`, `sandboxes`, `pods` | get, list, watch |
 | `tokenreviews` (cluster) | create |
 
-Un quota de namespace borne les ressources ; le back-end borne en plus le nombre de
-sandboxes actifs, un pool n'étant pas une limite de concurrence. Un sandbox arrêté compte
+Un quota de namespace borne les ressources ; Agora borne en plus le nombre
+d'exécutions actives, un pool n'étant pas une limite de concurrence. Une exécution arrêtée compte
 jusqu'à sa destruction.
 
 ## Le banc
 
-Une page servie par le back-end sur `agora-lab.bretagne.dev`, derrière Pocket-ID (groupe
+Le déployable `apps/lab` monte le paquet `executions` et sert une page sur `agora-lab.bretagne.dev`, derrière Pocket-ID (groupe
 admin). Elle crée des sandboxes, relaie ACP à la main, montre échéances, anchors et fins,
 et offre trois gestes réservés au banc :
 
 | Route | Effet |
 | --- | --- |
-| `POST /api/lab/sandboxes/{nom}/drop-bridge` | Coupe la connexion au bridge ; le back-end se reconnecte avec rejeu. |
-| `POST /api/lab/sandboxes/{nom}/probe-auth` | Tente le bridge sans jeton, avec un jeton expiré, pour un autre sandbox, signé par une autre clé. |
-| `POST /api/lab/restart` | Arrête le processus du back-end ; Kubernetes le relance. |
+| `POST /api/lab/executions/{nom}/drop-bridge` | Coupe la connexion au bridge ; Agora se reconnecte avec rejeu. |
+| `POST /api/lab/executions/{nom}/probe-auth` | Tente le bridge sans jeton, avec un jeton expiré, pour un autre sandbox, signé par une autre clé. |
+| `POST /api/lab/restart` | Arrête le processus du banc ; Kubernetes le relance. |
 
 Le harness **mock** est un agent ACP sans modèle. Selon le texte du prompt, il répond en
 écho numéroté, dort, se tait, demande une permission, produit un outil ou un long texte,
@@ -330,7 +332,7 @@ Proposées le 27 septembre 2026.
 | Joindre le Pod par son IP | Le Service est la brique native ; le Pod n'a plus à être joint pendant sa grâce. |
 | Règles réseau par nom de domaine | Les réponses du proxy DNS de Cilium n'arrivent pas dans une VM Kata. |
 | gVisor pour ces sandboxes | Kata retenu après l'évaluation du 22 septembre. |
-| Router amont d'Agent Sandbox | Le back-end relaie lui-même le WebSocket. |
+| Router amont d'Agent Sandbox | Agora relaie lui-même le WebSocket. |
 
 Conséquences : un arrêt libère la ressource au plus un bail plus tard ; si Agora est
 injoignable pendant la grâce, le sandbox part sans anchor ; un tour ne dépasse pas une
@@ -338,30 +340,30 @@ heure ; reprendre depuis un anchor ouvre une nouvelle session et repaie tout le 
 
 ## Les cas à valider
 
-Joués le 27 septembre sur g4, sous Kata, par `apps/sandbox-backend/scripts/live-cases.ts`
-(branche `feat/sandbox-backend`) : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
+Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts`
+(branche `feat/executions`) : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
 ré-armé trois fois par bail.
 
 | # | Cas | Attendu | Mesuré |
 | --- | --- | --- | --- |
 | 1 | Créer depuis un pool chaud | Prêt en moins d'une seconde, lancement `warm`. | Prêt en 0,29 s, `warm`. |
 | 2 | Créer au-delà du stock chaud | Prêt en quelques secondes, lancement `cold`. | Deux `cold` en 5,4 s, un `warm` en 0,61 s. |
-| 3 | Créer deux fois avec le même identifiant | Même sandbox, un seul claim. | Même nom, un seul claim. |
+| 3 | Créer deux fois avec le même identifiant | Même exécution, un seul claim. | Même nom, un seul claim. |
 | 4 | Pool hors catalogue, quota atteint | Refusé, avec la raison. | 400 « pool hors catalogue » ; 429 « quota atteint : 6 sur 6 ». |
 | 5 | Relais : `initialize`, `session/new`, prompt | Réponse d'`initialize` du bridge, trames numérotées, tour clos. | `initialize` local, positions 1 → 3, `end_turn`. |
 | 6 | Second prompt pendant un tour | Refusé par une erreur JSON-RPC. | « refusé : un tour est déjà en cours ». |
-| 7 | Annuler un tour | Fin `cancelled`, sandbox prêt. | `cancelled`, sandbox prêt. |
+| 7 | Annuler un tour | Fin `cancelled`, exécution prête. | `cancelled`, exécution prête. |
 | 8 | Permission, consommateur parti puis revenu | La demande est rejouée, la réponse débloque le tour. | Demande rejouée, tour clos. |
 | 9 | Consommateur déconnecté pendant un tour | Le tour continue ; la reprise rend les trames manquées. | 7 trames rejouées, sans trou. |
 | 10 | Connexion au bridge coupée pendant un tour | Reconnexion, rejeu, tour clos sans trou. | Rejeu depuis la position 18, tour clos. |
-| 11 | Back-end redémarré pendant un tour | Tour retrouvé par l'annotation et clos par le rejeu. | Tour retrouvé *en tour* au redémarrage, clos `end_turn`. |
+| 11 | Agora redémarré pendant un tour | Tour retrouvé par l'annotation et clos par le rejeu. | Tour retrouvé *en tour* au redémarrage, clos `end_turn`. |
 | 12 | Échéance pendant un tour | Avance chaque minute, sans dépasser début + durée maximale. | Échéance repoussée pendant le tour, sous la limite. |
 | 13 | Fin de tour | Échéance à maintenant + bail, puis plus aucun renouvellement. | Échéance fixée à la fin du tour, inchangée 25 s après. |
 | 14 | Échéance atteinte entre deux tours | Détruit par l'infrastructure ; l'anchor arrive pendant la grâce. | Détruit par Agent Sandbox ; anchor poussé (1 fichier). |
 | 15 | Tour trop long | Détruit à début + durée maximale ; l'anchor arrive. | Détruit à début + 30 s ; anchor poussé. |
 | 16 | Arrêter | Plus de renouvellement, destruction à l'échéance, anchor reçu. | *Arrêté*, détruit à l'échéance ; anchor avec le texte du tour. |
 | 17 | Arrêter pendant un tour | Tour annulé, puis comme 16. | Tour `cancelled`, détruit à l'échéance ; anchor poussé. |
-| 18 | Restaurer un anchor | Nouveau sandbox, même session, l'agent se souvient. | Prêt en 0,52 s, session reprise, souvenir intact. |
+| 18 | Restaurer un anchor | Nouvelle exécution, même session, l'agent se souvient. | Prêt en 0,52 s, session reprise, souvenir intact. |
 | 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. | *Perdu* ; anchor poussé malgré l'adaptateur mort. |
 | 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. | 401 partout ; jeton valide 200 / 101. |
 | 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. | 401 sans jeton, 401 avec un faux. |
