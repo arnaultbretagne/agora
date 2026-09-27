@@ -171,6 +171,7 @@ C'est pourquoi le workspace est le même chemin dans toutes les images.
 | `AGORA_ANCHOR_URL` | la route de réception des anchors d'Agora |
 | Jeton projeté | volume `serviceAccountToken`, audience `agora-anchors`, monté sur `/var/run/agora/token` |
 | Readiness | `GET /healthz` sur le port 8080 |
+| Ressources | 50m CPU et 512 Mio réservés, 1 CPU et 1 Gio au plus : un sandbox au repos consomme ~1m, et le nœud n'a que 6 cœurs. |
 | `HOME` | `emptyDir` monté sur `/home/harness` |
 | Utilisateur | 10001, racine en lecture seule, aucune capacité |
 
@@ -337,30 +338,34 @@ heure ; reprendre depuis un anchor ouvre une nouvelle session et repaie tout le 
 
 ## Les cas à valider
 
-| # | Cas | Attendu |
-| --- | --- | --- |
-| 1 | Créer depuis un pool chaud | Prêt en moins d'une seconde, lancement `warm`. |
-| 2 | Créer au-delà du stock chaud | Prêt en quelques secondes, lancement `cold`. |
-| 3 | Créer deux fois avec le même identifiant | Même sandbox, un seul claim. |
-| 4 | Pool hors catalogue, quota atteint | Refusé, avec la raison. |
-| 5 | Relais : `initialize`, `session/new`, prompt | Réponse d'`initialize` du bridge, trames numérotées, tour clos. |
-| 6 | Second prompt pendant un tour | Refusé par une erreur JSON-RPC. |
-| 7 | Annuler un tour | Fin `cancelled`, sandbox prêt. |
-| 8 | Permission, consommateur parti puis revenu | La demande est rejouée, la réponse débloque le tour. |
-| 9 | Consommateur déconnecté pendant un tour | Le tour continue ; la reprise rend les trames manquées. |
-| 10 | Connexion au bridge coupée pendant un tour | Reconnexion, rejeu, tour clos sans trou. |
-| 11 | Back-end redémarré pendant un tour | Tour retrouvé par l'annotation et clos par le rejeu. |
-| 12 | Échéance pendant un tour | Avance chaque minute, sans dépasser début + durée maximale. |
-| 13 | Fin de tour | Échéance à maintenant + bail, puis plus aucun renouvellement. |
-| 14 | Échéance atteinte entre deux tours | Détruit par l'infrastructure ; l'anchor arrive pendant la grâce. |
-| 15 | Tour trop long | Détruit à début + durée maximale ; l'anchor arrive. |
-| 16 | Arrêter | Plus de renouvellement, destruction à l'échéance, anchor reçu. |
-| 17 | Arrêter pendant un tour | Tour annulé, puis comme 16. |
-| 18 | Restaurer un anchor | Nouveau sandbox, même session, l'agent se souvient. |
-| 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. |
-| 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. |
-| 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. |
-| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. |
+Joués le 27 septembre sur g4, sous Kata, par `apps/sandbox-backend/scripts/live-cases.ts`
+(branche `feat/sandbox-backend`) : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
+ré-armé trois fois par bail.
+
+| # | Cas | Attendu | Mesuré |
+| --- | --- | --- | --- |
+| 1 | Créer depuis un pool chaud | Prêt en moins d'une seconde, lancement `warm`. | Prêt en 0,29 s, `warm`. |
+| 2 | Créer au-delà du stock chaud | Prêt en quelques secondes, lancement `cold`. | Deux `cold` en 5,4 s, un `warm` en 0,61 s. |
+| 3 | Créer deux fois avec le même identifiant | Même sandbox, un seul claim. | Même nom, un seul claim. |
+| 4 | Pool hors catalogue, quota atteint | Refusé, avec la raison. | 400 « pool hors catalogue » ; 429 « quota atteint : 6 sur 6 ». |
+| 5 | Relais : `initialize`, `session/new`, prompt | Réponse d'`initialize` du bridge, trames numérotées, tour clos. | `initialize` local, positions 1 → 3, `end_turn`. |
+| 6 | Second prompt pendant un tour | Refusé par une erreur JSON-RPC. | « refusé : un tour est déjà en cours ». |
+| 7 | Annuler un tour | Fin `cancelled`, sandbox prêt. | `cancelled`, sandbox prêt. |
+| 8 | Permission, consommateur parti puis revenu | La demande est rejouée, la réponse débloque le tour. | Demande rejouée, tour clos. |
+| 9 | Consommateur déconnecté pendant un tour | Le tour continue ; la reprise rend les trames manquées. | 7 trames rejouées, sans trou. |
+| 10 | Connexion au bridge coupée pendant un tour | Reconnexion, rejeu, tour clos sans trou. | Rejeu depuis la position 18, tour clos. |
+| 11 | Back-end redémarré pendant un tour | Tour retrouvé par l'annotation et clos par le rejeu. | Tour retrouvé *en tour* au redémarrage, clos `end_turn`. |
+| 12 | Échéance pendant un tour | Avance chaque minute, sans dépasser début + durée maximale. | Échéance repoussée pendant le tour, sous la limite. |
+| 13 | Fin de tour | Échéance à maintenant + bail, puis plus aucun renouvellement. | Échéance fixée à la fin du tour, inchangée 25 s après. |
+| 14 | Échéance atteinte entre deux tours | Détruit par l'infrastructure ; l'anchor arrive pendant la grâce. | Détruit par Agent Sandbox ; anchor poussé (1 fichier). |
+| 15 | Tour trop long | Détruit à début + durée maximale ; l'anchor arrive. | Détruit à début + 30 s ; anchor poussé. |
+| 16 | Arrêter | Plus de renouvellement, destruction à l'échéance, anchor reçu. | *Arrêté*, détruit à l'échéance ; anchor avec le texte du tour. |
+| 17 | Arrêter pendant un tour | Tour annulé, puis comme 16. | Tour `cancelled`, détruit à l'échéance ; anchor poussé. |
+| 18 | Restaurer un anchor | Nouveau sandbox, même session, l'agent se souvient. | Prêt en 0,52 s, session reprise, souvenir intact. |
+| 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. | *Perdu* ; anchor poussé malgré l'adaptateur mort. |
+| 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. | 401 partout ; jeton valide 200 / 101. |
+| 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. | 401 sans jeton, 401 avec un faux. |
+| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. | 401 d'Anthropic au prompt ; anchor de 11 915 o poussé, restauré par `session/resume`. |
 
 **À préciser :** credentials des harnesses (Agent Vault), stockage des anchors en base,
 dossier natif de codex, tâches détachées, reprise après perte du processus.
