@@ -11,6 +11,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@agora/sandbox-bridge": "0.0.0"
+    "@agora/harness-bridge": "0.0.0"
   }
 }

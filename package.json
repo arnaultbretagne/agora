@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agora — refonte : le back-end des sandboxes, ses images et ses paquets.",
+  "description": "Agora — refonte : les exécutions, le banc, les images de harness.",
   "workspaces": [
     "apps/*",
     "packages/*"

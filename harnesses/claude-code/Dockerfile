@@ -1,7 +1,7 @@
-# Sandbox image: the bridge in front of claude-code's ACP adapter. Built from the repository root:
-#   docker build -f harnesses/claude-code/Dockerfile .
-# Exact versions, the ones measured by S8/S9 of the previous implementation (harnesses/claude-code
-# on main). No credential: the token below is a marker that only selects the CLI's OAuth mode.
+# Harness image: the bridge in front of claude-code's ACP adapter, launched by Agent Sandbox in its
+# pools. Built from the repository root:  docker build -f harnesses/claude-code/Dockerfile .
+# Exact versions, the ones measured by S8/S9 of the previous implementation. No credential: the
+# token below is a marker that only selects the CLI's OAuth mode.
 FROM node:24-bookworm-slim
 WORKDIR /app
 RUN npm install --global --no-audit --no-fund \
@@ -11,12 +11,13 @@ RUN npm install --global --no-audit --no-fund \
     && claude --version \
     && node /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --cli --version
 COPY package.json package-lock.json ./
-COPY apps/sandbox-backend/package.json apps/sandbox-backend/
-COPY packages/sandbox-bridge/package.json packages/sandbox-bridge/
+COPY apps/lab/package.json apps/lab/
+COPY packages/executions/package.json packages/executions/
+COPY packages/harness-bridge/package.json packages/harness-bridge/
 COPY packages/mock-agent/package.json packages/mock-agent/
-COPY packages/sandbox-testkit/package.json packages/sandbox-testkit/
-RUN npm ci --omit=dev --workspace @agora/sandbox-bridge --no-audit --no-fund && npm cache clean --force
-COPY packages/sandbox-bridge/src packages/sandbox-bridge/src
+COPY packages/testkit/package.json packages/testkit/
+RUN npm ci --omit=dev --workspace @agora/harness-bridge --no-audit --no-fund && npm cache clean --force
+COPY packages/harness-bridge/src packages/harness-bridge/src
 ENV HOME=/home/harness \
     BRIDGE_DRIVER=claude-code \
     BRIDGE_ADAPTER='["node","/usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"]' \
@@ -27,4 +28,4 @@ ENV HOME=/home/harness \
     NODE_NO_WARNINGS=1
 USER 10001:10001
 EXPOSE 8080
-ENTRYPOINT ["node", "/app/packages/sandbox-bridge/src/main.ts"]
+ENTRYPOINT ["node", "/app/packages/harness-bridge/src/main.ts"]

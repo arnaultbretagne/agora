@@ -1,7 +1,7 @@
 # apps
 
-Les services déployables d'Agora. Chaque dossier produit sa propre image.
+Ce qui se déploie. Chaque dossier produit sa propre image.
 
 | Dossier | Image | Rôle |
 | --- | --- | --- |
-| [sandbox-backend/](sandbox-backend/) | `agora-sandbox-backend` | Le back-end des sandboxes et la page du banc. |
+| [lab/](lab/) | `agora-lab` | Le banc : monte les exécutions et sert une page pour en jouer tous les cas. |

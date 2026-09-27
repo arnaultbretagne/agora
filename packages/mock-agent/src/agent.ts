@@ -1,4 +1,4 @@
-// The lab's ACP agent (docs/backend.md, "Le banc"): no model, deterministic behaviours chosen by
+// The lab's ACP agent (docs/executions.md, "Le banc"): no model, deterministic behaviours chosen by
 // the prompt text, and a REAL native transcript under $HOME that session/resume and session/load
 // read back — so an anchor restored into another sandbox is checked by asking what was said before.
 //
@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { nativeDir } from '@agora/sandbox-bridge/anchor'
+import { nativeDir } from '@agora/harness-bridge/anchor'
 
 type Id = string | number
 interface Message {
