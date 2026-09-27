@@ -88,7 +88,7 @@ C'est pourquoi le workspace est le même chemin dans toutes les images.
 | Geste | Règle |
 | --- | --- |
 | **Poussée** | `POST` vers `AGORA_ANCHOR_URL`. Le corps liste chaque fichier : chemin relatif au dossier natif, checksum sha256, contenu. 32 Mio au plus. |
-| **Identité du Pod** | `Authorization: Bearer` + le jeton de ServiceAccount projeté par le kubelet (audience `agora-anchors`), relu à chaque poussée. |
+| **Identité du Pod** | `Authorization: Bearer` + le jeton de ServiceAccount projeté par le kubelet (audience `agora-anchors`, 10 minutes, renouvelé par le kubelet jusque dans la VM Kata), relu à chaque poussée. |
 | **Restauration** | `PUT /anchor` avec le même corps. Chaque fichier est écrit à côté, relu, comparé, puis renommé. L'adaptateur lit le fichier au `session/resume`, pas au démarrage : un Pod du pool, déjà lancé, peut le recevoir. |
 
 ## Ce que le template fournit
