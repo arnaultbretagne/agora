@@ -105,6 +105,10 @@ reconnexions ne repoussent la limite d'une heure du tour.
 - **Pod supprimé seul :** le contrôleur en recrée un. L'instance du bridge change,
   Agora déclare le sandbox perdu : le contexte vivant n'existe plus.
 - **Nettoyage :** une suppression acceptée ne prouve pas l'arrêt physique immédiat.
+- **Chaud ou froid :** `warm` veut dire pris dans le pool, même si ce Sandbox démarre
+  encore. `cold` n'arrive que si le pool n'a plus rien du tout.
+- **Réseau d'une VM Kata :** les réponses du proxy DNS de Cilium n'y arrivent pas. Aucune
+  règle FQDN pour les sandboxes : du DNS simple, et des plages d'adresses.
 
 ## Les droits d'Agora
 
