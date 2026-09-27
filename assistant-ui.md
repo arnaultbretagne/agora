@@ -156,6 +156,9 @@ Feedback, `EditComposer`, les pièces jointes et la dictée. Copier reste.
 | Consommation de contexte (`usage` ACP) | `ContextDisplay` (registre) |
 | Pièces jointes | `Attachment` (registre) |
 
+Ce que chaque élément du registre peut recevoir d'ACP est dans
+[assistant-ui-elements.md](assistant-ui-elements.md).
+
 ## Les composants à écrire
 
 `Notice`, le choix du harness, le badge d'état du tour, le bandeau d'exécution et
