@@ -123,7 +123,8 @@ const pools = (await api('GET', '/api/pools')).pools as Json[]
 const mock = pools.find((p) => p.harness === 'mock')!.name as string
 const claude = pools.find((p) => p.harness === 'claude-code')?.name as string | undefined
 for (const s of (await snapshot()).sandboxes) await api('POST', `/api/sandboxes/${s.name as string}/stop`)
-await until('sandboxes précédents détruits', async () => (await snapshot()).sandboxes.length === 0, 660_000)
+// Stopped sandboxes stay until their deadline (up to a lease later); only the quota matters here.
+await until('place sous le quota', async () => (await snapshot()).sandboxes.length <= 2, 660_000)
 await until('stock chaud plein', async () => ((await api('GET', '/api/pools')).pools as Json[]).find((p) => p.name === mock)?.readyReplicas === 2, 120_000)
 console.log(`pools : ${pools.map((p) => `${p.name as string} (${p.harness as string})`).join(', ')}`)
 
@@ -173,7 +174,7 @@ await check(4, 'Pool hors catalogue, quota', async () => {
   return `« ${String(outside.reason)} » ; « ${String(refusedAnswer.reason)} »`
 })
 
-let client: Consumer
+let client!: Consumer
 let sessionA = ''
 await check(5, 'Relais : initialize, session/new, prompt', async () => {
   client = await consumer(a)
@@ -267,6 +268,9 @@ await check(11, 'Back-end redémarré pendant un tour', async () => {
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
   return `au redémarrage : « ${String(logs.at(-1)?.message)} », état ${String(found.state)}, puis ${String(closed.lastTurn.outcome)} ; le consommateur récupère la fin`
 })
+
+// The sandboxes stopped in case 4 count against the quota until Agent Sandbox destroys them.
+await until('sandboxes du cas 4 détruits', async () => (await snapshot()).sandboxes.length <= 2, 180_000)
 
 // The deadline cases wait on real destructions by Agent Sandbox: they run side by side.
 let anchorToRestore = ''
@@ -424,6 +428,6 @@ await check(22, 'Harness réel (claude-code)', async () => {
   return `prêt en ${String(ms)} ms, ${String(init.result.agentInfo?.name)}@${String(init.result.agentInfo?.version)}, prompt : ${outcome} ; anchor ${end.anchor === null ? `absent (${String(end.anchorError)})` : `${String(end.anchor.byteLength)} o poussé`} ; ${restoredNote}`
 })
 
-client!.close()
+client?.close()
 console.log(`\n${String(results.filter((r) => r.ok).length)}/${String(results.length)} cas validés`)
 process.exit(results.every((r) => r.ok) ? 0 : 1)
