@@ -157,7 +157,10 @@ await check(2, 'Créer au-delà du stock chaud, et 3 : deux fois le même identi
   }))
   const claims = (await snapshot()).executions.filter((s) => s.requestId === requestId).length
   assert(claims === 1, `${String(claims)} exécutions pour un identifiant`)
-  assert(timings.some((t) => t.includes('cold')), `aucun lancement froid : ${timings.join(', ')}`)
+  // Beyond the ready stock, a claim waits for a VM to boot: cold, or warm on a pool sandbox that is
+  // still starting (docs/executions.md, "Les cas limites"). Only the immediate ones had it ready.
+  const slow = timings.filter((t) => Number(/ (\d+) ms$/.exec(t)?.[1]) > 1500)
+  assert(slow.length >= 1, `tout était déjà prêt : ${timings.join(', ')}`)
   return `même identifiant → ${String(answers[0]!.name)} deux fois, un seul claim ; ${timings.join(' ; ')}`
 })
 
