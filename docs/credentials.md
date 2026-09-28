@@ -90,7 +90,7 @@ Vault `default` :
 | --- | --- |
 | Credential `CLAUDE_TOKEN` | Le setup-token Claude de l'opérateur (`sk-ant-oat01-…`). |
 | Service `claude` | Hôte `api.anthropic.com`, Bearer, clé `CLAUDE_TOKEN`. |
-| Agent `agora-lab` | Rôle d'instance `no-access`, rôle `member` sur `default`. Son jeton est dans le Secret `agent-vault` du namespace `agora-lab`. |
+| Agent `agent-lab` | Rôle d'instance `no-access`, rôle `member` sur `default`. Son jeton est dans le Secret `agent-vault` du namespace `agora-lab`. |
 
 | Rôle sur un vault (0.39.3) | Frapper une session | Lire, poser, supprimer un credential | Modifier les services |
 | --- | --- | --- | --- |
@@ -140,15 +140,21 @@ premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option
 
 ## Les cas à valider
 
-Suite des cas d'[executions.md](executions.md), joués sur g4 sous Kata.
+Suite des cas d'[executions.md](executions.md), joués le 28 septembre sur g4 sous Kata, par
+`apps/lab/scripts/live-cases.ts`.
 
 | # | Cas | Attendu | Mesuré |
 | --- | --- | --- | --- |
-| 23 | Sortir sans credential | `/fetch` du mock : `CONNECT` refusé, 503 ; un refus compté. | — |
-| 24 | Credential branché, chaîne seule | `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 d'Agent Vault, ni erreur TLS. | — |
-| 25 | Credential branché, harness réel | claude-code en `haiku` : vraie réponse du modèle, fin `end_turn`, `api.anthropic.com:443` → 200. | — |
+| 23 | Sortir sans credential | `/fetch` du mock : `CONNECT` refusé, 503 ; un refus compté. | 503 du bridge, un refus compté. |
+| 24 | Credential branché, chaîne seule | `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 d'Agent Vault, ni erreur TLS. | 400 d'Anthropic (« anthropic-version: header is required ») : TLS accepté, Bearer injecté ; tunnel → 200. |
+| 25 | Credential branché, harness réel | claude-code en `haiku` : vraie réponse du modèle, fin `end_turn`, `api.anthropic.com:443` → 200. | « pomme » en 1,8 à 2,3 s, `end_turn`, modèle `claude-haiku-4-5-20251001`, 5 tunnels. Journal d'Agent Vault : service `claude`, clé `CLAUDE_TOKEN`, deux `POST /v1/messages` en 200. Avant le branchement, deux sorties tentées par le Pod du pool, refusées par le bridge. |
 
-**À préciser :** brancher à la création et renouveler la session quand l'échéance la
-dépasse ; révoquer la session à la fin de l'exécution (aujourd'hui, elle expire) ; la
+Avec les cas 1 à 22 rejoués sur les nouvelles images, la suite passe entière. Une fois, la
+dernière réponse du proxy notée pour `api.anthropic.com:443` était un 407 alors que toutes les
+requêtes avaient abouti : probablement une connexion ouverte puis abandonnée par la CLI.
+
+**À préciser :** compter les réponses du proxy par statut, pas seulement la dernière ;
+composer plusieurs profils (une session par vault, choisie selon l'hôte) ; brancher à la
+création et renouveler la session quand l'échéance la dépasse ; révoquer la session à la fin de l'exécution (aujourd'hui, elle expire) ; la
 confiance TLS de codex, qui n'est pas en Node ; les autres hôtes, un service par hôte dans
 le vault.
