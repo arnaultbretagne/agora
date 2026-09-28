@@ -45,7 +45,7 @@ raison*.
 | **Écrire** | le texte | Refusée si un tour est enregistré ou en cours, ou si les envois sont fermés. |
 | **Annuler** | le tour visé | Sans effet si ce tour est clos ; ne touche jamais le tour suivant. |
 | **Répondre à une permission** | la demande et l'option choisie | Refusée si la demande n'est plus en attente. |
-| **Arrêter** | — | Ferme les envois ; l'exécution disparaît dès que sa suppression est acceptée. |
+| **Arrêter** | — | Ferme les envois et cesse de renouveler l'échéance ; l'exécution disparaît quand l'infrastructure la détruit ([executions.md](executions.md)). |
 
 ## Le pont : `useExternalStoreRuntime`
 

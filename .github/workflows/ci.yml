@@ -1,12 +1,14 @@
-# Agora's executions (docs/executions.md): checks every workspace, then builds and publishes the
-# lab and the harness images by digest. infra-k8s pins the digests (apps/agora-sandboxes,
-# apps/agora-lab), never a tag.
-name: executions
+# The refonte's CI: checks every workspace on each push and each PR to the base branch, then — on
+# pushes only — builds, tries and publishes the lab and the harness images by digest. infra-k8s
+# pins the digests (apps/agora-sandboxes, apps/agora-lab), never a tag.
+name: ci
 
 on:
   push:
-    branches: [feat/executions]
-    paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/executions.yml]
+    branches: [design/agora-foundations, 'feat/**', 'fix/**', 'chore/**']
+    paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
+  pull_request:
+    branches: [design/agora-foundations]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +32,7 @@ jobs:
 
   image:
     needs: check
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -87,9 +90,7 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:executions
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
