@@ -1,7 +1,8 @@
 // Agent Vault 0.39.3 seen from Agora (docs/credentials.md). Agora holds an agent token with the
-// `member` role on one vault, the least that may mint sessions; it never reads a credential. For an
-// execution it mints a session with the `proxy` role only (POST /v1/sessions), whose token opens
-// the MITM proxy and nothing else, and hands it to the execution's bridge.
+// `member` role on one vault: the least that may mint sessions, which also lets it read and change
+// the vault's credentials — so it stays in Agora and never reaches a sandbox. For an execution it
+// mints a session with the `proxy` role only (POST /v1/sessions), whose token opens the MITM proxy
+// and nothing else, and hands it to the execution's bridge.
 import { readFile } from 'node:fs/promises'
 import type { Credentials } from '@agora/harness-bridge/outbound'
 

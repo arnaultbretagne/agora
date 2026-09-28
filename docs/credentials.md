@@ -19,9 +19,10 @@ la remet au bridge après le claim, ce qui garde le pool chaud.
   d'Agent Vault, et y crée l'agent d'Agora.
 - **Agent Vault** garde les credentials, termine TLS avec sa propre autorité de
   certification et pose le credential du service qui correspond à l'hôte.
-- **Agora** détient un jeton d'agent, rôle `member` sur le vault : de quoi frapper des
-  sessions, rien pour lire un credential. Pour une exécution, il frappe une session `proxy`
-  et la remet au bridge.
+- **Agora** détient un jeton d'agent, rôle `member` sur le vault : le seul rôle qui frappe
+  des sessions. Ce rôle permet aussi de lire, poser et supprimer les credentials du vault :
+  ce jeton reste chez Agora, jamais dans un sandbox. Pour une exécution, Agora frappe une
+  session `proxy` et la remet au bridge.
 - **Le bridge** ouvre au harness un proxy sortant local et fait suivre chaque tunnel au proxy
   d'Agent Vault avec le jeton de la session.
 - **infra-k8s** fournit l'autorité de certification d'Agent Vault aux sandboxes et ne les
@@ -91,6 +92,15 @@ Vault `default` :
 | Service `claude` | Hôte `api.anthropic.com`, Bearer, clé `CLAUDE_TOKEN`. |
 | Agent `agora-lab` | Rôle d'instance `no-access`, rôle `member` sur `default`. Son jeton est dans le Secret `agent-vault` du namespace `agora-lab`. |
 
+| Rôle sur un vault (0.39.3) | Frapper une session | Lire, poser, supprimer un credential | Modifier les services |
+| --- | --- | --- | --- |
+| `proxy` | non | non | non |
+| `member` | oui | oui | non |
+| `admin` | oui | oui | oui |
+
+`member` est donc le minimum pour frapper, et il donne aussi accès aux credentials. Le
+vault d'Agora ne devrait contenir que ce dont ses exécutions ont besoin.
+
 L'image claude-code garde `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. Cette valeur ne sert
 qu'à mettre la CLI en mode OAuth : elle envoie alors un Bearer et
 `anthropic-beta: oauth-…`. Agent Vault remplace le Bearer et laisse passer le reste.
@@ -125,7 +135,7 @@ premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option
 | Jeton dans l'environnement du claim | Force le démarrage à froid et écrit un secret dans la spec du sandbox. |
 | Relancer l'adaptateur après le claim, jeton en environnement | Perd l'`initialize` fait dans le pool, et l'agent lit son environnement. |
 | `_meta.claudeCode.options.env` au `session/new` | Propre à claude-code, et le jeton atterrit dans l'environnement de la CLI, lisible par les outils de l'agent. |
-| Jeton d'agent dans le sandbox | Durable et capable de frapper des sessions ; une session `proxy` expire et ne fait que passer. |
+| Jeton d'agent dans le sandbox | Un jeton `member` ouvrirait les credentials au sandbox. Un jeton d'agent `proxy`, remis à chaque exécution, n'ouvrirait que le proxy, mais il serait durable et commun à toutes les exécutions : une fuite vaudrait jusqu'à sa rotation, et le journal d'Agent Vault ne distinguerait plus les exécutions. |
 | Sortie directe vers Anthropic | Ce qui sort sans passer par le vault échappe à son journal et à sa politique. |
 
 ## Les cas à valider
