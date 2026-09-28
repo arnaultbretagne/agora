@@ -1,5 +1,6 @@
-// Plays every case of docs/executions.md ("Les cas à valider") against the DEPLOYED lab, with real
-// Kata sandboxes destroyed by Agent Sandbox at their deadline.
+// Plays every case of docs/executions.md and docs/credentials.md ("Les cas à valider") against the
+// DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline. Case 25 is a
+// real, billed prompt: on haiku, one short answer.
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [cas…] (the receiver is on port 8081).
 // From g4, the lab Pod IP is reachable directly (its policy admits the host); the page at
 // agora-lab.bretagne.dev offers the same cases by hand, behind Pocket-ID.
@@ -429,6 +430,68 @@ await check(22, 'Harness réel (claude-code)', async () => {
   }
   const outcome = answer === null ? 'pas de réponse en 120 s, annulé' : answer.error !== undefined ? `erreur « ${String(answer.error.message).slice(0, 100)} »` : `fin ${String(answer.result?.stopReason)}`
   return `prêt en ${String(ms)} ms, ${String(init.result.agentInfo?.name)}@${String(init.result.agentInfo?.version)}, prompt : ${outcome} ; anchor ${end.anchor === null ? `absent (${String(end.anchorError)})` : `${String(end.anchor.byteLength)} o poussé`} ; ${restoredNote}`
+})
+
+// ---------------------------------------------------------------- credentials (docs/credentials.md)
+
+/** The agent's text in a turn, from the session/update chunks. */
+function said(c: Consumer): string {
+  return c
+    .acp()
+    .filter((m) => m.method === 'session/update' && m.params?.update?.sessionUpdate === 'agent_message_chunk')
+    .map((m) => String(m.params.update.content?.text ?? ''))
+    .join('')
+}
+
+await check(23, 'Sortir sans credential', async () => {
+  const { name } = await create(mock, SHORT)
+  const c = await consumer(name)
+  const s = await c.session()
+  c.prompt(1, s, '/fetch https://api.anthropic.com/v1/models')
+  await c.response(1)
+  const reply = said(c)
+  const refused = await until('refus compté', async () => (await execution(name))?.outbound?.refused, 10_000)
+  await api('POST', `/api/executions/${name}/stop`)
+  assert(reply.includes('refusé par le proxy : 503'), reply)
+  return `« ${reply.slice(0, 90)} » ; ${String(refused)} refus`
+})
+
+await check(24, 'Credential branché, chaîne seule', async () => {
+  const { name } = await create(mock, SHORT)
+  const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 300 })
+  assert(attached.accepted === true, JSON.stringify(attached))
+  const c = await consumer(name)
+  const s = await c.session()
+  c.prompt(1, s, '/fetch https://api.anthropic.com/v1/models')
+  await c.response(1, 60_000)
+  const reply = said(c)
+  const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
+  await api('POST', `/api/executions/${name}/stop`)
+  assert(reply.startsWith('HTTP/1.1 ') && !/agent.vault/i.test(reply), reply)
+  return `session jusqu'à ${String(attached.expiresAt)} ; « ${reply.slice(0, 140)} » ; tunnel → ${String(outbound.lastStatus)}`
+})
+
+await check(25, 'Credential branché, harness réel (haiku)', async () => {
+  if (claude === undefined) throw new Error('pas de pool claude-code')
+  const { name } = await create(claude, SHORT)
+  const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600 })
+  assert(attached.accepted === true, JSON.stringify(attached))
+  const c = await consumer(name)
+  const s = await c.session()
+  c.send({ jsonrpc: '2.0', id: 'model', method: 'session/set_config_option', params: { sessionId: s, configId: 'model', value: 'haiku' } })
+  const model = await c.response('model', 30_000)
+  assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
+  const current = (model.result?.configOptions as Json[] | undefined)?.find((o) => o.id === 'model')?.currentValue
+  const started = Date.now()
+  c.prompt(1, s, 'Réponds seulement par le mot : pomme')
+  const answer = await c.response(1, 120_000)
+  const seconds = ((Date.now() - started) / 1000).toFixed(1)
+  const reply = said(c)
+  const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
+  await api('POST', `/api/executions/${name}/stop`)
+  assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
+  assert(/pomme/i.test(reply), `réponse : ${reply}`)
+  return `modèle ${String(current)}, « ${reply.trim().slice(0, 60)} » en ${seconds} s, fin ${String(answer.result.stopReason)} ; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
 })
 
 client?.close()

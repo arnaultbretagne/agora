@@ -1,8 +1,9 @@
 # lab
 
-Le banc, sur `agora-lab.bretagne.dev` derrière Pocket-ID. Il monte le paquet
-[executions](../../packages/executions/) et sert une page volontairement brute pour jouer tous
-les cas de [docs/executions.md](../../docs/executions.md).
+Le banc, sur `agora-lab.bretagne.dev` derrière Pocket-ID. Il monte les paquets
+[executions](../../packages/executions/) et [credentials](../../packages/credentials/) et sert
+une page volontairement brute pour jouer tous les cas de
+[docs/executions.md](../../docs/executions.md) et [docs/credentials.md](../../docs/credentials.md).
 
 | Dossier | Contenu |
 | --- | --- |
@@ -22,5 +23,9 @@ aux sandboxes).
 | `MAX_ACTIVE` | 4 | Exécutions actives au plus. |
 | `LAB` | — | `true` pour ouvrir les routes du banc. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Audience attendue du jeton projeté des Pods. |
+| `AGENT_VAULT_API` | — | API d'Agent Vault. Sans elle, aucun credential ne peut être branché. |
+| `AGENT_VAULT_PROXY` | requis avec l'API | Le proxy d'Agent Vault vu des sandboxes, `hôte:port`. |
+| `AGENT_VAULT_NAME` | `default` | Le vault dont les sessions sont frappées. |
+| `AGENT_VAULT_TOKEN_FILE` | requis avec l'API | Le jeton de l'agent `agora-lab`, relu à chaque frappe. |
 
 Image : `docker build -f apps/lab/Dockerfile .` depuis la racine.

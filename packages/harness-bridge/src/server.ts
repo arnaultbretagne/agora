@@ -1,7 +1,9 @@
 // The bridge (docs/executions.md). It spawns the ACP adapter once, initializes it once, then relays
 // its stdio to ONE WebSocket client, numbering every line the adapter writes. It never interprets
-// ACP: lines are relayed and buffered byte-for-byte. When the Pod ends (SIGTERM), it stops the
-// adapter and hands back the native files en bloc for the entrypoint to push to Agora.
+// ACP: lines are relayed and buffered byte-for-byte. The adapter's only way out is the bridge's
+// outbound proxy, opened when Agora attaches a credential (docs/credentials.md). When the Pod ends
+// (SIGTERM), it stops the adapter and hands back the native files en bloc for the entrypoint to
+// push to Agora.
 //
 // Carried over from the previous implementation's packages/harness-bridge (arnaultbretagne/agora
 // main): one client at a time, newest wins — every ACP connection numbers its requests from 0, so two
@@ -15,6 +17,7 @@ import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { bearerOf, verifyBridgeToken } from './token.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from './anchor.ts'
+import { parseCredentials, startOutbound } from './outbound.ts'
 
 export interface BridgeOptions {
   readonly port: number
@@ -30,6 +33,8 @@ export interface BridgeOptions {
   readonly ringBytes?: number
   readonly initializeTimeoutMs?: number
   readonly adapterStopMs?: number
+  /** Loopback port of the outbound proxy the adapter goes through (docs/credentials.md); 0 picks one. */
+  readonly outboundPort?: number
   readonly log?: (message: string) => void
 }
 
@@ -58,9 +63,15 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   mkdirSync(options.workspace, { recursive: true })
 
+  // Started before the adapter, whose environment must point at it: no credential yet, only the
+  // way out (docs/credentials.md).
+  const outbound = await startOutbound({ port: options.outboundPort ?? 0, log })
+  const loopback = 'localhost,127.0.0.1'
+  const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback }
+
   const [command, ...args] = options.adapterCommand
   if (command === undefined) throw new Error("la commande de l'adaptateur est vide")
-  const child: ChildProcess = spawn(command, args, { cwd: options.workspace, stdio: ['pipe', 'pipe', 'inherit'] })
+  const child: ChildProcess = spawn(command, args, { cwd: options.workspace, env, stdio: ['pipe', 'pipe', 'inherit'] })
 
   const adapter = { alive: true, exitCode: null as number | null, signal: null as string | null }
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
@@ -162,6 +173,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       terminating,
       lastSeq: seq,
       firstRetainedSeq: ring[0]?.seq ?? seq + 1,
+      outbound: outbound.describe(),
     }
   }
 
@@ -188,6 +200,25 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     if (!auth.ok) return json(res, 401, { reason: auth.reason })
 
     if (url.pathname === '/info' && req.method === 'GET') return json(res, 200, describe())
+
+    if (url.pathname === '/credentials' && req.method === 'PUT') {
+      if (terminating) return json(res, 503, { reason: 'Pod en fin de vie' })
+      const chunks: Buffer[] = []
+      let size = 0
+      for await (const chunk of req) {
+        size += (chunk as Buffer).byteLength
+        if (size > 16 * 1024) return json(res, 413, { reason: 'corps trop gros' })
+        chunks.push(chunk as Buffer)
+      }
+      let credentials
+      try {
+        credentials = parseCredentials(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch (error) {
+        return json(res, 400, { reason: error instanceof Error ? error.message : String(error) })
+      }
+      outbound.set(credentials)
+      return json(res, 200, outbound.describe())
+    }
 
     if (url.pathname === '/anchor' && req.method === 'PUT') {
       if (terminating) return json(res, 503, { reason: 'Pod en fin de vie' })
@@ -301,6 +332,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
             await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
           }
         }
+        await outbound.close()
         try {
           return await readBundle(options.harness, options.nativeDir)
         } catch (error) {
@@ -312,6 +344,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     close: async () => {
       client?.close(1001, 'arrêt du bridge')
       if (adapter.alive) child.kill('SIGTERM')
+      await outbound.close()
       await new Promise<void>((resolve) => {
         wss.close()
         server.close(() => resolve())

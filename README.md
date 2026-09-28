@@ -10,7 +10,7 @@ précédentes n'est repris sans être écrit dans [docs/](docs/).
 | [docs/](docs/) | La conception : produit, exécutions, interface. |
 | [apps/](apps/) | Ce qui se déploie : aujourd'hui le banc. |
 | [harnesses/](harnesses/) | Les images de harness, qu'Agent Sandbox lance dans ses pools. |
-| [packages/](packages/) | Le code partagé : les exécutions, le bridge, l'agent mock, les outils de test. |
+| [packages/](packages/) | Le code partagé : les exécutions, les credentials, le bridge, l'agent mock, les outils de test. |
 | [.github/workflows/](.github/workflows/) | La CI : vérifications et publication des images. |
 
 Un déployable ne dépend jamais d'un autre ; un paquet ne dépend jamais d'un déployable.

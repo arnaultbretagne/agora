@@ -6,8 +6,11 @@
 // the ACP 1.5.0 schema (@agentclientprotocol/sdk 1.5.0).
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
+import type { Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { connect as tlsConnect } from 'node:tls'
 import { nativeDir } from '@agora/harness-bridge/anchor'
 
 type Id = string | number
@@ -170,6 +173,12 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       process.stderr.write('mock-agent : /crash demandé, sortie code 3\n')
       process.exit(3)
     }
+    case '/fetch': {
+      const reply = await fetchOut(argument ?? 'https://api.anthropic.com/v1/models')
+      remember(session, 'agent', reply)
+      say(session.id, reply)
+      return 'end_turn'
+    }
     case '/recall': {
       const said = session.history.filter((entry) => entry.role === 'user').map((entry) => `« ${entry.text} »`)
       const text = `Tu m'as dit, dans l'ordre : ${said.join(', ')}.`
@@ -185,6 +194,49 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, reply)
       return 'end_turn'
     }
+  }
+}
+
+/**
+ * A GET through HTTPS_PROXY, the way a real harness goes out (docs/credentials.md): CONNECT to the
+ * proxy, then TLS trusted by the system store plus NODE_EXTRA_CA_CERTS. Answers with what came back.
+ */
+async function fetchOut(address: string): Promise<string> {
+  let target: URL
+  try {
+    target = new URL(address)
+  } catch {
+    return `URL invalide : ${address}`
+  }
+  if (target.protocol !== 'https:') return 'seulement https://'
+  const proxy = process.env.HTTPS_PROXY
+  if (proxy === undefined || proxy === '') return 'HTTPS_PROXY absent'
+  const authority = `${target.hostname}:${target.port === '' ? '443' : target.port}`
+  try {
+    const socket = await new Promise<Socket>((resolve, reject) => {
+      const connect = httpRequest(proxy, { method: 'CONNECT', path: authority, headers: { host: authority } })
+      connect.once('connect', (response, tunnel) => {
+        if (response.statusCode === 200) return resolve(tunnel)
+        tunnel.destroy()
+        reject(new Error(`CONNECT ${authority} refusé par le proxy : ${String(response.statusCode)}`))
+      })
+      connect.once('error', reject)
+      connect.setTimeout(15_000, () => connect.destroy(new Error('CONNECT sans réponse')))
+      connect.end()
+    })
+    const secure = tlsConnect({ socket, servername: target.hostname })
+    await new Promise<void>((resolve, reject) => {
+      secure.once('secureConnect', resolve)
+      secure.once('error', reject)
+    })
+    secure.write(`GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\nAccept: */*\r\nConnection: close\r\n\r\n`)
+    const chunks: Buffer[] = []
+    for await (const chunk of secure) chunks.push(chunk as Buffer)
+    const raw = Buffer.concat(chunks).toString('utf8')
+    const [head = '', body = ''] = raw.split('\r\n\r\n', 2)
+    return `${head.split('\r\n')[0] ?? '?'} — ${body.slice(0, 300)}`
+  } catch (error) {
+    return `échec : ${error instanceof Error ? error.message : String(error)}`
   }
 }
 

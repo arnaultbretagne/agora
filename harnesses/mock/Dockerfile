@@ -5,6 +5,7 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/lab/package.json apps/lab/
+COPY packages/credentials/package.json packages/credentials/
 COPY packages/executions/package.json packages/executions/
 COPY packages/harness-bridge/package.json packages/harness-bridge/
 COPY packages/mock-agent/package.json packages/mock-agent/

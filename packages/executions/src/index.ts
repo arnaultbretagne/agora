@@ -3,5 +3,5 @@
 export { ExecutionManager, LIMIT_BOUNDS, type Limits, type ManagerOptions } from './manager.ts'
 export { HttpKube, type KubeApi } from './kube.ts'
 export { AnchorStore, type AnchorMeta } from './anchors.ts'
-export { createApi, createAnchorReceiver } from './http.ts'
+export { createApi, createAnchorReceiver, type CredentialSource } from './http.ts'
 export { privateKeyFrom } from '@agora/harness-bridge/token'
