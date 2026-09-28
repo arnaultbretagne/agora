@@ -344,8 +344,8 @@ heure ; reprendre depuis un anchor ouvre une nouvelle session et repaie tout le 
 
 ## Les cas à valider
 
-Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts`
-(branche `feat/executions`) : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
+Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts` :
+**22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
 ré-armé trois fois par bail.
 
 | # | Cas | Attendu | Mesuré |

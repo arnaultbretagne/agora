@@ -1,0 +1,112 @@
+# The refonte's CI: checks every workspace on each push and each PR to the base branch, then — on
+# pushes only — builds, tries and publishes the lab and the harness images by digest. infra-k8s
+# pins the digests (apps/agora-sandboxes, apps/agora-lab), never a tag.
+name: ci
+
+on:
+  push:
+    branches: [design/agora-foundations, 'feat/**', 'fix/**', 'chore/**']
+    paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
+  pull_request:
+    branches: [design/agora-foundations]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Typecheck and test every workspace
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+
+  image:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: agora-lab, dockerfile: apps/lab/Dockerfile, harness: false }
+          - { name: agora-harness-mock, dockerfile: harnesses/mock/Dockerfile, harness: true }
+          - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: ${{ matrix.name }}:test
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # A harness image starts as in the cluster: non-root, read-only root, HOME on tmpfs, and is ready
+      # only once the real adapter answered initialize.
+      - name: Start the harness image read-only and probe it
+        if: matrix.harness
+        run: |
+          openssl genpkey -algorithm ed25519 -out key.pem
+          openssl pkey -in key.pem -pubout -out pub.pem
+          docker run -d --name harness --read-only --tmpfs /home/harness:uid=10001,gid=10001 --tmpfs /tmp \
+            --cap-drop ALL -e POD_NAME=sbx-ci -e BRIDGE_PUBLIC_KEY="$(cat pub.pem)" -p 8080:8080 \
+            ${{ matrix.name }}:test
+          for i in $(seq 1 60); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
+          curl -fsS http://localhost:8080/healthz
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
+          docker logs harness
+
+      - name: Start the lab far enough to fail on its configuration
+        if: ${{ !matrix.harness }}
+        run: |
+          docker run --rm --read-only --cap-drop ALL agora-lab:test 2>&1 | tee out.txt || true
+          grep -q 'SANDBOX_NAMESPACE est requis' out.txt
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the digest
+        run: |
+          {
+            echo '### ${{ matrix.name }}'
+            echo ''
+            echo '```'
+            echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

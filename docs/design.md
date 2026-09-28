@@ -33,7 +33,7 @@ l'historique indépendamment de la durée de vie des processus et de l'infrastru
 | Historique durable | Retrouver les demandes, réponses, outils et erreurs après fermeture du navigateur ou redémarrage d'Agora. |
 | Exécution à la demande | Ouvrir une exécution avec un harness et une configuration choisis parmi les options autorisées. |
 | Interaction | Envoyer un message, suivre les sorties, répondre aux permissions ACP et demander l'annulation d'un tour. |
-| Arrêt | Fermer l'admission de nouveaux messages et demander l'arrêt de l'exécution. Retirer le sandbox de l'UI dès que la suppression est acceptée. |
+| Arrêt | Fermer l'admission de nouveaux messages et cesser de renouveler l'échéance de l'exécution ; elle disparaît quand l'infrastructure la détruit. |
 | Reconnexion | Retrouver une exécution encore vivante sans créer un second contexte ni renvoyer le dernier message. |
 | Reprise après perte | Expliquer ce qui est récupérable et permettre une continuation explicite. |
 | Choix du harness | Utiliser une interface commune, sans prétendre que tous les harnesses ont les mêmes capacités de reprise ou de configuration. |
@@ -143,9 +143,9 @@ Une indisponibilité acceptable ne signifie pas qu'un élargissement des droits 
 ## Arrêt et nettoyage
 
 Agora ferme les nouveaux envois, demande l'annulation si nécessaire, retire l'accès
-au proxy selon son contrat, puis demande l'arrêt à Agent Sandbox. Ces demandes doivent
-survivre à un redémarrage d'Agora. La conservation du contexte ne doit pas bloquer
-indéfiniment un arrêt demandé.
+au proxy selon son contrat, puis cesse de renouveler l'échéance : Agent Sandbox détruit.
+Ces demandes doivent survivre à un redémarrage d'Agora. La conservation du contexte ne
+doit pas bloquer indéfiniment un arrêt demandé.
 
 L'expiration et le reaper côté infrastructure nettoient aussi les ressources dont
 Agora a perdu la trace. Ils ne remplacent pas le traitement d'une demande explicite

@@ -1,0 +1,21 @@
+{
+  "name": "@agora/executions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Les exécutions d'Agora : claims Agent Sandbox, échéance, relais ACP, anchors.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "@agora/harness-bridge": "0.0.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
+  }
+}

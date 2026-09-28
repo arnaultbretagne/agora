@@ -1,0 +1,22 @@
+{
+  "name": "@agora/harness-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Le bridge devant le harness dans l'image : relais ACP numéroté, jeton d'Agora, anchor.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./token": "./src/token.ts",
+    "./anchor": "./src/anchor.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0"
+  }
+}
