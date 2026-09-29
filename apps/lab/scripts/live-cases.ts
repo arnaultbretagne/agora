@@ -1,6 +1,6 @@
 // Plays every case of docs/executions.md and docs/credentials.md ("Les cas à valider") against the
 // DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline. Case 25 is a
-// real, billed prompt: on haiku, one short answer.
+// real, billed prompt: on haiku, one short answer. Case 26 writes a dated file to GITHUB_A.
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [cas…] (the receiver is on port 8081).
 // From g4, the lab Pod IP is reachable directly (its policy admits the host); the page at
 // agora-lab.bretagne.dev offers the same cases by hand, behind Pocket-ID.
@@ -456,9 +456,16 @@ await check(23, 'Sortir sans credential', async () => {
   return `« ${reply.slice(0, 90)} » ; ${String(refused)} refus`
 })
 
-await check(24, 'Credential branché, chaîne seule', async () => {
+// The repos for case 26: the operator's throwaway repos with a real PAT (GITHUB_A, GITHUB_B), or
+// public stand-ins — then a request the gateway lets through is answered by GitHub (401 with the
+// stand-in PAT), and one it refuses never leaves: 403 "authorization failed".
+const REPO_A = process.env.GITHUB_A ?? 'octocat/Hello-World'
+const REPO_B = process.env.GITHUB_B ?? 'octocat/Spoon-Knife'
+const REPO_C = process.env.GITHUB_C ?? 'github/linguist'
+
+await check(24, 'Passerelle, chaîne seule', async () => {
   const { name } = await create(mock, SHORT)
-  const attached = await api('POST', `/api/executions/${name}/credentials`, { source: 'agent-vault', ttlSeconds: 300 })
+  const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 300, profiles: ['anthropic'] })
   assert(attached.accepted === true, JSON.stringify(attached))
   const c = await consumer(name)
   const s = await c.session()
@@ -467,40 +474,9 @@ await check(24, 'Credential branché, chaîne seule', async () => {
   const reply = said(c)
   const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
   await api('POST', `/api/executions/${name}/stop`)
-  assert(reply.startsWith('HTTP/1.1 ') && !/agent.vault/i.test(reply), reply)
-  return `session jusqu'à ${String(attached.expiresAt)} ; « ${reply.slice(0, 140)} » ; tunnel → ${String(outbound.lastStatus)}`
+  assert(reply.startsWith('HTTP/1.1 ') && !reply.includes('authorization failed'), reply)
+  return `JWT jusqu'à ${String(attached.expiresAt)} ; « ${reply.slice(0, 140)} » ; tunnel → ${String(outbound.lastStatus)}`
 })
-
-await check(25, 'Credential branché, harness réel (haiku)', async () => {
-  if (claude === undefined) throw new Error('pas de pool claude-code')
-  const { name } = await create(claude, SHORT)
-  const attached = await api('POST', `/api/executions/${name}/credentials`, { source: 'agent-vault', ttlSeconds: 600 })
-  assert(attached.accepted === true, JSON.stringify(attached))
-  const c = await consumer(name)
-  const s = await c.session()
-  c.send({ jsonrpc: '2.0', id: 'model', method: 'session/set_config_option', params: { sessionId: s, configId: 'model', value: 'haiku' } })
-  const model = await c.response('model', 30_000)
-  assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
-  const current = (model.result?.configOptions as Json[] | undefined)?.find((o) => o.id === 'model')?.currentValue
-  const started = Date.now()
-  c.prompt(1, s, 'Quelle est la capitale de la France ? Réponds en un mot.')
-  const answer = await c.response(1, 120_000)
-  const seconds = ((Date.now() - started) / 1000).toFixed(1)
-  const reply = said(c)
-  const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
-  await api('POST', `/api/executions/${name}/stop`)
-  assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
-  assert(/paris/i.test(reply), `réponse : ${reply}`)
-  return `modèle ${String(current)}, « ${reply.trim().slice(0, 60)} » en ${seconds} s, fin ${String(answer.result.stopReason)} ; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
-})
-
-// ---------------------------------------------------------------- the gateway (docs/credentials.md, "La passerelle")
-
-// Public repos stand in for A, B and C; with the stand-in PAT, a request the gateway lets through is
-// answered by GitHub (401 Bad credentials), one it refuses never leaves: 403 "authorization failed".
-const REPO_A = process.env.GITHUB_A ?? 'octocat/Hello-World'
-const REPO_B = process.env.GITHUB_B ?? 'octocat/Spoon-Knife'
-const REPO_C = process.env.GITHUB_C ?? 'github/linguist'
 
 async function haiku(name: string): Promise<string> {
   const c = await consumer(name)
@@ -508,19 +484,21 @@ async function haiku(name: string): Promise<string> {
   c.send({ jsonrpc: '2.0', id: 'model', method: 'session/set_config_option', params: { sessionId: s, configId: 'model', value: 'haiku' } })
   const model = await c.response('model', 30_000)
   assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
+  const current = (model.result?.configOptions as Json[] | undefined)?.find((o) => o.id === 'model')?.currentValue
   const started = Date.now()
+  // A neutral question: haiku declined "answer only with the word …" as an injected instruction.
   c.prompt(1, s, 'Quelle est la capitale de la France ? Réponds en un mot.')
   const answer = await c.response(1, 120_000)
   const reply = said(c)
   assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
   assert(/paris/i.test(reply), `réponse : ${reply}`)
-  return `« ${reply.trim().slice(0, 40)} » en ${((Date.now() - started) / 1000).toFixed(1)} s`
+  return `modèle ${String(current)}, « ${reply.trim().slice(0, 40)} » en ${((Date.now() - started) / 1000).toFixed(1)} s`
 }
 
-await check(26, 'Passerelle, harness réel (haiku)', async () => {
+await check(25, 'Passerelle, harness réel (haiku)', async () => {
   if (claude === undefined) throw new Error('pas de pool claude-code')
   const { name } = await create(claude, SHORT)
-  const attached = await api('POST', `/api/executions/${name}/credentials`, { source: 'gateway', ttlSeconds: 600, profiles: ['anthropic'] })
+  const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles: ['anthropic'] })
   assert(attached.accepted === true, JSON.stringify(attached))
   const detail = await haiku(name)
   const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
@@ -528,16 +506,16 @@ await check(26, 'Passerelle, harness réel (haiku)', async () => {
   return `JWT jusqu'à ${String(attached.expiresAt)} ; ${detail} ; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
 })
 
-await check(27, 'Passerelle, composition (A écriture, B lecture, C rien)', async () => {
+await check(26, 'Passerelle, composition (A écriture, B lecture, C rien)', async () => {
   const { name } = await create(mock, SHORT)
   const profiles = [`github:${REPO_A}:write`, `github:${REPO_B}:read`]
-  const attached = await api('POST', `/api/executions/${name}/credentials`, { source: 'gateway', ttlSeconds: 600, profiles })
+  const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles })
   assert(attached.accepted === true, JSON.stringify(attached))
   const c = await consumer(name)
   const s = await c.session()
   // A real create when the PAT is real (201 on A); the same file on B must never exist.
   const file = `agora-spike-${String(Date.now())}.txt`
-  const createFile = JSON.stringify({ message: `agora: case 27 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
+  const createFile = JSON.stringify({ message: `agora: case 26 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
   const probes: [string, string, boolean][] = [
     [`GET https://api.github.com/repos/${REPO_A}`, 'A lecture', true],
     [`PUT https://api.github.com/repos/${REPO_A}/contents/${file} ${createFile}`, 'A écriture', true],

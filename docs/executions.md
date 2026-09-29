@@ -181,7 +181,7 @@ C'est pourquoi le workspace est le même chemin dans toutes les images.
 | Ressources | 50m CPU et 512 Mio réservés, 1 CPU et 1 Gio au plus : un sandbox au repos consomme ~1m, et le nœud n'a que 6 cœurs. |
 | `HOME` | `emptyDir` monté sur `/home/harness` |
 | Utilisateur | 10001, racine en lecture seule, aucune capacité |
-| Sortie | Par le proxy d'Agent Vault seulement, et sa confiance TLS ([credentials.md](credentials.md)) |
+| Sortie | Par la passerelle d'Agora seulement, et sa confiance TLS ([credentials.md](credentials.md)) |
 
 Un template et un pool par image, nommés d'après son digest. Changer d'image, c'est un
 nouveau template et un nouveau pool, jamais une modification en place.

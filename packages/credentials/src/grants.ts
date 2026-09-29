@@ -65,8 +65,8 @@ export class GrantSigner {
     this.options = options
   }
 
-  describe(): { kind: string; proxy: string; profiles: string[] } {
-    return { kind: 'gateway', proxy: this.options.proxy, profiles: ['anthropic', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'] }
+  describe(): { proxy: string; profiles: string[] } {
+    return { proxy: this.options.proxy, profiles: ['anthropic', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'] }
   }
 
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {

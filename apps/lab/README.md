@@ -23,12 +23,8 @@ aux sandboxes).
 | `MAX_ACTIVE` | 4 | Exécutions actives au plus. |
 | `LAB` | — | `true` pour ouvrir les routes du banc. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Audience attendue du jeton projeté des Pods. |
-| `GATEWAY_PROXY` | — | La passerelle vue des sandboxes, `hôte:port`. Avec elle, la source `gateway` (profils signés) est offerte, et devient la source par défaut. |
+| `GATEWAY_PROXY` | — | La passerelle vue des sandboxes, `hôte:port`. Sans elle, aucun credential ne peut être branché. |
 | `GRANTS_KEY_FILE` | requis avec la passerelle | Clé privée Ed25519 qui signe les droits d'une exécution. |
 | `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | En-tête `kid`, `iss` et `aud` du JWT, attendus par la passerelle. |
-| `AGENT_VAULT_API` | — | API d'Agent Vault. Avec elle, la source `agent-vault` est offerte. |
-| `AGENT_VAULT_PROXY` | requis avec l'API | Le proxy d'Agent Vault vu des sandboxes, `hôte:port`. |
-| `AGENT_VAULT_NAME` | `default` | Le vault dont les sessions sont frappées. |
-| `AGENT_VAULT_TOKEN_FILE` | requis avec l'API | Le jeton de l'agent `agora-lab`, relu à chaque frappe. |
 
 Image : `docker build -f apps/lab/Dockerfile .` depuis la racine.
