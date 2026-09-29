@@ -38,6 +38,11 @@ check on a request: a host, a pattern on the path, and the allowed methods.
 
 Grants add up: any mix of profiles is just a longer list.
 
+Grants are the only restriction, so they stop at what the gateway can check: a host, a path, a
+method. An ACP permission, an installed tool or an instruction given to the model restricts
+nothing on the service's side. If the gateway refuses or does not answer, the request fails;
+nothing ever widens the grants.
+
 ## The token
 
 The grants travel inside a short-lived JWT: a header, a content and a signature. The content is

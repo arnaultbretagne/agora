@@ -5,10 +5,11 @@ Written to be read end to end by someone who does not know the system yet.
 
 ## What goes here
 
-- `overview.md`: what Agora is for, its foundations, who owns what, how it behaves, and the open
-  questions.
-- One document per subject, explaining it: who does what, the main flows, what follows from
-  them.
+- `_overview.md`: the map, read first (the underscore sorts it first). What Agora does, its
+  components and what each holds, the prerequisites, where trust stops, a message end to end.
+  It stays at the components' boundaries.
+- One document per subject, explaining its inside: who does what, the main flows, what follows
+  from them, and its open questions.
 
 ## Rules
 

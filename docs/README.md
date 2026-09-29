@@ -4,7 +4,7 @@ Agora's documentation, in three folders that each answer one question.
 
 | Folder | Question | Content |
 | --- | --- | --- |
-| `architecture/` | How does it work? | How the system fits together, subject by subject; read end to end. Start with `overview.md`. |
+| `architecture/` | How does it work? | How the system fits together, subject by subject; read end to end. Start with `_overview.md`. |
 | `specs/` | What exactly must be implemented? | The contracts: routes, fields, states, rules, validated cases; consulted, not read end to end. |
 | `adr/` | Why is it built this way? | One decision per record: context, decision, what we tried, consequences. |
 
