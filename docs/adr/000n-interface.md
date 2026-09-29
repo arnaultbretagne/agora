@@ -23,13 +23,6 @@
 3. **Neither AG-UI nor A2A.** A2A connects agents to each other; AG-UI assumes a run driven by
    the client, whereas Agora's log is authoritative.
 
-| ACP | assistant-ui |
-| --- | --- |
-| text, reasoning | message parts |
-| `tool_call`, `tool_call_update` | tool parts with a status |
-| `session/request_permission` | human approval |
-| `session/cancel` | `onCancel` |
-
 ## Why
 
 - Primitives without styling, and a runtime that takes an external store: the interface stays a

@@ -13,32 +13,21 @@
 
 ## Decision
 
-1. **Agent Sandbox provides executions.** It is a prerequisite, like Kubernetes: one
-   `SandboxClaim` per request, taken from a warm pool; Kata isolates each Pod in a VM.
-2. **Agora only sets the deadline.** At creation, now + 10 minutes. During a turn, every minute,
-   `min(now + 10 min, turn start + 1 h)`. After a confirmed end of turn, one more lease, then
-   nothing. Stopping is no longer renewing.
+1. **Agent Sandbox provides executions.** It is a prerequisite, like Kubernetes: one claim per
+   request, taken from a warm pool; Kata isolates each Pod in a VM.
+2. **Agora only sets the deadline**, renewing it during a turn only, and a turn is capped at one
+   hour. Stopping is no longer renewing.
 3. **Only the infrastructure destroys**, at the deadline.
-4. **The Pod saves itself.** At SIGTERM, the bridge pushes the harness's native files as a
-   whole — the anchor — to Agora, identified by its projected ServiceAccount token.
-5. **Agora reaches the bridge through the Sandbox's Service**, with an Ed25519 token bound to the
-   Pod's name. What Agora must remember about an execution is written on its claim.
+4. **The Pod saves itself**: at SIGTERM it pushes the harness's native files — the anchor — to
+   Agora, proving its identity with its projected ServiceAccount token.
+5. **Agora keeps its state on the claim**, and reaches the bridge through the Sandbox's Service.
 
 ```mermaid
-sequenceDiagram
-    participant Agora
-    participant AS as Agent Sandbox
-    participant Pod as Pod (bridge + harness)
-    Agora->>AS: SandboxClaim, deadline now + 10 min
-    AS-->>Agora: Ready (taken from the warm pool)
-    Agora->>Pod: prompt, through the Service
-    loop every minute of the turn
-        Agora->>AS: deadline = min(now + 10 min, turn start + 1 h)
-    end
-    Pod-->>Agora: end of turn
-    Agora->>AS: deadline = now + 10 min, then nothing
-    AS->>Pod: deadline reached: claim deleted, SIGTERM
-    Pod->>Agora: anchor (native files) + projected token
+flowchart LR
+    Agora -- claim, deadline --> AS[Agent Sandbox]
+    AS -- allocates, destroys --> Pod[Pod: bridge + harness]
+    Agora -- ACP, through the Service --> Pod
+    Pod -- anchor, at SIGTERM --> Agora
 ```
 
 ## Why

@@ -70,13 +70,3 @@ sequenceDiagram
 The gateway applies a single rule to every request: some grant must cover its host, its path
 and its method. The harness trusts the gateway's certificate authority, so the TLS it sees ends
 at the gateway, which can read the request and set the credential.
-
-## What follows
-
-- **No state.** The gateway keeps nothing per execution and never calls Agora. Changing an
-  execution's rights is issuing a new token.
-- **No early revocation.** A token stays valid until it expires, so tokens are short and Agora
-  reissues them during the execution's life.
-- **The credential bounds, the grants cut.** One credential per host sets the maximum Agora can
-  ever reach; each execution gets only its share.
-- **Size.** The token grows with the grants: a few hundred bytes for a few repos.

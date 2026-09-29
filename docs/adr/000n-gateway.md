@@ -17,42 +17,25 @@
 
 ## Decision
 
-1. **No credential in the sandbox.** Everything it sends out goes through a gateway, reached
-   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent
-   Sandbox: agentgateway, deployed and configured by the infrastructure.
-2. **Agora signs the rights, and nothing more.** It compiles the execution's profiles
-   (`anthropic`, `github:owner/repo:read|write`) into grants — host, path, methods — and signs
-   them into a short-lived JWT, handed to the bridge after the claim. The grants travel in clear
-   inside the token; Agora's Ed25519 signature makes them tamper-proof, and the gateway checks
-   it with Agora's public key alone. The sandbox can read its own rights, not change them.
-3. **The gateway decides, then sets the credential.** It verifies the JWT and checks every
-   request against the grants with a single rule. If allowed, it sets the host's credential,
-   which only it holds (a SOPS-encrypted Kubernetes Secret).
+1. **No credential in the sandbox.** Everything it sends out goes through a gateway — a
+   prerequisite, like Kubernetes and Agent Sandbox: agentgateway, deployed by the
+   infrastructure.
+2. **Agora signs each execution's rights into a short-lived, self-contained token**, and does
+   nothing more: it never holds a credential.
+3. **The gateway checks every request against that token**, then sets the credential it alone
+   holds.
 4. **The credential bounds, the grants cut.** One credential per host, as narrow as possible;
-   each execution gets only the share its profiles grant.
-
-| Profile | Grants in the token |
-| --- | --- |
-| `anthropic` | `api.anthropic.com`, everything |
-| `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
-| `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
+   each execution gets only the share its token grants.
 
 ```mermaid
-sequenceDiagram
-    participant Agora
-    participant Bridge as Bridge (sandbox)
-    participant Harness as Harness (sandbox)
-    participant Gateway
-    participant GitHub
-    Agora->>Bridge: JWT: anthropic, A write, B read
-    Harness->>Bridge: CONNECT api.github.com:443
-    Bridge->>Gateway: CONNECT + JWT
-    Harness->>Gateway: PUT /repos/o/B/contents/x (through the tunnel)
-    Gateway->>Gateway: no grant covers B + PUT
-    Gateway-->>Harness: 403
-    Harness->>Gateway: PUT /repos/o/A/contents/x
-    Gateway->>GitHub: same request + the PAT
-    GitHub-->>Harness: 201
+flowchart LR
+    subgraph sandbox [Sandbox, untrusted]
+        Harness --> Bridge
+    end
+    Agora -- signed rights --> Bridge
+    Bridge -- every request + token --> Gateway
+    Secrets[(Credentials)] --- Gateway
+    Gateway -- allowed request + credential --> Services[External services]
 ```
 
 ## Why
@@ -144,6 +127,8 @@ Dropped outright: vaults grow with the combinations.
 - A new host needs a gateway route and a profile in Agora's catalogue, reviewed as code.
 - A JWT cannot be revoked before it expires: keep it short, and Agora reissues it during the
   execution.
+- The token grows with the grants: a few hundred bytes for a few repos. Tens of repos would call
+  for profiles expanded by the gateway instead.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
 - git and codex must trust the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`.
 - agentgateway is young and moves fast (1.5 made `iss` and `aud` mandatory): pinned by digest,
