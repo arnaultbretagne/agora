@@ -164,7 +164,7 @@ What each registry element can receive from ACP is in
 sending-closed banner. Everything else comes from the registry or the primitives.
 
 **To be specified:** blocking writing after an uncertain turn (the command-ordering question in
-`overview.md`), pagination of long threads, and pinning the assistant-ui version —
+`log.md`), pagination of long threads, and pinning the assistant-ui version —
 `adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
 unstable in 0.15.
 
