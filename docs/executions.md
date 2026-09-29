@@ -347,8 +347,8 @@ heure ; reprendre depuis un anchor ouvre une nouvelle session et repaie tout le 
 
 ## Les cas à valider
 
-Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts` :
-**22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
+Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts`, et rejoués le
+29 septembre : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
 ré-armé trois fois par bail.
 
 | # | Cas | Attendu | Mesuré |
@@ -374,7 +374,7 @@ ré-armé trois fois par bail.
 | 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. | *Perdu* ; anchor poussé malgré l'adaptateur mort. |
 | 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. | 401 partout ; jeton valide 200 / 101. |
 | 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. | 401 sans jeton, 401 avec un faux. |
-| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. | 401 d'Anthropic au prompt ; anchor de 11 915 o poussé, restauré par `session/resume`. |
+| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. | Sans credential, la sortie est refusée par le bridge : pas de réponse au prompt en 120 s, tour annulé ; anchor de 11 238 o poussé, restauré par `session/resume`. |
 
 **À préciser :** stockage des anchors en base, dossier natif de codex, tâches détachées,
 reprise après perte du processus. Les credentials : `credentials.md`.

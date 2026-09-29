@@ -156,14 +156,14 @@ premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option
 
 ## Les cas à valider
 
-Suite des cas d'`executions.md`, joués sur g4 sous Kata, par
+Suite des cas d'`executions.md`, joués les 28 et 29 septembre sur g4 sous Kata, par
 `apps/lab/scripts/live-cases.ts`. Pour GitHub, un PAT à grain fin limité à deux repos jetables,
 en écriture sur les deux : un refus ne peut venir que de la passerelle.
 
 | # | Cas | Attendu | Mesuré |
 | --- | --- | --- | --- |
 | 23 | Sortir sans credential | `/fetch` du mock : `CONNECT` refusé, 503 ; un refus compté. | 503 du bridge, un refus compté. Avant tout branchement, les sorties tentées par le Pod du pool sont aussi refusées. |
-| 24 | Chaîne seule | Profil `anthropic`, `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 de la passerelle, ni erreur TLS. | — |
+| 24 | Chaîne seule | Profil `anthropic`, `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 de la passerelle, ni erreur TLS. | 400 d'Anthropic (« anthropic-version: header is required ») : TLS accepté, Bearer posé par la passerelle ; tunnel → 200. |
 | 25 | Harness réel | Profil `anthropic`, claude-code en `haiku` : vraie réponse du modèle. | « Paris. » en 2,3 s, `end_turn` ; journal de la passerelle : deux `POST /v1/messages` en 200 sous le nom de l'exécution. |
 | 26 | Composition | Profils `github:A:write` et `github:B:read`. A : lecture, écriture, push ; B : lecture et fetch, pas d'écriture ni de push ; C, GraphQL : refusés. | A : lecture 200, écriture 201, push 200 ; B : lecture 200, fetch 200 ; B écriture, B push, C, GraphQL : 403 de la passerelle. Vérifié dans GitHub : le fichier créé existe sur A, pas sur B. |
 
