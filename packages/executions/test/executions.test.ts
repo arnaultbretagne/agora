@@ -53,7 +53,7 @@ async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?:
   })
   await manager.start()
   cleanups.push(() => manager.stop())
-  const base = await listen(createApi({ manager, anchors, lab: true, onRestart: () => {}, ...(options.credentials === undefined ? {} : { credentials: options.credentials }) }))
+  const base = await listen(createApi({ manager, anchors, lab: true, onRestart: () => {}, ...(options.credentials === undefined ? {} : { credentials: { fake: options.credentials } }) }))
   const receiver = await listen(createAnchorReceiver({ manager, namespace: NAMESPACE, verify: (token) => kube.reviewToken(token) }))
   kube.anchorUrl = `http://${receiver}/anchors`
   return { kube, manager, anchors, base, receiver }

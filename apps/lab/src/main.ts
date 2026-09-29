@@ -2,8 +2,8 @@
 // case of docs/executions.md. Configuration comes from the environment.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { AnchorStore, createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { AgentVault } from '@agora/credentials'
+import { AnchorStore, createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type CredentialSource } from '@agora/executions'
+import { AgentVault, GrantSigner } from '@agora/credentials'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -40,16 +40,26 @@ const manager = new ExecutionManager({
   bridgePort: number('BRIDGE_PORT', 8080),
 })
 
-// docs/credentials.md: without AGENT_VAULT_API, executions have no credential and no way out.
-const credentials =
-  process.env.AGENT_VAULT_API === undefined || process.env.AGENT_VAULT_API === ''
-    ? undefined
-    : new AgentVault({
-        api: process.env.AGENT_VAULT_API,
-        proxy: required('AGENT_VAULT_PROXY'),
-        vault: process.env.AGENT_VAULT_NAME ?? 'default',
-        agentTokenFile: required('AGENT_VAULT_TOKEN_FILE'),
-      })
+// docs/credentials.md: without a source, executions have no credential and no way out. Agent Vault
+// (one vault per session) and the gateway (Agora's signed grants) can both be offered.
+const credentials: Record<string, CredentialSource> = {}
+if (process.env.GATEWAY_PROXY !== undefined && process.env.GATEWAY_PROXY !== '') {
+  credentials.gateway = new GrantSigner({
+    proxy: process.env.GATEWAY_PROXY,
+    keyFile: required('GRANTS_KEY_FILE'),
+    keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
+    issuer: process.env.GRANTS_ISSUER ?? 'agora',
+    audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
+  })
+}
+if (process.env.AGENT_VAULT_API !== undefined && process.env.AGENT_VAULT_API !== '') {
+  credentials['agent-vault'] = new AgentVault({
+    api: process.env.AGENT_VAULT_API,
+    proxy: required('AGENT_VAULT_PROXY'),
+    vault: process.env.AGENT_VAULT_NAME ?? 'default',
+    agentTokenFile: required('AGENT_VAULT_TOKEN_FILE'),
+  })
+}
 
 await manager.start()
 const server = createApi({
@@ -57,7 +67,7 @@ const server = createApi({
   anchors,
   lab: process.env.LAB === 'true',
   page: join(import.meta.dirname, '..', 'public', 'index.html'),
-  ...(credentials === undefined ? {} : { credentials }),
+  credentials,
 })
 server.listen(number('PORT', 8080), () => console.log(`- banc prêt sur :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({ manager, namespace, verify: (token) => kube.reviewToken(token, audience) })

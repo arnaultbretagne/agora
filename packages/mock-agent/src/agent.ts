@@ -174,7 +174,10 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       process.exit(3)
     }
     case '/fetch': {
-      const reply = await fetchOut(argument ?? 'https://api.anthropic.com/v1/models')
+      // /fetch [METHOD] URL [BODY…]
+      const words = text.trim().split(/\s+/).slice(1)
+      const method = /^[A-Z]+$/.test(words[0] ?? '') ? (words.shift() as string) : 'GET'
+      const reply = await fetchOut(method, words.shift() ?? 'https://api.anthropic.com/v1/models', words.join(' '))
       remember(session, 'agent', reply)
       say(session.id, reply)
       return 'end_turn'
@@ -198,10 +201,10 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
 }
 
 /**
- * A GET through HTTPS_PROXY, the way a real harness goes out (docs/credentials.md): CONNECT to the
- * proxy, then TLS trusted by the system store plus NODE_EXTRA_CA_CERTS. Answers with what came back.
+ * A request through HTTPS_PROXY, the way a real harness goes out (docs/credentials.md): CONNECT to
+ * the proxy, then TLS trusted by the system store plus NODE_EXTRA_CA_CERTS. Answers with what came back.
  */
-async function fetchOut(address: string): Promise<string> {
+async function fetchOut(method: string, address: string, requestBody: string): Promise<string> {
   let target: URL
   try {
     target = new URL(address)
@@ -229,7 +232,10 @@ async function fetchOut(address: string): Promise<string> {
       secure.once('secureConnect', resolve)
       secure.once('error', reject)
     })
-    secure.write(`GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\nAccept: */*\r\nConnection: close\r\n\r\n`)
+    const payload = Buffer.from(requestBody)
+    const requestHead = `${method} ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\nAccept: */*\r\nUser-Agent: agora-mock\r\nConnection: close\r\n`
+    secure.write(`${requestHead}${payload.length > 0 ? `Content-Type: application/json\r\nContent-Length: ${String(payload.length)}\r\n` : ''}\r\n`)
+    if (payload.length > 0) secure.write(payload)
     const chunks: Buffer[] = []
     for await (const chunk of secure) chunks.push(chunk as Buffer)
     const raw = Buffer.concat(chunks).toString('utf8')

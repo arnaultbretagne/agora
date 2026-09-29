@@ -35,11 +35,12 @@ export class AgentVault {
     this.options = options
   }
 
-  describe(): { vault: string; proxy: string } {
-    return { vault: this.options.vault, proxy: this.options.proxy }
+  describe(): { kind: string; vault: string; proxy: string } {
+    return { kind: 'agent-vault', vault: this.options.vault, proxy: this.options.proxy }
   }
 
-  async mint(input: { label: string; ttlSeconds: number }): Promise<Credentials> {
+  async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {
+    if (input.profiles !== undefined && input.profiles.length > 0) throw new AgentVaultRefused(400, 'Agent Vault ne compose pas de profils : une session couvre un vault entier')
     const [min, max] = SESSION_TTL_BOUNDS
     if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < min || input.ttlSeconds > max) {
       throw new AgentVaultRefused(400, `durée hors bornes : ${String(min)} à ${String(max)} s`)

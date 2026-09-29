@@ -13,4 +13,4 @@ fichier natif sous `$HOME/.mock-agent/sessions/`, relu à `session/resume` et `s
 | `/big N` | N Kio de texte. |
 | `/recall` | Rappelle tout ce qui a été dit dans la session. |
 | `/crash` | Sort avec le code 3. |
-| `/fetch URL` | Un GET par `HTTPS_PROXY`, comme un vrai harness ([docs/credentials.md](../../docs/credentials.md)) ; répond ce qui est revenu. |
+| `/fetch [MÉTHODE] URL [CORPS]` | Une requête par `HTTPS_PROXY`, comme un vrai harness ([docs/credentials.md](../../docs/credentials.md)) ; répond ce qui est revenu. GET par défaut. |

@@ -11,10 +11,10 @@ import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle } from '@agora/harness-bri
 import { bearerOf } from '@agora/harness-bridge/token'
 import type { Credentials } from '@agora/harness-bridge/outbound'
 
-/** Where an execution's credential comes from (docs/credentials.md): today Agent Vault. */
+/** Where an execution's credential comes from (docs/credentials.md): Agent Vault, or Agora's grants for the gateway. */
 export interface CredentialSource {
   describe(): Record<string, unknown>
-  mint(input: { label: string; ttlSeconds: number }): Promise<Credentials>
+  mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
 }
 
 export interface HttpOptions {
@@ -24,8 +24,8 @@ export interface HttpOptions {
   readonly lab: boolean
   /** A page to serve at `/`, if the deployable has one. */
   readonly page?: string
-  /** Opens POST /api/executions/{name}/credentials. */
-  readonly credentials?: CredentialSource
+  /** Opens POST /api/executions/{name}/credentials; the first one is the default. */
+  readonly credentials?: Readonly<Record<string, CredentialSource>>
   readonly onRestart?: () => void
 }
 const NAME = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
@@ -79,7 +79,10 @@ export function createApi(options: HttpOptions): Server {
     if (method === 'GET' && path === '/api/executions') return json(res, 200, manager.snapshot())
     if (method === 'GET' && path === '/api/anchors') return json(res, 200, { anchors: await anchors.list() })
     if (method === 'GET' && path === '/api/events') return events(req, res)
-    if (method === 'GET' && path === '/api/config') return json(res, 200, { lab: options.lab, credentials: options.credentials?.describe() ?? null })
+    if (method === 'GET' && path === '/api/config') {
+      const sources = Object.fromEntries(Object.entries(options.credentials ?? {}).map(([name, source]) => [name, source.describe()]))
+      return json(res, 200, { lab: options.lab, credentials: sources })
+    }
 
     const anchorContent = /^\/api\/anchors\/([^/]+)\/content$/.exec(path)
     if (method === 'GET' && anchorContent !== null) {
@@ -121,11 +124,15 @@ export function createApi(options: HttpOptions): Server {
   }
 
   async function attachCredentials(res: ServerResponse, name: string, input: Record<string, unknown>): Promise<void> {
-    if (options.credentials === undefined) return json(res, 503, { accepted: false, reason: 'aucune source de credentials configurée' })
+    const sources = options.credentials ?? {}
+    const sourceName = typeof input.source === 'string' ? input.source : Object.keys(sources)[0]
+    const source = sourceName === undefined ? undefined : sources[sourceName]
+    if (source === undefined) return json(res, sourceName === undefined ? 503 : 400, { accepted: false, reason: sourceName === undefined ? 'aucune source de credentials configurée' : `source inconnue : ${sourceName}` })
     const ttlSeconds = input.ttlSeconds === undefined ? 3600 : Number(input.ttlSeconds)
+    const profiles = Array.isArray(input.profiles) ? input.profiles.filter((p): p is string => typeof p === 'string') : undefined
     let credentials: Credentials
     try {
-      credentials = await options.credentials.mint({ label: `agora ${name}`, ttlSeconds })
+      credentials = await source.mint({ label: `agora ${name}`, ttlSeconds, ...(profiles === undefined ? {} : { profiles }) })
     } catch (error) {
       const status = typeof (error as { status?: unknown }).status === 'number' ? (error as { status: number }).status : 502
       return json(res, status, { accepted: false, reason: error instanceof Error ? error.message : String(error) })

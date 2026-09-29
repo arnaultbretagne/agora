@@ -1,0 +1,73 @@
+// Profiles compiled into grants, and the JWT that carries them (docs/credentials.md, "La passerelle").
+// The regexes only use what RE2 (the gateway's CEL `matches`) and JavaScript share.
+import assert from 'node:assert/strict'
+import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'node:test'
+import { compileProfile, compileProfiles, GrantSigner, type Grant } from '../src/index.ts'
+
+/** What the gateway's single rule decides, replayed in JavaScript. */
+function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
+  return grants.some((g) => g.host === host && (g.path === undefined || new RegExp(g.path).test(pathAndQuery)) && (g.methods === undefined || g.methods.includes(method)))
+}
+
+describe('profiles', () => {
+  it('anthropic opens the whole API host', () => {
+    assert.deepEqual(compileProfile('anthropic'), [{ host: 'api.anthropic.com' }])
+  })
+
+  it('composes write on one repo and read on another of the same host, without mixing them', () => {
+    const grants = compileProfiles(['anthropic', 'github:octo/app:write', 'github:octo/docs.site:read'])
+    const cases: [string, string, string, boolean][] = [
+      ['api.github.com', 'GET', '/repos/octo/app', true],
+      ['api.github.com', 'PUT', '/repos/octo/app/contents/a.txt', true],
+      ['api.github.com', 'GET', '/repos/octo/docs.site/contents/README.md?ref=main', true],
+      ['api.github.com', 'PUT', '/repos/octo/docs.site/contents/a.txt', false],
+      ['api.github.com', 'GET', '/repos/octo/docsXsite', false],
+      ['api.github.com', 'GET', '/repos/octo/app2', false],
+      ['api.github.com', 'GET', '/repos/octo/other', false],
+      ['api.github.com', 'POST', '/graphql', false],
+      ['github.com', 'GET', '/octo/docs.site.git/info/refs?service=git-upload-pack', true],
+      ['github.com', 'POST', '/octo/docs.site.git/git-upload-pack', true],
+      ['github.com', 'GET', '/octo/docs.site.git/info/refs?service=git-receive-pack', false],
+      ['github.com', 'POST', '/octo/docs.site.git/git-receive-pack', false],
+      ['github.com', 'GET', '/octo/app.git/info/refs?service=git-receive-pack', true],
+      ['github.com', 'POST', '/octo/app.git/git-receive-pack', true],
+      ['api.anthropic.com', 'POST', '/v1/messages', true],
+      ['api.openai.com', 'POST', '/v1/responses', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+  })
+
+  it('refuses what it does not know, and names that could escape the pattern', () => {
+    for (const profile of ['github:octo/app:admin', 'github:octo:read', 'github:octo/..:read', 'github:octo/a b:read', 'openai', '']) {
+      assert.throws(() => compileProfile(profile), /profil inconnu|repo invalide/, profile)
+    }
+    assert.throws(() => compileProfiles([]), /aucun profil/)
+  })
+})
+
+describe('GrantSigner', () => {
+  it('signs a short EdDSA JWT the gateway can verify with Agora’s public key', async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+    const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+    writeFileSync(keyFile, privateKey.export({ format: 'pem', type: 'pkcs8' }))
+    const signer = new GrantSigner({ proxy: 'gateway:3000', keyFile, keyId: 'k1', issuer: 'agora', audience: 'agora-gateway' })
+    const credentials = await signer.mint({ label: 'agora sbx-0123456789', ttlSeconds: 600, profiles: ['anthropic'] })
+    assert.equal(credentials.proxy, 'gateway:3000')
+    const [header, payload, signature] = credentials.token.split('.') as [string, string, string]
+    assert.ok(verify(null, Buffer.from(`${header}.${payload}`), createPublicKey(publicKey.export({ format: 'pem', type: 'spki' })), Buffer.from(signature, 'base64url')))
+    assert.deepEqual(JSON.parse(Buffer.from(header, 'base64url').toString()), { alg: 'EdDSA', typ: 'JWT', kid: 'k1' })
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as Record<string, unknown>
+    assert.equal(claims.iss, 'agora')
+    assert.equal(claims.aud, 'agora-gateway')
+    assert.equal(claims.sub, 'agora sbx-0123456789')
+    assert.deepEqual(claims.grants, [{ host: 'api.anthropic.com' }])
+    assert.equal((claims.exp as number) - (claims.iat as number), 600)
+    assert.equal(credentials.expiresAt, new Date((claims.exp as number) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'))
+    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] }), /aucun profil/)
+    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /hors bornes/)
+  })
+})

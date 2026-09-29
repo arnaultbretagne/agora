@@ -48,9 +48,10 @@
   <button id="createTwice" title="Deux POST avec le même identifiant">Créer 2× (même identifiant)</button>
 </div>
 <div class="row">
-  <span>Credentials : <b id="credentialSource">…</b></span>
-  <label>Durée d'un credential (s) <input id="credentialTtl" size="6" value="3600"></label>
-  <span class="muted">docs/credentials.md — bouton « brancher credential » sur une exécution</span>
+  <label>Credentials : source <select id="credentialSource"></select></label>
+  <label>profils <input id="profiles" size="70" value="anthropic"></label>
+  <label>durée (s) <input id="credentialTtl" size="6" value="3600"></label>
+  <span class="muted">docs/credentials.md — profils (passerelle) : anthropic, github:owner/repo:read, github:owner/repo:write</span>
 </div>
 <pre id="createResult" class="muted">—</pre>
 <div id="pools" class="muted"></div>
@@ -131,7 +132,7 @@
 <script>
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map(), newIds: new Set() }
+const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map(), newIds: new Set(), sources: {} }
 
 // ---------------------------------------------------------------- flux d'état
 function connectEvents() {
@@ -158,7 +159,9 @@ function connectEvents() {
 
 async function loadConfig() {
   const config = await (await fetch('/api/config')).json()
-  $('credentialSource').textContent = config.credentials ? `Agent Vault, vault ${config.credentials.vault}, proxy ${config.credentials.proxy}` : 'aucune source configurée'
+  state.sources = config.credentials ?? {}
+  const entries = Object.entries(state.sources)
+  $('credentialSource').innerHTML = entries.map(([name, d]) => `<option value="${esc(name)}">${esc(name)} (${esc(d.kind === 'agent-vault' ? `vault ${d.vault}` : 'profils signés')} → ${esc(d.proxy)})</option>`).join('') || '<option value="">aucune source</option>'
 }
 
 async function loadPools() {
@@ -273,7 +276,10 @@ document.addEventListener('click', async (event) => {
   if (!(target instanceof HTMLElement)) return
   if (target.dataset.select) selectSandbox(target.dataset.select)
   if (target.dataset.credentials) {
-    const r = await post(`/api/executions/${target.dataset.credentials}/credentials`, { ttlSeconds: Number($('credentialTtl').value) })
+    const source = $('credentialSource').value
+    const body = { source, ttlSeconds: Number($('credentialTtl').value) }
+    if (state.sources[source]?.kind === 'gateway') body.profiles = $('profiles').value.split(/[\s,]+/).filter(Boolean)
+    const r = await post(`/api/executions/${target.dataset.credentials}/credentials`, body)
     $('createResult').textContent = 'Credential : ' + JSON.stringify(r)
     $('createResult').className = r.accepted ? 'ok' : 'err'
   }
@@ -431,13 +437,15 @@ const CASES = [
   ['Sortir sans credential (docs/credentials.md)', 'Pool mock : /fetch.', 'CONNECT refusé par le proxy : 503 ; 1 refus dans « Accès sortant ».'],
   ['Credential branché, chaîne seule', 'Pool mock : « brancher credential », puis /fetch.', 'Réponse d’Anthropic (pas 403 d’Agent Vault, pas d’erreur TLS) ; tunnel compté.'],
   ['Credential branché, harness réel', 'Pool claude-code : « brancher credential », session/new (modèle haiku appliqué), un prompt court.', 'Vraie réponse du modèle, fin de tour end_turn ; api.anthropic.com:443 → 200.'],
+  ['Passerelle, harness réel', 'Source gateway, profil anthropic, pool claude-code, un prompt court.', 'Vraie réponse du modèle, par la passerelle.'],
+  ['Passerelle, composition', 'Source gateway, profils github:A:write github:B:read, pool mock, /fetch sur A, B et C.', 'A lu et écrit, B lu seulement, C refusé : 403 de la passerelle sur ce qui n’est pas accordé.'],
 ]
 $('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
 
 newRequestId()
 connectEvents()
 loadPools().catch((e) => { $('pools').textContent = 'catalogue indisponible : ' + e.message })
-loadConfig().catch((e) => { $('credentialSource').textContent = 'configuration indisponible : ' + e.message })
+loadConfig().catch((e) => { $('credentialSource').innerHTML = `<option>configuration indisponible : ${esc(e.message)}</option>` })
 </script>
 </body>
 </html>
