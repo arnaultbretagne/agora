@@ -55,7 +55,6 @@ Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cas
 | A secret or identity injected through the claim | Forces a cold start and puts a secret in the sandbox. |
 | Reaching the Pod by its IP | The Service is the native building block; the Pod no longer needs to be reached during its grace period. |
 | Network rules by domain name | The Cilium DNS proxy's responses do not reach a Kata VM. |
-| gVisor | Kata chosen after the 2026-09-22 evaluation. |
 | Agent Sandbox's upstream router | Agora relays the WebSocket itself. |
 
 ## Consequences
