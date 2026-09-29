@@ -154,6 +154,5 @@ message that the model still has the whole history.
 
 1. The functional scope.
 2. Workspace storage and the resume actually promised for each harness.
-3. Command ordering, recovery of uncertain sends and the buffering limits when the log is
-   unavailable.
+3. Releasing an uncertain turn without stopping the execution.
 4. User access, ACP permissions and data retention.

@@ -41,7 +41,7 @@ The server's response is *accepted* or *refused, with the reason*.
 | Command | Carries | Rule |
 | --- | --- | --- |
 | **Create** | the harness chosen among the allowed options | — |
-| **Write** | the text | Refused if a turn is saved or in progress, or if sending is closed. |
+| **Write** | the text | Refused if a turn is saved, in progress or uncertain, or if sending is closed. |
 | **Cancel** | the targeted turn | No effect if that turn is over; never touches the next turn. |
 | **Respond to a permission** | the request and the chosen option | Refused if the request is no longer pending. |
 | **Stop** | — | Closes sending and stops renewing the deadline; the execution disappears when the infrastructure destroys it (`executions.md`). |
@@ -74,7 +74,7 @@ Not provided, so the features are absent from the interface: `onEdit`, `onReload
 | **done** — the agent has finished | — | `complete` |
 | **cancelled** — stopped on request | — | `incomplete` / `cancelled`; a pending permission moves to `resolution: cancelled` |
 | **failed** — the agent answered with an error | — | `incomplete` / `error`, with the message |
-| **uncertain** — connection lost during the turn | "uncertain" badge, clearly visible | `incomplete` / `other`, with the explanation |
+| **uncertain** — the end of the turn could not be seen: the connection dropped, or Agora stopped without closing it | "uncertain" badge, clearly visible | `incomplete` / `other`, with the explanation |
 
 An uncertain turn is never resent automatically. It changes state only on proof.
 The turn's state travels in the user message's `metadata.custom`.
@@ -163,8 +163,7 @@ What each registry element can receive from ACP is in
 `Notice`, the harness choice, the turn state badge, the execution banner and the
 sending-closed banner. Everything else comes from the registry or the primitives.
 
-**To be specified:** blocking writing after an uncertain turn (the command-ordering question in
-`log.md`), pagination of long threads, and pinning the assistant-ui version —
+**To be specified:** pagination of long threads, and pinning the assistant-ui version —
 `adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
 unstable in 0.15.
 
