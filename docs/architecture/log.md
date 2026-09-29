@@ -81,8 +81,8 @@ A clean restart of Agora loses nothing: the server closes the connection and wri
 received before leaving. A crash or a network drop can lose the lines in flight: the view shows
 where output may be missing, and a turn in progress becomes uncertain until its end is seen.
 
-After a restart, the claim says which turn was in progress (`executions.md`) and the log how far
-it went; the server connects to the bridge again and carries on.
+After a restart, the claims say which executions still exist and the log where each one stands;
+the server connects to the bridges again and carries on.
 
 ## Commands and recovery
 
@@ -107,7 +107,7 @@ re-evaluates every dependency and the whole desired configuration.
 
 Agora closes new sends, requests cancellation if needed, then stops renewing the deadline:
 Agent Sandbox destroys the sandbox at most one lease later, and the execution's token expires on
-its own. A stop is written on the claim, so it survives an Agora restart; saving the context
+its own. A stop is a command in the log, so it survives an Agora restart; saving the context
 never delays it.
 
 Expiry and the infrastructure-side reaper also clean up resources Agora has lost

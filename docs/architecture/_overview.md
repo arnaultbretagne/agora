@@ -40,7 +40,7 @@ flowchart TB
         Bridge --> Harness
     end
     Server -- log, anchors --> DB
-    Server -- claims, deadline --> AS
+    Server -- claim: pool, deadline --> AS
     AS -- allocates, destroys --> Sandbox
     Server -- ACP --> Bridge
     Bridge -- anchor, when the Pod ends --> Server

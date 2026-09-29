@@ -78,9 +78,9 @@ flowchart LR
   retention to decide.
 - A crash or a network drop can lose the lines in flight: the break is in the log, the view shows
   where, and a turn in progress stays uncertain until its end is seen.
-- The claim keeps what drives the execution — deadline, turn start, stop, the session an anchor
-  resumes; the log keeps what happened. After a restart, the claim says which turn was in
-  progress and the log how far it went.
+- Nothing about an execution is kept on its claim, which carries only a pool and a deadline:
+  the request, the settings, the session, the turns and the stop are entries. After a restart,
+  the claims say which executions still exist, the log everything else.
 - Changing a projection bumps its version and rebuilds it.
 - An invalid line is not an entry; only its size, digest and reason are kept.
 - Agora never reads inside an anchor.

@@ -8,10 +8,48 @@ keeps its anchor when it ends.
 
 | Actor | Role |
 | --- | --- |
-| Agent Sandbox | Keeps a warm pool of sandboxes per harness image, hands one out per claim, destroys it at its deadline. |
+| infra-k8s | Declares a template and a warm pool per harness image, the Kata runtime, the network rules, the resources. |
+| Agent Sandbox | Keeps the pools warm, hands out one sandbox per claim, destroys it at its deadline. |
 | The image | A bridge in front of the harness's ACP adapter, both started in the pool, before any claim. |
-| Agora | Requests the claims, relays ACP while following turns, re-arms the deadline during a turn, stores the anchors. It never deletes anything. |
-| infra-k8s | Templates and pools per image, the Kata runtime, the network rules, the resources. |
+| Agora | Requests the claims, moves their deadline, talks ACP with the harness through the bridge, stores the anchors. It never deletes anything. |
+
+## Pools and claims
+
+| Object | What it is | Declared by |
+| --- | --- | --- |
+| `SandboxTemplate` | The Pod of a harness: its image pinned by digest, the Kata runtime, the network rules. | infra-k8s |
+| `SandboxWarmPool` | A number of sandboxes started from a template, waiting. One pool per image, named after its digest and labelled with its harness. | infra-k8s |
+| `Sandbox` | One sandbox: a Pod and its Service. | Agent Sandbox, to fill a pool |
+| `SandboxClaim` | A request: a sandbox from this pool, until this time. One per execution, with the execution's name. | Agora |
+
+A claim carries only what Agent Sandbox reads: **the pool and the deadline**. Choosing the pool
+is choosing the harness and the exact version of its image; Agora finds the pools by their
+harness label.
+
+Warming is the point. A warm sandbox has its Pod running, its bridge listening and its adapter
+started, before any execution exists. A claim takes one, ready in a fraction of a second, and
+Agent Sandbox starts another to refill the pool; when the pool is empty, one is created cold from
+the template, in a few seconds. A used sandbox is never returned to the pool.
+
+```mermaid
+sequenceDiagram
+    participant Infra as infra-k8s
+    participant AS as Agent Sandbox
+    participant Agora
+    participant Pod as Warm sandbox
+    Infra->>AS: a template and a warm pool per image
+    AS->>Pod: starts it: bridge listening, adapter started
+    Agora->>AS: claim: pool, deadline
+    AS-->>Agora: ready: this sandbox, its Service
+    AS->>AS: starts another to refill the pool
+    Agora->>Pod: through the bridge: initialize, anchor, credentials
+```
+
+So every sandbox of a pool is interchangeable, and must stay so: nothing specific to an execution
+goes through the claim, or the sandbox would have to be created for it, cold. The anchor to
+restore, the credentials and the ACP session reach the sandbox through the bridge, after the
+claim. Nor is the claim Agora's memory: what Agora must remember about an execution is in its
+log.
 
 ## The life of an execution
 
@@ -36,10 +74,8 @@ stateDiagram-v2
     ending --> [*]: anchor received
 ```
 
-A sandbox taken from the pool is ready in a fraction of a second; when the pool is empty, one is
-created cold in a few seconds. A used sandbox is never returned to the pool. The spec lists every
-state, including *uncertain* (the end of a turn could not be seen) and *error* (the claim will
-not succeed).
+The spec lists every state, including *uncertain* (the end of a turn could not be seen) and
+*error* (the claim will not succeed).
 
 ## The deadline
 
@@ -54,18 +90,19 @@ the deadline passes.
 | Stop | nothing: Agora stops renewing |
 
 An idle execution therefore disappears one lease after its last turn, and a runaway turn after
-one hour. Agora writes what drives the execution — the turn in progress, the session, a stop — on the
-claim itself, so a restart of Agora finds it again; what happened is in the log.
+one hour. The turn start that bounds it is in the log, so a restart of Agora keeps the limit.
 
 ## The end of the Pod and the anchor
 
 When the deadline passes, Agent Sandbox deletes the claim and the Pod receives SIGTERM. Within
 the 30-second grace period, the bridge stops the adapter, reads the harness's native files as a
 whole — the anchor — and pushes them to Agora. It proves which Pod it is with the projected
-ServiceAccount token Kubernetes gives it; Agora checks it with a TokenReview.
+ServiceAccount token Kubernetes gives it; Agora checks it with a TokenReview. The Pod's claim
+names the execution, and the log gives the session the anchor will resume.
 
-Restoring an anchor puts those files back into a new sandbox and resumes the session there. It
-is a new session for the model: the whole context is paid again.
+Restoring an anchor puts those files back into a new sandbox, through the bridge once the claim
+is ready, and resumes the session there. It is a new session for the model: the whole context is
+paid again.
 
 ## Reaching the harness
 

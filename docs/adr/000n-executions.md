@@ -13,20 +13,22 @@
 
 ## Decision
 
-1. **Agent Sandbox provides executions.** It is a prerequisite, like Kubernetes: one claim per
-   request, taken from a warm pool; Kata isolates each Pod in a VM.
-2. **Agora only sets the deadline**, renewing it during a turn only, and a turn is capped at one
+1. **Agent Sandbox provides executions.** It is a prerequisite, like Kubernetes: a warm pool per
+   harness image, one claim per execution; Kata isolates each Pod in a VM.
+2. **A claim carries only a pool and a deadline.** Everything specific to an execution — the
+   anchor to restore, the credentials, the ACP session — reaches the sandbox through the bridge,
+   after the claim, via the Sandbox's Service. What Agora remembers is in its log.
+3. **Agora only sets the deadline**, renewing it during a turn only, and a turn is capped at one
    hour. Stopping is no longer renewing.
-3. **Only the infrastructure destroys**, at the deadline.
-4. **The Pod saves itself**: at SIGTERM it pushes the harness's native files — the anchor — to
+4. **Only the infrastructure destroys**, at the deadline.
+5. **The Pod saves itself**: at SIGTERM it pushes the harness's native files — the anchor — to
    Agora, proving its identity with its projected ServiceAccount token.
-5. **Agora keeps its state on the claim**, and reaches the bridge through the Sandbox's Service.
 
 ```mermaid
 flowchart LR
-    Agora -- claim, deadline --> AS[Agent Sandbox]
-    AS -- allocates, destroys --> Pod[Pod: bridge + harness]
-    Agora -- ACP, through the Service --> Pod
+    Agora -- claim: pool, deadline --> AS[Agent Sandbox]
+    AS -- warm pool, destroys --> Pod[Pod: bridge + harness]
+    Agora -- through the Service: anchor, credentials, ACP --> Pod
     Pod -- anchor, at SIGTERM --> Agora
 ```
 
@@ -35,9 +37,12 @@ flowchart LR
 - **One actor destroys.** No race between Agora and the infrastructure; Agora needs no `delete`
   permission.
 - **A warm pool hides the start.** Ready in 0.29 s from the pool, 3.8 to 5.4 s cold.
+- **Every sandbox of a pool is interchangeable.** Since nothing specific to an execution goes
+  through the claim, any warm sandbox fits any claim of its pool.
 - **The Pod knows when it dies.** Pushing at SIGTERM avoids Agora racing its own WATCH against
   the Pod's death.
-- **Agora survives its own restart.** The turn in progress is found again from the claim.
+- **Agora survives its own restart.** The claims say which executions still exist; the log says
+  where each one stands.
 
 Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cases pass.
 
@@ -53,6 +58,7 @@ Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cas
 | Saving at every turn | The anchor only matters at the end of the Pod; before that, the live sandbox is the reference. |
 | The Pod writes to Agora's database | No database login in an untrusted sandbox. |
 | A secret or identity injected through the claim | Forces a cold start and puts a secret in the sandbox. |
+| Agora's state in annotations on the claim | Used while Agora had no database; beside the log, every annotation duplicated an entry: two sources for the same facts. |
 | Reaching the Pod by its IP | The Service is the native building block; the Pod no longer needs to be reached during its grace period. |
 | Network rules by domain name | The Cilium DNS proxy's responses do not reach a Kata VM. |
 | Agent Sandbox's upstream router | Agora relays the WebSocket itself. |
@@ -60,6 +66,7 @@ Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cas
 ## Consequences
 
 - A stop frees the resource at most one lease later.
+- A new image is a new pool: its name follows the image's digest.
 - If Agora is unreachable during the grace period, the sandbox leaves without an anchor.
 - A turn lasts at most one hour.
 - Restoring from an anchor opens a new session and pays for the whole context again.
