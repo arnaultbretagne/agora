@@ -54,7 +54,7 @@ flowchart TB
 | --- | --- | --- |
 | **Client** | Runs in the browser. Displays a Workstream's thread with assistant-ui and turns the user's actions into commands. | The thread it received, in memory. |
 | **Server** | Records the commands and the ACP exchanges, projects them for the client. Obtains the executions, relays ACP, follows the turns, sets the deadlines, receives the anchors. Signs each execution's grants. | The log, the anchors, its signing keys, the database login. |
-| **Bridge** | In front of the harness, in the sandbox's image. Relays ACP to the server, gives the harness its only way out, pushes the anchor when the Pod ends. | The execution's grants, in memory. |
+| **Bridge** | In front of the harness, in the sandbox's image, and thin. Pipes ACP lines between the server and the harness, gives the harness its only way out, pushes the anchor when the Pod ends. | The execution's grants, in memory. |
 | **Harness** | A coding agent (claude-code, codex, …) behind its ACP adapter. | Its native files, in the sandbox only. |
 
 The server has three parts, each with its own document: the log (`log.md`), the executions

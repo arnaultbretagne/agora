@@ -70,6 +70,7 @@ is a new session for the model: the whole context is paid again.
 ## Reaching the harness
 
 Agora reaches each bridge through the Sandbox's Service, with a short token it signs for that
-Pod. The bridge relays the adapter's ACP lines one by one, numbered, to a single client at a
-time, and keeps the recent ones so a reconnection can replay what it missed. Agora is that
-client; it relays in turn to its own consumers and tracks each turn from the ACP traffic.
+Pod. The bridge pipes the adapter's ACP lines to a single connection at a time, and back; it
+numbers nothing and keeps nothing. Agora is that connection: it sends `initialize` itself on its
+first connection, writes every line to the log before acting on it, and tracks each turn from the
+ACP traffic.
