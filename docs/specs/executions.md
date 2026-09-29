@@ -82,11 +82,11 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
    (`credentials.md`).
 3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
    outbound proxy.
-4. Send `initialize` only once (`fs` and `terminal` set to *no*), keep the response.
-5. Answer ready on `/healthz`.
+4. Listen immediately after spawning the adapter; answer ready on `/healthz` while it runs.
 
-All of this happens before the claim, with no user and no credential. codex refuses a second
-`initialize`: Agora never resends it and serves the response kept by the bridge.
+All of this happens before the claim, with no user and no credential. The bridge sends no ACP.
+Agora sends `initialize` on its first connection, with `fs` and `terminal` set to *no*, and keeps
+the answer. codex refuses a second `initialize`: Agora never resends it to the same instance.
 
 ### The bridge's routes
 
@@ -94,8 +94,8 @@ Port **8080**. Every route except `/healthz` requires Agora's token.
 
 | Route | Role |
 | --- | --- |
-| `GET /healthz` | 200 if the adapter is alive and has answered `initialize`, 503 otherwise. This is the Pod's readiness. |
-| `GET /info` | Instance, Pod, workspace, `initialize` response, adapter state, last position, the way out (`outbound`). |
+| `GET /healthz` | 200 while the adapter runs and the Pod is not ending, 503 otherwise. This is the Pod's readiness. |
+| `GET /info` | Instance, Pod, workspace, start time, adapter state (alive, exit code, signal), ending, the way out (`outbound`). |
 | `GET /acp` | WebSocket: the ACP relay. |
 | `PUT /anchor` | Restores an anchor before the session is resumed. |
 | `PUT /credentials` | Attaches the credential through which the adapter goes out (`credentials.md`). |
@@ -110,14 +110,18 @@ only admits ingress from Agora.
 | Rule | Detail |
 | --- | --- |
 | A single client | The most recent connection wins; the old one is closed (4000). Every ACP connection numbers its requests from 0: two clients would steal each other's responses. |
-| First message | `hello`: instance, Pod, workspace, `initialize` response, adapter state, replay and `gap`. |
-| To the client | Each adapter line becomes `{seq, acp}`: `seq` increases for the instance, `acp` is the raw line. |
-| To the adapter | Each text message from the client is a raw ACP line. |
-| Without a client | Lines are kept: the last 2,000, 16 MiB at most. |
-| Replay | `?after=N` replays what follows position N, with `gap` if some are missing. |
+| Instance | The WebSocket upgrade response carries `agora-bridge-instance`. No bridge-generated message is sent. |
+| Both ways | One WebSocket text message per ACP line, without its newline; stdin receives that line followed by a newline. Contents are never parsed or rewritten. Binary or multiline messages are refused. |
+| From the adapter | Read only while a connection is open, and await each send callback and an empty `bufferedAmount` before reading further. There is no ring, numbering or replay; `after` has no meaning here. |
+| While Agora is away | Stop reading stdout. The pipe and its bounded stream buffer hold unread bytes; the adapter waits when they fill. The bridge retains only the partial line being assembled and the remainder of one pipe read. |
+| To the adapter | Pause the WebSocket while stdin is full; resume on `drain`. A superseded socket can no longer write to stdin. |
+| Maximum line | 16 MiB, measured in UTF-8 bytes without the newline. Exceeding it stops the adapter and makes the execution lost. |
 
-If the adapter dies, the bridge stays alive: `/healthz` switches to 503, `hello` and `/info`
-give the exit code, and the anchor will leave with the Pod.
+If the adapter dies, the current connection closes with 1011 and `/healthz` switches to 503.
+The bridge stays alive: `/info` gives the exit code, and the anchor leaves with the Pod.
+At SIGTERM the connection closes with 1001, reason "Pod ending", before stopping the adapter.
+A crash or network drop can lose lines already sent into the failed connection; unread lines
+continue in order on the next connection. No delivery or replay guarantee applies to lines in flight.
 
 ### The end of the Pod and the anchor
 
@@ -209,14 +213,14 @@ are bounded: 60 to 600 s for the lease, 30 to 3,600 s for a turn's duration.
 | State | Meaning | What proves it |
 | --- | --- | --- |
 | **starting** | Claim created, not ready yet. | `Ready` false; the claim's reason, the Pod's waiting reason. |
-| **connecting** | Claim ready, bridge not reached yet. | `Ready` true, no `hello`. |
-| **restoring** | Anchor placed, resume in progress. | `PUT /anchor` then `session/resume` in progress. |
-| **ready** | Bridge reached, adapter alive, no turn. | `hello`. |
+| **connecting** | Claim ready, bridge not reached yet. | `Ready` true, no open connection with a completed `initialize`. |
+| **restoring** | Anchor placed, resume in progress. | `initialize` answered, then `PUT /anchor` and `session/resume` (or `session/load`) in progress. |
+| **ready** | Connected, `initialize` answered, no turn. | Same instance verified by the upgrade header and initialization answer retained by Agora. |
 | **in turn** | `session/prompt` sent, final response not received yet. | Turn annotation on the claim. |
-| **uncertain** | The end of the turn could not be seen. | `gap` on replay. |
-| **lost** | The adapter died or the process was replaced. | `hello`; instance different from the recorded one. |
+| **uncertain** | The end of the turn could not be seen. | A bridge connection breaks during a turn, or Agora restarts with its turn annotation. Only the final answer resolves it. |
+| **lost** | The adapter died or the process was replaced. | Close 1011, or an upgrade header different from the recorded instance. |
 | **stopped** | Sending closed, no more renewal. | Stop annotation on the claim. |
-| **error** | The claim will not succeed. | The claim's reason, for example `WarmPoolNotFound`. |
+| **error** | Startup or restore failed. | The claim's reason (for example `WarmPoolNotFound`), a refused/timed-out initialization, or a failed restore. |
 | **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim. |
 
 The execution leaves the list when its anchor is received or when its claim has disappeared; the
@@ -228,8 +232,8 @@ The consumer is whatever mounts the executions: the lab, or Agora's log.
 
 | Rule | Detail |
 | --- | --- |
-| Received | The bridge's `{seq, acp}` frames; `{local}`, Agora's own responses (`initialize`, refusals); state `{event}`s. |
-| Resume | `?after=N` replays what Agora still has in memory after N, with `gap` if some are missing. |
+| Received | Agora's `{seq, acp}` frames, numbered in receive order; `{local}`, Agora's own responses (`initialize`, refusals); state `{event}`s. |
+| Resume | `?after=N&epoch=E` replays what Agora still has in memory after N, with `gap` if some are missing. Memory holds at most 2,000 lines / 16 MiB. Positions start again after an Agora restart: each attachment carries a `reset` event naming this Agora process, which the consumer compares with its previous process before reusing a position. A previous epoch restarts replay at zero. |
 | `session/prompt` | Refused with a JSON-RPC error if the execution is not ready, if a turn is in progress, or if it is stopped. |
 | Session | The response to `session/new`, `session/load` or `session/resume` sets the session an anchor will resume. |
 | Permissions | `session/request_permission` goes to the consumer and waits for its answer, even if it has left. |
@@ -245,7 +249,8 @@ without an anchor. Anchors are stored on the lab's volume.
 
 ### What Agora writes on the claim
 
-The claim carries everything needed to resume after an Agora restart.
+The lab stores its recovery memory on the claim until the log owns it. This table is transitional;
+the log replaces these annotations rather than duplicating them.
 
 | Key | Content |
 | --- | --- |
@@ -255,20 +260,26 @@ The claim carries everything needed to resume after an Agora restart.
 | `agora.bretagne.dev/limits` | this execution's lease and turn duration |
 | `agora.bretagne.dev/restore-anchor`, `…/restored` | the anchor to restore, then the date it was restored |
 | `agora.bretagne.dev/instance` | the bridge instance seen on the first connection |
+| `agora.bretagne.dev/initialize` | The initialization request id, followed by the agent information and capabilities returned for this instance. A pending request is never resent; its eventual answer completes it. |
 | `agora.bretagne.dev/session-id` | the session an anchor will resume |
-| `agora.bretagne.dev/turn` | the turn in progress: start, id of the request, bridge position |
+| `agora.bretagne.dev/turn` | the turn in progress: start, id of the request, session |
 | `agora.bretagne.dev/idle-since` | the end of the last turn |
 | `agora.bretagne.dev/stopped` | the requested stop, and its date |
 
-On restart: LIST of the labelled claims, then connection to each bridge with `after`
-= the position recorded at the start of the turn in progress. The replay contains the final response: the
-turn closes. A gap: *uncertain*. Another instance: *lost*.
+On restart: LIST the labelled claims, mark any saved turn *uncertain*, then connect to each bridge
+without `after`. Verify the upgrade header, reuse the saved initialization answer, and take the
+unread lines from the pipe. A pending `initialize` waits for the same request's answer, never a
+second request. Its 30-second timeout leaves the execution in *error*, without claiming readiness.
+A different instance means *lost*. A final answer for the saved turn clears uncertainty.
+
+A break during a turn marks it *uncertain* until its final answer arrives. Close 1011 means *lost*;
+1001 means *ending*. Other closes reconnect after 2 seconds, bounded by the execution's deadline.
 
 ### Restoring
 
-Create with an anchor. Once the bridge is reached, Agora places the anchor (`PUT /anchor`)
-then sends `session/resume`, or `session/load` if the agent does not advertise
-`sessionCapabilities.resume`. A failure leaves the execution in *error*.
+Create with an anchor. Once connected, Agora sends `initialize` and retains its answer before
+placing the anchor (`PUT /anchor`), then sends `session/resume`, or `session/load` if the agent
+advertises only `loadSession`. A failure leaves the execution in *error*.
 
 ### Permissions
 
@@ -290,7 +301,7 @@ ends, and offers three actions reserved for the lab:
 
 | Route | Effect |
 | --- | --- |
-| `POST /api/lab/executions/{name}/drop-bridge` | Cuts the connection to the bridge; Agora reconnects with replay. |
+| `POST /api/lab/executions/{name}/drop-bridge` | Cuts the connection to the bridge; Agora reconnects without replay. Optional `pauseSeconds` (0–60) delays reconnection to exercise an absent reader. A turn remains uncertain until its final answer. |
 | `POST /api/lab/executions/{name}/probe-auth` | Tries the bridge with no token, with an expired token, with one for another sandbox, with one signed by another key. |
 | `POST /api/lab/restart` | Stops the lab process; Kubernetes restarts it. |
 
@@ -302,22 +313,23 @@ file and reads it back at `session/resume`.
 ## Cases to validate
 
 Run on 27 September on g4, under Kata, by `apps/lab/scripts/live-cases.ts`, and re-run on
-29 September: **22 out of 22**. The deadline cases use a 60 s lease,
+29 September: **22 out of 22** for the preceding relay. Changed cases below require new measurements
+with the thin bridge; an earlier result does not validate the new transport. The deadline cases use a 60 s lease,
 re-armed three times per lease.
 
 | # | Case | Expected | Measured |
 | --- | --- | --- | --- |
-| 1 | Create from a warm pool | Ready in under a second, `warm` launch. | Ready in 0.29 s, `warm`. |
-| 2 | Create beyond the warm pool | Ready in a few seconds: `cold`, or `warm` on a pool Sandbox still starting. | One `warm` in 0.55 s, then two `cold` in 3.8 and 4.9 s; on the previous run, two `warm` in 2.9 s. |
+| 1 | Create from a warm pool | Ready includes Agora's `initialize`; `warm` launch. | Not measured with the thin bridge. |
+| 2 | Create beyond the warm pool | Ready includes Agora's `initialize`: `cold`, or `warm` on a pool Sandbox still starting. | Not measured with the thin bridge. |
 | 3 | Create twice with the same id | Same execution, a single claim. | Same name, a single claim. |
 | 4 | Pool not in the catalogue, quota reached | Refused, with the reason. | 400 "pool not in the catalogue"; 429 "quota reached: 6 active executions out of 6". |
-| 5 | Relay: `initialize`, `session/new`, prompt | `initialize` response from the bridge, numbered frames, turn closed. | Local `initialize`, positions 1 → 3, `end_turn`. |
+| 5 | Relay: `initialize`, `session/new`, prompt | `initialize` answered by Agora, positions numbered by Agora, turn closed. | Not measured with the thin bridge. |
 | 6 | Second prompt during a turn | Refused with a JSON-RPC error. | "refused: a turn is already in progress". |
 | 7 | Cancel a turn | Ends `cancelled`, execution ready. | `cancelled`, execution ready. |
 | 8 | Permission, consumer gone then back | The request is replayed, the answer unblocks the turn. | Request replayed, turn closed. |
 | 9 | Consumer disconnected during a turn | The turn continues; resuming returns the missed frames. | 7 frames replayed, no gap. |
-| 10 | Bridge connection cut during a turn | Reconnection, replay, turn closed with no gap. | Replay from position 18, turn closed. |
-| 11 | Agora restarted during a turn | Turn found through the annotation and closed by the replay. | Turn found *in turn* at restart, closed `end_turn`. |
+| 10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. | Not measured with the thin bridge. |
+| 11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. | Not measured with the thin bridge. |
 | 12 | Deadline during a turn | Moves forward every minute, never beyond start + maximum duration. | Deadline pushed back during the turn, under the limit. |
 | 13 | End of turn | Deadline at now + lease, then no more renewal. | Deadline set at the end of the turn, unchanged 25 s later. |
 | 14 | Deadline reached between two turns | Destroyed by the infrastructure; the anchor arrives during the grace period. | Destroyed by Agent Sandbox; anchor pushed (1 file). |
@@ -329,6 +341,8 @@ re-armed three times per lease.
 | 20 | Bridge with no token, expired, for another sandbox, another key | 401 every time. | 401 everywhere; valid token 200 / 101. |
 | 21 | Anchor push without a valid projected token | 401, nothing is stored. | 401 without a token, 401 with a fake one. |
 | 22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. | Without a credential, egress is refused by the bridge: no answer to the prompt in 120 s, turn cancelled; 11,238-byte anchor pushed, restored by `session/resume`. |
+| 27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. | Not measured with the thin bridge. |
+| 28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. | Not measured with the thin bridge. |
 
 **To be specified:** anchor storage in the database, codex's native directory, detached tasks,
 resuming after the process is lost. Credentials: `credentials.md`.

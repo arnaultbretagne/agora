@@ -191,7 +191,7 @@ function renderSandboxes() {
       <td>${s.renewals}${s.renewing ? '<br><b class="ok">re-armed (turn)</b>' : '<br><span class="muted">not re-armed</span>'}<br><span class="muted">lease ${s.limits.leaseSeconds} / turn ${s.limits.turnCapSeconds}</span></td>
       <td class="mono wrap">${esc(s.instance)}<br><span class="muted">bridge ${esc(s.bridge.state)} ${esc(s.bridge.agent ? s.bridge.agent.name + '@' + s.bridge.agent.version : '')}</span></td>
       <td class="mono wrap">${esc(s.sessionId)}</td>
-      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>since ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">idle since ${esc(s.idleSince)}</span>`}</td>
+      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>since ${esc(s.turn.startedAt)}<br>session ${esc(s.turn.sessionId)}` : `<span class="muted">idle since ${esc(s.idleSince)}</span>`}</td>
       <td>${s.lastSeq}</td>
       <td class="mono wrap">${outbound(s.outbound)}</td>
       <td>
@@ -199,6 +199,7 @@ function renderSandboxes() {
         <button data-stop="${esc(s.name)}">Stop</button><br>
         <button data-credentials="${esc(s.name)}">attach credential</button><br>
         <button data-lab="drop-bridge" data-name="${esc(s.name)}">cut bridge</button>
+        <button data-lab="drop-bridge" data-pause="10" data-name="${esc(s.name)}">pause bridge 10s</button>
 <br>
         <button data-lab="probe-auth" data-name="${esc(s.name)}">probe token</button>
       </td>
@@ -285,7 +286,7 @@ document.addEventListener('click', async (event) => {
     $('createResult').textContent = 'Stop: ' + JSON.stringify(r)
   }
   if (target.dataset.lab) {
-    const r = await post(`/api/lab/executions/${target.dataset.name}/${target.dataset.lab}`)
+    const r = await post(`/api/lab/executions/${target.dataset.name}/${target.dataset.lab}`, target.dataset.pause ? { pauseSeconds: Number(target.dataset.pause) } : undefined)
     if (target.dataset.lab === 'probe-auth') {
       $('probe').textContent = r.accepted ? r.results.map((x) => `${x.case.padEnd(32)}  /info → ${x.info}   /acp → ${x.acp}`).join('\n') : JSON.stringify(r)
     } else $('createResult').textContent = `${target.dataset.lab}: ${JSON.stringify(r)}`
@@ -308,7 +309,7 @@ $('restart').onclick = async () => { $('createResult').textContent = JSON.string
 
 // ---------------------------------------------------------------- ACP relay
 function selectSandbox(name) {
-  if (state.selected !== name) { closeAcp(); state.lastSeq = 0; $('acpLog').textContent = ''; state.permissions.clear(); renderPermissions() }
+  if (state.selected !== name) { closeAcp(); state.lastSeq = 0; state.epoch = null; $('acpLog').textContent = ''; state.permissions.clear(); renderPermissions() }
   state.selected = name
   $('acpName').textContent = name
   const s = state.sandboxes.get(name)
@@ -328,7 +329,7 @@ function openAcp(resume) {
   if (!state.selected) return
   closeAcp()
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-  const url = `${scheme}://${location.host}/api/executions/${state.selected}/acp${resume ? `?after=${state.lastSeq}` : ''}`
+  const url = `${scheme}://${location.host}/api/executions/${state.selected}/acp${resume ? `?after=${state.lastSeq}${state.epoch ? `&epoch=${encodeURIComponent(state.epoch)}` : ''}` : ''}`
   const ws = new WebSocket(url)
   state.ws = ws
   $('acpConn').textContent = 'connecting…'
@@ -336,6 +337,11 @@ function openAcp(resume) {
   ws.onclose = (e) => { if (state.ws === ws) { $('acpConn').textContent = `closed (${e.code} ${e.reason})`; $('acpConn').className = 'err'; state.ws = null } }
   ws.onmessage = (message) => {
     const data = JSON.parse(message.data)
+    if (data.event?.type === 'reset') {
+      if (state.epoch !== data.event.epoch) { state.lastSeq = 0; $('acpSeq').textContent = '0' }
+      state.epoch = data.event.epoch
+      return
+    }
     if (typeof data.seq === 'number') {
       state.lastSeq = Math.max(state.lastSeq, data.seq); $('acpSeq').textContent = state.lastSeq
       onAcp(data.acp, `← ${String(data.seq).padStart(5)}`)
@@ -417,7 +423,7 @@ const CASES = [
   ['Cancel a turn', '/sleep 30 then session/cancel.', 'stopReason cancelled, execution ready.'],
   ['Permission, consumer gone then back', '/permission, "Disconnect", "Reconnect after my last position".', 'The request is replayed; answering it unblocks the turn.'],
   ['Consumer disconnected during a turn', '/sleep 30, "Disconnect", wait, reconnect after the last position.', 'Missed frames replayed, end of turn visible.'],
-  ['Bridge connection cut', '/sleep 30 then "cut bridge".', 'Reconnection with replay, turn closed with no gap (log).'],
+  ['Bridge connection cut', '/sleep 30 then "cut bridge".', 'Reconnection without replay; uncertain until the final answer, then the turn closes.'],
   ['Agora restarted during a turn', '/sleep 60 then "Restart the lab".', 'Once back, the turn is found again, then closed.'],
   ['Deadline during a turn', '/sleep 150 and watch the Deadline column.', 'Moves forward every minute, never past start + max turn.'],
   ['End of turn', 'A short turn, then watch the deadline.', 'Now + lease, then no more renewals.'],
@@ -434,6 +440,8 @@ const CASES = [
   ['Gateway, chain only', 'Pool mock, profile anthropic: "attach credential", then /fetch.', 'Answer from Anthropic (no 403 from the gateway, no TLS error); tunnel counted.'],
   ['Gateway, real harness', 'Pool claude-code, profile anthropic: "attach credential", session/new (model haiku applied), a short prompt.', 'Real answer from the model, end of turn end_turn.'],
   ['Gateway, composition', 'Pool mock, profiles github:A:write github:B:read: /fetch on A, B and C.', 'A read and written, B read only, C refused: 403 from the gateway on what is not granted.'],
+  ['Agora away', '/sleep 5 then "pause bridge 10s".', 'Uncertain while disconnected; all unread output arrives in order, then ready.'],
+  ['Restarted Agora initializes once', '"Restart the lab" while idle, reconnect ACP, initialize, then prompt.', 'Same capabilities and context; new positions epoch, no second initialize to the adapter.'],
 ]
 $('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
 

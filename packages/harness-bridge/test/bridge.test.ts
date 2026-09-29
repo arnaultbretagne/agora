@@ -2,9 +2,11 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { startBridge, MAX_LINE_BYTES } from '../src/server.ts'
 import { after, describe, it } from 'node:test'
 import { mintBridgeToken } from '../src/token.ts'
 import { pushBundle, type Bundle } from '../src/anchor.ts'
@@ -16,8 +18,8 @@ after(async () => {
   for (const lab of running) await lab.bridge.close()
 })
 
-async function lab(podName = 'sbx-test', options: { ringLines?: number } = {}): Promise<LabBridge> {
-  const started = await mockBridge(publicKey, podName, options)
+async function lab(podName = 'sbx-test'): Promise<LabBridge> {
+  const started = await mockBridge(publicKey, podName)
   running.push(started)
   return started
 }
@@ -29,8 +31,13 @@ function auth(podName = 'sbx-test'): Record<string, string> {
 async function connect(target: LabBridge, query = '', podName = 'sbx-test'): Promise<Collector> {
   const client = new Collector(`ws://${target.url}/acp${query}`, auth(podName))
   await client.opened()
-  await client.until(() => client.messages.find((m) => 'hello' in m))
+  assert.equal(client.instance, target.bridge.instance)
   return client
+}
+
+async function initialize(client: Collector): Promise<void> {
+  client.send({ jsonrpc: '2.0', id: 'agora-init', method: 'initialize', params: { protocolVersion: 1 } })
+  assert.equal(((await client.response('agora-init')).result as { agentInfo: { name: string } }).agentInfo.name, 'agora-mock-agent')
 }
 
 async function newSession(client: Collector, target: LabBridge, id = 1): Promise<string> {
@@ -44,13 +51,30 @@ async function say(client: Collector, id: number, sessionId: string, text: strin
   return client.response(id)
 }
 
+async function stdio(mode: string): Promise<LabBridge> {
+  const home = mkdtempSync(join(tmpdir(), 'stdio-bridge-'))
+  const bridge = await startBridge({
+    port: 0, host: '127.0.0.1',
+    adapterCommand: [process.execPath, fileURLToPath(new URL('./stdio-adapter.ts', import.meta.url)), mode, home],
+    workspace: home, podName: 'sbx-test', publicKey, harness: 'mock', nativeDir: join(home, 'native'), log: () => {},
+  })
+  const target = { bridge, home, workspace: home, url: `127.0.0.1:${String(bridge.port())}` }
+  running.push(target)
+  return target
+}
+
 describe('bridge', () => {
-  it('is ready only once initialize answered, and keeps that answer for itself', async () => {
+  it('is ready while the adapter runs, sends no ACP and carries the instance only in the upgrade header', async () => {
     const target = await lab()
     assert.equal((await fetch(`http://${target.url}/healthz`)).status, 200)
     const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as Record<string, unknown>
-    assert.equal((info.initialize as { agentInfo: { name: string } }).agentInfo.name, 'agora-mock-agent')
-    assert.equal(info.lastSeq, 0, 'the initialize answer is not relayed')
+    assert.equal(info.instance, target.bridge.instance)
+    for (const removed of ['initialize', 'initializeError', 'lastSeq', 'firstRetainedSeq']) assert.ok(!(removed in info))
+    const client = await connect(target)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.deepEqual(client.raw, [], 'nothing is sent before Agora writes ACP')
+    await initialize(client) // the mock rejects any second initialize, including one sent by the bridge
+    assert.deepEqual(client.binary, [false])
   })
 
   it('refuses a missing, expired, foreign or forged token', async () => {
@@ -69,47 +93,97 @@ describe('bridge', () => {
     }
   })
 
-  it('numbers every line, relays a full turn, and never lets two clients share the adapter', async () => {
+  it('relays raw lines for a full turn and never lets two clients share the adapter', async () => {
     const target = await lab()
     const first = await connect(target)
+    await initialize(first)
     const sessionId = await newSession(first, target)
     const second = await connect(target)
     await first.until(() => first.closed)
     assert.equal(first.closed?.code, 4000)
     assert.deepEqual((await say(second, 2, sessionId, 'hello')).result, { stopReason: 'end_turn' })
-    const seqs = second.messages.filter((m) => typeof m.seq === 'number').map((m) => m.seq as number)
-    assert.deepEqual(seqs, [...seqs].sort((a, b) => a - b))
-    assert.equal(new Set(seqs).size, seqs.length)
+    assert.ok(second.raw.every((line) => JSON.parse(line).jsonrpc === '2.0'))
+    assert.ok(second.binary.every((binary) => !binary))
+    assert.ok(second.messages.every((m) => !('seq' in m) && !('acp' in m) && !('hello' in m)))
   })
 
-  it('keeps what the adapter says while nobody listens, and replays it after the given position', async () => {
+  it('leaves disconnected output in the pipe, then delivers it in order without replay', async () => {
     const target = await lab()
     const client = await connect(target)
+    await initialize(client)
     const sessionId = await newSession(client, target)
-    const before = Math.max(...client.messages.filter((m) => typeof m.seq === 'number').map((m) => m.seq as number))
     client.send({ jsonrpc: '2.0', id: 7, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: '/sleep 2' }] } })
     client.close()
-    await new Promise((resolve) => setTimeout(resolve, 2600))
-    const back = await connect(target, `?after=${String(before)}`)
-    const hello = back.messages[0]!.hello as { gap: boolean; replayFrom: number }
-    assert.equal(hello.gap, false)
-    assert.equal(hello.replayFrom, before + 1)
+    await client.until(() => client.closed)
+    await new Promise((resolve) => setTimeout(resolve, 2300))
+    const back = await connect(target)
     assert.deepEqual((await back.response(7)).result, { stopReason: 'end_turn' })
+    const chunks = back.acp().filter((m) => m.method === 'session/update').map((m) => JSON.stringify(m))
+    assert.equal(chunks.length, 3)
+    assert.match(chunks[0]!, /second 1/)
+    assert.match(chunks[1]!, /second 2/)
+    assert.match(chunks[2]!, /Slept 2/)
+    back.close()
+    await back.until(() => back.closed)
+    const again = await connect(target, '?after=0')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.deepEqual(again.raw, [], 'already delivered lines are never replayed')
   })
 
-  it('says so when the lines asked for are already gone', async () => {
-    const target = await lab('sbx-test', { ringLines: 5 })
+  it('preserves split UTF-8, whitespace, unknown metadata and large JSON numbers byte for byte', async () => {
+    const target = await stdio('split')
     const client = await connect(target)
-    const sessionId = await newSession(client, target)
-    await say(client, 3, sessionId, '/big 20')
-    client.close()
-    const back = await connect(target, '?after=0')
-    assert.equal((back.messages[0]!.hello as { gap: boolean }).gap, true)
+    await client.until(() => client.raw.length === 2)
+    assert.deepEqual(client.raw, ['  {"jsonrpc":"2.0","id":9007199254740993,"_meta":{"text":"été ☃"}}  ', 'second'])
+    assert.deepEqual(client.binary, [false, false])
+  })
+
+  it('blocks a disconnected writer, then delivers more than the former ring could retain in order', async () => {
+    const target = await stdio('stream')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(existsSync(join(target.home, 'done')), false, 'the writer must block while Agora is away')
+    const client = await connect(target)
+    await client.until(() => client.raw.length === 20_000, 30_000)
+    for (const [i, line] of client.raw.entries()) assert.equal(line, `${String(i)} ${'x'.repeat(1024)}`)
+    await client.until(() => existsSync(join(target.home, 'done')))
+  })
+
+  it('pauses incoming messages when stdin is blocked and resumes them in order on drain', async () => {
+    const target = await stdio('stdin')
+    const client = await connect(target)
+    const lines = Array.from({ length: 256 }, (_, i) => `${String(i)} ${'x'.repeat(64 * 1024)}`)
+    for (const line of lines) client.socket.send(line)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.ok(client.socket.bufferedAmount > 0, 'pressure must reach the sending socket rather than accumulate in the bridge')
+    assert.deepEqual(client.raw, [])
+    writeFileSync(join(target.home, 'read'), 'read')
+    await client.until(() => client.raw.length === lines.length, 20_000)
+    assert.deepEqual(client.raw, lines)
+  })
+
+  it('stops the adapter when a line exceeds 16 MiB, even across many pipe reads', async () => {
+    const target = await stdio('oversized')
+    const client = await connect(target)
+    await client.until(() => client.closed)
+    assert.equal(client.closed?.code, 1011)
+    assert.equal((await fetch(`http://${target.url}/healthz`)).status, 503)
+    assert.deepEqual(client.raw, [])
+  })
+
+  it('stops the adapter when a client message exceeds the same ceiling', async () => {
+    const target = await lab()
+    const client = await connect(target)
+    client.socket.send('x'.repeat(MAX_LINE_BYTES + 1))
+    await client.until(() => client.closed)
+    assert.equal(client.closed?.code, 1009)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal((await fetch(`http://${target.url}/healthz`)).status, 503)
   })
 
   it('at the end of the Pod: closes the relay, stops the adapter, hands back the native files en bloc', async () => {
     const target = await lab()
     const client = await connect(target)
+    await initialize(client)
     const first = await newSession(client, target)
     await say(client, 2, first, 'mirabelle')
     const second = await newSession(client, target, 3)
@@ -117,7 +191,8 @@ describe('bridge', () => {
 
     const bundle = await target.bridge.terminate()
     await client.until(() => client.closed)
-    assert.ok(client.messages.some((m) => 'terminating' in m))
+    assert.ok(client.messages.every((m) => !('terminating' in m)))
+    assert.equal(client.closed?.reason, 'Pod ending')
     assert.equal(client.closed?.code, 1001)
     assert.equal((await fetch(`http://${target.url}/healthz`)).status, 503)
     const refused = new Collector(`ws://${target.url}/acp`, auth())
@@ -156,6 +231,7 @@ describe('bridge', () => {
   it('restores a bundle into another sandbox, which then remembers', async () => {
     const source = await lab('sbx-source')
     const client = await connect(source, '', 'sbx-source')
+    await initialize(client)
     const sessionId = await newSession(client, source)
     await say(client, 2, sessionId, 'mirabelle')
     const bundle = await source.bridge.terminate()
@@ -167,6 +243,7 @@ describe('bridge', () => {
     assert.equal(placed.status, 200)
 
     const resumed = await connect(target, '', 'sbx-target')
+    await initialize(resumed)
     resumed.send({ jsonrpc: '2.0', id: 1, method: 'session/resume', params: { sessionId, cwd: target.workspace } })
     assert.deepEqual((await resumed.response(1)).result, {})
     await say(resumed, 2, sessionId, '/recall')
@@ -176,6 +253,7 @@ describe('bridge', () => {
   it('stays up when the adapter dies, and still hands back the files at the end', async () => {
     const target = await lab()
     const client = await connect(target)
+    await initialize(client)
     const sessionId = await newSession(client, target)
     await say(client, 2, sessionId, 'before the fall')
     client.send({ jsonrpc: '2.0', id: 3, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: '/crash' }] } })

@@ -1,7 +1,7 @@
 // The executions contract (docs/specs/executions.md), against real bridges running the mock agent and an
 // in-memory Kubernetes API whose controller destroys claims at their deadline.
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { createServer as createTcpServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +10,7 @@ import { AnchorStore } from '../src/anchors.ts'
 import { createAnchorReceiver, createApi, type CredentialSource } from '../src/http.ts'
 import { ANNOTATION, ExecutionManager, type Limits } from '../src/manager.ts'
 import { FakeKube, NAMESPACE } from './fake-kube.ts'
-import { Collector, keys } from '@agora/testkit'
+import { Collector, keys, mockBridge } from '@agora/testkit'
 
 const { privateKey, publicKey } = keys()
 const cleanups: (() => Promise<void>)[] = []
@@ -143,6 +143,7 @@ describe('executions', () => {
 
     prompt(client, 2, sessionId, '/sleep 1')
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
+    assert.ok(!('seq' in JSON.parse(target.kube.claims.get(name)!.metadata.annotations![ANNOTATION.turn]!)))
     prompt(client, 3, sessionId, 'too early')
     assert.match(String(((await client.response(3)).error as { message: string }).message), /a turn is already in progress/)
     assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
@@ -263,7 +264,7 @@ describe('executions', () => {
     assert.deepEqual((await back.response(2)).result, { stopReason: 'end_turn' })
   })
 
-  it('reconnects to the bridge after a cut, and closes the turn from the replay', async () => {
+  it('reconnects without replay, marks a turn uncertain and resolves it only from its final answer', async () => {
     const target = await lab()
     const name = await ready(target)
     const client = await consumer(target, name)
@@ -271,8 +272,10 @@ describe('executions', () => {
     prompt(client, 2, sessionId, '/sleep 3')
     await until(() => view(target, name)?.state === 'in turn')
     assert.equal((await post(target, `/api/lab/executions/${name}/drop-bridge`)).accepted, true)
+    await until(() => view(target, name)?.state === 'uncertain')
     assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
     await until(() => view(target, name)?.state === 'ready')
+    assert.ok(target.manager.snapshot().logs.some((entry) => entry.message.includes('without replay or initialize')))
   })
 
   it('finds a turn in flight after its own restart, from the claim alone', async () => {
@@ -283,13 +286,113 @@ describe('executions', () => {
     const name = await ready(first)
     const client = await consumer(first, name)
     const sessionId = await session(client)
+    const initialized = kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]
+    const firstEpoch = (client.messages.find((m) => (m.event as { type?: string } | undefined)?.type === 'reset')!.event as { epoch: string }).epoch
     prompt(client, 2, sessionId, '/sleep 2')
     await until(() => kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
     await first.manager.stop()
     const second = await lab({ kube, anchors })
-    await until(() => view(second, name)?.state === 'in turn')
+    await until(() => view(second, name)?.state === 'uncertain')
     await until(() => view(second, name)?.state === 'ready', 8000)
     assert.match(String(view(second, name)?.lastTurn?.outcome), /end_turn/)
+    assert.equal(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize], initialized, 'the same initialization is retained, never resent')
+    const back = await consumer(second, name, 10_000)
+    assert.deepEqual((await back.response(2)).result, { stopReason: 'end_turn' })
+    const reset = back.messages.find((m) => (m.event as { type?: string } | undefined)?.type === 'reset')!.event as { epoch: string }
+    assert.notEqual(reset.epoch, firstEpoch)
+  })
+
+  it('restarts while idle without initializing the mock twice or losing capabilities', async () => {
+    const kube = new FakeKube(publicKey)
+    cleanups.push(() => kube.closeAll())
+    const anchors = new AnchorStore(mkdtempSync(join(tmpdir(), 'anchors-')))
+    const first = await lab({ kube, anchors })
+    const name = await ready(first)
+    const initialization = kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]
+    assert.equal(JSON.parse(initialization!).result.agentInfo.name, 'agora-mock-agent')
+    await first.manager.stop()
+    const second = await lab({ kube, anchors })
+    await until(() => view(second, name)?.state === 'ready')
+    assert.equal(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize], initialization)
+    const client = await consumer(second, name)
+    client.send({ jsonrpc: '2.0', id: 'consumer-init', method: 'initialize', params: { protocolVersion: 1 } })
+    assert.deepEqual((await client.response('consumer-init')).result, JSON.parse(initialization!).result)
+    const sessionId = await session(client)
+    prompt(client, 1, sessionId, 'still alive')
+    assert.deepEqual((await client.response(1)).result, { stopReason: 'end_turn' })
+  })
+
+  it('recovers a pending initialize after a restart by waiting for its original answer', async () => {
+    const kube = new FakeKube(publicKey)
+    kube.bridgeFactory = (key, pod) => mockBridge(key, pod, { initializeDelayMs: 1500 })
+    cleanups.push(() => kube.closeAll())
+    const anchors = new AnchorStore(mkdtempSync(join(tmpdir(), 'anchors-')))
+    const first = await lab({ kube, anchors })
+    const created = await post(first, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test' })
+    const name = created.name as string
+    const bridge = await until(() => {
+      const pod = view(first, name)?.pod
+      return pod ? kube.bridges.get(pod) : undefined
+    })
+    const requests = join(bridge.home, '.mock-agent', 'initialize-requests')
+    await until(() => existsSync(requests))
+    assert.equal(view(first, name)?.state, 'connecting', 'Pod readiness is not ACP readiness')
+    const pending = JSON.parse(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]!)
+    assert.equal(pending.result, null)
+    await first.manager.stop()
+    const second = await lab({ kube, anchors })
+    await until(() => view(second, name)?.state === 'ready')
+    assert.equal(readFileSync(requests, 'utf8'), `${String(pending.requestId)}\n`, 'exactly one initialize reached the process')
+    assert.equal(JSON.parse(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]!).result.agentInfo.name, 'agora-mock-agent')
+  })
+
+  it('retries saving an initialization answer without sending another initialize', async () => {
+    const kube = new FakeKube(publicKey)
+    cleanups.push(() => kube.closeAll())
+    const patch = kube.patchClaim.bind(kube)
+    let refusedOnce = false
+    kube.patchClaim = async (name, input) => {
+      const initialization = (input.metadata as { annotations?: Record<string, string> } | undefined)?.annotations?.[ANNOTATION.initialize]
+      if (!refusedOnce && initialization !== undefined && JSON.parse(initialization).result !== null) {
+        refusedOnce = true
+        throw new Error('temporary annotation failure')
+      }
+      return patch(name, input)
+    }
+    const target = await lab({ kube })
+    const created = await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test' })
+    const name = created.name as string
+    await until(() => view(target, name)?.state === 'error')
+    assert.equal(JSON.parse(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]!).result, null)
+    assert.equal((await post(target, `/api/lab/executions/${name}/drop-bridge`)).accepted, true)
+    await until(() => view(target, name)?.state === 'ready')
+    assert.equal(JSON.parse(kube.claims.get(name)!.metadata.annotations![ANNOTATION.initialize]!).result.agentInfo.name, 'agora-mock-agent')
+  })
+
+  it('receives all unread lines after Agora is away beyond the end of a turn', async () => {
+    const target = await lab()
+    const name = await ready(target)
+    const client = await consumer(target, name)
+    const sessionId = await session(client)
+    prompt(client, 2, sessionId, '/sleep 3')
+    await until(() => view(target, name)?.state === 'in turn')
+    assert.equal((await post(target, `/api/lab/executions/${name}/drop-bridge`, { pauseSeconds: 5 })).accepted, true)
+    await until(() => view(target, name)?.state === 'uncertain')
+    assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
+    const chunks = client.acp().filter((m) => m.method === 'session/update').map((m) => JSON.stringify(m))
+    assert.equal(chunks.length, 4)
+    for (let i = 0; i < 3; i++) assert.ok(chunks[i]!.includes(`second ${String(i + 1)}/3`))
+    assert.match(chunks[3]!, /Slept 3/)
+    await until(() => view(target, name)?.state === 'ready')
+  })
+
+  it('treats close 1001 as ending and never reconnects to a terminating Pod', async () => {
+    const target = await lab()
+    const name = await ready(target)
+    await target.kube.bridges.get(view(target, name)!.pod!)!.bridge.terminate()
+    await until(() => view(target, name)?.state === 'ending')
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    assert.equal(view(target, name)?.bridge.state, 'none')
   })
 
   it('stops renewing an execution whose adapter died; its anchor still leaves with the Pod', async () => {

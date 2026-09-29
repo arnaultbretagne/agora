@@ -1,20 +1,12 @@
-// The bridge (docs/specs/executions.md). It spawns the ACP adapter once, initializes it once, then relays
-// its stdio to ONE WebSocket client, numbering every line the adapter writes. It never interprets
-// ACP: lines are relayed and buffered byte-for-byte. The adapter's only way out is the bridge's
-// outbound proxy, opened when Agora attaches a credential (docs/specs/credentials.md). When the Pod ends
-// (SIGTERM), it stops the adapter and hands back the native files en bloc for the entrypoint to
-// push to Agora.
-//
-// Carried over from the previous implementation's packages/harness-bridge (arnaultbretagne/agora
-// main): one client at a time, newest wins — every ACP connection numbers its requests from 0, so two
-// attached clients steal each other's responses; `initialize` done by whoever owns the process,
-// because codex-acp refuses a second one ("Already initialized"); the adapter outlives any socket.
+// The bridge owns the adapter's process and transport, never ACP state. It reads stdout only
+// while Agora is attached and awaits each socket send before continuing. Unread bytes stay in
+// the pipe; only an incomplete line and the remainder of one read belong to this process.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { WebSocketServer, WebSocket } from 'ws'
 import { bearerOf, verifyBridgeToken } from './token.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from './anchor.ts'
 import { parseCredentials, startOutbound } from './outbound.ts'
@@ -29,9 +21,6 @@ export interface BridgeOptions {
   readonly harness: string
   /** The harness's native directory for this workspace: what an anchor holds. */
   readonly nativeDir: string
-  readonly ringLines?: number
-  readonly ringBytes?: number
-  readonly initializeTimeoutMs?: number
   readonly adapterStopMs?: number
   /** Loopback port of the outbound proxy the adapter goes through (docs/specs/credentials.md); 0 picks one. */
   readonly outboundPort?: number
@@ -46,18 +35,10 @@ export interface Bridge {
   close(): Promise<void>
 }
 
-interface Line {
-  readonly seq: number
-  readonly text: string
-  readonly bytes: number
-}
-
-const INITIALIZE_ID = 'bridge-initialize'
+export const MAX_LINE_BYTES = 16 * 1024 * 1024
 
 export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const log = options.log ?? ((message: string) => console.log(`[bridge] ${message}`))
-  const ringLines = options.ringLines ?? 2000
-  const ringBytes = options.ringBytes ?? 16 * 1024 * 1024
   const instance = randomUUID()
   const startedAt = new Date().toISOString()
 
@@ -75,91 +56,81 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   const adapter = { alive: true, exitCode: null as number | null, signal: null as string | null }
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
-  let initializeResult: unknown = null
-  let initializeError: unknown = null
   let terminating = false
-  let seq = 0
-  const ring: Line[] = []
-  let ringSize = 0
   let client: WebSocket | null = null
+  let reading = false
+  let chunk: Buffer | null = null
+  let offset = 0
+  let parts: Buffer[] = []
+  let lineBytes = 0
 
-  let onInitialize: (error: unknown) => void = () => {}
-  const initialized = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no answer to initialize after ${String(options.initializeTimeoutMs ?? 30_000)} ms`)), options.initializeTimeoutMs ?? 30_000)
-    timer.unref()
-    onInitialize = (error) => {
-      clearTimeout(timer)
-      if (error === null) resolve()
-      else reject(error instanceof Error ? error : new Error(JSON.stringify(error)))
-    }
-  })
-
-  function record(text: string): void {
-    // The initialize answer is the bridge's own: it is kept, not relayed. Everything else is numbered.
-    if (initializeResult === null && initializeError === null && text.includes(INITIALIZE_ID)) {
-      try {
-        const parsed = JSON.parse(text) as { id?: unknown; result?: unknown; error?: unknown }
-        if (parsed.id === INITIALIZE_ID) {
-          if (parsed.error !== undefined) {
-            initializeError = parsed.error
-            onInitialize(parsed.error)
-          } else {
-            initializeResult = parsed.result ?? {}
-            onInitialize(null)
-          }
-          return
-        }
-      } catch {
-        // Not JSON: numbered and relayed like any other line.
-      }
-    }
-    seq += 1
-    const line: Line = { seq, text, bytes: Buffer.byteLength(text) }
-    ring.push(line)
-    ringSize += line.bytes
-    while (ring.length > ringLines || ringSize > ringBytes) {
-      const dropped = ring.shift()
-      if (dropped === undefined) break
-      ringSize -= dropped.bytes
-    }
-    if (client !== null && client.readyState === client.OPEN) client.send(JSON.stringify({ seq: line.seq, acp: line.text }))
+  function failAdapter(reason: string): void {
+    if (!adapter.alive) return
+    log(reason)
+    adapter.alive = false
+    client?.close(1011, 'adapter stopped')
+    child.kill('SIGKILL')
   }
 
-  let pending = ''
-  child.stdout?.setEncoding('utf8')
-  child.stdout?.on('data', (chunk: string) => {
-    pending += chunk
-    for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
-      const text = pending.slice(0, end).replace(/\r$/, '')
-      pending = pending.slice(end + 1)
-      if (text.length > 0) record(text)
+  // No data listener: readable mode leaves output buffered until there is a socket to consume it.
+  // A send that reached a failed socket is never replayed: its acceptance cannot be known.
+  async function pipeOutput(): Promise<void> {
+    if (reading) return
+    reading = true
+    try {
+      while (client?.readyState === WebSocket.OPEN && !terminating && adapter.alive) {
+        if (chunk === null) {
+          chunk = child.stdout?.read() as Buffer | null
+          offset = 0
+          if (chunk == null) { chunk = null; return }
+        }
+        const end = chunk.indexOf(0x0a, offset)
+        const limit = end < 0 ? chunk.length : end
+        const piece = chunk.subarray(offset, limit)
+        lineBytes += piece.length
+        if (lineBytes > MAX_LINE_BYTES) {
+          failAdapter('adapter line exceeds 16 MiB')
+          return
+        }
+        if (piece.length > 0) parts.push(piece)
+        offset = limit + (end < 0 ? 0 : 1)
+        if (offset === chunk.length) chunk = null
+        if (end < 0) continue
+        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts, lineBytes)
+        parts = []
+        lineBytes = 0
+        const peer = client
+        await new Promise<void>((resolve) => {
+          peer.send(line, { binary: false }, (error) => {
+            if (error) peer.terminate()
+            resolve()
+          })
+        })
+        // ws's send callback runs after the underlying write finishes. If the peer disappeared,
+        // the next loop iteration stops; the remaining read belongs to the next connection.
+        while (peer.readyState === WebSocket.OPEN && peer.bufferedAmount > 0 && client === peer && !terminating) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+      }
+    } finally {
+      reading = false
     }
-  })
+  }
+  child.stdout?.on('readable', () => void pipeOutput())
   child.on('exit', (code, signal) => {
     adapter.alive = false
     adapter.exitCode = code
     adapter.signal = signal
     log(`adapter exited code=${String(code)} signal=${String(signal)}`)
-    onInitialize(new Error(`the adapter died before answering initialize (code ${String(code)})`))
-    // The bridge stays up: the native files still leave with the Pod, at SIGTERM.
     if (!terminating) client?.close(1011, 'adapter exited')
   })
-  child.on('error', (error) => {
-    log(`cannot start the adapter: ${error.message}`)
+  child.on('error', () => {
+    adapter.alive = false
+    log('cannot start the adapter')
+    client?.close(1011, 'adapter failed to start')
   })
-
-  child.stdin?.write(
-    `${JSON.stringify({
-      jsonrpc: '2.0',
-      id: INITIALIZE_ID,
-      method: 'initialize',
-      params: {
-        protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: { name: 'agora-bridge', version: '1' },
-      },
-    })}\n`,
-  )
+  child.stdin?.on('error', () => failAdapter('adapter stdin failed'))
+  child.stdout?.on('error', () => failAdapter('adapter stdout failed'))
 
   function describe(): Record<string, unknown> {
     return {
@@ -167,12 +138,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       pod: options.podName,
       workspace: options.workspace,
       startedAt,
-      initialize: initializeResult,
-      initializeError,
       adapter: { ...adapter },
       terminating,
-      lastSeq: seq,
-      firstRetainedSeq: ring[0]?.seq ?? seq + 1,
       outbound: outbound.describe(),
     }
   }
@@ -191,9 +158,9 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://bridge')
     if (url.pathname === '/healthz') {
-      const ready = adapter.alive && initializeResult !== null && !terminating
+      const ready = adapter.alive && !terminating
       res.writeHead(ready ? 200 : 503, { 'content-type': 'text/plain' })
-      res.end(ready ? 'ACP servable\n' : 'ACP non servable\n')
+      res.end(ready ? 'adapter alive\n' : 'adapter unavailable\n')
       return
     }
     const auth = authorized(req)
@@ -241,13 +208,14 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const server: Server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
       if (error instanceof AnchorRefused) return json(res, error.status, { reason: error.message })
-      log(`error on ${String(req.method)} ${String(req.url)}: ${error instanceof Error ? error.message : String(error)}`)
+      log(`error on ${String(req.method)} ${new URL(req.url ?? '/', 'http://bridge').pathname}`)
       if (!res.headersSent) json(res, 500, { reason: error instanceof Error ? error.message : String(error) })
       else res.destroy()
     })
   })
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 })
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_LINE_BYTES })
+  wss.on('headers', (headers) => headers.push(`agora-bridge-instance: ${instance}`))
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://bridge')
     if (url.pathname !== '/acp') {
@@ -263,51 +231,50 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nPod ending\n')
       return
     }
-    wss.handleUpgrade(req, socket, head, (peer) => attach(peer, url.searchParams.get('after')))
+    wss.handleUpgrade(req, socket, head, attach)
   })
 
-  function attach(peer: WebSocket, afterParam: string | null): void {
+  function attach(peer: WebSocket): void {
     if (client !== null) {
       log('new connection: the previous one is closed')
       client.close(4000, 'replaced by a newer connection')
     }
     client = peer
-
-    const after = afterParam === null ? null : Number(afterParam)
-    let replay: Line[] = []
-    let gap = false
-    if (after !== null && Number.isFinite(after)) {
-      replay = ring.filter((line) => line.seq > after)
-      const firstWanted = after + 1
-      const firstKept = ring[0]?.seq ?? seq + 1
-      gap = firstWanted < firstKept && firstWanted <= seq
-    }
-    peer.send(JSON.stringify({ hello: { ...describe(), replayFrom: replay[0]?.seq ?? null, gap } }))
-    for (const line of replay) peer.send(JSON.stringify({ seq: line.seq, acp: line.text }))
-
     if (!adapter.alive) {
       peer.close(1011, 'adapter exited')
       return
     }
+    const drain = (): void => {
+      if (client === peer && peer.readyState === WebSocket.OPEN && !terminating) peer.resume()
+    }
+    child.stdin?.on('drain', drain)
+    if (child.stdin?.writableNeedDrain) peer.pause()
     peer.on('message', (data, isBinary) => {
-      if (isBinary) {
-        peer.close(1003, 'binary messages refused')
-        return
-      }
-      if (!adapter.alive || terminating) return
-      const text = data.toString().replace(/\n+$/, '')
-      child.stdin?.write(`${text}\n`)
+      if (client !== peer || !adapter.alive || terminating) return
+      if (isBinary) { peer.close(1003, 'binary messages refused'); return }
+      const line = data.toString()
+      if (line.includes('\n')) { peer.close(1008, 'one line per message'); return }
+      if (!child.stdin?.write(`${line}\n`)) peer.pause()
     })
     peer.on('close', () => {
+      child.stdin?.off('drain', drain)
       if (client === peer) client = null
     })
-    peer.on('error', () => {})
+    peer.on('error', (error: Error & { code?: string }) => {
+      if (error.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') failAdapter('client line exceeds 16 MiB')
+    })
+    void pipeOutput()
   }
 
-  await initialized
-  await new Promise<void>((resolve) => server.listen(options.port, options.host ?? '0.0.0.0', resolve))
-  const info = initializeResult as { agentInfo?: { name?: string; version?: string } }
-  log(`ready: instance ${instance}, ${String(info.agentInfo?.name)}@${String(info.agentInfo?.version)}, port ${String((server.address() as { port: number }).port)}`)
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(options.port, options.host ?? '0.0.0.0', () => { server.off('error', reject); resolve() })
+  }).catch(async (error: unknown) => {
+    child.kill('SIGKILL')
+    await outbound.close()
+    throw error
+  })
+  log(`listening: instance ${instance}, port ${String((server.address() as { port: number }).port)}`)
 
   let terminated: Promise<Bundle> | null = null
 
@@ -319,7 +286,6 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         terminating = true
         log('end of the Pod: relay closed, stopping the adapter')
         if (client !== null && client.readyState === client.OPEN) {
-          client.send(JSON.stringify({ terminating: { at: new Date().toISOString() } }))
           client.close(1001, 'Pod ending')
         }
         if (adapter.alive) {
@@ -342,7 +308,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       return terminated
     },
     close: async () => {
-      client?.close(1001, 'bridge stopping')
+      terminating = true
+      for (const peer of wss.clients) peer.terminate()
       if (adapter.alive) child.kill('SIGTERM')
       await outbound.close()
       await new Promise<void>((resolve) => {

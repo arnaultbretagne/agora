@@ -38,6 +38,7 @@ export class FakeKube implements KubeApi {
   anchorUrl = ''
   allocationDelayMs = 50
   failPatches = false
+  bridgeFactory: (publicKey: KeyObject, podName: string) => Promise<LabBridge> = mockBridge
 
   constructor(publicKey: KeyObject) {
     this.publicKey = publicKey
@@ -91,7 +92,7 @@ export class FakeKube implements KubeApi {
       claim.status = { conditions: [{ type: 'Ready', status: 'False', reason: 'WarmPoolNotFound', message: 'pool absent' }] }
     } else {
       const podName = `${pool}-${String(++this.podCounter)}`
-      this.bridges.set(podName, await mockBridge(this.publicKey, podName))
+      this.bridges.set(podName, await this.bridgeFactory(this.publicKey, podName))
       claim.status = { conditions: [{ type: 'Ready', status: 'True', reason: 'SandboxReady' }], sandbox: { name: podName, serviceFQDN: `${podName}.${NAMESPACE}.svc.cluster.local` } }
     }
     this.bump(claim)
@@ -171,7 +172,7 @@ export class FakeKube implements KubeApi {
   /** The Sandbox controller recreating a Pod that vanished: same name, new bridge instance. */
   async replacePod(name: string): Promise<void> {
     await this.bridges.get(name)?.bridge.close()
-    this.bridges.set(name, await mockBridge(this.publicKey, name))
+    this.bridges.set(name, await this.bridgeFactory(this.publicKey, name))
   }
 
   async closeAll(): Promise<void> {

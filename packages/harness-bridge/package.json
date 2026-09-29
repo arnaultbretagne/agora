@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The bridge in front of the harness in the image: numbered ACP relay, Agora's token, anchor, outbound proxy.",
+  "description": "The bridge in front of the harness in the image: raw ACP relay with backpressure, Agora's token, anchor, outbound proxy.",
   "exports": {
     ".": "./src/index.ts",
     "./token": "./src/token.ts",
