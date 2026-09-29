@@ -3,8 +3,7 @@
 - **Statut :** acceptée
 - **Date :** 29 septembre 2026
 - **Remplace :** les ADR 0009 (« OneCLI est la seule autorité sur les droits externes ») et 0010
-  (« Les capacités se compilent en droits OneCLI ») de l'implémentation précédente, branche
-  `main`. Ils ne s'appliquent pas à la refonte ; celui-ci repart de zéro.
+  (« Les capacités se compilent en droits OneCLI ») de l'implémentation précédente.
 - **Contrat :** [credentials.md](../credentials.md).
 
 ## Contexte
@@ -72,7 +71,7 @@ Abandonné pour son modèle d'identité :
 | Un second secret du même type cassait la résolution des droits. | Deux credentials pour le même hôte ne cohabitaient pas. |
 | La gestion passe par la clé d'API du projet (`oc_…`). | Agora détenait une clé d'administration de la passerelle. |
 
-### OneCLI 2.x, la refonte d'OneCLI
+### OneCLI 2.x
 
 La v2.0 (18 août 2026) a transformé OneCLI en plateforme d'agents hébergés : un sandbox durable
 par agent, un runner, un superviseur, Slack. Cela recouvre ce que font Agora et Agent Sandbox.
