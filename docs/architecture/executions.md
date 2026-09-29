@@ -22,7 +22,7 @@ stateDiagram-v2
     starting --> connecting: claim ready
     connecting --> restoring: an anchor to restore
     restoring --> ready
-    connecting --> ready: bridge reached
+    connecting --> ready: initialize answered
     ready --> in_turn: prompt admitted
     in_turn --> ready: end of turn
     ready --> stopped: stop
@@ -54,8 +54,8 @@ the deadline passes.
 | Stop | nothing: Agora stops renewing |
 
 An idle execution therefore disappears one lease after its last turn, and a runaway turn after
-one hour. Agora writes what it must remember — the turn in progress, the session, a stop — on
-the claim itself, so a restart of Agora finds everything again.
+one hour. Agora writes what drives the execution — the turn in progress, the session, a stop — on the
+claim itself, so a restart of Agora finds it again; what happened is in the log.
 
 ## The end of the Pod and the anchor
 

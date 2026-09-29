@@ -20,10 +20,11 @@
    pinned by digest. No variant per right, persona or profile: rights are grants at the gateway.
 3. **The image is trusted, the execution is not.** Nothing is installed at start, and nothing in
    the sandbox is relied on for security.
-4. **The bridge is thin.** It starts the adapter, checks Agora's token, pipes ACP lines between
-   the adapter and a single connection, gives the adapter its only way out, and pushes the anchor
-   when the Pod ends. It numbers nothing, keeps no line and sends no ACP of its own; while Agora
-   is not connected, it stops reading the adapter.
+4. **The bridge is thin.** It starts the adapter and reports ready while it runs, checks Agora's
+   token, pipes ACP lines between the adapter and a single connection, gives the adapter its only
+   way out, and puts back or pushes the anchor. It numbers nothing, keeps no line and sends no
+   ACP of its own; it reads the adapter only as fast as Agora takes the lines, and not at all
+   while Agora is away.
 
 ```mermaid
 flowchart LR
@@ -69,4 +70,5 @@ flowchart LR
 - The pool's readiness proves the adapter runs, not that it speaks ACP: Agora's `initialize`, on
   the first connection, is the first proof. codex refuses a second one, so Agora never resends it
   to the same process.
-- A break between Agora and the bridge can lose the lines in flight; the log records the break.
+- A crash or a network drop between Agora and the bridge can lose the lines in flight; the log
+  records the break.

@@ -12,7 +12,7 @@ behaviour; the open questions close the document.
 | The server | Writes each entry to the log before acting on it, projects the log into views, serves them to the client. |
 | PostgreSQL | Holds the log, the views and the anchors. |
 | The bridge | Pipes ACP lines between the adapter and the server. It keeps nothing. |
-| The client | Reads a Workstream's views from its last position and sends commands. |
+| The client | Reads a Workstream's thread from its last position and sends commands. |
 
 ## Workstreams and Sessions
 
@@ -48,7 +48,7 @@ sequenceDiagram
     Bridge-->>Server: session/update
     Server->>DB: the line, at the next position
     Server->>DB: the views it changes
-    Server-->>Client: the updated block, with its position
+    Server-->>Client: a thread update, with its position
 ```
 
 A line is stored whole, as the harness wrote it: members no view knows yet, large integers and
@@ -67,16 +67,22 @@ identities derive from the log, so rebuilding a view gives back the same identit
 version: changing how it is built rebuilds it from the log, which never changes. A line no view
 understands stays in the log and shows as a generic item.
 
-The client reads a Workstream's views from a position: opening, reloading and reconnecting are
-the same action, with nothing lost and nothing received twice.
+Each change to a view is an update of the Workstream's thread, with its own increasing position.
+The client reads the thread from the last position it has: opening, reloading and reconnecting
+are the same action, with nothing lost and nothing received twice.
 
 ## Breaks
 
-When the connection to the bridge breaks, because Agora restarts or the network drops, the bridge
-stops reading the adapter until the server connects again: the adapter waits, and nothing is kept
-in between. The lines in flight at the moment of the break may be lost. The server writes the
-break into the log; the view shows where output may be missing, and a turn whose end was not seen
-stays uncertain.
+The bridge reads the adapter only as fast as the server takes the lines, and not at all while the
+server is away: the adapter waits, and nothing is kept in between. The server writes every break
+into the log.
+
+A clean restart of Agora loses nothing: the server closes the connection and writes everything it
+received before leaving. A crash or a network drop can lose the lines in flight: the view shows
+where output may be missing, and a turn in progress becomes uncertain until its end is seen.
+
+After a restart, the claim says which turn was in progress (`executions.md`) and the log how far
+it went; the server connects to the bridge again and carries on.
 
 ## Commands and recovery
 

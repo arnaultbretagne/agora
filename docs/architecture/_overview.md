@@ -54,7 +54,7 @@ flowchart TB
 | --- | --- | --- |
 | **Client** | Runs in the browser. Displays a Workstream's thread with assistant-ui and turns the user's actions into commands. | The thread it received, in memory. |
 | **Server** | Records the commands and the ACP exchanges, projects them for the client. Obtains the executions, relays ACP, follows the turns, sets the deadlines, receives the anchors. Signs each execution's grants. | The log, the anchors, its signing keys, the database login. |
-| **Bridge** | In front of the harness, in the sandbox's image, and thin. Pipes ACP lines between the server and the harness, gives the harness its only way out, pushes the anchor when the Pod ends. | The execution's grants, in memory. |
+| **Bridge** | In front of the harness, in the sandbox's image, and thin. Starts the harness and reports ready while it runs, pipes ACP lines between the server and the harness, gives the harness its only way out, puts back or pushes the anchor. | The execution's grants, in memory. |
 | **Harness** | A coding agent (claude-code, codex, …) behind its ACP adapter. | Its native files, in the sandbox only. |
 
 The server has three parts, each with its own document: the log (`log.md`), the executions
@@ -69,7 +69,7 @@ case.
 | **Kubernetes** | Runs everything. Its API is how Agora requests executions and checks which Pod is calling. | — |
 | **Agent Sandbox**, with Kata | Warm pools per harness image, one sandbox per claim, destruction at the deadline; each Pod in its own VM. | executions ADR |
 | **The gateway** (agentgateway) | The sandboxes' only way out: checks the grants on every request and sets the services' credentials. | gateway ADR |
-| **PostgreSQL** | Agora's storage: the log and the anchors. | — |
+| **PostgreSQL** | Agora's storage: the log, its views and the anchors. | log ADR |
 
 infra-k8s deploys them, with the harness images' pools and the network rules. Agora configures
 them with allowed values and reimplements none of them: no Pod controller, no reaper, no
@@ -104,7 +104,7 @@ sequenceDiagram
     participant Model as Anthropic
     User->>Client: writes
     Client->>Server: Write command
-    Server->>DB: records the command
+    Server->>DB: writes the command and the prompt
     Server->>Bridge: session/prompt
     Bridge->>Harness: session/prompt
     Harness->>Bridge: HTTPS to the model
@@ -112,10 +112,10 @@ sequenceDiagram
     Gateway->>Model: with the credential
     Model-->>Harness: the response, the same way back
     Harness-->>Server: session/update, then the end of the turn
-    Server->>DB: logs the exchanges
+    Server->>DB: writes each line
     Server-->>Client: thread updates
 ```
 
-The server records the command before sending it and logs every ACP exchange it relays: the
-client only ever displays what the log holds. The model is reached like any other service,
+The server writes the command and every ACP line to the log before acting on them: the client
+only ever displays what the log holds. The model is reached like any other service,
 through the bridge and the gateway.
