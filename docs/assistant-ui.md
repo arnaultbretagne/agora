@@ -1,173 +1,172 @@
-# Interface Agora ↔ assistant-ui
+# Agora ↔ assistant-ui interface
 
-Contrat de départ à implémenter — `@assistant-ui/react` **0.15.21**.
+Starting contract to implement — `@assistant-ui/react` **0.15.21**.
 
-**Agora détient le fil et les commandes. assistant-ui affiche le fil et remonte
-les gestes de l'utilisateur.**
+**Agora owns the thread and the commands. assistant-ui displays the thread and passes
+up the user's actions.**
 
-Les options étudiées avant ce choix sont dans `ui-options.md`.
+The options studied before this choice are in `ui-options.md`.
 
-## Qui fait quoi ?
+## Who does what?
 
-- **Le serveur Agora** projette le journal ACP en tours, éléments et avis, en base,
-  et applique les commandes.
-- **Le client Agora** tient le fil reçu en mémoire, le convertit en messages
-  assistant-ui et transforme les gestes en commandes.
-- **assistant-ui** fournit le runtime `useExternalStoreRuntime`, les primitives
-  et les composants du registre.
+- **The Agora server** projects the ACP log into turns, elements and notices, in the
+  database, and applies the commands.
+- **The Agora client** holds the received thread in memory, converts it into
+  assistant-ui messages and turns actions into commands.
+- **assistant-ui** provides the `useExternalStoreRuntime` runtime, the primitives
+  and the registry components.
 
-Les composants du registre sont copiés dans le code d'Agora (`npx assistant-ui add
-<nom>`, modèle shadcn) : on les modifie librement. Seuls `@assistant-ui/react` et
-son runtime sont des dépendances.
+Registry components are copied into Agora's code (`npx assistant-ui add <name>`,
+shadcn model): we modify them freely. Only `@assistant-ui/react` and its runtime
+are dependencies.
 
-L'interface n'invente aucun état. Même le message que l'utilisateur vient d'écrire
-n'apparaît qu'une fois enregistré par le serveur. L'effet d'une commande se lit
-dans le fil, jamais dans la réponse à la commande.
+The interface invents no state. Even the message the user just wrote appears only
+once the server has saved it. A command's effect is read in the thread, never in
+the response to the command.
 
-## Les trois échanges
+## The three exchanges
 
-| Échange | Contenu |
+| Exchange | Content |
 | --- | --- |
-| **Liste des workstreams** | Lecture simple : identifiant, titre, état de l'exécution. |
-| **Fil d'un workstream** | Un flux unique, ouvert depuis la dernière position connue (zéro au départ). Il envoie d'abord l'état actuel de ce qui a changé depuis, puis chaque changement. Chaque envoi remplace un objet entier : workstream, tour, élément ou avis. |
-| **Commandes** | Créer, Écrire, Annuler, Répondre à une permission, Arrêter. |
+| **Workstream list** | Simple read: id, title, execution state. |
+| **A workstream's thread** | A single stream, opened from the last known position (zero at first). It first sends the current state of what has changed since, then each change. Each update replaces a whole object: workstream, turn, element or notice. |
+| **Commands** | Create, Write, Cancel, Respond to a permission, Stop. |
 
-Chaque envoi du fil porte une position strictement croissante. Ouvrir, recharger
-et se reconnecter sont le même geste : rien n'est perdu, rien n'est reçu deux fois.
+Each thread update carries a strictly increasing position. Opening, reloading and
+reconnecting are the same action: nothing is lost, nothing is received twice.
 
-Chaque commande porte un identifiant choisi par l'interface. Rejouée, elle n'est
-exécutée qu'une fois. La réponse du serveur est *acceptée* ou *refusée, avec la
-raison*.
+Each command carries an id chosen by the interface. If replayed, it runs only once.
+The server's response is *accepted* or *refused, with the reason*.
 
-| Commande | Porte | Règle |
+| Command | Carries | Rule |
 | --- | --- | --- |
-| **Créer** | le harness choisi parmi les options autorisées | — |
-| **Écrire** | le texte | Refusée si un tour est enregistré ou en cours, ou si les envois sont fermés. |
-| **Annuler** | le tour visé | Sans effet si ce tour est clos ; ne touche jamais le tour suivant. |
-| **Répondre à une permission** | la demande et l'option choisie | Refusée si la demande n'est plus en attente. |
-| **Arrêter** | — | Ferme les envois et cesse de renouveler l'échéance ; l'exécution disparaît quand l'infrastructure la détruit (`executions.md`). |
+| **Create** | the harness chosen among the allowed options | — |
+| **Write** | the text | Refused if a turn is saved or in progress, or if sending is closed. |
+| **Cancel** | the targeted turn | No effect if that turn is over; never touches the next turn. |
+| **Respond to a permission** | the request and the chosen option | Refused if the request is no longer pending. |
+| **Stop** | — | Closes sending and stops renewing the deadline; the execution disappears when the infrastructure destroys it (`executions.md`). |
 
-## Le pont : `useExternalStoreRuntime`
+## The connection point: `useExternalStoreRuntime`
 
-C'est le seul point de contact entre les données d'Agora et assistant-ui.
+It is the only point of contact between Agora's data and assistant-ui.
 
-| Propriété | Alimentée par |
+| Property | Fed by |
 | --- | --- |
-| `messages` + `convertMessage` | Tours et avis du fil. Un tour donne un message `user` et un message `assistant` ; un avis donne un message `system`. |
-| `isRunning` | Le dernier tour est enregistré ou en cours. |
-| `isSendDisabled` | Envois fermés : exécution en démarrage ou en erreur, stockage indisponible. |
-| `isDisabled` | Workstream arrêté : le fil reste lisible. |
-| `onNew` | **Écrire** |
-| `onCancel` | **Annuler**, sur le tour en cours connu de l'interface. |
-| `onRespondToToolApproval` | **Répondre à une permission** : `approvalId` = la demande, `optionId` = le choix. |
-| `adapters.threadList` | La liste des workstreams (voir la barre latérale). |
+| `messages` + `convertMessage` | The thread's turns and notices. A turn gives a `user` message and an `assistant` message; a notice gives a `system` message. |
+| `isRunning` | The last turn is saved or in progress. |
+| `isSendDisabled` | Sending closed: execution starting or in error, storage unavailable. |
+| `isDisabled` | Workstream stopped: the thread stays readable. |
+| `onNew` | **Write** |
+| `onCancel` | **Cancel**, on the in-progress turn known to the interface. |
+| `onRespondToToolApproval` | **Respond to a permission**: `approvalId` = the request, `optionId` = the choice. |
+| `adapters.threadList` | The workstream list (see the sidebar). |
 
-Non fournis, donc fonctions absentes de l'interface : `onEdit`, `onReload`,
-`onDelete`, `setMessages`, `queue`, `suggestions` et les adaptateurs `attachments`,
-`feedback`, `speech`, `dictation`.
+Not provided, so the features are absent from the interface: `onEdit`, `onReload`,
+`onDelete`, `setMessages`, `queue`, `suggestions` and the `attachments`,
+`feedback`, `speech`, `dictation` adapters.
 
-## Les états d'un tour
+## A turn's states
 
-| Tour | Message utilisateur | Réponse (`status`) |
+| Turn | User message | Response (`status`) |
 | --- | --- | --- |
-| **enregistré** — écrit par Agora, pas encore envoyé | badge « enregistré » | `running`, vide : indicateur ● |
-| **en cours** — envoyé, la réponse arrive | — | `running` |
-| **terminé** — l'agent a fini | — | `complete` |
-| **annulé** — arrêté à la demande | — | `incomplete` / `cancelled` ; une permission en attente passe à `resolution: cancelled` |
-| **échoué** — l'agent a répondu par une erreur | — | `incomplete` / `error`, avec le message |
-| **incertain** — connexion perdue pendant le tour | badge « incertain », bien visible | `incomplete` / `other`, avec l'explication |
+| **saved** — written by Agora, not yet sent | "saved" badge | `running`, empty: ● indicator |
+| **in progress** — sent, the response is arriving | — | `running` |
+| **done** — the agent has finished | — | `complete` |
+| **cancelled** — stopped on request | — | `incomplete` / `cancelled`; a pending permission moves to `resolution: cancelled` |
+| **failed** — the agent answered with an error | — | `incomplete` / `error`, with the message |
+| **uncertain** — connection lost during the turn | "uncertain" badge, clearly visible | `incomplete` / `other`, with the explanation |
 
-Un tour incertain n'est jamais renvoyé automatiquement. Il ne change d'état que sur
-preuve. L'état du tour voyage dans `metadata.custom` du message utilisateur.
+An uncertain turn is never resent automatically. It changes state only on proof.
+The turn's state travels in the user message's `metadata.custom`.
 
-## L'écran, zone par zone
+## The screen, area by area
 
-### Barre latérale
+### Sidebar
 
-| Élément | Composant | Branchement |
+| Element | Component | Wiring |
 | --- | --- | --- |
-| Liste des workstreams | `ThreadList` (registre) | `threadList.threads` : id, titre ; état de l'exécution dans `custom` |
-| Ouvrir un workstream | `ThreadListItemPrimitive.Trigger` | `onSwitchToThread` → ouvre le fil |
-| Nouveau workstream | `ThreadListPrimitive.New` + choix du harness (**à nous**) | `onSwitchToNewThread` → choix → **Créer** |
-| État de l'exécution | `Badge` (registre) | démarrage, disponible, erreur, arrêtée |
+| Workstream list | `ThreadList` (registry) | `threadList.threads`: id, title; execution state in `custom` |
+| Open a workstream | `ThreadListItemPrimitive.Trigger` | `onSwitchToThread` → opens the thread |
+| New workstream | `ThreadListPrimitive.New` + harness choice (**ours**) | `onSwitchToNewThread` → choice → **Create** |
+| Execution state | `Badge` (registry) | starting, available, error, stopped |
 
-### Fil
+### Thread
 
-| Élément | Composant | Branchement |
+| Element | Component | Wiring |
 | --- | --- | --- |
-| Conteneur, défilement | `Thread` (registre) | — |
-| Message utilisateur | `UserMessage` (dans `Thread`) + badge d'état du tour | `role: user` |
-| Réponse de l'agent | `AssistantMessage` (dans `Thread`) | `role: assistant`, `status` selon les états du tour |
-| Erreur d'un tour | `MessagePrimitive.Error` (déjà dans `AssistantMessage`) | tour échoué |
-| Avis | `Notice` (**à nous**) | `role: system`, code dans `metadata.custom` |
-| Démarrage, erreur de l'exécution | bandeau d'exécution (**à nous**) | état de l'exécution du workstream |
-| Connexion au fil perdue | `ConnectionState` (registre `elements-connection-state`) | état du flux dans le navigateur, pas une donnée Agora |
+| Container, scrolling | `Thread` (registry) | — |
+| User message | `UserMessage` (in `Thread`) + turn state badge | `role: user` |
+| Agent response | `AssistantMessage` (in `Thread`) | `role: assistant`, `status` according to the turn's states |
+| Turn error | `MessagePrimitive.Error` (already in `AssistantMessage`) | failed turn |
+| Notice | `Notice` (**ours**) | `role: system`, code in `metadata.custom` |
+| Execution starting, execution error | execution banner (**ours**) | the workstream's execution state |
+| Thread connection lost | `ConnectionState` (registry `elements-connection-state`) | stream state in the browser, not Agora data |
 
-`Thread` rend aujourd'hui tout message non `user` comme une réponse : on lui ajoute
-le cas `system` → `Notice`.
+`Thread` currently renders every non-`user` message as a response: we add the
+`system` → `Notice` case.
 
-Avis : session démarrée, session terminée, contexte perdu, harness perdu.
+Notices: session started, session ended, context lost, harness lost.
 
-### Blocs d'une réponse
+### Blocks of a response
 
-Construits sur le serveur, en base, à partir du journal ACP.
+Built on the server, in the database, from the ACP log.
 
-| Élément | Construit à partir de | Part assistant-ui | Composant |
+| Element | Built from | assistant-ui part | Component |
 | --- | --- | --- | --- |
-| **Texte** | fragments de message consécutifs | `text` | `MarkdownText` (registre) |
-| **Réflexion** | fragments de pensée consécutifs | `reasoning` | `Reasoning` (registre), regroupé automatiquement |
-| **Outil** | l'appel puis ses mises à jour, fusionnés | `tool-call` | `ToolFallback` (registre), modifié pour afficher le titre ; outils consécutifs regroupés par `ToolGroup` (registre) |
-| **Outil `edit`** | idem | idem | `DiffViewer` (registre) via `makeAssistantToolUI` |
-| **Outil `execute`** | idem | idem | `TerminalBlock` (registre `elements-terminal-block`) via `makeAssistantToolUI` |
-| **Permission** | la demande ACP, rattachée à son outil | champ `approval` du `tool-call` | boutons déjà présents dans `ToolFallback` |
-| **Plan** | le dernier plan reçu dans le tour | `data` nommée `plan` | `TodoList` (registre `elements-todo-list`) via `makeAssistantDataUI` |
+| **Text** | consecutive message chunks | `text` | `MarkdownText` (registry) |
+| **Reasoning** | consecutive thought chunks | `reasoning` | `Reasoning` (registry), grouped automatically |
+| **Tool** | the call then its updates, merged | `tool-call` | `ToolFallback` (registry), modified to show the title; consecutive tools grouped by `ToolGroup` (registry) |
+| **`edit` tool** | same | same | `DiffViewer` (registry) via `makeAssistantToolUI` |
+| **`execute` tool** | same | same | `TerminalBlock` (registry `elements-terminal-block`) via `makeAssistantToolUI` |
+| **Permission** | the ACP request, attached to its tool | `approval` field of the `tool-call` | buttons already in `ToolFallback` |
+| **Plan** | the last plan received in the turn | `data` named `plan` | `TodoList` (registry `elements-todo-list`) via `makeAssistantDataUI` |
 
-Correspondances de champs :
+Field mappings:
 
-- **Outil** — `toolCallId` = id ACP ; `toolName` = sorte ACP (`read`, `edit`,
-  `execute`…) ; `args` = entrée ; `result` = résultat ; `isError` = échec ;
-  `artifact` = titre et emplacements.
-- **Diff** — `DiffViewer` reçoit directement le diff ACP : chemin, ancien texte,
-  nouveau texte.
-- **Permission** — `approval.id` = la demande ; `approval.options` = les options ACP.
-  Les quatre sortes sont identiques des deux côtés : `allow-once`, `allow-always`,
-  `reject-once`, `reject-always`. `approval.optionId` = la réponse.
-- **Plan** — `pending` / `in_progress` / `completed` deviennent `pending` / `active` /
+- **Tool** — `toolCallId` = ACP id; `toolName` = ACP kind (`read`, `edit`,
+  `execute`…); `args` = input; `result` = result; `isError` = failure;
+  `artifact` = title and locations.
+- **Diff** — `DiffViewer` receives the ACP diff directly: path, old text,
+  new text.
+- **Permission** — `approval.id` = the request; `approval.options` = the ACP options.
+  The four kinds are identical on both sides: `allow-once`, `allow-always`,
+  `reject-once`, `reject-always`. `approval.optionId` = the answer.
+- **Plan** — `pending` / `in_progress` / `completed` become `pending` / `active` /
   `done`.
 
 ### Composer
 
-| Élément | Composant | Branchement |
+| Element | Component | Wiring |
 | --- | --- | --- |
-| Saisie | `ComposerPrimitive.Input` | — |
-| Envoyer | `ComposerPrimitive.Send` | `onNew` → **Écrire** |
-| Stop | `ComposerPrimitive.Cancel`, visible pendant un tour | `onCancel` → **Annuler** |
-| Raison de fermeture | bandeau au-dessus du composer (**à nous**) | envois fermés |
+| Input | `ComposerPrimitive.Input` | — |
+| Send | `ComposerPrimitive.Send` | `onNew` → **Write** |
+| Stop | `ComposerPrimitive.Cancel`, visible during a turn | `onCancel` → **Cancel** |
+| Closure reason | banner above the composer (**ours**) | sending closed |
 
-À retirer des composants copiés : `BranchPicker`, les actions Edit, Reload et
-Feedback, `EditComposer`, les pièces jointes et la dictée. Copier reste.
+To remove from the copied components: `BranchPicker`, the Edit, Reload and
+Feedback actions, `EditComposer`, attachments and dictation. Copy stays.
 
-## Hors de ce contrat, déjà disponible
+## Outside this contract, already available
 
-| Besoin futur | Composant existant |
+| Future need | Existing component |
 | --- | --- |
-| Changer de modèle ou de mode | `ModelSelector` (registre) |
-| Commandes slash (`available_commands` ACP) | `ComposerTriggerPopover` (registre) |
-| Consommation de contexte (`usage` ACP) | `ContextDisplay` (registre) |
-| Pièces jointes | `Attachment` (registre) |
+| Switch model or mode | `ModelSelector` (registry) |
+| Slash commands (ACP `available_commands`) | `ComposerTriggerPopover` (registry) |
+| Context consumption (ACP `usage`) | `ContextDisplay` (registry) |
+| Attachments | `Attachment` (registry) |
 
-Ce que chaque élément du registre peut recevoir d'ACP est dans
+What each registry element can receive from ACP is in
 `assistant-ui-elements.md`.
 
-## Les composants à écrire
+## The components to write
 
-`Notice`, le choix du harness, le badge d'état du tour, le bandeau d'exécution et
-le bandeau de fermeture des envois. Tout le reste vient du registre ou des primitives.
+`Notice`, the harness choice, the turn state badge, the execution banner and the
+sending-closed banner. Everything else comes from the registry or the primitives.
 
-**À préciser :** blocage de l'écriture après un tour incertain (décision 5 du
-design), pagination des fils longs, et version d'assistant-ui figée —
-`adapters.threadList`, `onSwitchToThread` et `onSwitchToNewThread` sont marqués
-instables en 0.15.
+**To be settled:** blocking writing after an uncertain turn (decision 5 of the
+design), pagination of long threads, and pinning the assistant-ui version —
+`adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
+unstable in 0.15.
 
-Références : [ExternalStoreAdapter](https://github.com/assistant-ui/assistant-ui/blob/main/packages/core/src/runtimes/external-store/external-store-adapter.ts),
-[registre des composants](https://r.assistant-ui.com/registry.json).
+References: [ExternalStoreAdapter](https://github.com/assistant-ui/assistant-ui/blob/main/packages/core/src/runtimes/external-store/external-store-adapter.ts),
+[component registry](https://r.assistant-ui.com/registry.json).

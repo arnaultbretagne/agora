@@ -1,9 +1,9 @@
 # src
 
-| Fichier | Rôle |
+| File | Role |
 | --- | --- |
-| `manager.ts` | `ExecutionManager` : claims, connexion à chaque bridge, tours, échéance, restauration, réception des anchors. |
-| `kube.ts` | Les appels à l'API Kubernetes, et rien d'autre (jamais de suppression). |
-| `http.ts` | L'API, le flux SSE, le relais WebSocket du consommateur et le récepteur d'anchors. |
-| `anchors.ts` | Le stockage des anchors. |
-| `index.ts` | Ce que le paquet exporte. |
+| `manager.ts` | `ExecutionManager`: claims, connection to each bridge, turns, deadline, restore, anchor reception, credential hand-off. |
+| `kube.ts` | The Kubernetes API calls, and nothing else (never a deletion). |
+| `http.ts` | The API, the SSE stream, the consumer's WebSocket relay and the anchor receiver. |
+| `anchors.ts` | The anchor store. |
+| `index.ts` | What the package exports. |

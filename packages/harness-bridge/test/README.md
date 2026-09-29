@@ -1,4 +1,6 @@
 # test
 
-`bridge.test.ts` : jetons refusés, relais numéroté, un seul client, rejeu et trou, fin du Pod,
-poussée, restauration, adaptateur mort. `npm test -w @agora/harness-bridge`
+`bridge.test.ts`: refused tokens, numbered relay, a single client, replay and gap, end of the
+Pod, push, restore, dead adapter. `outbound.test.ts`: no way out before a credential, the token
+on each `CONNECT`, the proxy's answer handed back, an unreachable proxy.
+`npm test -w @agora/harness-bridge`

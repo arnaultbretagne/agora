@@ -1,9 +1,10 @@
 # src
 
-| Fichier | Rôle |
+| File | Role |
 | --- | --- |
-| `main.ts` | Point d'entrée des images : configuration par l'environnement, poussée de l'anchor au SIGTERM. |
-| `server.ts` | Le bridge : adaptateur, relais numéroté, rejeu, routes, fin du Pod. |
-| `token.ts` | Le jeton Ed25519 d'Agora : signature (Agora) et vérification (bridge). |
-| `anchor.ts` | L'anchor : dossier natif de chaque harness, lecture en bloc, poussée, restauration. |
-| `index.ts` | Ce que le paquet exporte. |
+| `main.ts` | The images' entry point: configuration from the environment, anchor push at SIGTERM. |
+| `server.ts` | The bridge: adapter, numbered relay, replay, routes, end of the Pod. |
+| `outbound.ts` | The outbound proxy: forwards the adapter's `CONNECT`s with the execution's token, refuses everything before. |
+| `token.ts` | Agora's Ed25519 token: signing (Agora) and verification (bridge). |
+| `anchor.ts` | The anchor: each harness's native directory, reading en bloc, push, restore. |
+| `index.ts` | What the package exports. |

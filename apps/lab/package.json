@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Le banc : monte les exécutions d'Agora et sert une page pour en jouer tous les cas.",
+  "description": "The lab: mounts Agora's executions and serves a page to play every case.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },

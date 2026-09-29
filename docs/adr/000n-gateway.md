@@ -1,4 +1,4 @@
-# ADR 000n — Agora's gateway is an execution's only way out
+# ADR 000n — Gateway
 
 - **Status:** accepted
 - **Date:** 2026-09-29
@@ -12,14 +12,17 @@
   repo B are both `api.github.com`.
 - The sandbox starts in a warm pool, before the execution exists: its environment cannot carry
   a per-execution secret.
+- Agora does not run infrastructure: Kubernetes and Agent Sandbox are prerequisites it uses, not
+  components it ships.
 
 ## Decision
 
-1. **No credential in the sandbox.** Its only egress is Agora's gateway (agentgateway), reached
-   through the bridge's local proxy.
-2. **Agora signs the rights.** It compiles the execution's profiles (`anthropic`,
-   `github:owner/repo:read|write`) into grants — host, path, methods — and signs them into a
-   short-lived JWT, handed to the bridge after the claim.
+1. **No credential in the sandbox.** Everything it sends out goes through a gateway, reached
+   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent Sandbox:
+   agentgateway, deployed and configured by the infrastructure.
+2. **Agora signs the rights, and nothing more.** It compiles the execution's profiles
+   (`anthropic`, `github:owner/repo:read|write`) into grants — host, path, methods — and signs
+   them into a short-lived JWT, handed to the bridge after the claim.
 3. **The gateway decides, then sets the credential.** It verifies the JWT and checks every
    request against the grants with a single rule. If allowed, it sets the host's credential,
    which only it holds (a SOPS-encrypted Kubernetes Secret).

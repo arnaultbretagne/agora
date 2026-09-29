@@ -1,4 +1,4 @@
 # public
 
-`index.html` : la page du banc. Volontairement brute : créer des exécutions, relayer ACP à la
-main, suivre échéances, anchors et fins, jouer les cas du contrat.
+`index.html`: the lab page. Deliberately bare: create executions, relay ACP by hand, attach
+credentials, follow deadlines, anchors and ends, play the contract's cases.

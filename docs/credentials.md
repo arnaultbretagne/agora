@@ -1,176 +1,174 @@
-# Les credentials d'une exécution
+# An execution's credentials
 
-Contrat à implémenter — agentgateway **1.5.0**, sur les exécutions (`executions.md`). La décision
-et les options essayées sont dans l'ADR de la passerelle.
+Contract to implement — agentgateway **1.5.0**, on top of executions (`executions.md`). The
+decision and the options tried are in the gateway ADR.
 
-**Le sandbox ne contient aucun secret. Il sort par la passerelle d'Agora, qui vérifie chaque
-requête contre les droits de l'exécution et pose le credential au passage.**
+**The sandbox holds no secret. It goes out through the gateway, which checks each request
+against the execution's grants and sets the credential on the way through.**
 
-Un harness a besoin de credentials : Claude, GitHub. Ils n'entrent jamais dans le sandbox. Sa
-seule sortie est la passerelle : elle termine TLS, décide si la requête est permise et pose
-l'en-tête d'authentification de l'hôte. L'exécution ne détient qu'un **JWT court signé par
-Agora**, qui liste ses droits. Agora le remet au bridge après le claim, ce qui garde le pool
-chaud.
+A harness needs credentials: Claude, GitHub. They never enter the sandbox. Its only way out is
+the gateway: it terminates TLS, decides whether the request is allowed and sets the host's
+authentication header. The execution holds only a **short-lived JWT signed by Agora**, which
+lists its grants. Agora hands it to the bridge after the claim, which keeps the pool warm.
 
-## Qui fait quoi ?
+## Who does what
 
-- **L'opérateur** range les credentials en Secret SOPS dans infra-k8s.
-- **La passerelle** (agentgateway) garde les credentials, termine TLS avec sa propre autorité de
-  certification, vérifie le JWT et les droits, et pose le credential de l'hôte.
-- **Agora** compile les profils de l'exécution en droits, les signe et remet le jeton au
-  bridge. Il ne voit aucun credential.
-- **Le bridge** ouvre au harness un proxy sortant local et fait suivre chaque tunnel à la
-  passerelle, avec le jeton.
-- **infra-k8s** fournit aux sandboxes l'autorité de certification de la passerelle et ne les
-  laisse sortir que vers elle.
+- **The operator** stores the credentials as a SOPS Secret in infra-k8s.
+- **The gateway** (agentgateway) is a prerequisite, like Kubernetes and Agent Sandbox, deployed
+  and configured by infra-k8s. It holds the credentials, terminates TLS with its own certificate
+  authority, checks the JWT and the grants, and sets the host's credential.
+- **Agora** compiles the execution's profiles into grants, signs them and hands the token to the
+  bridge. It sees no credential.
+- **The bridge** opens a local outbound proxy for the harness and forwards each tunnel to the
+  gateway, with the token.
+- **infra-k8s** gives the sandboxes the gateway's certificate authority and lets them out only
+  to the gateway.
 
-## Pourquoi un proxy dans le bridge ?
+## Why a proxy in the bridge
 
-L'adaptateur démarre dans le pool, avant tout claim : son environnement ne peut porter aucun
-jeton. Passer le jeton par le claim force le démarrage à froid (voir
-`executions.md`, « Décisions et options écartées »).
+The adapter starts in the pool, before any claim: its environment cannot carry a token. Passing
+the token through the claim forces a cold start (see `executions.md`, "Decisions and ruled-out
+options").
 
-Le bridge lance donc l'adaptateur avec `HTTPS_PROXY` pointé sur un proxy à lui, en local,
-qui refuse tout tant qu'aucun credential n'est branché. Agora branche le jeton plus tard, par
-une route du bridge. Tout harness qui respecte `HTTPS_PROXY` en profite.
+So the bridge starts the adapter with `HTTPS_PROXY` pointing at its own local proxy, which
+refuses everything until a credential is attached. Agora attaches the token later, through a
+bridge route. Any harness that honours `HTTPS_PROXY` benefits.
 
-Le jeton reste dans la mémoire du bridge : ni dans l'environnement de l'adaptateur, ni sur
-disque. L'agent peut emprunter la sortie, pas emporter le jeton, et le réseau ne le laisse
-aller nulle part ailleurs.
+The token stays in the bridge's memory: not in the adapter's environment, not on disk. The agent
+can use the way out but not take the token with it, and the network lets it go nowhere else.
 
-## Le chemin d'une requête
+## A request's path
 
-| Étape | Qui | Quoi |
+| Step | Who | What |
 | --- | --- | --- |
-| 1 | Adaptateur → bridge | `CONNECT api.github.com:443` sur `127.0.0.1`. |
-| 2 | Bridge → passerelle | Le même `CONNECT` vers `gateway.agora-gateway.svc.cluster.local:3000`, avec `Proxy-Authorization: Bearer` et le JWT. La réponse revient telle quelle à l'adaptateur. |
-| 3 | Passerelle | Répond 200, puis termine TLS avec un certificat signé par « Agora gateway CA ». |
-| 4 | Adaptateur | Fait confiance à cette autorité par `NODE_EXTRA_CA_CERTS` et envoie sa requête. |
-| 5 | Passerelle | Vérifie le JWT et les droits. Pose le credential de l'hôte à la place du `Authorization` reçu, garde les autres en-têtes, suit vers l'hôte. |
+| 1 | Adapter → bridge | `CONNECT api.github.com:443` on `127.0.0.1`. |
+| 2 | Bridge → gateway | The same `CONNECT` to `gateway.agora-gateway.svc.cluster.local:3000`, with `Proxy-Authorization: Bearer` and the JWT. The response goes back to the adapter as is. |
+| 3 | Gateway | Answers 200, then terminates TLS with a certificate signed by "Agora gateway CA". |
+| 4 | Adapter | Trusts that authority through `NODE_EXTRA_CA_CERTS` and sends its request. |
+| 5 | Gateway | Checks the JWT and the grants. Sets the host's credential in place of the `Authorization` it received, keeps the other headers, forwards to the host. |
 
-| Réponse | Sens |
+| Response | Meaning |
 | --- | --- |
-| 503 du bridge, au `CONNECT` | Aucun credential branché sur cette exécution. |
-| 502 du bridge, au `CONNECT` | Passerelle injoignable. |
-| 401 de la passerelle | JWT absent, expiré ou signé par une autre clé. |
-| 403 de la passerelle | Aucun droit de l'exécution ne couvre cet hôte, ce chemin et cette méthode. |
-| 404 de la passerelle | Hôte sans route. |
+| 503 from the bridge, on `CONNECT` | No credential attached to this execution. |
+| 502 from the bridge, on `CONNECT` | Gateway unreachable. |
+| 401 from the gateway | JWT missing, expired or signed by another key. |
+| 403 from the gateway | None of the execution's grants covers this host, path and method. |
+| 404 from the gateway | Host with no route. |
 
-## Le bridge
+## The bridge
 
-| Élément | Règle |
+| Element | Rule |
 | --- | --- |
-| `PUT /credentials` | Avec le jeton d'Agora. Le corps donne le proxy (`hôte:port`), le jeton et son expiration. Remplace le jeton précédent : les tunnels suivants prennent le nouveau, les tunnels ouverts continuent. |
-| `GET /info`, champ `outbound` | Proxy, expiration, date du branchement, nombre de tunnels, nombre de refus, et pour chaque cible le nombre de tunnels et la dernière réponse au `CONNECT`. Jamais le jeton. |
-| Environnement de l'adaptateur | `HTTPS_PROXY` et `https_proxy` sur `http://127.0.0.1:<port>`, `NO_PROXY` sur `localhost,127.0.0.1`. |
-| Ce qui est relayé | `CONNECT` seulement. Une requête `http://` est refusée (501) : elle n'a aucun credential à porter. |
+| `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token: later tunnels use the new one, open tunnels carry on. |
+| `GET /info`, `outbound` field | Proxy, expiry, when the credential was attached, number of tunnels, number of refusals, and for each target the number of tunnels and the last response to the `CONNECT`. Never the token. |
+| Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`. |
+| What is relayed | `CONNECT` only. An `http://` request is refused (501): it has no credential to carry. |
 
-## Les profils et les droits
+## Profiles and grants
 
-Une exécution reçoit une liste de **profils**. Agora les compile en **droits** : un hôte, une
-expression régulière ancrée sur le chemin et la query, des méthodes. Le catalogue est dans le
-code d'Agora (`packages/credentials`).
+An execution receives a list of **profiles**. Agora compiles them into **grants**: a host, a
+regular expression anchored on the path and query, methods. The catalogue lives in Agora's code
+(`packages/credentials`).
 
-| Profil | Droits |
+| Profile | Grants |
 | --- | --- |
-| `anthropic` | `api.anthropic.com`, tout. |
-| `github:owner/repo:read` | API REST `/repos/owner/repo…` en `GET` et `HEAD` ; git `git-upload-pack` seulement (un clone fait aussi un `POST`). |
-| `github:owner/repo:write` | API REST `/repos/owner/repo…`, toutes méthodes ; git `git-upload-pack` et `git-receive-pack`. |
+| `anthropic` | `api.anthropic.com`, everything. |
+| `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
+| `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
-Les droits sont additifs : n'importe quelle combinaison de profils se compose, sans entité par
-combinaison. GraphQL (`/graphql`) n'est couvert par aucun profil : on ne peut pas y vérifier le
-repo visé.
+Grants are additive: any combination of profiles composes, with no entity per combination.
+GraphQL (`/graphql`) is covered by no profile: the target repo cannot be checked there.
 
-## Le jeton
+## The token
 
-Un JWT EdDSA signé par la clé d'Agora (Secret `grants-key`), `kid` `agora-grants-1`.
+An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`.
 
-| Claim | Contenu |
+| Claim | Content |
 | --- | --- |
-| `iss`, `aud` | `agora`, `agora-gateway` : exigés par la passerelle. |
-| `sub` | L'exécution (`agora <nom>`), écrit dans chaque ligne du journal. |
-| `exp` | La durée demandée au branchement, de 60 s à 24 h. |
-| `jti` | Un identifiant par jeton. |
-| `grants` | Les droits compilés. |
-| `profiles` | Les profils demandés, pour mémoire. |
+| `iss`, `aud` | `agora`, `agora-gateway`: required by the gateway. |
+| `sub` | The execution (`agora <name>`), written in every log line. |
+| `exp` | The duration requested when attaching, from 60 s to 24 h. |
+| `jti` | One id per token. |
+| `grants` | The compiled grants. |
+| `profiles` | The requested profiles, for the record. |
 
-La passerelle le lit dans le `Proxy-Authorization` du `CONNECT`, que chaque requête du tunnel
-voit (`source.connectHeaders`), et le vérifie avec le JWKS de la ConfigMap `grants-jwks`.
+The gateway reads it from the `Proxy-Authorization` of the `CONNECT`, which every request in the
+tunnel sees (`source.connectHeaders`), and checks it with the JWKS from the `grants-jwks`
+ConfigMap.
 
-## La passerelle
+## The gateway
 
-agentgateway en mode autonome, namespace `agora-gateway`, Service `gateway` port 3000
-(`CONNECT`). Chaque tunnel vers le port 443 est terminé avec la CA « Agora gateway CA ».
+agentgateway in standalone mode, namespace `agora-gateway`, Service `gateway` port 3000
+(`CONNECT`). Every tunnel to port 443 is terminated with the "Agora gateway CA" CA.
 
-Une seule règle d'autorisation, la même pour toutes les routes : le chemin ne contient ni `..`,
-ni `.`, ni `%2e`, ni `%2f`, et un des droits du JWT couvre l'hôte, le chemin avec la query, et
-la méthode. Si la règle échoue, la requête s'arrête à la passerelle ; sinon la passerelle pose le
-credential de l'hôte.
+A single authorization rule, the same for every route: the path contains no `..`, `.`, `%2e` or
+`%2f`, and one of the JWT's grants covers the host, the path with the query, and the method. If
+the rule fails, the request stops at the gateway; otherwise the gateway sets the host's
+credential.
 
-| Route | Hôte | Credential posé |
+| Route | Host | Credential set |
 | --- | --- | --- |
-| `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + le setup-token Claude de l'opérateur. |
-| `github-api` | `api.github.com` | `Authorization: Bearer` + le PAT GitHub. |
-| `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` et le PAT, en base64. |
+| `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
+| `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
+| `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 
-Les credentials sont dans le Secret SOPS `upstream-credentials`, montés en fichiers. La
-passerelle surveille ces fichiers : une rotation se fait par un commit, sans redémarrage.
-Vérifié : un PAT remplacé a été rechargé environ une minute après la fusion, le temps que le
-kubelet synchronise le Secret. Le PAT délimite le maximum, les repos qu'Agora peut toucher ; les
-droits découpent ce maximum par exécution.
+The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
+watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
+reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. The PAT
+sets the maximum, the repos Agora can touch; the grants cut that maximum down per execution.
 
-Chaque requête laisse une ligne de journal : exécution (`jwt.sub`), `jti`, méthode, hôte,
-chemin, statut, et la raison d'un refus.
+Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
+the reason for a refusal.
 
-## Côté Agora
+## On Agora's side
 
-| Élément | Règle |
+| Element | Rule |
 | --- | --- |
-| `POST /api/executions/{nom}/credentials` | Corps : les profils, la durée en secondes (3 600 par défaut). Agora compile et signe, puis remet le jeton au bridge ; la réponse est le champ `outbound` du bridge. |
-| Le jeton | Gardé nulle part : ni sur le claim, ni en mémoire après l'appel, ni dans le journal. |
-| Après chaque tour | Agora relit le champ `outbound` du bridge : tunnels et réponses deviennent visibles dans l'état de l'exécution. |
-| `GET /api/config` | Champ `credentials` : la passerelle et les profils connus, ou rien. |
-| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, et `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`. Sans `GATEWAY_PROXY`, aucune exécution n'a de sortie. |
+| `POST /api/executions/{name}/credentials` | Body: the profiles, the duration in seconds (3,600 by default). Agora compiles and signs, then hands the token to the bridge; the response is the bridge's `outbound` field. |
+| The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
+| After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
+| `GET /api/config` | `credentials` field: the gateway and the known profiles, or nothing. |
+| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`. Without `GATEWAY_PROXY`, no execution has a way out. |
 
-Aujourd'hui, le banc branche un credential à la main. Plus tard, Agora le fera à la création
-de l'exécution.
+The lab attaches a credential by hand; attaching it when the execution is created is still to
+be specified (below).
 
-L'image claude-code garde `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. Cette valeur ne sert
-qu'à mettre la CLI en mode OAuth : elle envoie alors un Bearer et
-`anthropic-beta: oauth-…`. La passerelle remplace le Bearer et laisse passer le reste.
+The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
+CLI in OAuth mode: it then sends a Bearer and `anthropic-beta: oauth-…`. The gateway replaces the
+Bearer and lets the rest through.
 
-## Ce que le template fournit, en plus
+## What the template adds
 
-| Élément | Valeur |
+| Element | Value |
 | --- | --- |
-| `NODE_EXTRA_CA_CERTS` | `/etc/agora/credential-proxy/ca.pem`, depuis la ConfigMap `credential-proxy-ca` : « Agora gateway CA », valide jusqu'en 2028. |
-| Sortie réseau | Le DNS, et `gateway.agora-gateway` sur le port 3000. Plus rien vers Internet. |
+| `NODE_EXTRA_CA_CERTS` | `/etc/agora/credential-proxy/ca.pem`, from the `credential-proxy-ca` ConfigMap: "Agora gateway CA", valid until 2028. |
+| Network egress | DNS, and `gateway.agora-gateway` on port 3000. Nothing else to the Internet. |
 
-En face, la passerelle n'accepte que les sandboxes et ne sort que sur le port 443.
+On the other side, the gateway accepts only the sandboxes and goes out only on port 443.
 
-## Le modèle
+## The model
 
-Le modèle se choisit en ACP : `session/set_config_option` avec `configId` `model`, par
-exemple `haiku`. Il s'envoie après `session/new` et avant le premier prompt, qui est le
-premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option.
+The model is chosen over ACP: `session/set_config_option` with `configId` `model`, for example
+`haiku`. It is sent after `session/new` and before the first prompt, which is the first billed
+call. The lab does it itself when the agent offers the option.
 
-## Les cas à valider
+## Cases to validate
 
-Suite des cas d'`executions.md`, joués les 28 et 29 septembre sur g4 sous Kata, par
-`apps/lab/scripts/live-cases.ts`. Pour GitHub, un PAT à grain fin limité à deux repos jetables,
-en écriture sur les deux : un refus ne peut venir que de la passerelle.
+Continues the cases of `executions.md`, run on 28 and 29 September on g4 under Kata, by
+`apps/lab/scripts/live-cases.ts`. For GitHub, a fine-grained PAT limited to two throwaway repos,
+with write access to both: a refusal can only come from the gateway.
 
-| # | Cas | Attendu | Mesuré |
+| # | Case | Expected | Measured |
 | --- | --- | --- | --- |
-| 23 | Sortir sans credential | `/fetch` du mock : `CONNECT` refusé, 503 ; un refus compté. | 503 du bridge, un refus compté. Avant tout branchement, les sorties tentées par le Pod du pool sont aussi refusées. |
-| 24 | Chaîne seule | Profil `anthropic`, `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 de la passerelle, ni erreur TLS. | 400 d'Anthropic (« anthropic-version: header is required ») : TLS accepté, Bearer posé par la passerelle ; tunnel → 200. |
-| 25 | Harness réel | Profil `anthropic`, claude-code en `haiku` : vraie réponse du modèle. | « Paris. » en 2,3 s, `end_turn` ; journal de la passerelle : deux `POST /v1/messages` en 200 sous le nom de l'exécution. |
-| 26 | Composition | Profils `github:A:write` et `github:B:read`. A : lecture, écriture, push ; B : lecture et fetch, pas d'écriture ni de push ; C, GraphQL : refusés. | A : lecture 200, écriture 201, push 200 ; B : lecture 200, fetch 200 ; B écriture, B push, C, GraphQL : 403 de la passerelle. Vérifié dans GitHub : le fichier créé existe sur A, pas sur B. |
+| 23 | Going out without a credential | The mock's `/fetch`: `CONNECT` refused, 503; one refusal counted. | 503 from the bridge, one refusal counted. Before any credential is attached, the outbound attempts of the pool's Pod are refused too. |
+| 24 | The chain alone | `anthropic` profile, the mock's `/fetch https://api.anthropic.com/v1/models`: a response from Anthropic, neither a 403 from the gateway nor a TLS error. | 400 from Anthropic ("anthropic-version: header is required"): TLS accepted, Bearer set by the gateway; tunnel → 200. |
+| 25 | Real harness | `anthropic` profile, claude-code on `haiku`: a real model response. | "Paris." in 2.3 s, `end_turn`; gateway log: two `POST /v1/messages` at 200 under the execution's name. |
+| 26 | Composition | Profiles `github:A:write` and `github:B:read`. A: read, write, push; B: read and fetch, no write or push; C, GraphQL: refused. | A: read 200, write 201, push 200; B: read 200, fetch 200; B write, B push, C, GraphQL: 403 from the gateway. Checked in GitHub: the created file exists on A, not on B. |
 
-Hors banc, contre la même configuration : JWT absent, expiré ou étranger → 401 ; chemins
-piégés (`..`, `.`, `%2e`, `%2f`) → 403 ; hôte sans route → 404.
+Outside the lab, against the same configuration: missing, expired or foreign JWT → 401; crafted
+paths (`..`, `.`, `%2e`, `%2f`) → 403; host with no route → 404.
 
-**À préciser :** brancher à la création et renouveler le jeton quand l'échéance le dépasse, un
-JWT ne se révoquant pas avant son expiration ; compter les réponses au `CONNECT` par statut, pas
-seulement la dernière ; la confiance TLS de git (libcurl ne lit pas `NODE_EXTRA_CA_CERTS`) et de
-codex, qui ne sont pas en Node ; un accès GraphQL en lecture.
+**To be specified:** attach at creation and renew the token when the deadline goes past it,
+since a JWT cannot be revoked before it expires; count the responses to `CONNECT` by status, not
+just the last one; TLS trust for git (libcurl does not read `NODE_EXTRA_CA_CERTS`) and for codex,
+which are not Node; read access to GraphQL.

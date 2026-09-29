@@ -1,7 +1,7 @@
 # adr
 
 Agora's architecture decisions. An ADR explains why Agora is built this way; how it works is
-described in the subject's own document, one level up.
+described in the subject's own document, in `docs/`.
 
 ## When to write one
 
@@ -22,8 +22,8 @@ document already explains.
 
 ## Rules
 
-- **Language:** English.
-- **Name:** a four-digit number and a short title; the title states the decision.
+- **Name:** a four-digit number and the subject in a word or two (`0001-gateway.md`); the title
+  is that subject.
 - **Status:** *proposed* while under review and nothing depends on it; *accepted* once it binds
   the code.
 - **Living:** an ADR states the decision in force. When the decision changes, rewrite it; git

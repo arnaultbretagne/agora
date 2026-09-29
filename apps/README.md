@@ -1,7 +1,7 @@
 # apps
 
-Ce qui se déploie. Chaque dossier produit sa propre image.
+What gets deployed. Each folder produces its own image.
 
-| Dossier | Image | Rôle |
+| Folder | Image | Role |
 | --- | --- | --- |
-| [lab/](lab/) | `agora-lab` | Le banc : monte les exécutions et sert une page pour en jouer tous les cas. |
+| `lab/` | `agora-lab` | The lab: mounts the executions and serves a page to play every case. |

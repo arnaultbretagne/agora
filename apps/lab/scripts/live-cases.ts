@@ -1,4 +1,4 @@
-// Plays every case of docs/executions.md and docs/credentials.md ("Les cas à valider") against the
+// Plays every case of docs/executions.md and docs/credentials.md ("Cases to validate") against the
 // DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline. Case 25 is a
 // real, billed prompt: on haiku, one short answer. Case 26 writes a dated file to GITHUB_A.
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [cas…] (the receiver is on port 8081).
@@ -28,7 +28,7 @@ async function until<T>(what: string, find: () => Promise<T | undefined | null |
   for (;;) {
     const found = await find()
     if (found !== undefined && found !== null && found !== false) return found
-    if (Date.now() > deadline) throw new Error(`délai dépassé : ${what}`)
+    if (Date.now() > deadline) throw new Error(`timed out: ${what}`)
     await sleep(250)
   }
 }
@@ -37,7 +37,7 @@ async function snapshot(): Promise<{ executions: Json[]; history: Json[]; logs: 
   return (await api('GET', '/api/executions')) as any
 }
 const execution = async (name: string) => (await snapshot()).executions.find((s) => s.name === name)
-const ended = (name: string, timeoutMs: number) => until(`fin de ${name}`, async () => (await snapshot()).history.find((h) => h.name === name), timeoutMs)
+const ended = (name: string, timeoutMs: number) => until(`end of ${name}`, async () => (await snapshot()).history.find((h) => h.name === name), timeoutMs)
 const anchorText = async (id: string) => (await fetch(`${base}/api/anchors/${id}/content`)).text()
 
 class Consumer {
@@ -66,7 +66,7 @@ class Consumer {
     this.socket.send(JSON.stringify(message))
   }
   response(id: unknown, timeoutMs = 30_000): Promise<Json> {
-    return until(`réponse ${JSON.stringify(id)}`, () => this.acp().find((m) => m.id === id && m.method === undefined), timeoutMs)
+    return until(`answer ${JSON.stringify(id)}`, () => this.acp().find((m) => m.id === id && m.method === undefined), timeoutMs)
   }
   async session(): Promise<string> {
     const attached = await until('attached', () => this.messages.find((m) => m.event?.type === 'attached'), 10_000)
@@ -94,9 +94,9 @@ const SHORT = { limits: { leaseSeconds: 60 } }
 async function create(pool: string, extra: Json = {}): Promise<{ name: string; ms: number }> {
   const started = Date.now()
   const created = await api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool, ...extra })
-  if (created.accepted !== true) throw new Error(`création refusée : ${JSON.stringify(created)}`)
+  if (created.accepted !== true) throw new Error(`creation refused: ${JSON.stringify(created)}`)
   const name = created.name as string
-  await until(`${name} prêt`, async () => (await execution(name))?.state === 'prêt', 120_000)
+  await until(`${name} ready`, async () => (await execution(name))?.state === 'ready', 120_000)
   return { name, ms: Date.now() - started }
 }
 
@@ -125,21 +125,21 @@ const mock = pools.find((p) => p.harness === 'mock')!.name as string
 const claude = pools.find((p) => p.harness === 'claude-code')?.name as string | undefined
 for (const s of (await snapshot()).executions) await api('POST', `/api/executions/${s.name as string}/stop`)
 // Stopped sandboxes stay until their deadline (up to a lease later); only the quota matters here.
-await until('place sous le quota', async () => (await snapshot()).executions.length <= 2, 660_000)
-await until('stock chaud plein', async () => ((await api('GET', '/api/pools')).pools as Json[]).find((p) => p.name === mock)?.readyReplicas === 2, 120_000)
+await until('room under the quota', async () => (await snapshot()).executions.length <= 2, 660_000)
+await until('warm pool full', async () => ((await api('GET', '/api/pools')).pools as Json[]).find((p) => p.name === mock)?.readyReplicas === 2, 120_000)
 console.log(`pools : ${pools.map((p) => `${p.name as string} (${p.harness as string})`).join(', ')}`)
 
 let a = ''
 
-await check(1, 'Créer depuis un pool chaud', async () => {
+await check(1, 'Create from a warm pool', async () => {
   const created = await create(mock)
   a = created.name
   const launch = await until('launchType', async () => (await execution(a))?.launchType, 10_000)
-  assert(launch === 'warm', `lancement ${String(launch)}`)
-  return `${a} prêt en ${String(created.ms)} ms, lancement ${String(launch)}`
+  assert(launch === 'warm', `launch ${String(launch)}`)
+  return `${a} ready in ${String(created.ms)} ms, launch ${String(launch)}`
 })
 
-await check(2, 'Créer au-delà du stock chaud, et 3 : deux fois le même identifiant', async () => {
+await check(2, 'Create beyond the warm pool, and 3: the same id twice', async () => {
   // A has taken one of the two warm sandboxes; three claims at once outrun what the pool holds.
   const requestId = crypto.randomUUID()
   const started = Date.now()
@@ -149,86 +149,86 @@ await check(2, 'Créer au-delà du stock chaud, et 3 : deux fois le même identi
     api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: mock, ...SHORT }),
     api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: mock, ...SHORT }),
   ])
-  assert(answers[0]!.name === answers[1]!.name, `deux noms pour un identifiant : ${String(answers[0]!.name)} / ${String(answers[1]!.name)}`)
+  assert(answers[0]!.name === answers[1]!.name, `two names for one id: ${String(answers[0]!.name)} / ${String(answers[1]!.name)}`)
   const names = [answers[0]!.name as string, answers[2]!.name as string, answers[3]!.name as string]
   const timings = await Promise.all(names.map(async (name) => {
-    await until(`${name} prêt`, async () => (await execution(name))?.state === 'prêt', 120_000)
+    await until(`${name} ready`, async () => (await execution(name))?.state === 'ready', 120_000)
     const ms = Date.now() - started
     return `${name} ${String(await until('launchType', async () => (await execution(name))?.launchType, 10_000))} ${String(ms)} ms`
   }))
   const claims = (await snapshot()).executions.filter((s) => s.requestId === requestId).length
-  assert(claims === 1, `${String(claims)} exécutions pour un identifiant`)
+  assert(claims === 1, `${String(claims)} executions for one id`)
   // Beyond the ready stock, a claim waits for a VM to boot: cold, or warm on a pool sandbox that is
-  // still starting (docs/executions.md, "Les cas limites"). Only the immediate ones had it ready.
+  // still starting (docs/executions.md, "Edge cases"). Only the immediate ones had it ready.
   const slow = timings.filter((t) => Number(/ (\d+) ms$/.exec(t)?.[1]) > 1500)
-  assert(slow.length >= 1, `tout était déjà prêt : ${timings.join(', ')}`)
-  return `même identifiant → ${String(answers[0]!.name)} deux fois, un seul claim ; ${timings.join(' ; ')}`
+  assert(slow.length >= 1, `everything was already ready: ${timings.join(', ')}`)
+  return `same id → ${String(answers[0]!.name)} twice, a single claim; ${timings.join('; ')}`
 })
 
-await check(4, 'Pool hors catalogue, quota', async () => {
-  const outside = await api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: 'pool-inexistant' })
+await check(4, 'Pool not in the catalogue, quota', async () => {
+  const outside = await api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: 'no-such-pool' })
   assert(outside.accepted === false && outside.status === 400, JSON.stringify(outside))
   let refusedAnswer: Json | null = null
   for (let i = 0; i < 8 && refusedAnswer === null; i++) {
     const answer = await api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: mock, ...SHORT })
     if (answer.status === 429) refusedAnswer = answer
   }
-  assert(refusedAnswer !== null, 'jamais refusé')
+  assert(refusedAnswer !== null, 'never refused')
   for (const s of (await snapshot()).executions) if (s.name !== a) await api('POST', `/api/executions/${s.name as string}/stop`)
-  return `« ${String(outside.reason)} » ; « ${String(refusedAnswer.reason)} »`
+  return `"${String(outside.reason)}"; "${String(refusedAnswer.reason)}"`
 })
 
 let client!: Consumer
 let sessionA = ''
-await check(5, 'Relais : initialize, session/new, prompt', async () => {
+await check(5, 'Relay: initialize, session/new, prompt', async () => {
   client = await consumer(a)
   client.send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: 1 } })
   const init = await client.response(0)
   sessionA = await client.session()
-  await until('session sur le claim', async () => (await execution(a))?.sessionId === sessionA, 10_000)
+  await until('session on the claim', async () => (await execution(a))?.sessionId === sessionA, 10_000)
   client.prompt(1, sessionA, 'mirabelle')
   const done = await client.response(1)
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
   const seqs = client.messages.filter((m) => typeof m.seq === 'number').map((m) => m.seq as number)
-  assert(seqs.every((s, i) => i === 0 || s > seqs[i - 1]!), 'positions non croissantes')
-  return `initialize local (${String(init.result.agentInfo.name)}), session ${sessionA.slice(0, 8)}…, fin end_turn, positions ${String(seqs[0])}→${String(seqs.at(-1))}`
+  assert(seqs.every((s, i) => i === 0 || s > seqs[i - 1]!), 'positions not increasing')
+  return `initialize local (${String(init.result.agentInfo.name)}), session ${sessionA.slice(0, 8)}…, end end_turn, positions ${String(seqs[0])}→${String(seqs.at(-1))}`
 })
 
-await check(6, 'Second prompt pendant un tour', async () => {
+await check(6, 'Second prompt during a turn', async () => {
   client.prompt(2, sessionA, '/sleep 8')
-  await until('en tour', async () => (await execution(a))?.state === 'en tour', 10_000)
-  client.prompt(3, sessionA, 'trop tôt')
+  await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
+  client.prompt(3, sessionA, 'too early')
   const refused = await client.response(3)
-  assert(String(refused.error?.message).includes('un tour est déjà en cours'), JSON.stringify(refused))
-  return `« ${String(refused.error.message)} »`
+  assert(String(refused.error?.message).includes('a turn is already in progress'), JSON.stringify(refused))
+  return `"${String(refused.error.message)}"`
 })
 
-await check(7, 'Annuler un tour', async () => {
+await check(7, 'Cancel a turn', async () => {
   client.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: sessionA } })
   const done = await client.response(2)
   assert(done.result?.stopReason === 'cancelled', JSON.stringify(done))
-  await until('prêt', async () => (await execution(a))?.state === 'prêt', 10_000)
-  return 'stopReason cancelled, exécution prête'
+  await until('ready', async () => (await execution(a))?.state === 'ready', 10_000)
+  return 'stopReason cancelled, execution ready'
 })
 
-await check(8, 'Permission, consommateur parti puis revenu', async () => {
+await check(8, 'Permission, consumer gone then back', async () => {
   client.prompt(4, sessionA, '/permission')
   const asked = await until('permission', () => client.acp().find((m) => m.method === 'session/request_permission'), 10_000)
   const seen = client.lastSeq()
   client.close()
   await sleep(2000)
   client = await consumer(a, seen - 1)
-  const replayed = await until('permission rejouée', () => client.acp().find((m) => m.method === 'session/request_permission'), 10_000)
-  assert(replayed.id === asked.id, 'autre demande')
+  const replayed = await until('permission replayed', () => client.acp().find((m) => m.method === 'session/request_permission'), 10_000)
+  assert(replayed.id === asked.id, 'another request')
   client.send({ jsonrpc: '2.0', id: replayed.id, result: { outcome: { outcome: 'selected', optionId: 'allow-once' } } })
   const done = await client.response(4)
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
-  return `demande ${String(asked.id)} rejouée après reconnexion, réponse acceptée, tour clos`
+  return `request ${String(asked.id)} replayed after reconnection, answer accepted, turn closed`
 })
 
-await check(9, 'Consommateur déconnecté pendant un tour', async () => {
+await check(9, 'Consumer disconnected during a turn', async () => {
   client.prompt(5, sessionA, '/sleep 5')
-  await until('en tour', async () => (await execution(a))?.state === 'en tour', 10_000)
+  await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const seen = client.lastSeq()
   client.close()
   await sleep(7000)
@@ -236,45 +236,45 @@ await check(9, 'Consommateur déconnecté pendant un tour', async () => {
   const done = await client.response(5)
   const replay = client.messages.find((m) => m.event?.type === 'replay')
   assert(done.result?.stopReason === 'end_turn' && replay?.event.gap === false, JSON.stringify(replay))
-  return `${String(replay.event.count)} trames rejouées depuis ${String(replay.event.from)}, sans trou, fin du tour reçue`
+  return `${String(replay.event.count)} frames replayed from ${String(replay.event.from)}, no gap, end of turn received`
 })
 
-await check(10, 'Connexion au bridge coupée pendant un tour', async () => {
+await check(10, 'Bridge connection cut during a turn', async () => {
   client.prompt(6, sessionA, '/sleep 6')
-  await until('en tour', async () => (await execution(a))?.state === 'en tour', 10_000)
+  await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   await sleep(1000)
   const cut = await api('POST', `/api/lab/executions/${a}/drop-bridge`)
   assert(cut.accepted === true, JSON.stringify(cut))
   const done = await client.response(6)
-  const log = (await snapshot()).logs.find((l) => l.execution === a && String(l.message).startsWith('bridge rejoint'))
+  const log = (await snapshot()).logs.find((l) => l.execution === a && String(l.message).startsWith('bridge rejoined'))
   assert(done.result?.stopReason === 'end_turn' && log !== undefined && !String(log.message).includes('TROU'), JSON.stringify(log))
-  return `« ${String(log.message)} », tour clos`
+  return `"${String(log.message)}", turn closed`
 })
 
-await check(11, 'Back-end redémarré pendant un tour', async () => {
+await check(11, 'Back-end restarted during a turn', async () => {
   client.prompt(7, sessionA, '/sleep 20')
-  await until('en tour', async () => (await execution(a))?.state === 'en tour', 10_000)
+  await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const seen = client.lastSeq()
   await api('POST', '/api/lab/restart')
-  await until('banc tombé', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then(() => false, () => true), 30_000).catch(() => true)
-  await until('banc revenu', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false), 120_000)
+  await until('lab down', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then(() => false, () => true), 30_000).catch(() => true)
+  await until('lab back', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false), 120_000)
   const logs = (await snapshot()).logs
-  const found = await until('tour retrouvé', async () => {
+  const found = await until('turn found again', async () => {
     const s = await execution(a)
-    return s?.state === 'en tour' || s?.lastTurn !== null ? s : undefined
+    return s?.state === 'in turn' || s?.lastTurn !== null ? s : undefined
   }, 30_000)
-  const closed = await until('tour clos', async () => {
+  const closed = await until('turn closed', async () => {
     const s = await execution(a)
-    return s?.state === 'prêt' && String(s.lastTurn?.outcome).includes('end_turn') ? s : undefined
+    return s?.state === 'ready' && String(s.lastTurn?.outcome).includes('end_turn') ? s : undefined
   }, 60_000)
   client = await consumer(a, seen)
   const done = await client.response(7)
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
-  return `au redémarrage : « ${String(logs.at(-1)?.message)} », état ${String(found.state)}, puis ${String(closed.lastTurn.outcome)} ; le consommateur récupère la fin`
+  return `at restart: "${String(logs.at(-1)?.message)}", state ${String(found.state)}, then ${String(closed.lastTurn.outcome)}; the consumer gets the end`
 })
 
 // The sandboxes stopped in case 4 count against the quota until Agent Sandbox destroys them.
-await until('sandboxes du cas 4 détruits', async () => (await snapshot()).executions.length <= 2, 180_000)
+await until('sandboxes of case 4 destroyed', async () => (await snapshot()).executions.length <= 2, 180_000)
 
 // The deadline cases wait on real destructions by Agent Sandbox: they run side by side.
 let anchorToRestore = ''
@@ -283,50 +283,50 @@ parallel.push((async () => {
   let name = ''
   let patchesAtEnd = 0
   let grantedAt = ''
-  await check(12, 'Échéance pendant un tour', async () => {
+  await check(12, 'Deadline during a turn', async () => {
     name = (await create(mock, SHORT)).name
     const c = await consumer(name)
     const s = await c.session()
     c.prompt(1, s, '/sleep 45')
-    await until('en tour', async () => (await execution(name))?.state === 'en tour', 10_000)
+    await until('in turn', async () => (await execution(name))?.state === 'in turn', 10_000)
     const admitted = (await execution(name))!
-    const later = await until('ré-armé', async () => {
+    const later = await until('re-armed', async () => {
       const x = await execution(name)
       return x !== undefined && x.shutdownTime !== admitted.shutdownTime ? x : undefined
     }, 40_000)
     const cap = Date.parse(admitted.turn.startedAt) + admitted.limits.turnCapSeconds * 1000
-    assert(Date.parse(later.shutdownTime) <= cap, 'au-delà de la limite du tour')
+    assert(Date.parse(later.shutdownTime) <= cap, 'beyond the turn limit')
     await c.response(1, 60_000)
-    const done = await until('fin du tour vue', async () => {
+    const done = await until('end of turn seen', async () => {
       const x = await execution(name)
       return x?.turn === null && x.renewing === false ? x : undefined
     }, 10_000)
     patchesAtEnd = done.renewals
     grantedAt = done.shutdownTime
-    return `échéance ${String(admitted.shutdownTime)} → ${String(later.shutdownTime)} pendant le tour`
+    return `deadline ${String(admitted.shutdownTime)} → ${String(later.shutdownTime)} during the turn`
   })
-  await check(13, 'Fin de tour', async () => {
+  await check(13, 'End of turn', async () => {
     await sleep(25_000)
     const x = await execution(name)
-    assert(x !== undefined && x.shutdownTime === grantedAt && x.renewals === patchesAtEnd, `ré-armé hors tour : ${JSON.stringify(x)}`)
-    return `échéance ${grantedAt} fixée à la fin du tour, inchangée 25 s plus tard`
+    assert(x !== undefined && x.shutdownTime === grantedAt && x.renewals === patchesAtEnd, `re-armed outside a turn: ${JSON.stringify(x)}`)
+    return `deadline ${grantedAt} set at the end of the turn, unchanged 25 s later`
   })
-  await check(14, 'Échéance atteinte entre deux tours', async () => {
+  await check(14, 'Deadline reached between two turns', async () => {
     const end = await ended(name, 90_000)
-    assert(end.reason === 'échéance après le dernier tour' && end.anchor !== null, JSON.stringify(end))
-    return `détruit par Agent Sandbox ; anchor ${String(end.anchor.id)} poussé par le Pod (${String(end.anchor.files.length)} fichier(s), ${String(end.anchor.byteLength)} o)`
+    assert(end.reason === 'deadline after the last turn' && end.anchor !== null, JSON.stringify(end))
+    return `destroyed by Agent Sandbox; anchor ${String(end.anchor.id)} pushed by the Pod (${String(end.anchor.files.length)} file(s), ${String(end.anchor.byteLength)} B)`
   })
 })())
-parallel.push(check(15, 'Tour trop long', async () => {
+parallel.push(check(15, 'Turn too long', async () => {
   const { name } = await create(mock, { limits: { turnCapSeconds: 30 } })
   const c = await consumer(name)
   const s = await c.session()
   c.prompt(1, s, '/sleep 120')
   const end = await ended(name, 120_000)
-  assert(String(end.reason).startsWith('tour en cours') && end.anchor !== null, JSON.stringify(end))
-  return `détruit à début + 30 s ; anchor ${String(end.anchor.id)} (${String(end.anchor.byteLength)} o)`
+  assert(String(end.reason).startsWith('turn in progress') && end.anchor !== null, JSON.stringify(end))
+  return `destroyed at start + 30 s; anchor ${String(end.anchor.id)} (${String(end.anchor.byteLength)} B)`
 }))
-parallel.push(check(16, 'Arrêter', async () => {
+parallel.push(check(16, 'Stop', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -336,57 +336,57 @@ parallel.push(check(16, 'Arrêter', async () => {
   assert(stopped.accepted === true, JSON.stringify(stopped))
   const state = (await execution(name))?.state
   const end = await ended(name, 120_000)
-  assert(end.reason === 'arrêt demandé' && end.anchor !== null, JSON.stringify(end))
-  assert((await anchorText(end.anchor.id as string)).includes('mirabelle'), 'anchor sans mirabelle')
+  assert(end.reason === 'stop requested' && end.anchor !== null, JSON.stringify(end))
+  assert((await anchorText(end.anchor.id as string)).includes('mirabelle'), 'anchor without mirabelle')
   anchorToRestore = end.anchor.id as string
-  return `état ${String(state)}, détruit à l'échéance ${String(stopped.shutdownTime)} ; anchor ${anchorToRestore}`
+  return `state ${String(state)}, destroyed at the deadline ${String(stopped.shutdownTime)}; anchor ${anchorToRestore}`
 }))
-parallel.push(check(17, 'Arrêter pendant un tour', async () => {
+parallel.push(check(17, 'Stop during a turn', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
-  c.prompt(1, s, 'avant')
+  c.prompt(1, s, 'before')
   await c.response(1)
   c.prompt(2, s, '/sleep 120')
-  await until('en tour', async () => (await execution(name))?.state === 'en tour', 10_000)
+  await until('in turn', async () => (await execution(name))?.state === 'in turn', 10_000)
   await api('POST', `/api/executions/${name}/stop`)
   const cancelled = await c.response(2)
   const end = await ended(name, 120_000)
   assert(cancelled.result?.stopReason === 'cancelled' && end.anchor !== null, JSON.stringify({ cancelled, end }))
-  return `tour annulé (cancelled), détruit à l'échéance, anchor ${String(end.anchor.id)}`
+  return `turn cancelled, destroyed at the deadline, anchor ${String(end.anchor.id)}`
 }))
 await Promise.all(parallel)
 await api('POST', `/api/executions/${a}/stop`)
 
-await check(18, 'Restaurer un anchor', async () => {
+await check(18, 'Restore an anchor', async () => {
   const { name, ms } = await create(mock, { anchorId: anchorToRestore, ...SHORT })
-  const restored = await until('restauré', async () => {
+  const restored = await until('restored', async () => {
     const s = await execution(name)
     return s?.restored === true ? s : undefined
   }, 60_000)
   const c = await consumer(name)
   c.prompt(1, restored.sessionId, '/recall')
   await c.response(1)
-  assert(JSON.stringify(c.acp()).includes('mirabelle'), 'amnésique')
+  assert(JSON.stringify(c.acp()).includes('mirabelle'), 'amnesiac')
   await api('POST', `/api/executions/${name}/stop`)
-  return `${name} prêt en ${String(ms)} ms, session ${String(restored.sessionId).slice(0, 8)}… reprise, l'agent se souvient de « mirabelle »`
+  return `${name} ready in ${String(ms)} ms, session ${String(restored.sessionId).slice(0, 8)}… resumed, the agent remembers "mirabelle"`
 })
 
-await check(19, 'Adaptateur mort', async () => {
+await check(19, 'Adapter died', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
-  c.prompt(1, s, 'avant la chute')
+  c.prompt(1, s, 'before the fall')
   await c.response(1)
   c.prompt(2, s, '/crash')
-  await until('perdu', async () => (await execution(name))?.state === 'perdu', 20_000)
+  await until('lost', async () => (await execution(name))?.state === 'lost', 20_000)
   const end = await ended(name, 120_000)
-  assert(String(end.reason).startsWith('perdu') && end.anchor !== null, JSON.stringify(end))
-  assert((await anchorText(end.anchor.id as string)).includes('avant la chute'), 'anchor vide')
-  return `perdu, plus de renouvellement ; détruit à l'échéance, anchor ${String(end.anchor.id)} poussé malgré l'adaptateur mort`
+  assert(String(end.reason).startsWith('lost') && end.anchor !== null, JSON.stringify(end))
+  assert((await anchorText(end.anchor.id as string)).includes('before the fall'), 'empty anchor')
+  return `lost, no more renewal; destroyed at the deadline, anchor ${String(end.anchor.id)} pushed despite the dead adapter`
 })
 
-await check(20, 'Jetons refusés', async () => {
+await check(20, 'Tokens refused', async () => {
   const { name } = await create(mock, SHORT)
   const probe = await api('POST', `/api/lab/executions/${name}/probe-auth`)
   const rows = probe.results as Json[]
@@ -396,40 +396,40 @@ await check(20, 'Jetons refusés', async () => {
   return rows.map((r) => `${String(r.case)} ${String(r.info)}/${String(r.acp)}`).join(' ; ')
 })
 
-await check(21, 'Poussée d’anchor sans jeton projeté valide', async () => {
+await check(21, 'Anchor push without a valid projected token', async () => {
   const body = JSON.stringify({ format: 'agora-anchor/1', harness: 'mock', files: [], stable: true })
   const statuses: number[] = []
-  for (const headers of [{}, { authorization: 'Bearer pas-un-jeton' }] as Record<string, string>[]) {
+  for (const headers of [{}, { authorization: 'Bearer not-a-token' }] as Record<string, string>[]) {
     statuses.push((await fetch(`${receiver}/anchors`, { method: 'POST', body, headers })).status)
   }
   assert(statuses.every((status) => status === 401), JSON.stringify(statuses))
-  return `sans jeton ${String(statuses[0])}, jeton faux ${String(statuses[1])}`
+  return `no token ${String(statuses[0])}, fake token ${String(statuses[1])}`
 })
 
-await check(22, 'Harness réel (claude-code)', async () => {
-  if (claude === undefined) throw new Error('pas de pool claude-code')
+await check(22, 'Real harness (claude-code)', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
   const { name, ms } = await create(claude, SHORT)
   const c = await consumer(name)
   c.send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: 1 } })
   const init = await c.response(0)
   const s = await c.session()
-  c.prompt(1, s, 'Réponds juste : ok')
+  c.prompt(1, s, 'Just answer: ok')
   const answer = await c.response(1, 120_000).catch(() => null)
   if (answer === null) c.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: s } })
   await api('POST', `/api/executions/${name}/stop`)
   const end = await ended(name, 150_000)
-  let restoredNote = 'pas d’anchor à restaurer'
+  let restoredNote = 'no anchor to restore'
   if (end.anchor !== null) {
     const back = await create(claude, { anchorId: end.anchor.id, ...SHORT })
-    const r = await until('restauré', async () => {
+    const r = await until('restored', async () => {
       const x = await execution(back.name)
-      return x?.restored === true || x?.state === 'erreur' ? x : undefined
+      return x?.restored === true || x?.state === 'error' ? x : undefined
     }, 60_000)
-    restoredNote = r.restored === true ? `restauré dans ${back.name} par session/resume (session ${String(r.sessionId).slice(0, 8)}…)` : `restauration : ${String(r.reason)}`
+    restoredNote = r.restored === true ? `restored into ${back.name} by session/resume (session ${String(r.sessionId).slice(0, 8)}…)` : `restore: ${String(r.reason)}`
     await api('POST', `/api/executions/${back.name}/stop`)
   }
-  const outcome = answer === null ? 'pas de réponse en 120 s, annulé' : answer.error !== undefined ? `erreur « ${String(answer.error.message).slice(0, 100)} »` : `fin ${String(answer.result?.stopReason)}`
-  return `prêt en ${String(ms)} ms, ${String(init.result.agentInfo?.name)}@${String(init.result.agentInfo?.version)}, prompt : ${outcome} ; anchor ${end.anchor === null ? `absent (${String(end.anchorError)})` : `${String(end.anchor.byteLength)} o poussé`} ; ${restoredNote}`
+  const outcome = answer === null ? 'no answer in 120 s, cancelled' : answer.error !== undefined ? `error "${String(answer.error.message).slice(0, 100)}"` : `end ${String(answer.result?.stopReason)}`
+  return `ready in ${String(ms)} ms, ${String(init.result.agentInfo?.name)}@${String(init.result.agentInfo?.version)}, prompt: ${outcome}; anchor ${end.anchor === null ? `missing (${String(end.anchorError)})` : `${String(end.anchor.byteLength)} B pushed`}; ${restoredNote}`
 })
 
 // ---------------------------------------------------------------- credentials (docs/credentials.md)
@@ -443,17 +443,17 @@ function said(c: Consumer): string {
     .join('')
 }
 
-await check(23, 'Sortir sans credential', async () => {
+await check(23, 'Going out without a credential', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
   c.prompt(1, s, '/fetch https://api.anthropic.com/v1/models')
   await c.response(1)
   const reply = said(c)
-  const refused = await until('refus compté', async () => (await execution(name))?.outbound?.refused, 10_000)
+  const refused = await until('refusal counted', async () => (await execution(name))?.outbound?.refused, 10_000)
   await api('POST', `/api/executions/${name}/stop`)
-  assert(reply.includes('refusé par le proxy : 503'), reply)
-  return `« ${reply.slice(0, 90)} » ; ${String(refused)} refus`
+  assert(reply.includes('refused by the proxy: 503'), reply)
+  return `"${reply.slice(0, 90)}"; ${String(refused)} refusal(s)`
 })
 
 // The repos for case 26: the operator's throwaway repos with a real PAT (GITHUB_A, GITHUB_B), or
@@ -463,7 +463,7 @@ const REPO_A = process.env.GITHUB_A ?? 'octocat/Hello-World'
 const REPO_B = process.env.GITHUB_B ?? 'octocat/Spoon-Knife'
 const REPO_C = process.env.GITHUB_C ?? 'github/linguist'
 
-await check(24, 'Passerelle, chaîne seule', async () => {
+await check(24, 'Gateway, the chain alone', async () => {
   const { name } = await create(mock, SHORT)
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 300, profiles: ['anthropic'] })
   assert(attached.accepted === true, JSON.stringify(attached))
@@ -472,10 +472,10 @@ await check(24, 'Passerelle, chaîne seule', async () => {
   c.prompt(1, s, '/fetch https://api.anthropic.com/v1/models')
   await c.response(1, 60_000)
   const reply = said(c)
-  const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
+  const outbound = await until('tunnel counted', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
   await api('POST', `/api/executions/${name}/stop`)
   assert(reply.startsWith('HTTP/1.1 ') && !reply.includes('authorization failed'), reply)
-  return `JWT jusqu'à ${String(attached.expiresAt)} ; « ${reply.slice(0, 140)} » ; tunnel → ${String(outbound.lastStatus)}`
+  return `JWT until ${String(attached.expiresAt)}; "${reply.slice(0, 140)}"; tunnel → ${String(outbound.lastStatus)}`
 })
 
 async function haiku(name: string): Promise<string> {
@@ -483,30 +483,30 @@ async function haiku(name: string): Promise<string> {
   const s = await c.session()
   c.send({ jsonrpc: '2.0', id: 'model', method: 'session/set_config_option', params: { sessionId: s, configId: 'model', value: 'haiku' } })
   const model = await c.response('model', 30_000)
-  assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
+  assert(model.error === undefined, `model refused: ${JSON.stringify(model.error)}`)
   const current = (model.result?.configOptions as Json[] | undefined)?.find((o) => o.id === 'model')?.currentValue
   const started = Date.now()
   // A neutral question: haiku declined "answer only with the word …" as an injected instruction.
-  c.prompt(1, s, 'Quelle est la capitale de la France ? Réponds en un mot.')
+  c.prompt(1, s, 'What is the capital of France? Answer in one word.')
   const answer = await c.response(1, 120_000)
   const reply = said(c)
   assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
-  assert(/paris/i.test(reply), `réponse : ${reply}`)
-  return `modèle ${String(current)}, « ${reply.trim().slice(0, 40)} » en ${((Date.now() - started) / 1000).toFixed(1)} s`
+  assert(/paris/i.test(reply), `answer: ${reply}`)
+  return `model ${String(current)}, "${reply.trim().slice(0, 40)}" in ${((Date.now() - started) / 1000).toFixed(1)} s`
 }
 
-await check(25, 'Passerelle, harness réel (haiku)', async () => {
-  if (claude === undefined) throw new Error('pas de pool claude-code')
+await check(25, 'Gateway, real harness (haiku)', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
   const { name } = await create(claude, SHORT)
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles: ['anthropic'] })
   assert(attached.accepted === true, JSON.stringify(attached))
   const detail = await haiku(name)
-  const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
+  const outbound = await until('tunnel counted', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
   await api('POST', `/api/executions/${name}/stop`)
-  return `JWT jusqu'à ${String(attached.expiresAt)} ; ${detail} ; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
+  return `JWT until ${String(attached.expiresAt)}; ${detail}; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
 })
 
-await check(26, 'Passerelle, composition (A écriture, B lecture, C rien)', async () => {
+await check(26, 'Gateway, composition (A write, B read, C nothing)', async () => {
   const { name } = await create(mock, SHORT)
   const profiles = [`github:${REPO_A}:write`, `github:${REPO_B}:read`]
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles })
@@ -517,14 +517,14 @@ await check(26, 'Passerelle, composition (A écriture, B lecture, C rien)', asyn
   const file = `agora-spike-${String(Date.now())}.txt`
   const createFile = JSON.stringify({ message: `agora: case 26 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
   const probes: [string, string, boolean][] = [
-    [`GET https://api.github.com/repos/${REPO_A}`, 'A lecture', true],
-    [`PUT https://api.github.com/repos/${REPO_A}/contents/${file} ${createFile}`, 'A écriture', true],
+    [`GET https://api.github.com/repos/${REPO_A}`, 'A read', true],
+    [`PUT https://api.github.com/repos/${REPO_A}/contents/${file} ${createFile}`, 'A write', true],
     [`GET https://github.com/${REPO_A}.git/info/refs?service=git-receive-pack`, 'A git push', true],
-    [`GET https://api.github.com/repos/${REPO_B}/contents/README.md?ref=main`, 'B lecture', true],
+    [`GET https://api.github.com/repos/${REPO_B}/contents/README.md?ref=main`, 'B read', true],
     [`POST https://github.com/${REPO_B}.git/git-upload-pack`, 'B git fetch', true],
-    [`PUT https://api.github.com/repos/${REPO_B}/contents/${file} ${createFile}`, 'B écriture', false],
+    [`PUT https://api.github.com/repos/${REPO_B}/contents/${file} ${createFile}`, 'B write', false],
     [`GET https://github.com/${REPO_B}.git/info/refs?service=git-receive-pack`, 'B git push', false],
-    [`GET https://api.github.com/repos/${REPO_C}`, 'C lecture', false],
+    [`GET https://api.github.com/repos/${REPO_C}`, 'C read', false],
     [`POST https://api.github.com/graphql {"query":"{viewer{login}}"}`, 'GraphQL', false],
   ]
   const lines: string[] = []
@@ -537,13 +537,13 @@ await check(26, 'Passerelle, composition (A écriture, B lecture, C rien)', asyn
     const refusedByGateway = /^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed')
     const passed = reply.startsWith('HTTP/1.1 ') && !refusedByGateway
     const status = /^HTTP\/1\.1 (\d{3})/.exec(reply)?.[1] ?? '?'
-    lines.push(`${label} ${passed ? `→ GitHub ${status}` : refusedByGateway ? '→ 403 passerelle' : `→ ? ${reply.slice(0, 60)}`}`)
-    assert(passed === expected, `${label} : ${reply.slice(0, 160)}`)
+    lines.push(`${label} ${passed ? `→ GitHub ${status}` : refusedByGateway ? '→ 403 gateway' : `→ ? ${reply.slice(0, 60)}`}`)
+    assert(passed === expected, `${label}: ${reply.slice(0, 160)}`)
   }
   await api('POST', `/api/executions/${name}/stop`)
-  return `${lines.join(' ; ')} ; fichier ${file}`
+  return `${lines.join('; ')}; file ${file}`
 })
 
 client?.close()
-console.log(`\n${String(results.filter((r) => r.ok).length)}/${String(results.length)} cas validés`)
+console.log(`\n${String(results.filter((r) => r.ok).length)}/${String(results.length)} cases validated`)
 process.exit(results.every((r) => r.ok) ? 0 : 1)

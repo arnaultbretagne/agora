@@ -1,14 +1,14 @@
 # executions
 
-Ce que fait Agora pour une exécution ([docs/executions.md](../../docs/executions.md), « Côté
-Agora ») : demander le sandbox à Agent Sandbox (un `SandboxClaim`), joindre son bridge par le
-Service, relayer ACP en suivant les tours, ré-armer l'échéance pendant un tour, recevoir
-l'anchor que le Pod pousse, et reprendre une exécution depuis un anchor. Il ne crée ni ne
-supprime aucun sandbox.
+What Agora does for an execution (`docs/executions.md`, "On Agora's side"): request the
+sandbox from Agent Sandbox (a `SandboxClaim`), reach its bridge through the Service, relay ACP
+while following turns, re-arm the deadline during a turn, receive the anchor the Pod pushes,
+resume an execution from an anchor, and hand the bridge its credential. It neither creates nor
+deletes any sandbox.
 
-| Dossier | Contenu |
+| Folder | Content |
 | --- | --- |
-| [src/](src/) | Le gestionnaire, le client Kubernetes, le stockage des anchors, l'API. |
-| [test/](test/) | Le contrat, contre de vrais bridges et une API Kubernetes simulée. |
+| `src/` | The manager, the Kubernetes client, the anchor store, the API. |
+| `test/` | The contract, against real bridges and a simulated Kubernetes API. |
 
-Monté aujourd'hui par [apps/lab](../../apps/lab/), demain par le serveur d'Agora.
+Mounted by `apps/lab`, and by Agora's server once it exists.

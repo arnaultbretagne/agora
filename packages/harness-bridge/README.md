@@ -1,14 +1,14 @@
 # harness-bridge
 
-Le côté image du contrat ([docs/executions.md](../../docs/executions.md), « L'image ») : le bridge
-lance l'adaptateur ACP, l'initialise une fois, le relaie par un WebSocket numéroté et, au
-SIGTERM, pousse les fichiers natifs du harness vers Agora. L'adaptateur ne sort que par le proxy
-sortant du bridge, qui ne s'ouvre qu'une fois un credential branché par Agora
-([docs/credentials.md](../../docs/credentials.md)).
+The image side of the contract (`docs/executions.md`, "The image"): the bridge starts the ACP
+adapter, initializes it once, relays it over a numbered WebSocket and, at SIGTERM, pushes the
+harness's native files to Agora. The adapter only goes out through the bridge's outbound proxy,
+which opens once Agora attaches a credential (`docs/credentials.md`).
 
-| Dossier | Contenu |
+| Folder | Content |
 | --- | --- |
-| [src/](src/) | Le bridge, son point d'entrée, le jeton, l'anchor, le proxy sortant. |
-| [test/](test/) | Le contrat de l'image, contre l'agent mock ; le proxy sortant contre un faux proxy de credentials. |
+| `src/` | The bridge, its entry point, the token, the anchor, the outbound proxy. |
+| `test/` | The image contract, against the mock agent; the outbound proxy, against a fake credential proxy. |
 
-Exports : `@agora/harness-bridge` (tout), `@agora/harness-bridge/token`, `@agora/harness-bridge/anchor`.
+Exports: `@agora/harness-bridge` (everything), `@agora/harness-bridge/token`,
+`@agora/harness-bridge/anchor`, `@agora/harness-bridge/outbound`.

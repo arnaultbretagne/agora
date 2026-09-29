@@ -1,4 +1,4 @@
-// Anchors (docs/executions.md, "La fin du Pod et l'anchor"): the harness's native files, saved en bloc and nothing
+// Anchors (docs/executions.md, "The end of the Pod and the anchor"): the harness's native files, saved en bloc and nothing
 // else. What is kept from the S9 custody driver of the previous implementation (arnaultbretagne/agora
 // main, harnesses/claude-code/src/driver.ts): the native location and claude-code's slug rule, the
 // stability read before a capture, the size limit, and restoration written beside the target, read
@@ -25,7 +25,7 @@ export function workspaceSlug(workspace: string): string {
 export function nativeDir(harness: string, home: string, workspace: string): string {
   if (harness === 'claude-code') return join(home, '.claude', 'projects', workspaceSlug(workspace))
   if (harness === 'mock') return join(home, '.mock-agent', 'sessions', workspaceSlug(workspace))
-  throw new Error(`harness sans dossier natif connu : ${harness}`)
+  throw new Error(`harness without a known native directory: ${harness}`)
 }
 
 export interface AnchorFile {
@@ -81,7 +81,7 @@ async function snapshot(root: string): Promise<{ files: Map<string, Buffer>; dig
   for (const path of await listFiles(root)) {
     const bytes = await readFile(join(root, path))
     size += bytes.byteLength
-    if (size > MAX_ANCHOR_BYTES) throw new AnchorRefused(413, `les fichiers natifs dépassent ${String(MAX_ANCHOR_BYTES)} octets`)
+    if (size > MAX_ANCHOR_BYTES) throw new AnchorRefused(413, `the native files exceed ${String(MAX_ANCHOR_BYTES)} bytes`)
     files.set(path, bytes)
     hash.update(path).update('\0').update(bytes)
   }
@@ -114,7 +114,7 @@ export async function readBundle(harness: string, root: string, options: { windo
 function inside(root: string, path: string): string {
   const clean = normalize(path)
   if (isAbsolute(clean) || clean === '..' || clean.startsWith(`..${sep}`) || clean.includes(`${sep}..${sep}`)) {
-    throw new AnchorRefused(409, `chemin refusé : ${JSON.stringify(path)}`)
+    throw new AnchorRefused(409, `path refused: ${JSON.stringify(path)}`)
   }
   return join(root, clean)
 }
@@ -124,9 +124,9 @@ export function parseBundle(bytes: Uint8Array): Bundle {
   try {
     bundle = JSON.parse(Buffer.from(bytes).toString('utf8')) as Bundle
   } catch {
-    throw new AnchorRefused(400, "l'anchor n'est pas du JSON")
+    throw new AnchorRefused(400, 'the anchor is not JSON')
   }
-  if (bundle.format !== ANCHOR_FORMAT || !Array.isArray(bundle.files)) throw new AnchorRefused(400, `format inconnu : ${String(bundle.format)}`)
+  if (bundle.format !== ANCHOR_FORMAT || !Array.isArray(bundle.files)) throw new AnchorRefused(400, `unknown format: ${String(bundle.format)}`)
   return bundle
 }
 
@@ -136,12 +136,12 @@ export async function writeBundle(root: string, bundle: Bundle): Promise<{ path:
   for (const file of bundle.files) {
     const target = inside(root, file.path)
     const bytes = Buffer.from(file.content, 'base64')
-    if (checksumOf(bytes) !== file.checksum) throw new AnchorRefused(409, `checksum faux pour ${file.path}`)
+    if (checksumOf(bytes) !== file.checksum) throw new AnchorRefused(409, `wrong checksum for ${file.path}`)
     const staging = `${target}.partial`
     await mkdir(dirname(target), { recursive: true })
     try {
       await writeFile(staging, bytes)
-      if (checksumOf(new Uint8Array(await readFile(staging))) !== file.checksum) throw new AnchorRefused(409, `relecture fausse pour ${file.path}`)
+      if (checksumOf(new Uint8Array(await readFile(staging))) !== file.checksum) throw new AnchorRefused(409, `read-back mismatch for ${file.path}`)
       await rename(staging, target)
     } catch (error) {
       await rm(staging, { force: true })
@@ -152,7 +152,7 @@ export async function writeBundle(root: string, bundle: Bundle): Promise<{ path:
   return placed
 }
 
-/** The Pod's push (docs/executions.md, "La fin du Pod et l'anchor"): a fresh projected token each attempt. */
+/** The Pod's push (docs/executions.md, "The end of the Pod and the anchor"): a fresh projected token each attempt. */
 export async function pushBundle(url: string, tokenFile: string, bundle: Bundle, options: { attempts?: number; log?: (message: string) => void } = {}): Promise<boolean> {
   const log = options.log ?? (() => {})
   const body = JSON.stringify(bundle)
@@ -167,13 +167,13 @@ export async function pushBundle(url: string, tokenFile: string, bundle: Bundle,
       })
       const answer = await response.text()
       if (response.ok) {
-        log(`anchor poussé : ${String(bundle.files.length)} fichier(s), ${String(body.length)} octets — ${answer}`)
+        log(`anchor pushed: ${String(bundle.files.length)} file(s), ${String(body.length)} bytes — ${answer}`)
         return true
       }
-      log(`poussée refusée (essai ${String(attempt)}) : ${String(response.status)} ${answer}`)
+      log(`push refused (attempt ${String(attempt)}): ${String(response.status)} ${answer}`)
       if (response.status < 500) return false
     } catch (error) {
-      log(`poussée impossible (essai ${String(attempt)}) : ${error instanceof Error ? error.message : String(error)}`)
+      log(`push failed (attempt ${String(attempt)}): ${error instanceof Error ? error.message : String(error)}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }

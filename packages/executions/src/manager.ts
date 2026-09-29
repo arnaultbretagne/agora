@@ -120,7 +120,7 @@ interface SandboxRecord {
   launchType: string | null
   podDetail: string | null
   bridge: WebSocket | null
-  bridgeState: 'aucune' | 'connexion' | 'connectée'
+  bridgeState: 'none' | 'connecting' | 'connected'
   reconnectTimer: NodeJS.Timeout | null
   hello: Hello | null
   lastSeq: number
@@ -209,7 +209,7 @@ export class ExecutionManager {
   async start(): Promise<void> {
     const { items, resourceVersion } = await this.options.kube.listClaims(SELECTOR)
     for (const claim of items) this.upsert(claim)
-    this.log(null, `démarrage : ${String(items.length)} claim(s) retrouvé(s)`)
+    this.log(null, `startup: ${String(items.length)} claim(s) found`)
     void this.watchLoop(resourceVersion)
     this.tickTimer = setInterval(() => void this.tick(), this.options.tickMs ?? 5000)
   }
@@ -221,7 +221,7 @@ export class ExecutionManager {
     for (const record of this.records.values()) {
       if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
       record.bridge?.terminate()
-      record.consumer?.close(1001, 'arrêt d’Agora')
+      record.consumer?.close(1001, 'Agora stopping')
     }
   }
 
@@ -234,7 +234,7 @@ export class ExecutionManager {
       } catch (error) {
         if (this.stopped) return
         if (error instanceof WatchGone) {
-          this.log(null, 'watch expiré : nouveau LIST')
+          this.log(null, 'watch expired: new LIST')
           try {
             const list = await this.options.kube.listClaims(SELECTOR)
             version = list.resourceVersion
@@ -287,11 +287,11 @@ export class ExecutionManager {
     record.shutdownTime = claim.spec?.lifecycle?.shutdownTime ?? null
     if (claim.metadata.deletionTimestamp !== undefined && !record.ending) {
       record.ending = true
-      this.log(record.name, `l'infrastructure supprime le claim (${this.endReason(record)}) : anchor attendu du Pod`)
+      this.log(record.name, `the infrastructure is deleting the claim (${this.endReason(record)}): anchor expected from the Pod`)
     }
     if (!record.ready && !record.ending && TERMINAL_CLAIM_REASONS.has(record.readyReason) && record.error === null) {
       record.error = `${record.readyReason} : ${record.readyMessage}`
-      this.log(record.name, `le claim n'aboutira pas : ${record.error}`)
+      this.log(record.name, `the claim will not succeed: ${record.error}`)
     }
     if (record.launchType === null && record.podName !== null) void this.readLaunchType(record)
     this.ensureBridge(record)
@@ -351,7 +351,7 @@ export class ExecutionManager {
       launchType: null,
       podDetail: null,
       bridge: null,
-      bridgeState: 'aucune',
+      bridgeState: 'none',
       reconnectTimer: null,
       hello: null,
       lastSeq: 0,
@@ -398,7 +398,7 @@ export class ExecutionManager {
     const url = `ws://${this.address(record)}/acp${after === null ? '' : `?after=${String(after)}`}`
     const socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.token(record)}` } })
     record.bridge = socket
-    record.bridgeState = 'connexion'
+    record.bridgeState = 'connecting'
     socket.on('message', (data) => this.onBridgeMessage(record, socket, data.toString()))
     socket.on('close', (code, reason) => this.onBridgeClose(record, socket, code, reason.toString()))
     socket.on('error', (error) => this.log(record.name, `bridge : ${error.message}`))
@@ -408,10 +408,10 @@ export class ExecutionManager {
   private onBridgeClose(record: SandboxRecord, socket: WebSocket, code: number, reason: string): void {
     if (record.bridge !== socket) return
     record.bridge = null
-    record.bridgeState = 'aucune'
+    record.bridgeState = 'none'
     if (this.records.get(record.name) !== record || this.stopped) return
-    this.log(record.name, `connexion au bridge fermée (${String(code)}${reason === '' ? '' : ` ${reason}`})`)
-    if (code === 1011) this.lose(record, "l'adaptateur est mort")
+    this.log(record.name, `bridge connection closed (${String(code)}${reason === '' ? '' : ` ${reason}`})`)
+    if (code === 1011) this.lose(record, 'the adapter died')
     else if (!record.ending && record.lost === null) {
       record.reconnectTimer = setTimeout(() => {
         record.reconnectTimer = null
@@ -421,12 +421,12 @@ export class ExecutionManager {
     this.emitRecord(record)
   }
 
-  /** No live context any more: the deadline is no longer re-armed (docs/executions.md, "L'échéance"). */
+  /** No live context any more: the deadline is no longer re-armed (docs/executions.md, "The deadline"). */
   private lose(record: SandboxRecord, reason: string): void {
     if (record.lost !== null) return
     record.lost = reason
-    if (record.turn !== null) record.uncertain = 'la fin du tour est partie avec le processus'
-    this.log(record.name, `perdu : ${reason} ; plus de renouvellement, fin à l'échéance ${String(record.shutdownTime)}`)
+    if (record.turn !== null) record.uncertain = 'the end of the turn left with the process'
+    this.log(record.name, `lost: ${reason}; no more renewal, ends at the deadline ${String(record.shutdownTime)}`)
     this.emitRecord(record)
   }
 
@@ -443,7 +443,7 @@ export class ExecutionManager {
     else if (message.terminating !== undefined) {
       // The Pod is being destroyed: no reconnection, its anchor is on the way.
       record.ending = true
-      this.log(record.name, 'le Pod a reçu SIGTERM : il pousse son anchor')
+      this.log(record.name, 'the Pod received SIGTERM: it is pushing its anchor')
       this.toConsumer(record, { event: { type: 'terminating' } })
     }
   }
@@ -451,22 +451,22 @@ export class ExecutionManager {
   private onHello(record: SandboxRecord, hello: Hello): void {
     record.hello = hello
     record.outbound = hello.outbound ?? null
-    record.bridgeState = 'connectée'
+    record.bridgeState = 'connected'
     if (record.instance === null) {
       record.instance = hello.instance
       record.idleSince ??= new Date().toISOString()
       void this.annotate(record, { [ANNOTATION.instance]: hello.instance, [ANNOTATION.idleSince]: record.idleSince }).catch(() => {})
-      this.log(record.name, `bridge joint : instance ${hello.instance}, ${String(hello.initialize?.agentInfo?.name)}@${String(hello.initialize?.agentInfo?.version)}`)
+      this.log(record.name, `bridge joined: instance ${hello.instance}, ${String(hello.initialize?.agentInfo?.name)}@${String(hello.initialize?.agentInfo?.version)}`)
     } else if (record.instance !== hello.instance) {
-      record.bridge?.close(1000, 'processus remplacé')
-      this.lose(record, `processus remplacé : instance ${hello.instance}, attendue ${record.instance}`)
+      record.bridge?.close(1000, 'process replaced')
+      this.lose(record, `process replaced: instance ${hello.instance}, expected ${record.instance}`)
       return
     } else {
-      this.log(record.name, `bridge rejoint${hello.replayFrom === null ? '' : `, rejeu depuis ${String(hello.replayFrom)}`}${hello.gap ? ', AVEC UN TROU' : ''}`)
+      this.log(record.name, `bridge rejoined${hello.replayFrom === null ? '' : `, replay from ${String(hello.replayFrom)}`}${hello.gap ? ', WITH A GAP' : ''}`)
     }
-    if (hello.gap && record.turn !== null) record.uncertain = 'des trames du tour ont été perdues (trou au rejeu)'
+    if (hello.gap && record.turn !== null) record.uncertain = 'frames of the turn were lost (gap in the replay)'
     if (!hello.adapter.alive) {
-      this.lose(record, `l'adaptateur est mort (code ${String(hello.adapter.exitCode)})`)
+      this.lose(record, `the adapter died (code ${String(hello.adapter.exitCode)})`)
       return
     }
     this.toConsumer(record, { event: { type: 'bridge', instance: hello.instance, gap: hello.gap, replayFrom: hello.replayFrom } })
@@ -509,9 +509,9 @@ export class ExecutionManager {
     }
   }
 
-  /** A confirmed end: 10 more minutes without renewal (docs/executions.md, "Entre deux tours"). */
+  /** A confirmed end: 10 more minutes without renewal (docs/executions.md, "Between two turns"). */
   private async endTurn(record: SandboxRecord, message: AcpMessage): Promise<void> {
-    const outcome = message.error !== undefined ? `erreur : ${String(message.error.message)}` : `fin : ${String(message.result?.stopReason)}`
+    const outcome = message.error !== undefined ? `error: ${String(message.error.message)}` : `end: ${String(message.result?.stopReason)}`
     record.turn = null
     record.uncertain = null
     record.permissions.clear()
@@ -519,7 +519,7 @@ export class ExecutionManager {
     record.lastTurn = { outcome, endedAt: record.idleSince }
     const grant = record.stopped === null && record.lost === null && !record.ending
     const shutdownTime = iso(Date.now() + record.limits.leaseSeconds * 1000)
-    this.log(record.name, `tour clos (${outcome})${grant ? `, échéance ${shutdownTime} sans renouvellement` : ''}`)
+    this.log(record.name, `turn closed (${outcome})${grant ? `, deadline ${shutdownTime} without renewal` : ''}`)
     this.emitRecord(record)
     if (record.outbound !== null) void this.refreshOutbound(record)
     try {
@@ -548,7 +548,7 @@ export class ExecutionManager {
         ...(lifecycle === undefined ? {} : { spec: { lifecycle } }),
       })
     } catch (error) {
-      this.log(record.name, `PATCH refusé : ${error instanceof Error ? error.message : String(error)}`)
+      this.log(record.name, `PATCH refused: ${error instanceof Error ? error.message : String(error)}`)
       throw error
     }
   }
@@ -558,7 +558,7 @@ export class ExecutionManager {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         record.ownPending.delete(idKey(id))
-        reject(new Error(`${method} sans réponse après ${String(timeoutMs)} ms`))
+        reject(new Error(`${method} unanswered after ${String(timeoutMs)} ms`))
       }, timeoutMs)
       record.ownPending.set(idKey(id), (message) => {
         clearTimeout(timer)
@@ -578,8 +578,8 @@ export class ExecutionManager {
     try {
       const meta = await this.options.anchors.meta(anchorId)
       const bundle = await this.options.anchors.bundle(anchorId)
-      if (meta === null || bundle === null) throw new Error(`anchor ${anchorId} introuvable`)
-      if (meta.sessionId === null) throw new Error(`l'anchor ${anchorId} ne connaît pas sa session`)
+      if (meta === null || bundle === null) throw new Error(`anchor ${anchorId} not found`)
+      if (meta.sessionId === null) throw new Error(`anchor ${anchorId} does not know its session`)
       const response = await fetch(`http://${this.address(record)}/anchor`, {
         method: 'PUT',
         body: bundle as unknown as BodyInit,
@@ -587,21 +587,21 @@ export class ExecutionManager {
         signal: AbortSignal.timeout(30_000),
       })
       const placement = (await response.json()) as { files?: unknown[]; reason?: string }
-      if (!response.ok) throw new Error(`dépôt refusé (${String(response.status)}) : ${String(placement.reason)}`)
-      this.log(record.name, `anchor ${anchorId} déposé : ${String(placement.files?.length)} fichier(s)`)
+      if (!response.ok) throw new Error(`placement refused (${String(response.status)}): ${String(placement.reason)}`)
+      this.log(record.name, `anchor ${anchorId} placed: ${String(placement.files?.length)} file(s)`)
 
       const capabilities = record.hello?.initialize?.agentCapabilities
       const method = capabilities?.sessionCapabilities?.resume != null ? 'session/resume' : capabilities?.loadSession === true ? 'session/load' : null
-      if (method === null) throw new Error("l'agent n'annonce ni session/resume ni session/load")
+      if (method === null) throw new Error('the agent announces neither session/resume nor session/load')
       const answer = await this.ownRequest(record, method, { sessionId: meta.sessionId, cwd: record.hello?.workspace, mcpServers: [] }, 60_000)
-      if (answer.error !== undefined) throw new Error(`${method} refusé : ${String(answer.error.message)}`)
+      if (answer.error !== undefined) throw new Error(`${method} refused: ${String(answer.error.message)}`)
 
       record.restored = true
       record.sessionId = meta.sessionId
       await this.annotate(record, { [ANNOTATION.restored]: new Date().toISOString(), [ANNOTATION.sessionId]: meta.sessionId })
-      this.log(record.name, `reprise par ${method} de la session ${meta.sessionId}`)
+      this.log(record.name, `session ${meta.sessionId} resumed by ${method}`)
     } catch (error) {
-      record.error = `restauration impossible : ${error instanceof Error ? error.message : String(error)}`
+      record.error = `restore failed: ${error instanceof Error ? error.message : String(error)}`
       this.log(record.name, record.error)
     } finally {
       record.restoring = false
@@ -614,9 +614,9 @@ export class ExecutionManager {
   /** Hands the bridge the proxy to go out through and its token; the token is kept nowhere here. */
   async attachCredentials(name: string, credentials: Credentials): Promise<CommandResult<OutboundView>> {
     const record = this.records.get(name)
-    if (record === undefined) return refused(`exécution inconnue : ${name}`, 404)
-    if (record.ending) return refused("l'infrastructure détruit déjà ce sandbox")
-    if (!record.ready || record.serviceFQDN === null || record.podName === null) return refused('sandbox pas encore prêt')
+    if (record === undefined) return refused(`unknown execution: ${name}`, 404)
+    if (record.ending) return refused('the infrastructure is already destroying this sandbox')
+    if (!record.ready || record.serviceFQDN === null || record.podName === null) return refused('sandbox not ready yet')
     try {
       const response = await fetch(`http://${this.address(record)}/credentials`, {
         method: 'PUT',
@@ -625,13 +625,13 @@ export class ExecutionManager {
         signal: AbortSignal.timeout(10_000),
       })
       const answer = (await response.json()) as OutboundView & { reason?: string }
-      if (!response.ok) return refused(`le bridge a refusé (${String(response.status)}) : ${String(answer.reason)}`, 502)
+      if (!response.ok) return refused(`the bridge refused (${String(response.status)}): ${String(answer.reason)}`, 502)
       record.outbound = answer
-      this.log(name, `credential branché : ${credentials.proxy}${credentials.expiresAt === null ? '' : `, valable jusqu'à ${credentials.expiresAt}`}`)
+      this.log(name, `credential attached: ${credentials.proxy}${credentials.expiresAt === null ? '' : `, valid until ${credentials.expiresAt}`}`)
       this.emitRecord(record)
       return { accepted: true, value: answer }
     } catch (error) {
-      return refused(`bridge injoignable : ${error instanceof Error ? error.message : String(error)}`, 502)
+      return refused(`bridge unreachable: ${error instanceof Error ? error.message : String(error)}`, 502)
     }
   }
 
@@ -652,10 +652,10 @@ export class ExecutionManager {
   attachConsumer(name: string, socket: WebSocket, after: number | null): void {
     const record = this.records.get(name)
     if (record === undefined) {
-      socket.close(4404, 'exécution inconnue')
+      socket.close(4404, 'unknown execution')
       return
     }
-    if (record.consumer !== null) record.consumer.close(4000, 'remplacé par un consommateur plus récent')
+    if (record.consumer !== null) record.consumer.close(4000, 'replaced by a newer consumer')
     record.consumer = socket
     socket.send(JSON.stringify({ event: { type: 'attached', execution: this.view(record), initialize: record.hello?.initialize ?? null } }))
     if (after !== null) {
@@ -684,7 +684,7 @@ export class ExecutionManager {
 
   private answer(record: SandboxRecord, socket: WebSocket, id: Id, payload: { result?: unknown; error?: { code: number; message: string } }): void {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ local: JSON.stringify({ jsonrpc: '2.0', id, ...payload }) }))
-    if (payload.error !== undefined) this.log(record.name, `requête ${JSON.stringify(id)} refusée : ${payload.error.message}`)
+    if (payload.error !== undefined) this.log(record.name, `request ${JSON.stringify(id)} refused: ${payload.error.message}`)
   }
 
   private async onConsumerMessage(record: SandboxRecord, socket: WebSocket, text: string): Promise<void> {
@@ -692,21 +692,21 @@ export class ExecutionManager {
     try {
       message = JSON.parse(text) as AcpMessage
     } catch {
-      socket.send(JSON.stringify({ event: { type: 'error', message: 'JSON invalide' } }))
+      socket.send(JSON.stringify({ event: { type: 'error', message: 'invalid JSON' } }))
       return
     }
     const id = message.id
     const isRequest = message.method !== undefined && id !== undefined && id !== null
     if (isRequest && typeof id === 'string' && id.startsWith('agora-')) {
-      return this.answer(record, socket, id, { error: { code: -32600, message: 'les identifiants agora-… sont réservés à Agora' } })
+      return this.answer(record, socket, id, { error: { code: -32600, message: 'agora-… ids are reserved for Agora' } })
     }
     if (message.method === 'initialize' && isRequest) {
-      if (record.hello?.initialize == null) return this.answer(record, socket, id, { error: { code: -32000, message: 'refusé : bridge pas encore joint' } })
+      if (record.hello?.initialize == null) return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge not joined yet' } })
       return this.answer(record, socket, id, { result: record.hello.initialize })
     }
     if (!this.bridgeOpen(record)) {
-      if (isRequest) return this.answer(record, socket, id, { error: { code: -32000, message: `refusé : bridge non connecté (${this.state(record).state})` } })
-      socket.send(JSON.stringify({ event: { type: 'error', message: 'bridge non connecté : message perdu' } }))
+      if (isRequest) return this.answer(record, socket, id, { error: { code: -32000, message: `refused: bridge not connected (${this.state(record).state})` } })
+      socket.send(JSON.stringify({ event: { type: 'error', message: 'bridge not connected: message lost' } }))
       return
     }
     if (message.method === 'session/prompt' && isRequest) return this.admitPrompt(record, socket, message, id, text)
@@ -720,11 +720,11 @@ export class ExecutionManager {
   private async admitPrompt(record: SandboxRecord, socket: WebSocket, message: AcpMessage, id: Id, text: string): Promise<void> {
     const { state } = this.state(record)
     const refusal =
-      record.admitting ? "un prompt est déjà en cours d'admission"
-      : record.turn !== null ? 'un tour est déjà en cours'
-      : state !== 'prêt' ? `sandbox ${state}`
+      record.admitting ? 'a prompt is already being admitted'
+      : record.turn !== null ? 'a turn is already in progress'
+      : state !== 'ready' ? `sandbox ${state}`
       : null
-    if (refusal !== null) return this.answer(record, socket, id, { error: { code: -32000, message: `refusé : ${refusal}` } })
+    if (refusal !== null) return this.answer(record, socket, id, { error: { code: -32000, message: `refused: ${refusal}` } })
 
     record.admitting = true
     const now = Date.now()
@@ -735,12 +735,12 @@ export class ExecutionManager {
       await this.annotate(record, { [ANNOTATION.turn]: JSON.stringify(turn) }, { shutdownTime })
     } catch (error) {
       record.admitting = false
-      return this.answer(record, socket, id, { error: { code: -32000, message: `refusé : échéance non acceptée (${error instanceof Error ? error.message : String(error)})` } })
+      return this.answer(record, socket, id, { error: { code: -32000, message: `refused: deadline not accepted (${error instanceof Error ? error.message : String(error)})` } })
     }
     record.admitting = false
     if (!this.bridgeOpen(record) || record.stopped !== null) {
       void this.annotate(record, { [ANNOTATION.turn]: null }).catch(() => {})
-      return this.answer(record, socket, id, { error: { code: -32000, message: 'refusé : bridge perdu ou arrêt pendant l’admission' } })
+      return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge lost or stop during admission' } })
     }
     record.turn = turn
     record.shutdownTime = shutdownTime
@@ -748,7 +748,7 @@ export class ExecutionManager {
     record.renewals += 1
     record.uncertain = null
     record.bridge?.send(text)
-    this.log(record.name, `tour ouvert (requête ${JSON.stringify(id)}, position ${String(turn.seq)}), échéance ${shutdownTime}`)
+    this.log(record.name, `turn opened (request ${JSON.stringify(id)}, position ${String(turn.seq)}), deadline ${shutdownTime}`)
     this.emitRecord(record)
   }
 
@@ -765,7 +765,7 @@ export class ExecutionManager {
         if (!record.ready && !record.ending && record.podName !== null) await this.diagnose(record)
         if (record.launchType === null && record.podName !== null) await this.readLaunchType(record)
       } catch (error) {
-        this.log(record.name, `tick : ${error instanceof Error ? error.message : String(error)}`)
+        this.log(record.name, `tick: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
   }
@@ -788,7 +788,7 @@ export class ExecutionManager {
       this.emitRecord(record)
     } catch (error) {
       if (error instanceof KubeError && error.status === 404) return
-      this.log(record.name, `renouvellement refusé : ${error instanceof Error ? error.message : String(error)}`)
+      this.log(record.name, `renewal refused: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -806,21 +806,21 @@ export class ExecutionManager {
 
   private endReason(record: SandboxRecord): string {
     if (record.stopped !== null) return record.stopped.reason
-    if (record.lost !== null) return `perdu : ${record.lost}`
-    if (record.turn !== null) return 'tour en cours à l’échéance (limite du tour ou fin non vue)'
-    return 'échéance après le dernier tour'
+    if (record.lost !== null) return `lost: ${record.lost}`
+    if (record.turn !== null) return 'turn in progress at the deadline (turn limit or unseen end)'
+    return 'deadline after the last turn'
   }
 
   // ---------------------------------------------------------------- the anchor pushed by the Pod
 
-  /** docs/executions.md, "La réception d'un anchor": the Pod is already authenticated by TokenReview. */
+  /** docs/executions.md, "Receiving an anchor": the Pod is already authenticated by TokenReview. */
   async receiveAnchor(podName: string, bundle: Bundle, raw: Uint8Array): Promise<CommandResult<{ anchorId: string | null }>> {
     const record = [...this.records.values()].find((candidate) => candidate.podName === podName)
-    if (record === undefined) return refused(`aucun claim connu pour le Pod ${podName}`, 404)
+    if (record === undefined) return refused(`no known claim for Pod ${podName}`, 404)
     const files = bundle.files.map((file) => ({ path: file.path, byteLength: Buffer.from(file.content, 'base64').byteLength }))
     if (files.length === 0) {
-      record.anchorError = bundle.error ?? 'aucun fichier natif (pas de session écrite)'
-      this.log(record.name, `anchor vide reçu : ${record.anchorError}`)
+      record.anchorError = bundle.error ?? 'no native file (no session written)'
+      this.log(record.name, `empty anchor received: ${record.anchorError}`)
     } else {
       const anchor = await this.options.anchors.save(
         {
@@ -838,7 +838,7 @@ export class ExecutionManager {
       )
       record.anchor = anchor
       record.anchorError = null
-      this.log(record.name, `anchor ${anchor.id} reçu du Pod : ${String(files.length)} fichier(s), ${String(anchor.byteLength)} octets${bundle.stable ? '' : ', NON stabilisé'}`)
+      this.log(record.name, `anchor ${anchor.id} received from the Pod: ${String(files.length)} file(s), ${String(anchor.byteLength)} bytes${bundle.stable ? '' : ', NOT stable'}`)
       this.emit({ type: 'anchor', anchor })
     }
     this.finish(record)
@@ -847,7 +847,7 @@ export class ExecutionManager {
 
   /** The claim is gone from Kubernetes: whatever was received is all there will be. */
   private claimGone(record: SandboxRecord): void {
-    if (record.anchor === null && record.anchorError === null) record.anchorError = 'aucun anchor reçu avant la disparition du claim'
+    if (record.anchor === null && record.anchorError === null) record.anchorError = 'no anchor received before the claim disappeared'
     this.finish(record)
   }
 
@@ -857,13 +857,13 @@ export class ExecutionManager {
     if (this.gone.has(record.uid)) return ending
     this.gone.add(record.uid)
     if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
-    record.bridge?.close(1000, 'fin du sandbox')
+    record.bridge?.close(1000, 'end of the sandbox')
     record.bridge = null
-    record.consumer?.close(4001, `exécution terminée : ${ending.reason}`)
-    for (const [, resolve] of record.ownPending) resolve({ error: { message: 'exécution terminée' } })
+    record.consumer?.close(4001, `execution ended: ${ending.reason}`)
+    for (const [, resolve] of record.ownPending) resolve({ error: { message: 'execution ended' } })
     this.history.unshift(ending)
     this.history.splice(HISTORY_LIMIT)
-    this.log(record.name, `terminé (${ending.reason}) ; ${ending.anchor === null ? `sans anchor : ${String(ending.anchorError)}` : `anchor ${ending.anchor.id}`}`)
+    this.log(record.name, `ended (${ending.reason}); ${ending.anchor === null ? `no anchor: ${String(ending.anchorError)}` : `anchor ${ending.anchor.id}`}`)
     this.emit({ type: 'ended', ending })
     return ending
   }
@@ -892,18 +892,18 @@ export class ExecutionManager {
 
   async create(input: { requestId?: unknown; pool?: unknown; anchorId?: unknown; limits?: Partial<Record<keyof Limits, unknown>> }): Promise<CommandResult<{ name: string; existing: boolean }>> {
     const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : ''
-    if (requestId === '' || requestId.length > 200) return refused('identifiant de demande manquant ou trop long', 400)
+    if (requestId === '' || requestId.length > 200) return refused('request id missing or too long', 400)
     const poolName = typeof input.pool === 'string' ? input.pool : ''
     const name = claimName(requestId)
 
     const known = this.records.get(name)
     if (known !== undefined) {
-      return known.requestId === requestId ? { accepted: true, value: { name, existing: true } } : refused(`le nom ${name} est déjà pris par une autre demande`)
+      return known.requestId === requestId ? { accepted: true, value: { name, existing: true } } : refused(`name ${name} is already taken by another request`)
     }
 
     this.poolCache = null
     const pool = (await this.pools()).find((candidate) => candidate.name === poolName)
-    if (pool === undefined) return refused(`pool hors catalogue : ${poolName}`, 400)
+    if (pool === undefined) return refused(`pool not in the catalogue: ${poolName}`, 400)
 
     const limits: Record<string, number> = { ...this.options.defaults }
     for (const key of Object.keys(LIMIT_BOUNDS) as (keyof Limits)[]) {
@@ -911,20 +911,20 @@ export class ExecutionManager {
       if (raw === undefined || raw === null || raw === '') continue
       const value = Number(raw)
       const [min, max] = LIMIT_BOUNDS[key]
-      if (!Number.isInteger(value) || value < min || value > max) return refused(`${key} hors bornes : ${String(raw)} (de ${String(min)} à ${String(max)})`, 400)
+      if (!Number.isInteger(value) || value < min || value > max) return refused(`${key} out of bounds: ${String(raw)} (${String(min)} to ${String(max)})`, 400)
       limits[key] = value
     }
 
     let anchorId: string | null = null
     if (typeof input.anchorId === 'string' && input.anchorId !== '') {
       const meta = await this.options.anchors.meta(input.anchorId)
-      if (meta === null) return refused(`anchor inconnu : ${input.anchorId}`, 400)
-      if (meta.harness !== pool.harness) return refused(`anchor du harness ${meta.harness}, pool du harness ${pool.harness}`, 400)
+      if (meta === null) return refused(`unknown anchor: ${input.anchorId}`, 400)
+      if (meta.harness !== pool.harness) return refused(`anchor from harness ${meta.harness}, pool of harness ${pool.harness}`, 400)
       anchorId = meta.id
     }
 
     const active = [...this.records.values()].filter((record) => !record.ending).length
-    if (active >= this.options.maxActive) return refused(`quota atteint : ${String(active)} exécutions actives sur ${String(this.options.maxActive)}`, 429)
+    if (active >= this.options.maxActive) return refused(`quota reached: ${String(active)} active executions out of ${String(this.options.maxActive)}`, 429)
 
     const now = Date.now()
     const claim = {
@@ -947,7 +947,7 @@ export class ExecutionManager {
     try {
       const created = await this.options.kube.createClaim(claim)
       this.upsert(created)
-      this.log(name, `claim créé sur ${pool.name}${anchorId === null ? '' : `, restauration de ${anchorId}`}`)
+      this.log(name, `claim created on ${pool.name}${anchorId === null ? '' : `, restoring ${anchorId}`}`)
       return { accepted: true, value: { name, existing: false } }
     } catch (error) {
       if (error instanceof KubeError && error.status === 409) {
@@ -956,54 +956,54 @@ export class ExecutionManager {
           this.upsert(existing)
           return { accepted: true, value: { name, existing: true } }
         }
-        return refused(`le nom ${name} est déjà pris par une autre demande`)
+        return refused(`name ${name} is already taken by another request`)
       }
-      return refused(`Kubernetes a refusé : ${error instanceof Error ? error.message : String(error)}`, 502)
+      return refused(`Kubernetes refused: ${error instanceof Error ? error.message : String(error)}`, 502)
     }
   }
 
   /** Stop: close sends, cancel the turn, stop re-arming. The infrastructure destroys at the deadline. */
   async stopSandbox(name: string): Promise<CommandResult<{ name: string; shutdownTime: string | null }>> {
     const record = this.records.get(name)
-    if (record === undefined) return refused(`exécution inconnue : ${name}`, 404)
-    if (record.stopped !== null) return refused(`arrêt déjà demandé (${record.stopped.at})`)
-    if (record.ending) return refused("l'infrastructure détruit déjà ce sandbox")
-    record.stopped = { reason: 'arrêt demandé', at: new Date().toISOString() }
+    if (record === undefined) return refused(`unknown execution: ${name}`, 404)
+    if (record.stopped !== null) return refused(`stop already requested (${record.stopped.at})`)
+    if (record.ending) return refused('the infrastructure is already destroying this sandbox')
+    record.stopped = { reason: 'stop requested', at: new Date().toISOString() }
     try {
       await this.annotate(record, { [ANNOTATION.stopped]: JSON.stringify(record.stopped) })
     } catch (error) {
       record.stopped = null
-      return refused(`PATCH refusé : ${error instanceof Error ? error.message : String(error)}`, 502)
+      return refused(`PATCH refused: ${error instanceof Error ? error.message : String(error)}`, 502)
     }
     if (record.turn !== null && this.bridgeOpen(record)) {
       record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: record.turn.sessionId } }))
     }
-    this.log(name, `arrêt demandé : plus de renouvellement, fin à l'échéance ${String(record.shutdownTime)}`)
+    this.log(name, `stop requested: no more renewal, ends at the deadline ${String(record.shutdownTime)}`)
     this.emitRecord(record)
     return { accepted: true, value: { name, shutdownTime: record.shutdownTime } }
   }
 
-  // ---------------------------------------------------------------- lab hooks (docs/executions.md, "Le banc")
+  // ---------------------------------------------------------------- lab hooks (docs/executions.md, "The lab")
 
   lab = {
     dropBridge: (name: string): CommandResult<string> => {
       const record = this.records.get(name)
-      if (record === undefined) return refused(`exécution inconnue : ${name}`, 404)
-      if (record.bridge === null) return refused('aucune connexion au bridge')
+      if (record === undefined) return refused(`unknown execution: ${name}`, 404)
+      if (record.bridge === null) return refused('no bridge connection')
       record.bridge.terminate()
-      this.log(name, 'banc : connexion au bridge coupée')
-      return { accepted: true, value: 'coupée' }
+      this.log(name, 'lab: bridge connection cut')
+      return { accepted: true, value: 'cut' }
     },
     probeAuth: async (name: string): Promise<CommandResult<{ case: string; info: number; acp: number }[]>> => {
       const record = this.records.get(name)
-      if (record === undefined || record.podName === null || record.serviceFQDN === null) return refused('exécution inconnue ou sans Service', 404)
+      if (record === undefined || record.podName === null || record.serviceFQDN === null) return refused('unknown execution or no Service', 404)
       const podName = record.podName
       const cases: [string, Record<string, string>][] = [
-        ['sans jeton', {}],
-        ['jeton expiré', { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, podName, { now: Date.now() - 120_000 })}` }],
-        ["jeton d'un autre sandbox", { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, 'sbx-autre')}` }],
-        ['jeton signé par une autre clé', { authorization: `Bearer ${mintBridgeToken(this.foreignKey, podName)}` }],
-        ['jeton valide (témoin)', { authorization: `Bearer ${this.token(record)}` }],
+        ['no token', {}],
+        ['expired token', { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, podName, { now: Date.now() - 120_000 })}` }],
+        ['token for another sandbox', { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, 'sbx-autre')}` }],
+        ['token signed by another key', { authorization: `Bearer ${mintBridgeToken(this.foreignKey, podName)}` }],
+        ['valid token (control)', { authorization: `Bearer ${this.token(record)}` }],
       ]
       const results: { case: string; info: number; acp: number }[] = []
       for (const [label, headers] of cases) {
@@ -1023,7 +1023,7 @@ export class ExecutionManager {
         })
         results.push({ case: label, info, acp })
       }
-      this.log(name, `banc : sondage du jeton ${JSON.stringify(results)}`)
+      this.log(name, `lab: token probe ${JSON.stringify(results)}`)
       // The witness connection took the bridge over; Agora reconnects on its own.
       return { accepted: true, value: results }
     },
@@ -1032,16 +1032,16 @@ export class ExecutionManager {
   // ---------------------------------------------------------------- views and events
 
   private state(record: SandboxRecord): { state: string; reason: string } {
-    if (record.ending) return { state: 'fin de vie', reason: `${this.endReason(record)} ; anchor attendu du Pod` }
-    if (record.error !== null) return { state: 'erreur', reason: record.error }
-    if (record.lost !== null) return { state: 'perdu', reason: record.lost }
-    if (record.stopped !== null) return { state: 'arrêté', reason: `plus de renouvellement, fin à l'échéance` }
-    if (!record.ready) return { state: 'démarrage', reason: [record.readyReason, record.readyMessage, record.podDetail].filter((part) => part !== '' && part !== null).join(' — ') }
-    if (!this.bridgeOpen(record)) return { state: 'connexion', reason: `bridge : ${record.bridgeState}` }
-    if (record.restoring) return { state: 'restauration', reason: `anchor ${String(record.restoreAnchor)}` }
-    if (record.uncertain !== null) return { state: 'incertain', reason: record.uncertain }
-    if (record.turn !== null) return { state: 'en tour', reason: `depuis ${record.turn.startedAt}` }
-    return { state: 'prêt', reason: '' }
+    if (record.ending) return { state: 'ending', reason: `${this.endReason(record)}; anchor expected from the Pod` }
+    if (record.error !== null) return { state: 'error', reason: record.error }
+    if (record.lost !== null) return { state: 'lost', reason: record.lost }
+    if (record.stopped !== null) return { state: 'stopped', reason: 'no more renewal, ends at the deadline' }
+    if (!record.ready) return { state: 'starting', reason: [record.readyReason, record.readyMessage, record.podDetail].filter((part) => part !== '' && part !== null).join(' — ') }
+    if (!this.bridgeOpen(record)) return { state: 'connecting', reason: `bridge: ${record.bridgeState}` }
+    if (record.restoring) return { state: 'restoring', reason: `anchor ${String(record.restoreAnchor)}` }
+    if (record.uncertain !== null) return { state: 'uncertain', reason: record.uncertain }
+    if (record.turn !== null) return { state: 'in turn', reason: `since ${record.turn.startedAt}` }
+    return { state: 'ready', reason: '' }
   }
 
   view(record: SandboxRecord) {

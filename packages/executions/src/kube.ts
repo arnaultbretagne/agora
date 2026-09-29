@@ -1,4 +1,4 @@
-// The Kubernetes calls of docs/executions.md ("Les quatre opérations") and nothing else: Agora never
+// The Kubernetes calls of docs/executions.md ("The four operations") and nothing else: Agora never
 // deletes anything — the infrastructure destroys at the deadline. Plain REST over fetch: the
 // ServiceAccount token is re-read on every call (projected tokens rotate), and the cluster CA is
 // trusted through NODE_EXTRA_CA_CERTS, set on the Deployment.
@@ -130,7 +130,7 @@ export class HttpKube implements KubeApi {
     const query = `?watch=1&allowWatchBookmarks=true&timeoutSeconds=300&resourceVersion=${encodeURIComponent(resourceVersion)}&labelSelector=${encodeURIComponent(selector)}`
     const response = await fetch(this.url(CLAIMS, 'sandboxclaims', '', query), { headers: await this.headers(), signal })
     if (response.status === 410) throw new WatchGone('resourceVersion trop ancien')
-    if (!response.ok || response.body === null) throw new KubeError(response.status, `watch refusé : ${String(response.status)}`)
+    if (!response.ok || response.body === null) throw new KubeError(response.status, `watch refused: ${String(response.status)}`)
     const decoder = new TextDecoder()
     let pending = ''
     for await (const chunk of response.body) {
@@ -141,7 +141,7 @@ export class HttpKube implements KubeApi {
         if (line.trim() === '') continue
         const event = JSON.parse(line) as WatchEvent
         if (event.type === 'ERROR') {
-          if (event.object.code === 410) throw new WatchGone(event.object.message ?? 'watch expiré')
+          if (event.object.code === 410) throw new WatchGone(event.object.message ?? 'watch expired')
           throw new KubeError(event.object.code ?? 500, event.object.message ?? 'erreur de watch')
         }
         onEvent(event)

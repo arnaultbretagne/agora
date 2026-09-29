@@ -9,13 +9,13 @@ function number(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined || raw === '') return fallback
   const value = Number(raw)
-  if (!Number.isFinite(value)) throw new Error(`${name} doit être un nombre : ${raw}`)
+  if (!Number.isFinite(value)) throw new Error(`${name} must be a number: ${raw}`)
   return value
 }
 
 function required(name: string): string {
   const value = process.env[name]
-  if (value === undefined || value === '') throw new Error(`${name} est requis`)
+  if (value === undefined || value === '') throw new Error(`${name} is required`)
   return value
 }
 
@@ -60,9 +60,9 @@ const server = createApi({
   page: join(import.meta.dirname, '..', 'public', 'index.html'),
   ...(credentials === undefined ? {} : { credentials }),
 })
-server.listen(number('PORT', 8080), () => console.log(`- banc prêt sur :${String(number('PORT', 8080))}`))
+server.listen(number('PORT', 8080), () => console.log(`- lab ready on :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({ manager, namespace, verify: (token) => kube.reviewToken(token, audience) })
-receiver.listen(number('ANCHOR_PORT', 8081), () => console.log(`- réception des anchors sur :${String(number('ANCHOR_PORT', 8081))}`))
+receiver.listen(number('ANCHOR_PORT', 8081), () => console.log(`- anchor receiver on :${String(number('ANCHOR_PORT', 8081))}`))
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {

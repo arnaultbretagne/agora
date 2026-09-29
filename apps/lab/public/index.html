@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Banc des exécutions</title>
+<title>Executions lab</title>
 <style>
   body { font: 13px/1.35 system-ui, sans-serif; margin: 12px; background: #fff; color: #111; }
   h1 { font-size: 18px; margin: 0 0 8px; }
@@ -27,49 +27,49 @@
 </style>
 </head>
 <body>
-<h1>Banc des exécutions</h1>
+<h1>Executions lab</h1>
 <div class="row">
-  <span>Flux d'état : <b id="sse">…</b></span>
-  <button id="restart" title="POST /api/lab/restart">Redémarrer le banc</button>
-  <span class="muted">Contrat : docs/executions.md</span>
+  <span>State stream: <b id="sse">…</b></span>
+  <button id="restart" title="POST /api/lab/restart">Restart the lab</button>
+  <span class="muted">Contract: docs/executions.md</span>
 </div>
 
-<h2>Créer une exécution</h2>
+<h2>Create an execution</h2>
 <div class="row">
   <label>Pool <select id="pool"></select></label>
-  <label>Identifiant de demande <input id="requestId" size="38"></label>
-  <button id="newId">nouvel identifiant</button>
-  <label>Anchor à restaurer <select id="anchor"><option value="">aucun</option></select></label>
+  <label>Request id <input id="requestId" size="38"></label>
+  <button id="newId">new id</button>
+  <label>Anchor to restore <select id="anchor"><option value="">none</option></select></label>
 </div>
 <div class="row">
-  <label>Bail (s) <input id="leaseSeconds" size="5" placeholder="600"></label>
-  <label>Tour max (s) <input id="turnCapSeconds" size="5" placeholder="3600"></label>
-  <button id="create">Créer</button>
-  <button id="createTwice" title="Deux POST avec le même identifiant">Créer 2× (même identifiant)</button>
+  <label>Lease (s) <input id="leaseSeconds" size="5" placeholder="600"></label>
+  <label>Turn cap (s) <input id="turnCapSeconds" size="5" placeholder="3600"></label>
+  <button id="create">Create</button>
+  <button id="createTwice" title="Two POSTs with the same id">Create 2× (same id)</button>
 </div>
 <div class="row">
-  <span>Credentials : <b id="credentialSource">…</b></span>
-  <label>profils <input id="profiles" size="70" value="anthropic"></label>
-  <label>durée (s) <input id="credentialTtl" size="6" value="3600"></label>
-  <span class="muted">docs/credentials.md — profils : anthropic, github:owner/repo:read, github:owner/repo:write</span>
+  <span>Credentials: <b id="credentialSource">…</b></span>
+  <label>profiles <input id="profiles" size="70" value="anthropic"></label>
+  <label>duration (s) <input id="credentialTtl" size="6" value="3600"></label>
+  <span class="muted">docs/credentials.md — profiles: anthropic, github:owner/repo:read, github:owner/repo:write</span>
 </div>
 <pre id="createResult" class="muted">—</pre>
 <div id="pools" class="muted"></div>
 
-<h2>Exécutions vivantes</h2>
+<h2>Live executions</h2>
 <table>
-  <thead><tr><th>Nom</th><th>Pool</th><th>État</th><th>Raison</th><th>Lancement</th><th>Pod / Service</th><th>Échéance</th><th>Renouv.</th><th>Instance</th><th>Session</th><th>Tour</th><th>Seq</th><th>Accès sortant</th><th>Actions</th></tr></thead>
+  <thead><tr><th>Name</th><th>Pool</th><th>State</th><th>Reason</th><th>Launch</th><th>Pod / Service</th><th>Deadline</th><th>Renew.</th><th>Instance</th><th>Session</th><th>Turn</th><th>Seq</th><th>Way out</th><th>Actions</th></tr></thead>
   <tbody id="sandboxes"></tbody>
 </table>
 
 <div class="panel" id="acpPanel">
-  <b>Relais ACP</b> — exécution : <b id="acpName">aucune (bouton ACP d'une ligne)</b> — connexion : <b id="acpConn">fermée</b> — dernière position reçue : <b id="acpSeq">0</b>
+  <b>ACP relay</b> — execution: <b id="acpName">none (ACP button on a row)</b> — connection: <b id="acpConn">closed</b> — last position received: <b id="acpSeq">0</b>
   <div class="row">
-    <button id="acpConnect">Connecter (en direct)</button>
-    <button id="acpResume">Reconnecter après ma dernière position</button>
-    <button id="acpClose">Déconnecter</button>
-    <label><input type="checkbox" id="hideChunks" checked> masquer les fragments de texte</label>
-    <button id="acpClear">vider</button>
+    <button id="acpConnect">Connect (live)</button>
+    <button id="acpResume">Reconnect after my last position</button>
+    <button id="acpClose">Disconnect</button>
+    <label><input type="checkbox" id="hideChunks" checked> hide text chunks</label>
+    <button id="acpClear">clear</button>
   </div>
   <div class="row">
     <button data-acp="initialize">initialize</button>
@@ -80,14 +80,14 @@
     <button data-acp="cancel">session/cancel</button>
   </div>
   <div class="row">
-    <label>modèle <input id="model" size="12" value="haiku"></label>
+    <label>model <input id="model" size="12" value="haiku"></label>
     <button data-acp="model">session/set_config_option model</button>
-    <span class="muted">appliqué d'office après session/new si l'agent propose l'option « model » (claude-code)</span>
+    <span class="muted">applied automatically after session/new if the agent offers the "model" option (claude-code)</span>
   </div>
   <div class="row">
-    <input id="promptText" size="50" value="bonjour">
+    <input id="promptText" size="50" value="hello">
     <button data-acp="prompt">session/prompt</button>
-    <span class="muted">rapides :</span>
+    <span class="muted">quick:</span>
     <button data-quick="/sleep 30">/sleep 30</button>
     <button data-quick="/silence 20">/silence 20</button>
     <button data-quick="/permission">/permission</button>
@@ -99,33 +99,33 @@
   </div>
   <div id="permissions"></div>
   <div class="row">
-    <textarea id="raw" rows="2" cols="90">{"jsonrpc":"2.0","id":99,"method":"session/prompt","params":{"sessionId":"","prompt":[{"type":"text","text":"brut"}]}}</textarea>
-    <button id="sendRaw">envoyer tel quel</button>
+    <textarea id="raw" rows="2" cols="90">{"jsonrpc":"2.0","id":99,"method":"session/prompt","params":{"sessionId":"","prompt":[{"type":"text","text":"raw"}]}}</textarea>
+    <button id="sendRaw">send as is</button>
   </div>
   <pre id="acpLog"></pre>
 </div>
 
-<h2>Anchors stockés</h2>
+<h2>Stored anchors</h2>
 <table>
-  <thead><tr><th>Id</th><th>Harness</th><th>Pool</th><th>Session</th><th>Taille</th><th>Checksum</th><th>Exécution</th><th>Raison</th><th>Date</th><th></th></tr></thead>
+  <thead><tr><th>Id</th><th>Harness</th><th>Pool</th><th>Session</th><th>Size</th><th>Checksum</th><th>Execution</th><th>Reason</th><th>Date</th><th></th></tr></thead>
   <tbody id="anchors"></tbody>
 </table>
 
-<h2>Fins (destruction par l'infrastructure)</h2>
+<h2>Endings (destroyed by the infrastructure)</h2>
 <table>
-  <thead><tr><th>Date</th><th>Nom</th><th>Pool</th><th>Raison</th><th>Anchor</th></tr></thead>
+  <thead><tr><th>Date</th><th>Name</th><th>Pool</th><th>Reason</th><th>Anchor</th></tr></thead>
   <tbody id="history"></tbody>
 </table>
 
-<h2>Sondage du jeton</h2>
+<h2>Token probe</h2>
 <pre id="probe" class="muted">—</pre>
 
-<h2>Journal du banc</h2>
+<h2>Lab log</h2>
 <pre id="logs"></pre>
 
-<h2>Les cas à valider (docs/executions.md)</h2>
+<h2>Cases to validate (docs/executions.md)</h2>
 <table>
-  <thead><tr><th>#</th><th>Cas</th><th>Comment le jouer ici</th><th>Attendu</th></tr></thead>
+  <thead><tr><th>#</th><th>Case</th><th>How to play it here</th><th>Expected</th></tr></thead>
   <tbody id="cases"></tbody>
 </table>
 
@@ -134,11 +134,11 @@ const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map(), newIds: new Set() }
 
-// ---------------------------------------------------------------- flux d'état
+// ---------------------------------------------------------------- state stream
 function connectEvents() {
   const source = new EventSource('/api/events')
-  source.onopen = () => { $('sse').textContent = 'connecté'; $('sse').className = 'ok' }
-  source.onerror = () => { $('sse').textContent = 'coupé, reconnexion…'; $('sse').className = 'err' }
+  source.onopen = () => { $('sse').textContent = 'connected'; $('sse').className = 'ok' }
+  source.onerror = () => { $('sse').textContent = 'disconnected, reconnecting…'; $('sse').className = 'err' }
   source.onmessage = (message) => {
     const event = JSON.parse(message.data)
     if (event.type === 'snapshot') {
@@ -159,15 +159,15 @@ function connectEvents() {
 
 async function loadConfig() {
   const config = await (await fetch('/api/config')).json()
-  $('credentialSource').textContent = config.credentials ? `droits signés par Agora, passerelle ${config.credentials.proxy}` : 'aucune passerelle configurée'
+  $('credentialSource').textContent = config.credentials ? `grants signed by Agora, gateway ${config.credentials.proxy}` : 'no gateway configured'
 }
 
 async function loadPools() {
   const response = await fetch('/api/pools')
   const { pools } = await response.json()
   state.pools = pools
-  $('pool').innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.harness)})</option>`).join('') + '<option value="pool-inexistant">pool-inexistant (hors catalogue)</option>'
-  $('pools').innerHTML = 'Catalogue : ' + pools.map((p) => `<b>${esc(p.name)}</b> — harness ${esc(p.harness)}, stock ${p.readyReplicas}/${p.replicas}, <code>${esc(p.image)}</code>`).join(' · ')
+  $('pool').innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.harness)})</option>`).join('') + '<option value="no-such-pool">no-such-pool (not in the catalogue)</option>'
+  $('pools').innerHTML = 'Catalogue: ' + pools.map((p) => `<b>${esc(p.name)}</b> — harness ${esc(p.harness)}, warm pool ${p.readyReplicas}/${p.replicas}, <code>${esc(p.image)}</code>`).join(' · ')
 }
 
 function renderAll() { renderSandboxes(); renderAnchors(); renderHistory(); renderLogs() }
@@ -183,48 +183,48 @@ function renderSandboxes() {
     <tr class="${s.name === state.selected ? 'sel' : ''}">
       <td class="mono">${esc(s.name)}<br><span class="muted">${esc(s.requestId)}</span></td>
       <td>${esc(s.pool)}</td>
-      <td class="state">${esc(s.state)}${s.pendingPermissions ? `<br><span class="err">${s.pendingPermissions} permission(s)</span>` : ''}${s.consumer ? '<br><span class="muted">consommateur</span>' : ''}</td>
-      <td class="wrap">${esc(s.reason)}${s.lastTurn ? `<br><span class="muted">dernier tour : ${esc(s.lastTurn.outcome)}</span>` : ''}${s.restoreAnchor ? `<br><span class="muted">restauration ${esc(s.restoreAnchor)} : ${s.restored ? 'faite' : 'à faire'}</span>` : ''}</td>
+      <td class="state">${esc(s.state)}${s.pendingPermissions ? `<br><span class="err">${s.pendingPermissions} permission(s)</span>` : ''}${s.consumer ? '<br><span class="muted">consumer</span>' : ''}</td>
+      <td class="wrap">${esc(s.reason)}${s.lastTurn ? `<br><span class="muted">last turn: ${esc(s.lastTurn.outcome)}</span>` : ''}${s.restoreAnchor ? `<br><span class="muted">restore ${esc(s.restoreAnchor)}: ${s.restored ? 'done' : 'pending'}</span>` : ''}</td>
       <td>${esc(s.launchType ?? '?')}</td>
       <td class="mono">${esc(s.pod)}<br>${esc(s.service)}${s.podDetail ? `<br><span class="muted">${esc(s.podDetail)}</span>` : ''}</td>
       <td class="mono" data-deadline="${esc(s.shutdownTime)}">${secondsLeft(s.shutdownTime)}<br><span class="muted">${esc(s.shutdownTime)}</span></td>
-      <td>${s.renewals}${s.renewing ? '<br><b class="ok">ré-armé (tour)</b>' : '<br><span class="muted">pas ré-armé</span>'}<br><span class="muted">bail ${s.limits.leaseSeconds} / tour ${s.limits.turnCapSeconds}</span></td>
+      <td>${s.renewals}${s.renewing ? '<br><b class="ok">re-armed (turn)</b>' : '<br><span class="muted">not re-armed</span>'}<br><span class="muted">lease ${s.limits.leaseSeconds} / turn ${s.limits.turnCapSeconds}</span></td>
       <td class="mono wrap">${esc(s.instance)}<br><span class="muted">bridge ${esc(s.bridge.state)} ${esc(s.bridge.agent ? s.bridge.agent.name + '@' + s.bridge.agent.version : '')}</span></td>
       <td class="mono wrap">${esc(s.sessionId)}</td>
-      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>depuis ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">inactif depuis ${esc(s.idleSince)}</span>`}</td>
+      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>since ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">idle since ${esc(s.idleSince)}</span>`}</td>
       <td>${s.lastSeq}</td>
       <td class="mono wrap">${outbound(s.outbound)}</td>
       <td>
         <button data-select="${esc(s.name)}">ACP</button>
-        <button data-stop="${esc(s.name)}">Arrêter</button><br>
-        <button data-credentials="${esc(s.name)}">brancher credential</button><br>
-        <button data-lab="drop-bridge" data-name="${esc(s.name)}">couper bridge</button>
+        <button data-stop="${esc(s.name)}">Stop</button><br>
+        <button data-credentials="${esc(s.name)}">attach credential</button><br>
+        <button data-lab="drop-bridge" data-name="${esc(s.name)}">cut bridge</button>
 <br>
-        <button data-lab="probe-auth" data-name="${esc(s.name)}">sonder jeton</button>
+        <button data-lab="probe-auth" data-name="${esc(s.name)}">probe token</button>
       </td>
     </tr>`).join('')
-  $('sandboxes').innerHTML = rows || '<tr><td colspan="14" class="muted">aucun</td></tr>'
+  $('sandboxes').innerHTML = rows || '<tr><td colspan="14" class="muted">none</td></tr>'
 }
 
 function outbound(o) {
   if (!o) return '<span class="muted">?</span>'
-  if (!o.proxy) return `<span class="muted">aucun credential</span>${o.refused ? `<br>${o.refused} refus` : ''}`
+  if (!o.proxy) return `<span class="muted">no credential</span>${o.refused ? `<br>${o.refused} refused` : ''}`
   const targets = Object.entries(o.targets ?? {}).map(([t, v]) => `${esc(t)} ×${v.count} → ${esc(v.lastStatus ?? '?')}`).join('<br>')
-  return `${esc(o.proxy)}<br><span class="muted">jusqu'à ${esc(o.expiresAt ?? '?')}</span><br>${o.tunnels} tunnel(s), ${o.refused} refus${targets ? `<br>${targets}` : ''}`
+  return `${esc(o.proxy)}<br><span class="muted">until ${esc(o.expiresAt ?? '?')}</span><br>${o.tunnels} tunnel(s), ${o.refused} refused${targets ? `<br>${targets}` : ''}`
 }
 
 function renderAnchors() {
-  $('anchor').innerHTML = '<option value="">aucun</option>' + state.anchors.map((a) => `<option value="${esc(a.id)}">${esc(a.id)} — ${esc(a.harness)} — ${esc(a.sessionId)}</option>`).join('')
+  $('anchor').innerHTML = '<option value="">none</option>' + state.anchors.map((a) => `<option value="${esc(a.id)}">${esc(a.id)} — ${esc(a.harness)} — ${esc(a.sessionId)}</option>`).join('')
   $('anchors').innerHTML = state.anchors.map((a) => `
     <tr><td class="mono">${esc(a.id)}</td><td>${esc(a.harness)}</td><td>${esc(a.pool)}</td><td class="mono">${esc(a.sessionId)}</td><td>${a.byteLength}</td>
     <td class="mono">${esc(a.checksum.slice(0, 19))}…</td><td class="mono">${esc(a.execution)}</td><td>${esc(a.reason)}</td><td>${esc(a.createdAt)}</td>
-    <td><a href="/api/anchors/${esc(a.id)}/content" target="_blank">voir</a> <button data-restore="${esc(a.id)}" data-pool="${esc(a.pool)}">restaurer</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">aucun</td></tr>'
+    <td><a href="/api/anchors/${esc(a.id)}/content" target="_blank">view</a> <button data-restore="${esc(a.id)}" data-pool="${esc(a.pool)}">restore</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">none</td></tr>'
 }
 
 function renderHistory() {
   $('history').innerHTML = state.history.map((h) => `
     <tr><td>${esc(h.at)}</td><td class="mono">${esc(h.name)}</td><td>${esc(h.pool)}</td><td>${esc(h.reason)}</td>
-    <td>${h.anchor ? `<span class="ok">${esc(h.anchor.id)}</span> (${h.anchor.byteLength} o)` : `<span class="err">aucun</span> : ${esc(h.anchorError)}`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">aucune</td></tr>'
+    <td>${h.anchor ? `<span class="ok">${esc(h.anchor.id)}</span> (${h.anchor.byteLength} B)` : `<span class="err">none</span>: ${esc(h.anchorError)}`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">none</td></tr>'
 }
 
 function renderLogs() {
@@ -238,8 +238,8 @@ setInterval(() => {
   }
 }, 1000)
 
-// ---------------------------------------------------------------- commandes
-// crypto.randomUUID n'existe qu'en contexte sécurisé : la page doit aussi marcher en HTTP direct.
+// ---------------------------------------------------------------- commands
+// crypto.randomUUID only exists in a secure context: the page must also work over plain HTTP.
 function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID()
   const b = crypto.getRandomValues(new Uint8Array(16))
@@ -276,25 +276,25 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.credentials) {
     const profiles = $('profiles').value.split(/[\s,]+/).filter(Boolean)
     const r = await post(`/api/executions/${target.dataset.credentials}/credentials`, { ttlSeconds: Number($('credentialTtl').value), profiles })
-    $('createResult').textContent = 'Credential : ' + JSON.stringify(r)
+    $('createResult').textContent = 'Credential: ' + JSON.stringify(r)
     $('createResult').className = r.accepted ? 'ok' : 'err'
   }
   if (target.dataset.stop) {
     target.disabled = true
     const r = await post(`/api/executions/${target.dataset.stop}/stop`)
-    $('createResult').textContent = 'Arrêt : ' + JSON.stringify(r)
+    $('createResult').textContent = 'Stop: ' + JSON.stringify(r)
   }
   if (target.dataset.lab) {
     const r = await post(`/api/lab/executions/${target.dataset.name}/${target.dataset.lab}`)
     if (target.dataset.lab === 'probe-auth') {
       $('probe').textContent = r.accepted ? r.results.map((x) => `${x.case.padEnd(32)}  /info → ${x.info}   /acp → ${x.acp}`).join('\n') : JSON.stringify(r)
-    } else $('createResult').textContent = `${target.dataset.lab} : ${JSON.stringify(r)}`
+    } else $('createResult').textContent = `${target.dataset.lab}: ${JSON.stringify(r)}`
   }
   if (target.dataset.restore) {
     $('anchor').value = target.dataset.restore
     const pool = state.pools.find((p) => p.name === target.dataset.pool) ? target.dataset.pool : state.pools[0]?.name
     if (pool) $('pool').value = pool
-    $('createResult').textContent = `Anchor ${target.dataset.restore} choisi : cliquez « Créer ».`
+    $('createResult').textContent = `Anchor ${target.dataset.restore} selected: click "Create".`
   }
   if (target.dataset.quick) { $('promptText').value = target.dataset.quick; acp('prompt') }
   if (target.dataset.acp) acp(target.dataset.acp)
@@ -306,7 +306,7 @@ $('create').onclick = () => create(1)
 $('createTwice').onclick = () => create(2)
 $('restart').onclick = async () => { $('createResult').textContent = JSON.stringify(await post('/api/lab/restart')) }
 
-// ---------------------------------------------------------------- relais ACP
+// ---------------------------------------------------------------- ACP relay
 function selectSandbox(name) {
   if (state.selected !== name) { closeAcp(); state.lastSeq = 0; $('acpLog').textContent = ''; state.permissions.clear(); renderPermissions() }
   state.selected = name
@@ -331,9 +331,9 @@ function openAcp(resume) {
   const url = `${scheme}://${location.host}/api/executions/${state.selected}/acp${resume ? `?after=${state.lastSeq}` : ''}`
   const ws = new WebSocket(url)
   state.ws = ws
-  $('acpConn').textContent = 'connexion…'
-  ws.onopen = () => { $('acpConn').textContent = resume ? `ouverte (reprise après ${state.lastSeq})` : 'ouverte (direct)'; $('acpConn').className = 'ok' }
-  ws.onclose = (e) => { if (state.ws === ws) { $('acpConn').textContent = `fermée (${e.code} ${e.reason})`; $('acpConn').className = 'err'; state.ws = null } }
+  $('acpConn').textContent = 'connecting…'
+  ws.onopen = () => { $('acpConn').textContent = resume ? `open (resumed after ${state.lastSeq})` : 'open (live)'; $('acpConn').className = 'ok' }
+  ws.onclose = (e) => { if (state.ws === ws) { $('acpConn').textContent = `closed (${e.code} ${e.reason})`; $('acpConn').className = 'err'; state.ws = null } }
   ws.onmessage = (message) => {
     const data = JSON.parse(message.data)
     if (typeof data.seq === 'number') {
@@ -349,24 +349,24 @@ function openAcp(resume) {
 
 function onAcp(line, prefix) {
   let m = null
-  try { m = JSON.parse(line) } catch { /* affiché brut */ }
+  try { m = JSON.parse(line) } catch { /* shown raw */ }
   if (m && m.method === 'session/request_permission') { state.permissions.set(JSON.stringify(m.id), m); renderPermissions() }
   if (m && m.method === 'session/update' && m.params?.update?.sessionUpdate === 'agent_message_chunk' && $('hideChunks').checked) {
-    logLine(prefix, `[texte] ${m.params.update.content?.text?.slice(0, 120).replace(/\n/g, '⏎')}`)
+    logLine(prefix, `[text] ${m.params.update.content?.text?.slice(0, 120).replace(/\n/g, '⏎')}`)
     return
   }
   if (m && m.result && m.result.sessionId) $('sessionId').value = m.result.sessionId
-  // Le modèle, avant le premier prompt : c'est le premier appel facturé.
+  // The model, before the first prompt: that prompt is the first billed call.
   if (m && state.newIds.delete(m.id) && m.result?.configOptions?.some((o) => o.id === 'model') && $('model').value.trim() !== '') {
     setTimeout(() => acp('model'), 0)
   }
   logLine(prefix, line.length > 2000 ? line.slice(0, 2000) + '…' : line)
 }
 
-function closeAcp() { if (state.ws) { const ws = state.ws; state.ws = null; ws.close(); $('acpConn').textContent = 'fermée'; $('acpConn').className = '' } }
+function closeAcp() { if (state.ws) { const ws = state.ws; state.ws = null; ws.close(); $('acpConn').textContent = 'closed'; $('acpConn').className = '' } }
 
 function send(message) {
-  if (!state.ws || state.ws.readyState !== 1) { logLine('!', 'relais non connecté'); return }
+  if (!state.ws || state.ws.readyState !== 1) { logLine('!', 'relay not connected'); return }
   const text = JSON.stringify(message)
   state.ws.send(text)
   logLine('→', text)
@@ -388,9 +388,9 @@ function acp(kind) {
 
 function renderPermissions() {
   $('permissions').innerHTML = [...state.permissions.entries()].map(([key, m]) => `
-    <div class="perm">Permission demandée (requête ${esc(key)}) : ${esc(m.params?.toolCall?.title)} —
+    <div class="perm">Permission requested (request ${esc(key)}): ${esc(m.params?.toolCall?.title)} —
     ${(m.params?.options ?? []).map((o) => `<button data-permission="${esc(key)}" data-option="${esc(o.optionId)}">${esc(o.name)} (${esc(o.kind)})</button>`).join(' ')}
-    <button data-permission="${esc(key)}" data-option="">annulée</button></div>`).join('')
+    <button data-permission="${esc(key)}" data-option="">cancelled</button></div>`).join('')
 }
 
 function answerPermission(key, optionId) {
@@ -404,43 +404,43 @@ $('acpConnect').onclick = () => openAcp(false)
 $('acpResume').onclick = () => openAcp(true)
 $('acpClose').onclick = closeAcp
 $('acpClear').onclick = () => { $('acpLog').textContent = '' }
-$('sendRaw').onclick = () => { try { const m = JSON.parse($('raw').value); send(m) } catch (e) { logLine('!', 'JSON invalide : ' + e.message) } }
+$('sendRaw').onclick = () => { try { const m = JSON.parse($('raw').value); send(m) } catch (e) { logLine('!', 'invalid JSON: ' + e.message) } }
 
-// ---------------------------------------------------------------- les cas
+// ---------------------------------------------------------------- the cases
 const CASES = [
-  ['Créer depuis un pool chaud', 'Créer sur un pool dont le stock est prêt.', 'Prêt en moins d’une seconde, lancement warm.'],
-  ['Créer au-delà du stock chaud', 'Créer plusieurs sandboxes d’affilée.', 'Prêt en quelques secondes, lancement cold.'],
-  ['Créer deux fois, même identifiant', '« Créer 2× (même identifiant) ».', 'Même nom deux fois, une seule exécution.'],
-  ['Pool hors catalogue, quota', 'Pool « pool-inexistant » ; ou créer au-delà du quota.', 'Refusé avec la raison.'],
-  ['Relais ACP', 'ACP → initialize, session/new, session/prompt.', 'initialize répondu en local, trames numérotées, tour clos.'],
-  ['Second prompt pendant un tour', '/sleep 30 puis session/prompt aussitôt.', 'Erreur JSON-RPC « refusé : un tour est déjà en cours ».'],
-  ['Annuler un tour', '/sleep 30 puis session/cancel.', 'stopReason cancelled, exécution prête.'],
-  ['Permission, consommateur parti puis revenu', '/permission, Déconnecter, « Reconnecter après ma dernière position ».', 'La demande est rejouée ; répondre débloque le tour.'],
-  ['Consommateur déconnecté pendant un tour', '/sleep 30, Déconnecter, attendre, reconnecter après la dernière position.', 'Trames manquées rejouées, fin du tour visible.'],
-  ['Connexion au bridge coupée', '/sleep 30 puis « couper bridge ».', 'Reconnexion avec rejeu, tour clos sans trou (journal).'],
-  ['Agora redémarré pendant un tour', '/sleep 60 puis « Redémarrer le banc ».', 'Au retour, le tour est retrouvé puis clos.'],
-  ['Échéance pendant un tour', '/sleep 150 et regarder la colonne Échéance.', 'Avance chaque minute, jamais au-delà de début + tour max.'],
-  ['Fin de tour', 'Un tour court, puis regarder l’échéance.', 'Maintenant + bail, puis plus aucun renouvellement.'],
-  ['Échéance entre deux tours', 'Créer avec bail 60, un tour, attendre.', 'Détruit par l’infrastructure, anchor reçu du Pod.'],
-  ['Tour trop long', 'Créer avec tour max 30, puis /sleep 120.', 'Détruit à début + 30 s, anchor reçu du Pod.'],
-  ['Arrêter', '« Arrêter » sur une exécution prête (bail 60 pour ne pas attendre).', 'Plus de renouvellement, fin à l’échéance, anchor reçu.'],
-  ['Arrêter pendant un tour', '/sleep 60 puis « Arrêter ».', 'Tour annulé, puis comme ci-dessus.'],
-  ['Restaurer un anchor', 'Anchors → restaurer → Créer, puis ACP et /recall.', 'Même session, l’agent se souvient.'],
-  ['Adaptateur mort', 'Un tour, puis /crash.', 'Perdu, plus de renouvellement, anchor reçu à la fin du Pod.'],
-  ['Jetons refusés', '« sonder jeton ».', '401 partout sauf le témoin.'],
-  ['Poussée sans jeton projeté', 'Hors page : POST sur le port 8081 sans jeton valide.', '401, rien n’est stocké.'],
-  ['Harness réel', 'Pool claude-code : initialize, session/new, un prompt, Arrêter, restaurer.', 'initialize réel ; sans credential le prompt échoue.'],
-  ['Sortir sans credential (docs/credentials.md)', 'Pool mock : /fetch.', 'CONNECT refusé par le bridge : 503 ; 1 refus dans « Accès sortant ».'],
-  ['Passerelle, chaîne seule', 'Pool mock, profil anthropic : « brancher credential », puis /fetch.', 'Réponse d’Anthropic (pas de 403 de la passerelle, pas d’erreur TLS) ; tunnel compté.'],
-  ['Passerelle, harness réel', 'Pool claude-code, profil anthropic : « brancher credential », session/new (modèle haiku appliqué), un prompt court.', 'Vraie réponse du modèle, fin de tour end_turn.'],
-  ['Passerelle, composition', 'Pool mock, profils github:A:write github:B:read : /fetch sur A, B et C.', 'A lu et écrit, B lu seulement, C refusé : 403 de la passerelle sur ce qui n’est pas accordé.'],
+  ['Create from a warm pool', 'Create on a pool with ready replicas.', 'Ready in under a second, launch warm.'],
+  ['Create beyond the warm pool', 'Create several sandboxes in a row.', 'Ready in a few seconds, launch cold.'],
+  ['Create twice, same id', '"Create 2× (same id)".', 'Same name twice, a single execution.'],
+  ['Pool not in the catalogue, quota', 'Pool "no-such-pool"; or create beyond the quota.', 'Refused with the reason.'],
+  ['ACP relay', 'ACP → initialize, session/new, session/prompt.', 'initialize answered locally, numbered frames, turn closed.'],
+  ['Second prompt during a turn', '/sleep 30 then session/prompt right away.', 'JSON-RPC error "refused: a turn is already in progress".'],
+  ['Cancel a turn', '/sleep 30 then session/cancel.', 'stopReason cancelled, execution ready.'],
+  ['Permission, consumer gone then back', '/permission, "Disconnect", "Reconnect after my last position".', 'The request is replayed; answering it unblocks the turn.'],
+  ['Consumer disconnected during a turn', '/sleep 30, "Disconnect", wait, reconnect after the last position.', 'Missed frames replayed, end of turn visible.'],
+  ['Bridge connection cut', '/sleep 30 then "cut bridge".', 'Reconnection with replay, turn closed with no gap (log).'],
+  ['Agora restarted during a turn', '/sleep 60 then "Restart the lab".', 'Once back, the turn is found again, then closed.'],
+  ['Deadline during a turn', '/sleep 150 and watch the Deadline column.', 'Moves forward every minute, never past start + max turn.'],
+  ['End of turn', 'A short turn, then watch the deadline.', 'Now + lease, then no more renewals.'],
+  ['Deadline between two turns', 'Create with lease 60, one turn, wait.', 'Destroyed by the infrastructure, anchor received from the Pod.'],
+  ['Turn too long', 'Create with max turn 30, then /sleep 120.', 'Destroyed at start + 30 s, anchor received from the Pod.'],
+  ['Stop', '"Stop" on a ready execution (lease 60 to avoid waiting).', 'No more renewals, end at the deadline, anchor received.'],
+  ['Stop during a turn', '/sleep 60 then "Stop".', 'Turn cancelled, then as above.'],
+  ['Restore an anchor', 'Anchors → "restore" → "Create", then ACP and /recall.', 'Same session, the agent remembers.'],
+  ['Dead adapter', 'One turn, then /crash.', 'State lost, no more renewals, anchor received at the end of the Pod.'],
+  ['Refused tokens', '"probe token".', '401 everywhere except the control.'],
+  ['Push without a projected token', 'Outside the page: POST on port 8081 without a valid token.', '401, nothing is stored.'],
+  ['Real harness', 'Pool claude-code: initialize, session/new, a prompt, "Stop", "restore".', 'Real initialize; without a credential the prompt fails.'],
+  ['Going out without a credential (docs/credentials.md)', 'Pool mock: /fetch.', 'CONNECT refused by the bridge: 503; 1 refused in "Way out".'],
+  ['Gateway, chain only', 'Pool mock, profile anthropic: "attach credential", then /fetch.', 'Answer from Anthropic (no 403 from the gateway, no TLS error); tunnel counted.'],
+  ['Gateway, real harness', 'Pool claude-code, profile anthropic: "attach credential", session/new (model haiku applied), a short prompt.', 'Real answer from the model, end of turn end_turn.'],
+  ['Gateway, composition', 'Pool mock, profiles github:A:write github:B:read: /fetch on A, B and C.', 'A read and written, B read only, C refused: 403 from the gateway on what is not granted.'],
 ]
 $('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
 
 newRequestId()
 connectEvents()
-loadPools().catch((e) => { $('pools').textContent = 'catalogue indisponible : ' + e.message })
-loadConfig().catch((e) => { $('credentialSource').textContent = 'configuration indisponible : ' + e.message })
+loadPools().catch((e) => { $('pools').textContent = 'catalogue unavailable: ' + e.message })
+loadConfig().catch((e) => { $('credentialSource').textContent = 'configuration unavailable: ' + e.message })
 </script>
 </body>
 </html>

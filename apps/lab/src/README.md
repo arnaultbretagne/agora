@@ -1,4 +1,4 @@
 # src
 
-`main.ts` : lit la configuration, monte `ExecutionManager`, l'API avec la page du banc, et le
-récepteur d'anchors.
+`main.ts`: reads the configuration, mounts `ExecutionManager`, the API with the lab page, the
+anchor receiver, and the grant signer for the gateway.
