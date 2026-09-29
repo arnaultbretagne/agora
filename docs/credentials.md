@@ -1,10 +1,10 @@
 # An execution's credentials
 
 Contract to implement — agentgateway **1.5.0**, on top of executions (`executions.md`). The
-decision and the options tried are in the credential gateway ADR.
+decision and the options tried are in the gateway ADR.
 
-**The sandbox holds no secret. It goes out through the credential gateway, which checks each
-request against the execution's grants and sets the credential on the way through.**
+**The sandbox holds no secret. It goes out through the gateway, which checks each request
+against the execution's grants and sets the credential on the way through.**
 
 A harness needs credentials: Claude, GitHub. They never enter the sandbox. Its only way out is
 the gateway: it terminates TLS, decides whether the request is allowed and sets the host's

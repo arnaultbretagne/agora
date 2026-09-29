@@ -1,4 +1,4 @@
-# ADR 000n — Executions go out through a credential gateway that checks Agora-signed grants
+# ADR 000n — Gateway
 
 - **Status:** accepted
 - **Date:** 2026-09-29
@@ -17,8 +17,8 @@
 
 ## Decision
 
-1. **No credential in the sandbox.** Its only egress is a credential gateway, reached through
-   the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent Sandbox:
+1. **No credential in the sandbox.** Everything it sends out goes through a gateway, reached
+   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent Sandbox:
    agentgateway, deployed and configured by the infrastructure.
 2. **Agora signs the rights, and nothing more.** It compiles the execution's profiles
    (`anthropic`, `github:owner/repo:read|write`) into grants — host, path, methods — and signs

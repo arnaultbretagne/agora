@@ -7,7 +7,7 @@ for the upcoming UI ADR.
 ## Starting split
 
 Agent Sandbox owns execution, the gateway owns credentials (Agent Vault at the
-time of these notes, ruled out since, see the credential gateway ADR). What is left
+time of these notes, ruled out since, see the gateway ADR). What is left
 for Agora is the log of commands and ACP exchanges, and an interface that is a
 view of it. Each candidate was assessed for two possible roles: serving as the
 interface, or replacing this log.

@@ -181,7 +181,7 @@ That is why the workspace is the same path in every image.
 | Resources | 50m CPU and 512 MiB reserved, 1 CPU and 1 GiB at most: an idle sandbox uses ~1m, and the node has only 6 cores. |
 | `HOME` | `emptyDir` mounted on `/home/harness` |
 | User | 10001, read-only root, no capabilities |
-| Egress | Through the credential gateway only, and its TLS trust (`credentials.md`) |
+| Egress | Through the gateway only, and its TLS trust (`credentials.md`) |
 
 One template and one pool per image, named after its digest. Changing the image means a
 new template and a new pool, never an in-place modification.
