@@ -7,7 +7,7 @@ unless it is written in `docs/`.
 
 | Folder | Content |
 | --- | --- |
-| `docs/` | The design: product, executions, credentials, interface, architecture decisions. |
+| `docs/` | Architecture (how it works), specs (what to implement) and ADRs (why). |
 | `apps/` | What gets deployed: today, the lab. |
 | `harnesses/` | The harness images Agent Sandbox starts in its pools. |
 | `packages/` | Shared code: executions, credentials, the bridge, the mock agent, test tools. |
@@ -21,7 +21,7 @@ A deployable never depends on another; a package never depends on a deployable.
 | --- | --- |
 | One base | `design/agora-foundations`. Never commit to it directly: everything enters through a PR. |
 | One branch per subject | Branched from the base, prefixed `feat/`, `fix/`, `chore/` or `docs/` (example: `feat/executions`). |
-| Docs and code together | A subject's doc (its contract in `docs/`) changes in the same branch as its code, never separately. |
+| Docs and code together | A subject's docs (its contract in `docs/specs/`) change in the same branch as its code, never separately. |
 | Stay current | Merge the base into your branch; never merge one subject branch into another. |
 | Back to the base | Through a PR with green CI; the branch is deleted after the merge. |
 

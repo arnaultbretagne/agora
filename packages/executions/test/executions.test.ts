@@ -1,4 +1,4 @@
-// The executions contract (docs/executions.md), against real bridges running the mock agent and an
+// The executions contract (docs/specs/executions.md), against real bridges running the mock agent and an
 // in-memory Kubernetes API whose controller destroys claims at their deadline.
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -345,7 +345,7 @@ describe('executions', () => {
     await until(() => view(target, name)?.state === 'ready')
   })
 
-  it('hands an execution a credential (docs/credentials.md): minted, given to the bridge, never kept by Agora', async () => {
+  it('hands an execution a credential (docs/specs/credentials.md): minted, given to the bridge, never kept by Agora', async () => {
     // A stand-in for the credential proxy: keeps each CONNECT head and refuses it.
     const heads: string[] = []
     const proxy = createTcpServer((socket) => {

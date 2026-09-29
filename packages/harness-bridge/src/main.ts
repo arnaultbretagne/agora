@@ -1,4 +1,4 @@
-// The image entrypoint (docs/executions.md). Everything it reads is fixed by the image or the
+// The image entrypoint (docs/specs/executions.md). Everything it reads is fixed by the image or the
 // template — never by a claim, which would force a cold start.
 import { nativeDir, pushBundle } from './anchor.ts'
 import { publicKeyFrom } from './token.ts'
@@ -26,7 +26,7 @@ const bridge = await startBridge({
   log,
 })
 
-// The end of the Pod (docs/executions.md, "The end of the Pod and the anchor"): the infrastructure deletes it at the
+// The end of the Pod (docs/specs/executions.md, "The end of the Pod and the anchor"): the infrastructure deletes it at the
 // deadline, and the grace period is for this — stop the adapter, push the native files, leave.
 process.on('SIGTERM', () => {
   void (async () => {

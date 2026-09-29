@@ -1,19 +1,19 @@
 # docs
 
-Agora's design: one document per subject, which says how it works, and the architecture
-decisions in `adr/`, which say why. Start with `design.md`.
+Agora's documentation, in three folders that each answer one question.
 
-## What goes here
+| Folder | Question | Content |
+| --- | --- | --- |
+| `architecture/` | How does it work? | How the system fits together, subject by subject; read end to end. Start with `overview.md`. |
+| `specs/` | What exactly must be implemented? | The contracts: routes, fields, states, rules, validated cases; consulted, not read end to end. |
+| `adr/` | Why is it built this way? | One decision per record: context, decision, what we tried, consequences. |
 
-- **One document per subject** — the product, executions, credentials, the interface. It
-  describes the contract: the actors, the exchanges, the rules, the validated cases and what
-  remains to be specified.
-- **One ADR per architecture decision**, in `adr/`, following that folder's recipe.
+A subject can appear in all three — `executions.md` in `architecture/` and `specs/`, the
+executions ADR in `adr/` — each document saying only what its folder is for.
 
 ## Rules
 
-- **One subject, one document.** The file name says the subject; a new subject makes a new file,
-  not a section added elsewhere.
+- **One subject, one document per folder.** The file name says the subject.
 - **No links between files.** Names and layout are enough to find a document; a link ends up
   dead. Cite a document by its name.
 - **Written as Agora's documentation.** What is true of Agora, not the state of a work in

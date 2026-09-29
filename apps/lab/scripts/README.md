@@ -1,6 +1,6 @@
 # scripts
 
-`live-cases.ts` plays the cases of `docs/executions.md` and `docs/credentials.md` against the
+`live-cases.ts` plays the cases of `docs/specs/executions.md` and `docs/specs/credentials.md` against the
 deployed lab, with real Kata sandboxes destroyed by Agent Sandbox. From g4, the lab Pod's IP is
 reachable:
 

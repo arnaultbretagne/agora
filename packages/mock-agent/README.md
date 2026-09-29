@@ -13,4 +13,4 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/big N` | N KiB of text. |
 | `/recall` | Recalls everything said in the session. |
 | `/crash` | Exits with code 3. |
-| `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/credentials.md`); answers with what came back. GET by default. |
+| `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/specs/credentials.md`); answers with what came back. GET by default. |

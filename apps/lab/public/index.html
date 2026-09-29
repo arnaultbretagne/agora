@@ -31,7 +31,7 @@
 <div class="row">
   <span>State stream: <b id="sse">…</b></span>
   <button id="restart" title="POST /api/lab/restart">Restart the lab</button>
-  <span class="muted">Contract: docs/executions.md</span>
+  <span class="muted">Contract: docs/specs/executions.md</span>
 </div>
 
 <h2>Create an execution</h2>
@@ -51,7 +51,7 @@
   <span>Credentials: <b id="credentialSource">…</b></span>
   <label>profiles <input id="profiles" size="70" value="anthropic"></label>
   <label>duration (s) <input id="credentialTtl" size="6" value="3600"></label>
-  <span class="muted">docs/credentials.md — profiles: anthropic, github:owner/repo:read, github:owner/repo:write</span>
+  <span class="muted">docs/specs/credentials.md — profiles: anthropic, github:owner/repo:read, github:owner/repo:write</span>
 </div>
 <pre id="createResult" class="muted">—</pre>
 <div id="pools" class="muted"></div>
@@ -123,7 +123,7 @@
 <h2>Lab log</h2>
 <pre id="logs"></pre>
 
-<h2>Cases to validate (docs/executions.md)</h2>
+<h2>Cases to validate (docs/specs/executions.md)</h2>
 <table>
   <thead><tr><th>#</th><th>Case</th><th>How to play it here</th><th>Expected</th></tr></thead>
   <tbody id="cases"></tbody>
@@ -430,7 +430,7 @@ const CASES = [
   ['Refused tokens', '"probe token".', '401 everywhere except the control.'],
   ['Push without a projected token', 'Outside the page: POST on port 8081 without a valid token.', '401, nothing is stored.'],
   ['Real harness', 'Pool claude-code: initialize, session/new, a prompt, "Stop", "restore".', 'Real initialize; without a credential the prompt fails.'],
-  ['Going out without a credential (docs/credentials.md)', 'Pool mock: /fetch.', 'CONNECT refused by the bridge: 503; 1 refused in "Way out".'],
+  ['Going out without a credential (docs/specs/credentials.md)', 'Pool mock: /fetch.', 'CONNECT refused by the bridge: 503; 1 refused in "Way out".'],
   ['Gateway, chain only', 'Pool mock, profile anthropic: "attach credential", then /fetch.', 'Answer from Anthropic (no 403 from the gateway, no TLS error); tunnel counted.'],
   ['Gateway, real harness', 'Pool claude-code, profile anthropic: "attach credential", session/new (model haiku applied), a short prompt.', 'Real answer from the model, end of turn end_turn.'],
   ['Gateway, composition', 'Pool mock, profiles github:A:write github:B:read: /fetch on A, B and C.', 'A read and written, B read only, C refused: 403 from the gateway on what is not granted.'],

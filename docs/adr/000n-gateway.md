@@ -17,45 +17,42 @@
 
 ## Decision
 
-1. **No credential in the sandbox.** Everything it sends out goes through a gateway, reached
-   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent Sandbox:
-   agentgateway, deployed and configured by the infrastructure.
-2. **Agora signs the rights, and nothing more.** It compiles the execution's profiles
-   (`anthropic`, `github:owner/repo:read|write`) into grants — host, path, methods — and signs
-   them into a short-lived JWT, handed to the bridge after the claim.
-3. **The gateway decides, then sets the credential.** It verifies the JWT and checks every
-   request against the grants with a single rule. If allowed, it sets the host's credential,
-   which only it holds (a SOPS-encrypted Kubernetes Secret).
+1. **No credential in the sandbox.** Everything it sends out goes through a gateway — a
+   prerequisite, like Kubernetes and Agent Sandbox: agentgateway, deployed by the
+   infrastructure.
+2. **Agora signs each execution's rights into a short-lived, self-contained token**, and does
+   nothing more: it never holds a credential.
+3. **The gateway checks every request against that token**, then sets the credential it alone
+   holds.
 4. **The credential bounds, the grants cut.** One credential per host, as narrow as possible;
-   each execution gets only the share its profiles grant.
+   each execution gets only the share its token grants.
 
 ```mermaid
-sequenceDiagram
-    participant Agora
-    participant Bridge as Bridge (sandbox)
-    participant Harness as Harness (sandbox)
-    participant Gateway
-    participant GitHub
-    Agora->>Bridge: JWT: anthropic, A write, B read
-    Harness->>Bridge: CONNECT api.github.com:443
-    Bridge->>Gateway: CONNECT + JWT
-    Harness->>Gateway: PUT /repos/o/B/contents/x (through the tunnel)
-    Gateway->>Gateway: no grant covers B + PUT
-    Gateway-->>Harness: 403
-    Harness->>Gateway: PUT /repos/o/A/contents/x
-    Gateway->>GitHub: same request + the PAT
-    GitHub-->>Harness: 201
+flowchart LR
+    subgraph sandbox [Sandbox, untrusted]
+        Harness --> Bridge
+    end
+    Agora -- signed rights --> Bridge
+    Bridge -- every request + token --> Gateway
+    Secrets[(Credentials)] --- Gateway
+    Gateway -- allowed request + credential --> Services[External services]
 ```
 
 ## Why
 
 - **Any combination fits in one token.** Nothing is created or cleaned up per execution or per
   combination.
+- **The gateway decides alone.** Everything it needs is in the token: no state to keep in sync,
+  no call to Agora per request. Changing an execution's rights is issuing a new token.
 - **Secrets live in one place.** Agora never sees them; the sandbox holds a token that expires
   and only works through the gateway, for its grants.
 - **One rule, one log.** Each request leaves a line: execution, method, path, status, reason.
 - **Secrets change like the rest of the infrastructure.** A SOPS commit; the gateway reloads it
   without a restart.
+- **agentgateway does all of it natively** (read in its v1.5.0 code, measured on g4): a `CONNECT`
+  listener with TLS interception by its own CA, the JWT read from the `CONNECT` headers, one CEL
+  rule over the claims and the request's host, path and method, and credentials read from files
+  it watches. Apache-2.0, under the Linux Foundation.
 
 Measured on g4 under Kata, 2026-09-29: with a PAT able to write to two repos, an execution
 granted "write A, read B" created a file on A (201) and was refused the same write on B (403);
@@ -100,6 +97,14 @@ kept as is. Dropped because it does not compose, and for what it demands of Agor
 | Minting a session requires `member`, which can also read, set and delete credentials. | Agora would hold every secret it hands out. |
 | Per its documentation, the enterprise edition adds method and path filters, still one vault per session. | Same limit, licensed. |
 
+### Other ways for the token to carry the rights
+
+| Option | Why not |
+| --- | --- |
+| An opaque token the gateway resolves with Agora | State and a lookup per request; Agora on the critical path of every call. It is Agent Vault's session model. |
+| An identity per execution, created in the gateway | Created and cleaned up per execution; it is OneCLI's Agent model. |
+| Profiles in the token, expanded by the gateway | Moves the profile catalogue into the gateway's configuration. Kept in reserve if tokens grow too big (tens of repos). |
+
 ### A short-lived credential per execution
 
 A GitHub App installation token scoped per execution. Dropped: per-execution state and cleanup
@@ -126,6 +131,8 @@ Dropped outright: vaults grow with the combinations.
 - A new host needs a gateway route and a profile in Agora's catalogue, reviewed as code.
 - A JWT cannot be revoked before it expires: keep it short, and Agora reissues it during the
   execution.
+- The token grows with the grants: a few hundred bytes for a few repos. Tens of repos would call
+  for profiles expanded by the gateway instead.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
 - git and codex must trust the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`.
 - agentgateway is young and moves fast (1.5 made `iss` and `aud` mandatory): pinned by digest,

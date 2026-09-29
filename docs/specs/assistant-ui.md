@@ -1,13 +1,13 @@
 # Agora ↔ assistant-ui interface
 
-Starting contract to implement — `@assistant-ui/react` **0.15.21**.
+Contract to implement — `@assistant-ui/react` **0.15.21**.
 
 **Agora owns the thread and the commands. assistant-ui displays the thread and passes
 up the user's actions.**
 
-The options studied before this choice are in `ui-options.md`.
+The choice of assistant-ui and the options studied before it are in the interface ADR.
 
-## Who does what?
+## Who does what
 
 - **The Agora server** projects the ACP log into turns, elements and notices, in the
   database, and applies the commands.
@@ -163,8 +163,8 @@ What each registry element can receive from ACP is in
 `Notice`, the harness choice, the turn state badge, the execution banner and the
 sending-closed banner. Everything else comes from the registry or the primitives.
 
-**To be settled:** blocking writing after an uncertain turn (decision 5 of the
-design), pagination of long threads, and pinning the assistant-ui version —
+**To be specified:** blocking writing after an uncertain turn (the command-ordering question in
+`overview.md`), pagination of long threads, and pinning the assistant-ui version —
 `adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
 unstable in 0.15.
 

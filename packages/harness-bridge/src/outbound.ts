@@ -1,4 +1,4 @@
-// The bridge's outbound proxy (docs/credentials.md). The adapter starts with the warm Pod, before
+// The bridge's outbound proxy (docs/specs/credentials.md). The adapter starts with the warm Pod, before
 // any execution exists, so its environment cannot carry a credential: it starts with HTTPS_PROXY
 // pointing here, on loopback, and Agora hands the bridge later the credential proxy to go through
 // and the token that opens it (PUT /credentials). Each CONNECT is forwarded to that proxy with the

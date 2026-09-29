@@ -1,6 +1,6 @@
-// Agora's executions (docs/executions.md). It holds ONE connection per bridge, follows turns by
+// Agora's executions (docs/specs/executions.md). It holds ONE connection per bridge, follows turns by
 // watching the ACP traffic it relays, and re-arms each claim's deadline while a turn runs
-// (docs/executions.md: min(now + lease, turn start + max turn)). It never deletes anything: the
+// (docs/specs/executions.md: min(now + lease, turn start + max turn)). It never deletes anything: the
 // infrastructure destroys at the deadline, and the Pod pushes its anchor on the way out.
 // Everything it must know after a restart is written on the claim itself.
 import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto'
@@ -136,7 +136,7 @@ interface SandboxRecord {
   lastTurn: { outcome: string; endedAt: string } | null
   anchor: AnchorMeta | null
   anchorError: string | null
-  /** What the bridge says of its way out (docs/credentials.md) — never the token. */
+  /** What the bridge says of its way out (docs/specs/credentials.md) — never the token. */
   outbound: OutboundView | null
   error: string | null
   lost: string | null
@@ -421,7 +421,7 @@ export class ExecutionManager {
     this.emitRecord(record)
   }
 
-  /** No live context any more: the deadline is no longer re-armed (docs/executions.md, "The deadline"). */
+  /** No live context any more: the deadline is no longer re-armed (docs/specs/executions.md, "The deadline"). */
   private lose(record: SandboxRecord, reason: string): void {
     if (record.lost !== null) return
     record.lost = reason
@@ -509,7 +509,7 @@ export class ExecutionManager {
     }
   }
 
-  /** A confirmed end: 10 more minutes without renewal (docs/executions.md, "Between two turns"). */
+  /** A confirmed end: 10 more minutes without renewal (docs/specs/executions.md, "Between two turns"). */
   private async endTurn(record: SandboxRecord, message: AcpMessage): Promise<void> {
     const outcome = message.error !== undefined ? `error: ${String(message.error.message)}` : `end: ${String(message.result?.stopReason)}`
     record.turn = null
@@ -609,7 +609,7 @@ export class ExecutionManager {
     }
   }
 
-  // ---------------------------------------------------------------- credentials (docs/credentials.md)
+  // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
 
   /** Hands the bridge the proxy to go out through and its token; the token is kept nowhere here. */
   async attachCredentials(name: string, credentials: Credentials): Promise<CommandResult<OutboundView>> {
@@ -758,7 +758,7 @@ export class ExecutionManager {
     const now = Date.now()
     for (const record of [...this.records.values()]) {
       try {
-        // Every minute (docs/executions.md); a lease shorter than three minutes, possible in the lab,
+        // Every minute (docs/specs/executions.md); a lease shorter than three minutes, possible in the lab,
         // is re-armed three times per lease so the renewal never races the deadline.
         const every = Math.min(this.options.renewSeconds, record.limits.leaseSeconds / 3) * 1000
         if (this.renews(record) && now - record.lastRenewedAt >= every) await this.renew(record, now)
@@ -813,7 +813,7 @@ export class ExecutionManager {
 
   // ---------------------------------------------------------------- the anchor pushed by the Pod
 
-  /** docs/executions.md, "Receiving an anchor": the Pod is already authenticated by TokenReview. */
+  /** docs/specs/executions.md, "Receiving an anchor": the Pod is already authenticated by TokenReview. */
   async receiveAnchor(podName: string, bundle: Bundle, raw: Uint8Array): Promise<CommandResult<{ anchorId: string | null }>> {
     const record = [...this.records.values()].find((candidate) => candidate.podName === podName)
     if (record === undefined) return refused(`no known claim for Pod ${podName}`, 404)
@@ -983,7 +983,7 @@ export class ExecutionManager {
     return { accepted: true, value: { name, shutdownTime: record.shutdownTime } }
   }
 
-  // ---------------------------------------------------------------- lab hooks (docs/executions.md, "The lab")
+  // ---------------------------------------------------------------- lab hooks (docs/specs/executions.md, "The lab")
 
   lab = {
     dropBridge: (name: string): CommandResult<string> => {

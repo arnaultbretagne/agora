@@ -1,6 +1,6 @@
 # Harness image: the bridge in front of the lab's mock agent, launched by Agent Sandbox in its pools.
 # Built from the repository root:  docker build -f harnesses/mock/Dockerfile .
-# Everything is in the image (docs/executions.md, "The image"): nothing is fetched when it starts.
+# Everything is in the image (docs/specs/executions.md, "The image"): nothing is fetched when it starts.
 FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./

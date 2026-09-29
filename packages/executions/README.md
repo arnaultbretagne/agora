@@ -1,6 +1,6 @@
 # executions
 
-What Agora does for an execution (`docs/executions.md`, "On Agora's side"): request the
+What Agora does for an execution (`docs/specs/executions.md`, "On Agora's side"): request the
 sandbox from Agent Sandbox (a `SandboxClaim`), reach its bridge through the Service, relay ACP
 while following turns, re-arm the deadline during a turn, receive the anchor the Pod pushes,
 resume an execution from an anchor, and hand the bridge its credential. It neither creates nor

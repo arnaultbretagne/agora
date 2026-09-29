@@ -1,41 +1,11 @@
 # An execution's credentials
 
-Contract to implement — agentgateway **1.5.0**, on top of executions (`executions.md`). The
-decision and the options tried are in the gateway ADR.
+Contract to implement — agentgateway **1.5.0**, on top of the executions contract
+(`executions.md`). How it fits together is explained in `architecture/credentials.md`; why, in
+the gateway ADR.
 
 **The sandbox holds no secret. It goes out through the gateway, which checks each request
 against the execution's grants and sets the credential on the way through.**
-
-A harness needs credentials: Claude, GitHub. They never enter the sandbox. Its only way out is
-the gateway: it terminates TLS, decides whether the request is allowed and sets the host's
-authentication header. The execution holds only a **short-lived JWT signed by Agora**, which
-lists its grants. Agora hands it to the bridge after the claim, which keeps the pool warm.
-
-## Who does what
-
-- **The operator** stores the credentials as a SOPS Secret in infra-k8s.
-- **The gateway** (agentgateway) is a prerequisite, like Kubernetes and Agent Sandbox, deployed
-  and configured by infra-k8s. It holds the credentials, terminates TLS with its own certificate
-  authority, checks the JWT and the grants, and sets the host's credential.
-- **Agora** compiles the execution's profiles into grants, signs them and hands the token to the
-  bridge. It sees no credential.
-- **The bridge** opens a local outbound proxy for the harness and forwards each tunnel to the
-  gateway, with the token.
-- **infra-k8s** gives the sandboxes the gateway's certificate authority and lets them out only
-  to the gateway.
-
-## Why a proxy in the bridge
-
-The adapter starts in the pool, before any claim: its environment cannot carry a token. Passing
-the token through the claim forces a cold start (see `executions.md`, "Decisions and ruled-out
-options").
-
-So the bridge starts the adapter with `HTTPS_PROXY` pointing at its own local proxy, which
-refuses everything until a credential is attached. Agora attaches the token later, through a
-bridge route. Any harness that honours `HTTPS_PROXY` benefits.
-
-The token stays in the bridge's memory: not in the adapter's environment, not on disk. The agent
-can use the way out but not take the token with it, and the network lets it go nowhere else.
 
 ## A request's path
 
@@ -76,8 +46,7 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
-Grants are additive: any combination of profiles composes, with no entity per combination.
-GraphQL (`/graphql`) is covered by no profile: the target repo cannot be checked there.
+Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
 ## The token
 
@@ -114,8 +83,7 @@ credential.
 
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
-reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. The PAT
-sets the maximum, the repos Agora can touch; the grants cut that maximum down per execution.
+reloaded about a minute after the merge, the time the kubelet takes to sync the Secret.
 
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.

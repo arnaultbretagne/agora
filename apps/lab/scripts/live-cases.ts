@@ -1,4 +1,4 @@
-// Plays every case of docs/executions.md and docs/credentials.md ("Cases to validate") against the
+// Plays every case of docs/specs/executions.md and docs/specs/credentials.md ("Cases to validate") against the
 // DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline. Case 25 is a
 // real, billed prompt: on haiku, one short answer. Case 26 writes a dated file to GITHUB_A.
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [cas…] (the receiver is on port 8081).
@@ -159,7 +159,7 @@ await check(2, 'Create beyond the warm pool, and 3: the same id twice', async ()
   const claims = (await snapshot()).executions.filter((s) => s.requestId === requestId).length
   assert(claims === 1, `${String(claims)} executions for one id`)
   // Beyond the ready stock, a claim waits for a VM to boot: cold, or warm on a pool sandbox that is
-  // still starting (docs/executions.md, "Edge cases"). Only the immediate ones had it ready.
+  // still starting (docs/specs/executions.md, "Edge cases"). Only the immediate ones had it ready.
   const slow = timings.filter((t) => Number(/ (\d+) ms$/.exec(t)?.[1]) > 1500)
   assert(slow.length >= 1, `everything was already ready: ${timings.join(', ')}`)
   return `same id → ${String(answers[0]!.name)} twice, a single claim; ${timings.join('; ')}`
@@ -432,7 +432,7 @@ await check(22, 'Real harness (claude-code)', async () => {
   return `ready in ${String(ms)} ms, ${String(init.result.agentInfo?.name)}@${String(init.result.agentInfo?.version)}, prompt: ${outcome}; anchor ${end.anchor === null ? `missing (${String(end.anchorError)})` : `${String(end.anchor.byteLength)} B pushed`}; ${restoredNote}`
 })
 
-// ---------------------------------------------------------------- credentials (docs/credentials.md)
+// ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
 
 /** The agent's text in a turn, from the session/update chunks. */
 function said(c: Consumer): string {
