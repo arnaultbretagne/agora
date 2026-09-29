@@ -69,6 +69,6 @@ Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cas
 - A new image is a new pool: its name follows the image's digest.
 - If Agora is unreachable during the grace period, the sandbox leaves without an anchor.
 - A turn lasts at most one hour.
-- Restoring from an anchor opens a new session and pays for the whole context again.
+- Restoring from an anchor opens a new Session and pays for the whole context again.
 - Kata constraints: no FQDN network rules (plain DNS and address ranges), and clock sync
   disabled in the guest (`systemd.mask=chrony.service`).

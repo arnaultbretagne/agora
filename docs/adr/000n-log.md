@@ -83,4 +83,4 @@ flowchart LR
   the claims say which executions still exist, the log everything else.
 - Changing a projection bumps its version and rebuilds it.
 - An invalid line is not an entry; only its size, digest and reason are kept.
-- Agora never reads inside an anchor.
+- Agora never interprets the harness's files inside an anchor.
