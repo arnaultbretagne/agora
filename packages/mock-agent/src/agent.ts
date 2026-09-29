@@ -1,4 +1,4 @@
-// The lab's ACP agent (docs/executions.md, "The lab"): no model, deterministic behaviours chosen by
+// The lab's ACP agent (docs/specs/executions.md, "The lab"): no model, deterministic behaviours chosen by
 // the prompt text, and a REAL native transcript under $HOME that session/resume and session/load
 // read back — so an anchor restored into another sandbox is checked by asking what was said before.
 //
@@ -201,7 +201,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
 }
 
 /**
- * A request through HTTPS_PROXY, the way a real harness goes out (docs/credentials.md): CONNECT to
+ * A request through HTTPS_PROXY, the way a real harness goes out (docs/specs/credentials.md): CONNECT to
  * the proxy, then TLS trusted by the system store plus NODE_EXTRA_CA_CERTS. Answers with what came back.
  */
 async function fetchOut(method: string, address: string, requestBody: string): Promise<string> {

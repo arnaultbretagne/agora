@@ -1,4 +1,4 @@
-// The HTTP surface of the executions (docs/executions.md, "On Agora's side"), and a deployable's page. Every command answers accepted
+// The HTTP surface of the executions (docs/specs/executions.md, "On Agora's side"), and a deployable's page. Every command answers accepted
 // or refused with its reason; the effects are read from /api/events, never from the answer alone.
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -11,7 +11,7 @@ import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle } from '@agora/harness-bri
 import { bearerOf } from '@agora/harness-bridge/token'
 import type { Credentials } from '@agora/harness-bridge/outbound'
 
-/** Where an execution's credential comes from (docs/credentials.md): Agora's signed grants for the gateway. */
+/** Where an execution's credential comes from (docs/specs/credentials.md): Agora's signed grants for the gateway. */
 export interface CredentialSource {
   describe(): Record<string, unknown>
   mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
@@ -20,7 +20,7 @@ export interface CredentialSource {
 export interface HttpOptions {
   readonly manager: ExecutionManager
   readonly anchors: AnchorStore
-  /** Opens the lab's own routes (docs/executions.md, "The lab"). */
+  /** Opens the lab's own routes (docs/specs/executions.md, "The lab"). */
   readonly lab: boolean
   /** A page to serve at `/`, if the deployable has one. */
   readonly page?: string
@@ -183,7 +183,7 @@ export interface AnchorReceiverOptions {
 }
 
 /**
- * The only route the sandboxes reach (docs/executions.md, "Receiving an anchor"), on its own
+ * The only route the sandboxes reach (docs/specs/executions.md, "Receiving an anchor"), on its own
  * port so that the network policy opens this and nothing else of Agora to them.
  */
 export function createAnchorReceiver(options: AnchorReceiverOptions): Server {

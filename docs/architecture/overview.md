@@ -1,10 +1,8 @@
-# Agora
+# Overview
 
-Design proposal for review — 21 September 2026.
-
-This branch starts from scratch. No code, schema, ADR or contract from previous versions
-is implicitly adopted. The choices proposed below are still to be validated; any reuse
-will require an explicit decision.
+Agora as a whole: what it is for, what it relies on, who owns what, and how it behaves. The
+foundations are decided in the ADRs; the rest describes the intended behaviour, still to be
+validated where marked, and the open questions close the document.
 
 ## Purpose
 
@@ -14,21 +12,20 @@ find your work again after an interruption.
 The product provides a common interface to several harnesses through ACP. It keeps
 the history independently of the lifetime of processes and infrastructure.
 
-## Settled decisions
+## Foundations
 
-- **Agent Sandbox** owns the lifecycle of sandboxes on Kubernetes.
-- **A gateway** (agentgateway) is the executions' only way out. Like Agent Sandbox,
-  it is a prerequisite, not part of Agora. Agora signs each execution's grants; the gateway
-  checks them on every request and sets the credentials (gateway ADR). It replaces
-  OneCLI; Agent Vault was tried, then ruled out.
-- **ACP** is the interface between Agora and the harnesses.
-- Cleaning up abandoned sandboxes is the job of Agent Sandbox and, if needed,
-  of a reaping extension in that infrastructure. No reaper in Agora.
-- A proxy outage or an access refusal can make an operation fail.
-  Agora does not have to repair this dependency automatically to pursue a
-  global convergence.
+| Foundation | Decided in |
+| --- | --- |
+| **Agent Sandbox**, a prerequisite, runs the executions on Kubernetes; Agora only sets their deadline, the infrastructure alone destroys them. | executions ADR |
+| **A gateway** (agentgateway), a prerequisite, is the executions' only way out; Agora signs each execution's grants, the gateway checks them on every request and sets the credentials. | gateway ADR |
+| **assistant-ui** renders the interface, as a view of Agora's log. | interface ADR |
+| **ACP** is the interface between Agora and the harnesses. | — |
 
-## Proposed features
+Cleaning up abandoned sandboxes is Agent Sandbox's job, not Agora's: no reaper in Agora. A
+gateway outage or an access refusal can make an operation fail; Agora does not repair this
+dependency automatically to pursue a global convergence.
+
+## Features
 
 | Feature | Expected behaviour |
 | --- | --- |
@@ -41,8 +38,8 @@ the history independently of the lifetime of processes and infrastructure.
 | Harness choice | Use a common interface, without claiming that all harnesses have the same resume or configuration capabilities. |
 
 Switching harness with context transfer, personas, customizable skills,
-conversation branches and multi-user collaboration stay outside the first proposed
-scope. They are not inherited from previous versions.
+conversation branches and multi-user collaboration are outside the scope. They are not
+inherited from previous versions.
 
 ## Responsibilities
 
@@ -62,15 +59,13 @@ credentials and enforces the grants Agora signed for each execution.
 Agora configures these integrations with allowed values. It does not reimplement
 a Pod controller, a vault, an HTTP proxy, or their global monitoring.
 
-Executions (`executions.md`) specifies the interface with Agent Sandbox, the image
-and what Agora does: a 10-minute lease, renewed every minute during a turn, a turn
-limited to 1 hour, destruction by the infrastructure alone, an anchor pushed by the Pod.
+Each subject is explained in this folder, specified in `specs/` and decided in `adr/`:
 
-An execution's credentials (`credentials.md`) specifies an execution's way out: the
-bridge's local proxy, grants signed by Agora, a gateway that checks them and sets the credential.
-
-The Agora ↔ assistant-ui interface (`assistant-ui.md`) specifies the thread, the commands
-and the chosen components: ACP projection in the database, a single stream resumed by position.
+| Subject | What it covers |
+| --- | --- |
+| Executions | A 10-minute lease renewed every minute during a turn, a turn limited to 1 hour, destruction by the infrastructure alone, an anchor pushed by the Pod. |
+| Credentials | The bridge's local proxy, grants signed by Agora, a gateway that checks them and sets the credential. |
+| Interface (`assistant-ui.md` in `specs/`) | The thread, the commands and the components: ACP projection in the database, a single stream resumed by position. |
 
 ## History and execution
 
@@ -130,7 +125,7 @@ re-evaluates every dependency and the whole desired configuration.
 ## Credentials and isolation
 
 The sandbox only receives a short-lived token, signed by Agora, that lists its grants;
-the services' credentials and administrative powers stay in the gateway.
+the services' credentials and administrative powers stay in the gateway (`credentials.md`).
 
 Restrictions must match what the gateway and the target service can actually
 enforce: a host, a path, a method. An ACP permission, an installed tool or an
@@ -174,10 +169,10 @@ Three kinds of data have different guarantees:
 A persistent volume can preserve files without preserving the process. A saved
 transcript is not enough to guarantee consistency with those files.
 
-The earlier Save, Anchor and Handoff mechanisms are to be re-examined. They are not
-required up front. If reliable native resume is not available, Agora keeps the
-history and explicitly offers a new context with the chosen elements. It does not
-present this operation as an exact restore.
+The anchor keeps the harness's native files when a Pod ends (`executions.md`); restoring it
+opens a new session. The earlier Save and Handoff mechanisms are not adopted. If reliable
+native resume is not available, Agora keeps the history and explicitly offers a new context
+with the chosen elements. It does not present this operation as an exact restore.
 
 Internal compaction belongs to the harness. Agora does not try to prove after each
 message that the model still has the whole history.
@@ -194,18 +189,14 @@ message that the model still has the whole history.
 | Log storage unavailable | Suspend new sends and apply bounded backpressure; do not claim durability that is not there. |
 | Old execution cannot be stopped | Cleanup left to the infrastructure; no replacement announced as safe without proof. |
 
-## Decisions to close before implementation
+## Open questions
 
-1. Validate the functional scope and the definition of Sessions.
-2. Define workspace storage and the resume actually promised for each harness.
-3. Credentials contract: closed by the gateway ADR and
-   `credentials.md`; token renewal and the TLS trust of git and codex
-   remain.
-4. Define the Agent Sandbox contract: idempotent creation, process identity,
-   stop, expiry, storage and replacement after a failure.
-5. Specify command ordering, recovery of uncertain sends and the
-   buffering limits when the log is unavailable.
-6. Define user access, ACP permissions and data retention.
+1. The functional scope and the definition of Sessions.
+2. Workspace storage and the resume actually promised for each harness.
+3. Credentials: token renewal, and the TLS trust of git and codex.
+4. Command ordering, recovery of uncertain sends and the buffering limits when the log is
+   unavailable.
+5. User access, ACP permissions and data retention.
 
 ## Validation and reuse
 
@@ -217,5 +208,5 @@ Each piece of old code brought back must name the feature it serves, its depende
 and the scenarios that validate it. The log, the ACP transport, the projections,
 the interface and the harness integrations are candidates, not givens.
 
-The old reconciliation engines, infrastructure controllers and grant models
-impose no obligation on this design.
+The previous implementation's reconciliation engines, infrastructure controllers and grant
+models impose no obligation on this design.

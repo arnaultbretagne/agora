@@ -1,4 +1,4 @@
-// Bridge tokens (docs/executions.md, "The bridge's routes"). Agora signs with its Ed25519
+// Bridge tokens (docs/specs/executions.md, "The bridge's routes"). Agora signs with its Ed25519
 // private key; the bridge only holds the public key, so a sandbox never contains a secret. The
 // token names the sandbox it is for and expires after a minute: a token lifted from one sandbox is
 // useless against another, and useless for long against the same one.

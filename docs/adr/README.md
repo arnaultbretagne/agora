@@ -1,7 +1,7 @@
 # adr
 
 Agora's architecture decisions. An ADR explains why Agora is built this way; how it works is
-described in the subject's own document, in `docs/`.
+explained in `architecture/` and specified in `specs/`.
 
 ## When to write one
 

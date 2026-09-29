@@ -1,4 +1,4 @@
-// Anchors (docs/executions.md, "The end of the Pod and the anchor"): the harness's native files, saved en bloc and nothing
+// Anchors (docs/specs/executions.md, "The end of the Pod and the anchor"): the harness's native files, saved en bloc and nothing
 // else. What is kept from the S9 custody driver of the previous implementation (arnaultbretagne/agora
 // main, harnesses/claude-code/src/driver.ts): the native location and claude-code's slug rule, the
 // stability read before a capture, the size limit, and restoration written beside the target, read
@@ -152,7 +152,7 @@ export async function writeBundle(root: string, bundle: Bundle): Promise<{ path:
   return placed
 }
 
-/** The Pod's push (docs/executions.md, "The end of the Pod and the anchor"): a fresh projected token each attempt. */
+/** The Pod's push (docs/specs/executions.md, "The end of the Pod and the anchor"): a fresh projected token each attempt. */
 export async function pushBundle(url: string, tokenFile: string, bundle: Bundle, options: { attempts?: number; log?: (message: string) => void } = {}): Promise<boolean> {
   const log = options.log ?? (() => {})
   const body = JSON.stringify(bundle)

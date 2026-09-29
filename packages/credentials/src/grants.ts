@@ -1,4 +1,4 @@
-// Composition by policy (docs/credentials.md, "The gateway"): an execution's rights are a set of
+// Composition by policy (docs/specs/credentials.md, "The gateway"): an execution's rights are a set of
 // profiles, compiled here into grants — host, anchored regex on path and query, methods — and signed
 // by Agora into a short JWT. The gateway checks each request against those grants, then sets the
 // broad credential it holds for the host. No entity per combination: the set lives in the JWT.

@@ -1,4 +1,4 @@
-// Profiles compiled into grants, and the JWT that carries them (docs/credentials.md, "The gateway").
+// Profiles compiled into grants, and the JWT that carries them (docs/specs/credentials.md, "The gateway").
 // The regexes only use what RE2 (the gateway's CEL `matches`) and JavaScript share.
 import assert from 'node:assert/strict'
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'

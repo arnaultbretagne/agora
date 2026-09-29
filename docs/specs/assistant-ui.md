@@ -5,9 +5,9 @@ Starting contract to implement — `@assistant-ui/react` **0.15.21**.
 **Agora owns the thread and the commands. assistant-ui displays the thread and passes
 up the user's actions.**
 
-The options studied before this choice are in `ui-options.md`.
+The choice of assistant-ui and the options studied before it are in the interface ADR.
 
-## Who does what?
+## Who does what
 
 - **The Agora server** projects the ACP log into turns, elements and notices, in the
   database, and applies the commands.

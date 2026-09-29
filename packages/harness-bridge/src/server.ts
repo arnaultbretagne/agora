@@ -1,7 +1,7 @@
-// The bridge (docs/executions.md). It spawns the ACP adapter once, initializes it once, then relays
+// The bridge (docs/specs/executions.md). It spawns the ACP adapter once, initializes it once, then relays
 // its stdio to ONE WebSocket client, numbering every line the adapter writes. It never interprets
 // ACP: lines are relayed and buffered byte-for-byte. The adapter's only way out is the bridge's
-// outbound proxy, opened when Agora attaches a credential (docs/credentials.md). When the Pod ends
+// outbound proxy, opened when Agora attaches a credential (docs/specs/credentials.md). When the Pod ends
 // (SIGTERM), it stops the adapter and hands back the native files en bloc for the entrypoint to
 // push to Agora.
 //
@@ -33,7 +33,7 @@ export interface BridgeOptions {
   readonly ringBytes?: number
   readonly initializeTimeoutMs?: number
   readonly adapterStopMs?: number
-  /** Loopback port of the outbound proxy the adapter goes through (docs/credentials.md); 0 picks one. */
+  /** Loopback port of the outbound proxy the adapter goes through (docs/specs/credentials.md); 0 picks one. */
   readonly outboundPort?: number
   readonly log?: (message: string) => void
 }
@@ -64,7 +64,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   mkdirSync(options.workspace, { recursive: true })
 
   // Started before the adapter, whose environment must point at it: no credential yet, only the
-  // way out (docs/credentials.md).
+  // way out (docs/specs/credentials.md).
   const outbound = await startOutbound({ port: options.outboundPort ?? 0, log })
   const loopback = 'localhost,127.0.0.1'
   const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback }

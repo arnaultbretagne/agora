@@ -1,4 +1,4 @@
-// The image contract (docs/executions.md), exercised against the real bridge and the mock agent.
+// The image contract (docs/specs/executions.md), exercised against the real bridge and the mock agent.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'

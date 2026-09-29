@@ -2,7 +2,7 @@
 
 The lab, on `agora-lab.bretagne.dev` behind Pocket-ID. It mounts the `executions` and
 `credentials` packages and serves a deliberately bare page to play every case of
-`docs/executions.md` and `docs/credentials.md`.
+`docs/specs/executions.md` and `docs/specs/credentials.md`.
 
 | Folder | Content |
 | --- | --- |

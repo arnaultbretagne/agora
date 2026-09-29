@@ -18,16 +18,24 @@
 ## Decision
 
 1. **No credential in the sandbox.** Everything it sends out goes through a gateway, reached
-   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent Sandbox:
-   agentgateway, deployed and configured by the infrastructure.
+   through the bridge's local proxy. The gateway is a prerequisite, like Kubernetes and Agent
+   Sandbox: agentgateway, deployed and configured by the infrastructure.
 2. **Agora signs the rights, and nothing more.** It compiles the execution's profiles
    (`anthropic`, `github:owner/repo:read|write`) into grants — host, path, methods — and signs
-   them into a short-lived JWT, handed to the bridge after the claim.
+   them into a short-lived JWT, handed to the bridge after the claim. The grants travel in clear
+   inside the token; Agora's Ed25519 signature makes them tamper-proof, and the gateway checks
+   it with Agora's public key alone. The sandbox can read its own rights, not change them.
 3. **The gateway decides, then sets the credential.** It verifies the JWT and checks every
    request against the grants with a single rule. If allowed, it sets the host's credential,
    which only it holds (a SOPS-encrypted Kubernetes Secret).
 4. **The credential bounds, the grants cut.** One credential per host, as narrow as possible;
    each execution gets only the share its profiles grant.
+
+| Profile | Grants in the token |
+| --- | --- |
+| `anthropic` | `api.anthropic.com`, everything |
+| `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
+| `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
 
 ```mermaid
 sequenceDiagram
@@ -51,6 +59,8 @@ sequenceDiagram
 
 - **Any combination fits in one token.** Nothing is created or cleaned up per execution or per
   combination.
+- **The gateway decides alone.** Everything it needs is in the token: no state to keep in sync,
+  no call to Agora per request. Changing an execution's rights is issuing a new token.
 - **Secrets live in one place.** Agora never sees them; the sandbox holds a token that expires
   and only works through the gateway, for its grants.
 - **One rule, one log.** Each request leaves a line: execution, method, path, status, reason.
@@ -99,6 +109,14 @@ kept as is. Dropped because it does not compose, and for what it demands of Agor
 | A request goes through one vault; the path is hidden in TLS from the bridge. | One vault per profile cannot be combined on one host. |
 | Minting a session requires `member`, which can also read, set and delete credentials. | Agora would hold every secret it hands out. |
 | Per its documentation, the enterprise edition adds method and path filters, still one vault per session. | Same limit, licensed. |
+
+### Other ways for the token to carry the rights
+
+| Option | Why not |
+| --- | --- |
+| An opaque token the gateway resolves with Agora | State and a lookup per request; Agora on the critical path of every call. It is Agent Vault's session model. |
+| An identity per execution, created in the gateway | Created and cleaned up per execution; it is OneCLI's Agent model. |
+| Profiles in the token, expanded by the gateway | Moves the profile catalogue into the gateway's configuration. Kept in reserve if tokens grow too big (tens of repos). |
 
 ### A short-lived credential per execution
 

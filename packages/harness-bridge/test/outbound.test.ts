@@ -1,4 +1,4 @@
-// The way out (docs/credentials.md): the adapter goes through the bridge's outbound proxy, which
+// The way out (docs/specs/credentials.md): the adapter goes through the bridge's outbound proxy, which
 // holds no credential until Agora hands it one, then forwards each CONNECT with it.
 import assert from 'node:assert/strict'
 import { createServer, connect, type Server, type Socket } from 'node:net'

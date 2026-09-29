@@ -1,9 +1,9 @@
 # harness-bridge
 
-The image side of the contract (`docs/executions.md`, "The image"): the bridge starts the ACP
+The image side of the contract (`docs/specs/executions.md`, "The image"): the bridge starts the ACP
 adapter, initializes it once, relays it over a numbered WebSocket and, at SIGTERM, pushes the
 harness's native files to Agora. The adapter only goes out through the bridge's outbound proxy,
-which opens once Agora attaches a credential (`docs/credentials.md`).
+which opens once Agora attaches a credential (`docs/specs/credentials.md`).
 
 | Folder | Content |
 | --- | --- |

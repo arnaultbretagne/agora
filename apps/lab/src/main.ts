@@ -1,5 +1,5 @@
 // The lab: Agora's executions (packages/executions) mounted with the page that exercises every
-// case of docs/executions.md. Configuration comes from the environment.
+// case of docs/specs/executions.md. Configuration comes from the environment.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AnchorStore, createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
@@ -40,7 +40,7 @@ const manager = new ExecutionManager({
   bridgePort: number('BRIDGE_PORT', 8080),
 })
 
-// docs/credentials.md: without the gateway, executions have no credential and no way out.
+// docs/specs/credentials.md: without the gateway, executions have no credential and no way out.
 const credentials =
   process.env.GATEWAY_PROXY === undefined || process.env.GATEWAY_PROXY === ''
     ? undefined

@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Kubernetes API and for Agent Sandbox's controller: claims with merge
 // patches and UID preconditions, a watch, allocation that starts a real bridge with the mock agent,
 // and the deadline — at `shutdownTime` the claim is deleted and its Pod terminated, which makes the
-// bridge push its anchor exactly as in a real Pod (docs/executions.md, "The end of the Pod and the anchor").
+// bridge push its anchor exactly as in a real Pod (docs/specs/executions.md, "The end of the Pod and the anchor").
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

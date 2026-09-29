@@ -1,4 +1,4 @@
-// Where Agora keeps anchors (docs/executions.md, "Receiving an anchor"): durable and on Agora's side —
+// Where Agora keeps anchors (docs/specs/executions.md, "Receiving an anchor"): durable and on Agora's side —
 // a volume of the lab, Agora's database later. The bundle the Pod pushed is kept
 // byte-exact, next to what Agora knows about it.
 import { randomBytes } from 'node:crypto'

@@ -5,10 +5,9 @@ Contract to implement — Agent Sandbox **v1.0.3**, **Kata** runtime.
 **Agora requests a sandbox, talks ACP with it and sets its deadline.
 Agent Sandbox allocates the resources and destroys them.**
 
-An **execution** is a harness running in a sandbox obtained from Agent Sandbox. Agora
-creates no sandbox: it requests the execution, talks ACP with it, sets its deadline, receives
-its anchor and can restore it from an anchor. This document brings together the interface with
-Agent Sandbox, the image contract, what Agora does, the decisions made and the validated cases.
+The contract of an execution: the interface with Agent Sandbox, the image, what Agora does, and
+the validated cases. How it fits together is explained in `architecture/executions.md`; why, in
+the executions ADR.
 
 ## Who does what
 
@@ -310,40 +309,6 @@ and offers three actions reserved for the lab:
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
 with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long text,
 or dies. It writes a real native file and reads it back at `session/resume`.
-
-## Decisions and ruled-out options
-
-Proposed on 27 September 2026.
-
-| Subject | Chosen |
-| --- | --- |
-| **Execution** | Agent Sandbox: one `SandboxClaim` per request, taken from a warm pool. |
-| **Isolation** | Kata: one VM per Pod, RuntimeClass `kata`. |
-| **Lifetime** | Agora sets `shutdownTime`, re-arms it during a turn, grants a lease after it. |
-| **Destruction** | Only by the infrastructure, at the deadline. |
-| **Anchor** | The harness's native files, as a whole, pushed by the Pod when it ends. |
-| **Pod identity** | Projected ServiceAccount token, verified by `TokenReview`. |
-| **Bridge access** | The Sandbox's Service, Agora's Ed25519 token bound to the Pod name. |
-| **Agora's state** | Written on the claim. |
-
-| Ruled out | Why |
-| --- | --- |
-| Agora deletes claims or Pods | A single actor destroys: the infrastructure. No reaper, no `delete` permission. |
-| Home-made Pod controller or reaper | Agent Sandbox already does it. |
-| Persistent volume (PVC) in the sandbox | Against the principle, and a PVC on the claim forces a cold start. |
-| Renewing between two turns | The lease granted after the turn is enough; after that the infrastructure takes the resource back. |
-| Agora pulls the anchor during the grace period | Race between its WATCH and the Pod's death; only the Pod knows when it dies. |
-| Saving at every turn | The anchor only matters at the end of the Pod; before that, the live sandbox is the reference. |
-| The Pod writes to Agora's database | No database login in an untrusted sandbox. |
-| Secret or identity injected through the claim | Forces a cold start and puts a secret in the sandbox. |
-| Reaching the Pod by its IP | The Service is the native building block; the Pod no longer needs to be reached during its grace period. |
-| Network rules by domain name | The Cilium DNS proxy's responses do not reach a Kata VM. |
-| gVisor for these sandboxes | Kata chosen after the 22 September evaluation. |
-| Agent Sandbox's upstream router | Agora relays the WebSocket itself. |
-
-Consequences: a stop frees the resource at most one lease later; if Agora is
-unreachable during the grace period, the sandbox leaves without an anchor; a turn does not exceed one
-hour; restoring from an anchor opens a new session and pays for the whole context again.
 
 ## Cases to validate
 

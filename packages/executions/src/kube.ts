@@ -1,4 +1,4 @@
-// The Kubernetes calls of docs/executions.md ("The four operations") and nothing else: Agora never
+// The Kubernetes calls of docs/specs/executions.md ("The four operations") and nothing else: Agora never
 // deletes anything — the infrastructure destroys at the deadline. Plain REST over fetch: the
 // ServiceAccount token is re-read on every call (projected tokens rotate), and the cluster CA is
 // trusted through NODE_EXTRA_CA_CERTS, set on the Deployment.
