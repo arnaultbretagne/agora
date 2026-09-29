@@ -128,9 +128,10 @@ credential de l'hôte.
 | `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` et le PAT, en base64. |
 
 Les credentials sont dans le Secret SOPS `upstream-credentials`, montés en fichiers. La
-passerelle surveille ces fichiers : une rotation se fait par un commit, sans redémarrage. Le
-PAT peut être large (écriture sur tous les repos utiles) : c'est la règle qui restreint chaque
-exécution.
+passerelle surveille ces fichiers : une rotation se fait par un commit, sans redémarrage.
+Vérifié : un PAT remplacé a été rechargé environ une minute après la fusion, le temps que le
+kubelet synchronise le Secret. Le PAT délimite le maximum, les repos qu'Agora peut toucher ; la
+règle découpe ce maximum par exécution.
 
 ### Le journal
 
@@ -214,8 +215,8 @@ premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option
 ## Les cas à valider
 
 Suite des cas d'[executions.md](executions.md), joués les 28 et 29 septembre sur g4 sous
-Kata, par `apps/lab/scripts/live-cases.ts`. Pour GitHub, un PAT de substitution : ce que la
-passerelle laisse passer reçoit un 401 de GitHub, ce qu'elle refuse s'arrête chez elle.
+Kata, par `apps/lab/scripts/live-cases.ts`. Pour GitHub, un PAT à grain fin limité à deux
+repos jetables, en écriture sur les deux : un refus ne peut venir que de la passerelle.
 
 | # | Cas | Attendu | Mesuré |
 | --- | --- | --- | --- |
@@ -223,7 +224,7 @@ passerelle laisse passer reçoit un 401 de GitHub, ce qu'elle refuse s'arrête c
 | 24 | Agent Vault, chaîne seule | `/fetch https://api.anthropic.com/v1/models` du mock : une réponse d'Anthropic, ni 403 d'Agent Vault, ni erreur TLS. | 400 d'Anthropic (« anthropic-version: header is required ») : TLS accepté, Bearer injecté ; tunnel → 200. |
 | 25 | Agent Vault, harness réel | claude-code en `haiku` : vraie réponse du modèle, fin `end_turn`. | « Paris. » en 1,5 à 2,3 s, `end_turn`, modèle `claude-haiku-4-5-20251001`, 5 tunnels. Journal d'Agent Vault : service `claude`, clé `CLAUDE_TOKEN`, deux `POST /v1/messages` en 200. Avant le branchement, deux sorties tentées par le Pod du pool, refusées par le bridge. |
 | 26 | Passerelle, harness réel | Profil `anthropic`, claude-code en `haiku` : vraie réponse du modèle. | « Paris. » en 2,3 s, `end_turn` ; journal de la passerelle : deux `POST /v1/messages` en 200 sous le nom de l'exécution. |
-| 27 | Passerelle, composition | Profils `github:A:write` et `github:B:read`. A : lecture, écriture, push ; B : lecture et fetch, pas d'écriture ni de push ; C, GraphQL : refusés. | A lecture, écriture et push → GitHub ; B lecture et fetch → GitHub ; B écriture, B push, C, GraphQL → 403 de la passerelle. |
+| 27 | Passerelle, composition | Profils `github:A:write` et `github:B:read`. A : lecture, écriture, push ; B : lecture et fetch, pas d'écriture ni de push ; C, GraphQL : refusés. | A : lecture 200, écriture 201, push 200 ; B : lecture 200, fetch 200 ; B écriture, B push, C, GraphQL : 403 de la passerelle. Vérifié dans GitHub : le fichier créé existe sur A, pas sur B. |
 
 Hors banc, contre la même configuration : JWT absent, expiré ou étranger → 401 ; chemins
 piégés (`..`, `.`, `%2e`, `%2f`) → 403 ; hôte sans route → 404.
@@ -232,8 +233,7 @@ piégés (`..`, `.`, `%2e`, `%2f`) → 403 ; hôte sans route → 404.
 que toutes les requêtes avaient abouti : probablement une connexion ouverte puis abandonnée
 par la CLI.
 
-**À préciser :** la passerelle ou Agent Vault, à trancher ; une écriture réelle avec un vrai
-PAT ; compter les réponses des proxies par statut, pas seulement la dernière ; brancher à la
+**À préciser :** la passerelle ou Agent Vault, à trancher ; compter les réponses des proxies par statut, pas seulement la dernière ; brancher à la
 création et renouveler le jeton quand l'échéance le dépasse, le JWT ne se révoquant pas avant
 son expiration ; la confiance TLS de git (libcurl ne lit pas `NODE_EXTRA_CA_CERTS`) et de
 codex, qui ne sont pas en Node ; un accès GraphQL en lecture.

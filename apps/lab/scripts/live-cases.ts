@@ -535,13 +535,16 @@ await check(27, 'Passerelle, composition (A écriture, B lecture, C rien)', asyn
   assert(attached.accepted === true, JSON.stringify(attached))
   const c = await consumer(name)
   const s = await c.session()
+  // A real create when the PAT is real (201 on A); the same file on B must never exist.
+  const file = `agora-spike-${String(Date.now())}.txt`
+  const createFile = JSON.stringify({ message: `agora: case 27 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
   const probes: [string, string, boolean][] = [
     [`GET https://api.github.com/repos/${REPO_A}`, 'A lecture', true],
-    [`PUT https://api.github.com/repos/${REPO_A}/contents/agora-spike.txt {}`, 'A écriture', true],
+    [`PUT https://api.github.com/repos/${REPO_A}/contents/${file} ${createFile}`, 'A écriture', true],
     [`GET https://github.com/${REPO_A}.git/info/refs?service=git-receive-pack`, 'A git push', true],
     [`GET https://api.github.com/repos/${REPO_B}/contents/README.md?ref=main`, 'B lecture', true],
     [`POST https://github.com/${REPO_B}.git/git-upload-pack`, 'B git fetch', true],
-    [`PUT https://api.github.com/repos/${REPO_B}/contents/agora-spike.txt {}`, 'B écriture', false],
+    [`PUT https://api.github.com/repos/${REPO_B}/contents/${file} ${createFile}`, 'B écriture', false],
     [`GET https://github.com/${REPO_B}.git/info/refs?service=git-receive-pack`, 'B git push', false],
     [`GET https://api.github.com/repos/${REPO_C}`, 'C lecture', false],
     [`POST https://api.github.com/graphql {"query":"{viewer{login}}"}`, 'GraphQL', false],
@@ -555,11 +558,12 @@ await check(27, 'Passerelle, composition (A écriture, B lecture, C rien)', asyn
     const reply = c.messages.slice(before).flatMap((m) => (typeof m.acp === 'string' ? [JSON.parse(m.acp)] : [])).filter((m) => m.params?.update?.sessionUpdate === 'agent_message_chunk').map((m) => String(m.params.update.content?.text ?? '')).join('')
     const refusedByGateway = /^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed')
     const passed = reply.startsWith('HTTP/1.1 ') && !refusedByGateway
-    lines.push(`${label} ${passed ? '→ GitHub' : refusedByGateway ? '→ 403 passerelle' : `→ ? ${reply.slice(0, 60)}`}`)
+    const status = /^HTTP\/1\.1 (\d{3})/.exec(reply)?.[1] ?? '?'
+    lines.push(`${label} ${passed ? `→ GitHub ${status}` : refusedByGateway ? '→ 403 passerelle' : `→ ? ${reply.slice(0, 60)}`}`)
     assert(passed === expected, `${label} : ${reply.slice(0, 160)}`)
   }
   await api('POST', `/api/executions/${name}/stop`)
-  return lines.join(' ; ')
+  return `${lines.join(' ; ')} ; fichier ${file}`
 })
 
 client?.close()
