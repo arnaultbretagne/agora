@@ -19,7 +19,7 @@ l'historique indépendamment de la durée de vie des processus et de l'infrastru
 - **Agent Sandbox** possède le cycle de vie des sandboxes sur Kubernetes.
 - **La passerelle d'Agora** (agentgateway) est la seule sortie des exécutions. Agora
   signe les droits de chaque exécution ; la passerelle les vérifie à chaque requête et
-  pose les credentials ([ADR 0001](adr/0001-la-passerelle.md)). Elle remplace OneCLI ;
+  pose les credentials (ADR de la passerelle). Elle remplace OneCLI ;
   Agent Vault a été essayé puis écarté.
 - **ACP** est l'interface entre Agora et les harnesses.
 - Le nettoyage des sandboxes abandonnées relève d'Agent Sandbox et, si nécessaire,
@@ -62,14 +62,14 @@ possède les credentials et applique les droits qu'Agora a signés pour chaque e
 Agora configure ces intégrations avec des valeurs autorisées. Il ne réimplémente
 ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance globale.
 
-Les [exécutions](executions.md) précisent l'interface avec Agent Sandbox, l'image
+Les exécutions (`executions.md`) précisent l'interface avec Agent Sandbox, l'image
 et ce que fait Agora : bail de 10 minutes, renouvellement chaque minute pendant un tour, tour
 limité à 1 heure, destruction par l'infrastructure seule, anchor poussé par le Pod.
 
-Les [credentials](credentials.md) précisent la sortie d'une exécution : proxy local du
+Les credentials (`credentials.md`) précisent la sortie d'une exécution : proxy local du
 bridge, droits signés par Agora, passerelle qui les vérifie et pose le credential.
 
-L'[interface Agora ↔ assistant-ui](assistant-ui.md) précise le fil, les commandes et
+L'interface Agora ↔ assistant-ui (`assistant-ui.md`) précise le fil, les commandes et
 les composants retenus : projection ACP en base, un flux unique repris par position.
 
 ## Historique et exécution
@@ -199,8 +199,8 @@ chaque message que le modèle possède toujours tout l'historique.
 
 1. Valider le périmètre fonctionnel et la définition des Sessions.
 2. Définir le stockage du workspace et la reprise réellement promise pour chaque harness.
-3. Contrat des credentials : fermé par l'[ADR 0001](adr/0001-la-passerelle.md) et
-   [credentials.md](credentials.md) ; restent le renouvellement du jeton et la confiance
+3. Contrat des credentials : fermé par l'ADR de la passerelle et
+   `credentials.md` ; restent le renouvellement du jeton et la confiance
    TLS de git et de codex.
 4. Définir le contrat Agent Sandbox : création idempotente, identité du processus,
    arrêt, expiration, stockage et remplacement après panne.

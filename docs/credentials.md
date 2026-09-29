@@ -1,8 +1,7 @@
 # Les credentials d'une exécution
 
-Contrat à implémenter — agentgateway **1.5.0**, sur les exécutions de
-[executions.md](executions.md). La décision et les options essayées :
-[ADR 0001](adr/0001-la-passerelle.md).
+Contrat à implémenter — agentgateway **1.5.0**, sur les exécutions (`executions.md`). La décision
+et les options essayées sont dans l'ADR de la passerelle.
 
 **Le sandbox ne contient aucun secret. Il sort par la passerelle d'Agora, qui vérifie chaque
 requête contre les droits de l'exécution et pose le credential au passage.**
@@ -29,7 +28,7 @@ chaud.
 
 L'adaptateur démarre dans le pool, avant tout claim : son environnement ne peut porter aucun
 jeton. Passer le jeton par le claim force le démarrage à froid (voir
-[executions.md](executions.md), « Décisions et options écartées »).
+`executions.md`, « Décisions et options écartées »).
 
 Le bridge lance donc l'adaptateur avec `HTTPS_PROXY` pointé sur un proxy à lui, en local,
 qui refuse tout tant qu'aucun credential n'est branché. Agora branche le jeton plus tard, par
@@ -157,7 +156,7 @@ premier appel facturé. Le banc le fait lui-même quand l'agent propose l'option
 
 ## Les cas à valider
 
-Suite des cas d'[executions.md](executions.md), joués sur g4 sous Kata, par
+Suite des cas d'`executions.md`, joués sur g4 sous Kata, par
 `apps/lab/scripts/live-cases.ts`. Pour GitHub, un PAT à grain fin limité à deux repos jetables,
 en écriture sur les deux : un refus ne peut venir que de la passerelle.
 

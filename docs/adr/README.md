@@ -1,35 +1,34 @@
 # adr
 
-Les décisions d'architecture d'Agora. Un ADR explique pourquoi Agora est construit ainsi ; le
-fonctionnement lui-même est décrit dans le document du sujet, dans [docs/](../).
+Agora's architecture decisions. An ADR explains why Agora is built this way; how it works is
+described in the subject's own document, one level up.
 
-## Quand en écrire un
+## When to write one
 
-Pour un choix qui engage durablement et qu'il serait coûteux de défaire : un composant, une
-dépendance, une frontière de confiance, un format échangé. Pas pour un détail d'implémentation,
-ni pour ce que le document du sujet suffit à expliquer.
+For a choice that commits us and would be costly to undo: a component, a dependency, a trust
+boundary, an exchanged format. Not for an implementation detail, nor for what the subject's
+document already explains.
 
-## Ce qu'on veut y lire
+## What we want to read
 
-| Section | Contenu |
+| Section | Content |
 | --- | --- |
-| En-tête | Statut, date, l'ADR qu'il remplace s'il y en a un, le document du sujet qui porte le contrat. |
-| Contexte | Le problème et ses contraintes, sans la solution. |
-| Décision | Ce qui est décidé, en quelques points vérifiables. |
-| Pourquoi | Ce que la décision apporte, avec les mesures qui l'appuient. |
-| Ce qu'on a essayé | Chaque option essayée ou étudiée : ce qu'elle était, ce qu'on a constaté, pourquoi on l'a écartée. |
-| Conséquences | Ce que la décision coûte ou impose ensuite. |
+| Header | Status and date. |
+| Context | The problem and its constraints, without the solution. |
+| Decision | What is decided, in a few checkable points; a diagram when it helps. |
+| Why | What the decision brings, with the measurements that back it. |
+| What we tried | Each option tried or studied: what it was, what we found, why we dropped it. |
+| Consequences | What the decision costs or imposes next. |
 
-## Règles
+## Rules
 
-- **Nom :** un numéro sur quatre chiffres et un titre court, `0001-la-passerelle.md`. Le titre du
-  document énonce la décision.
-- **Statut :** *proposée* tant qu'elle est à relire et que rien n'en dépend ; *acceptée* quand
-  elle engage le code ; *remplacée* quand un ADR plus récent la remplace, et il le nomme.
-- **Pas de réécriture :** une décision acceptée ne se réécrit pas. Changer d'avis, c'est écrire
-  un nouvel ADR qui la remplace ; seul le statut de l'ancien change. Les corrections de forme
-  restent permises.
-- **Constats sourcés :** chaque constat dit d'où il vient, avec sa date ou sa version : une mesure
-  (où, quand), du code lu, une documentation citée comme telle.
-- **Forme :** prose et tableaux, avec les vrais noms des éléments ; pas de code. Le contrat vit
-  dans le document du sujet : l'ADR le lie, il ne le recopie pas.
+- **Language:** English.
+- **Name:** a four-digit number and a short title; the title states the decision.
+- **Status:** *proposed* while under review and nothing depends on it; *accepted* once it binds
+  the code.
+- **Living:** an ADR states the decision in force. When the decision changes, rewrite it; git
+  keeps the history.
+- **Sourced findings:** each finding says where it comes from — a measurement (where, when),
+  code read (version), documentation (quoted as such).
+- **Form:** short sentences, tables, the real names of things; Mermaid diagrams welcome, kept
+  minimal. No code, no links to other files: names and layout are enough to find them.
