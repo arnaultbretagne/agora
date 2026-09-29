@@ -17,10 +17,10 @@ the history independently of the lifetime of processes and infrastructure.
 ## Settled decisions
 
 - **Agent Sandbox** owns the lifecycle of sandboxes on Kubernetes.
-- **Agora's gateway** (agentgateway) is the executions' only way out. Agora
-  signs each execution's grants; the gateway checks them on every request and
-  sets the credentials (credential gateway ADR). It replaces OneCLI;
-  Agent Vault was tried, then ruled out.
+- **A credential gateway** (agentgateway) is the executions' only way out. Like Agent Sandbox,
+  it is a prerequisite, not part of Agora. Agora signs each execution's grants; the gateway
+  checks them on every request and sets the credentials (credential gateway ADR). It replaces
+  OneCLI; Agent Vault was tried, then ruled out.
 - **ACP** is the interface between Agora and the harnesses.
 - Cleaning up abandoned sandboxes is the job of Agent Sandbox and, if needed,
   of a reaping extension in that infrastructure. No reaper in Agora.

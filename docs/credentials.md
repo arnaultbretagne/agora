@@ -3,8 +3,8 @@
 Contract to implement — agentgateway **1.5.0**, on top of executions (`executions.md`). The
 decision and the options tried are in the credential gateway ADR.
 
-**The sandbox holds no secret. It goes out through Agora's gateway, which checks each request
-against the execution's grants and sets the credential on the way through.**
+**The sandbox holds no secret. It goes out through the credential gateway, which checks each
+request against the execution's grants and sets the credential on the way through.**
 
 A harness needs credentials: Claude, GitHub. They never enter the sandbox. Its only way out is
 the gateway: it terminates TLS, decides whether the request is allowed and sets the host's
@@ -14,7 +14,8 @@ lists its grants. Agora hands it to the bridge after the claim, which keeps the 
 ## Who does what
 
 - **The operator** stores the credentials as a SOPS Secret in infra-k8s.
-- **The gateway** (agentgateway) holds the credentials, terminates TLS with its own certificate
+- **The gateway** (agentgateway) is a prerequisite, like Kubernetes and Agent Sandbox, deployed
+  and configured by infra-k8s. It holds the credentials, terminates TLS with its own certificate
   authority, checks the JWT and the grants, and sets the host's credential.
 - **Agora** compiles the execution's profiles into grants, signs them and hands the token to the
   bridge. It sees no credential.
