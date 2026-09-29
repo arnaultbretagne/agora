@@ -6,7 +6,7 @@ La conception de la refonte d'Agora. Chaque document est autonome ; commencer pa
 | --- | --- |
 | [design.md](design.md) | Le produit : but, décisions acquises, responsabilités, pannes visibles. |
 | [executions.md](executions.md) | Les exécutions : Agent Sandbox, l'image et son bridge, ce que fait Agora, les décisions et options écartées, les cas validés. |
-| [credentials.md](credentials.md) | Les credentials d'une exécution : Agent Vault, le proxy sortant du bridge, la session remise par Agora. |
+| [credentials.md](credentials.md) | Les credentials d'une exécution : le proxy sortant du bridge, la passerelle qui compose des droits signés par Agora, Agent Vault. |
 | [assistant-ui.md](assistant-ui.md) | L'interface : le fil, les commandes, les composants assistant-ui retenus. |
 | [assistant-ui-elements.md](assistant-ui-elements.md) | Ce que chaque élément du registre assistant-ui peut recevoir d'ACP. |
 | [ui-options.md](ui-options.md) | Les interfaces étudiées avant le choix d'assistant-ui. |

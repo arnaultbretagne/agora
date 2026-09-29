@@ -483,14 +483,14 @@ await check(25, 'Credential branché, harness réel (haiku)', async () => {
   assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
   const current = (model.result?.configOptions as Json[] | undefined)?.find((o) => o.id === 'model')?.currentValue
   const started = Date.now()
-  c.prompt(1, s, 'Réponds seulement par le mot : pomme')
+  c.prompt(1, s, 'Quelle est la capitale de la France ? Réponds en un mot.')
   const answer = await c.response(1, 120_000)
   const seconds = ((Date.now() - started) / 1000).toFixed(1)
   const reply = said(c)
   const outbound = await until('tunnel compté', async () => (await execution(name))?.outbound?.targets?.['api.anthropic.com:443'], 10_000)
   await api('POST', `/api/executions/${name}/stop`)
   assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
-  assert(/pomme/i.test(reply), `réponse : ${reply}`)
+  assert(/paris/i.test(reply), `réponse : ${reply}`)
   return `modèle ${String(current)}, « ${reply.trim().slice(0, 60)} » en ${seconds} s, fin ${String(answer.result.stopReason)} ; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
 })
 
@@ -509,11 +509,11 @@ async function haiku(name: string): Promise<string> {
   const model = await c.response('model', 30_000)
   assert(model.error === undefined, `modèle refusé : ${JSON.stringify(model.error)}`)
   const started = Date.now()
-  c.prompt(1, s, 'Réponds seulement par le mot : pomme')
+  c.prompt(1, s, 'Quelle est la capitale de la France ? Réponds en un mot.')
   const answer = await c.response(1, 120_000)
   const reply = said(c)
   assert(answer.result?.stopReason === 'end_turn', JSON.stringify(answer))
-  assert(/pomme/i.test(reply), `réponse : ${reply}`)
+  assert(/paris/i.test(reply), `réponse : ${reply}`)
   return `« ${reply.trim().slice(0, 40)} » en ${((Date.now() - started) / 1000).toFixed(1)} s`
 }
 
