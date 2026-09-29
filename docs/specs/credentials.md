@@ -46,8 +46,7 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
-Grants are additive: any combination of profiles composes, with no entity per combination.
-GraphQL (`/graphql`) is covered by no profile: the target repo cannot be checked there.
+Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
 ## The token
 
@@ -84,8 +83,7 @@ credential.
 
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
-reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. The PAT
-sets the maximum, the repos Agora can touch; the grants cut that maximum down per execution.
+reloaded about a minute after the merge, the time the kubelet takes to sync the Secret.
 
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.

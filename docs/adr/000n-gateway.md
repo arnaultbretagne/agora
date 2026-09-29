@@ -49,6 +49,10 @@ flowchart LR
 - **One rule, one log.** Each request leaves a line: execution, method, path, status, reason.
 - **Secrets change like the rest of the infrastructure.** A SOPS commit; the gateway reloads it
   without a restart.
+- **agentgateway does all of it natively** (read in its v1.5.0 code, measured on g4): a `CONNECT`
+  listener with TLS interception by its own CA, the JWT read from the `CONNECT` headers, one CEL
+  rule over the claims and the request's host, path and method, and credentials read from files
+  it watches. Apache-2.0, under the Linux Foundation.
 
 Measured on g4 under Kata, 2026-09-29: with a PAT able to write to two repos, an execution
 granted "write A, read B" created a file on A (201) and was refused the same write on B (403);

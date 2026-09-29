@@ -9,21 +9,13 @@ The contract of an execution: the interface with Agent Sandbox, the image, what 
 the validated cases. How it fits together is explained in `architecture/executions.md`; why, in
 the executions ADR.
 
-## Who does what
+## Ground rules
 
-- **Agora** builds the complete ACP + WebSocket images and consumes the claims.
-- **infra-k8s** configures the templates, pools per versioned image, Kata, network and resources.
-- **Agent Sandbox** maintains the warm pool, assigns sandboxes, exposes their state and destroys them.
-- **The bridge**, in the image, launches the ACP adapter, relays it without reading it and pushes
-  the anchor when the Pod ends.
-- **Agora** (package `packages/executions`) creates the claims, relays ACP while tracking
-  turns, re-arms the deadline during a turn and stores the anchors. It never deletes anything.
-
-The ACP process and the WS server start in the pool. Each assignment triggers its
-replenishment; a used sandbox is never returned to the pool.
-
-No persistent storage in a sandbox. Whatever the agent wants to keep, it pushes
-itself: code, a note. What Agora keeps is the anchor.
+- Agora creates no sandbox and never deletes anything: Agent Sandbox allocates and destroys.
+- The ACP adapter and the bridge's WebSocket server start in the pool, before any claim. Each
+  assignment triggers its replenishment; a used sandbox is never returned to the pool.
+- No persistent storage in a sandbox. Whatever the agent wants to keep, it pushes itself: code, a
+  note. What Agora keeps is the anchor.
 
 ## Agent Sandbox
 
@@ -49,23 +41,16 @@ of the SHA-256 of the request id.
 
 ### A 10-minute lease, a 1-hour turn at most
 
-| Chosen parameter | Initial value |
+| Parameter | Value |
 | --- | --- |
 | Lease duration | **10 minutes** |
 | Renewal during a turn | **Every minute** |
 | Maximum turn duration | **1 hour** |
 
-On creation: expiry at `now + 10 min`.
-Before the prompt: record the turn start and get its deadline accepted.
-During the turn: renew with
-
-```text
-shutdownTime = min(now + 10 min, turn start + 1 h)
-```
-
-The turn stays open until the final response to `session/prompt`. Renewal
-continues during a silent tool or with the browser closed. The turn start is kept
-across restarts; neither ACP events nor reconnections push back the one-hour limit.
+How the deadline moves is in "The deadline" (On Agora's side). The turn stays open until the
+final response to `session/prompt`. Renewal continues during a silent tool or with the browser
+closed. The turn start is kept across restarts; neither ACP events nor reconnections push back
+the one-hour limit.
 
 At the limit, the infrastructure triggers destruction with the Kubernetes template's
 termination delay, with no additional ACP grace period.
@@ -93,9 +78,12 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
 ### Startup, in the pool
 
 1. Create the fixed workspace `/home/harness/work`.
-2. Launch the adapter through its *bin* entry, stdio over pipes.
-3. Send `initialize` only once (`fs` and `terminal` set to *no*), keep the response.
-4. Answer ready on `/healthz`.
+2. Start the outbound proxy on loopback, closed until a credential is attached
+   (`credentials.md`).
+3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
+   outbound proxy.
+4. Send `initialize` only once (`fs` and `terminal` set to *no*), keep the response.
+5. Answer ready on `/healthz`.
 
 All of this happens before the claim, with no user and no credential. codex refuses a second
 `initialize`: Agora never resends it and serves the response kept by the bridge.
@@ -107,7 +95,7 @@ Port **8080**. Every route except `/healthz` requires Agora's token.
 | Route | Role |
 | --- | --- |
 | `GET /healthz` | 200 if the adapter is alive and has answered `initialize`, 503 otherwise. This is the Pod's readiness. |
-| `GET /info` | Instance, Pod, workspace, `initialize` response, adapter state, last position. |
+| `GET /info` | Instance, Pod, workspace, `initialize` response, adapter state, last position, the way out (`outbound`). |
 | `GET /acp` | WebSocket: the ACP relay. |
 | `PUT /anchor` | Restores an anchor before the session is resumed. |
 | `PUT /credentials` | Attaches the credential through which the adapter goes out (`credentials.md`). |
@@ -145,8 +133,8 @@ receives SIGTERM and has the template's termination delay, **30 seconds**, to:
 Agora pulls nothing and does not watch for the Pod's death. With no native file (no
 session opened), the bridge pushes an empty anchor.
 
-The anchor reuses the S9 work: the harness's native files and nothing else, no
-`.claude.json`, no authentication file, no global setting
+The anchor keeps what the previous implementation measured: the harness's native files and
+nothing else — no `.claude.json`, no authentication file, no global setting
 (`harnesses/claude-code/src/driver.ts`, `docs/field-findings.md` §2.2 on `main`).
 
 | Harness | Native directory, saved as a whole | Resume |
@@ -253,7 +241,7 @@ Agora has the projected token validated by the Kubernetes API (`TokenReview`, au
 `agora-anchors`), derives the namespace and the Pod from it, finds that Pod's claim and stores
 the anchor with the session recorded on the claim. A refused token: 401; a Pod without a claim:
 404; nothing is stored. With no push before the claim disappears, the end is recorded
-without an anchor. Storage is a lab volume; Agora's database later.
+without an anchor. Anchors are stored on the lab's volume.
 
 ### What Agora writes on the claim
 
@@ -297,8 +285,8 @@ until it is destroyed.
 ## The lab
 
 The `apps/lab` deployable mounts the `executions` package and serves a page on `agora-lab.bretagne.dev`, behind Pocket-ID (admin
-group). It creates sandboxes, relays ACP by hand, shows deadlines, anchors and ends,
-and offers three actions reserved for the lab:
+group). It creates executions, relays ACP by hand, attaches credentials, shows deadlines, anchors and
+ends, and offers three actions reserved for the lab:
 
 | Route | Effect |
 | --- | --- |
@@ -307,8 +295,9 @@ and offers three actions reserved for the lab:
 | `POST /api/lab/restart` | Stops the lab process; Kubernetes restarts it. |
 
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
-with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long text,
-or dies. It writes a real native file and reads it back at `session/resume`.
+with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long
+text, recalls the session, sends a request through its way out, or dies. It writes a real native
+file and reads it back at `session/resume`.
 
 ## Cases to validate
 
@@ -344,5 +333,4 @@ re-armed three times per lease.
 **To be specified:** anchor storage in the database, codex's native directory, detached tasks,
 resuming after the process is lost. Credentials: `credentials.md`.
 
-References: [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go);
-Kata measurements in `docs/agent-sandbox-evaluation.md` of the `infra-k8s` repository.
+Reference: [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go).

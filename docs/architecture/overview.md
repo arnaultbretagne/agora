@@ -43,29 +43,24 @@ inherited from previous versions.
 
 ## Responsibilities
 
-```text
-User → Agora → ACP → harness in a sandbox
-         │                 │
-         │                 └→ gateway → external services
-         │
-         ├→ durable storage of exchanges and commands
-         └→ Agent Sandbox API: request, find, stop
+```mermaid
+flowchart LR
+    User --> Agora
+    Agora -- ACP --> Harness[Harness, in a sandbox]
+    Harness --> Gateway --> Services[External services]
+    Agora --> Log[(Exchanges and commands)]
+    Agora -- request, find, stop --> AS[Agent Sandbox]
 ```
 
 Agora owns the user's commands, their attribution, the log and the displayed
 views. Agent Sandbox owns the execution resources. The gateway owns the
 credentials and enforces the grants Agora signed for each execution.
 
-Agora configures these integrations with allowed values. It does not reimplement
-a Pod controller, a vault, an HTTP proxy, or their global monitoring.
+Agora configures these integrations with allowed values. It does not reimplement a Pod
+controller, a credential store, a gateway or their global monitoring.
 
-Each subject is explained in this folder, specified in `specs/` and decided in `adr/`:
-
-| Subject | What it covers |
-| --- | --- |
-| Executions | A 10-minute lease renewed every minute during a turn, a turn limited to 1 hour, destruction by the infrastructure alone, an anchor pushed by the Pod. |
-| Credentials | The bridge's local proxy, grants signed by Agora, a gateway that checks them and sets the credential. |
-| Interface (`assistant-ui.md` in `specs/`) | The thread, the commands and the components: ACP projection in the database, a single stream resumed by position. |
+Executions and credentials are explained in their own documents here; every subject's
+contract is in `specs/` and its decisions in `adr/`.
 
 ## History and execution
 
@@ -124,27 +119,20 @@ re-evaluates every dependency and the whole desired configuration.
 
 ## Credentials and isolation
 
-The sandbox only receives a short-lived token, signed by Agora, that lists its grants;
-the services' credentials and administrative powers stay in the gateway (`credentials.md`).
+The sandbox only receives a short-lived token, signed by Agora, that lists its grants; the
+services' credentials stay in the gateway (`credentials.md`).
 
-Restrictions must match what the gateway and the target service can actually
-enforce: a host, a path, a method. An ACP permission, an installed tool or an
-instruction given to the model is not a restriction on access to the service.
-
-An execution's grants are those of its token. A new token replaces them for later
-connections; the old one stays valid until it expires, hence short-lived tokens,
-reissued during the execution's life.
-
-HTTP clients must honour the proxy and its chain of trust. The network policy
-closes the paths that would bypass the expected restrictions. An acceptable outage
-does not mean that widening the grants is acceptable.
+Restrictions must match what the gateway and the target service can actually enforce: a host,
+a path, a method. An ACP permission, an installed tool or an instruction given to the model is
+not a restriction on access to the service. A gateway outage makes the operation fail; it never
+widens the grants.
 
 ## Stop and cleanup
 
-Agora closes new sends, requests cancellation if needed, removes proxy access
-according to its contract, then stops renewing the deadline: Agent Sandbox destroys it.
-These requests must survive an Agora restart. Preserving the context must not
-block a requested stop indefinitely.
+Agora closes new sends, requests cancellation if needed, then stops renewing the deadline:
+Agent Sandbox destroys the sandbox at most one lease later, and the execution's token expires on
+its own. A stop is written on the claim, so it survives an Agora restart; saving the context
+never delays it.
 
 Expiry and the infrastructure-side reaper also clean up resources Agora has lost
 track of. They do not replace the handling of an explicit stop request, and do not
@@ -164,10 +152,7 @@ Three kinds of data have different guarantees:
 | --- | --- |
 | Product history | Durable once accepted by Agora. |
 | Harness native context | Resumable only if the integration demonstrates it. |
-| Files and artefacts | Depend on an explicit storage policy, independent of the log. |
-
-A persistent volume can preserve files without preserving the process. A saved
-transcript is not enough to guarantee consistency with those files.
+| Files and artefacts | Not kept by Agora: the sandbox has no persistent storage, and the agent pushes what must last (code, a note). |
 
 The anchor keeps the harness's native files when a Pod ends (`executions.md`); restoring it
 opens a new session. The earlier Save and Handoff mechanisms are not adopted. If reliable
@@ -200,13 +185,13 @@ message that the model still has the whole history.
 
 ## Validation and reuse
 
-The first slice must demonstrate: opening a sandbox, a logged ACP exchange,
-reloading the interface, restarting Agora during a turn, stop then cleanup.
-Add a proxy refusal and a harness loss to check the visible errors.
+A slice is validated end to end: opening a sandbox, a logged ACP exchange, reloading the
+interface, restarting Agora during a turn, stop then cleanup, a gateway refusal and a harness
+loss for the visible errors.
 
 Each piece of old code brought back must name the feature it serves, its dependencies
 and the scenarios that validate it. The log, the ACP transport, the projections,
 the interface and the harness integrations are candidates, not givens.
 
 The previous implementation's reconciliation engines, infrastructure controllers and grant
-models impose no obligation on this design.
+models impose no obligation on Agora's design.

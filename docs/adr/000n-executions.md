@@ -5,8 +5,8 @@
 
 ## Context
 
-- Agora runs harnesses (claude-code, codex, …) in isolated, disposable environments, talks ACP
-  with them, and finds the work again after an interruption.
+- Agora needs harnesses (claude-code, codex, …) running in isolated, disposable environments;
+  it talks ACP with them and finds the work again after an interruption.
 - A harness is hostile: it must hold neither Agora's credentials nor a database login.
 - Starting a harness takes seconds; the user should not wait for it.
 - Agora does not run infrastructure: no Pod controller, no reaper of its own.
