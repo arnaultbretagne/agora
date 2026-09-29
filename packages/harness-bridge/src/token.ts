@@ -1,4 +1,4 @@
-// Bridge tokens (docs/executions.md, "Les routes du bridge"). Agora signs with its Ed25519
+// Bridge tokens (docs/executions.md, "The bridge's routes"). Agora signs with its Ed25519
 // private key; the bridge only holds the public key, so a sandbox never contains a secret. The
 // token names the sandbox it is for and expires after a minute: a token lifted from one sandbox is
 // useless against another, and useless for long against the same one.
@@ -37,7 +37,7 @@ export type Verdict = { readonly ok: true } | { readonly ok: false; readonly rea
 
 export function verifyBridgeToken(publicKey: KeyObject, token: string, expectedSandbox: string, now: number = Date.now()): Verdict {
   const [payload, signature, extra] = token.split('.')
-  if (payload === undefined || signature === undefined || extra !== undefined) return { ok: false, reason: 'jeton mal formé' }
+  if (payload === undefined || signature === undefined || extra !== undefined) return { ok: false, reason: 'malformed token' }
   if (!verify(null, Buffer.from(payload), publicKey, Buffer.from(signature, 'base64url'))) {
     return { ok: false, reason: 'signature invalide' }
   }
@@ -45,11 +45,11 @@ export function verifyBridgeToken(publicKey: KeyObject, token: string, expectedS
   try {
     claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Partial<TokenClaims>
   } catch {
-    return { ok: false, reason: 'jeton illisible' }
+    return { ok: false, reason: 'unreadable token' }
   }
   if (claims.aud !== AUDIENCE) return { ok: false, reason: 'audience inattendue' }
-  if (claims.sandbox !== expectedSandbox) return { ok: false, reason: `jeton pour ${String(claims.sandbox)}, pas pour ${expectedSandbox}` }
-  if (typeof claims.exp !== 'number' || claims.exp * 1000 < now) return { ok: false, reason: 'jeton expiré' }
+  if (claims.sandbox !== expectedSandbox) return { ok: false, reason: `token for ${String(claims.sandbox)}, not for ${expectedSandbox}` }
+  if (typeof claims.exp !== 'number' || claims.exp * 1000 < now) return { ok: false, reason: 'expired token' }
   return { ok: true }
 }
 

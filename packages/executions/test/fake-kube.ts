@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Kubernetes API and for Agent Sandbox's controller: claims with merge
 // patches and UID preconditions, a watch, allocation that starts a real bridge with the mock agent,
 // and the deadline — at `shutdownTime` the claim is deleted and its Pod terminated, which makes the
-// bridge push its anchor exactly as in a real Pod (docs/executions.md, "La fin du Pod et l'anchor").
+// bridge push its anchor exactly as in a real Pod (docs/executions.md, "The end of the Pod and the anchor").
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -87,7 +87,7 @@ export class FakeKube implements KubeApi {
     const claim = this.claims.get(name)
     if (claim === undefined) return
     const pool = (claim.spec.warmPoolRef as { name: string }).name
-    if (pool === 'pool-inexistant') {
+    if (pool === 'no-such-pool') {
       claim.status = { conditions: [{ type: 'Ready', status: 'False', reason: 'WarmPoolNotFound', message: 'pool absent' }] }
     } else {
       const podName = `${pool}-${String(++this.podCounter)}`
@@ -129,11 +129,11 @@ export class FakeKube implements KubeApi {
   }
 
   async patchClaim(name: string, patch: Json): Promise<Claim> {
-    if (this.failPatches) throw new KubeError(500, 'patch refusé (test)')
+    if (this.failPatches) throw new KubeError(500, 'patch refused (test)')
     const claim = this.claims.get(name)
     if (claim === undefined) throw new KubeError(404, 'absent')
     const uid = (patch.metadata as { uid?: string } | undefined)?.uid
-    if (uid !== undefined && uid !== claim.metadata.uid) throw new KubeError(409, 'uid ne correspond pas')
+    if (uid !== undefined && uid !== claim.metadata.uid) throw new KubeError(409, 'uid does not match')
     merge(claim as unknown as Record<string, unknown>, patch)
     const shutdownTime = ((patch.spec as { lifecycle?: { shutdownTime?: string } } | undefined)?.lifecycle)?.shutdownTime
     if (shutdownTime !== undefined) this.deadlines.push({ name, shutdownTime, at: Date.now() })

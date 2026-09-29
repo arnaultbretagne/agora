@@ -1,104 +1,104 @@
-# Options d'interface — notes pour l'ADR UI
+# Interface options — notes for the UI ADR
 
-Notes d'étude du 23 septembre 2026. Ce n'est pas une décision : ces notes gardent
-la trace des candidats examinés et des raisons de leur retenue ou de leur refus,
-pour l'ADR UI à venir.
+Study notes from 23 September 2026. This is not a decision: these notes keep
+track of the candidates examined and of why they were kept or rejected,
+for the upcoming UI ADR.
 
-## Découpage de départ
+## Starting split
 
-Agent Sandbox possède l'exécution, la passerelle possède les credentials (Agent Vault à
-l'époque de ces notes, écarté depuis, voir l'ADR de la passerelle). Il reste à
-Agora le journal des commandes et des échanges ACP, puis une interface qui en est
-une vue. Chaque candidat a été évalué sur deux rôles possibles : servir d'interface,
-ou remplacer ce journal.
+Agent Sandbox owns execution, the gateway owns credentials (Agent Vault at the
+time of these notes, ruled out since, see the credential gateway ADR). What is left
+for Agora is the log of commands and ACP exchanges, and an interface that is a
+view of it. Each candidate was assessed for two possible roles: serving as the
+interface, or replacing this log.
 
-## Piste retenue : assistant-ui
+## Chosen option: assistant-ui
 
-Version examinée : `@assistant-ui/react` 0.15.x.
+Version examined: `@assistant-ui/react` 0.15.x.
 
-- Bibliothèque de primitives de chat (fil, message, composer) sans style imposé,
-  avec des variantes stylées optionnelles.
-- Branchement par `ExternalStoreRuntime` : Agora fournit les messages et les
-  callbacks (envoi, annulation, réponse de permission). L'interface n'affiche que
-  ce que le journal projette. Les adaptateurs AG-UI et A2A de la bibliothèque
-  reposent eux-mêmes sur ce runtime.
-- AG-UI et A2A ne sont pas utilisés. A2A relie des agents entre eux. AG-UI suppose
-  un run piloté par le client, alors qu'un tour Agora survit au navigateur et que
-  le journal fait foi. Il n'existe aucun adaptateur ACP ; la projection
-  ACP → messages reste chez Agora.
-- Bonne correspondance avec ACP : texte et raisonnement en parties de message,
-  `tool_call` et `tool_call_update` en parties outil avec statut,
-  `session/request_permission` en validation humaine, `session/cancel` en `onCancel`.
-- Restent spécifiques à Agora : livraison incertaine, frontières de Session,
-  perte de contexte, arrêt avec nettoyage en attente, différences de capacités
-  entre harnesses. L'édition, la régénération et les branches de la bibliothèque
-  sont à désactiver.
-- Coût : `@assistant-ui/core` est indépendant du framework, mais tout le rendu
-  dépend de React (DOM, React Native, Ink). Adopter la bibliothèque veut dire
-  adopter React et un bundler, contrairement au choix « sans framework » de
-  l'implémentation précédente.
-- Validation proposée : un spike sur `ExternalStoreRuntime`, alimenté par un
-  journal ACP réel, avec une permission, une annulation et un rechargement en
-  plein tour.
+- A library of chat primitives (thread, message, composer) with no imposed styling,
+  plus optional styled variants.
+- Wired through `ExternalStoreRuntime`: Agora supplies the messages and the
+  callbacks (send, cancel, permission response). The interface only displays
+  what the log projects. The library's AG-UI and A2A adapters are themselves
+  built on this runtime.
+- AG-UI and A2A are not used. A2A connects agents to each other. AG-UI assumes
+  a client-driven run, whereas an Agora turn outlives the browser and the
+  log is authoritative. There is no ACP adapter; the
+  ACP → messages projection stays with Agora.
+- Good fit with ACP: text and reasoning as message parts,
+  `tool_call` and `tool_call_update` as tool parts with a status,
+  `session/request_permission` as human approval, `session/cancel` as `onCancel`.
+- Still specific to Agora: uncertain delivery, Session boundaries,
+  context loss, stop with pending cleanup, capability differences
+  between harnesses. The library's editing, regeneration and branching
+  must be disabled.
+- Cost: `@assistant-ui/core` is framework-independent, but all rendering
+  depends on React (DOM, React Native, Ink). Adopting the library means
+  adopting React and a bundler, unlike the "no framework" choice of
+  the previous implementation.
+- Proposed validation: a spike on `ExternalStoreRuntime`, fed by a real ACP
+  log, with a permission, a cancellation and a reload in the middle of
+  a turn.
 
-## Candidats écartés
+## Rejected candidates
 
-Chaque dépôt a été cloné et son code lu. Les verdicts ci-dessous s'appuient sur le
-code, pas sur la documentation du projet.
+Each repository was cloned and its code read. The verdicts below rest on the
+code, not on the project's documentation.
 
 ### acp-ui (formulahendry/acp-ui)
 
-Client ACP en Vue et Tauri, v0.1.16, dernier commit en mai 2026, un seul mainteneur.
+ACP client in Vue and Tauri, v0.1.16, last commit in May 2026, a single maintainer.
 
-- Aucun stockage : les messages ne vivent qu'en mémoire, et l'historique dépend du
-  rejeu `session/load` de l'agent.
-- Pas de serveur : c'est le navigateur qui tient la connexion ACP, à l'inverse du
-  modèle d'Agora.
-- Un timeout de 60 s s'applique à toutes les requêtes, `session/prompt` compris.
-  Tout tour de code réaliste échoue.
-- La sortie de l'agent est rendue sans assainissement (`v-html`), d'où un risque
-  XSS. La télémétrie est active par défaut.
-- Aucun test TypeScript.
+- No storage: messages live only in memory, and the history depends on the
+  agent's `session/load` replay.
+- No server: the browser holds the ACP connection, the opposite of
+  Agora's model.
+- A 60 s timeout applies to every request, `session/prompt` included.
+  Any realistic coding turn fails.
+- The agent's output is rendered without sanitization (`v-html`), hence an XSS
+  risk. Telemetry is on by default.
+- No TypeScript tests.
 
-### AionUi (iOfficeAI/AionUi, backend AionCore)
+### AionUi (iOfficeAI/AionUi, AionCore backend)
 
-L'interface Electron et React est populaire. Le vrai backend est AionCore, un
-serveur Rust sur SQLite créé en avril 2026 (v0.2.2 à la date d'étude).
+The Electron and React interface is popular. The real backend is AionCore, a
+Rust server on SQLite created in April 2026 (v0.2.2 at the time of study).
 
-- Contredit les invariants du design :
-  - le prompt est renvoyé automatiquement après une erreur, et c'est testé comme
-    comportement voulu ;
-  - une Session périmée est remplacée sans que la frontière soit enregistrée ;
-  - l'état est perdu au redémarrage, et les tours en cours sont marqués terminés
-    sans que l'utilisateur le voie ;
-  - seules des vues assemblées sont stockées, jamais l'ACP brut.
-- ACP ne passe que par un processus enfant stdio local. Claude et Codex
-  contournent ACP (stream-json et `app-server`).
-- Le build open source désactive l'authentification (`--local`). En mode
-  `--remote`, une réinitialisation de mot de passe admin est possible sans
-  authentification. Une partie de l'authentification est fermée.
-- Une base verrouillée impose une seule réplique. L'activité s'effondre (6 commits
-  en septembre contre plus de 1 400 en mars).
+- Contradicts the design's invariants:
+  - the prompt is resent automatically after an error, and this is tested as
+    intended behaviour;
+  - a stale Session is replaced without the boundary being recorded;
+  - state is lost on restart, and turns in progress are marked done
+    without the user seeing it;
+  - only assembled views are stored, never the raw ACP.
+- ACP only goes through a local stdio child process. Claude and Codex
+  bypass ACP (stream-json and `app-server`).
+- The open-source build disables authentication (`--local`). In
+  `--remote` mode, an admin password reset is possible without
+  authentication. Part of the authentication is closed source.
+- A locked database forces a single replica. Activity is collapsing (6 commits
+  in September against more than 1,400 in March).
 
 ### agentrq (agentrq/agentrq)
 
-File de tâches avec humain dans la boucle, construite sur MCP (Go, Vue). L'ACP ne
-passe que par un gateway séparé.
+Human-in-the-loop task queue built on MCP (Go, Vue). ACP only
+goes through a separate gateway.
 
-- Ce n'est pas une interface de chat ACP. Le produit est centré sur les tâches et
-  le kanban. Il n'affiche ni les appels d'outils ni le streaming.
-- Le gateway ne sait lancer qu'un agent local en stdio. Il ne fait ni
-  `session/load` ni reprise. Les messages de l'agent sont agrégés, et les appels
-  d'outils ne sont pas conservés.
-- La livraison repose sur la diffusion à toutes les sessions et sur un
-  réessai toutes les 60 s. Il n'y a ni états de livraison ni identité de tour :
-  une annulation tardive coupe le tour suivant.
-- Il pourrait tourner à côté d'Agora comme tableau de tâches MCP, mais créerait
-  un second historique du même travail.
+- It is not an ACP chat interface. The product centres on tasks and
+  the kanban. It shows neither tool calls nor streaming.
+- The gateway can only launch a local agent over stdio. It does neither
+  `session/load` nor resume. The agent's messages are aggregated, and tool
+  calls are not kept.
+- Delivery relies on broadcasting to every session and on a
+  retry every 60 s. There are no delivery states and no turn identity:
+  a late cancellation cuts off the next turn.
+- It could run alongside Agora as an MCP task board, but would create
+  a second history of the same work.
 
-## Conclusion provisoire
+## Provisional conclusion
 
-Aucun candidat ne remplace le journal : tous butent sur la livraison incertaine,
-la reprise après redémarrage et l'attribution aux Sessions. Le journal reste la
-brique propre à Agora. Pour l'interface, assistant-ui est la piste à valider par
-le spike décrit plus haut.
+No candidate replaces the log: they all stumble on uncertain delivery,
+resume after a restart and attribution to Sessions. The log remains Agora's
+own building block. For the interface, assistant-ui is the option to validate with
+the spike described above.

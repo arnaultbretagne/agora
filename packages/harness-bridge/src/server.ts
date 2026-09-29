@@ -70,7 +70,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback }
 
   const [command, ...args] = options.adapterCommand
-  if (command === undefined) throw new Error("la commande de l'adaptateur est vide")
+  if (command === undefined) throw new Error('the adapter command is empty')
   const child: ChildProcess = spawn(command, args, { cwd: options.workspace, env, stdio: ['pipe', 'pipe', 'inherit'] })
 
   const adapter = { alive: true, exitCode: null as number | null, signal: null as string | null }
@@ -85,7 +85,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   let onInitialize: (error: unknown) => void = () => {}
   const initialized = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`pas de réponse à initialize après ${String(options.initializeTimeoutMs ?? 30_000)} ms`)), options.initializeTimeoutMs ?? 30_000)
+    const timer = setTimeout(() => reject(new Error(`no answer to initialize after ${String(options.initializeTimeoutMs ?? 30_000)} ms`)), options.initializeTimeoutMs ?? 30_000)
     timer.unref()
     onInitialize = (error) => {
       clearTimeout(timer)
@@ -139,13 +139,13 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     adapter.alive = false
     adapter.exitCode = code
     adapter.signal = signal
-    log(`adaptateur terminé code=${String(code)} signal=${String(signal)}`)
-    onInitialize(new Error(`l'adaptateur est mort avant de répondre à initialize (code ${String(code)})`))
+    log(`adapter exited code=${String(code)} signal=${String(signal)}`)
+    onInitialize(new Error(`the adapter died before answering initialize (code ${String(code)})`))
     // The bridge stays up: the native files still leave with the Pod, at SIGTERM.
-    if (!terminating) client?.close(1011, 'adaptateur terminé')
+    if (!terminating) client?.close(1011, 'adapter exited')
   })
   child.on('error', (error) => {
-    log(`lancement de l'adaptateur impossible : ${error.message}`)
+    log(`cannot start the adapter: ${error.message}`)
   })
 
   child.stdin?.write(
@@ -179,7 +179,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   function authorized(req: IncomingMessage): { ok: true } | { ok: false; reason: string } {
     const token = bearerOf(req.headers.authorization)
-    if (token === undefined) return { ok: false, reason: 'jeton absent' }
+    if (token === undefined) return { ok: false, reason: 'token missing' }
     return verifyBridgeToken(options.publicKey, token, options.podName)
   }
 
@@ -202,12 +202,12 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     if (url.pathname === '/info' && req.method === 'GET') return json(res, 200, describe())
 
     if (url.pathname === '/credentials' && req.method === 'PUT') {
-      if (terminating) return json(res, 503, { reason: 'Pod en fin de vie' })
+      if (terminating) return json(res, 503, { reason: 'Pod ending' })
       const chunks: Buffer[] = []
       let size = 0
       for await (const chunk of req) {
         size += (chunk as Buffer).byteLength
-        if (size > 16 * 1024) return json(res, 413, { reason: 'corps trop gros' })
+        if (size > 16 * 1024) return json(res, 413, { reason: 'body too big' })
         chunks.push(chunk as Buffer)
       }
       let credentials
@@ -221,27 +221,27 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     }
 
     if (url.pathname === '/anchor' && req.method === 'PUT') {
-      if (terminating) return json(res, 503, { reason: 'Pod en fin de vie' })
+      if (terminating) return json(res, 503, { reason: 'Pod ending' })
       const chunks: Buffer[] = []
       let size = 0
       for await (const chunk of req) {
         size += (chunk as Buffer).byteLength
         // base64 inflates by a third, plus the JSON around it.
-        if (size > MAX_ANCHOR_BYTES * 1.4) throw new AnchorRefused(413, "l'anchor est trop gros")
+        if (size > MAX_ANCHOR_BYTES * 1.4) throw new AnchorRefused(413, 'the anchor is too big')
         chunks.push(chunk as Buffer)
       }
       const placed = await writeBundle(options.nativeDir, parseBundle(new Uint8Array(Buffer.concat(chunks))))
-      log(`anchor restauré : ${String(placed.length)} fichier(s) dans ${options.nativeDir}`)
+      log(`anchor restored: ${String(placed.length)} file(s) in ${options.nativeDir}`)
       return json(res, 200, { files: placed })
     }
 
-    json(res, 404, { reason: 'route inconnue' })
+    json(res, 404, { reason: 'unknown route' })
   }
 
   const server: Server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
       if (error instanceof AnchorRefused) return json(res, error.status, { reason: error.message })
-      log(`erreur sur ${String(req.method)} ${String(req.url)} : ${error instanceof Error ? error.message : String(error)}`)
+      log(`error on ${String(req.method)} ${String(req.url)}: ${error instanceof Error ? error.message : String(error)}`)
       if (!res.headersSent) json(res, 500, { reason: error instanceof Error ? error.message : String(error) })
       else res.destroy()
     })
@@ -260,7 +260,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       return
     }
     if (terminating) {
-      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nPod en fin de vie\n')
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nPod ending\n')
       return
     }
     wss.handleUpgrade(req, socket, head, (peer) => attach(peer, url.searchParams.get('after')))
@@ -268,8 +268,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   function attach(peer: WebSocket, afterParam: string | null): void {
     if (client !== null) {
-      log('nouvelle connexion : la précédente est fermée')
-      client.close(4000, 'remplacée par une connexion plus récente')
+      log('new connection: the previous one is closed')
+      client.close(4000, 'replaced by a newer connection')
     }
     client = peer
 
@@ -286,12 +286,12 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     for (const line of replay) peer.send(JSON.stringify({ seq: line.seq, acp: line.text }))
 
     if (!adapter.alive) {
-      peer.close(1011, 'adaptateur terminé')
+      peer.close(1011, 'adapter exited')
       return
     }
     peer.on('message', (data, isBinary) => {
       if (isBinary) {
-        peer.close(1003, 'messages binaires refusés')
+        peer.close(1003, 'binary messages refused')
         return
       }
       if (!adapter.alive || terminating) return
@@ -307,7 +307,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   await initialized
   await new Promise<void>((resolve) => server.listen(options.port, options.host ?? '0.0.0.0', resolve))
   const info = initializeResult as { agentInfo?: { name?: string; version?: string } }
-  log(`prêt : instance ${instance}, ${String(info.agentInfo?.name)}@${String(info.agentInfo?.version)}, port ${String((server.address() as { port: number }).port)}`)
+  log(`ready: instance ${instance}, ${String(info.agentInfo?.name)}@${String(info.agentInfo?.version)}, port ${String((server.address() as { port: number }).port)}`)
 
   let terminated: Promise<Bundle> | null = null
 
@@ -317,17 +317,17 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     terminate: () => {
       terminated ??= (async () => {
         terminating = true
-        log('fin du Pod : relais fermé, arrêt de l’adaptateur')
+        log('end of the Pod: relay closed, stopping the adapter')
         if (client !== null && client.readyState === client.OPEN) {
           client.send(JSON.stringify({ terminating: { at: new Date().toISOString() } }))
-          client.close(1001, 'Pod en fin de vie')
+          client.close(1001, 'Pod ending')
         }
         if (adapter.alive) {
           child.kill('SIGTERM')
           const stopMs = options.adapterStopMs ?? 5000
           const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), stopMs))])
           if (!stopped) {
-            log(`adaptateur toujours là après ${String(stopMs)} ms : SIGKILL`)
+            log(`adapter still there after ${String(stopMs)} ms: SIGKILL`)
             child.kill('SIGKILL')
             await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
           }
@@ -342,7 +342,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       return terminated
     },
     close: async () => {
-      client?.close(1001, 'arrêt du bridge')
+      client?.close(1001, 'bridge stopping')
       if (adapter.alive) child.kill('SIGTERM')
       await outbound.close()
       await new Promise<void>((resolve) => {

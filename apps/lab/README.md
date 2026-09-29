@@ -1,30 +1,29 @@
 # lab
 
-Le banc, sur `agora-lab.bretagne.dev` derrière Pocket-ID. Il monte les paquets
-[executions](../../packages/executions/) et [credentials](../../packages/credentials/) et sert
-une page volontairement brute pour jouer tous les cas de
-[docs/executions.md](../../docs/executions.md) et [docs/credentials.md](../../docs/credentials.md).
+The lab, on `agora-lab.bretagne.dev` behind Pocket-ID. It mounts the `executions` and
+`credentials` packages and serves a deliberately bare page to play every case of
+`docs/executions.md` and `docs/credentials.md`.
 
-| Dossier | Contenu |
+| Folder | Content |
 | --- | --- |
-| [src/](src/) | Le point d'entrée : configuration et montage des exécutions. |
-| [public/](public/) | La page du banc. |
-| [scripts/](scripts/) | Les cas du contrat joués contre le banc déployé. |
+| `src/` | The entry point: configuration and mounting of the executions. |
+| `public/` | The lab page. |
+| `scripts/` | The contract's cases, played against the deployed lab. |
 
-Ports : **8080** pour l'API et la page, **8081** pour la réception des anchors (seul port ouvert
-aux sandboxes).
+Ports: **8080** for the API and the page, **8081** for the anchor receiver (the only port open
+to sandboxes).
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Role |
 | --- | --- | --- |
-| `SANDBOX_NAMESPACE` | requis | Namespace des claims et des sandboxes. |
-| `SIGNING_KEY_FILE` | requis | Clé privée Ed25519 qui signe les jetons du bridge. |
-| `ANCHOR_DIR` | `/data/anchors` | Où les anchors sont stockés. |
-| `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Bail, durée maximale d'un tour, cadence du ré-armement. |
-| `MAX_ACTIVE` | 4 | Exécutions actives au plus. |
-| `LAB` | — | `true` pour ouvrir les routes du banc. |
-| `ANCHOR_AUDIENCE` | `agora-anchors` | Audience attendue du jeton projeté des Pods. |
-| `GATEWAY_PROXY` | — | La passerelle vue des sandboxes, `hôte:port`. Sans elle, aucun credential ne peut être branché. |
-| `GRANTS_KEY_FILE` | requis avec la passerelle | Clé privée Ed25519 qui signe les droits d'une exécution. |
-| `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | En-tête `kid`, `iss` et `aud` du JWT, attendus par la passerelle. |
+| `SANDBOX_NAMESPACE` | required | Namespace of the claims and sandboxes. |
+| `SIGNING_KEY_FILE` | required | Ed25519 private key that signs the bridge tokens. |
+| `ANCHOR_DIR` | `/data/anchors` | Where anchors are stored. |
+| `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Lease, maximum turn duration, re-arm cadence. |
+| `MAX_ACTIVE` | 4 | Maximum active executions. |
+| `LAB` | — | `true` to open the lab's routes. |
+| `ANCHOR_AUDIENCE` | `agora-anchors` | Expected audience of the Pods' projected token. |
+| `GATEWAY_PROXY` | — | The gateway as sandboxes see it, `host:port`. Without it, no credential can be attached. |
+| `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants. |
+| `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway. |
 
-Image : `docker build -f apps/lab/Dockerfile .` depuis la racine.
+Image: `docker build -f apps/lab/Dockerfile .` from the root.

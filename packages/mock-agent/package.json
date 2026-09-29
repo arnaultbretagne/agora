@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "L'agent ACP sans modèle du banc, avec un vrai fichier natif.",
+  "description": "The lab's ACP agent without a model, with a real native file.",
   "exports": {
     "./agent": "./src/agent.ts"
   },

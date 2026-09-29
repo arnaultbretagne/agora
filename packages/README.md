@@ -1,11 +1,11 @@
 # packages
 
-Le code partagé, sans identité de déploiement.
+Shared code, with no deployment identity.
 
-| Dossier | Paquet | Rôle |
+| Folder | Package | Role |
 | --- | --- | --- |
-| [credentials/](credentials/) | `@agora/credentials` | Les credentials d'une exécution : ses profils compilés en droits, signés par Agora pour la passerelle. |
-| [executions/](executions/) | `@agora/executions` | Les exécutions d'Agora : claims, échéance, relais ACP, anchors, remise d'un credential au bridge. |
-| [harness-bridge/](harness-bridge/) | `@agora/harness-bridge` | Le bridge devant le harness dans l'image, le jeton d'Agora, le format de l'anchor. |
-| [mock-agent/](mock-agent/) | `@agora/mock-agent` | L'agent ACP sans modèle du banc. |
-| [testkit/](testkit/) | `@agora/testkit` | Outils de test : un bridge avec l'agent mock en local, un client WebSocket. |
+| `credentials/` | `@agora/credentials` | An execution's credentials: its profiles compiled into grants, signed by Agora for the gateway. |
+| `executions/` | `@agora/executions` | Agora's executions: claims, deadline, ACP relay, anchors, handing a credential to the bridge. |
+| `harness-bridge/` | `@agora/harness-bridge` | The bridge in front of the harness in the image, Agora's token, the anchor format, the outbound proxy. |
+| `mock-agent/` | `@agora/mock-agent` | The lab's ACP agent without a model. |
+| `testkit/` | `@agora/testkit` | Test tools: a local bridge with the mock agent, a WebSocket client. |

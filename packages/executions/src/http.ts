@@ -1,4 +1,4 @@
-// The HTTP surface of the executions (docs/executions.md, "Côté Agora"), and a deployable's page. Every command answers accepted
+// The HTTP surface of the executions (docs/executions.md, "On Agora's side"), and a deployable's page. Every command answers accepted
 // or refused with its reason; the effects are read from /api/events, never from the answer alone.
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -20,7 +20,7 @@ export interface CredentialSource {
 export interface HttpOptions {
   readonly manager: ExecutionManager
   readonly anchors: AnchorStore
-  /** Opens the lab's own routes (docs/executions.md, "Le banc"). */
+  /** Opens the lab's own routes (docs/executions.md, "The lab"). */
   readonly lab: boolean
   /** A page to serve at `/`, if the deployable has one. */
   readonly page?: string
@@ -86,7 +86,7 @@ export function createApi(options: HttpOptions): Server {
     const anchorContent = /^\/api\/anchors\/([^/]+)\/content$/.exec(path)
     if (method === 'GET' && anchorContent !== null) {
       const bytes = await anchors.bundle(anchorContent[1]!)
-      if (bytes === null) return json(res, 404, { accepted: false, reason: 'anchor inconnu' })
+      if (bytes === null) return json(res, 404, { accepted: false, reason: 'unknown anchor' })
       // The native files, one after the other, readable in a browser tab.
       const bundle = parseBundle(bytes)
       const text = bundle.files.map((file) => `===== ${file.path} (${file.checksum})\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n')
@@ -103,7 +103,7 @@ export function createApi(options: HttpOptions): Server {
     const command = /^\/api\/(lab\/)?executions\/([^/]+)\/([a-z-]+)$/.exec(path)
     if (method === 'POST' && command !== null) {
       const [, labPrefix, name, verb] = command
-      if (!NAME.test(name!)) return json(res, 400, { accepted: false, reason: 'nom invalide' })
+      if (!NAME.test(name!)) return json(res, 400, { accepted: false, reason: 'invalid name' })
       if (labPrefix === undefined && verb === 'stop') return reply(res, await manager.stopSandbox(name!))
       if (labPrefix === undefined && verb === 'credentials') return attachCredentials(res, name!, await body(req))
       if (labPrefix !== undefined && options.lab) {
@@ -115,16 +115,16 @@ export function createApi(options: HttpOptions): Server {
       }
     }
     if (method === 'POST' && path === '/api/lab/restart' && options.lab) {
-      json(res, 200, { accepted: true, value: 'le processus du banc s’arrête ; Kubernetes le relance' })
+      json(res, 200, { accepted: true, value: 'the lab process stops; Kubernetes restarts it' })
       setTimeout(() => (options.onRestart ?? (() => process.exit(0)))(), 300)
       return
     }
-    json(res, 404, { accepted: false, reason: 'route inconnue' })
+    json(res, 404, { accepted: false, reason: 'unknown route' })
   }
 
   async function attachCredentials(res: ServerResponse, name: string, input: Record<string, unknown>): Promise<void> {
     const source = options.credentials
-    if (source === undefined) return json(res, 503, { accepted: false, reason: 'aucune source de credentials configurée' })
+    if (source === undefined) return json(res, 503, { accepted: false, reason: 'no credential source configured' })
     const ttlSeconds = input.ttlSeconds === undefined ? 3600 : Number(input.ttlSeconds)
     const profiles = Array.isArray(input.profiles) ? input.profiles.filter((p): p is string => typeof p === 'string') : undefined
     let credentials: Credentials
@@ -183,7 +183,7 @@ export interface AnchorReceiverOptions {
 }
 
 /**
- * The only route the sandboxes reach (docs/executions.md, "La réception d'un anchor"), on its own
+ * The only route the sandboxes reach (docs/executions.md, "Receiving an anchor"), on its own
  * port so that the network policy opens this and nothing else of Agora to them.
  */
 export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
@@ -195,16 +195,16 @@ export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
         res.end('ok\n')
         return
       }
-      if (req.method !== 'POST' || url.pathname !== '/anchors') return json(res, 404, { accepted: false, reason: 'route inconnue' })
+      if (req.method !== 'POST' || url.pathname !== '/anchors') return json(res, 404, { accepted: false, reason: 'unknown route' })
       const token = bearerOf(req.headers.authorization)
       const pod = token === undefined ? null : await options.verify(token).catch(() => null)
-      if (pod === null) return json(res, 401, { accepted: false, reason: 'jeton projeté absent ou refusé' })
-      if (pod.namespace !== options.namespace) return json(res, 403, { accepted: false, reason: `namespace ${pod.namespace} refusé` })
+      if (pod === null) return json(res, 401, { accepted: false, reason: 'projected token missing or refused' })
+      if (pod.namespace !== options.namespace) return json(res, 403, { accepted: false, reason: `namespace ${pod.namespace} refused` })
       const chunks: Buffer[] = []
       let size = 0
       for await (const chunk of req) {
         size += (chunk as Buffer).byteLength
-        if (size > MAX_ANCHOR_BYTES * 1.4) return json(res, 413, { accepted: false, reason: "l'anchor est trop gros" })
+        if (size > MAX_ANCHOR_BYTES * 1.4) return json(res, 413, { accepted: false, reason: 'the anchor is too big' })
         chunks.push(chunk as Buffer)
       }
       const raw = new Uint8Array(Buffer.concat(chunks))

@@ -85,7 +85,7 @@ export class Collector {
     for (;;) {
       const found = find()
       if (found !== undefined && found !== null && found !== false) return found
-      if (Date.now() > deadline) throw new Error(`délai dépassé ; reçu : ${JSON.stringify(this.messages).slice(-2000)}`)
+      if (Date.now() > deadline) throw new Error(`timed out; received: ${JSON.stringify(this.messages).slice(-2000)}`)
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 100)
         this.waiters.push(() => {

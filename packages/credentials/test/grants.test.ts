@@ -1,4 +1,4 @@
-// Profiles compiled into grants, and the JWT that carries them (docs/credentials.md, "La passerelle").
+// Profiles compiled into grants, and the JWT that carries them (docs/credentials.md, "The gateway").
 // The regexes only use what RE2 (the gateway's CEL `matches`) and JavaScript share.
 import assert from 'node:assert/strict'
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
@@ -43,9 +43,9 @@ describe('profiles', () => {
 
   it('refuses what it does not know, and names that could escape the pattern', () => {
     for (const profile of ['github:octo/app:admin', 'github:octo:read', 'github:octo/..:read', 'github:octo/a b:read', 'openai', '']) {
-      assert.throws(() => compileProfile(profile), /profil inconnu|repo invalide/, profile)
+      assert.throws(() => compileProfile(profile), /unknown profile|invalid repo/, profile)
     }
-    assert.throws(() => compileProfiles([]), /aucun profil/)
+    assert.throws(() => compileProfiles([]), /no profile/)
   })
 })
 
@@ -67,7 +67,7 @@ describe('GrantSigner', () => {
     assert.deepEqual(claims.grants, [{ host: 'api.anthropic.com' }])
     assert.equal((claims.exp as number) - (claims.iat as number), 600)
     assert.equal(credentials.expiresAt, new Date((claims.exp as number) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'))
-    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] }), /aucun profil/)
-    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /hors bornes/)
+    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] }), /no profile/)
+    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /out of bounds/)
   })
 })

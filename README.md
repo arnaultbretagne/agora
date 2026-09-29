@@ -1,52 +1,52 @@
-# Agora — refonte
+# Agora — rewrite
 
-Agora fait travailler des agents dans des sandboxes, garde leurs échanges et retrouve le
-travail après une interruption. `design/agora-foundations` est la branche de base de la
-refonte : elle repart de zéro, sans historique commun avec `main`, et rien des versions
-précédentes n'est repris sans être écrit dans [docs/](docs/).
+Agora runs agents in sandboxes, keeps their exchanges and finds the work again after an
+interruption. `design/agora-foundations` is the base branch of the rewrite: it starts from
+scratch, with no history shared with `main`, and nothing from earlier versions is carried over
+unless it is written in `docs/`.
 
-| Dossier | Contenu |
+| Folder | Content |
 | --- | --- |
-| [docs/](docs/) | La conception : produit, exécutions, interface. |
-| [apps/](apps/) | Ce qui se déploie : aujourd'hui le banc. |
-| [harnesses/](harnesses/) | Les images de harness, qu'Agent Sandbox lance dans ses pools. |
-| [packages/](packages/) | Le code partagé : les exécutions, les credentials, le bridge, l'agent mock, les outils de test. |
-| [.github/workflows/](.github/workflows/) | La CI : vérifications et publication des images. |
+| `docs/` | The design: product, executions, credentials, interface, architecture decisions. |
+| `apps/` | What gets deployed: today, the lab. |
+| `harnesses/` | The harness images Agent Sandbox starts in its pools. |
+| `packages/` | Shared code: executions, credentials, the bridge, the mock agent, test tools. |
+| `.github/workflows/` | CI: checks and image publishing. |
 
-Un déployable ne dépend jamais d'un autre ; un paquet ne dépend jamais d'un déployable.
+A deployable never depends on another; a package never depends on a deployable.
 
-## Travailler par branches
+## Working with branches
 
-| Règle | Détail |
+| Rule | Detail |
 | --- | --- |
-| Une base | `design/agora-foundations`. On n'y commite jamais directement : tout y entre par PR. |
-| Une branche par sujet | Partie de la base, préfixée `feat/`, `fix/`, `chore/` ou `docs/` (exemple : `feat/executions`). |
-| Doc et code ensemble | La doc d'un sujet (son contrat dans `docs/`) change dans la même branche que son code, jamais à côté. |
-| Rester à jour | On fusionne la base dans sa branche ; on ne fusionne jamais une branche de sujet dans une autre. |
-| Retour sur la base | Par PR, CI verte ; la branche est supprimée après la fusion. |
+| One base | `design/agora-foundations`. Never commit to it directly: everything enters through a PR. |
+| One branch per subject | Branched from the base, prefixed `feat/`, `fix/`, `chore/` or `docs/` (example: `feat/executions`). |
+| Docs and code together | A subject's doc (its contract in `docs/`) changes in the same branch as its code, never separately. |
+| Stay current | Merge the base into your branch; never merge one subject branch into another. |
+| Back to the base | Through a PR with green CI; the branch is deleted after the merge. |
 
-Deux branches ne modifient donc jamais le même doc en parallèle, et chaque retour sur la base
-se fait sans conflit.
+So two branches never edit the same doc in parallel, and every return to the base merges
+without conflict.
 
-**Le jour où la refonte remplace `main`**, on ne fusionne pas : on substitue. Depuis une
-branche issue de la base :
+**The day the rewrite replaces `main`**, we do not merge: we substitute. From a branch off
+the base:
 
 ```sh
 git merge -s ours --allow-unrelated-histories origin/main
 ```
 
-Ce commit garde exactement l'arbre de la refonte et donne `main` pour parent : la PR vers
-`main` passe sans conflit, l'ancien code disparaît de l'arbre et son historique reste accessible.
-C'est une décision à prendre à ce moment-là : le moteur en production est construit depuis `main`.
+This commit keeps the rewrite's tree exactly and gives it `main` as a parent: the PR to `main`
+goes through without conflict, the old code leaves the tree and its history stays reachable.
+It is a decision to take at that moment: the engine in production is built from `main`.
 
-## Vérifier et construire
+## Check and build
 
-Node 24 exécute directement le TypeScript : rien n'est compilé.
+Node 24 runs TypeScript directly: nothing is compiled.
 
 ```sh
 npm ci
-npm run check      # typecheck puis tests de chaque workspace
+npm run check      # typecheck, then each workspace's tests
 ```
 
-La CI vérifie chaque push et chaque PR vers la base, puis publie les images par digest ;
-infra-k8s les épingle (`apps/agora-sandboxes`, `apps/agora-lab`).
+CI checks every push and every PR to the base, then publishes the images by digest;
+infra-k8s pins them (`apps/agora-sandboxes`, `apps/agora-lab`).

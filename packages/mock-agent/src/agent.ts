@@ -1,4 +1,4 @@
-// The lab's ACP agent (docs/executions.md, "Le banc"): no model, deterministic behaviours chosen by
+// The lab's ACP agent (docs/executions.md, "The lab"): no model, deterministic behaviours chosen by
 // the prompt text, and a REAL native transcript under $HOME that session/resume and session/load
 // read back — so an anchor restored into another sandbox is checked by asking what was said before.
 //
@@ -108,28 +108,28 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     case '/sleep': {
       for (let i = 1; i <= n; i++) {
         if (await pause(turn, 1000)) return 'cancelled'
-        say(session.id, `… seconde ${String(i)}/${String(n)}\n`)
+        say(session.id, `… second ${String(i)}/${String(n)}\n`)
       }
-      remember(session, 'agent', `J'ai dormi ${String(n)} s.`)
-      say(session.id, `J'ai dormi ${String(n)} s.`)
+      remember(session, 'agent', `Slept ${String(n)} s.`)
+      say(session.id, `Slept ${String(n)} s.`)
       return 'end_turn'
     }
     case '/silence': {
       if (await pause(turn, n * 1000)) return 'cancelled'
-      remember(session, 'agent', `Fini, après ${String(n)} s de silence.`)
-      say(session.id, `Fini, après ${String(n)} s de silence.`)
+      remember(session, 'agent', `Done, after ${String(n)} s of silence.`)
+      say(session.id, `Done, after ${String(n)} s of silence.`)
       return 'end_turn'
     }
     case '/permission': {
       const toolCallId = `outil-${randomUUID().slice(0, 8)}`
-      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'Écrire demo.txt', kind: 'edit', status: 'pending' })
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'Write demo.txt', kind: 'edit', status: 'pending' })
       const answer = await Promise.race([
         request('session/request_permission', {
           sessionId: session.id,
-          toolCall: { toolCallId, title: 'Écrire demo.txt', kind: 'edit', status: 'pending' },
+          toolCall: { toolCallId, title: 'Write demo.txt', kind: 'edit', status: 'pending' },
           options: [
-            { optionId: 'allow-once', name: 'Autoriser', kind: 'allow_once' },
-            { optionId: 'reject-once', name: 'Refuser', kind: 'reject_once' },
+            { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
           ],
         }),
         new Promise<null>((resolve) => {
@@ -143,8 +143,8 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       const outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome
       const choice = outcome?.outcome === 'selected' ? String(outcome.optionId) : String(outcome?.outcome ?? 'erreur')
       update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: choice === 'allow-once' ? 'completed' : 'failed' })
-      remember(session, 'agent', `Permission : ${choice}.`)
-      say(session.id, `Permission : ${choice}.`)
+      remember(session, 'agent', `Permission: ${choice}.`)
+      say(session.id, `Permission: ${choice}.`)
       return 'end_turn'
     }
     case '/tool': {
@@ -152,25 +152,25 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       update(session.id, {
         sessionUpdate: 'tool_call',
         toolCallId,
-        title: 'Modifier demo.txt',
+        title: 'Edit demo.txt',
         kind: 'edit',
         status: 'in_progress',
-        content: [{ type: 'diff', path: `${session.cwd}/demo.txt`, oldText: 'avant\n', newText: 'après\n' }],
+        content: [{ type: 'diff', path: `${session.cwd}/demo.txt`, oldText: 'before\n', newText: 'after\n' }],
       })
       if (await pause(turn, 500)) return 'cancelled'
       update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' })
-      remember(session, 'agent', 'Outil terminé.')
-      say(session.id, 'Outil terminé.')
+      remember(session, 'agent', 'Tool done.')
+      say(session.id, 'Tool done.')
       return 'end_turn'
     }
     case '/big': {
       const kib = Math.min(n, 4096)
       for (let i = 0; i < kib; i++) say(session.id, `${String(i).padStart(5, '0')} ${'x'.repeat(1017)}\n`)
-      remember(session, 'agent', `${String(kib)} Kio envoyés.`)
+      remember(session, 'agent', `${String(kib)} KiB sent.`)
       return 'end_turn'
     }
     case '/crash': {
-      process.stderr.write('mock-agent : /crash demandé, sortie code 3\n')
+      process.stderr.write('mock-agent: /crash asked, exiting with code 3\n')
       process.exit(3)
     }
     case '/fetch': {
@@ -183,8 +183,8 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       return 'end_turn'
     }
     case '/recall': {
-      const said = session.history.filter((entry) => entry.role === 'user').map((entry) => `« ${entry.text} »`)
-      const text = `Tu m'as dit, dans l'ordre : ${said.join(', ')}.`
+      const said = session.history.filter((entry) => entry.role === 'user').map((entry) => `"${entry.text}"`)
+      const text = `You told me, in order: ${said.join(', ')}.`
       remember(session, 'agent', text)
       say(session.id, text)
       return 'end_turn'
@@ -192,7 +192,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     default: {
       const users = session.history.filter((entry) => entry.role === 'user')
       const previous = users.at(-2)
-      const reply = `Écho n°${String(users.length)} : ${text}.${previous === undefined ? '' : ` Avant, tu m'avais dit « ${previous.text} ».`}`
+      const reply = `Echo #${String(users.length)}: ${text}.${previous === undefined ? '' : ` Before, you told me "${previous.text}".`}`
       remember(session, 'agent', reply)
       say(session.id, reply)
       return 'end_turn'
@@ -209,11 +209,11 @@ async function fetchOut(method: string, address: string, requestBody: string): P
   try {
     target = new URL(address)
   } catch {
-    return `URL invalide : ${address}`
+    return `invalid URL: ${address}`
   }
-  if (target.protocol !== 'https:') return 'seulement https://'
+  if (target.protocol !== 'https:') return 'https:// only'
   const proxy = process.env.HTTPS_PROXY
-  if (proxy === undefined || proxy === '') return 'HTTPS_PROXY absent'
+  if (proxy === undefined || proxy === '') return 'HTTPS_PROXY missing'
   const authority = `${target.hostname}:${target.port === '' ? '443' : target.port}`
   try {
     const socket = await new Promise<Socket>((resolve, reject) => {
@@ -221,10 +221,10 @@ async function fetchOut(method: string, address: string, requestBody: string): P
       connect.once('connect', (response, tunnel) => {
         if (response.statusCode === 200) return resolve(tunnel)
         tunnel.destroy()
-        reject(new Error(`CONNECT ${authority} refusé par le proxy : ${String(response.statusCode)}`))
+        reject(new Error(`CONNECT ${authority} refused by the proxy: ${String(response.statusCode)}`))
       })
       connect.once('error', reject)
-      connect.setTimeout(15_000, () => connect.destroy(new Error('CONNECT sans réponse')))
+      connect.setTimeout(15_000, () => connect.destroy(new Error('CONNECT unanswered')))
       connect.end()
     })
     const secure = tlsConnect({ socket, servername: target.hostname })
@@ -242,7 +242,7 @@ async function fetchOut(method: string, address: string, requestBody: string): P
     const [head = '', body = ''] = raw.split('\r\n\r\n', 2)
     return `${head.split('\r\n')[0] ?? '?'} — ${body.slice(0, 300)}`
   } catch (error) {
-    return `échec : ${error instanceof Error ? error.message : String(error)}`
+    return `failed: ${error instanceof Error ? error.message : String(error)}`
   }
 }
 
@@ -271,7 +271,7 @@ async function handle(message: Message): Promise<void> {
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
             sessionCapabilities: { resume: {} },
           },
-          agentInfo: { name: 'agora-mock-agent', title: 'Agent mock du banc', version: '1.0.0' },
+          agentInfo: { name: 'agora-mock-agent', title: 'The lab\'s mock agent', version: '1.0.0' },
           authMethods: [],
         },
       })
@@ -299,7 +299,7 @@ async function handle(message: Message): Promise<void> {
     case 'session/prompt': {
       const session = sessions.get(String(params.sessionId))
       if (session === undefined) return fail(message.id, -32002, `session inconnue : ${String(params.sessionId)}`)
-      if (turns.has(session.id)) return fail(message.id, -32603, 'un tour est déjà en cours')
+      if (turns.has(session.id)) return fail(message.id, -32603, 'a turn is already in progress')
       const blocks = Array.isArray(params.prompt) ? (params.prompt as { type?: string; text?: string }[]) : []
       const text = blocks
         .filter((block) => block.type === 'text')
@@ -325,7 +325,7 @@ async function handle(message: Message): Promise<void> {
       return
     }
     default:
-      return fail(message.id, -32601, `méthode inconnue : ${message.method}`)
+      return fail(message.id, -32601, `unknown method: ${message.method}`)
   }
 }
 

@@ -1,222 +1,221 @@
 # Agora
 
-Proposition de design à relire — 21 septembre 2026.
+Design proposal for review — 21 September 2026.
 
-Cette branche repart de zéro. Aucun code, schéma, ADR ou contrat des versions
-précédentes n'est adopté implicitement. Les choix proposés ci-dessous restent à
-valider ; toute réutilisation fera l'objet d'une décision explicite.
+This branch starts from scratch. No code, schema, ADR or contract from previous versions
+is implicitly adopted. The choices proposed below are still to be validated; any reuse
+will require an explicit decision.
 
-## But
+## Purpose
 
-Agora permet de travailler avec des agents exécutés dans des sandboxes, de suivre
-leurs échanges et de retrouver le travail après une interruption.
+Agora lets you work with agents running in sandboxes, follow their exchanges and
+find your work again after an interruption.
 
-Le produit fournit une interface commune à plusieurs harnesses via ACP. Il conserve
-l'historique indépendamment de la durée de vie des processus et de l'infrastructure.
+The product provides a common interface to several harnesses through ACP. It keeps
+the history independently of the lifetime of processes and infrastructure.
 
-## Décisions acquises
+## Settled decisions
 
-- **Agent Sandbox** possède le cycle de vie des sandboxes sur Kubernetes.
-- **La passerelle d'Agora** (agentgateway) est la seule sortie des exécutions. Agora
-  signe les droits de chaque exécution ; la passerelle les vérifie à chaque requête et
-  pose les credentials (ADR de la passerelle). Elle remplace OneCLI ;
-  Agent Vault a été essayé puis écarté.
-- **ACP** est l'interface entre Agora et les harnesses.
-- Le nettoyage des sandboxes abandonnées relève d'Agent Sandbox et, si nécessaire,
-  d'une extension de reaping dans cette infrastructure. Aucun reaper dans Agora.
-- Une indisponibilité du proxy ou un refus d'accès peut faire échouer une opération.
-  Agora n'a pas à réparer automatiquement cette dépendance pour poursuivre une
-  convergence globale.
+- **Agent Sandbox** owns the lifecycle of sandboxes on Kubernetes.
+- **Agora's gateway** (agentgateway) is the executions' only way out. Agora
+  signs each execution's grants; the gateway checks them on every request and
+  sets the credentials (credential gateway ADR). It replaces OneCLI;
+  Agent Vault was tried, then ruled out.
+- **ACP** is the interface between Agora and the harnesses.
+- Cleaning up abandoned sandboxes is the job of Agent Sandbox and, if needed,
+  of a reaping extension in that infrastructure. No reaper in Agora.
+- A proxy outage or an access refusal can make an operation fail.
+  Agora does not have to repair this dependency automatically to pursue a
+  global convergence.
 
-## Fonctionnalités proposées
+## Proposed features
 
-| Fonctionnalité | Comportement attendu |
+| Feature | Expected behaviour |
 | --- | --- |
-| Historique durable | Retrouver les demandes, réponses, outils et erreurs après fermeture du navigateur ou redémarrage d'Agora. |
-| Exécution à la demande | Ouvrir une exécution avec un harness et une configuration choisis parmi les options autorisées. |
-| Interaction | Envoyer un message, suivre les sorties, répondre aux permissions ACP et demander l'annulation d'un tour. |
-| Arrêt | Fermer l'admission de nouveaux messages et cesser de renouveler l'échéance de l'exécution ; elle disparaît quand l'infrastructure la détruit. |
-| Reconnexion | Retrouver une exécution encore vivante sans créer un second contexte ni renvoyer le dernier message. |
-| Reprise après perte | Expliquer ce qui est récupérable et permettre une continuation explicite. |
-| Choix du harness | Utiliser une interface commune, sans prétendre que tous les harnesses ont les mêmes capacités de reprise ou de configuration. |
+| Durable history | Find requests, responses, tools and errors again after the browser is closed or Agora restarts. |
+| On-demand execution | Open an execution with a harness and a configuration chosen among the allowed options. |
+| Interaction | Send a message, follow the outputs, answer ACP permissions and request cancellation of a turn. |
+| Stop | Close admission of new messages and stop renewing the execution's deadline; it disappears when the infrastructure destroys it. |
+| Reconnection | Find an execution that is still alive without creating a second context or resending the last message. |
+| Resume after loss | Explain what is recoverable and allow an explicit continuation. |
+| Harness choice | Use a common interface, without claiming that all harnesses have the same resume or configuration capabilities. |
 
-Le changement de harness avec transfert de contexte, les personas, les skills
-personnalisables, les branches de conversation et la collaboration multi-utilisateur
-restent hors du premier périmètre proposé. Ils ne sont pas hérités des anciennes versions.
+Switching harness with context transfer, personas, customizable skills,
+conversation branches and multi-user collaboration stay outside the first proposed
+scope. They are not inherited from previous versions.
 
-## Responsabilités
+## Responsibilities
 
 ```text
-Utilisateur → Agora → ACP → harness dans une sandbox
-                │                 │
-                │                 └→ passerelle → services externes
-                │
-                ├→ stockage durable des échanges et commandes
-                └→ API Agent Sandbox : demander, retrouver, arrêter
+User → Agora → ACP → harness in a sandbox
+         │                 │
+         │                 └→ gateway → external services
+         │
+         ├→ durable storage of exchanges and commands
+         └→ Agent Sandbox API: request, find, stop
 ```
 
-Agora possède les commandes de l'utilisateur, leur attribution, le journal et les
-vues affichées. Agent Sandbox possède les ressources d'exécution. La passerelle
-possède les credentials et applique les droits qu'Agora a signés pour chaque exécution.
+Agora owns the user's commands, their attribution, the log and the displayed
+views. Agent Sandbox owns the execution resources. The gateway owns the
+credentials and enforces the grants Agora signed for each execution.
 
-Agora configure ces intégrations avec des valeurs autorisées. Il ne réimplémente
-ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance globale.
+Agora configures these integrations with allowed values. It does not reimplement
+a Pod controller, a vault, an HTTP proxy, or their global monitoring.
 
-Les exécutions (`executions.md`) précisent l'interface avec Agent Sandbox, l'image
-et ce que fait Agora : bail de 10 minutes, renouvellement chaque minute pendant un tour, tour
-limité à 1 heure, destruction par l'infrastructure seule, anchor poussé par le Pod.
+Executions (`executions.md`) specifies the interface with Agent Sandbox, the image
+and what Agora does: a 10-minute lease, renewed every minute during a turn, a turn
+limited to 1 hour, destruction by the infrastructure alone, an anchor pushed by the Pod.
 
-Les credentials (`credentials.md`) précisent la sortie d'une exécution : proxy local du
-bridge, droits signés par Agora, passerelle qui les vérifie et pose le credential.
+An execution's credentials (`credentials.md`) specifies an execution's way out: the
+bridge's local proxy, grants signed by Agora, a gateway that checks them and sets the credential.
 
-L'interface Agora ↔ assistant-ui (`assistant-ui.md`) précise le fil, les commandes et
-les composants retenus : projection ACP en base, un flux unique repris par position.
+The Agora ↔ assistant-ui interface (`assistant-ui.md`) specifies the thread, the commands
+and the chosen components: ACP projection in the database, a single stream resumed by position.
 
-## Historique et exécution
+## History and execution
 
-Proposition : conserver deux notions produit simples.
+Proposal: keep two simple product concepts.
 
-- Un **Workstream** regroupe un travail et son historique ordonné.
-- Une **Session** attribue les échanges à une exécution concrète d'un harness.
+- A **Workstream** groups a piece of work and its ordered history.
+- A **Session** attributes exchanges to a concrete execution of a harness.
 
-Une reconnexion au même contexte vivant conserve cette attribution. Un nouveau
-processus ou contexte doit être identifié explicitement ; le nom stable d'une
-sandbox ne suffit pas à prouver la continuité.
+Reconnecting to the same live context keeps this attribution. A new process or
+context must be identified explicitly; a sandbox's stable name is not enough to
+prove continuity.
 
-La configuration demandée et celle effectivement appliquée restent distinguées.
-Cela n'impose ni un objet Intent complet à chaque changement, ni un moteur générique
-de réconciliation. La frontière exacte des Sessions lors d'un changement de modèle
-reste à décider.
+The requested configuration and the one actually applied stay distinct. This
+requires neither a full Intent object on every change nor a generic reconciliation
+engine. The exact boundary of Sessions when the model changes is still to be
+decided.
 
-Le journal conserve les échanges ACP complets acceptés, y compris leurs métadonnées.
-Les messages assemblés et les états d'outils sont des vues reconstruisibles. Les
-credentials d'infrastructure ne sont pas des données conversationnelles.
+The log keeps the complete accepted ACP exchanges, including their metadata.
+Assembled messages and tool states are views that can be rebuilt. Infrastructure
+credentials are not conversation data.
 
-PostgreSQL est proposé pour ce stockage transactionnel ; aucun ancien schéma n'est
-repris par défaut.
+PostgreSQL is proposed for this transactional storage; no previous schema is
+reused by default.
 
-## Traitement d'un message
+## Handling a message
 
-1. Autoriser l'utilisateur sur le Workstream et dédupliquer sa requête.
-2. Vérifier la Session cible, la connexion ACP et les commandes incompatibles en cours.
-3. Enregistrer durablement la commande avant son envoi.
-4. Envoyer sur la connexion existante ; journaliser les échanges reçus et alimenter l'interface.
+1. Authorize the user on the Workstream and deduplicate their request.
+2. Check the target Session, the ACP connection and incompatible commands in progress.
+3. Durably record the command before sending it.
+4. Send on the existing connection; log the exchanges received and feed the interface.
 
-Le chemin courant ne relit pas Kubernetes, les grants et le transcript natif avant
-chaque message. Les événements de connexion et les réponses des opérations mettent
-à jour ce qu'Agora sait de son interaction avec le harness.
+The usual path does not re-read Kubernetes, the grants and the native transcript before
+each message. Connection events and operation responses update what Agora knows of
+its interaction with the harness.
 
-Une connexion ouverte n'est pas une preuve de progression. Un délai dépassé rend
-le blocage visible ; il ne prouve ni l'échec de la commande ni l'absence d'effet.
+An open connection is not proof of progress. A timeout makes the stall visible; it
+proves neither that the command failed nor that it had no effect.
 
-## Commandes et reprise d'Agora
+## Commands and Agora's recovery
 
-Proposition : un seul tour actif par Workstream. Les changements de configuration,
-les envois et les arrêts partagent une règle d'ordre explicite. L'annulation peut
-interrompre le tour actif ; une annulation tardive ne doit pas viser le suivant.
+Proposal: a single active turn per Workstream. Configuration changes, sends and
+stops share an explicit ordering rule. Cancellation can interrupt the active turn;
+a late cancellation must not hit the next one.
 
-Après un crash, Agora retrouve les commandes non résolues et leurs cibles. Une demande
-de sandbox réessayée doit retrouver la même ressource lorsque sa création a réussi
-malgré la perte de réponse.
+After a crash, Agora finds the unresolved commands and their targets again. A retried
+sandbox request must find the same resource when its creation succeeded despite
+the lost response.
 
-Pour ACP, « enregistré », « potentiellement envoyé » et « terminé » sont distincts.
-Une réponse perdue ne déclenche pas un nouvel envoi automatique. Agora cherche une
-preuve auprès du même contexte si le harness le permet, sinon expose l'incertitude.
-Un identifiant de commande Agora ne garantit pas la déduplication côté harness.
+For ACP, "saved", "possibly sent" and "done" are distinct. A lost response does
+not trigger an automatic resend. Agora looks for proof from the same context if the
+harness allows it, otherwise it exposes the uncertainty. An Agora command id does
+not guarantee deduplication on the harness side.
 
-Cette récupération ciblée est nécessaire. Elle ne réintroduit pas une boucle qui
-réévalue en permanence toutes les dépendances et toute la configuration souhaitée.
+This targeted recovery is necessary. It does not bring back a loop that constantly
+re-evaluates every dependency and the whole desired configuration.
 
-## Credentials et isolation
+## Credentials and isolation
 
-La sandbox ne reçoit qu'un jeton court, signé par Agora, qui liste ses droits ; les
-credentials des services et les pouvoirs d'administration restent dans la passerelle.
+The sandbox only receives a short-lived token, signed by Agora, that lists its grants;
+the services' credentials and administrative powers stay in the gateway.
 
-Les restrictions doivent correspondre à ce que la passerelle et le service cible savent
-réellement appliquer : un hôte, un chemin, une méthode. Une permission ACP, un outil
-installé ou une instruction donnée au modèle ne constituent pas une restriction d'accès
-au service.
+Restrictions must match what the gateway and the target service can actually
+enforce: a host, a path, a method. An ACP permission, an installed tool or an
+instruction given to the model is not a restriction on access to the service.
 
-Les droits d'une exécution sont ceux de son jeton. Un nouveau jeton les remplace pour les
-connexions suivantes ; l'ancien reste valable jusqu'à son expiration, d'où des jetons
-courts, réémis pendant la vie de l'exécution.
+An execution's grants are those of its token. A new token replaces them for later
+connections; the old one stays valid until it expires, hence short-lived tokens,
+reissued during the execution's life.
 
-Les clients HTTP doivent respecter le proxy et sa chaîne de confiance. La politique
-réseau ferme les chemins permettant de contourner les restrictions attendues.
-Une indisponibilité acceptable ne signifie pas qu'un élargissement des droits l'est.
+HTTP clients must honour the proxy and its chain of trust. The network policy
+closes the paths that would bypass the expected restrictions. An acceptable outage
+does not mean that widening the grants is acceptable.
 
-## Arrêt et nettoyage
+## Stop and cleanup
 
-Agora ferme les nouveaux envois, demande l'annulation si nécessaire, retire l'accès
-au proxy selon son contrat, puis cesse de renouveler l'échéance : Agent Sandbox détruit.
-Ces demandes doivent survivre à un redémarrage d'Agora. La conservation du contexte ne
-doit pas bloquer indéfiniment un arrêt demandé.
+Agora closes new sends, requests cancellation if needed, removes proxy access
+according to its contract, then stops renewing the deadline: Agent Sandbox destroys it.
+These requests must survive an Agora restart. Preserving the context must not
+block a requested stop indefinitely.
 
-L'expiration et le reaper côté infrastructure nettoient aussi les ressources dont
-Agora a perdu la trace. Ils ne remplacent pas le traitement d'une demande explicite
-d'arrêt, et ne garantissent pas une terminaison instantanée.
+Expiry and the infrastructure-side reaper also clean up resources Agora has lost
+track of. They do not replace the handling of an explicit stop request, and do not
+guarantee instant termination.
 
-Avant d'autoriser un remplacement, il faut décider quelle preuve empêche l'ancienne
-exécution de continuer à modifier des fichiers ou appeler des services. Une ressource
-absente de l'API ne suffit pas en cas de partition réseau. Si l'infrastructure ne
-fournit pas cette garantie, le remplacement reste bloqué ou une garantie plus faible
-doit être explicitement acceptée. Agora ne construira pas un système de fencing maison.
+Before a replacement is allowed, it must be decided which proof prevents the old
+execution from continuing to modify files or call services. A resource missing from
+the API is not enough in case of a network partition. If the infrastructure does not
+provide this guarantee, the replacement stays blocked or a weaker guarantee must be
+explicitly accepted. Agora will not build its own fencing system.
 
-## Continuité du travail
+## Continuity of work
 
-Trois données ont des garanties différentes :
+Three kinds of data have different guarantees:
 
-| Donnée | Garantie proposée |
+| Data | Proposed guarantee |
 | --- | --- |
-| Historique produit | Durable après acceptation par Agora. |
-| Contexte natif du harness | Reprise seulement si l'intégration la démontre. |
-| Fichiers et artefacts | Dépendent d'une politique de stockage explicite, indépendante du journal. |
+| Product history | Durable once accepted by Agora. |
+| Harness native context | Resumable only if the integration demonstrates it. |
+| Files and artefacts | Depend on an explicit storage policy, independent of the log. |
 
-Un volume persistant peut préserver des fichiers sans préserver le processus. Un
-transcript sauvegardé ne suffit pas à garantir la cohérence avec ces fichiers.
+A persistent volume can preserve files without preserving the process. A saved
+transcript is not enough to guarantee consistency with those files.
 
-Les mécanismes antérieurs de Save, Anchor et Handoff sont à réexaminer. Ils ne sont
-pas requis d'avance. Si une reprise native fiable n'est pas disponible, Agora conserve
-l'historique et propose explicitement un nouveau contexte avec les éléments choisis.
-Il ne présente pas cette opération comme une restauration exacte.
+The earlier Save, Anchor and Handoff mechanisms are to be re-examined. They are not
+required up front. If reliable native resume is not available, Agora keeps the
+history and explicitly offers a new context with the chosen elements. It does not
+present this operation as an exact restore.
 
-La compaction interne appartient au harness. Agora ne cherche pas à prouver après
-chaque message que le modèle possède toujours tout l'historique.
+Internal compaction belongs to the harness. Agora does not try to prove after each
+message that the model still has the whole history.
 
-## Pannes visibles
+## Visible failures
 
-| Incident | Réaction attendue |
+| Incident | Expected reaction |
 | --- | --- |
-| Navigateur déconnecté | L'exécution peut continuer ; l'interface relit l'historique au retour. |
-| Agora redémarre | Retrouver la cible et les commandes ; aucun renvoi aveugle. |
-| ACP se déconnecte pendant un tour | Reconnexion ciblée ; résultat incertain tant qu'il n'est pas établi. |
-| Harness ou sandbox perdu | Historique conservé ; reprise selon les données réellement disponibles. |
-| La passerelle refuse ou ne répond pas | Erreur de l'opération, sans escalade automatique des droits. |
-| Stockage du journal indisponible | Suspendre les nouveaux envois et appliquer une backpressure bornée ; ne pas annoncer une durabilité absente. |
-| Ancienne exécution impossible à arrêter | Nettoyage confié à l'infrastructure ; aucun remplacement annoncé sûr sans preuve. |
+| Browser disconnected | The execution can continue; the interface re-reads the history on return. |
+| Agora restarts | Find the target and the commands again; no blind resend. |
+| ACP disconnects during a turn | Targeted reconnection; result uncertain until it is established. |
+| Harness or sandbox lost | History kept; resume according to the data actually available. |
+| The gateway refuses or does not respond | Error on the operation, with no automatic escalation of grants. |
+| Log storage unavailable | Suspend new sends and apply bounded backpressure; do not claim durability that is not there. |
+| Old execution cannot be stopped | Cleanup left to the infrastructure; no replacement announced as safe without proof. |
 
-## Décisions à fermer avant implementation
+## Decisions to close before implementation
 
-1. Valider le périmètre fonctionnel et la définition des Sessions.
-2. Définir le stockage du workspace et la reprise réellement promise pour chaque harness.
-3. Contrat des credentials : fermé par l'ADR de la passerelle et
-   `credentials.md` ; restent le renouvellement du jeton et la confiance
-   TLS de git et de codex.
-4. Définir le contrat Agent Sandbox : création idempotente, identité du processus,
-   arrêt, expiration, stockage et remplacement après panne.
-5. Spécifier l'ordre des commandes, la récupération des envois incertains et les
-   limites de buffering lorsque le journal est indisponible.
-6. Définir l'accès des utilisateurs, les permissions ACP et la rétention des données.
+1. Validate the functional scope and the definition of Sessions.
+2. Define workspace storage and the resume actually promised for each harness.
+3. Credentials contract: closed by the credential gateway ADR and
+   `credentials.md`; token renewal and the TLS trust of git and codex
+   remain.
+4. Define the Agent Sandbox contract: idempotent creation, process identity,
+   stop, expiry, storage and replacement after a failure.
+5. Specify command ordering, recovery of uncertain sends and the
+   buffering limits when the log is unavailable.
+6. Define user access, ACP permissions and data retention.
 
-## Validation et réutilisation
+## Validation and reuse
 
-La première tranche doit démontrer : ouverture d'une sandbox, échange ACP journalisé,
-rechargement de l'interface, redémarrage d'Agora pendant un tour, arrêt puis nettoyage.
-Ajouter un refus du proxy et une perte du harness pour vérifier les erreurs visibles.
+The first slice must demonstrate: opening a sandbox, a logged ACP exchange,
+reloading the interface, restarting Agora during a turn, stop then cleanup.
+Add a proxy refusal and a harness loss to check the visible errors.
 
-Chaque récupération de code ancien doit nommer la fonctionnalité servie, ses dépendances
-et les scénarios qui la valident. Le journal, le transport ACP, les projections,
-l'interface et les intégrations de harness sont des candidats, pas des acquis.
+Each piece of old code brought back must name the feature it serves, its dependencies
+and the scenarios that validate it. The log, the ACP transport, the projections,
+the interface and the harness integrations are candidates, not givens.
 
-Les anciens moteurs de réconciliation, contrôleurs d'infrastructure et modèles de
-grants ne définissent aucune obligation pour ce design.
+The old reconciliation engines, infrastructure controllers and grant models
+impose no obligation on this design.

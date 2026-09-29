@@ -1,82 +1,82 @@
-# Éléments assistant-ui et ACP
+# assistant-ui elements and ACP
 
-Ce que chaque élément du registre assistant-ui ([assistant-ui.com/elements](https://www.assistant-ui.com/elements))
-peut espérer recevoir d'un harness parlant ACP.
+What each element of the assistant-ui registry ([assistant-ui.com/elements](https://www.assistant-ui.com/elements))
+can expect to receive from a harness that speaks ACP.
 
-**Référence : la norme ACP 1.5.0** (schéma de `@agentclientprotocol/sdk` 1.5.0, 21 septembre 2026),
-partie stable uniquement. Pas les extensions d'une implémentation particulière.
+**Reference: the ACP 1.5.0 standard** (schema of `@agentclientprotocol/sdk` 1.5.0, 21 September 2026),
+stable part only. Not the extensions of any particular implementation.
 
-Chaque agent annonce ce qu'il supporte parmi la norme (`initialize`, capacités de session et de
-prompt, options de configuration). Un élément « ACP » n'apparaît que si l'agent connecté fournit
-la donnée ; l'interface masque le reste.
+Each agent announces which parts of the standard it supports (`initialize`, session and prompt
+capabilities, configuration options). An "ACP" element appears only if the connected agent provides
+the data; the interface hides the rest.
 
-| Verdict | Sens |
+| Verdict | Meaning |
 | --- | --- |
-| **ACP** | Alimenté par un message ACP stable. |
-| **Agora** | Fourni par Agora ou le navigateur, sans rien demander à ACP. |
-| **Partiel** | Une partie de l'élément tient, l'autre n'a pas de source. |
-| **Non** | ACP ne transporte pas ce qu'il faut. |
+| **ACP** | Fed by a stable ACP message. |
+| **Agora** | Provided by Agora or the browser, without asking anything of ACP. |
+| **Partial** | Part of the element works, the other part has no source. |
+| **No** | ACP does not carry what is needed. |
 
-## Tableau
+## Table
 
-| Éléments | Verdict | Source | Limite |
+| Elements | Verdict | Source | Limit |
 | --- | --- | --- | --- |
-| streaming-text, message-pair, typing-indicator | **ACP** | `agent_message_chunk` ; `messageId` délimite les messages | — |
+| streaming-text, message-pair, typing-indicator | **ACP** | `agent_message_chunk`; `messageId` delimits messages | — |
 | reasoning-panel, reasoning | **ACP** | `agent_thought_chunk` | — |
-| thinking-indicator | **ACP** | titre du dernier `tool_call` en cours | Durée calculée par Agora. |
-| tool-call, tool-group, tool-timeline | **ACP** | `tool_call` / `tool_call_update` : sorte, titre, statut, fichiers touchés, entrée et sortie brutes | — |
-| tool-error | **ACP** | statut `failed` d'un outil | Pas de « réessayer » : ACP ne relance pas un outil seul. |
-| code-diff | **ACP** | contenu d'outil `diff` (chemin, ancien texte, nouveau texte) | — |
-| terminal-block | **ACP** | contenu d'outil `terminal` et méthodes `terminal/*` | Agora tient le terminal : la sortie est lue en direct. |
-| agent-plan, todo-list | **ACP** | `plan` : étapes, priorité, état | Trois états seulement ; pas d'étape « échouée ». |
-| approval-card | **ACP** | `session/request_permission`, options `allow_once`, `allow_always`, `reject_once`, `reject_always` | — |
-| elicitation-form | **ACP** | `elicitation` : formulaire décrit par un schéma, ou URL | Capacité à annoncer par Agora. |
-| stopped-run | **ACP** | `session/cancel`, motif d'arrêt `cancelled` | « Continuer » est un nouveau prompt. |
-| guardrail-notice | **ACP** | motif d'arrêt `refusal` | Pas d'alternatives proposées. |
-| error-state | **ACP** | erreur du prompt, motifs `max_tokens`, `max_turn_requests` | « Réessayer » est un nouveau prompt. |
-| model-picker, model-selector | **ACP** | options de configuration, catégorie `model` | Pas de prix ni de capacités par modèle. |
-| context-display | **ACP** | `usage_update` : contexte utilisé et taille | — |
-| message-attachment | **ACP** | blocs `image`, `audio`, `resource`, `resource_link` du prompt | Selon les types acceptés par l'agent. |
-| agent-card | **ACP** | `initialize` : identité et capacités de l'agent ; commandes disponibles | — |
-| reasoning-effort | **Partiel** | options de configuration, catégorie `thought_level` | Le budget consommé n'est pas connu. |
-| cost-meter | **Partiel** | `usage_update.cost` | Total de la session seulement, pas par modèle. |
-| context-breakdown | **Partiel** | `usage_update` | Total seulement, pas la répartition. |
-| settings-panel | **Partiel** | options de configuration (`mode`, `model`, `thought_level`, booléens) | Prompt système et température seulement si l'agent les expose. |
-| composer | **Partiel** | commandes (`available_commands_update`), pièces jointes, modèle | Mentions `@fichier` : la liste des fichiers vient du sandbox, pas d'ACP. Pas de voix. |
-| reviewable-diff | **Partiel** | contenu d'outil `diff` | Décision sur l'appel d'outil entier, pas bloc par bloc. |
-| permission-grant | **Partiel** | option `allow_always` | La portée de l'autorisation n'est pas décrite. |
-| file-tree | **Partiel** | fichiers touchés et diffs des outils | Reconstruit par Agora. |
-| image-generation | **Partiel** | bloc `image` dans la réponse | L'image arrive entière, sans progression. |
-| web-search, sources, document-reference | **Partiel** | outils `search` / `fetch`, blocs `resource_link` | Pas de citations structurées. |
-| subagent-list, task-card, agent-handoff | **Partiel** | appels d'outil, si l'agent y expose ses sous-agents | ACP ne connaît pas les sous-agents. |
-| message-actions | **Partiel** | — | Copier et noter : oui. Régénérer : non (voir regenerate-menu). |
-| mcp-server-panel | **Partiel** | serveurs MCP déclarés par Agora à la création de la session | Pas d'état des serveurs ; connexion dynamique instable. |
-| thread-list, thread-search, conversation-search, shared-conversation | **Agora** | journal Agora ; titre par `session_info_update` | ACP a aussi `session/list`, mais le journal fait foi. |
-| speaker-identity | **Agora** | attribution des échanges aux Sessions | — |
-| connection-state, agent-status, loading-state | **Agora** | état de la connexion et du tour | — |
-| message-timing | **Agora** | horodatage des trames | Débit en jetons approximatif. |
-| message-queue | **Agora** | file côté client | À arbitrer avec la règle d'un seul tour actif. |
-| feedback-dialog | **Agora** | stocké par Agora | Rien ne remonte à l'agent. |
+| thinking-indicator | **ACP** | title of the last in-progress `tool_call` | Duration computed by Agora. |
+| tool-call, tool-group, tool-timeline | **ACP** | `tool_call` / `tool_call_update`: kind, title, status, files touched, raw input and output | — |
+| tool-error | **ACP** | `failed` status of a tool | No "Retry": ACP does not rerun a single tool. |
+| code-diff | **ACP** | `diff` tool content (path, old text, new text) | — |
+| terminal-block | **ACP** | `terminal` tool content and `terminal/*` methods | Agora holds the terminal: the output is read live. |
+| agent-plan, todo-list | **ACP** | `plan`: steps, priority, status | Three states only; no "failed" step. |
+| approval-card | **ACP** | `session/request_permission`, `allow_once`, `allow_always`, `reject_once`, `reject_always` options | — |
+| elicitation-form | **ACP** | `elicitation`: form described by a schema, or URL | Capability Agora must announce. |
+| stopped-run | **ACP** | `session/cancel`, stop reason `cancelled` | "Continue" is a new prompt. |
+| guardrail-notice | **ACP** | stop reason `refusal` | No alternatives offered. |
+| error-state | **ACP** | prompt error, stop reasons `max_tokens`, `max_turn_requests` | "Retry" is a new prompt. |
+| model-picker, model-selector | **ACP** | configuration options, `model` category | No price or capabilities per model. |
+| context-display | **ACP** | `usage_update`: context used and size | — |
+| message-attachment | **ACP** | prompt `image`, `audio`, `resource`, `resource_link` blocks | Depends on the types the agent accepts. |
+| agent-card | **ACP** | `initialize`: the agent's identity and capabilities; available commands | — |
+| reasoning-effort | **Partial** | configuration options, `thought_level` category | The budget consumed is not known. |
+| cost-meter | **Partial** | `usage_update.cost` | Session total only, not per model. |
+| context-breakdown | **Partial** | `usage_update` | Total only, not the breakdown. |
+| settings-panel | **Partial** | configuration options (`mode`, `model`, `thought_level`, booleans) | System prompt and temperature only if the agent exposes them. |
+| composer | **Partial** | commands (`available_commands_update`), attachments, model | `@file` mentions: the file list comes from the sandbox, not from ACP. No voice. |
+| reviewable-diff | **Partial** | `diff` tool content | Decision on the whole tool call, not block by block. |
+| permission-grant | **Partial** | `allow_always` option | The scope of the authorization is not described. |
+| file-tree | **Partial** | files touched and diffs from tools | Rebuilt by Agora. |
+| image-generation | **Partial** | `image` block in the response | The image arrives whole, with no progress. |
+| web-search, sources, document-reference | **Partial** | `search` / `fetch` tools, `resource_link` blocks | No structured citations. |
+| subagent-list, task-card, agent-handoff | **Partial** | tool calls, if the agent exposes its subagents through them | ACP does not know about subagents. |
+| message-actions | **Partial** | — | Copy and rate: yes. Regenerate: no (see regenerate-menu). |
+| mcp-server-panel | **Partial** | MCP servers declared by Agora when the session is created | No server state; dynamic connection unstable. |
+| thread-list, thread-search, conversation-search, shared-conversation | **Agora** | Agora log; title via `session_info_update` | ACP also has `session/list`, but the log is authoritative. |
+| speaker-identity | **Agora** | attribution of exchanges to Sessions | — |
+| connection-state, agent-status, loading-state | **Agora** | connection and turn state | — |
+| message-timing | **Agora** | frame timestamps | Approximate token throughput. |
+| message-queue | **Agora** | client-side queue | To be reconciled with the single-active-turn rule. |
+| feedback-dialog | **Agora** | stored by Agora | Nothing goes back to the agent. |
 | quote-reply, draft-restore | **Agora** | composer | — |
-| directive-text | **Agora** | rendu des commandes et mentions dans le message | — |
-| prompt-library | **Agora** | prompts enregistrés par Agora | — |
-| activity-graph | **Agora** | statistiques du journal | — |
-| math-block, diagram, mermaid-diagram, shiki-highlighter | **Agora** | rendu du texte Markdown | — |
-| read-aloud | **Agora** | synthèse vocale du navigateur | — |
-| chat-panel, empty-state, scroll-anchor, conversation-map, day-separator, command-palette, launcher-bubble, mobile-composer, onboarding | **Agora** | interface seule | — |
-| edit-message, message-branches, regenerate-menu | **Non** | — | Ni édition ni retour en arrière. `session/fork` est instable. |
-| suggestions | **Non** | — | Agora pourrait les générer à part. |
-| voice, voice-conversation | **Non** | — | Pas d'audio en temps réel. |
-| recommendation-card | **Non** | — | La permission est le seul accord prévu. |
-| inline-citation, retrieval-chunks, confidence-marker | **Non** | — | Pas de citations ni de degré de confiance. |
-| data-table, chart, number-ticker, spec-sheet, comparison-card, timeline, map-answer, score-breakdown, research-report, job-progress | **Non** | — | ACP ne transporte que Markdown, images et ressources. Un tableau Markdown reste possible. |
-| artifact-card, canvas-split | **Non** | — | Pas d'artefact : les fichiers passent par les diffs. |
-| trace-waterfall, flow-graph | **Non** | — | Pas de spans ni de graphe d'exécution. |
-| computer-use, code-runner, web-preview | **Non** | — | Hors ACP ; un aperçu web passerait par Agent Sandbox. |
-| memory-chips, checkpoint-history, background-inbox, schedule-card, quota-banner | **Non** | — | — |
+| directive-text | **Agora** | rendering of commands and mentions in the message | — |
+| prompt-library | **Agora** | prompts saved by Agora | — |
+| activity-graph | **Agora** | log statistics | — |
+| math-block, diagram, mermaid-diagram, shiki-highlighter | **Agora** | Markdown text rendering | — |
+| read-aloud | **Agora** | browser speech synthesis | — |
+| chat-panel, empty-state, scroll-anchor, conversation-map, day-separator, command-palette, launcher-bubble, mobile-composer, onboarding | **Agora** | interface only | — |
+| edit-message, message-branches, regenerate-menu | **No** | — | No editing and no going back. `session/fork` is unstable. |
+| suggestions | **No** | — | Agora could generate them separately. |
+| voice, voice-conversation | **No** | — | No real-time audio. |
+| recommendation-card | **No** | — | The permission is the only agreement provided for. |
+| inline-citation, retrieval-chunks, confidence-marker | **No** | — | No citations or confidence level. |
+| data-table, chart, number-ticker, spec-sheet, comparison-card, timeline, map-answer, score-breakdown, research-report, job-progress | **No** | — | ACP carries only Markdown, images and resources. A Markdown table remains possible. |
+| artifact-card, canvas-split | **No** | — | No artifacts: files go through diffs. |
+| trace-waterfall, flow-graph | **No** | — | No spans or execution graph. |
+| computer-use, code-runner, web-preview | **No** | — | Outside ACP; a web preview would go through Agent Sandbox. |
+| memory-chips, checkpoint-history, background-inbox, schedule-card, quota-banner | **No** | — | — |
 
-## Instable, à surveiller
+## Unstable, to watch
 
-Ces messages existent dans le schéma 1.5.0 mais restent marqués instables :
-`plan_update` et `plan_removed` (plan partiel), `notice`, `compaction_update`, les fournisseurs,
-la connexion MCP dynamique, et surtout `session/fork`, qui ouvrirait les branches.
+These messages exist in the 1.5.0 schema but are still marked unstable:
+`plan_update` and `plan_removed` (partial plan), `notice`, `compaction_update`, providers,
+dynamic MCP connection, and above all `session/fork`, which would enable branches.

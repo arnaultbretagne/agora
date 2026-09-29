@@ -1,6 +1,6 @@
 # mock
 
-Image `agora-harness-mock` : le bridge devant l'agent mock
-([packages/mock-agent](../../packages/mock-agent/)). Aucun modèle, aucun réseau.
+Image `agora-harness-mock`: the bridge in front of the mock agent (`packages/mock-agent`). No
+model.
 
-`docker build -f harnesses/mock/Dockerfile .` depuis la racine.
+`docker build -f harnesses/mock/Dockerfile .` from the root.

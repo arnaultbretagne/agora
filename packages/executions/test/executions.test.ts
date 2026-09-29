@@ -73,7 +73,7 @@ async function until<T>(find: () => T | undefined | null | false, timeoutMs = 10
   for (;;) {
     const found = find()
     if (found !== undefined && found !== null && found !== false) return found
-    if (Date.now() > deadline) throw new Error('délai dépassé')
+    if (Date.now() > deadline) throw new Error('timed out')
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
 }
@@ -90,7 +90,7 @@ async function ready(target: Lab, pool = 'mock-test', extra: Record<string, unkn
   const created = await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool, ...extra })
   assert.equal(created.accepted, true, JSON.stringify(created))
   const name = created.name as string
-  await until(() => view(target, name)?.state === 'prêt')
+  await until(() => view(target, name)?.state === 'ready')
   return name
 }
 
@@ -126,8 +126,8 @@ describe('executions', () => {
     ])
     assert.equal(first!.name, second!.name)
     assert.equal(target.kube.claims.size, 1)
-    assert.match((await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'pool-inexistant' })).reason as string, /hors catalogue/)
-    assert.match((await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test', limits: { turnCapSeconds: 5 } })).reason as string, /hors bornes/)
+    assert.match((await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'no-such-pool' })).reason as string, /not in the catalogue/)
+    assert.match((await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test', limits: { turnCapSeconds: 5 } })).reason as string, /out of bounds/)
     await ready(target)
     assert.equal((await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test' })).status, 429)
   })
@@ -143,11 +143,11 @@ describe('executions', () => {
 
     prompt(client, 2, sessionId, '/sleep 1')
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
-    prompt(client, 3, sessionId, 'trop tôt')
-    assert.match(String(((await client.response(3)).error as { message: string }).message), /un tour est déjà en cours/)
+    prompt(client, 3, sessionId, 'too early')
+    assert.match(String(((await client.response(3)).error as { message: string }).message), /a turn is already in progress/)
     assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
     await until(() => target.kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn] === undefined)
-    assert.equal(view(target, name)?.state, 'prêt')
+    assert.equal(view(target, name)?.state, 'ready')
   })
 
   it('refuses the prompt when its deadline cannot be accepted', async () => {
@@ -156,10 +156,10 @@ describe('executions', () => {
     const client = await consumer(target, name)
     const sessionId = await session(client)
     target.kube.failPatches = true
-    prompt(client, 2, sessionId, 'bonjour')
+    prompt(client, 2, sessionId, 'hello')
     const answer = await client.response(2)
     target.kube.failPatches = false
-    assert.match(String((answer.error as { message: string }).message), /échéance non acceptée/)
+    assert.match(String((answer.error as { message: string }).message), /deadline not accepted/)
     assert.equal(view(target, name)?.turn, null)
   })
 
@@ -177,7 +177,7 @@ describe('executions', () => {
     const granted = during.at(-1)!
     assert.ok(Math.abs(Date.parse(granted.shutdownTime) - (granted.at + 30_000)) < 1500)
     await new Promise((resolve) => setTimeout(resolve, 2500))
-    assert.equal(deadlinesOf(target, name).length, before + during.length, 'renouvelé hors tour')
+    assert.equal(deadlinesOf(target, name).length, before + during.length, 'renewed outside a turn')
   })
 
   it('caps a turn at its maximum: the infrastructure destroys it, the Pod pushes its anchor', async () => {
@@ -187,7 +187,7 @@ describe('executions', () => {
     const sessionId = await session(client)
     prompt(client, 2, sessionId, '/sleep 60')
     const end = await ending(target, name)
-    assert.match(end.reason, /tour en cours à l’échéance/)
+    assert.match(end.reason, /turn in progress at the deadline/)
     assert.notEqual(end.anchor, null, String(end.anchorError))
     const bundle = new TextDecoder().decode((await target.anchors.bundle(end.anchor!.id))!)
     assert.match(bundle, /agora-anchor\/1/)
@@ -201,7 +201,7 @@ describe('executions', () => {
     prompt(client, 2, sessionId, 'mirabelle')
     await client.response(2)
     const end = await ending(target, name)
-    assert.equal(end.reason, 'échéance après le dernier tour')
+    assert.equal(end.reason, 'deadline after the last turn')
     assert.equal(end.anchor?.sessionId, sessionId)
     assert.deepEqual(end.anchor?.files.map((file) => file.path), [`${sessionId}.jsonl`])
   })
@@ -211,20 +211,20 @@ describe('executions', () => {
     const name = await ready(target)
     const client = await consumer(target, name)
     const sessionId = await session(client)
-    prompt(client, 2, sessionId, 'avant')
+    prompt(client, 2, sessionId, 'before')
     await client.response(2)
     prompt(client, 3, sessionId, '/sleep 60')
-    await until(() => view(target, name)?.state === 'en tour')
+    await until(() => view(target, name)?.state === 'in turn')
     const patches = deadlinesOf(target, name).length
     const stopped = await post(target, `/api/executions/${name}/stop`)
     assert.equal(stopped.accepted, true)
     assert.deepEqual((await client.response(3)).result, { stopReason: 'cancelled' })
-    assert.equal(view(target, name)?.state, 'arrêté')
-    assert.match((await post(target, `/api/executions/${name}/stop`)).reason as string, /déjà demandé/)
+    assert.equal(view(target, name)?.state, 'stopped')
+    assert.match((await post(target, `/api/executions/${name}/stop`)).reason as string, /already requested/)
     const end = await ending(target, name)
-    assert.equal(deadlinesOf(target, name).length, patches, 'renouvelé après l’arrêt')
-    assert.equal(end.reason, 'arrêt demandé')
-    assert.match(new TextDecoder().decode((await target.anchors.bundle(end.anchor!.id))!), /YXZhbnQ|avant/)
+    assert.equal(deadlinesOf(target, name).length, patches, 'renewed after the stop')
+    assert.equal(end.reason, 'stop requested')
+    assert.match(new TextDecoder().decode((await target.anchors.bundle(end.anchor!.id))!), /YmVmb3Jl|before/)
   })
 
   it('restores an anchor into a new execution that remembers', async () => {
@@ -269,10 +269,10 @@ describe('executions', () => {
     const client = await consumer(target, name)
     const sessionId = await session(client)
     prompt(client, 2, sessionId, '/sleep 3')
-    await until(() => view(target, name)?.state === 'en tour')
+    await until(() => view(target, name)?.state === 'in turn')
     assert.equal((await post(target, `/api/lab/executions/${name}/drop-bridge`)).accepted, true)
     assert.deepEqual((await client.response(2)).result, { stopReason: 'end_turn' })
-    await until(() => view(target, name)?.state === 'prêt')
+    await until(() => view(target, name)?.state === 'ready')
   })
 
   it('finds a turn in flight after its own restart, from the claim alone', async () => {
@@ -287,8 +287,8 @@ describe('executions', () => {
     await until(() => kube.claims.get(name)?.metadata.annotations?.[ANNOTATION.turn])
     await first.manager.stop()
     const second = await lab({ kube, anchors })
-    await until(() => view(second, name)?.state === 'en tour')
-    await until(() => view(second, name)?.state === 'prêt', 8000)
+    await until(() => view(second, name)?.state === 'in turn')
+    await until(() => view(second, name)?.state === 'ready', 8000)
     assert.match(String(view(second, name)?.lastTurn?.outcome), /end_turn/)
   })
 
@@ -297,12 +297,12 @@ describe('executions', () => {
     const name = await ready(target)
     const client = await consumer(target, name)
     const sessionId = await session(client)
-    prompt(client, 2, sessionId, 'avant la chute')
+    prompt(client, 2, sessionId, 'before the fall')
     await client.response(2)
     prompt(client, 3, sessionId, '/crash')
-    await until(() => view(target, name)?.state === 'perdu')
+    await until(() => view(target, name)?.state === 'lost')
     const end = await ending(target, name)
-    assert.match(end.reason, /perdu/)
+    assert.match(end.reason, /lost/)
     assert.notEqual(end.anchor, null, String(end.anchorError))
   })
 
@@ -310,8 +310,8 @@ describe('executions', () => {
     const target = await lab()
     const name = await ready(target)
     await target.kube.replacePod(view(target, name)!.pod!)
-    await until(() => view(target, name)?.state === 'perdu')
-    assert.match(String(view(target, name)?.reason), /processus remplacé/)
+    await until(() => view(target, name)?.state === 'lost')
+    assert.match(String(view(target, name)?.reason), /process replaced/)
   })
 
   it('refuses an anchor pushed without a valid projected token', async () => {
@@ -321,18 +321,18 @@ describe('executions', () => {
       const response = await fetch(`http://${target.receiver}/anchors`, { method: 'POST', body, headers })
       assert.equal(response.status, 401)
     }
-    assert.equal((await fetch(`http://${target.receiver}/anchors`, { method: 'POST', body, headers: { authorization: 'Bearer pod:inconnu' } })).status, 404)
+    assert.equal((await fetch(`http://${target.receiver}/anchors`, { method: 'POST', body, headers: { authorization: 'Bearer pod:unknown' } })).status, 404)
     assert.deepEqual(await target.anchors.list(), [])
   })
 
   it('forgets a claim that disappears without any push', async () => {
     const target = await lab({ defaults: { leaseSeconds: 1 } })
-    const created = await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'pool-inexistant-ailleurs' })
+    const created = await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'no-such-pool-ailleurs' })
     assert.equal(created.accepted, false)
     const claim = await post(target, '/api/executions', { requestId: crypto.randomUUID(), pool: 'mock-test' })
     const end = await ending(target, claim.name as string)
     assert.equal(end.anchor, null)
-    assert.match(String(end.anchorError), /aucun fichier natif|aucun anchor/)
+    assert.match(String(end.anchorError), /no native file|no anchor/)
   })
 
   it('probes the bridge with bad tokens', async () => {
@@ -342,7 +342,7 @@ describe('executions', () => {
     const results = probe.results as { case: string; info: number; acp: number }[]
     for (const result of results.slice(0, -1)) assert.deepEqual([result.info, result.acp], [401, 401], result.case)
     assert.deepEqual([results.at(-1)!.info, results.at(-1)!.acp], [200, 101])
-    await until(() => view(target, name)?.state === 'prêt')
+    await until(() => view(target, name)?.state === 'ready')
   })
 
   it('hands an execution a credential (docs/credentials.md): minted, given to the bridge, never kept by Agora', async () => {
@@ -362,7 +362,7 @@ describe('executions', () => {
       describe: () => ({ vault: 'default' }),
       mint: async (input) => {
         minted.push(input)
-        return { proxy: `127.0.0.1:${String((proxy.address() as AddressInfo).port)}`, token: 'jeton-de-session-proxy', expiresAt: '2030-01-01T00:00:00Z' }
+        return { proxy: `127.0.0.1:${String((proxy.address() as AddressInfo).port)}`, token: 'proxy-session-token', expiresAt: '2030-01-01T00:00:00Z' }
       },
     }
 
@@ -384,8 +384,8 @@ describe('executions', () => {
     prompt(client, 1, sessionId, '/fetch https://api.example.test/v1/models')
     await client.response(1)
     assert.match(heads[0] ?? '', /^CONNECT api\.example\.test:443 HTTP\/1\.1\r\n/)
-    assert.match(heads[0] ?? '', /Proxy-Authorization: Bearer jeton-de-session-proxy/)
+    assert.match(heads[0] ?? '', /Proxy-Authorization: Bearer proxy-session-token/)
     await until(() => view(target, name)?.outbound?.targets['api.example.test:443']?.lastStatus === 403)
-    assert.ok(!JSON.stringify(target.manager.snapshot()).includes('jeton-de-session-proxy'), 'the token is kept nowhere on Agora’s side')
+    assert.ok(!JSON.stringify(target.manager.snapshot()).includes('proxy-session-token'), 'the token is kept nowhere on Agora’s side')
   })
 })

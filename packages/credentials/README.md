@@ -1,11 +1,10 @@
 # credentials
 
-Les credentials d'une exécution, côté Agora ([docs/credentials.md](../../docs/credentials.md)) :
-compiler ses profils en droits et les signer dans un JWT court pour la passerelle. Agora ne voit
-aucun credential. Remettre le jeton au bridge est le travail des exécutions
-(`POST /api/executions/{nom}/credentials`).
+An execution's credentials, on Agora's side (`docs/credentials.md`): compile its profiles into
+grants and sign them into a short JWT for the gateway. Agora never sees a credential. Handing
+the token to the bridge is the executions' job (`POST /api/executions/{name}/credentials`).
 
-| Dossier | Contenu |
+| Folder | Content |
 | --- | --- |
-| [src/](src/) | Le catalogue des profils et la signature des droits. |
-| [test/](test/) | La compilation des profils, leur composition, et le JWT. |
+| `src/` | The profile catalogue and the grant signer. |
+| `test/` | Profile compilation, composition, and the JWT. |

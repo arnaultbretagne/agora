@@ -1,5 +1,5 @@
 # testkit
 
-Outils partagés par les tests du bridge et des exécutions : un bridge local devant l'agent mock
-(`mockBridge`), une paire de clés (`keys`) et un client WebSocket qui garde tout ce qu'il reçoit
-(`Collector`). Jamais embarqué dans une image.
+Tools shared by the bridge and executions tests: a local bridge in front of the mock agent
+(`mockBridge`), a key pair (`keys`) and a WebSocket client that keeps everything it receives
+(`Collector`). Never shipped in an image.

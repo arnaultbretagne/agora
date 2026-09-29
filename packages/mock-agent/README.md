@@ -1,16 +1,16 @@
 # mock-agent
 
-L'agent ACP du banc : aucun modèle, un comportement choisi par le texte du prompt, et un vrai
-fichier natif sous `$HOME/.mock-agent/sessions/`, relu à `session/resume` et `session/load`.
+The lab's ACP agent: no model, a behaviour chosen by the prompt text, and a real native file
+under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/load`.
 
-| Prompt | Comportement |
+| Prompt | Behaviour |
 | --- | --- |
-| texte libre | Écho numéroté, avec le message précédent. |
-| `/sleep N` | Un fragment par seconde pendant N secondes. |
-| `/silence N` | Rien pendant N secondes, puis une réponse. |
-| `/permission` | Demande une permission et attend la réponse. |
-| `/tool` | Un appel d'outil avec un diff. |
-| `/big N` | N Kio de texte. |
-| `/recall` | Rappelle tout ce qui a été dit dans la session. |
-| `/crash` | Sort avec le code 3. |
-| `/fetch [MÉTHODE] URL [CORPS]` | Une requête par `HTTPS_PROXY`, comme un vrai harness ([docs/credentials.md](../../docs/credentials.md)) ; répond ce qui est revenu. GET par défaut. |
+| free text | Numbered echo, with the previous message. |
+| `/sleep N` | One chunk per second for N seconds. |
+| `/silence N` | Nothing for N seconds, then an answer. |
+| `/permission` | Asks for a permission and waits for the answer. |
+| `/tool` | A tool call with a diff. |
+| `/big N` | N KiB of text. |
+| `/recall` | Recalls everything said in the session. |
+| `/crash` | Exits with code 3. |
+| `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/credentials.md`); answers with what came back. GET by default. |

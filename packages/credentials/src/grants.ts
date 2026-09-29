@@ -1,4 +1,4 @@
-// Composition by policy (docs/credentials.md, "La passerelle"): an execution's rights are a set of
+// Composition by policy (docs/credentials.md, "The gateway"): an execution's rights are a set of
 // profiles, compiled here into grants — host, anchored regex on path and query, methods — and signed
 // by Agora into a short JWT. The gateway checks each request against those grants, then sets the
 // broad credential it holds for the host. No entity per combination: the set lives in the JWT.
@@ -31,7 +31,7 @@ export function compileProfile(profile: string): Grant[] {
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
-    if (!NAME.test(owner) || !NAME.test(repo) || repo === '.' || repo === '..') throw new ProfileRefused(`repo invalide : ${owner}/${repo}`)
+    if (!NAME.test(owner) || !NAME.test(repo) || repo === '.' || repo === '..') throw new ProfileRefused(`invalid repo: ${owner}/${repo}`)
     const rest = `^/repos/${escape(owner)}/${escape(repo)}(/[^?]*)?(\\?.*)?$`
     // git smart HTTP: a clone POSTs too (git-upload-pack); writing is git-receive-pack.
     const services = level === 'write' ? '(upload|receive)' : 'upload'
@@ -40,11 +40,11 @@ export function compileProfile(profile: string): Grant[] {
       ? [{ host: 'api.github.com', path: rest }, { host: 'github.com', path: git }]
       : [{ host: 'api.github.com', path: rest, methods: [...READ] }, { host: 'github.com', path: git }]
   }
-  throw new ProfileRefused(`profil inconnu : ${profile}`)
+  throw new ProfileRefused(`unknown profile: ${profile}`)
 }
 
 export function compileProfiles(profiles: readonly string[]): Grant[] {
-  if (profiles.length === 0) throw new ProfileRefused('aucun profil')
+  if (profiles.length === 0) throw new ProfileRefused('no profile')
   return profiles.flatMap(compileProfile)
 }
 
@@ -70,7 +70,7 @@ export class GrantSigner {
   }
 
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {
-    if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 60 || input.ttlSeconds > 24 * 3600) throw new ProfileRefused('durée hors bornes : 60 à 86 400 s')
+    if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 60 || input.ttlSeconds > 24 * 3600) throw new ProfileRefused('duration out of bounds: 60 to 86,400 s')
     const grants = compileProfiles(input.profiles ?? [])
     this.key ??= createPrivateKey(await readFile(this.options.keyFile))
     const now = Math.floor(Date.now() / 1000)

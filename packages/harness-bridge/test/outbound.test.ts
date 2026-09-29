@@ -69,7 +69,7 @@ async function putCredentials(target: LabBridge, body: unknown, headers = auth()
 describe('outbound proxy', () => {
   it('refuses to open anything before a credential is attached', async () => {
     const target = await lab()
-    assert.match(await ask(target, '/fetch https://api.example.test/v1/models'), /CONNECT api\.example\.test:443 refusé par le proxy : 503/)
+    assert.match(await ask(target, '/fetch https://api.example.test/v1/models'), /CONNECT api\.example\.test:443 refused by the proxy: 503/)
     const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { outbound: { proxy: unknown; refused: number } }
     assert.equal(info.outbound.proxy, null)
     assert.equal(info.outbound.refused, 1)
@@ -91,11 +91,11 @@ describe('outbound proxy', () => {
   it('forwards the adapter’s CONNECT with the token, and hands back the proxy’s answer', async () => {
     const target = await lab()
     const vault = await upstreamProxy((socket) => socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'))
-    assert.equal((await putCredentials(target, { proxy: vault.address, token: 'jeton-de-session' })).status, 200)
-    assert.match(await ask(target, '/fetch https://api.example.test/v1/models'), /refusé par le proxy : 403/)
+    assert.equal((await putCredentials(target, { proxy: vault.address, token: 'session-token' })).status, 200)
+    assert.match(await ask(target, '/fetch https://api.example.test/v1/models'), /refused by the proxy: 403/)
     assert.equal(vault.heads.length, 1)
     assert.match(vault.heads[0] ?? '', /^CONNECT api\.example\.test:443 HTTP\/1\.1\r\n/)
-    assert.match(vault.heads[0] ?? '', /\r\nProxy-Authorization: Bearer jeton-de-session(\r\n|$)/)
+    assert.match(vault.heads[0] ?? '', /\r\nProxy-Authorization: Bearer session-token(\r\n|$)/)
     const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { outbound: { tunnels: number; targets: Record<string, { count: number; lastStatus: number }> } }
     assert.equal(info.outbound.tunnels, 1)
     assert.deepEqual(info.outbound.targets['api.example.test:443'], { count: 1, lastStatus: 403 })
@@ -140,7 +140,7 @@ describe('outbound proxy', () => {
 
   it('answers 502 when the credential proxy cannot be reached', async () => {
     const target = await lab()
-    assert.equal((await putCredentials(target, { proxy: '127.0.0.1:1', token: 'jeton' })).status, 200)
-    assert.match(await ask(target, '/fetch https://api.example.test/'), /refusé par le proxy : 502/)
+    assert.equal((await putCredentials(target, { proxy: '127.0.0.1:1', token: 'token' })).status, 200)
+    assert.match(await ask(target, '/fetch https://api.example.test/'), /refused by the proxy: 502/)
   })
 })

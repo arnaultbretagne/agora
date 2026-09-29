@@ -1,22 +1,23 @@
 # docs
 
-La conception d'Agora : un document par sujet, qui dit comment ça marche, et les décisions
-d'architecture dans `adr/`, qui disent pourquoi. Le point d'entrée est `design.md`.
+Agora's design: one document per subject, which says how it works, and the architecture
+decisions in `adr/`, which say why. Start with `design.md`.
 
-## Ce qu'on y met
+## What goes here
 
-- **Un document par sujet** — le produit, les exécutions, les credentials, l'interface. Il décrit
-  le contrat : les acteurs, les échanges, les règles, les cas validés et ce qui reste à préciser.
-- **Un ADR par décision d'architecture**, dans `adr/`, selon la recette de ce dossier.
+- **One document per subject** — the product, executions, credentials, the interface. It
+  describes the contract: the actors, the exchanges, the rules, the validated cases and what
+  remains to be specified.
+- **One ADR per architecture decision**, in `adr/`, following that folder's recipe.
 
-## Règles
+## Rules
 
-- **Un sujet, un document.** Le nom du fichier dit le sujet ; un nouveau sujet fait un nouveau
-  fichier, pas une section ajoutée ailleurs.
-- **Pas de lien entre fichiers.** Le nommage et l'arborescence suffisent à retrouver un
-  document ; un lien finit par mourir. On cite un document par son nom.
-- **Écrit comme la doc d'Agora.** Ce qui est vrai d'Agora, pas l'état d'un chantier : ni
-  « refonte », ni « cette branche », ni « pour l'instant ».
-- **Langue :** les documents en français, les ADR en anglais.
-- **Forme :** prose et tableaux, avec les vrais noms des éléments ; des schémas Mermaid quand ils
-  aident, minimaux. Pas de code.
+- **One subject, one document.** The file name says the subject; a new subject makes a new file,
+  not a section added elsewhere.
+- **No links between files.** Names and layout are enough to find a document; a link ends up
+  dead. Cite a document by its name.
+- **Written as Agora's documentation.** What is true of Agora, not the state of a work in
+  progress: no "rewrite", no "this branch", no "for now".
+- **Language:** English.
+- **Form:** prose and tables, with the real names of things; Mermaid diagrams when they help,
+  kept minimal. No code.

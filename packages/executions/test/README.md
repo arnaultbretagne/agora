@@ -1,8 +1,8 @@
 # test
 
-| Fichier | Rôle |
+| File | Role |
 | --- | --- |
-| `executions.test.ts` | Le contrat, contre de vrais bridges qui font tourner l'agent mock. |
-| `fake-kube.ts` | Une API Kubernetes en mémoire qui joue aussi le contrôleur d'Agent Sandbox : à l'échéance, elle supprime le claim et termine le Pod, qui pousse son anchor. |
+| `executions.test.ts` | The contract, against real bridges running the mock agent. |
+| `fake-kube.ts` | An in-memory Kubernetes API that also plays Agent Sandbox's controller: at the deadline, it deletes the claim and terminates the Pod, which pushes its anchor. |
 
 `npm test -w @agora/executions`

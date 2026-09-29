@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Outils de test : bridge + agent mock en local, client WebSocket qui garde tout.",
+  "description": "Test tools: a local bridge with the mock agent, a WebSocket client that keeps everything.",
   "exports": {
     ".": "./src/index.ts"
   },

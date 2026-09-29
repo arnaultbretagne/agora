@@ -37,9 +37,9 @@ const TARGET = /^[A-Za-z0-9.-]+:\d{1,5}$/
 export function parseCredentials(body: unknown): Credentials {
   const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
   const { proxy, token, expiresAt } = input
-  if (typeof proxy !== 'string' || !TARGET.test(proxy)) throw new Error('proxy doit être « hôte:port »')
-  if (typeof token !== 'string' || token.trim() === '' || /[\s]/.test(token)) throw new Error('token absent ou invalide')
-  if (expiresAt !== undefined && expiresAt !== null && (typeof expiresAt !== 'string' || Number.isNaN(Date.parse(expiresAt)))) throw new Error('expiresAt doit être une date ISO')
+  if (typeof proxy !== 'string' || !TARGET.test(proxy)) throw new Error('proxy must be "host:port"')
+  if (typeof token !== 'string' || token.trim() === '' || /[\s]/.test(token)) throw new Error('token missing or invalid')
+  if (expiresAt !== undefined && expiresAt !== null && (typeof expiresAt !== 'string' || Number.isNaN(Date.parse(expiresAt)))) throw new Error('expiresAt must be an ISO date')
   return { proxy, token, expiresAt: (expiresAt as string | null | undefined) ?? null }
 }
 
@@ -59,15 +59,15 @@ export async function startOutbound(options: { port?: number; log: (message: str
   const server: Server = createServer((_req, res) => {
     // Only CONNECT: plain http:// has no credential to carry and never leaves the Pod.
     res.writeHead(501, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('seul CONNECT est relayé\n')
+    res.end('only CONNECT is relayed\n')
   })
 
   server.on('connect', (req: IncomingMessage, client: Duplex, head: Buffer) => {
     const target = req.url ?? ''
     client.on('error', () => {})
-    if (!TARGET.test(target)) return refuse(client, '400 Bad Request', 'cible attendue : hôte:port')
+    if (!TARGET.test(target)) return refuse(client, '400 Bad Request', 'expected target: host:port')
     const current = credentials
-    if (current === null) return refuse(client, '503 Service Unavailable', 'aucun accès sortant branché sur cette exécution')
+    if (current === null) return refuse(client, '503 Service Unavailable', 'no way out attached to this execution')
 
     tunnels += 1
     const stats = (targets[target] ??= { count: 0, lastStatus: null })
@@ -94,9 +94,9 @@ export async function startOutbound(options: { port?: number; log: (message: str
     upstream.on('error', (error) => {
       if (connected) client.destroy()
       else {
-        options.log(`proxy de credentials injoignable (${current.proxy}) : ${error.message}`)
+        options.log(`credential proxy unreachable (${current.proxy}): ${error.message}`)
         stats.lastStatus = 502
-        refuse(client, '502 Bad Gateway', 'proxy de credentials injoignable')
+        refuse(client, '502 Bad Gateway', 'credential proxy unreachable')
       }
     })
     client.on('error', () => upstream.destroy())
@@ -111,7 +111,7 @@ export async function startOutbound(options: { port?: number; log: (message: str
       credentials = next
       attachedAt = new Date().toISOString()
       // Never the token.
-      options.log(`accès sortant branché : ${next.proxy}${next.expiresAt === null ? '' : `, jusqu'à ${next.expiresAt}`}`)
+      options.log(`way out attached: ${next.proxy}${next.expiresAt === null ? '' : `, until ${next.expiresAt}`}`)
     },
     describe: () => ({
       proxy: credentials?.proxy ?? null,

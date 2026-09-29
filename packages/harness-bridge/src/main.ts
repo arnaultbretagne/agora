@@ -6,7 +6,7 @@ import { startBridge } from './server.ts'
 
 function required(name: string): string {
   const value = process.env[name]
-  if (value === undefined || value.trim() === '') throw new Error(`${name} est requis`)
+  if (value === undefined || value.trim() === '') throw new Error(`${name} is required`)
   return value
 }
 
@@ -26,13 +26,13 @@ const bridge = await startBridge({
   log,
 })
 
-// The end of the Pod (docs/executions.md, "La fin du Pod et l'anchor"): the infrastructure deletes it at the
+// The end of the Pod (docs/executions.md, "The end of the Pod and the anchor"): the infrastructure deletes it at the
 // deadline, and the grace period is for this — stop the adapter, push the native files, leave.
 process.on('SIGTERM', () => {
   void (async () => {
     const bundle = await bridge.terminate()
     const url = process.env.AGORA_ANCHOR_URL
-    if (url === undefined || url === '') log('AGORA_ANCHOR_URL absent : anchor non poussé')
+    if (url === undefined || url === '') log('AGORA_ANCHOR_URL missing: anchor not pushed')
     else await pushBundle(url, process.env.AGORA_TOKEN_FILE ?? '/var/run/agora/token', bundle, { log })
     process.exit(0)
   })()
