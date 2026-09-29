@@ -9,6 +9,7 @@ import type { AnchorMeta, AnchorStore } from './anchors.ts'
 import { KubeError, WatchGone, type Claim, type KubeApi, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
 import type { Bundle } from '@agora/harness-bridge/anchor'
+import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
 export const MANAGER = 'agora'
@@ -73,6 +74,7 @@ interface Hello {
   readonly lastSeq: number
   readonly gap: boolean
   readonly replayFrom: number | null
+  readonly outbound?: OutboundView
 }
 
 export interface Ending {
@@ -134,6 +136,8 @@ interface SandboxRecord {
   lastTurn: { outcome: string; endedAt: string } | null
   anchor: AnchorMeta | null
   anchorError: string | null
+  /** What the bridge says of its way out (docs/credentials.md) — never the token. */
+  outbound: OutboundView | null
   error: string | null
   lost: string | null
   uncertain: string | null
@@ -363,6 +367,7 @@ export class ExecutionManager {
       lastTurn: null,
       anchor: null,
       anchorError: null,
+      outbound: null,
       error: null,
       lost: null,
       uncertain: null,
@@ -445,6 +450,7 @@ export class ExecutionManager {
 
   private onHello(record: SandboxRecord, hello: Hello): void {
     record.hello = hello
+    record.outbound = hello.outbound ?? null
     record.bridgeState = 'connectée'
     if (record.instance === null) {
       record.instance = hello.instance
@@ -515,6 +521,7 @@ export class ExecutionManager {
     const shutdownTime = iso(Date.now() + record.limits.leaseSeconds * 1000)
     this.log(record.name, `tour clos (${outcome})${grant ? `, échéance ${shutdownTime} sans renouvellement` : ''}`)
     this.emitRecord(record)
+    if (record.outbound !== null) void this.refreshOutbound(record)
     try {
       await this.annotate(record, { [ANNOTATION.turn]: null, [ANNOTATION.idleSince]: record.idleSince }, grant ? { shutdownTime } : undefined)
       if (grant) {
@@ -599,6 +606,44 @@ export class ExecutionManager {
     } finally {
       record.restoring = false
       this.emitRecord(record)
+    }
+  }
+
+  // ---------------------------------------------------------------- credentials (docs/credentials.md)
+
+  /** Hands the bridge the proxy to go out through and its token; the token is kept nowhere here. */
+  async attachCredentials(name: string, credentials: Credentials): Promise<CommandResult<OutboundView>> {
+    const record = this.records.get(name)
+    if (record === undefined) return refused(`exécution inconnue : ${name}`, 404)
+    if (record.ending) return refused("l'infrastructure détruit déjà ce sandbox")
+    if (!record.ready || record.serviceFQDN === null || record.podName === null) return refused('sandbox pas encore prêt')
+    try {
+      const response = await fetch(`http://${this.address(record)}/credentials`, {
+        method: 'PUT',
+        body: JSON.stringify(credentials),
+        headers: { authorization: `Bearer ${this.token(record)}`, 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(10_000),
+      })
+      const answer = (await response.json()) as OutboundView & { reason?: string }
+      if (!response.ok) return refused(`le bridge a refusé (${String(response.status)}) : ${String(answer.reason)}`, 502)
+      record.outbound = answer
+      this.log(name, `credential branché : ${credentials.proxy}${credentials.expiresAt === null ? '' : `, valable jusqu'à ${credentials.expiresAt}`}`)
+      this.emitRecord(record)
+      return { accepted: true, value: answer }
+    } catch (error) {
+      return refused(`bridge injoignable : ${error instanceof Error ? error.message : String(error)}`, 502)
+    }
+  }
+
+  /** After a turn, what went out through the bridge (tunnels, the proxy's answers). */
+  private async refreshOutbound(record: SandboxRecord): Promise<void> {
+    try {
+      const response = await fetch(`http://${this.address(record)}/info`, { headers: { authorization: `Bearer ${this.token(record)}` }, signal: AbortSignal.timeout(5000) })
+      if (!response.ok) return
+      record.outbound = ((await response.json()) as { outbound?: OutboundView }).outbound ?? record.outbound
+      this.emitRecord(record)
+    } catch {
+      // Shown again at the next turn.
     }
   }
 
@@ -1036,6 +1081,7 @@ export class ExecutionManager {
       restored: record.restored,
       consumer: record.consumer !== null,
       pendingPermissions: record.permissions.size,
+      outbound: record.outbound,
     }
   }
 

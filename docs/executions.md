@@ -111,6 +111,7 @@ Port **8080**. Toutes les routes sauf `/healthz` exigent le jeton d'Agora.
 | `GET /info` | Instance, Pod, workspace, réponse d'`initialize`, état de l'adaptateur, dernière position. |
 | `GET /acp` | WebSocket : le relais ACP. |
 | `PUT /anchor` | Restaure un anchor avant la reprise de la session. |
+| `PUT /credentials` | Branche le credential par lequel l'adaptateur sort (`credentials.md`). |
 
 Le jeton est signé **Ed25519** par Agora, nomme le sandbox visé et expire après
 **60 secondes**. Le bridge le vérifie avec la clé publique d'Agora et compare le nom à
@@ -180,6 +181,7 @@ C'est pourquoi le workspace est le même chemin dans toutes les images.
 | Ressources | 50m CPU et 512 Mio réservés, 1 CPU et 1 Gio au plus : un sandbox au repos consomme ~1m, et le nœud n'a que 6 cœurs. |
 | `HOME` | `emptyDir` monté sur `/home/harness` |
 | Utilisateur | 10001, racine en lecture seule, aucune capacité |
+| Sortie | Par la passerelle d'Agora seulement, et sa confiance TLS (`credentials.md`) |
 
 Un template et un pool par image, nommés d'après son digest. Changer d'image, c'est un
 nouveau template et un nouveau pool, jamais une modification en place.
@@ -195,6 +197,7 @@ nouveau template et un nouveau pool, jamais une modification en place.
 | `GET /api/events` | Flux SSE : l'état complet au départ, puis chaque exécution changée, entière. |
 | `POST /api/executions` | Créer : identifiant de demande, pool, anchor à restaurer (optionnel), réglages. |
 | `POST /api/executions/{nom}/stop` | Arrêter : fermer les envois, annuler le tour, cesser de renouveler. |
+| `POST /api/executions/{nom}/credentials` | Brancher un credential (`credentials.md`). |
 | `GET /api/executions/{nom}/acp` | WebSocket : le relais ACP du consommateur. |
 | `GET /api/anchors` | Les anchors stockés. |
 | `GET /api/anchors/{id}/content` | Le contenu d'un anchor. |
@@ -344,8 +347,8 @@ heure ; reprendre depuis un anchor ouvre une nouvelle session et repaie tout le 
 
 ## Les cas à valider
 
-Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts` :
-**22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
+Joués le 27 septembre sur g4, sous Kata, par `apps/lab/scripts/live-cases.ts`, et rejoués le
+29 septembre : **22 sur 22**. Les cas d'échéance utilisent un bail de 60 s,
 ré-armé trois fois par bail.
 
 | # | Cas | Attendu | Mesuré |
@@ -371,10 +374,10 @@ ré-armé trois fois par bail.
 | 19 | Adaptateur mort | *Perdu*, plus de renouvellement ; l'anchor part quand même avec le Pod. | *Perdu* ; anchor poussé malgré l'adaptateur mort. |
 | 20 | Bridge sans jeton, expiré, pour un autre sandbox, autre clé | 401 à chaque fois. | 401 partout ; jeton valide 200 / 101. |
 | 21 | Poussée d'anchor sans jeton projeté valide | 401, rien n'est stocké. | 401 sans jeton, 401 avec un faux. |
-| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. | 401 d'Anthropic au prompt ; anchor de 11 915 o poussé, restauré par `session/resume`. |
+| 22 | Harness réel (claude-code) | `initialize` et `session/new` réels ; anchor poussé et restauré. | Sans credential, la sortie est refusée par le bridge : pas de réponse au prompt en 120 s, tour annulé ; anchor de 11 238 o poussé, restauré par `session/resume`. |
 
-**À préciser :** credentials des harnesses (Agent Vault), stockage des anchors en base,
-dossier natif de codex, tâches détachées, reprise après perte du processus.
+**À préciser :** stockage des anchors en base, dossier natif de codex, tâches détachées,
+reprise après perte du processus. Les credentials : `credentials.md`.
 
 Références : [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go) ;
 mesures Kata dans `docs/agent-sandbox-evaluation.md` du dépôt `infra-k8s`.

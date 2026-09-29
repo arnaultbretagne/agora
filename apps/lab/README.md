@@ -1,8 +1,9 @@
 # lab
 
-Le banc, sur `agora-lab.bretagne.dev` derrière Pocket-ID. Il monte le paquet
-[executions](../../packages/executions/) et sert une page volontairement brute pour jouer tous
-les cas de [docs/executions.md](../../docs/executions.md).
+Le banc, sur `agora-lab.bretagne.dev` derrière Pocket-ID. Il monte les paquets
+[executions](../../packages/executions/) et [credentials](../../packages/credentials/) et sert
+une page volontairement brute pour jouer tous les cas de
+[docs/executions.md](../../docs/executions.md) et [docs/credentials.md](../../docs/credentials.md).
 
 | Dossier | Contenu |
 | --- | --- |
@@ -22,5 +23,8 @@ aux sandboxes).
 | `MAX_ACTIVE` | 4 | Exécutions actives au plus. |
 | `LAB` | — | `true` pour ouvrir les routes du banc. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Audience attendue du jeton projeté des Pods. |
+| `GATEWAY_PROXY` | — | La passerelle vue des sandboxes, `hôte:port`. Sans elle, aucun credential ne peut être branché. |
+| `GRANTS_KEY_FILE` | requis avec la passerelle | Clé privée Ed25519 qui signe les droits d'une exécution. |
+| `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | En-tête `kid`, `iss` et `aud` du JWT, attendus par la passerelle. |
 
 Image : `docker build -f apps/lab/Dockerfile .` depuis la racine.

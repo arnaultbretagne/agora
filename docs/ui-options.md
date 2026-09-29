@@ -6,7 +6,8 @@ pour l'ADR UI à venir.
 
 ## Découpage de départ
 
-Agent Sandbox possède l'exécution, Agent Vault possède les credentials. Il reste à
+Agent Sandbox possède l'exécution, la passerelle possède les credentials (Agent Vault à
+l'époque de ces notes, écarté depuis, voir l'ADR de la passerelle). Il reste à
 Agora le journal des commandes et des échanges ACP, puis une interface qui en est
 une vue. Chaque candidat a été évalué sur deux rôles possibles : servir d'interface,
 ou remplacer ce journal.

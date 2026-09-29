@@ -5,7 +5,7 @@ Contrat de départ à implémenter — `@assistant-ui/react` **0.15.21**.
 **Agora détient le fil et les commandes. assistant-ui affiche le fil et remonte
 les gestes de l'utilisateur.**
 
-Les options étudiées avant ce choix sont dans [ui-options.md](ui-options.md).
+Les options étudiées avant ce choix sont dans `ui-options.md`.
 
 ## Qui fait quoi ?
 
@@ -45,7 +45,7 @@ raison*.
 | **Écrire** | le texte | Refusée si un tour est enregistré ou en cours, ou si les envois sont fermés. |
 | **Annuler** | le tour visé | Sans effet si ce tour est clos ; ne touche jamais le tour suivant. |
 | **Répondre à une permission** | la demande et l'option choisie | Refusée si la demande n'est plus en attente. |
-| **Arrêter** | — | Ferme les envois et cesse de renouveler l'échéance ; l'exécution disparaît quand l'infrastructure la détruit ([executions.md](executions.md)). |
+| **Arrêter** | — | Ferme les envois et cesse de renouveler l'échéance ; l'exécution disparaît quand l'infrastructure la détruit (`executions.md`). |
 
 ## Le pont : `useExternalStoreRuntime`
 
@@ -157,7 +157,7 @@ Feedback, `EditComposer`, les pièces jointes et la dictée. Copier reste.
 | Pièces jointes | `Attachment` (registre) |
 
 Ce que chaque élément du registre peut recevoir d'ACP est dans
-[assistant-ui-elements.md](assistant-ui-elements.md).
+`assistant-ui-elements.md`.
 
 ## Les composants à écrire
 

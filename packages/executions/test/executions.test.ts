@@ -2,12 +2,12 @@
 // in-memory Kubernetes API whose controller destroys claims at their deadline.
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
-import type { AddressInfo } from 'node:net'
+import { createServer as createTcpServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import { AnchorStore } from '../src/anchors.ts'
-import { createAnchorReceiver, createApi } from '../src/http.ts'
+import { createAnchorReceiver, createApi, type CredentialSource } from '../src/http.ts'
 import { ANNOTATION, ExecutionManager, type Limits } from '../src/manager.ts'
 import { FakeKube, NAMESPACE } from './fake-kube.ts'
 import { Collector, keys } from '@agora/testkit'
@@ -35,7 +35,7 @@ async function listen(server: ReturnType<typeof createApi>): Promise<string> {
   return `127.0.0.1:${String((server.address() as AddressInfo).port)}`
 }
 
-async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?: Partial<Limits>; maxActive?: number; renewSeconds?: number } = {}): Promise<Lab> {
+async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?: Partial<Limits>; maxActive?: number; renewSeconds?: number; credentials?: CredentialSource } = {}): Promise<Lab> {
   const kube = options.kube ?? new FakeKube(publicKey)
   if (options.kube === undefined) cleanups.push(() => kube.closeAll())
   const anchors = options.anchors ?? new AnchorStore(mkdtempSync(join(tmpdir(), 'anchors-')))
@@ -53,7 +53,7 @@ async function lab(options: { kube?: FakeKube; anchors?: AnchorStore; defaults?:
   })
   await manager.start()
   cleanups.push(() => manager.stop())
-  const base = await listen(createApi({ manager, anchors, lab: true, onRestart: () => {} }))
+  const base = await listen(createApi({ manager, anchors, lab: true, onRestart: () => {}, ...(options.credentials === undefined ? {} : { credentials: options.credentials }) }))
   const receiver = await listen(createAnchorReceiver({ manager, namespace: NAMESPACE, verify: (token) => kube.reviewToken(token) }))
   kube.anchorUrl = `http://${receiver}/anchors`
   return { kube, manager, anchors, base, receiver }
@@ -343,5 +343,49 @@ describe('executions', () => {
     for (const result of results.slice(0, -1)) assert.deepEqual([result.info, result.acp], [401, 401], result.case)
     assert.deepEqual([results.at(-1)!.info, results.at(-1)!.acp], [200, 101])
     await until(() => view(target, name)?.state === 'prêt')
+  })
+
+  it('hands an execution a credential (docs/credentials.md): minted, given to the bridge, never kept by Agora', async () => {
+    // A stand-in for the credential proxy: keeps each CONNECT head and refuses it.
+    const heads: string[] = []
+    const proxy = createTcpServer((socket) => {
+      socket.once('data', (chunk: Buffer) => {
+        heads.push(chunk.toString('latin1'))
+        socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+      })
+      socket.on('error', () => {})
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+    cleanups.push(() => new Promise<void>((resolve) => proxy.close(() => resolve())))
+    const minted: { label: string; ttlSeconds: number }[] = []
+    const credentials: CredentialSource = {
+      describe: () => ({ vault: 'default' }),
+      mint: async (input) => {
+        minted.push(input)
+        return { proxy: `127.0.0.1:${String((proxy.address() as AddressInfo).port)}`, token: 'jeton-de-session-proxy', expiresAt: '2030-01-01T00:00:00Z' }
+      },
+    }
+
+    const without = await lab()
+    const bare = await ready(without)
+    const refusedAnswer = await post(without, `/api/executions/${bare}/credentials`, {})
+    assert.equal(refusedAnswer.status, 503)
+
+    const target = await lab({ credentials })
+    const name = await ready(target)
+    assert.equal(view(target, name)?.outbound?.proxy, null, 'no credential until one is attached')
+    const attached = await post(target, `/api/executions/${name}/credentials`, { ttlSeconds: 900 })
+    assert.equal(attached.accepted, true, JSON.stringify(attached))
+    assert.deepEqual(minted, [{ label: `agora ${name}`, ttlSeconds: 900 }])
+    assert.equal(view(target, name)?.outbound?.expiresAt, '2030-01-01T00:00:00Z')
+
+    const client = await consumer(target, name)
+    const sessionId = await session(client)
+    prompt(client, 1, sessionId, '/fetch https://api.example.test/v1/models')
+    await client.response(1)
+    assert.match(heads[0] ?? '', /^CONNECT api\.example\.test:443 HTTP\/1\.1\r\n/)
+    assert.match(heads[0] ?? '', /Proxy-Authorization: Bearer jeton-de-session-proxy/)
+    await until(() => view(target, name)?.outbound?.targets['api.example.test:443']?.lastStatus === 403)
+    assert.ok(!JSON.stringify(target.manager.snapshot()).includes('jeton-de-session-proxy'), 'the token is kept nowhere on Agora’s side')
   })
 })

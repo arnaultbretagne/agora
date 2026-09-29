@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AnchorStore, createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
+import { GrantSigner } from '@agora/credentials'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -39,8 +40,26 @@ const manager = new ExecutionManager({
   bridgePort: number('BRIDGE_PORT', 8080),
 })
 
+// docs/credentials.md: without the gateway, executions have no credential and no way out.
+const credentials =
+  process.env.GATEWAY_PROXY === undefined || process.env.GATEWAY_PROXY === ''
+    ? undefined
+    : new GrantSigner({
+        proxy: process.env.GATEWAY_PROXY,
+        keyFile: required('GRANTS_KEY_FILE'),
+        keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
+        issuer: process.env.GRANTS_ISSUER ?? 'agora',
+        audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
+      })
+
 await manager.start()
-const server = createApi({ manager, anchors, lab: process.env.LAB === 'true', page: join(import.meta.dirname, '..', 'public', 'index.html') })
+const server = createApi({
+  manager,
+  anchors,
+  lab: process.env.LAB === 'true',
+  page: join(import.meta.dirname, '..', 'public', 'index.html'),
+  ...(credentials === undefined ? {} : { credentials }),
+})
 server.listen(number('PORT', 8080), () => console.log(`- banc prêt sur :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({ manager, namespace, verify: (token) => kube.reviewToken(token, audience) })
 receiver.listen(number('ANCHOR_PORT', 8081), () => console.log(`- réception des anchors sur :${String(number('ANCHOR_PORT', 8081))}`))

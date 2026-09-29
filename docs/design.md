@@ -17,8 +17,10 @@ l'historique indépendamment de la durée de vie des processus et de l'infrastru
 ## Décisions acquises
 
 - **Agent Sandbox** possède le cycle de vie des sandboxes sur Kubernetes.
-- **Infisical Agent Vault** remplace OneCLI pour le courtage des credentials.
-  Agent Vault désigne ici le produit autonome, distinct d'Infisical Agent Proxy.
+- **La passerelle d'Agora** (agentgateway) est la seule sortie des exécutions. Agora
+  signe les droits de chaque exécution ; la passerelle les vérifie à chaque requête et
+  pose les credentials (ADR de la passerelle). Elle remplace OneCLI ;
+  Agent Vault a été essayé puis écarté.
 - **ACP** est l'interface entre Agora et les harnesses.
 - Le nettoyage des sandboxes abandonnées relève d'Agent Sandbox et, si nécessaire,
   d'une extension de reaping dans cette infrastructure. Aucun reaper dans Agora.
@@ -47,24 +49,27 @@ restent hors du premier périmètre proposé. Ils ne sont pas hérités des anci
 ```text
 Utilisateur → Agora → ACP → harness dans une sandbox
                 │                 │
-                │                 └→ Agent Vault → services externes
+                │                 └→ passerelle → services externes
                 │
                 ├→ stockage durable des échanges et commandes
                 └→ API Agent Sandbox : demander, retrouver, arrêter
 ```
 
 Agora possède les commandes de l'utilisateur, leur attribution, le journal et les
-vues affichées. Agent Sandbox possède les ressources d'exécution. Agent Vault
-possède les credentials et applique les restrictions de leur utilisation.
+vues affichées. Agent Sandbox possède les ressources d'exécution. La passerelle
+possède les credentials et applique les droits qu'Agora a signés pour chaque exécution.
 
 Agora configure ces intégrations avec des valeurs autorisées. Il ne réimplémente
 ni un contrôleur de Pods, ni un coffre, ni un proxy HTTP, ni leur surveillance globale.
 
-Les [exécutions](executions.md) précisent l'interface avec Agent Sandbox, l'image
+Les exécutions (`executions.md`) précisent l'interface avec Agent Sandbox, l'image
 et ce que fait Agora : bail de 10 minutes, renouvellement chaque minute pendant un tour, tour
 limité à 1 heure, destruction par l'infrastructure seule, anchor poussé par le Pod.
 
-L'[interface Agora ↔ assistant-ui](assistant-ui.md) précise le fil, les commandes et
+Les credentials (`credentials.md`) précisent la sortie d'une exécution : proxy local du
+bridge, droits signés par Agora, passerelle qui les vérifie et pose le credential.
+
+L'interface Agora ↔ assistant-ui (`assistant-ui.md`) précise le fil, les commandes et
 les composants retenus : projection ACP en base, un flux unique repris par position.
 
 ## Historique et exécution
@@ -124,17 +129,17 @@ réévalue en permanence toutes les dépendances et toute la configuration souha
 
 ## Credentials et isolation
 
-La sandbox reçoit une autorisation limitée d'utiliser Agent Vault ; les credentials
-des services et les pouvoirs d'administration restent hors de la sandbox.
+La sandbox ne reçoit qu'un jeton court, signé par Agora, qui liste ses droits ; les
+credentials des services et les pouvoirs d'administration restent dans la passerelle.
 
-Les restrictions doivent correspondre à ce qu'Agent Vault et le service cible savent
-réellement appliquer. Une permission ACP, un outil installé ou une instruction donnée
-au modèle ne constituent pas une restriction d'accès au service.
+Les restrictions doivent correspondre à ce que la passerelle et le service cible savent
+réellement appliquer : un hôte, un chemin, une méthode. Une permission ACP, un outil
+installé ou une instruction donnée au modèle ne constituent pas une restriction d'accès
+au service.
 
-Proposition initiale : fixer les droits pour une incarnation d'exécution. Un changement
-de droits passe par un remplacement contrôlé plutôt que par une modification à chaud.
-La portée, la durée, le renouvellement éventuel et la révocation du jeton du proxy
-doivent être vérifiés sur l'intégration retenue.
+Les droits d'une exécution sont ceux de son jeton. Un nouveau jeton les remplace pour les
+connexions suivantes ; l'ancien reste valable jusqu'à son expiration, d'où des jetons
+courts, réémis pendant la vie de l'exécution.
 
 Les clients HTTP doivent respecter le proxy et sa chaîne de confiance. La politique
 réseau ferme les chemins permettant de contourner les restrictions attendues.
@@ -186,7 +191,7 @@ chaque message que le modèle possède toujours tout l'historique.
 | Agora redémarre | Retrouver la cible et les commandes ; aucun renvoi aveugle. |
 | ACP se déconnecte pendant un tour | Reconnexion ciblée ; résultat incertain tant qu'il n'est pas établi. |
 | Harness ou sandbox perdu | Historique conservé ; reprise selon les données réellement disponibles. |
-| Agent Vault refuse ou ne répond pas | Erreur de l'opération, sans escalade automatique des droits. |
+| La passerelle refuse ou ne répond pas | Erreur de l'opération, sans escalade automatique des droits. |
 | Stockage du journal indisponible | Suspendre les nouveaux envois et appliquer une backpressure bornée ; ne pas annoncer une durabilité absente. |
 | Ancienne exécution impossible à arrêter | Nettoyage confié à l'infrastructure ; aucun remplacement annoncé sûr sans preuve. |
 
@@ -194,7 +199,9 @@ chaque message que le modèle possède toujours tout l'historique.
 
 1. Valider le périmètre fonctionnel et la définition des Sessions.
 2. Définir le stockage du workspace et la reprise réellement promise pour chaque harness.
-3. Vérifier le contrat Agent Vault : droits, jetons, révocation et clients compatibles.
+3. Contrat des credentials : fermé par l'ADR de la passerelle et
+   `credentials.md` ; restent le renouvellement du jeton et la confiance
+   TLS de git et de codex.
 4. Définir le contrat Agent Sandbox : création idempotente, identité du processus,
    arrêt, expiration, stockage et remplacement après panne.
 5. Spécifier l'ordre des commandes, la récupération des envois incertains et les

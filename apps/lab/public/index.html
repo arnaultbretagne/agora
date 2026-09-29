@@ -47,12 +47,18 @@
   <button id="create">Créer</button>
   <button id="createTwice" title="Deux POST avec le même identifiant">Créer 2× (même identifiant)</button>
 </div>
+<div class="row">
+  <span>Credentials : <b id="credentialSource">…</b></span>
+  <label>profils <input id="profiles" size="70" value="anthropic"></label>
+  <label>durée (s) <input id="credentialTtl" size="6" value="3600"></label>
+  <span class="muted">docs/credentials.md — profils : anthropic, github:owner/repo:read, github:owner/repo:write</span>
+</div>
 <pre id="createResult" class="muted">—</pre>
 <div id="pools" class="muted"></div>
 
 <h2>Exécutions vivantes</h2>
 <table>
-  <thead><tr><th>Nom</th><th>Pool</th><th>État</th><th>Raison</th><th>Lancement</th><th>Pod / Service</th><th>Échéance</th><th>Renouv.</th><th>Instance</th><th>Session</th><th>Tour</th><th>Seq</th><th>Actions</th></tr></thead>
+  <thead><tr><th>Nom</th><th>Pool</th><th>État</th><th>Raison</th><th>Lancement</th><th>Pod / Service</th><th>Échéance</th><th>Renouv.</th><th>Instance</th><th>Session</th><th>Tour</th><th>Seq</th><th>Accès sortant</th><th>Actions</th></tr></thead>
   <tbody id="sandboxes"></tbody>
 </table>
 
@@ -74,6 +80,11 @@
     <button data-acp="cancel">session/cancel</button>
   </div>
   <div class="row">
+    <label>modèle <input id="model" size="12" value="haiku"></label>
+    <button data-acp="model">session/set_config_option model</button>
+    <span class="muted">appliqué d'office après session/new si l'agent propose l'option « model » (claude-code)</span>
+  </div>
+  <div class="row">
     <input id="promptText" size="50" value="bonjour">
     <button data-acp="prompt">session/prompt</button>
     <span class="muted">rapides :</span>
@@ -84,6 +95,7 @@
     <button data-quick="/big 64">/big 64</button>
     <button data-quick="/recall">/recall</button>
     <button data-quick="/crash">/crash</button>
+    <button data-quick="/fetch https://api.anthropic.com/v1/models">/fetch</button>
   </div>
   <div id="permissions"></div>
   <div class="row">
@@ -120,7 +132,7 @@
 <script>
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map() }
+const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map(), newIds: new Set() }
 
 // ---------------------------------------------------------------- flux d'état
 function connectEvents() {
@@ -143,6 +155,11 @@ function connectEvents() {
       state.logs.unshift(event.entry); state.logs.length = Math.min(state.logs.length, 300); renderLogs()
     }
   }
+}
+
+async function loadConfig() {
+  const config = await (await fetch('/api/config')).json()
+  $('credentialSource').textContent = config.credentials ? `droits signés par Agora, passerelle ${config.credentials.proxy}` : 'aucune passerelle configurée'
 }
 
 async function loadPools() {
@@ -176,15 +193,24 @@ function renderSandboxes() {
       <td class="mono wrap">${esc(s.sessionId)}</td>
       <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>depuis ${esc(s.turn.startedAt)}<br>seq ${s.turn.seq}` : `<span class="muted">inactif depuis ${esc(s.idleSince)}</span>`}</td>
       <td>${s.lastSeq}</td>
+      <td class="mono wrap">${outbound(s.outbound)}</td>
       <td>
         <button data-select="${esc(s.name)}">ACP</button>
         <button data-stop="${esc(s.name)}">Arrêter</button><br>
+        <button data-credentials="${esc(s.name)}">brancher credential</button><br>
         <button data-lab="drop-bridge" data-name="${esc(s.name)}">couper bridge</button>
 <br>
         <button data-lab="probe-auth" data-name="${esc(s.name)}">sonder jeton</button>
       </td>
     </tr>`).join('')
-  $('sandboxes').innerHTML = rows || '<tr><td colspan="13" class="muted">aucun</td></tr>'
+  $('sandboxes').innerHTML = rows || '<tr><td colspan="14" class="muted">aucun</td></tr>'
+}
+
+function outbound(o) {
+  if (!o) return '<span class="muted">?</span>'
+  if (!o.proxy) return `<span class="muted">aucun credential</span>${o.refused ? `<br>${o.refused} refus` : ''}`
+  const targets = Object.entries(o.targets ?? {}).map(([t, v]) => `${esc(t)} ×${v.count} → ${esc(v.lastStatus ?? '?')}`).join('<br>')
+  return `${esc(o.proxy)}<br><span class="muted">jusqu'à ${esc(o.expiresAt ?? '?')}</span><br>${o.tunnels} tunnel(s), ${o.refused} refus${targets ? `<br>${targets}` : ''}`
 }
 
 function renderAnchors() {
@@ -247,6 +273,12 @@ document.addEventListener('click', async (event) => {
   const target = event.target
   if (!(target instanceof HTMLElement)) return
   if (target.dataset.select) selectSandbox(target.dataset.select)
+  if (target.dataset.credentials) {
+    const profiles = $('profiles').value.split(/[\s,]+/).filter(Boolean)
+    const r = await post(`/api/executions/${target.dataset.credentials}/credentials`, { ttlSeconds: Number($('credentialTtl').value), profiles })
+    $('createResult').textContent = 'Credential : ' + JSON.stringify(r)
+    $('createResult').className = r.accepted ? 'ok' : 'err'
+  }
   if (target.dataset.stop) {
     target.disabled = true
     const r = await post(`/api/executions/${target.dataset.stop}/stop`)
@@ -324,6 +356,10 @@ function onAcp(line, prefix) {
     return
   }
   if (m && m.result && m.result.sessionId) $('sessionId').value = m.result.sessionId
+  // Le modèle, avant le premier prompt : c'est le premier appel facturé.
+  if (m && state.newIds.delete(m.id) && m.result?.configOptions?.some((o) => o.id === 'model') && $('model').value.trim() !== '') {
+    setTimeout(() => acp('model'), 0)
+  }
   logLine(prefix, line.length > 2000 ? line.slice(0, 2000) + '…' : line)
 }
 
@@ -342,7 +378,8 @@ function acp(kind) {
   const sessionId = $('sessionId').value.trim()
   const id = state.nextId++
   if (kind === 'initialize') send({ jsonrpc: '2.0', id, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } } })
-  if (kind === 'new') send({ jsonrpc: '2.0', id, method: 'session/new', params: { cwd, mcpServers: [] } })
+  if (kind === 'new') { state.newIds.add(id); send({ jsonrpc: '2.0', id, method: 'session/new', params: { cwd, mcpServers: [] } }) }
+  if (kind === 'model') send({ jsonrpc: '2.0', id, method: 'session/set_config_option', params: { sessionId, configId: 'model', value: $('model').value.trim() } })
   if (kind === 'resume') send({ jsonrpc: '2.0', id, method: 'session/resume', params: { sessionId, cwd, mcpServers: [] } })
   if (kind === 'load') send({ jsonrpc: '2.0', id, method: 'session/load', params: { sessionId, cwd, mcpServers: [] } })
   if (kind === 'cancel') send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } })
@@ -393,12 +430,17 @@ const CASES = [
   ['Jetons refusés', '« sonder jeton ».', '401 partout sauf le témoin.'],
   ['Poussée sans jeton projeté', 'Hors page : POST sur le port 8081 sans jeton valide.', '401, rien n’est stocké.'],
   ['Harness réel', 'Pool claude-code : initialize, session/new, un prompt, Arrêter, restaurer.', 'initialize réel ; sans credential le prompt échoue.'],
+  ['Sortir sans credential (docs/credentials.md)', 'Pool mock : /fetch.', 'CONNECT refusé par le bridge : 503 ; 1 refus dans « Accès sortant ».'],
+  ['Passerelle, chaîne seule', 'Pool mock, profil anthropic : « brancher credential », puis /fetch.', 'Réponse d’Anthropic (pas de 403 de la passerelle, pas d’erreur TLS) ; tunnel compté.'],
+  ['Passerelle, harness réel', 'Pool claude-code, profil anthropic : « brancher credential », session/new (modèle haiku appliqué), un prompt court.', 'Vraie réponse du modèle, fin de tour end_turn.'],
+  ['Passerelle, composition', 'Pool mock, profils github:A:write github:B:read : /fetch sur A, B et C.', 'A lu et écrit, B lu seulement, C refusé : 403 de la passerelle sur ce qui n’est pas accordé.'],
 ]
 $('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
 
 newRequestId()
 connectEvents()
 loadPools().catch((e) => { $('pools').textContent = 'catalogue indisponible : ' + e.message })
+loadConfig().catch((e) => { $('credentialSource').textContent = 'configuration indisponible : ' + e.message })
 </script>
 </body>
 </html>
