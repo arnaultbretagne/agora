@@ -46,7 +46,8 @@ column grants, UUIDv5 identities, sparse tool updates, canonical hashes and allo
 The new dispatcher uses accepted commands and Agent Sandbox deadlines. It does not carry over
 Intent/Observation reconciliation, Saves, W/H frontiers, refills, OneCLI or annotation memory.
 
-Measurements in `docs/specs/log.md` distinguish PostgreSQL/mock/browser results and injected
-faults from whole-server failure, SIGKILL, real Claude transcripts and the assistant-ui client.
+Measurements in `docs/specs/log.md` cover PostgreSQL/mock/browser results, injected faults and
+a live Haiku run through the gateway under Kata. The captured Claude transcript runs in ordinary
+checks; the billed runner is opt-in. Whole-server failure, SIGKILL and assistant-ui remain unmeasured.
 The lab is a diagnostic surface; production identity, replacement proof, model readback,
 retention and history seeding remain separate contracts.

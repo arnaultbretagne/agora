@@ -9,7 +9,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node test/run.ts"
+    "test": "node test/run.ts",
+    "measure:claude": "node test/run.ts live-claude"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.1",
@@ -22,6 +23,7 @@
     "ws": "8.22.0"
   },
   "devDependencies": {
+    "@agora/credentials": "0.0.0",
     "@agora/testkit": "0.0.0",
     "@playwright/test": "1.56.1",
     "@types/pg": "8.15.5"

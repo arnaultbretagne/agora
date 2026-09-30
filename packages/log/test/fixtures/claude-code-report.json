@@ -1,0 +1,57 @@
+{
+  "date": "2026-09-30T12:35:44.635Z",
+  "measurements": [
+    {
+      "case": "create_ready",
+      "ms": 20930
+    },
+    {
+      "case": "real_response",
+      "stopReason": "end_turn",
+      "gatewayLastStatus": 200,
+      "gatewayTunnels": 3,
+      "entries": 37,
+      "objects": 15,
+      "projectionHash": "df426088816dae19bd1147f405ad11fdf7e384d1dd50a88d8c550a651356df73",
+      "validatedTurnMs": 2852,
+      "postRebuildCheckMs": 35.08
+    },
+    {
+      "case": "real_tool",
+      "stopReason": "end_turn",
+      "gatewayLastStatus": 200,
+      "gatewayTunnels": 5,
+      "entries": 49,
+      "objects": 26,
+      "projectionHash": "649841fda777e804e050f82e77f75731352fd7f50d513f113c643fec79e02b98",
+      "validatedTurnMs": 3483,
+      "postRebuildCheckMs": 39.92
+    },
+    {
+      "case": "native_restore_ready",
+      "ms": 20435
+    },
+    {
+      "case": "native_recall",
+      "stopReason": "end_turn",
+      "gatewayLastStatus": 200,
+      "gatewayTunnels": 3,
+      "entries": 32,
+      "objects": 41,
+      "projectionHash": "9023fe2a5bf4c1f2ee8361f34bd4a5f66d3ece20b07a91afe83797fda0812153",
+      "validatedTurnMs": 2730,
+      "postRebuildCheckMs": 60.08
+    }
+  ],
+  "diagnosticCount": 0,
+  "anchorBytes": 30539,
+  "anchorFiles": 1,
+  "newSession": true,
+  "sameAcpContext": true,
+  "scope": {
+    "validatedTurnMs": "Command admission through final assertions, including projection checks and bridge outbound readback.",
+    "postRebuildCheckMs": "Rebuild, object readback/hash comparison and bridge outbound readback.",
+    "samplesPerCase": 1,
+    "nativeCapture": "Tester invokes the bridge native-file helper on a quiescent Pod; termination hook and receiver are not exercised."
+  }
+}

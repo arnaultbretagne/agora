@@ -307,9 +307,11 @@ entry point and proving that neither values nor fragments are emitted.
 ## Cases to validate
 
 Measurements: 2026-09-30, Node 24.20.0, PostgreSQL 17.11, ACP SDK 1.5.1, real mock-agent
-bridges and Chromium 141. `packages/log/test/log.test.ts` is the reproducible measurement
-suite. Fault injection is called out explicitly; these results do not establish real-adapter
-conformance, product authentication or replacement extinction.
+bridges and Chromium 141. A separate live run used Claude Code 2.1.261, claude-agent-acp 0.75.1,
+Haiku, Kata and agentgateway 1.5.0. `packages/log/test/log.test.ts` is the reproducible measurement
+suite; `packages/log/scripts/live-claude.ts` runs the opt-in billed cases. Fault injection is called
+out explicitly; these results do not establish full adapter conformance, product authentication
+or replacement extinction.
 
 | # | Case | Expected | Measured |
 | --- | --- | --- | --- |
@@ -324,11 +326,11 @@ conformance, product authentication or replacement extinction.
 | L9 | A command replayed with the same id, then another body | Same answer, one entry; then refused. | Passed: immutable replay answer, conflict refusal and one admitted concurrent turn. |
 | L10 | A break that is not clean during a turn | The turn is uncertain; its answer, if it arrives, closes it. | Passed: real bridge peer displacement; uncertainty until the valid cancelled answer. |
 | L11 | Cancel on an uncertain turn still running | `cancelled`; Write accepted again. | Passed: targeted Cancel of the real mock agent after a break. |
-| L12 | Restore from an anchor | A new Session, same ACP session id. | Passed: opaque mock native anchor, new Session, same ACP id and recalled history. |
+| L12 | Restore from an anchor | A new Session, same ACP session id. | Passed on mock and live Claude: opaque native files, new Session, same ACP id and recalled history. Claude capture used the tester's invocation of the bridge helper; termination-hook push was not exercised. |
 | L13 | Change the model | Same Session. | Passed for attribution: valid configuration request/reply retains Session. Applied model readback belongs to the configuration contract. |
 | L14 | Agora restarts after a completed drain, with a dispatched turn and a separate saved-line case | Dispatched turn remains in progress; saved line stays saved; all committed correlations found; claims carry only pool/deadline and labels. | Partial: clean restart of dispatched turn and initialization reuse passed; saved state covered at the marker failure boundary. |
 | L15 | Agora killed during a turn | The turn is uncertain until its answer arrives. | Partial: missing-break crash window injected and recovered. OS-level SIGKILL not measured. |
-| L16 | Rebuild against incremental, on a real claude-code transcript | Same identities, same hash. | Not measured: no real Claude ACP transcript fixture; deterministic rebuild measured on mock/synthetic traffic. |
+| L16 | Rebuild against incremental, on a real claude-code transcript | Same identities, same hash. | Passed: live Haiku response and Bash tool traffic through the gateway, 105 canonical entries and 26 objects; identical identities/hash after rebuild. Captured real transcript also replayed in the PostgreSQL suite. |
 | L17 | A projector's version changes and removes an object while another projector's objects remain | Atomic rebuild/reset through one source position; positions go on; obsolete object gone, unchanged objects retained. | Passed: version removal, coordinated reset and other projector objects retained. |
 | L18 | Snapshot while updates commit, disconnect before snapshot-end, then reconnect | Snapshot through H, live tail after H; idempotent recovery; no skipped change or duplicate state. | Passed: repeatable-read snapshot, partial replay, lossless live tail and browser reload. |
 | L19 | Normal create, append, lock, Session close, projection and anchor operations under actual logins; forbidden operations too | Required operations succeed; each role's forbidden writes/reads are denied, including anchor bytes for writer/projector and history edits for writer. | Passed: real restricted logins, permitted operations and denied history/anchor/view access. |
@@ -343,6 +345,34 @@ conformance, product authentication or replacement extinction.
 | L28 | Uncertain turn after a break or invalid answer, in assistant-ui | Composer disabled with reason; targeted Cancel and Stop available; uncertainty survives reload. | Partial: external-store mapping and Chromium lab composer/actions/reload passed. assistant-ui integration not measured. |
 | L29 | Anchor committed before crash, without its journal entry | Recovery appends one `anchor.received` before exposure; writer/projector cannot read bytes. | Passed: unpublished committed metadata recovered once; restricted byte access and actual native restore. |
 | L30 | Database outage exceeds execution deadline, or receive budget cannot be enforced | Interruption visible; no lossless-continuation claim or fresh lease invented. | Passed with injected commit outage, shortened infrastructure expiry and receive-budget overflow; visible interruption, no fresh lease. |
+
+### Live Claude run
+
+Run on 2026-09-30 in an isolated sandbox namespace. The gateway kept the Anthropic token;
+the bridge received a ten-minute JWT with only the Anthropic grant. The pinned harness image
+was `ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:5f3bb480d8cd1dccfe9ab6561b8a46d8cf5bad90574bccef2e379124e311b81c`.
+The tester's temporary gateway ingress policy and namespace were removed after both executions
+stopped and their claims expired. Runtime database operations used the three restricted logins.
+
+| Case | Validated turn (ms) | New canonical entries | Objects | Result |
+| --- | --- | --- | --- | --- |
+| Response and memorized test marker | 2,852 | 37 | 15 | `end_turn`; gateway CONNECT 200; rebuild hash identical. |
+| Bounded Bash printf | 3,483 | 49 | 26 | `end_turn`; gateway CONNECT 200; tool updates retained; rebuild hash identical. |
+| Recall after native restoration | 2,730 | 32 | 41 | `end_turn`; original marker recalled; rebuild hash identical. |
+
+One sample per case, timed from command admission through all assertions, including projection
+checks and bridge outbound readback. These are validated-run durations, not isolated inference
+latencies or throughput benchmarks. Create through Session/configuration readiness took 20,930 ms;
+native restore through readiness took 20,435 ms. The native bundle was 30,539 bytes in one file.
+Restoration preserved the ACP context id and opened a different Agora Session. No ACP line was
+rejected during the live run.
+
+The source fixture and report are `packages/log/test/fixtures/claude-code.json` and
+`claude-code-report.json`. The fixture includes the two original turns; its 26-object projection
+hash is `649841fda777e804e050f82e77f75731352fd7f50d513f113c643fec79e02b98`.
+The native restoration sample is in the report. Native files were captured while quiescent by
+the bridge's helper and published through the log; the Pod termination hook and anchor receiver
+were not exercised by this case.
 
 ## Decisions still open
 

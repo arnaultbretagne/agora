@@ -115,6 +115,43 @@ afterEach(async () => {
 })
 
 describe('log / PostgreSQL 17 restricted runtime logins', () => {
+  it('L16: captured real Claude transcript agrees with incremental projection and rebuild', async () => {
+    const fixture = decode(await readFile(new URL('fixtures/claude-code.json', import.meta.url), 'utf8')) as {
+      harness: string; workstream: string; entries: Entry[]; projectionHash: string; image: string
+    }
+    assert.equal(fixture.harness, 'claude-code')
+    assert.match(fixture.image, /^ghcr\.io\/arnaultbretagne\/agora-harness-claude-code@sha256:/)
+    assert.ok(fixture.entries.some((e) => object(object(e.content.params)?.update)?.sessionUpdate === 'tool_call'))
+    const recorded = core.fold(fixture.entries).sort((a, b) => a.id.localeCompare(b.id))
+    assert.equal(hash(recorded), fixture.projectionHash)
+    await store.create(fixture.workstream, randomUUID())
+    // Fixture setup alone uses the administrator, to preserve the original database timestamps.
+    // Every projection below runs through the actual restricted projector login.
+    const source = await migration.connect()
+    try {
+      for (const e of fixture.entries) {
+        await source.query('BEGIN')
+        await source.query(
+          `INSERT INTO entries(workstream,position,time,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal)
+           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16)`,
+          [e.workstream, e.position, e.time, e.kind, e.execution, e.session, encode(e.content), e.direction,
+            e.rpc_kind, e.method, e.correlated_method, e.request_position, e.rpc_id === null ? null : encode(e.rpc_id), e.command, e.connection, e.receive_ordinal],
+        )
+        await source.query('UPDATE workstreams SET last_position=$2 WHERE id=$1', [e.workstream, e.position])
+        await source.query('COMMIT')
+        await projections.run(fixture.workstream)
+      }
+    } catch (error) {
+      await source.query('ROLLBACK')
+      throw error
+    } finally { source.release() }
+    const incremental = await projections.objects(fixture.workstream)
+    assert.equal(hash(incremental), fixture.projectionHash)
+    await projections.run(fixture.workstream, core, true)
+    const rebuilt = await projections.objects(fixture.workstream)
+    assert.deepEqual(rebuilt.map((o) => o.id), incremental.map((o) => o.id))
+    assert.equal(hash(rebuilt), fixture.projectionHash)
+  })
   it('L1-L2-L23: raw semantic fidelity, distinct occurrences and uncertain commit retry', async () => {
     const s = await seed()
     const raw =
