@@ -34,7 +34,7 @@ class LiveKube extends HttpKube {
   override async getClaim(name: string): Promise<Claim | null> {
     const claim = await super.getClaim(name)
     const podName = claim?.status?.sandbox?.name
-    if (podName) {
+    if (podName && !this.addresses.has(podName)) {
       const pod = await this.getPod(podName)
       const ip = object(pod?.status)?.podIP
       if (typeof ip === 'string') this.addresses.set(podName, `${ip}:8080`)
@@ -55,6 +55,8 @@ const store = new LogStore({
   writer: required('LOG_TEST_WRITER_URL'), projector: required('LOG_TEST_PROJECTOR_URL'),
   anchors: required('LOG_TEST_ANCHORS_URL'),
 })
+const timings: Record<string, unknown>[] = []
+const mintedTokens: string[] = []
 const driver = new LogDriver({
   store, kube, signingKey, tickMs: 250, renewSeconds: 20,
   address: (_service, pod) => {
@@ -62,11 +64,19 @@ const driver = new LogDriver({
     if (!address) throw new Error('pod_address_unavailable')
     return address
   },
+  sink: (line) => {
+    const value = JSON.parse(line) as Record<string, unknown>
+    if (typeof value.stage === 'string') timings.push(value)
+  },
+  credentials: async (_workstream, execution) => {
+    const credentials = await signer.mint({ label: `agora ${claimName(execution)}`, ttlSeconds: 600, profiles: ['anthropic'] })
+    mintedTokens.push(credentials.token)
+    return credentials
+  },
 })
 const output = required('LOG_LIVE_OUTPUT_DIR')
 const workstream = randomUUID()
 const measurements: Record<string, unknown>[] = []
-const mintedTokens: string[] = []
 const executions: string[] = []
 let started = false
 let transcript: Entry[] = []
@@ -102,10 +112,6 @@ async function create(pool: string, anchor?: string) {
     if (current?.ended || current?.lost) throw new Error('execution_failed')
     return current?.id === execution && current.session ? current : false
   })
-  const credentials = await signer.mint({ label: `agora ${claimName(execution)}`, ttlSeconds: 600, profiles: ['anthropic'] })
-  mintedTokens.push(credentials.token)
-  // Supply the gateway JWT to the bridge through its existing transport; no lab UI attachment.
-  await driver.attachCredentials(workstream, execution, credentials)
   await control(execution, 'session/set_config_option', {
     sessionId: state.acpId, configId: 'model', value: 'haiku',
   })
@@ -170,6 +176,20 @@ async function stopAndExpire(execution: string) {
   await until('claim_expiry', async () => await kube.getClaim(claimName(execution)) === null, 100000)
   await until('canonical_end', async () => (await store.state(workstream)).executions.get(execution)?.ended)
 }
+async function savePlatformTimings() {
+  const stages = [...new Set(timings.map((v) => `${String(v.stage)}:${String(v.outcome)}`))].sort().map((group) => {
+    const [stage, outcome] = group.split(':')
+    const values = timings.filter((v) => v.stage === stage && v.outcome === outcome)
+      .map((v) => Number(v.durationMs)).sort((a, b) => a - b)
+    const percentile = (p: number) => values.length ? values[Math.ceil(p * values.length) - 1] : null
+    return { stage, outcome, samples: values.length, p50Ms: percentile(0.5), p95Ms: percentile(0.95), maxMs: values.at(-1) ?? null }
+  })
+  const platform = JSON.stringify({ clock: 'performance.now',
+    scope: 'Driver call boundaries; nested stages overlap. WebSocket receipt excludes time buffered before its message callback. Projection completion is not SSE/browser delivery.',
+    stages, timings }, null, 2)
+  for (const token of mintedTokens) assert.equal(platform.includes(token), false, 'jwt_in_timings')
+  await writeFile(join(output, 'platform-timings.json'), platform + '\n', { mode: 0o600 })
+}
 try {
   await mkdir(output, { recursive: true, mode: 0o700 })
   await store.create(workstream, randomUUID())
@@ -215,6 +235,11 @@ try {
     newSession: restored.session !== original.session, sameAcpContext: restored.acpId === original.acpId }, null, 2) + '\n', { mode: 0o600 })
   console.log(JSON.stringify({ result: 'passed', output }))
 } finally {
+  // Preserve timing evidence even when Session opening or a model assertion fails.
+  await savePlatformTimings().catch(() => {
+    process.exitCode = 1
+    console.error('platform_timing_report_unavailable')
+  })
   if (started) {
     for (const execution of executions) await stopAndExpire(execution).catch(() => {})
     await driver.stop()

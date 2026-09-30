@@ -367,6 +367,43 @@ native restore through readiness took 20,435 ms. The native bundle was 30,539 by
 Restoration preserved the ACP context id and opened a different Agora Session. No ACP line was
 rejected during the live run.
 
+The Pod was ready before Create. The bridge and ACP adapter were warm; the adapter starts a new
+Claude CLI query process during Session creation. Gateway credentials were supplied after the
+opening response in this sample. Authentication-related initialization delays are a hypothesis,
+not an established cause. The live runner supplies the gateway JWT before initialization and
+Session opening through the driver's optional credential provider; a failed provisioning attempt
+leaves those requests unsent. Credentials remain outside the canonical log.
+
+| Original trace interval | Transaction-start difference (ms) |
+| --- | --- |
+| Create to bridge connection | 899 |
+| Initialize request to response | 22 |
+| Session/new request to response | 19,747 |
+| First Write to acp.sent | 32 |
+| Second Write to acp.sent | 35 |
+
+Entries use PostgreSQL's transaction-start timestamp, not a commit or socket-receipt timestamp.
+These differences locate the long opening wait but do not isolate platform latency. The two
+turns contain 24 and 32 thought fragments respectively; the receive handler serially commits,
+reconciles Kubernetes state and projects before handling the next retained line. That path can
+delay output independently of generation. The original host-side measurement also looked up the
+Pod on every claim read; the runner now caches the address once per Pod. The HTTP thread tail
+waits 250 ms after an empty read, adding a separate scheduled delay before the next read.
+
+The live runner writes `platform-timings.json` with monotonic durations, closed stage names and
+validated correlations. Command-to-write ends at the local WebSocket send callback; it excludes
+the response wait and does not prove adapter receipt. Receive-to-commit and receive-to-projection
+start at the WebSocket message callback. They include queue waits after that callback but exclude
+earlier socket buffering and SSE/browser delivery. Projection timing includes pool acquisition,
+source reads, folding, view writes and the COMMIT acknowledgement. Nested stages overlap and
+must not be added. The preserved live run has no such stage measurements.
+
+The offline analysis script reads the preserved fixture, computes those transaction-start
+differences and measures canonical folding and projection folding/hashing over prefixes of 20,
+55 and 105 entries. Its CPU samples exclude SQL and all transport. The report is
+`packages/log/test/fixtures/claude-code-platform-analysis.json`; it cannot establish gateway,
+commit or publication latency.
+
 The source fixture and report are `packages/log/test/fixtures/claude-code.json` and
 `claude-code-report.json`. The fixture includes the two original turns; its 26-object projection
 hash is `649841fda777e804e050f82e77f75731352fd7f50d513f113c643fec79e02b98`.

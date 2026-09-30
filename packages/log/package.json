@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node test/run.ts",
-    "measure:claude": "node test/run.ts live-claude"
+    "measure:claude": "node test/run.ts live-claude",
+    "measure:analysis": "node scripts/analyze-platform.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.1",

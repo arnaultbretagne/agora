@@ -1,6 +1,7 @@
 import { type LogStore, readEntries } from './store.ts'
 import { project, type ProjectedObject } from './state.ts'
 import { cursor, decode, encode, hash } from './json.ts'
+import { measured } from './telemetry.ts'
 
 export type ThreadRow = {
   position: string
@@ -18,11 +19,17 @@ export const core: Projector = { name: 'core', version: '1', fold: project }
 export class Projections {
   readonly store: LogStore
   readonly registry: Map<string, Projector>
-  constructor(store: LogStore, projectors: Projector[] = [core]) {
+  private readonly sink: (line: string) => void
+  constructor(store: LogStore, projectors: Projector[] = [core], sink: (line: string) => void = () => {}) {
     this.store = store
+    this.sink = sink
     this.registry = new Map(projectors.map((p) => [p.name, p]))
   }
   async run(workstream: string, projector: Projector = core, rebuild = false): Promise<string> {
+    return measured({ operation: 'project', stage: 'projection_commit', workstream },
+      () => this.apply(workstream, projector, rebuild), this.sink)
+  }
+  private async apply(workstream: string, projector: Projector, rebuild: boolean): Promise<string> {
     this.registry.set(projector.name, projector)
     const client = await this.store.projector.connect()
     try {

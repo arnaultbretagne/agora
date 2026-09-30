@@ -9,7 +9,7 @@ import { chromium, expect } from '@playwright/test'
 import { logHttp } from '../src/http.ts'
 import { readFile } from 'node:fs/promises'
 import { LogStore, type Command, type Entry, Transaction } from '../src/store.ts'
-import { LogDriver, claimName } from '../src/driver.ts'
+import { LogDriver, claimName, type DriverOptions } from '../src/driver.ts'
 import { Projections, ThreadClient, core } from '../src/projection.ts'
 import { fold, project, runtimeState } from '../src/state.ts'
 import { encode, decode, hash, identity, object } from '../src/json.ts'
@@ -460,6 +460,10 @@ describe('log / PostgreSQL 17 restricted runtime logins', () => {
         execution: secret,
         connection: secret,
         command: secret,
+        stage: secret,
+        requestPosition: secret,
+        receiveOrdinal: secret,
+        threadPosition: secret,
       },
       (line) => lines.push(line),
     )
@@ -471,7 +475,7 @@ describe('log / PostgreSQL 17 restricted runtime logins', () => {
 })
 
 describe('durable dispatcher / real bridge + mock agent', () => {
-  async function lab() {
+  async function lab(options: Partial<DriverOptions> = {}) {
     const { privateKey, publicKey } = keys(),
       kube = new FakeKube(publicKey)
     const driver = new LogDriver({
@@ -481,6 +485,7 @@ describe('durable dispatcher / real bridge + mock agent', () => {
       address: kube.address,
       tickMs: 50,
       shutdownMs: 1000,
+      ...options,
     })
     await driver.start()
     cleanups.push(() => kube.closeAll())
@@ -506,6 +511,45 @@ describe('durable dispatcher / real bridge + mock agent', () => {
     })
     return { driver, kube, workstream, execution, command }
   }
+  it('gateway credentials precede session opening and timings do not include prompt waits', async () => {
+    const lines: Record<string, unknown>[] = [], token = 'GATEWAY_TIMING_TEST_TOKEN'
+    let attempts = 0
+    const l = await lab({
+      sink: (line) => lines.push(JSON.parse(line)),
+      credentials: async (workstream) => {
+        assert.ok(!(await store.entries(workstream)).some((e) => e.direction === 'out' &&
+          ['initialize', 'session/new'].includes(e.method ?? '')))
+        // A provisioning failure must leave initialization/session opening unsent.
+        if (++attempts === 1) throw new Error('GATEWAY_TIMING_TEST_TOKEN')
+        return { proxy: '127.0.0.1:1', token, expiresAt: null }
+      },
+    })
+    const entries = await store.entries(l.workstream)
+    assert.equal(encode(entries).includes(token), false)
+    assert.equal(entries.filter((e) => e.direction === 'out' && e.method === 'initialize').length, 1)
+    const credentialsIndex = lines.findIndex((v) => v.stage === 'credentials' && v.outcome === 'succeeded')
+    const sessionRequest = entries.find((e) => e.direction === 'out' && e.method === 'session/new')!
+    const dispatchIndex = lines.findIndex((v) => v.stage === 'dispatch_write' && v.position === sessionRequest.position)
+    assert.ok(credentialsIndex >= 0 && dispatchIndex > credentialsIndex)
+    const current = (await store.state(l.workstream)).current!
+    const answer = await l.driver.command(l.workstream, {
+      id: randomUUID(), kind: 'Write', target: { execution: l.execution, session: current.session },
+      body: { prompt: [{ type: 'text', text: '/silence 1 GATEWAY_TIMING_TEST_TOKEN' }] },
+    })
+    assert.equal(answer.accepted, true)
+    if (!answer.accepted) throw new Error('write_refused')
+    const response = await until(async () => {
+      const source = await store.entries(l.workstream)
+      const response = source.find((e) => e.direction === 'in' && e.rpc_id === answer.requestId)
+      return response && lines.some((v) => v.stage === 'receive_to_projection' && v.position === response.position) ? response : false
+    })
+    const writeIndex = lines.findIndex((v) => v.stage === 'command_to_write' && v.command === answer.command)
+    const responseIndex = lines.findIndex((v) => v.stage === 'receive_to_commit' && v.position === response.position)
+    assert.ok(writeIndex >= 0 && responseIndex > writeIndex)
+    assert.ok(lines.some((v) => v.stage === 'receive_to_commit'))
+    assert.ok(lines.every((v) => !JSON.stringify(v).includes(token)))
+    for (const v of lines.filter((v) => v.stage)) assert.ok(Number(v.durationMs) >= 0)
+  })
   it('L6-L8-L11-L22-L25: journaled creation, prompt, targeted cancellation, Stop and exclusive ownership', async () => {
     const l = await lab()
     const state = await store.state(l.workstream),

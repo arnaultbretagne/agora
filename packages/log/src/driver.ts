@@ -10,7 +10,7 @@ import { fold, type Execution, type State } from './state.ts'
 import { Projections } from './projection.ts'
 import { object, encode, decode, schemaValue, uuid, identity } from './json.ts'
 import { idKey, MAX_LINE, type Reason } from './acp.ts'
-import { telemetry } from './telemetry.ts'
+import { telemetry, measured } from './telemetry.ts'
 
 export const EXECUTION_LABEL = 'agora.bretagne.dev/execution-id'
 const MANAGED = 'app.kubernetes.io/managed-by'
@@ -31,6 +31,8 @@ export interface DriverOptions {
   sink?: (line: string) => void
   maxActive?: number
   shutdownMs?: number
+  /** Supply a gateway grant before any ACP initialization/session opening on each connection. */
+  credentials?: (workstream: string, execution: string) => Promise<Credentials>
 }
 interface Connection {
   workstream: string
@@ -48,6 +50,7 @@ interface Connection {
   draining: boolean
   sends: Set<Promise<void>>
   initialized: boolean
+  credentialsReady: boolean
 }
 export class LogDriver {
   readonly options: DriverOptions
@@ -59,12 +62,16 @@ export class LogDriver {
   private stopped = true
   private timer: NodeJS.Timeout | null = null
   private ticking = false
+  private readonly commandStarts = new Map<string, number>()
   constructor(options: DriverOptions) {
     this.options = options
-    this.projections = new Projections(options.store)
+    this.projections = new Projections(options.store, undefined, options.sink)
   }
   private report(operation: string, outcome: string, fields: Record<string, unknown> = {}): void {
     telemetry({ operation, outcome, ...fields }, this.options.sink ?? (() => {}))
+  }
+  private timed<T>(operation: string, stage: string, fields: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+    return measured({ operation, stage, ...fields }, run, this.options.sink ?? (() => {}))
   }
   private serial<T>(workstream: string, run: () => Promise<T>): Promise<T> {
     const preceding = this.queues.get(workstream) ?? Promise.resolve()
@@ -122,8 +129,10 @@ export class LogDriver {
   }
   async command(workstream: string, command: Command): Promise<Answer> {
     if (this.stopped) return { accepted: false, reason: 'unavailable' }
+    const started = performance.now(), fields = { workstream, command: command.id }
     return this.serial(workstream, async () => {
-      const answer = await this.options.store.accept(workstream, command, async (state, tx) => {
+      this.report('admission', 'succeeded', { ...fields, stage: 'command_queue', durationMs: performance.now() - started })
+      const accept = () => this.options.store.accept(workstream, command, async (state, tx) => {
         const current = state.current
         if (command.kind === 'Create') {
           const execution = command.body.execution === undefined ? randomUUID() : uuid(command.body.execution),
@@ -235,15 +244,25 @@ export class LogDriver {
           line: { id: permission.rpc_id, result: { outcome: command.body.outcome } },
         }
       })
+      const answer = await this.timed('admission', 'command_commit', fields, accept)
       this.report('admission', answer.accepted ? 'accepted' : 'refused', { workstream, command: command.id })
       // Acceptance never changes if a subsequent external effect fails.
-      if (answer.accepted)
-        await this.drive(workstream).catch(() =>
-          this.report('dispatch', 'blocked', { workstream, errorClass: 'database' }),
-        )
+      if (answer.accepted) {
+        this.commandStarts.set(`${workstream}:${command.id}`, started)
+        try {
+          await this.timed('dispatch', 'command_drive', fields, () => this.drive(workstream)).catch(() =>
+            this.report('dispatch', 'blocked', { workstream, errorClass: 'database' }),
+          )
+        } finally {
+          this.commandStarts.delete(`${workstream}:${command.id}`)
+        }
+      }
       await this.projections
         .run(workstream)
         .catch(() => this.report('project', 'blocked', { workstream, errorClass: 'database' }))
+      this.report('admission', answer.accepted ? 'accepted' : 'refused', {
+        ...fields, stage: 'command_return', durationMs: performance.now() - started,
+      })
       return answer
     })
   }
@@ -296,6 +315,12 @@ export class LogDriver {
         c.blocked
       )
         throw new Error('execution_unavailable')
+      await this.putCredentials(c, credentials)
+      c.credentialsReady = true
+    })
+  }
+  private async putCredentials(c: Connection, credentials: Credentials): Promise<void> {
+    await this.timed('connect', 'credentials', { workstream: c.workstream, execution: c.execution, connection: c.id }, async () => {
       const response = await fetch(`http://${c.address}/credentials`, {
         method: 'PUT',
         headers: {
@@ -326,7 +351,8 @@ export class LogDriver {
     const state = await this.options.store.state(workstream),
       execution = state.current
     if (!execution || execution.ended || execution.lost) return
-    let claim = await this.options.kube.getClaim(execution.claimName)
+    let claim = await this.timed('recover', 'claim_read', { workstream, execution: execution.id },
+      () => this.options.kube.getClaim(execution.claimName))
     const deadline = String(execution.body.deadline)
     if (!claim) {
       if (execution.uid) {
@@ -458,10 +484,11 @@ export class LogDriver {
         }
         const shutdownTime = new Date(until).toISOString()
         try {
-          connection.claim = await this.options.kube.patchClaim(execution.claimName, {
-            metadata: { uid: claim.metadata.uid },
-            spec: { lifecycle: { shutdownTime } },
-          })
+          connection.claim = await this.timed('renew', 'claim_renew', { workstream, execution: execution.id },
+            () => this.options.kube.patchClaim(execution.claimName, {
+              metadata: { uid: claim.metadata.uid },
+              spec: { lifecycle: { shutdownTime } },
+            }))
         } catch {
           await this.fail(workstream, entry, 'deadline_refused')
           continue
@@ -504,6 +531,13 @@ export class LogDriver {
     }
   }
   private async setup(workstream: string, execution: Execution, c: Connection): Promise<void> {
+    if (this.options.credentials && !c.credentialsReady) {
+      const credentials = await this.timed('connect', 'credential_provider', { workstream, execution: execution.id },
+        () => this.options.credentials!(workstream, execution.id))
+      await this.ensureOwner()
+      await this.putCredentials(c, credentials)
+      c.credentialsReady = true
+    }
     const entries = await this.options.store.entries(workstream),
       state = fold(entries)
     const init = entries.find((e) => e.execution === execution.id && e.method === 'initialize' && e.direction === 'out')
@@ -589,7 +623,7 @@ export class LogDriver {
     if (c.blocked || c.closed) return
     await this.ensureOwner()
     try {
-      const attempted = await this.options.store.transaction(workstream, async (tx) => {
+      const mark = () => this.options.store.transaction(workstream, async (tx) => {
         const entries = await tx.entries(),
           state = fold(entries)
         const command = entries.find((e) => e.kind === 'command' && e.command === entry.command)
@@ -629,6 +663,7 @@ export class LogDriver {
         })
         return true
       })
+      const attempted = await this.timed('dispatch', 'dispatch_marker', { workstream, position: entry.position }, mark)
       if (!attempted) return
     } catch (error) {
       c.blocked = true
@@ -637,18 +672,24 @@ export class LogDriver {
     }
     // The marker is durable. A failure from here on can only be treated as possible delivery.
     if (this.stopped || c.blocked || c.closed) return
-    const write = new Promise<void>((resolve, reject) =>
-      c.ws.send(encode(entry.content), (error) => (error ? reject(error) : resolve())),
-    )
+    const write = this.timed('dispatch', 'dispatch_write', { workstream, position: entry.position },
+      () => new Promise<void>((resolve, reject) =>
+        c.ws.send(encode(entry.content), (error) => (error ? reject(error) : resolve())),
+      ))
     c.sends.add(write)
     try {
       await write
-      await this.options.store.fact(workstream, {
-        kind: 'acp.sent',
-        execution: entry.execution,
-        session: entry.session,
-        content: { requestPosition: entry.position, connection: c.id },
+      const started = entry.command ? this.commandStarts.get(`${workstream}:${entry.command}`) : undefined
+      if (started !== undefined) this.report('dispatch', 'succeeded', {
+        workstream, command: entry.command, position: entry.position, stage: 'command_to_write', durationMs: performance.now() - started,
       })
+      await this.timed('dispatch', 'dispatch_commit', { workstream, position: entry.position },
+        () => this.options.store.fact(workstream, {
+          kind: 'acp.sent',
+          execution: entry.execution,
+          session: entry.session,
+          content: { requestPosition: entry.position, connection: c.id },
+        }))
     } catch {
       c.blocked = true
       await this.fail(workstream, entry, 'transport_error').catch(() => {})
@@ -691,6 +732,7 @@ export class LogDriver {
       draining: false,
       sends: new Set(),
       initialized: false,
+      credentialsReady: false,
     }
     this.connections.set(execution.id, c)
     let instance: string | null = null
@@ -699,6 +741,7 @@ export class LogDriver {
         typeof response.headers['agora-bridge-instance'] === 'string' ? response.headers['agora-bridge-instance'] : null
     })
     ws.on('message', (data: RawData) => {
+      const receivedAt = performance.now()
       const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer)
       ws.pause()
       if (c.bytes + bytes.byteLength > MAX_LINE) {
@@ -708,12 +751,16 @@ export class LogDriver {
       }
       c.bytes += bytes.byteLength
       const ordinal = String(++c.ordinal)
+      const fields = { workstream, execution: execution.id, connection: c.id, receiveOrdinal: ordinal }
       c.pending = c.pending
         .then(async () => {
+          this.report('capture', 'succeeded', { ...fields, stage: 'capture_queue', durationMs: performance.now() - receivedAt })
           const deadline = Date.parse(c.claim.spec?.lifecycle?.shutdownTime ?? String(execution.body.deadline))
+          let captured: Awaited<ReturnType<LogStore['incoming']>>
           for (;;) {
             try {
-              await this.options.store.incoming(workstream, execution.id, c.id, ordinal, bytes)
+              captured = await this.timed('capture', 'capture_commit', fields,
+                () => this.options.store.incoming(workstream, execution.id, c.id, ordinal, bytes))
               break
             } catch {
               c.blocked = true
@@ -731,13 +778,20 @@ export class LogDriver {
               await new Promise((resolve) => setTimeout(resolve, 50))
             }
           }
+          const committedFields = { ...fields, position: captured.position }
+          this.report('capture', 'succeeded', {
+            ...committedFields, stage: 'receive_to_commit', durationMs: performance.now() - receivedAt,
+          })
           c.bytes -= bytes.byteLength
           if (!c.closed) {
             c.blocked = false
             ws.resume()
           }
+          const queuedAt = performance.now()
           await this.serial(workstream, async () => {
-            const current = await this.options.store.state(workstream)
+            this.report('capture', 'succeeded', { ...committedFields, stage: 'receive_queue', durationMs: performance.now() - queuedAt })
+            const current = await this.timed('capture', 'receive_state', committedFields,
+              () => this.options.store.state(workstream))
             // Permission requests left open by cancellation must be settled before another prompt.
             const committed = (await this.options.store.entries(workstream)).find(
               (e) => e.connection === c.id && e.receive_ordinal === ordinal,
@@ -770,8 +824,12 @@ export class LogDriver {
                       permission.session ?? undefined,
                     ),
                   )
-            if (!this.stopped && !c.draining) await this.drive(workstream)
-            await this.projections.run(workstream)
+            if (!this.stopped && !c.draining)
+              await this.timed('recover', 'receive_drive', committedFields, () => this.drive(workstream))
+            const threadPosition = await this.projections.run(workstream)
+            this.report('project', 'succeeded', {
+              ...committedFields, threadPosition, stage: 'receive_to_projection', durationMs: performance.now() - receivedAt,
+            })
           }).catch(() => this.report('capture', 'blocked', { workstream, errorClass: 'database' }))
         })
         .catch(() => {
@@ -818,11 +876,12 @@ export class LogDriver {
         )
         .catch(() => this.report('connect', 'unclean', { workstream, errorClass: 'database' }))
     })
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', resolve)
-      ws.once('error', () => reject(new Error('transport_error')))
-      ws.once('close', () => reject(new Error('transport_error')))
-    })
+    await this.timed('connect', 'connect_handshake', { workstream, execution: execution.id, connection: c.id },
+      () => new Promise<void>((resolve, reject) => {
+        ws.once('open', resolve)
+        ws.once('error', () => reject(new Error('transport_error')))
+        ws.once('close', () => reject(new Error('transport_error')))
+      }))
     if (!instance || (execution.instance && execution.instance !== instance)) {
       await this.options.store.fact(workstream, {
         kind: 'execution.lost',
