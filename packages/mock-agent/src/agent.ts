@@ -257,11 +257,18 @@ async function handle(message: Message): Promise<void> {
     if (message.id !== undefined) outgoing.delete(message.id)
     return
   }
+  if (message.method !== 'initialize' && !initialized) return fail(message.id, -32603, 'Not initialized')
   const params = message.params ?? {}
   switch (message.method) {
     case 'initialize': {
       if (initialized) return fail(message.id, -32603, 'Already initialized')
       initialized = true
+      const delay = Number(process.env.AGORA_MOCK_INITIALIZE_DELAY_MS ?? 0)
+      if (delay > 0) {
+        mkdirSync(join(home, '.mock-agent'), { recursive: true })
+        appendFileSync(join(home, '.mock-agent', 'initialize-requests'), `${String(message.id)}\n`)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
       return send({
         id: message.id,
         result: {

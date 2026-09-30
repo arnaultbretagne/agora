@@ -3,7 +3,7 @@
 // (docs/specs/executions.md: min(now + lease, turn start + max turn)). It never deletes anything: the
 // infrastructure destroys at the deadline, and the Pod pushes its anchor on the way out.
 // Everything it must know after a restart is written on the claim itself.
-import { createHash, generateKeyPairSync, type KeyObject } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, type KeyObject } from 'node:crypto'
 import { WebSocket } from 'ws'
 import type { AnchorMeta, AnchorStore } from './anchors.ts'
 import { KubeError, WatchGone, type Claim, type KubeApi, type WatchEvent } from './kube.ts'
@@ -21,6 +21,7 @@ export const ANNOTATION = {
   restoreAnchor: 'agora.bretagne.dev/restore-anchor',
   restored: 'agora.bretagne.dev/restored',
   instance: 'agora.bretagne.dev/instance',
+  initialize: 'agora.bretagne.dev/initialize',
   sessionId: 'agora.bretagne.dev/session-id',
   turn: 'agora.bretagne.dev/turn',
   idleSince: 'agora.bretagne.dev/idle-since',
@@ -28,6 +29,7 @@ export const ANNOTATION = {
 } as const
 const SELECTOR = `${MANAGED_BY}=${MANAGER}`
 const RING_LIMIT = 2000
+const RING_BYTES = 16 * 1024 * 1024
 const HISTORY_LIMIT = 100
 const LOG_LIMIT = 300
 const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
@@ -61,20 +63,23 @@ type Id = string | number
 interface Turn {
   readonly startedAt: string
   readonly requestId: Id
-  readonly seq: number
   readonly sessionId: string | null
 }
 
-interface Hello {
+interface InitializeResult {
+  readonly agentInfo?: { name?: string; version?: string }
+  readonly agentCapabilities?: { loadSession?: boolean; sessionCapabilities?: { resume?: unknown } }
+  readonly [key: string]: unknown
+}
+interface Initialization {
+  readonly requestId: string
+  readonly result: InitializeResult | null
+}
+interface BridgeInfo {
   readonly instance: string
-  readonly pod: string
   readonly workspace: string
-  readonly initialize: { agentInfo?: { name?: string; version?: string }; agentCapabilities?: { loadSession?: boolean; sessionCapabilities?: { resume?: unknown } } } | null
   readonly adapter: { alive: boolean; exitCode: number | null; signal: string | null }
-  readonly lastSeq: number
-  readonly gap: boolean
-  readonly replayFrom: number | null
-  readonly outbound?: OutboundView
+  readonly outbound: OutboundView
 }
 
 export interface Ending {
@@ -122,9 +127,14 @@ interface SandboxRecord {
   bridge: WebSocket | null
   bridgeState: 'none' | 'connecting' | 'connected'
   reconnectTimer: NodeJS.Timeout | null
-  hello: Hello | null
+  info: BridgeInfo | null
+  initialization: Initialization | null
+  initializing: boolean
+  initializationPersisted: boolean
+  readonly recovered: boolean
   lastSeq: number
   ring: { seq: number; acp: string }[]
+  ringBytes: number
   consumer: WebSocket | null
   consumerPending: Map<string, { method: string; sessionId: string | null }>
   permissions: Set<string>
@@ -195,6 +205,7 @@ export class ExecutionManager {
   private readonly listeners = new Set<(event: ManagerEvent) => void>()
   private readonly foreignKey = generateKeyPairSync('ed25519').privateKey
   private poolCache: { at: number; pools: PoolView[] } | null = null
+  private readonly epoch = randomUUID()
   private ownCounter = 0
   private tickTimer: NodeJS.Timeout | null = null
   private watchAbort: AbortController | null = null
@@ -221,6 +232,8 @@ export class ExecutionManager {
     for (const record of this.records.values()) {
       if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
       record.bridge?.terminate()
+      for (const [, resolve] of record.ownPending) resolve({ error: { message: 'Agora stopping' } })
+      record.ownPending.clear()
       record.consumer?.close(1001, 'Agora stopping')
     }
   }
@@ -353,9 +366,14 @@ export class ExecutionManager {
       bridge: null,
       bridgeState: 'none',
       reconnectTimer: null,
-      hello: null,
+      info: null,
+      initialization: parse<Initialization>(annotations[ANNOTATION.initialize]),
+      initializing: false,
+      initializationPersisted: parse<Initialization>(annotations[ANNOTATION.initialize])?.result != null,
+      recovered: annotations[ANNOTATION.instance] !== undefined,
       lastSeq: 0,
       ring: [],
+      ringBytes: 0,
       consumer: null,
       consumerPending: new Map(),
       permissions: new Set(),
@@ -370,7 +388,7 @@ export class ExecutionManager {
       outbound: null,
       error: null,
       lost: null,
-      uncertain: null,
+      uncertain: annotations[ANNOTATION.turn] === undefined ? null : 'Agora restarted before the final answer was seen',
     }
   }
 
@@ -386,19 +404,27 @@ export class ExecutionManager {
   }
 
   private bridgeOpen(record: SandboxRecord): boolean {
-    return record.bridge !== null && record.bridge.readyState === WebSocket.OPEN && record.hello !== null
+    return record.bridge !== null && record.bridge.readyState === WebSocket.OPEN && record.initialization?.result != null && !record.initializing && record.bridgeState === 'connected'
   }
 
   private ensureBridge(record: SandboxRecord): void {
     if (this.stopped || !record.ready || record.serviceFQDN === null || record.podName === null) return
     if (record.bridge !== null || record.reconnectTimer !== null || record.ending || record.lost !== null) return
-    // In this process's lifetime, pick up exactly after the last frame seen. After a restart, the
-    // position noted at the start of the turn in flight — or live, when no turn is in flight.
-    const after = record.lastSeq > 0 ? record.lastSeq : record.turn !== null ? record.turn.seq : null
-    const url = `ws://${this.address(record)}/acp${after === null ? '' : `?after=${String(after)}`}`
-    const socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.token(record)}` } })
+    const socket = new WebSocket(`ws://${this.address(record)}/acp`, { headers: { authorization: `Bearer ${this.token(record)}` }, maxPayload: 16 * 1024 * 1024 })
     record.bridge = socket
     record.bridgeState = 'connecting'
+    let instance: string | null = null
+    socket.on('upgrade', (response) => {
+      const header = response.headers['agora-bridge-instance']
+      instance = typeof header === 'string' && header.length > 0 ? header : null
+      if (instance === null || (record.instance !== null && record.instance !== instance)) {
+        this.lose(record, instance === null ? 'bridge instance header missing' : `process replaced: instance ${instance}, expected ${record.instance}`)
+        socket.close(1000, 'process identity lost')
+      }
+    })
+    socket.on('open', () => {
+      if (record.lost === null && instance !== null) void this.joinBridge(record, socket, instance)
+    })
     socket.on('message', (data) => this.onBridgeMessage(record, socket, data.toString()))
     socket.on('close', (code, reason) => this.onBridgeClose(record, socket, code, reason.toString()))
     socket.on('error', (error) => this.log(record.name, `bridge : ${error.message}`))
@@ -411,8 +437,12 @@ export class ExecutionManager {
     record.bridgeState = 'none'
     if (this.records.get(record.name) !== record || this.stopped) return
     this.log(record.name, `bridge connection closed (${String(code)}${reason === '' ? '' : ` ${reason}`})`)
-    if (code === 1011) this.lose(record, 'the adapter died')
-    else if (!record.ending && record.lost === null) {
+    if (record.turn !== null) record.uncertain ??= 'bridge connection broke before the final answer was seen'
+    if (code === 1001) {
+      record.ending = true
+      this.toConsumer(record, { event: { type: 'terminating' } })
+    } else if (code === 1011) this.lose(record, 'the adapter died')
+    else if (!record.ending && record.lost === null && record.reconnectTimer === null) {
       record.reconnectTimer = setTimeout(() => {
         record.reconnectTimer = null
         this.ensureBridge(record)
@@ -431,54 +461,72 @@ export class ExecutionManager {
   }
 
   private onBridgeMessage(record: SandboxRecord, socket: WebSocket, text: string): void {
-    if (record.bridge !== socket) return
-    let message: { hello?: Hello; seq?: number; acp?: string; terminating?: unknown }
-    try {
-      message = JSON.parse(text) as typeof message
-    } catch {
-      return
-    }
-    if (message.hello !== undefined) this.onHello(record, message.hello)
-    else if (typeof message.seq === 'number' && typeof message.acp === 'string') this.onFrame(record, message.seq, message.acp)
-    else if (message.terminating !== undefined) {
-      // The Pod is being destroyed: no reconnection, its anchor is on the way.
-      record.ending = true
-      this.log(record.name, 'the Pod received SIGTERM: it is pushing its anchor')
-      this.toConsumer(record, { event: { type: 'terminating' } })
-    }
+    if (record.bridge !== socket || record.lost !== null) return
+    this.onFrame(record, ++record.lastSeq, text)
   }
 
-  private onHello(record: SandboxRecord, hello: Hello): void {
-    record.hello = hello
-    record.outbound = hello.outbound ?? null
-    record.bridgeState = 'connected'
-    if (record.instance === null) {
-      record.instance = hello.instance
-      record.idleSince ??= new Date().toISOString()
-      void this.annotate(record, { [ANNOTATION.instance]: hello.instance, [ANNOTATION.idleSince]: record.idleSince }).catch(() => {})
-      this.log(record.name, `bridge joined: instance ${hello.instance}, ${String(hello.initialize?.agentInfo?.name)}@${String(hello.initialize?.agentInfo?.version)}`)
-    } else if (record.instance !== hello.instance) {
-      record.bridge?.close(1000, 'process replaced')
-      this.lose(record, `process replaced: instance ${hello.instance}, expected ${record.instance}`)
-      return
-    } else {
-      this.log(record.name, `bridge rejoined${hello.replayFrom === null ? '' : `, replay from ${String(hello.replayFrom)}`}${hello.gap ? ', WITH A GAP' : ''}`)
+  private async joinBridge(record: SandboxRecord, socket: WebSocket, instance: string): Promise<void> {
+    if (record.initializing) return
+    record.initializing = true
+    try {
+      // Install the waiter before any asynchronous work: a pending initialize answer can be the
+      // very first unread line on reconnection, including after this manager restarted.
+      const first = record.instance === null
+      if (first) {
+        record.instance = instance
+        record.initialization = { requestId: `agora-initialize-${randomUUID()}`, result: null }
+        record.idleSince ??= new Date().toISOString()
+        await this.annotate(record, {
+          [ANNOTATION.instance]: instance,
+          [ANNOTATION.initialize]: JSON.stringify(record.initialization),
+          [ANNOTATION.idleSince]: record.idleSince,
+        })
+      }
+      if (record.initialization === null) throw new Error('initialization record missing for an existing instance; refusing to resend')
+      if (record.initialization.result === null) {
+        const request = record.initialization
+        const answer = await this.ownRequest(record, 'initialize', {
+          protocolVersion: 1,
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+          clientInfo: { name: 'agora', version: '1' },
+        }, 30_000, request.requestId, !first)
+        if (answer.error !== undefined || answer.result == null) throw new Error(`initialize refused: ${String(answer.error?.message ?? 'missing result')}`)
+        record.initialization = { requestId: request.requestId, result: answer.result }
+        record.initializationPersisted = false
+      }
+      if (!record.initializationPersisted) {
+        await this.annotate(record, { [ANNOTATION.initialize]: JSON.stringify(record.initialization) })
+        record.initializationPersisted = true
+      }
+      const response = await fetch(`http://${this.address(record)}/info`, {
+        headers: { authorization: `Bearer ${this.token(record)}` }, signal: AbortSignal.timeout(5000),
+      })
+      if (!response.ok) throw new Error(`bridge info refused (${String(response.status)})`)
+      const info = await response.json() as BridgeInfo
+      if (info.instance !== instance) { this.lose(record, 'process replaced while reading bridge info'); socket.close(); return }
+      if (record.bridge?.readyState !== WebSocket.OPEN || record.lost !== null || record.ending) return
+      record.error = null
+      record.info = info
+      record.outbound = info.outbound
+      record.bridgeState = 'connected'
+      this.log(record.name, first ? `bridge joined: instance ${instance}, ${String(record.initialization.result?.agentInfo?.name)}` : 'bridge rejoined, without replay or initialize')
+      this.toConsumer(record, { event: { type: 'bridge', instance } })
+    } catch (error) {
+      record.error = `bridge initialization failed: ${error instanceof Error ? error.message : String(error)}`
+      this.log(record.name, record.error)
+    } finally {
+      record.initializing = false
+      if (this.bridgeOpen(record) && record.error === null && record.restoreAnchor !== null && !record.restored && !record.restoring) void this.restore(record)
+      this.emitRecord(record)
     }
-    if (hello.gap && record.turn !== null) record.uncertain = 'frames of the turn were lost (gap in the replay)'
-    if (!hello.adapter.alive) {
-      this.lose(record, `the adapter died (code ${String(hello.adapter.exitCode)})`)
-      return
-    }
-    this.toConsumer(record, { event: { type: 'bridge', instance: hello.instance, gap: hello.gap, replayFrom: hello.replayFrom } })
-    if (record.restoreAnchor !== null && !record.restored && !record.restoring && record.error === null) void this.restore(record)
-    this.emitRecord(record)
   }
 
   private onFrame(record: SandboxRecord, seq: number, line: string): void {
-    if (seq <= record.lastSeq) return
-    record.lastSeq = seq
     record.ring.push({ seq, acp: line })
-    if (record.ring.length > RING_LIMIT) record.ring.splice(0, record.ring.length - RING_LIMIT)
+    record.ringBytes += Buffer.byteLength(line)
+    while (record.ring.length > RING_LIMIT || record.ringBytes > RING_BYTES) {
+      record.ringBytes -= Buffer.byteLength(record.ring.shift()!.acp)
+    }
     this.toConsumer(record, { seq, acp: line })
 
     let message: AcpMessage
@@ -553,8 +601,7 @@ export class ExecutionManager {
     }
   }
 
-  private ownRequest(record: SandboxRecord, method: string, params: Record<string, unknown>, timeoutMs: number): Promise<AcpMessage> {
-    const id = `agora-${String(++this.ownCounter)}`
+  private ownRequest(record: SandboxRecord, method: string, params: Record<string, unknown>, timeoutMs: number, id = `agora-${this.epoch}-${String(++this.ownCounter)}`, waitOnly = false): Promise<AcpMessage> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         record.ownPending.delete(idKey(id))
@@ -564,7 +611,7 @@ export class ExecutionManager {
         clearTimeout(timer)
         resolve(message)
       })
-      record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+      if (!waitOnly) record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     })
   }
 
@@ -590,10 +637,10 @@ export class ExecutionManager {
       if (!response.ok) throw new Error(`placement refused (${String(response.status)}): ${String(placement.reason)}`)
       this.log(record.name, `anchor ${anchorId} placed: ${String(placement.files?.length)} file(s)`)
 
-      const capabilities = record.hello?.initialize?.agentCapabilities
+      const capabilities = record.initialization?.result?.agentCapabilities
       const method = capabilities?.sessionCapabilities?.resume != null ? 'session/resume' : capabilities?.loadSession === true ? 'session/load' : null
       if (method === null) throw new Error('the agent announces neither session/resume nor session/load')
-      const answer = await this.ownRequest(record, method, { sessionId: meta.sessionId, cwd: record.hello?.workspace, mcpServers: [] }, 60_000)
+      const answer = await this.ownRequest(record, method, { sessionId: meta.sessionId, cwd: record.info?.workspace, mcpServers: [] }, 60_000)
       if (answer.error !== undefined) throw new Error(`${method} refused: ${String(answer.error.message)}`)
 
       record.restored = true
@@ -649,7 +696,7 @@ export class ExecutionManager {
 
   // ---------------------------------------------------------------- the consumer relay
 
-  attachConsumer(name: string, socket: WebSocket, after: number | null): void {
+  attachConsumer(name: string, socket: WebSocket, after: number | null, epoch: string | null = null): void {
     const record = this.records.get(name)
     if (record === undefined) {
       socket.close(4404, 'unknown execution')
@@ -657,7 +704,9 @@ export class ExecutionManager {
     }
     if (record.consumer !== null) record.consumer.close(4000, 'replaced by a newer consumer')
     record.consumer = socket
-    socket.send(JSON.stringify({ event: { type: 'attached', execution: this.view(record), initialize: record.hello?.initialize ?? null } }))
+    socket.send(JSON.stringify({ event: { type: 'reset', epoch: this.epoch, position: 0 } }))
+    if (epoch !== this.epoch && (epoch !== null || record.recovered)) after = after === null ? null : 0
+    socket.send(JSON.stringify({ event: { type: 'attached', execution: this.view(record), initialize: record.initialization?.result ?? null } }))
     if (after !== null) {
       const replay = record.ring.filter((frame) => frame.seq > after)
       const oldest = record.ring[0]?.seq ?? record.lastSeq + 1
@@ -701,8 +750,8 @@ export class ExecutionManager {
       return this.answer(record, socket, id, { error: { code: -32600, message: 'agora-… ids are reserved for Agora' } })
     }
     if (message.method === 'initialize' && isRequest) {
-      if (record.hello?.initialize == null) return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge not joined yet' } })
-      return this.answer(record, socket, id, { result: record.hello.initialize })
+      if (record.initialization?.result == null) return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge not joined yet' } })
+      return this.answer(record, socket, id, { result: record.initialization.result })
     }
     if (!this.bridgeOpen(record)) {
       if (isRequest) return this.answer(record, socket, id, { error: { code: -32000, message: `refused: bridge not connected (${this.state(record).state})` } })
@@ -728,7 +777,7 @@ export class ExecutionManager {
 
     record.admitting = true
     const now = Date.now()
-    const turn: Turn = { startedAt: new Date(now).toISOString(), requestId: id, seq: record.lastSeq, sessionId: (message.params?.sessionId as string | undefined) ?? null }
+    const turn: Turn = { startedAt: new Date(now).toISOString(), requestId: id, sessionId: (message.params?.sessionId as string | undefined) ?? null }
     const shutdownTime = iso(Math.min(now + record.limits.leaseSeconds * 1000, now + record.limits.turnCapSeconds * 1000))
     try {
       // One PATCH: the turn is written and its deadline accepted before the prompt leaves.
@@ -748,7 +797,7 @@ export class ExecutionManager {
     record.renewals += 1
     record.uncertain = null
     record.bridge?.send(text)
-    this.log(record.name, `turn opened (request ${JSON.stringify(id)}, position ${String(turn.seq)}), deadline ${shutdownTime}`)
+    this.log(record.name, `turn opened (request ${JSON.stringify(id)}), deadline ${shutdownTime}`)
     this.emitRecord(record)
   }
 
@@ -986,10 +1035,14 @@ export class ExecutionManager {
   // ---------------------------------------------------------------- lab hooks (docs/specs/executions.md, "The lab")
 
   lab = {
-    dropBridge: (name: string): CommandResult<string> => {
+    dropBridge: (name: string, pauseSeconds = 0): CommandResult<string> => {
       const record = this.records.get(name)
       if (record === undefined) return refused(`unknown execution: ${name}`, 404)
       if (record.bridge === null) return refused('no bridge connection')
+      if (!Number.isInteger(pauseSeconds) || pauseSeconds < 0 || pauseSeconds > 60) return refused('pauseSeconds must be 0 to 60', 400)
+      if (pauseSeconds > 0) {
+        record.reconnectTimer = setTimeout(() => { record.reconnectTimer = null; this.ensureBridge(record) }, pauseSeconds * 1000)
+      }
       record.bridge.terminate()
       this.log(name, 'lab: bridge connection cut')
       return { accepted: true, value: 'cut' }
@@ -1010,7 +1063,7 @@ export class ExecutionManager {
         const info = (await fetch(`http://${this.address(record)}/info`, { headers, signal: AbortSignal.timeout(5000) })).status
         // A bare upgrade request: only the status line matters, the socket is never kept.
         const acp = await new Promise<number>((resolve) => {
-          const socket = new WebSocket(`ws://${this.address(record)}/acp?after=${String(Number.MAX_SAFE_INTEGER)}`, { headers })
+          const socket = new WebSocket(`ws://${this.address(record)}/acp`, { headers })
           socket.on('unexpected-response', (_request, response) => {
             resolve(response.statusCode ?? 0)
             socket.terminate()
@@ -1037,9 +1090,9 @@ export class ExecutionManager {
     if (record.lost !== null) return { state: 'lost', reason: record.lost }
     if (record.stopped !== null) return { state: 'stopped', reason: 'no more renewal, ends at the deadline' }
     if (!record.ready) return { state: 'starting', reason: [record.readyReason, record.readyMessage, record.podDetail].filter((part) => part !== '' && part !== null).join(' — ') }
+    if (record.uncertain !== null) return { state: 'uncertain', reason: record.uncertain }
     if (!this.bridgeOpen(record)) return { state: 'connecting', reason: `bridge: ${record.bridgeState}` }
     if (record.restoring) return { state: 'restoring', reason: `anchor ${String(record.restoreAnchor)}` }
-    if (record.uncertain !== null) return { state: 'uncertain', reason: record.uncertain }
     if (record.turn !== null) return { state: 'in turn', reason: `since ${record.turn.startedAt}` }
     return { state: 'ready', reason: '' }
   }
@@ -1065,10 +1118,10 @@ export class ExecutionManager {
       renewals: record.renewals,
       bridge: {
         state: record.bridgeState,
-        instance: record.hello?.instance ?? null,
-        agent: record.hello?.initialize?.agentInfo ?? null,
-        adapter: record.hello?.adapter ?? null,
-        workspace: record.hello?.workspace ?? null,
+        instance: record.instance,
+        agent: record.initialization?.result?.agentInfo ?? null,
+        adapter: record.info?.adapter ?? null,
+        workspace: record.info?.workspace ?? null,
       },
       instance: record.instance,
       sessionId: record.sessionId,

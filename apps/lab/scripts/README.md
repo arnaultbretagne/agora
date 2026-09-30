@@ -10,3 +10,6 @@ node apps/lab/scripts/live-cases.ts http://<lab ip>:8080 [case numbers]
 
 Case 26 targets public stand-in repos unless `GITHUB_A`, `GITHUB_B` (and `GITHUB_C`) name
 repos the gateway's PAT can write to.
+
+Cases 27–28 exercise a paused bridge reader and process-level initialization after a lab restart.
+Consumer reconnections carry the positions epoch and reset after an Agora restart.

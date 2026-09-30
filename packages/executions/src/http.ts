@@ -107,7 +107,7 @@ export function createApi(options: HttpOptions): Server {
       if (labPrefix === undefined && verb === 'stop') return reply(res, await manager.stopSandbox(name!))
       if (labPrefix === undefined && verb === 'credentials') return attachCredentials(res, name!, await body(req))
       if (labPrefix !== undefined && options.lab) {
-        if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!))
+        if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!, Number((await body(req)).pauseSeconds ?? 0)))
         if (verb === 'probe-auth') {
           const result = await manager.lab.probeAuth(name!)
           return result.accepted ? json(res, 200, { accepted: true, results: result.value }) : reply(res, result)
@@ -168,7 +168,7 @@ export function createApi(options: HttpOptions): Server {
     }
     const afterParam = url.searchParams.get('after')
     const after = afterParam === null || afterParam === '' ? null : Number(afterParam)
-    wss.handleUpgrade(req, socket, head, (peer) => manager.attachConsumer(match[1]!, peer, after !== null && Number.isFinite(after) ? after : null))
+    wss.handleUpgrade(req, socket, head, (peer) => manager.attachConsumer(match[1]!, peer, after !== null && Number.isFinite(after) ? after : null, url.searchParams.get('epoch')))
   })
 
   return server

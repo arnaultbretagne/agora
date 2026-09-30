@@ -1,7 +1,7 @@
 # ADR 000n — Harnesses
 
-- **Status:** proposed
-- **Date:** 2026-09-29
+- **Status:** accepted
+- **Date:** 2026-09-30
 
 ## Context
 
@@ -50,6 +50,10 @@ flowchart LR
 - **A thin bridge keeps the hostile zone small.** It is the only Agora code in the sandbox. What
   must last — history, positions, Sessions — lives in Agora, where it is durable; the bridge
   rarely changes, so images rarely change.
+  Measured on g4 under Kata, 2026-09-30, with images from `7afc4d7`: unread output survived a
+  10 s disconnection, 3,600 large chunks arrived in order, and Agora restarted without sending a
+  second `initialize`. Local bridge tests drain 20,000 lines after an absent reader, exceeding
+  the former replay ring.
 
 ## What we tried
 
