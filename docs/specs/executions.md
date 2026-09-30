@@ -33,6 +33,18 @@ Templates enable `service: true`; the WS port and path are defined with the pool
 After `Ready=True`, the backend reaches the Service and establishes ACP with the required
 authorizations. **The claim precedes the WS connection; Ready alone does not prove that ACP is runnable.**
 
+### Readiness
+
+| Fact | Evidence | What it permits |
+| --- | --- | --- |
+| Pod ready | Infrastructure readiness and a reachable bridge whose adapter is alive. | Reach the bridge and request harness initialization; no prompt admission. |
+| SDK preinitialized | Harness-specific completion of initialization without a user prompt, with a live process reusable for compatible settings. | Reuse that process only when the harness proves compatibility; no ACP Session or native restoration is implied. |
+| Session ready | The same bridge instance, retained initialize result, successful Session opening/restoration, confirmed desired settings and authorization, and sufficient token validity for the bounded turn when external grants are required. | Admit Write if no saved, in-progress or uncertain turn or application barrier remains. |
+
+`warm` describes allocation from a pool. It does not certify a preinitialized SDK or a configured
+Session. GET /healthz proves only adapter liveness. A pool allocation can still be starting;
+the readiness and configuration facts must be established separately before a prompt.
+
 The UI shows startup, then availability or the error. On stop, Agora closes
 access and stops renewing; the sandbox disappears at the deadline, without the user waiting.
 
@@ -84,9 +96,18 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
    outbound proxy.
 4. Listen immediately after spawning the adapter; answer ready on `/healthz` while it runs.
 
-All of this happens before the claim, with no user and no credential. The bridge sends no ACP.
+All of this happens before the claim, with no user or execution configuration. Once the bridge
+is reachable, Agora's credentials component can attach the image's reviewed base authorization
+for the unassigned Pod and renew it while it waits. Tokens are issued dynamically; images and
+templates contain no JWT. The SDK can preinitialize only through the gateway and only with
+those base rights. The bridge sends no ACP.
 Agora sends `initialize` on its first connection, with `fs` and `terminal` set to *no*, and keeps
 the answer. codex refuses a second `initialize`: Agora never resends it to the same instance.
+
+Preinitialization belongs to the harness, not to a bridge-generated initialize or Session
+request. It must retain a compatible SDK process to remove startup cost from the opening path;
+starting and closing a disposable Session is not that proof. No user prompt is sent in the
+pool. An assigned Pod is not returned to it.
 
 ### The bridge's routes
 
@@ -98,7 +119,7 @@ Port **8080**. Every route except `/healthz` requires Agora's token.
 | `GET /info` | Instance, Pod, workspace, start time, adapter state (alive, exit code, signal), ending, the way out (`outbound`). |
 | `GET /acp` | WebSocket: the ACP relay. |
 | `PUT /anchor` | Restores an anchor before the session is resumed. |
-| `PUT /credentials` | Attaches the credential through which the adapter goes out (`credentials.md`). |
+| `PUT /credentials` | Installs warmup or execution authorization and resets previous outbound tunnels at the prescribed boundary (`credentials.md`). |
 
 The token is signed by Agora with **Ed25519**, names the target sandbox and expires after
 **60 seconds**. The bridge verifies it with Agora's public key and compares the name with
@@ -222,13 +243,19 @@ unavailable, and the last granted deadline remains in force.
 | **starting** | Claim created, not ready yet. | `Ready` false; the claim's reason, the Pod's waiting reason. |
 | **connecting** | Claim ready, bridge not reached yet. | `Ready` true, no open connection with a completed `initialize`. |
 | **restoring** | Anchor placed, resume in progress. | `initialize` answered, then `PUT /anchor` and `session/resume` (or `session/load`) in progress. |
-| **ready** | Connected, `initialize` answered, no turn. | Same instance verified by the upgrade header and initialization answer retained by Agora. |
+| **ready** | Connected, initialization retained, Session open/restored, no turn. Prompt admission also requires the configuration barrier to be open. | Same instance and successful Session opening/restoration; the separate application state establishes configured prompt readiness. |
 | **in turn** | `session/prompt` sent, final response not received yet. | Turn annotation on the claim. |
 | **uncertain** | The end of the turn could not be seen. | A bridge connection breaks during a turn, or Agora restarts with its turn annotation. Only the final answer resolves it. |
 | **lost** | The adapter died or the process was replaced. | Close 1011, or an upgrade header different from the recorded instance. |
 | **stopped** | Sending closed, no more renewal. | Stop annotation on the claim. |
 | **error** | Startup or restore failed. | The claim's reason (for example `WarmPoolNotFound`), a refused/timed-out initialization, or a failed restore. |
 | **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim. |
+
+Pending/applying/failed configuration is an admission barrier independent of these lifecycle
+states; it does not mean the process was replaced. Model, effort, grants and credential renewal
+are applied only between confirmed turns. The dispatcher closes admission throughout the
+application and preserves the Session, SDK process and ACP connection when resetting outbound
+tunnels. An uncertain turn or pending permission does not establish a safe boundary.
 
 The execution leaves the list when its anchor is received or when its claim has disappeared; the
 end row keeps the anchor, or the reason it is missing.
@@ -312,6 +339,13 @@ Create with an anchor. Once connected, Agora sends `initialize` and retains its 
 placing the anchor (`PUT /anchor`), then sends `session/resume`, or `session/load` if the agent
 advertises only `loadSession`. A failure leaves the execution in *error*.
 
+Base warmup authorization is handed off to the execution before Session readiness and the first
+prompt. Anchor placement must precede native loading. A preinitialized fresh query cannot be
+assumed to contain the restored context: reuse or replacement of that query follows the pinned
+harness's demonstrated compatibility, without two competing ACP contexts or a second initialize
+on the same adapter instance. The startup probe in `log.md` proves SDK-handle reuse after claim;
+it does not validate this pool/native-restore handoff.
+
 ### Permissions
 
 | Resource (`agora-sandboxes`) | Verbs |
@@ -374,7 +408,16 @@ use a 60 s lease, re-armed three times per lease.
 | 27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. | After a 10 s disconnection, unread text and the final answer arrived complete; 3,600 large chunks arrived once, in order. Local bridge tests also drain 20,000 lines beyond the former replay ring after an absent reader. |
 | 28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. | Same capabilities and session after restart; new positions epoch. The mock completed another prompt without a second `initialize`. |
 
-**To be specified:** anchor storage in the database, codex's native directory, detached tasks,
+The readiness levels, pool preinitialization/assignment handoff and outbound reset at a turn
+boundary are additional acceptance requirements. Earlier case timings use their recorded
+boundaries and do not establish Session readiness under the configuration contract. Cases
+C1–C14 in `credentials.md` separate these requirements from existing gateway and startup
+measurements. Harness conformance must also show whether detached tools, subagents or background
+requests can survive a final ACP response and how a reset affects them. A harness without such
+evidence cannot promise that a turn boundary permits an uninterrupted background workload.
+
+**To be specified:** anchor storage in the database, codex's native directory, SDK preinitialization
+and restore compatibility per harness, readiness evidence, detached tasks and reset policy,
 resuming after the process is lost. Credentials: `credentials.md`.
 
 Reference: [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go).

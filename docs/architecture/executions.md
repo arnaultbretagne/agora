@@ -31,6 +31,11 @@ started, before any execution exists. A claim takes one, ready in a fraction of 
 Agent Sandbox starts another to refill the pool; when the pool is empty, one is created cold from
 the template, in a few seconds. A used sandbox is never returned to the pool.
 
+Agora can supply the reviewed harness base authorization while the Pod waits, allowing
+compatible SDK preinitialization without a user prompt. Allocation, SDK preinitialization and a
+configured ACP Session are separate readiness facts. The execution's settings and provisioned
+resource rights are established after assignment.
+
 ```mermaid
 sequenceDiagram
     participant Infra as infra-k8s
@@ -39,30 +44,35 @@ sequenceDiagram
     participant Pod as Warm sandbox
     Infra->>AS: a template and a warm pool per image
     AS->>Pod: starts it: bridge listening, adapter started
+    Agora->>Pod: base harness authorization, compatible SDK preinitialization
     Agora->>AS: claim: pool, deadline
     AS-->>Agora: ready: this sandbox, its Service
     AS->>AS: starts another to refill the pool
-    Agora->>Pod: through the bridge: initialize, anchor, credentials
+    Agora->>Pod: execution authorization, initialize, anchor, Session
 ```
 
 So every sandbox of a pool is interchangeable, and must stay so: nothing specific to an execution
 goes through the claim, or the sandbox would have to be created for it, cold. The anchor to
-restore, the credentials and the ACP session reach the sandbox through the bridge, after the
-claim. Nor is the claim Agora's memory: what Agora must remember about an execution is in its
-log.
+restore, execution-specific rights and the ACP session reach the sandbox through the bridge,
+after the claim. Nor is the claim Agora's memory: what Agora must remember about an execution
+is in its log.
 
 ## The life of an execution
 
 ```mermaid
 stateDiagram-v2
     state "in turn" as in_turn
+    state "applying configuration" as configuring
     [*] --> starting: claim created
     starting --> connecting: claim ready
-    connecting --> restoring: an anchor to restore
-    restoring --> ready
-    connecting --> ready: initialize answered
+    connecting --> restoring: initialize answered, anchor to restore
+    connecting --> configuring: initialize and new Session answered
+    restoring --> configuring: restored Session answered
+    configuring --> ready: settings and authorization confirmed
+    ready --> configuring: a change or renewal is pending
     ready --> in_turn: prompt admitted
-    in_turn --> ready: end of turn
+    in_turn --> ready: confirmed end, configuration unchanged
+    in_turn --> configuring: confirmed end, a change or renewal is pending
     ready --> stopped: stop
     in_turn --> stopped: stop (the turn is cancelled)
     ready --> lost: adapter died
@@ -74,8 +84,10 @@ stateDiagram-v2
     ending --> [*]: anchor received
 ```
 
-The spec lists every state, including *uncertain* (the end of a turn could not be seen) and
-*error* (the claim will not succeed).
+Configuration application is a barrier, not a replacement of the SDK or Session. The next
+prompt waits for its confirmation; only outbound tunnels reset during token replacement.
+The spec lists the lifecycle states and configuration barrier, including *uncertain* (the end
+of a turn could not be seen) and *error* (the claim will not succeed).
 
 ## The deadline
 

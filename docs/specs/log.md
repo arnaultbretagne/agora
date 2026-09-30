@@ -85,7 +85,7 @@ turn. If correlation is unsafe, fail no request by guessing.
 
 Reasons are closed: `invalid_utf8`, `invalid_json`, `invalid_envelope`, `batch`, `wrong_direction`,
 `invalid_body`, `unsafe_id`, `line_too_large`, `unsupported_json_value`, `transport_error`,
-`response_timeout`, `deadline_refused`, `startup_failed`, `restore_failed`, `claim_conflict`, `claim_missing`,
+`response_timeout`, `deadline_refused`, `credentials_expiring`, `startup_failed`, `restore_failed`, `claim_conflict`, `claim_missing`,
 `adapter_exited`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`, `anchor_missing`.
 No parser, database or transport exception message becomes a reason.
 
@@ -144,7 +144,7 @@ proves this local drain, not harness acceptance. A saved line stays saved across
 | --- | --- |
 | Opening | `session.opened` is written in the same transaction as the answer that creates or resumes the ACP session. The Session gets an Agora id; the ACP session id is recorded, never used as its identity. |
 | Restoring | A restore from an anchor opens a new Session, even with the same ACP session id. |
-| Changing the model | `session/set_config_option` is an ACP line like any other: the Session goes on. |
+| Changing the model or effort | `session/set_config_option` is recorded and applied at a confirmed between-turn boundary. The Session goes on; the next prompt waits for applied-value confirmation. |
 | Another ACP session in the same execution | Ends the current Session and opens another. |
 | Opening requests | `initialize` and session creation/resume requests are attributed to the execution only; the successful opening answer belongs to the new Session. |
 | Reconnecting | To the same bridge instance, the Session goes on; to another instance, the execution is lost. |
@@ -159,10 +159,75 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Compare kind, target and body using a deterministic JSON encoding: object key order is ignored, array order and values are preserved. The same id and request returns the first answer and writes nothing; a different request is refused. |
 | Accepted | The command, its immutable accepted answer and its deduplication row commit together before any effect. For Write and Respond to a permission, the outgoing ACP entry commits in that transaction too. A refused command is answered with its reason and not written. A later operational failure is read in the thread; it does not replace the accepted answer. |
 | Create | Carries the reviewed pool, execution settings and anchor to restore, if any. In the acceptance transaction, bind a globally unique execution id, use it as the claim request id, and record the claim name and initial absolute deadline. Claim names are unique across accepted Creates; a hash collision is refused before creation. The same command id in another Workstream cannot select the same execution. |
-| Write | Accepted only if the execution is ready, sending is open, and no turn is saved, in progress or uncertain. The command, then its `session/prompt` line, are written before the line is sent. |
+| Write | Accepted only if the execution is ready, sending is open, no turn is saved, in progress or uncertain, the desired configuration is confirmed applied, and credentials cover the bounded turn when external grants are required. The applied revision is bound to the accepted turn. The command, then its `session/prompt` line, are written before the line is sent. |
 | Cancel | Carries the target turn id. Immediately before dispatch, recheck that exact turn and Session under the serialized dispatcher. Send `session/cancel` only while it is in progress or uncertain; otherwise, no effect. Cancelled permission outcomes for its pending requests precede any next prompt. A queued or recovered cancellation never reaches another turn. |
 | Respond to a permission | Carries the Session, RPC id and request source position. Accepted while that exact request is pending; the answer is an outgoing ACP line. Reused harness ids cannot redirect an old answer to a new permission occurrence. |
 | Stop | Accepted while the execution exists (`executions.md`). Commit it before closing admission, cancelling the active turn or stopping renewal. It prevents later dispatch and renewal even after restart. |
+
+### Configuration between turns
+
+**Each turn uses one confirmed configuration. Pending changes are applied before the next turn
+is admitted.** The configuration comprises the execution's authorized grants, model and effort.
+JWT renewal can change a credential installation without changing these semantic values.
+
+Requested and applied revisions are distinct canonical facts. A requested revision contains
+reviewed settings and references to the resources whose provisioned bindings authorize its
+profiles. Agora derives grants from those bindings; the client cannot confer rights by sending
+a profile name. The applied revision records the confirmed settings and authorization
+installation metadata. JWTs, Proxy-Authorization and upstream credentials are never entries,
+diagnostics or projected content. The command and closed entry schemas for these revisions
+must be specified before implementation; existing ACP attribution is not evidence of their
+application.
+
+Applied evidence is scoped to the execution, Session and bridge instance. A new or restored
+Session requires its own confirmation even when its requested values equal an earlier
+revision. An ACP reconnect to the same instance reuses verified authorization; it does not
+rotate credentials while a turn is running or uncertain.
+
+| State | Evidence | Write |
+| --- | --- | --- |
+| Ready | Desired values are confirmed applied, no earlier application is unresolved, and token validity is sufficient for the next turn when external grants are required. | May be admitted if the other execution/turn checks pass. |
+| Pending | A newer desired revision is recorded during a saved, in-progress or uncertain turn. | No next turn; the admitted turn keeps its bound revision. |
+| Applying | A confirmed boundary was reached and the required external effects have started. | Closed until all effects are confirmed and recorded. |
+| Failed | A required effect failed, readback disagreed or its outcome remains unknown. | Closed; partial application and its failed stage remain visible. |
+
+The Workstream projection exposes the desired values/revision, applied values/revision and
+application state, with a closed failure reason when needed. It does not expose credential
+transport or token metadata as product controls. UI state is derived from this projection;
+admission reads canonical state under the Workstream's serialization, never a lagging view.
+
+| Boundary step | Rule |
+| --- | --- |
+| Establish completion | Commit the final correlated response. No saved, in-progress or uncertain turn, pending permission or unproved background-task safety permits ordinary application. Cancel dispatch, a timeout or a transport break is not completion. |
+| Preserve the barrier | Record application state without opening a gap in Write admission after the final response. The same serialized dispatcher orders requested revisions, application, Write and Stop. |
+| Install grants | Derive the complete authorized set, supply the replacement JWT to the bridge and await acknowledgement of installation and closure of old outbound connections, including CONNECTs still opening. |
+| Apply model and effort | Record and dispatch model configuration through ACP, confirm its applied value, then configure compatible effort and confirm it. Unchanged values need no write; unsupported values are visibly refused. |
+| Publish readiness | Record the applied revision only after all required effects are confirmed. Open admission only if it still matches the desired revision and the execution remains usable and unstopped. |
+
+Select one recorded desired revision before starting an application. A later revision cannot
+overwrite that operation out of order; it is applied next, before another turn is admitted.
+Write binds the confirmed revision in its acceptance transaction. Changes ordered after that
+admission affect a later turn even if the accepted prompt is still saved.
+
+Immediately before the first transport write, recheck the bound revision, target instance,
+Stop and credential validity when external grants are required. If a proven never-dispatched
+prompt no longer has adequate token validity, record `request.failed` with `credentials_expiring`
+before a dispatch marker; do not rotate or apply a later configuration under that admitted turn.
+A new user command is required. Once dispatch is possible or uncertain, neither token
+preparation nor replay may guess that the turn is idle.
+
+Failure after an external effect never proves that the effect did not happen. Keep the
+application barrier across restart, re-establish driver ownership and the same execution/bridge
+instance, and verify the installation and applied settings. A lost acknowledgement is resolved
+through correlated evidence or supported readback, never a claim of success or rollback.
+Possibly dispatched ACP requests retain the existing recovery rules. A replacement execution
+uses its own startup/restore path, not completion of the old application's revision.
+
+The barrier preserves the Session, SDK process and ACP connection. Only outbound tunnels reset.
+Its authorization transport and token lifetime are specified in `credentials.md`; readiness and
+background-task conformance are in `executions.md`. The acceptance cases below cover this
+contract independently from the original configuration-attribution case; their measurement
+status is recorded separately.
 
 ### A turn's states
 
@@ -307,8 +372,9 @@ entry point and proving that neither values nor fragments are emitted.
 ## Cases to validate
 
 Measurements: 2026-09-30, Node 24.20.0, PostgreSQL 17.11, ACP SDK 1.5.1, real mock-agent
-bridges and Chromium 141. A separate live run used Claude Code 2.1.261, claude-agent-acp 0.75.1,
-Haiku, Kata and agentgateway 1.5.0. `packages/log/test/log.test.ts` is the reproducible measurement
+bridges and Chromium 141. A separate live run used the image with global Claude Code 2.1.261,
+claude-agent-acp 0.75.1 and its Agent SDK 0.3.257 native CLI (Claude Code 2.1.257), on Haiku,
+Kata and agentgateway 1.5.0. `packages/log/test/log.test.ts` is the reproducible measurement
 suite; `packages/log/scripts/live-claude.ts` runs the opt-in billed cases. Fault injection is called
 out explicitly; these results do not establish full adapter conformance, product authentication
 or replacement extinction.
@@ -345,6 +411,22 @@ or replacement extinction.
 | L28 | Uncertain turn after a break or invalid answer, in assistant-ui | Composer disabled with reason; targeted Cancel and Stop available; uncertainty survives reload. | Partial: external-store mapping and Chromium lab composer/actions/reload passed. assistant-ui integration not measured. |
 | L29 | Anchor committed before crash, without its journal entry | Recovery appends one `anchor.received` before exposure; writer/projector cannot read bytes. | Passed: unpublished committed metadata recovered once; restricted byte access and actual native restore. |
 | L30 | Database outage exceeds execution deadline, or receive budget cannot be enforced | Interruption visible; no lossless-continuation claim or fresh lease invented. | Passed with injected commit outage, shortened infrastructure expiry and receive-budget overflow; visible interruption, no fresh lease. |
+
+### Configuration application acceptance
+
+L13 proves Session attribution only. Credential-before-opening tests prove startup ordering.
+Neither establishes the between-turn barrier, durable configuration revisions or applied-value
+readback. The following cases are distinct acceptance requirements, together with C1–C14 in
+`credentials.md`.
+
+| # | Case | Expected | Measured |
+| --- | --- | --- | --- |
+| L31 | Change requested during a turn, then a terminal reply commits | Bound revision unchanged during the turn; admission stays closed through application, then opens with the confirmed desired revision. | Not measured. |
+| L32 | Write races application, Stop or a newer desired revision | One serialized order; no Write in the application gap, superseded readiness or reopening after Stop. | Not measured. |
+| L33 | Grant installation succeeds but model/effort fails or differs on readback | Partial effects and failure visible; no applied-revision claim or next prompt. | Not measured. |
+| L34 | Crash or lost acknowledgement between application stages | Barrier reconstructed from canonical evidence; actual installation/settings verified; no possibly dispatched ACP request blindly resent. | Not measured. |
+| L35 | Reload while configuration is pending/applying/failed | Requested and applied values remain distinct; Write disabled with projected reason; Stop and existing turn actions follow their normal rules. | Not measured. |
+| L36 | Token becomes inadequate after admission, before dispatch marker | `request.failed` with `credentials_expiring`, no marker or transport write; no rotation under the saved turn and no automatic prompt retry. | Not measured. |
 
 ### Live Claude run
 
@@ -473,7 +555,8 @@ The report is `packages/log/test/fixtures/claude-code-startup-report.json`. The 
 | Subject | Contract required before its implementation |
 | --- | --- |
 | Uncertain turns | Evidence that permits release without a valid final answer or execution loss/end. Timeout or a Cancel send is not that evidence. |
-| Applied configuration | Model/effort readback after new/resume, invalidation after a break, model before dependent effort options, and explicit incompatibility rather than default substitution. |
+| Configuration schemas and evidence | The between-turn ordering above is fixed. Specify request/revision identifiers, closed command/entry encodings, projected fields and failure classes; installation readback and harness-specific model/effort confirmation after new/resume or a break. No implicit default substitution. |
+| Warmup handoff and background tasks | Reviewed image-to-base-profile catalogue, ownership/installation protocol before and after assignment, SDK compatibility with native restoration, and reset safety per pinned harness. |
 | Retention and deletion | Retention by data kind and stop-before-delete semantics. Entries stay immutable until a separate deletion policy is accepted. |
 | User access | Trusted authentication-proxy identity, protection from forged headers, Workstream ownership enforcement and service actors. An owner column alone authorizes nothing. |
 | History seeding without an anchor | Included/excluded content, deterministic encoding and truncation, visible failures and proof of reception. Retaining a transcript does not prove a new context received it. |
