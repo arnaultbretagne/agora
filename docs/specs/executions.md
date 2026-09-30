@@ -208,6 +208,13 @@ are bounded: 60 to 600 s for the lease, 30 to 3,600 s for a turn's duration.
 | Stop requested | Nothing more; `session/cancel` if a turn is in progress |
 | Adapter lost, process replaced | Nothing more |
 
+With the log mounted, command acceptance commits before the deadline PATCH or any ACP dispatch.
+The turn start is the recorded prompt entry time. A refused deadline PATCH records
+`request.failed` with `deadline_refused`, without a dispatch marker or transport write; the
+accepted command's answer remains unchanged and its turn fails as proven never attempted.
+Deadline renewal and Stop share the Workstream dispatcher. Renewal stops when storage is
+unavailable, and the last granted deadline remains in force.
+
 ### An execution's states
 
 | State | Meaning | What proves it |
@@ -274,6 +281,30 @@ A different instance means *lost*. A final answer for the saved turn clears unce
 
 A break during a turn marks it *uncertain* until its final answer arrives. Close 1011 means *lost*;
 1001 means *ending*. Other closes reconnect after 2 seconds, bounded by the execution's deadline.
+
+### With the log mounted
+
+The log owns admission, capture, dispatch evidence and recovery (`log.md`). The executions
+package performs the requested Kubernetes and bridge operations; it must not send ACP, resolve
+an incoming answer, update a turn or renew a deadline before the required journal commit. The
+consumer's memory ring and positions are not a source of durable history or client thread data.
+
+Claims retain only pool, deadline and labels, including `agora.bretagne.dev/execution-id` for
+the recorded execution identity; the annotations in the preceding table are omitted. Recovery
+joins accepted Creates to claims by the recorded claim name, labels and UID, including
+commands accepted before claim creation. Initialization, Session, turn start, idle time and Stop
+come from entries. A proven never-dispatched prompt stays saved; an attempted prompt after an
+unclean break is uncertain. A completed clean drain permits an in-progress turn to continue.
+The connection and dispatch checks in `log.md` precede all resumed sends.
+
+Anchor bytes use the restricted anchor role. The Session is derived from the journal rather
+than the claim annotation; commit the anchor and then `anchor.received` before acknowledging or
+exposing it. Recover unpublished stored anchors after a crash. TokenReview and Pod/claim
+authentication still precede storage, and Agora never interprets native file contents.
+
+The lab mounts the log with PostgreSQL and creates one Workstream per execution. Its raw relay
+remains a test surface; capture and command admission follow the same journal rules as the
+server. Log cases are measured separately from the existing execution cases below.
 
 ### Restoring
 

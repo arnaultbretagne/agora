@@ -29,11 +29,17 @@ the response to the command.
 | Exchange | Content |
 | --- | --- |
 | **Workstream list** | Simple read: id, title, execution state. |
-| **A workstream's thread** | A single stream, opened from the last known position (zero at first). It first sends the current state of what has changed since, then each change. Each update replaces a whole object: workstream, turn, element or notice. |
+| **A workstream's thread** | A single stream, opened from the last completed cursor (zero at first). A consistent snapshot gives the latest state/removal of objects changed through high-water mark H, then snapshot-end carrying H, then live changes after H. Each update replaces a whole object: workstream, turn, element or notice. |
 | **Commands** | Create, Write, Cancel, Respond to a permission, Stop. |
 
-Each thread update carries a strictly increasing position. Opening, reloading and
-reconnecting are the same action: nothing is lost, nothing is received twice.
+Each live update carries a strictly increasing position, encoded as a decimal string and
+compared losslessly. The client advances its snapshot cursor only at snapshot-end, then applies
+each live object and its cursor together. A reset clears the objects before a complete snapshot
+is applied. An interrupted snapshot may be redelivered; whole-object replacements and removals
+are idempotent. A cursor is reused only with its matching object state; an empty browser starts
+at zero. Commands stay disabled until snapshot-end. Opening, reloading and reconnecting have
+the same result, with no skipped change or duplicate object. The exact snapshot and tail rules
+are in `log.md`.
 
 Each command carries an id chosen by the interface. If replayed, it runs only once.
 The server's response is *accepted* or *refused, with the reason*.
@@ -42,7 +48,7 @@ The server's response is *accepted* or *refused, with the reason*.
 | --- | --- | --- |
 | **Create** | the harness chosen among the allowed options | — |
 | **Write** | the text | Refused if a turn is saved, in progress or uncertain, or if sending is closed. |
-| **Cancel** | the targeted turn | No effect if that turn is over; never touches the next turn. |
+| **Cancel** | the targeted turn id | Available for an in-progress or uncertain turn. No effect if that turn is over; never touches the next turn. Sending Cancel alone does not prove completion. |
 | **Respond to a permission** | the request and the chosen option | Refused if the request is no longer pending. |
 | **Stop** | — | Closes sending and stops renewing the deadline; the execution disappears when the infrastructure destroys it (`executions.md`). |
 
@@ -54,10 +60,10 @@ It is the only point of contact between Agora's data and assistant-ui.
 | --- | --- |
 | `messages` + `convertMessage` | The thread's turns and notices. A turn gives a `user` message and an `assistant` message; a notice gives a `system` message. |
 | `isRunning` | The last turn is saved or in progress. |
-| `isSendDisabled` | Sending closed: execution starting or in error, storage unavailable. |
+| `isSendDisabled` | Sending closed: execution starting/in error/stopped, storage unavailable, or an unresolved saved, in-progress or uncertain turn. Also disabled while the thread snapshot is incomplete. The server's Workstream view supplies the execution/turn closure reason. |
 | `isDisabled` | Workstream stopped: the thread stays readable. |
 | `onNew` | **Write** |
-| `onCancel` | **Cancel**, on the in-progress turn known to the interface. |
+| `onCancel` | **Cancel**, carrying the in-progress turn id known to the interface. The uncertain-turn action uses the same targeted command handler. |
 | `onRespondToToolApproval` | **Respond to a permission**: `approvalId` = the request, `optionId` = the choice. |
 | `adapters.threadList` | The workstream list (see the sidebar). |
 
@@ -70,14 +76,16 @@ Not provided, so the features are absent from the interface: `onEdit`, `onReload
 | Turn | User message | Response (`status`) |
 | --- | --- | --- |
 | **saved** — written by Agora, not yet sent | "saved" badge | `running`, empty: ● indicator |
-| **in progress** — sent, the response is arriving | — | `running` |
+| **in progress** — dispatch begun, completion not yet confirmed | — | `running` |
 | **done** — the agent has finished | — | `complete` |
 | **cancelled** — stopped on request | — | `incomplete` / `cancelled`; a pending permission moves to `resolution: cancelled` |
-| **failed** — the agent answered with an error | — | `incomplete` / `error`, with the message |
-| **uncertain** — the end of the turn could not be seen: the connection dropped, or Agora stopped without closing it | "uncertain" badge, clearly visible | `incomplete` / `other`, with the explanation |
+| **failed** — valid agent error, proven failure before dispatch, or execution lost/ended before the answer | — | `incomplete` / `error`, with the recorded error or interruption explanation |
+| **uncertain** — completion could not be proved after a break, local transport failure, timeout or invalid answer | "uncertain" badge, clearly visible; Write disabled with reason | `incomplete` / `other`, with the explanation; targeted Cancel and Stop stay available |
 
 An uncertain turn is never resent automatically. It changes state only on proof.
-The turn's state travels in the user message's `metadata.custom`.
+The turn's state and any local failure class travel in the user message's `metadata.custom`.
+An invalid answer produces a failure notice and keeps the turn uncertain; it is not presented
+as a completed agent error. Reloading reconstructs both from the thread.
 
 ## The screen, area by area
 
@@ -105,7 +113,7 @@ The turn's state travels in the user message's `metadata.custom`.
 `Thread` currently renders every non-`user` message as a response: we add the
 `system` → `Notice` case.
 
-Notices: session started, session ended, context lost, harness lost.
+Notices: session started, session ended, context lost, harness lost, local request failure.
 
 ### Blocks of a response
 
@@ -140,7 +148,8 @@ Field mappings:
 | --- | --- | --- |
 | Input | `ComposerPrimitive.Input` | — |
 | Send | `ComposerPrimitive.Send` | `onNew` → **Write** |
-| Stop | `ComposerPrimitive.Cancel`, visible during a turn | `onCancel` → **Cancel** |
+| Cancel | `ComposerPrimitive.Cancel`, visible while in progress | `onCancel` → **Cancel**, with that turn's id |
+| Uncertain turn actions | buttons in the uncertainty banner (**ours**) | **Cancel**, with that turn's id, and **Stop**; available while sending is disabled and `isRunning` is false |
 | Closure reason | banner above the composer (**ours**) | sending closed |
 
 To remove from the copied components: `BranchPicker`, the Edit, Reload and
@@ -161,7 +170,8 @@ What each registry element can receive from ACP is in
 ## The components to write
 
 `Notice`, the harness choice, the turn state badge, the execution banner and the
-sending-closed banner. Everything else comes from the registry or the primitives.
+sending-closed banner with uncertain-turn actions. Everything else comes from the registry or
+the primitives.
 
 **To be specified:** pagination of long threads, and pinning the assistant-ui version —
 `adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
