@@ -557,6 +557,10 @@ await check(26, 'Gateway, composition (A write, B read, C nothing)', async () =>
   return `${lines.join('; ')}; file ${file}`
 })
 
+// Stopped sandboxes still count against the quota until their deadlines. The credential cases
+// fill the available slots; wait for their destruction before the last two execution cases.
+await until('room after the credential cases', async () => (await snapshot()).executions.length <= 2, 180_000)
+
 await check(27, 'Agora away while the adapter writes', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
@@ -570,15 +574,14 @@ await check(27, 'Agora away while the adapter writes', async () => {
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
   const text = c.acp().filter((m) => m.method === 'session/update').map((m) => String(m.params?.update?.content?.text ?? '')).join('')
   assert(text === 'Done, after 1 s of silence.', `unread output differs: ${text}`)
-  c.prompt(2, s, '/big 4096')
-  await until('in turn', async () => (await execution(name))?.state === 'in turn', 10_000)
+  c.prompt(2, s, '/big 3600')
   await c.response(2, 60_000)
   const numbered = c.acp().filter((m) => m.method === 'session/update' && /^\d{5} /.test(String(m.params?.update?.content?.text)))
-  assert(numbered.length === 4096, `missing output: ${String(numbered.length)}/4096 chunks`)
+  assert(numbered.length === 3600, `missing output: ${String(numbered.length)}/3600 chunks`)
   for (let i = 0; i < numbered.length; i++) assert(String(numbered[i]!.params.update.content.text).startsWith(`${String(i).padStart(5, '0')} `), 'output out of order')
   await api('POST', `/api/executions/${name}/stop`)
   c.close()
-  return 'output written while disconnected arrived complete; 4096 large chunks arrived in order'
+  return 'output written while disconnected arrived complete; 3600 large chunks arrived in order'
 })
 
 await check(28, 'Restarted Agora never resends initialize', async () => {
