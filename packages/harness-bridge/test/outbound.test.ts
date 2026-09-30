@@ -48,6 +48,8 @@ async function lab(): Promise<LabBridge> {
 async function ask(target: LabBridge, text: string): Promise<string> {
   const client = new Collector(`ws://${target.url}/acp`, auth())
   await client.opened()
+  client.send({ jsonrpc: '2.0', id: 'init', method: 'initialize', params: { protocolVersion: 1 } })
+  await client.response('init')
   client.send({ jsonrpc: '2.0', id: 1, method: 'session/new', params: { cwd: target.workspace, mcpServers: [] } })
   const sessionId = ((await client.response(1)).result as { sessionId: string }).sessionId
   client.send({ jsonrpc: '2.0', id: 2, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text }] } })

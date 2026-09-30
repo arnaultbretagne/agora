@@ -58,7 +58,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       # A harness image starts as in the cluster: non-root, read-only root, HOME on tmpfs, and is ready
-      # only once the real adapter answered initialize.
+      # while the adapter process runs; Agora initializes it over the authenticated relay.
       - name: Start the harness image read-only and probe it
         if: matrix.harness
         run: |

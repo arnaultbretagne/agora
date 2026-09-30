@@ -44,9 +44,14 @@ class Consumer {
   readonly messages: Json[] = []
   readonly socket: WebSocket
   closed: number | null = null
-  constructor(name: string, after?: number) {
-    this.socket = new WebSocket(`${base.replace(/^http/, 'ws')}/api/executions/${name}/acp${after === undefined ? '' : `?after=${String(after)}`}`)
-    this.socket.on('message', (data) => this.messages.push(JSON.parse(data.toString()) as Json))
+  epoch: string | null = null
+  constructor(name: string, after?: number, epoch?: string) {
+    this.socket = new WebSocket(`${base.replace(/^http/, 'ws')}/api/executions/${name}/acp${after === undefined ? '' : `?after=${String(after)}${epoch === undefined ? '' : `&epoch=${encodeURIComponent(epoch)}`}`}`)
+    this.socket.on('message', (data) => {
+      const message = JSON.parse(data.toString()) as Json
+      if (message.event?.type === 'reset') this.epoch = message.event.epoch as string
+      this.messages.push(message)
+    })
     this.socket.on('close', (code) => (this.closed = code))
     this.socket.on('error', () => {})
   }
@@ -82,8 +87,8 @@ class Consumer {
   }
 }
 
-async function consumer(name: string, after?: number): Promise<Consumer> {
-  const client = new Consumer(name, after)
+async function consumer(name: string, after?: number, epoch?: string): Promise<Consumer> {
+  const client = new Consumer(name, after, epoch)
   await client.opened()
   return client
 }
@@ -217,7 +222,7 @@ await check(8, 'Permission, consumer gone then back', async () => {
   const seen = client.lastSeq()
   client.close()
   await sleep(2000)
-  client = await consumer(a, seen - 1)
+  client = await consumer(a, seen - 1, client.epoch ?? undefined)
   const replayed = await until('permission replayed', () => client.acp().find((m) => m.method === 'session/request_permission'), 10_000)
   assert(replayed.id === asked.id, 'another request')
   client.send({ jsonrpc: '2.0', id: replayed.id, result: { outcome: { outcome: 'selected', optionId: 'allow-once' } } })
@@ -232,7 +237,7 @@ await check(9, 'Consumer disconnected during a turn', async () => {
   const seen = client.lastSeq()
   client.close()
   await sleep(7000)
-  client = await consumer(a, seen)
+  client = await consumer(a, seen, client.epoch ?? undefined)
   const done = await client.response(5)
   const replay = client.messages.find((m) => m.event?.type === 'replay')
   assert(done.result?.stopReason === 'end_turn' && replay?.event.gap === false, JSON.stringify(replay))
@@ -242,12 +247,17 @@ await check(9, 'Consumer disconnected during a turn', async () => {
 await check(10, 'Bridge connection cut during a turn', async () => {
   client.prompt(6, sessionA, '/sleep 6')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
-  await sleep(1000)
+  const before = client.messages.length
+  await until('first turn chunk', () => client.acp().find((m) => String(m.params?.update?.content?.text).includes('second 1/6')), 10_000)
   const cut = await api('POST', `/api/lab/executions/${a}/drop-bridge`)
   assert(cut.accepted === true, JSON.stringify(cut))
+  await until('uncertain after the cut', async () => (await execution(a))?.state === 'uncertain', 10_000)
   const done = await client.response(6)
+  const chunks = client.messages.slice(before).filter((m) => typeof m.acp === 'string').map((m) => JSON.parse(m.acp as string) as Json).filter((m) => m.method === 'session/update')
+  assert(chunks.length === 7, `missing or duplicate output: ${String(chunks.length)} chunks`)
+  for (let i = 0; i < 6; i++) assert(String(chunks[i]!.params?.update?.content?.text).includes(`second ${String(i + 1)}/6`), 'output out of order')
   const log = (await snapshot()).logs.find((l) => l.execution === a && String(l.message).startsWith('bridge rejoined'))
-  assert(done.result?.stopReason === 'end_turn' && log !== undefined && !String(log.message).includes('TROU'), JSON.stringify(log))
+  assert(done.result?.stopReason === 'end_turn' && log !== undefined && String(log.message).includes('without replay or initialize'), JSON.stringify(log))
   return `"${String(log.message)}", turn closed`
 })
 
@@ -255,19 +265,22 @@ await check(11, 'Back-end restarted during a turn', async () => {
   client.prompt(7, sessionA, '/sleep 20')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const seen = client.lastSeq()
+  const epoch = client.epoch
   await api('POST', '/api/lab/restart')
   await until('lab down', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then(() => false, () => true), 30_000).catch(() => true)
   await until('lab back', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false), 120_000)
   const logs = (await snapshot()).logs
   const found = await until('turn found again', async () => {
     const s = await execution(a)
-    return s?.state === 'in turn' || s?.lastTurn !== null ? s : undefined
+    return s?.state === 'uncertain' || s?.lastTurn != null ? s : undefined
   }, 30_000)
   const closed = await until('turn closed', async () => {
     const s = await execution(a)
     return s?.state === 'ready' && String(s.lastTurn?.outcome).includes('end_turn') ? s : undefined
   }, 60_000)
-  client = await consumer(a, seen)
+  client = await consumer(a, seen, epoch ?? undefined)
+  const reset = await until('positions reset', () => client.messages.find((m) => m.event?.type === 'reset'), 10_000)
+  assert(reset.event.epoch !== epoch, 'restart reused the old positions epoch')
   const done = await client.response(7)
   assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
   return `at restart: "${String(logs.at(-1)?.message)}", state ${String(found.state)}, then ${String(closed.lastTurn.outcome)}; the consumer gets the end`
@@ -542,6 +555,56 @@ await check(26, 'Gateway, composition (A write, B read, C nothing)', async () =>
   }
   await api('POST', `/api/executions/${name}/stop`)
   return `${lines.join('; ')}; file ${file}`
+})
+
+// Stopped sandboxes still count against the quota until their deadlines. The credential cases
+// fill the available slots; wait for their destruction before the last two execution cases.
+await until('room after the credential cases', async () => (await snapshot()).executions.length <= 2, 180_000)
+
+await check(27, 'Agora away while the adapter writes', async () => {
+  const { name } = await create(mock, SHORT)
+  const c = await consumer(name)
+  const s = await c.session()
+  c.prompt(1, s, '/silence 1')
+  await until('in turn', async () => (await execution(name))?.state === 'in turn', 10_000)
+  const cut = await api('POST', `/api/lab/executions/${name}/drop-bridge`, { pauseSeconds: 10 })
+  assert(cut.accepted === true, JSON.stringify(cut))
+  await until('uncertain', async () => (await execution(name))?.state === 'uncertain', 10_000)
+  const done = await c.response(1)
+  assert(done.result?.stopReason === 'end_turn', JSON.stringify(done))
+  const text = c.acp().filter((m) => m.method === 'session/update').map((m) => String(m.params?.update?.content?.text ?? '')).join('')
+  assert(text === 'Done, after 1 s of silence.', `unread output differs: ${text}`)
+  c.prompt(2, s, '/big 3600')
+  await c.response(2, 60_000)
+  const numbered = c.acp().filter((m) => m.method === 'session/update' && /^\d{5} /.test(String(m.params?.update?.content?.text)))
+  assert(numbered.length === 3600, `missing output: ${String(numbered.length)}/3600 chunks`)
+  for (let i = 0; i < numbered.length; i++) assert(String(numbered[i]!.params.update.content.text).startsWith(`${String(i).padStart(5, '0')} `), 'output out of order')
+  await api('POST', `/api/executions/${name}/stop`)
+  c.close()
+  return 'output written while disconnected arrived complete; 3600 large chunks arrived in order'
+})
+
+await check(28, 'Restarted Agora never resends initialize', async () => {
+  const { name } = await create(mock, SHORT)
+  let c = await consumer(name)
+  const s = await c.session()
+  c.send({ jsonrpc: '2.0', id: 'before-init', method: 'initialize', params: { protocolVersion: 1 } })
+  const before = (await c.response('before-init')).result
+  const epoch = c.epoch
+  await api('POST', '/api/lab/restart')
+  await until('lab back and execution ready', async () => {
+    try { return (await execution(name))?.state === 'ready' && c.closed !== null } catch { return false }
+  }, 120_000)
+  c = await consumer(name, 100_000, epoch ?? undefined)
+  c.send({ jsonrpc: '2.0', id: 'after-init', method: 'initialize', params: { protocolVersion: 1 } })
+  const after = (await c.response('after-init')).result
+  assert(JSON.stringify(after) === JSON.stringify(before), 'initialization capabilities changed after restart')
+  assert(c.epoch !== epoch, 'consumer positions were not reset')
+  c.prompt(1, s, 'still here')
+  assert((await c.response(1)).result?.stopReason === 'end_turn', 'the mock rejected reinitialization')
+  await api('POST', `/api/executions/${name}/stop`)
+  c.close()
+  return 'same capabilities, same context, new positions epoch; mock ready without a second initialize'
 })
 
 client?.close()

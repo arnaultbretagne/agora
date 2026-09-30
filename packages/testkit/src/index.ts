@@ -20,19 +20,18 @@ export interface LabBridge {
   readonly url: string
 }
 
-export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', options: { home?: string; ringLines?: number } = {}): Promise<LabBridge> {
+export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', options: { home?: string; initializeDelayMs?: number } = {}): Promise<LabBridge> {
   const home = options.home ?? mkdtempSync(join(tmpdir(), 'bridge-'))
   const workspace = join(home, 'work')
   const bridge = await startBridge({
     port: 0,
     host: '127.0.0.1',
-    adapterCommand: ['env', `HOME=${home}`, process.execPath, MOCK_AGENT],
+    adapterCommand: ['env', `HOME=${home}`, `AGORA_MOCK_INITIALIZE_DELAY_MS=${String(options.initializeDelayMs ?? 0)}`, process.execPath, MOCK_AGENT],
     workspace,
     podName,
     publicKey,
     harness: 'mock',
     nativeDir: nativeDir('mock', home, workspace),
-    ...(options.ringLines === undefined ? {} : { ringLines: options.ringLines }),
     adapterStopMs: 1000,
     log: () => {},
   })
@@ -43,13 +42,19 @@ export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', opt
 export class Collector {
   readonly messages: Record<string, unknown>[] = []
   readonly socket: WebSocket
+  readonly raw: string[] = []
+  readonly binary: boolean[] = []
+  instance: string | null = null
   closed: { code: number; reason: string } | null = null
   private waiters: (() => void)[] = []
 
   constructor(url: string, headers: Record<string, string> = {}) {
     this.socket = new WebSocket(url, { headers })
-    this.socket.on('message', (data) => {
-      this.messages.push(JSON.parse(data.toString()) as Record<string, unknown>)
+    this.socket.on('upgrade', (response) => { this.instance = response.headers['agora-bridge-instance'] as string ?? null })
+    this.socket.on('message', (data, isBinary) => {
+      this.raw.push(data.toString())
+      this.binary.push(isBinary)
+      try { this.messages.push(JSON.parse(data.toString()) as Record<string, unknown>) } catch { /* Raw framing tests also use non-JSON lines. */ }
       for (const wake of this.waiters.splice(0)) wake()
     })
     this.socket.on('close', (code, reason) => {
@@ -75,7 +80,7 @@ export class Collector {
   /** ACP messages carried in `{seq, acp}` envelopes (and `{local}` answers), parsed. */
   acp(): Record<string, unknown>[] {
     return this.messages
-      .map((m) => (typeof m.acp === 'string' ? m.acp : typeof m.local === 'string' ? m.local : null))
+      .map((m) => (typeof m.acp === 'string' ? m.acp : typeof m.local === 'string' ? m.local : m.jsonrpc === '2.0' ? JSON.stringify(m) : null))
       .filter((line): line is string => line !== null)
       .map((line) => JSON.parse(line) as Record<string, unknown>)
   }
