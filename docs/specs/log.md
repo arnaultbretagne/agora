@@ -351,6 +351,8 @@ or replacement extinction.
 Run on 2026-09-30 in an isolated sandbox namespace. The gateway kept the Anthropic token;
 the bridge received a ten-minute JWT with only the Anthropic grant. The pinned harness image
 was `ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:5f3bb480d8cd1dccfe9ab6561b8a46d8cf5bad90574bccef2e379124e311b81c`.
+It installs global Claude Code 2.1.261 and claude-agent-acp 0.75.1. The adapter selects its
+bundled Agent SDK 0.3.257 native CLI, verified as Claude Code 2.1.257.
 The tester's temporary gateway ingress policy and namespace were removed after both executions
 stopped and their claims expired. Runtime database operations used the three restricted logins.
 
@@ -369,9 +371,10 @@ rejected during the live run.
 
 The Pod was ready before Create. The bridge and ACP adapter were warm; the adapter starts a new
 Claude CLI query process during Session creation. Gateway credentials were supplied after the
-opening response in this sample. Authentication-related initialization delays are a hypothesis,
-not an established cause. The live runner supplies the gateway JWT before initialization and
-Session opening through the driver's optional credential provider; a failed provisioning attempt
+opening response in this sample. A separate direct startup A/B reproduced the long wait when
+credentials were withheld and removed it when supplied before opening. The live runner supplies
+the gateway JWT before initialization and Session opening through the driver's optional credential
+provider; a failed provisioning attempt
 leaves those requests unsent. Credentials remain outside the canonical log.
 
 | Original trace interval | Transaction-start difference (ms) |
@@ -410,6 +413,60 @@ hash is `649841fda777e804e050f82e77f75731352fd7f50d513f113c643fec79e02b98`.
 The native restoration sample is in the report. Native files were captured while quiescent by
 the bridge's helper and published through the log; the Pod termination hook and anchor receiver
 were not exercised by this case.
+
+### Startup isolation
+
+The direct startup experiments on 2026-09-30 used fresh already-ready Kata Pods and the same
+pinned image. They bypassed the journal and projector, sent no model prompt and measured RPC
+boundaries with a monotonic host clock. The adapter's own phase durations locate the wait
+inside SDK initialization. Each row is one observation, not a percentile or throughput claim.
+
+| JWT delivery | First Session/new (ms) | SDK initialize phase (ms) | Second Session/new on the same Pod (ms) | Refused outbound connections |
+| --- | --- | --- | --- | --- |
+| Before initialize and Session opening | 2,518 | 2,467 | 815 | 0 |
+| After the first Session closes | 20,236 | 20,101 | 1,418 | 14 |
+
+Initialize took 25 ms in both cases. Without credentials the bridge's loopback proxy refuses
+CONNECT with 503 before reaching the gateway. The missing route introduces roughly 18 seconds
+of SDK initialization delay in this experiment. It is independent of journal work and model
+generation. The earlier implementation also recorded a 21.5-second SDK-initialize phase in
+`field-findings.md`; its Pod-ready and post-opening turn timings did not include this wait.
+A separate before-order repeat on another fresh warm Pod took 2,215 ms for the first opening
+(2,170 ms in SDK initialize), 1,087 ms for the second and had no refused connections.
+
+Warm-pool readiness covers the bridge and ACP adapter, not a ready Claude CLI query. The pinned
+adapter calls the SDK's query API inside Session creation. Its bundled Agent SDK 0.3.257 also
+provides startup, which initializes a CLI subprocess without a prompt and returns a reusable
+WarmQuery handle. A separate real probe with gateway credentials took 1,400 ms to initialize
+and 0.53 ms to obtain that handle's already-initialized query. This measures query-handle reuse,
+not the first token or an ACP Session opening. The probe runs after claim; pool preinitialization
+requires adapter integration that retains the process and respects the chosen Session settings,
+client capabilities and native restoration. Starting then closing a disposable Session does
+not preserve a ready SDK process.
+
+The complete log run with credentials provisioned before opening reached Session/model readiness
+in 3,265 ms and native-restored readiness in 2,453 ms. Response, Bash and restored-marker recall
+all passed, with no rejected ACP lines. These readiness durations include claim acquisition,
+initialization, Session opening, configuration and the runner's 100-ms observation polling;
+they exclude model generation. Their wall-clock boundaries match the original readiness samples.
+
+| Monotonic platform stage | Samples in this run | Median (ms) | p95 (ms) | Boundary |
+| --- | --- | --- | --- | --- |
+| Command to local prompt write | 3 | 35.23 | 49.78 | Command invocation through the WebSocket send callback. |
+| Receive to canonical commit | 139 | 70.13 | 318.26 | Message callback through successful COMMIT acknowledgement, including the receive queue. |
+| Receive to projection | 139 | 103.88 | 370.88 | Message callback through projection completion, including both receive and driver queues. |
+| Canonical capture commit | 139 | 4.51 | 18.70 | Capture call, including pool acquisition and its transaction. |
+| Projection call | 517 | 14.03 | 22.40 | Pool acquisition, reads, fold, writes and COMMIT; includes periodic reconciliations. |
+
+Most receive-to-commit time in this run is queueing: its receive queue measured 65.86 ms median
+and 312.54 ms p95. These are per-event distributions from one execution sequence, including
+startup/configuration and turns, not production latency targets. They exclude buffering before
+the WebSocket callback, SSE polling and rendering. Nested stages overlap.
+
+The report is `packages/log/test/fixtures/claude-code-startup-report.json`. The opt-in
+`measure:startup` runner emits the direct A/B and SDK probe separately from the billed
+`measure:claude` run. Its 2,062 raw monotonic stage observations are preserved in
+`claude-code-platform-timings.json`. Gateway JWTs are absent from all saved reports.
 
 ## Decisions still open
 

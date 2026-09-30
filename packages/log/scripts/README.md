@@ -31,3 +31,22 @@ native capture/publication/restore, rather than the Pod termination hook or anch
 Both executions stop and expire before the database is removed. The report records one sample
 per case, not a throughput benchmark. The ACP fixture contains only the controlled test history;
 JWTs are explicitly checked to be absent. Review generated artifacts before committing them.
+
+`measure-startup.ts` isolates initialization from journal work and model generation. Run it
+through `npm run measure:startup --workspace @agora/log` with the same infrastructure settings;
+the namespace, ready warm pool and tester's Kubernetes command must be supplied explicitly.
+It does not use PostgreSQL or send a model prompt. Each run claims a fresh already-ready Pod,
+measures initialize and two successive Session openings, closes both Sessions and expires its
+claim. ACP phase durations and bridge outbound counters are included in the report.
+
+| Environment | Startup experiment |
+| --- | --- |
+| `LOG_STARTUP_AUTH` | `before` by default; supplies the JWT before initialize. `after` deliberately withholds it until the first Session has closed, reproducing initialization with no gateway route. |
+| `LOG_STARTUP_SDK_WARM` | `true` probes the bundled SDK's startup/reuse API instead of opening ACP Sessions. Requires credentials before initialization. It runs after claim and proves query-handle reuse; it does not implement warm-pool preinitialization. |
+
+The phase readback requires an isolated harness template with `CLAUDE_AGENT_LOGS` set to
+`/tmp/agora-acp-startup`. Only allow-listed phase fields are extracted, never the log's contents.
+The SDK probe resolves the adapter's own CLI and SDK, inherits its loopback proxy environment
+inside the Pod and keeps its prompt input empty. Nothing bypasses the gateway. Reports are
+`startup-before.json`, `startup-after.json` and `startup-sdk-warm.json`. Each experiment needs a
+fresh warm Pod; successive openings on one Pod are separate local-cache observations.
