@@ -27,7 +27,7 @@ export const ANNOTATION = {
   idleSince: 'agora.bretagne.dev/idle-since',
   stopped: 'agora.bretagne.dev/stopped',
 } as const
-const SELECTOR = `${MANAGED_BY}=${MANAGER}`
+const SELECTOR = `${MANAGED_BY}=${MANAGER},!agora.bretagne.dev/execution-id`
 const RING_LIMIT = 2000
 const RING_BYTES = 16 * 1024 * 1024
 const HISTORY_LIMIT = 100
@@ -55,7 +55,7 @@ export interface ManagerOptions {
   /** Test seam: where to reach a sandbox's bridge. Defaults to its Service (`serviceFQDN`). */
   readonly bridgeAddress?: (serviceFQDN: string, podName: string) => string
   readonly tickMs?: number
-  readonly log?: (message: string) => void
+  readonly log?: ((message: string) => void) | null
 }
 
 type Id = string | number
@@ -280,6 +280,7 @@ export class ExecutionManager {
   // ---------------------------------------------------------------- claims → records
 
   private upsert(claim: Claim): void {
+    if (claim.metadata.labels?.['agora.bretagne.dev/execution-id'] !== undefined) return
     const { name, uid } = claim.metadata
     if (this.gone.has(uid)) return
     let record = this.records.get(name)
@@ -1159,6 +1160,7 @@ export class ExecutionManager {
   }
 
   private log(execution: string | null, message: string): void {
+    if (this.options.log === null) return
     const entry: LogEntry = { at: new Date().toISOString(), execution, message }
     this.logs.unshift(entry)
     this.logs.splice(LOG_LIMIT)

@@ -10,6 +10,7 @@
   "dependencies": {
     "@agora/credentials": "0.0.0",
     "@agora/executions": "0.0.0",
-    "ws": "8.22.0"
+    "ws": "8.22.0",
+    "@agora/log": "0.0.0"
   }
 }

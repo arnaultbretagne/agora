@@ -161,7 +161,7 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | Create | Carries the reviewed pool, execution settings and anchor to restore, if any. In the acceptance transaction, bind a globally unique execution id, use it as the claim request id, and record the claim name and initial absolute deadline. Claim names are unique across accepted Creates; a hash collision is refused before creation. The same command id in another Workstream cannot select the same execution. |
 | Write | Accepted only if the execution is ready, sending is open, and no turn is saved, in progress or uncertain. The command, then its `session/prompt` line, are written before the line is sent. |
 | Cancel | Carries the target turn id. Immediately before dispatch, recheck that exact turn and Session under the serialized dispatcher. Send `session/cancel` only while it is in progress or uncertain; otherwise, no effect. Cancelled permission outcomes for its pending requests precede any next prompt. A queued or recovered cancellation never reaches another turn. |
-| Respond to a permission | Accepted while the request is pending; the answer is an outgoing ACP line. |
+| Respond to a permission | Carries the Session, RPC id and request source position. Accepted while that exact request is pending; the answer is an outgoing ACP line. Reused harness ids cannot redirect an old answer to a new permission occurrence. |
 | Stop | Accepted while the execution exists (`executions.md`). Commit it before closing admission, cancelling the active turn or stopping renewal. It prevents later dispatch and renewal even after restart. |
 
 ### A turn's states
@@ -233,7 +233,8 @@ What a restarted Agora reads to take each execution back:
 | Stop | The Stop command. |
 | Received anchors not yet published in the log | Stored anchor metadata without `anchor.received`; append the missing entry before exposing the anchor. |
 
-Every execution belongs to a Workstream; the lab creates one per execution. The claim carries
+Every execution belongs to a Workstream; the lab creates it before its first execution.
+Restoring another execution into that Workstream retains its ordered history. The claim carries
 only its pool, its deadline and its labels (`executions.md`), including the recorded execution
 id in `agora.bretagne.dev/execution-id`. That correlation label is not recovery state.
 
@@ -255,15 +256,20 @@ break; one with no dispatch stays saved. No recovery path invents a successful s
 
 ## Storage
 
+The mounted driver holds a database advisory lock on a dedicated writer connection. A second
+driver is refused. Losing ownership stops sends and closes its bridges; restart reconstructs
+the resulting gaps. Per-Workstream queues serialize effects; the marker transaction rechecks
+canonical cancellation and permission targets. This does not prove physical extinction.
+
 | Table | Key | Holds |
 | --- | --- | --- |
-| `workstreams` | id | Owner, last entry position and last thread position. The displayed title belongs to `workstream_views`. |
+| `workstreams` | id | Owner, last entry position and last thread position. The displayed title belongs to the Workstream object in `objects`. |
 | `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. Incoming ACP occurrences also have a unique (connection, receive ordinal). |
 | `commands` | Workstream, command id | Kind, target, SHA-256 of the encoded request, immutable accepted answer, position of its entry. |
 | `sessions` | id | Workstream, execution, ACP session id, positions where it opened and ended. |
 | `diagnostics` | id | Execution, connection, direction, closed reason, size, SHA-256, time. |
 | `anchors` | id | Execution, Session, harness, pool, format, files, content (`bytea`). |
-| `workstream_views`, `turns`, `elements`, `notices` | Object id | The object, first and last position folded. |
+| `objects` | Workstream, kind, object id | Workstream views, turns, elements and notices; owning projector, object, first and last position folded. |
 | `thread` | Workstream, position | Operation, object kind and id, the object. |
 | `checkpoints` | Projector, Workstream | Version, last position folded. |
 
@@ -300,38 +306,43 @@ entry point and proving that neither values nor fragments are emitted.
 
 ## Cases to validate
 
+Measurements: 2026-09-30, Node 24.20.0, PostgreSQL 17.11, ACP SDK 1.5.1, real mock-agent
+bridges and Chromium 141. `packages/log/test/log.test.ts` is the reproducible measurement
+suite. Fault injection is called out explicitly; these results do not establish real-adapter
+conformance, product authentication or replacement extinction.
+
 | # | Case | Expected | Measured |
 | --- | --- | --- | --- |
-| L1 | A line carrying `9007199254740993`, unknown members and arrays | Exact semantic values and array order read back as text; whitespace/member order may differ. | — |
-| L2 | Two identical lines | Two entries. | — |
-| L3 | An invalid line: batch, wrong direction, unsafe id, unsupported JSON value | A diagnostic without content; no ACP entry; not handled. | — |
-| L4 | An invalid correlated answer, then projector rebuild and a later valid answer | `request.failed` and diagnostic commit together; the turn remains uncertain and Write blocked; rebuild agrees; only the valid answer resolves it. | — |
-| L5 | An extension method, an unknown `session/update` type | Entries; generic elements. | — |
-| L6 | The write of an outgoing line fails | Nothing is sent. | — |
-| L7 | PostgreSQL stops after receipt but before commit, then returns before execution expiry | Retained line committed once before later lines; pending receive bytes stay within 32 MiB; the turn continues. | — |
-| L8 | Write during a turn, then during an uncertain turn | Refused; nothing written. | — |
-| L9 | A command replayed with the same id, then another body | Same answer, one entry; then refused. | — |
-| L10 | A break that is not clean during a turn | The turn is uncertain; its answer, if it arrives, closes it. | — |
-| L11 | Cancel on an uncertain turn still running | `cancelled`; Write accepted again. | — |
-| L12 | Restore from an anchor | A new Session, same ACP session id. | — |
-| L13 | Change the model | Same Session. | — |
-| L14 | Agora restarts after a completed drain, with a dispatched turn and a separate saved-line case | Dispatched turn remains in progress; saved line stays saved; all committed correlations found; claims carry only pool/deadline and labels. | — |
-| L15 | Agora killed during a turn | The turn is uncertain until its answer arrives. | — |
-| L16 | Rebuild against incremental, on a real claude-code transcript | Same identities, same hash. | — |
-| L17 | A projector's version changes and removes an object while another projector's objects remain | Atomic rebuild/reset through one source position; positions go on; obsolete object gone, unchanged objects retained. | — |
-| L18 | Snapshot while updates commit, disconnect before snapshot-end, then reconnect | Snapshot through H, live tail after H; idempotent recovery; no skipped change or duplicate state. | — |
-| L19 | Normal create, append, lock, Session close, projection and anchor operations under actual logins; forbidden operations too | Required operations succeed; each role's forbidden writes/reads are denied, including anchor bytes for writer/projector and history edits for writer. | — |
-| L20 | Standard requests, notifications, successful responses and errors in both directions | Direction matrix accepts normal initialization/prompt answers and permission replies, and rejects their reversals. | — |
-| L21 | Crash before dispatch marker, after marker before transport write, and after write before `acp.sent` | First case may dispatch once; remaining cases are uncertain and never blindly resent, including initialization and session creation/resume. | — |
-| L22 | Crash after Create acceptance before claim POST, and after claim POST before UID recording | Same execution, claim name, body and initial deadline recovered; no second claim. A previously obtained missing/different UID is not recreated or mutated. | — |
-| L23 | Receive commit succeeds but its response is lost | Same receive identity resolves to one entry; identical separate occurrences still produce two. | — |
-| L24 | Close handshake times out or database fails during shutdown | No clean break; restart records uncertainty; no false claim that output was drained. | — |
-| L25 | Two simultaneous Writes; Cancel delayed until the next turn; Stop racing dispatch/renewal | One admitted turn; cancellation never hits the next; no new dispatch or renewal attempt after Stop. | — |
-| L26 | Large cursors and positions beyond 2⁵³ − 1; roles created by concurrent migrations | Lossless arithmetic, ordering and thread resume; migrations succeed without privilege changes. | — |
-| L27 | Operational logger receives prompts, tools, tokens, headers, query strings, anchor bytes and exception messages | Only validated allow-listed correlations and closed classes emitted; no forbidden value or fragment. | — |
-| L28 | Uncertain turn after a break or invalid answer, in assistant-ui | Composer disabled with reason; targeted Cancel and Stop available; uncertainty survives reload. | — |
-| L29 | Anchor committed before crash, without its journal entry | Recovery appends one `anchor.received` before exposure; writer/projector cannot read bytes. | — |
-| L30 | Database outage exceeds execution deadline, or receive budget cannot be enforced | Interruption visible; no lossless-continuation claim or fresh lease invented. | — |
+| L1 | A line carrying `9007199254740993`, unknown members and arrays | Exact semantic values and array order read back as text; whitespace/member order may differ. | Passed: PostgreSQL 17.11, exact integer and decimal values, unknown members and array order. |
+| L2 | Two identical lines | Two entries. | Passed: two identical occurrences retained. |
+| L3 | An invalid line: batch, wrong direction, unsafe id, unsupported JSON value | A diagnostic without content; no ACP entry; not handled. | Passed: diagnostic-only rejection, UTF-8/body/direction/id/JSON value cases. |
+| L4 | An invalid correlated answer, then projector rebuild and a later valid answer | `request.failed` and diagnostic commit together; the turn remains uncertain and Write blocked; rebuild agrees; only the valid answer resolves it. | Passed: invalid reply, rebuild equality, blocked Write and later valid completion. |
+| L5 | An extension method, an unknown `session/update` type | Entries; generic elements. | Passed: generic extensions and sparse tool patches. |
+| L6 | The write of an outgoing line fails | Nothing is sent. | Passed: rejected outgoing transaction and dispatch marker, no transport write. |
+| L7 | PostgreSQL stops after receipt but before commit, then returns before execution expiry | Retained line committed once before later lines; pending receive bytes stay within 32 MiB; the turn continues. | Partial: PostgreSQL commit refusal injected; ordered bounded retention and recovery passed. Whole server stop/restart not measured. |
+| L8 | Write during a turn, then during an uncertain turn | Refused; nothing written. | Passed: real mock bridge; concurrent and uncertain Write refused. |
+| L9 | A command replayed with the same id, then another body | Same answer, one entry; then refused. | Passed: immutable replay answer, conflict refusal and one admitted concurrent turn. |
+| L10 | A break that is not clean during a turn | The turn is uncertain; its answer, if it arrives, closes it. | Passed: real bridge peer displacement; uncertainty until the valid cancelled answer. |
+| L11 | Cancel on an uncertain turn still running | `cancelled`; Write accepted again. | Passed: targeted Cancel of the real mock agent after a break. |
+| L12 | Restore from an anchor | A new Session, same ACP session id. | Passed: opaque mock native anchor, new Session, same ACP id and recalled history. |
+| L13 | Change the model | Same Session. | Passed for attribution: valid configuration request/reply retains Session. Applied model readback belongs to the configuration contract. |
+| L14 | Agora restarts after a completed drain, with a dispatched turn and a separate saved-line case | Dispatched turn remains in progress; saved line stays saved; all committed correlations found; claims carry only pool/deadline and labels. | Partial: clean restart of dispatched turn and initialization reuse passed; saved state covered at the marker failure boundary. |
+| L15 | Agora killed during a turn | The turn is uncertain until its answer arrives. | Partial: missing-break crash window injected and recovered. OS-level SIGKILL not measured. |
+| L16 | Rebuild against incremental, on a real claude-code transcript | Same identities, same hash. | Not measured: no real Claude ACP transcript fixture; deterministic rebuild measured on mock/synthetic traffic. |
+| L17 | A projector's version changes and removes an object while another projector's objects remain | Atomic rebuild/reset through one source position; positions go on; obsolete object gone, unchanged objects retained. | Passed: version removal, coordinated reset and other projector objects retained. |
+| L18 | Snapshot while updates commit, disconnect before snapshot-end, then reconnect | Snapshot through H, live tail after H; idempotent recovery; no skipped change or duplicate state. | Passed: repeatable-read snapshot, partial replay, lossless live tail and browser reload. |
+| L19 | Normal create, append, lock, Session close, projection and anchor operations under actual logins; forbidden operations too | Required operations succeed; each role's forbidden writes/reads are denied, including anchor bytes for writer/projector and history edits for writer. | Passed: real restricted logins, permitted operations and denied history/anchor/view access. |
+| L20 | Standard requests, notifications, successful responses and errors in both directions | Direction matrix accepts normal initialization/prompt answers and permission replies, and rejects their reversals. | Passed for initialize, prompt, permission, cancel and update families against SDK 1.5.1; full adapter conformance remains separate. |
+| L21 | Crash before dispatch marker, after marker before transport write, and after write before `acp.sent` | First case may dispatch once; remaining cases are uncertain and never blindly resent, including initialization and session creation/resume. | Passed for prompts at all three boundaries; initialization reuse passed on restart. Opening-request crash windows were not separately measured. |
+| L22 | Crash after Create acceptance before claim POST, and after claim POST before UID recording | Same execution, claim name, body and initial deadline recovered; no second claim. A previously obtained missing/different UID is not recreated or mutated. | Passed: accepted Create and POST/UID gaps recovered; obtained disappearance/conflicting UID never recreated or mutated. |
+| L23 | Receive commit succeeds but its response is lost | Same receive identity resolves to one entry; identical separate occurrences still produce two. | Passed: real COMMIT with injected lost reply, receive identity retry and distinct occurrences. |
+| L24 | Close handshake times out or database fails during shutdown | No clean break; restart records uncertainty; no false claim that output was drained. | Partial: database failure during break commit injected; missing break recovered unclean. Stalled peer close handshake not measured. |
+| L25 | Two simultaneous Writes; Cancel delayed until the next turn; Stop racing dispatch/renewal | One admitted turn; cancellation never hits the next; no new dispatch or renewal attempt after Stop. | Passed: concurrent Writes, stale Cancel, Stop disables later prompts and renewal; dispatcher rechecks targets in its marker transaction. |
+| L26 | Large cursors and positions beyond 2⁵³ − 1; roles created by concurrent migrations | Lossless arithmetic, ordering and thread resume; migrations succeed without privilege changes. | Passed: canonical positions and thread cursors beyond 2^53; concurrent role provisioning in separate databases. |
+| L27 | Operational logger receives prompts, tools, tokens, headers, query strings, anchor bytes and exception messages | Only validated allow-listed correlations and closed classes emitted; no forbidden value or fragment. | Passed: forbidden values excluded by the logger allow-list, including forged correlation fields and exception messages. |
+| L28 | Uncertain turn after a break or invalid answer, in assistant-ui | Composer disabled with reason; targeted Cancel and Stop available; uncertainty survives reload. | Partial: external-store mapping and Chromium lab composer/actions/reload passed. assistant-ui integration not measured. |
+| L29 | Anchor committed before crash, without its journal entry | Recovery appends one `anchor.received` before exposure; writer/projector cannot read bytes. | Passed: unpublished committed metadata recovered once; restricted byte access and actual native restore. |
+| L30 | Database outage exceeds execution deadline, or receive budget cannot be enforced | Interruption visible; no lossless-continuation claim or fresh lease invented. | Passed with injected commit outage, shortened infrastructure expiry and receive-budget overflow; visible interruption, no fresh lease. |
 
 ## Decisions still open
 

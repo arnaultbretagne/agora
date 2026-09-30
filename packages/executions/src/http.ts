@@ -19,6 +19,7 @@ export interface CredentialSource {
 
 export interface HttpOptions {
   readonly manager: ExecutionManager
+  readonly handle?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
   readonly anchors: AnchorStore
   /** Opens the lab's own routes (docs/specs/executions.md, "The lab"). */
   readonly lab: boolean
@@ -56,6 +57,7 @@ export function createApi(options: HttpOptions): Server {
   const { manager, anchors } = options
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (options.handle !== undefined && await options.handle(req, res)) return
     const url = new URL(req.url ?? '/', 'http://agora')
     const path = url.pathname
     const method = req.method ?? 'GET'
@@ -175,7 +177,7 @@ export function createApi(options: HttpOptions): Server {
 }
 
 export interface AnchorReceiverOptions {
-  readonly manager: ExecutionManager
+  readonly manager: Pick<ExecutionManager, 'receiveAnchor'>
   /** The namespace of the sandboxes: a token from anywhere else is refused. */
   readonly namespace: string
   /** TokenReview of the Pod's projected ServiceAccount token (audience agora-anchors). */

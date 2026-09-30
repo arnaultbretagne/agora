@@ -1,6 +1,6 @@
 # ADR 000n — Log
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-29
 
 ## Context

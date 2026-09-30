@@ -1,7 +1,6 @@
 # lab
 
-The lab, on `agora-lab.bretagne.dev` behind Pocket-ID. It mounts the `executions` and
-`credentials` packages and serves a deliberately bare page to play every case of
+The lab, on `agora-lab.bretagne.dev` behind Pocket-ID. It mounts the `executions`, `credentials` and optional `log` packages and serves a deliberately bare page to play every case of
 `docs/specs/executions.md` and `docs/specs/credentials.md`.
 
 | Folder | Content |
@@ -17,6 +16,7 @@ to sandboxes).
 | --- | --- | --- |
 | `SANDBOX_NAMESPACE` | required | Namespace of the claims and sandboxes. |
 | `SIGNING_KEY_FILE` | required | Ed25519 private key that signs the bridge tokens. |
+| `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`, `LOG_ANCHORS_URL` | — | Three restricted PostgreSQL logins; together mount the durable log page and Workstream API. Provision through `packages/log/scripts/migrate.ts`; the application never receives the migration URL. |
 | `ANCHOR_DIR` | `/data/anchors` | Where anchors are stored. |
 | `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Lease, maximum turn duration, re-arm cadence. |
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
@@ -27,3 +27,8 @@ to sandboxes).
 | `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway. |
 
 Image: `docker build -f apps/lab/Dockerfile .` from the root.
+
+With the log mounted, Workstream commands use the journal, database anchors and resumable
+thread. Raw execution routes remain a separate diagnostic surface; their manager excludes
+claims carrying the execution-id label, so it cannot initialize or drive log-owned bridges.
+Log HTTP routes require `LAB=true` and the lab's existing trusted admin boundary.

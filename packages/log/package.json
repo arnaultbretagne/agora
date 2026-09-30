@@ -1,0 +1,29 @@
+{
+  "name": "@agora/log",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Immutable Workstream log, ACP capture, deterministic projections and durable dispatch.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node test/run.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.1",
+    "@agora/executions": "0.0.0",
+    "@agora/harness-bridge": "0.0.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "lossless-json": "4.3.0",
+    "pg": "8.16.3",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agora/testkit": "0.0.0",
+    "@playwright/test": "1.56.1",
+    "@types/pg": "8.15.5"
+  }
+}
