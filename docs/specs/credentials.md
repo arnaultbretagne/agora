@@ -120,23 +120,17 @@ The model is chosen over ACP: `session/set_config_option` with `configId` `model
 `haiku`. It is sent after `session/new` and before the first prompt, which is the first billed
 call. The lab does it itself when the agent offers the option.
 
-## Cases to validate
+## Acceptance cases
 
-Continues the cases of `executions.md`, run on 28 and 29 September on g4 under Kata, by
-`apps/lab/scripts/live-cases.ts`, and re-run on 30 September with the thin bridge images from
-commit `7afc4d7`. The earlier GitHub run used a fine-grained PAT limited to two throwaway repos,
-with write access to both. The 30 September run used public stand-ins: it verifies the gateway's
-authorization and forwarding, but does not revalidate a successful GitHub write or push.
-
-| # | Case | Expected | Measured |
-| --- | --- | --- | --- |
-| 23 | Going out without a credential | The mock's `/fetch`: `CONNECT` refused, 503; one refusal counted. | 503 from the bridge, one refusal counted. Before any credential is attached, the outbound attempts of the pool's Pod are refused too. |
-| 24 | The chain alone | `anthropic` profile, the mock's `/fetch https://api.anthropic.com/v1/models`: a response from Anthropic, neither a 403 from the gateway nor a TLS error. | 400 from Anthropic ("anthropic-version: header is required"): TLS accepted, Bearer set by the gateway; tunnel → 200. |
-| 25 | Real harness | `anthropic` profile, claude-code on `haiku`: a real model response. | On 30 September: "Paris." in 2.0 s, `end_turn`; seven tunnels to `api.anthropic.com:443`, last `CONNECT` response 200. |
-| 26 | Composition | Profiles `github:A:write` and `github:B:read`. A: read, write, push; B: read and fetch, no write or push; C, GraphQL: refused. | On 28–29 September: A read 200, write 201, push 200; B read 200, fetch 200; B write, B push, C, GraphQL 403 from the gateway; file exists on A only. On 30 September: permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
-
-Outside the lab, against the same configuration: missing, expired or foreign JWT → 401; crafted
-paths (`..`, `.`, `%2e`, `%2f`) → 403; host with no route → 404.
+| ID | Case | Expected |
+| --- | --- | --- |
+| C1 | Going out without a credential | The mock's `/fetch`: `CONNECT` refused, 503; one refusal counted. |
+| C2 | The chain alone | `anthropic` profile, the mock's `/fetch https://api.anthropic.com/v1/models`: a response from Anthropic, neither a 403 from the gateway nor a TLS error. |
+| C3 | Real harness | `anthropic` profile, claude-code on `haiku`: a real model response. |
+| C4 | Composition | Profiles `github:A:write` and `github:B:read`. A: read, write, push; B: read and fetch, no write or push; C, GraphQL: refused. |
+| C5 | A JWT missing, expired or signed by another key, sent straight to the gateway | 401 from the gateway. |
+| C6 | Crafted paths (`..`, `.`, `%2e`, `%2f`) under a granted repo | 403 from the gateway. |
+| C7 | A host with no route | 404 from the gateway. |
 
 **To be specified:** attach at creation and renew the token when the deadline goes past it,
 since a JWT cannot be revoked before it expires; count the responses to `CONNECT` by status, not
