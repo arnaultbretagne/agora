@@ -54,9 +54,7 @@ try {
     env[`LOG_TEST_${role.toUpperCase()}_URL`] = runtimeUrl.href
   }
   const status = await new Promise<number>((resolve) => {
-    const child = spawn(process.execPath, process.argv[2] === 'live-claude'
-      ? ['scripts/live-claude.ts']
-      : ['--test', '--test-concurrency=1', 'test/log.test.ts', 'test/telemetry.test.ts'], {
+    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', 'test/log.test.ts', 'test/telemetry.test.ts'], {
       cwd: new URL('..', import.meta.url),
       env,
       stdio: 'inherit',

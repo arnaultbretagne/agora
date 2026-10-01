@@ -47,7 +47,7 @@ The server's response is *accepted* or *refused, with the reason*.
 | Command | Carries | Rule |
 | --- | --- | --- |
 | **Create** | the harness chosen among the allowed options | — |
-| **Write** | the text | Refused if a turn is saved, in progress or uncertain, sending is closed, or configuration application/readiness is unresolved. |
+| **Write** | the text | Refused if a turn is saved, in progress or uncertain, or if sending is closed. |
 | **Cancel** | the targeted turn id | Available for an in-progress or uncertain turn. No effect if that turn is over; never touches the next turn. Sending Cancel alone does not prove completion. |
 | **Respond to a permission** | the request and the chosen option | Refused if the request is no longer pending. |
 | **Stop** | — | Closes sending and stops renewing the deadline; the execution disappears when the infrastructure destroys it (`executions.md`). |
@@ -60,7 +60,7 @@ It is the only point of contact between Agora's data and assistant-ui.
 | --- | --- |
 | `messages` + `convertMessage` | The thread's turns and notices. A turn gives a `user` message and an `assistant` message; a notice gives a `system` message. |
 | `isRunning` | The last turn is saved or in progress. |
-| `isSendDisabled` | Sending closed: execution starting/in error/stopped, storage unavailable, an unresolved saved/in-progress/uncertain turn, or configuration pending/applying/failed. Also disabled while the thread snapshot is incomplete. The server's Workstream view supplies the closure reason. |
+| `isSendDisabled` | Sending closed: execution starting/in error/stopped, storage unavailable, or an unresolved saved/in-progress/uncertain turn. Also disabled while the thread snapshot is incomplete. The server's Workstream view supplies the closure reason. |
 | `isDisabled` | Workstream stopped: the thread stays readable. |
 | `onNew` | **Write** |
 | `onCancel` | **Cancel**, carrying the in-progress turn id known to the interface. The uncertain-turn action uses the same targeted command handler. |
@@ -70,32 +70,6 @@ It is the only point of contact between Agora's data and assistant-ui.
 Not provided, so the features are absent from the interface: `onEdit`, `onReload`,
 `onDelete`, `setMessages`, `queue`, `suggestions` and the `attachments`,
 `feedback`, `speech`, `dictation` adapters.
-
-## Requested and applied configuration
-
-The Workstream projection supplies requested and applied values for model, effort and authorized
-resource access, plus the application state. The interface preserves that distinction across
-reloads; selecting a value or receiving an accepted request does not display it as applied.
-Changes requested during a turn take effect before the next turn, as specified in `log.md`.
-
-| Application state | Display | Actions |
-| --- | --- | --- |
-| Ready | Confirmed model, effort and resource access. | Write follows normal execution/turn admission. |
-| Pending | Requested values alongside the applied values; "Applies before the next turn". | The current turn continues. The next Write stays disabled until confirmation. |
-| Applying | "Applying configuration" with the last confirmed and requested values. | Write disabled; Stop remains available. |
-| Failed or outcome unknown | Requested values and a visible application error; do not label partial effects as the applied revision. | Write disabled; Stop remains available. An explicit replacement request may supersede the failed desired revision at a safe boundary. |
-
-Cancel and permission answers retain their existing rules during a turn. The interface never
-uses a client timer, a clicked Cancel or the disappearance of the running indicator as proof
-that configuration can be applied. It sends requests to Agora, not ACP or bridge operations.
-Product access is derived from provisioned resource bindings; raw profiles, JWTs, expiry and
-tunnel-reset controls are not exposed to the user.
-
-Configuration controls use Agora's projected state outside the assistant-ui runtime adapter;
-this contract adds no library callback. Their request schema must be specified with the
-configuration command/entry schemas in `log.md`. Configuration changes and JWT renewal preserve
-the displayed thread and Session. Their end-to-end cases are separate acceptance requirements,
-not validated by the existing uncertain-turn/reload browser test.
 
 ## A turn's states
 
@@ -176,7 +150,7 @@ Field mappings:
 | Send | `ComposerPrimitive.Send` | `onNew` → **Write** |
 | Cancel | `ComposerPrimitive.Cancel`, visible while in progress | `onCancel` → **Cancel**, with that turn's id |
 | Uncertain turn actions | buttons in the uncertainty banner (**ours**) | **Cancel**, with that turn's id, and **Stop**; available while sending is disabled and `isRunning` is false |
-| Closure reason | banner above the composer (**ours**) | sending closed, including configuration pending/applying/failed |
+| Closure reason | banner above the composer (**ours**) | sending closed |
 
 To remove from the copied components: `BranchPicker`, the Edit, Reload and
 Feedback actions, `EditComposer`, attachments and dictation. Copy stays.
@@ -185,7 +159,7 @@ Feedback actions, `EditComposer`, attachments and dictation. Copy stays.
 
 | Future need | Existing component |
 | --- | --- |
-| Configuration selector presentation | `ModelSelector` (registry); requested/applied state and the between-turn boundary remain Agora's contract. |
+| Switch model or mode | `ModelSelector` (registry) |
 | Slash commands (ACP `available_commands`) | `ComposerTriggerPopover` (registry) |
 | Context consumption (ACP `usage`) | `ContextDisplay` (registry) |
 | Attachments | `Attachment` (registry) |
@@ -196,9 +170,8 @@ What each registry element can receive from ACP is in
 ## The components to write
 
 `Notice`, the harness choice, the turn state badge, the execution banner and the
-sending-closed banner with uncertain-turn actions, plus requested/applied configuration state
-and its application error. Selector presentation can use registry elements; admission and
-confirmation remain server-owned.
+sending-closed banner with uncertain-turn actions. Everything else comes from the registry or
+the primitives.
 
 **To be specified:** pagination of long threads, and pinning the assistant-ui version —
 `adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
