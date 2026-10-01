@@ -1,15 +1,18 @@
 # docs
 
-Agora's documentation, in three folders that each answer one question.
+Agora's documentation, in four folders that each answer one question.
 
 | Folder | Question | Content |
 | --- | --- | --- |
 | `architecture/` | How does it work? | How the system fits together, subject by subject; read end to end. Start with `_overview.md`. |
-| `specs/` | What exactly must be implemented? | The contracts: routes, fields, states, rules, validated cases; consulted, not read end to end. |
+| `specs/` | What exactly must be implemented? | The contracts: routes, fields, states, rules, acceptance cases; consulted, not read end to end. |
 | `adr/` | Why is it built this way? | One decision per record: context, decision, what we tried, consequences. |
+| `reliability/` | Which failures have we exercised, and what did we verify? | Failure scenarios, the required behavior, associated tests and the scope of recorded evidence. |
 
-A subject can appear in all three — `executions.md` in `architecture/` and `specs/`, the
-executions ADR in `adr/` — each document saying only what its folder is for.
+A subject can appear in all four — `executions.md` in `architecture/`, `specs/` and
+`reliability/`, the executions ADR in `adr/` — each document saying only what its folder is for.
+Specs own the required behavior; reliability documents map failure scenarios to its verification.
+Test setup and orchestration stay with executable tests; detailed run output stays in artifacts.
 
 ## Rules
 
