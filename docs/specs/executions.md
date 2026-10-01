@@ -6,7 +6,7 @@ Contract to implement — Agent Sandbox **v1.0.3**, **Kata** runtime.
 Agent Sandbox allocates the resources and destroys them.**
 
 The contract of an execution: the interface with Agent Sandbox, the image, what Agora does, and
-the validated cases. How it fits together is explained in `architecture/executions.md`; why, in
+the acceptance cases. How it fits together is explained in `architecture/executions.md`; why, in
 the executions ADR.
 
 ## Ground rules
@@ -310,38 +310,34 @@ with a numbered echo, sleeps, stays silent, asks for a permission, produces a to
 text, recalls the session, sends a request through its way out, or dies. It writes a real native
 file and reads it back at `session/resume`.
 
-## Cases to validate
+## Acceptance cases
 
-Measured on 30 September 2026 on g4, under Kata, by `apps/lab/scripts/live-cases.ts`, with
-the thin bridge images built from commit `7afc4d7`. Case 3 runs with case 2. The deadline cases
-use a 60 s lease, re-armed three times per lease.
-
-| # | Case | Expected | Measured |
-| --- | --- | --- | --- |
-| 1 | Create from a warm pool | Ready includes Agora's `initialize`; `warm` launch. | Ready in 1,015 ms, `warm` launch. |
-| 2 | Create beyond the warm pool | Ready includes Agora's `initialize`: `cold`, or `warm` on a pool Sandbox still starting. | Two `cold` launches ready in 4,363 and 6,140 ms; the remaining `warm` launch in 319 ms. |
-| 3 | Create twice with the same id | Same execution, a single claim. | Same name, a single claim. |
-| 4 | Pool not in the catalogue, quota reached | Refused, with the reason. | 400 "pool not in the catalogue"; 429 "quota reached: 6 active executions out of 6". |
-| 5 | Relay: `initialize`, `session/new`, prompt | `initialize` answered by Agora, positions numbered by Agora, turn closed. | Local answer names `agora-mock-agent`; session recorded on the claim, `end_turn`, Agora positions 2–4 increasing. |
-| 6 | Second prompt during a turn | Refused with a JSON-RPC error. | "refused: a turn is already in progress". |
-| 7 | Cancel a turn | Ends `cancelled`, execution ready. | `cancelled`, execution ready. |
-| 8 | Permission, consumer gone then back | The request is replayed, the answer unblocks the turn. | Request replayed, turn closed. |
-| 9 | Consumer disconnected during a turn | The turn continues; resuming returns the missed frames. | 7 frames replayed, no gap. |
-| 10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. | *Uncertain*, then `end_turn`; six numbered chunks and the final text arrived once, in order. Rejoined without replay or `initialize`. |
-| 11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. | Six claims found at startup; turn *uncertain*, then `end_turn`. Consumer positions reset to a new epoch and the final answer arrived. |
-| 12 | Deadline during a turn | Moves forward every minute, never beyond start + maximum duration. | Deadline pushed back during the turn, under the limit. |
-| 13 | End of turn | Deadline at now + lease, then no more renewal. | Deadline set at the end of the turn, unchanged 25 s later. |
-| 14 | Deadline reached between two turns | Destroyed by the infrastructure; the anchor arrives during the grace period. | Destroyed by Agent Sandbox; anchor pushed (1 file, 239 bytes). |
-| 15 | Turn too long | Destroyed at start + maximum duration; the anchor arrives. | Destroyed at start + 30 s; anchor pushed. |
-| 16 | Stop | No more renewal, destruction at the deadline, anchor received. | *Stopped*, destroyed at the deadline; anchor with the turn's text. |
-| 17 | Stop during a turn | Turn cancelled, then as in 16. | Turn `cancelled`, destroyed at the deadline; anchor pushed. |
-| 18 | Restore an anchor | New execution, same session, the agent remembers. | Ready in 425 ms, session resumed, the agent recalls "mirabelle". |
-| 19 | Dead adapter | *Lost*, no more renewal; the anchor still leaves with the Pod. | *Lost*; anchor pushed despite the dead adapter. |
-| 20 | Bridge with no token, expired, for another sandbox, another key | 401 every time. | 401 everywhere; valid token 200 / 101. |
-| 21 | Anchor push without a valid projected token | 401, nothing is stored. | 401 without a token, 401 with a fake one. |
-| 22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. | Ready in 362 ms with claude-agent-acp 0.75.1. Without a credential: no answer in 120 s, turn cancelled; 11,230-byte anchor pushed and restored by `session/resume`. |
-| 27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. | After a 10 s disconnection, unread text and the final answer arrived complete; 3,600 large chunks arrived once, in order. Local bridge tests also drain 20,000 lines beyond the former replay ring after an absent reader. |
-| 28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. | Same capabilities and session after restart; new positions epoch. The mock completed another prompt without a second `initialize`. |
+| ID | Case | Expected |
+| --- | --- | --- |
+| E1 | Create from a warm pool | Ready includes Agora's `initialize`; `warm` launch. |
+| E2 | Create beyond the warm pool | Ready includes Agora's `initialize`: `cold`, or `warm` on a pool Sandbox still starting. |
+| E3 | Create twice with the same id | Same execution, a single claim. |
+| E4 | Pool not in the catalogue, quota reached | Refused, with the reason. |
+| E5 | Relay: `initialize`, `session/new`, prompt | `initialize` answered by Agora, positions numbered by Agora, turn closed. |
+| E6 | Second prompt during a turn | Refused with a JSON-RPC error. |
+| E7 | Cancel a turn | Ends `cancelled`, execution ready. |
+| E8 | Permission, consumer gone then back | The request is replayed, the answer unblocks the turn. |
+| E9 | Consumer disconnected during a turn | The turn continues; resuming returns the missed frames. |
+| E10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. |
+| E11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. |
+| E12 | Deadline during a turn | Moves forward every minute, never beyond start + maximum duration. |
+| E13 | End of turn | Deadline at now + lease, then no more renewal. |
+| E14 | Deadline reached between two turns | Destroyed by the infrastructure; the anchor arrives during the grace period. |
+| E15 | Turn too long | Destroyed at start + maximum duration; the anchor arrives. |
+| E16 | Stop | No more renewal, destruction at the deadline, anchor received. |
+| E17 | Stop during a turn | Turn cancelled, then as in E16. |
+| E18 | Restore an anchor | New execution, same session, the agent remembers. |
+| E19 | Dead adapter | *Lost*, no more renewal; the anchor still leaves with the Pod. |
+| E20 | Bridge with no token, expired, for another sandbox, another key | 401 every time. |
+| E21 | Anchor push without a valid projected token | 401, nothing is stored. |
+| E22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. |
+| E27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. |
+| E28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. |
 
 **To be specified:** anchor storage in the database, codex's native directory, detached tasks,
 resuming after the process is lost. Credentials: `credentials.md`.

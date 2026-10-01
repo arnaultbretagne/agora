@@ -1,14 +1,15 @@
-// Plays every case of docs/specs/executions.md and docs/specs/credentials.md ("Cases to validate") against the
-// DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline. Case 25 is a
-// real, billed prompt: on haiku, one short answer. Case 26 writes a dated file to GITHUB_A.
-// Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [cas…] (the receiver is on port 8081).
+// Plays the acceptance cases of docs/specs/executions.md (E…) and docs/specs/credentials.md (C1–C4)
+// against the DEPLOYED lab, with real Kata sandboxes destroyed by Agent Sandbox at their deadline.
+// C3 is a real, billed prompt: on haiku, one short answer. C4 writes a dated file to GITHUB_A.
+// Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [case IDs…] (the receiver is on port 8081).
+// Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 // From g4, the lab Pod IP is reachable directly (its policy admits the host); the page at
 // agora-lab.bretagne.dev offers the same cases by hand, behind Pocket-ID.
 import { WebSocket } from 'ws'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
 const receiver = base.replace(/:8080$/, ':8081')
-const only = new Set(process.argv.slice(3).map(Number))
+const only = new Set(process.argv.slice(3).map((id) => id.toUpperCase()))
 type Json = Record<string, any>
 
 async function api(method: string, path: string, body?: unknown): Promise<Json> {
@@ -105,17 +106,17 @@ async function create(pool: string, extra: Json = {}): Promise<{ name: string; m
   return { name, ms: Date.now() - started }
 }
 
-const results: { n: number; label: string; ok: boolean; detail: string }[] = []
-async function check(n: number, label: string, body: () => Promise<string>): Promise<void> {
-  if (only.size > 0 && !only.has(n)) return
+const results: { id: string; label: string; ok: boolean; detail: string }[] = []
+async function check(id: string, label: string, body: () => Promise<string>): Promise<void> {
+  if (only.size > 0 && !only.has(id)) return
   const started = Date.now()
   try {
     const detail = await body()
-    results.push({ n, label, ok: true, detail: `${detail} (${String(Math.round((Date.now() - started) / 1000))} s)` })
-    console.log(`✔ ${String(n).padStart(2)} ${label} — ${detail}`)
+    results.push({ id, label, ok: true, detail: `${detail} (${String(Math.round((Date.now() - started) / 1000))} s)` })
+    console.log(`✔ ${id.padEnd(3)} ${label} — ${detail}`)
   } catch (error) {
-    results.push({ n, label, ok: false, detail: error instanceof Error ? error.message : String(error) })
-    console.log(`✖ ${String(n).padStart(2)} ${label} — ${error instanceof Error ? error.message : String(error)}`)
+    results.push({ id, label, ok: false, detail: error instanceof Error ? error.message : String(error) })
+    console.log(`✖ ${id.padEnd(3)} ${label} — ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -136,7 +137,7 @@ console.log(`pools : ${pools.map((p) => `${p.name as string} (${p.harness as str
 
 let a = ''
 
-await check(1, 'Create from a warm pool', async () => {
+await check('E1', 'Create from a warm pool', async () => {
   const created = await create(mock)
   a = created.name
   const launch = await until('launchType', async () => (await execution(a))?.launchType, 10_000)
@@ -144,7 +145,7 @@ await check(1, 'Create from a warm pool', async () => {
   return `${a} ready in ${String(created.ms)} ms, launch ${String(launch)}`
 })
 
-await check(2, 'Create beyond the warm pool, and 3: the same id twice', async () => {
+await check('E2', 'Create beyond the warm pool, and E3: the same id twice', async () => {
   // A has taken one of the two warm sandboxes; three claims at once outrun what the pool holds.
   const requestId = crypto.randomUUID()
   const started = Date.now()
@@ -170,7 +171,7 @@ await check(2, 'Create beyond the warm pool, and 3: the same id twice', async ()
   return `same id → ${String(answers[0]!.name)} twice, a single claim; ${timings.join('; ')}`
 })
 
-await check(4, 'Pool not in the catalogue, quota', async () => {
+await check('E4', 'Pool not in the catalogue, quota', async () => {
   const outside = await api('POST', '/api/executions', { requestId: crypto.randomUUID(), pool: 'no-such-pool' })
   assert(outside.accepted === false && outside.status === 400, JSON.stringify(outside))
   let refusedAnswer: Json | null = null
@@ -185,7 +186,7 @@ await check(4, 'Pool not in the catalogue, quota', async () => {
 
 let client!: Consumer
 let sessionA = ''
-await check(5, 'Relay: initialize, session/new, prompt', async () => {
+await check('E5', 'Relay: initialize, session/new, prompt', async () => {
   client = await consumer(a)
   client.send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: 1 } })
   const init = await client.response(0)
@@ -199,7 +200,7 @@ await check(5, 'Relay: initialize, session/new, prompt', async () => {
   return `initialize local (${String(init.result.agentInfo.name)}), session ${sessionA.slice(0, 8)}…, end end_turn, positions ${String(seqs[0])}→${String(seqs.at(-1))}`
 })
 
-await check(6, 'Second prompt during a turn', async () => {
+await check('E6', 'Second prompt during a turn', async () => {
   client.prompt(2, sessionA, '/sleep 8')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   client.prompt(3, sessionA, 'too early')
@@ -208,7 +209,7 @@ await check(6, 'Second prompt during a turn', async () => {
   return `"${String(refused.error.message)}"`
 })
 
-await check(7, 'Cancel a turn', async () => {
+await check('E7', 'Cancel a turn', async () => {
   client.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: sessionA } })
   const done = await client.response(2)
   assert(done.result?.stopReason === 'cancelled', JSON.stringify(done))
@@ -216,7 +217,7 @@ await check(7, 'Cancel a turn', async () => {
   return 'stopReason cancelled, execution ready'
 })
 
-await check(8, 'Permission, consumer gone then back', async () => {
+await check('E8', 'Permission, consumer gone then back', async () => {
   client.prompt(4, sessionA, '/permission')
   const asked = await until('permission', () => client.acp().find((m) => m.method === 'session/request_permission'), 10_000)
   const seen = client.lastSeq()
@@ -231,7 +232,7 @@ await check(8, 'Permission, consumer gone then back', async () => {
   return `request ${String(asked.id)} replayed after reconnection, answer accepted, turn closed`
 })
 
-await check(9, 'Consumer disconnected during a turn', async () => {
+await check('E9', 'Consumer disconnected during a turn', async () => {
   client.prompt(5, sessionA, '/sleep 5')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const seen = client.lastSeq()
@@ -244,7 +245,7 @@ await check(9, 'Consumer disconnected during a turn', async () => {
   return `${String(replay.event.count)} frames replayed from ${String(replay.event.from)}, no gap, end of turn received`
 })
 
-await check(10, 'Bridge connection cut during a turn', async () => {
+await check('E10', 'Bridge connection cut during a turn', async () => {
   client.prompt(6, sessionA, '/sleep 6')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const before = client.messages.length
@@ -261,7 +262,7 @@ await check(10, 'Bridge connection cut during a turn', async () => {
   return `"${String(log.message)}", turn closed`
 })
 
-await check(11, 'Back-end restarted during a turn', async () => {
+await check('E11', 'Back-end restarted during a turn', async () => {
   client.prompt(7, sessionA, '/sleep 20')
   await until('in turn', async () => (await execution(a))?.state === 'in turn', 10_000)
   const seen = client.lastSeq()
@@ -286,8 +287,8 @@ await check(11, 'Back-end restarted during a turn', async () => {
   return `at restart: "${String(logs.at(-1)?.message)}", state ${String(found.state)}, then ${String(closed.lastTurn.outcome)}; the consumer gets the end`
 })
 
-// The sandboxes stopped in case 4 count against the quota until Agent Sandbox destroys them.
-await until('sandboxes of case 4 destroyed', async () => (await snapshot()).executions.length <= 2, 180_000)
+// The sandboxes stopped in E4 count against the quota until Agent Sandbox destroys them.
+await until('sandboxes of E4 destroyed', async () => (await snapshot()).executions.length <= 2, 180_000)
 
 // The deadline cases wait on real destructions by Agent Sandbox: they run side by side.
 let anchorToRestore = ''
@@ -296,7 +297,7 @@ parallel.push((async () => {
   let name = ''
   let patchesAtEnd = 0
   let grantedAt = ''
-  await check(12, 'Deadline during a turn', async () => {
+  await check('E12', 'Deadline during a turn', async () => {
     name = (await create(mock, SHORT)).name
     const c = await consumer(name)
     const s = await c.session()
@@ -318,19 +319,19 @@ parallel.push((async () => {
     grantedAt = done.shutdownTime
     return `deadline ${String(admitted.shutdownTime)} → ${String(later.shutdownTime)} during the turn`
   })
-  await check(13, 'End of turn', async () => {
+  await check('E13', 'End of turn', async () => {
     await sleep(25_000)
     const x = await execution(name)
     assert(x !== undefined && x.shutdownTime === grantedAt && x.renewals === patchesAtEnd, `re-armed outside a turn: ${JSON.stringify(x)}`)
     return `deadline ${grantedAt} set at the end of the turn, unchanged 25 s later`
   })
-  await check(14, 'Deadline reached between two turns', async () => {
+  await check('E14', 'Deadline reached between two turns', async () => {
     const end = await ended(name, 90_000)
     assert(end.reason === 'deadline after the last turn' && end.anchor !== null, JSON.stringify(end))
     return `destroyed by Agent Sandbox; anchor ${String(end.anchor.id)} pushed by the Pod (${String(end.anchor.files.length)} file(s), ${String(end.anchor.byteLength)} B)`
   })
 })())
-parallel.push(check(15, 'Turn too long', async () => {
+parallel.push(check('E15', 'Turn too long', async () => {
   const { name } = await create(mock, { limits: { turnCapSeconds: 30 } })
   const c = await consumer(name)
   const s = await c.session()
@@ -339,7 +340,7 @@ parallel.push(check(15, 'Turn too long', async () => {
   assert(String(end.reason).startsWith('turn in progress') && end.anchor !== null, JSON.stringify(end))
   return `destroyed at start + 30 s; anchor ${String(end.anchor.id)} (${String(end.anchor.byteLength)} B)`
 }))
-parallel.push(check(16, 'Stop', async () => {
+parallel.push(check('E16', 'Stop', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -354,7 +355,7 @@ parallel.push(check(16, 'Stop', async () => {
   anchorToRestore = end.anchor.id as string
   return `state ${String(state)}, destroyed at the deadline ${String(stopped.shutdownTime)}; anchor ${anchorToRestore}`
 }))
-parallel.push(check(17, 'Stop during a turn', async () => {
+parallel.push(check('E17', 'Stop during a turn', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -371,7 +372,7 @@ parallel.push(check(17, 'Stop during a turn', async () => {
 await Promise.all(parallel)
 await api('POST', `/api/executions/${a}/stop`)
 
-await check(18, 'Restore an anchor', async () => {
+await check('E18', 'Restore an anchor', async () => {
   const { name, ms } = await create(mock, { anchorId: anchorToRestore, ...SHORT })
   const restored = await until('restored', async () => {
     const s = await execution(name)
@@ -385,7 +386,7 @@ await check(18, 'Restore an anchor', async () => {
   return `${name} ready in ${String(ms)} ms, session ${String(restored.sessionId).slice(0, 8)}… resumed, the agent remembers "mirabelle"`
 })
 
-await check(19, 'Adapter died', async () => {
+await check('E19', 'Adapter died', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -399,7 +400,7 @@ await check(19, 'Adapter died', async () => {
   return `lost, no more renewal; destroyed at the deadline, anchor ${String(end.anchor.id)} pushed despite the dead adapter`
 })
 
-await check(20, 'Tokens refused', async () => {
+await check('E20', 'Tokens refused', async () => {
   const { name } = await create(mock, SHORT)
   const probe = await api('POST', `/api/lab/executions/${name}/probe-auth`)
   const rows = probe.results as Json[]
@@ -409,7 +410,7 @@ await check(20, 'Tokens refused', async () => {
   return rows.map((r) => `${String(r.case)} ${String(r.info)}/${String(r.acp)}`).join(' ; ')
 })
 
-await check(21, 'Anchor push without a valid projected token', async () => {
+await check('E21', 'Anchor push without a valid projected token', async () => {
   const body = JSON.stringify({ format: 'agora-anchor/1', harness: 'mock', files: [], stable: true })
   const statuses: number[] = []
   for (const headers of [{}, { authorization: 'Bearer not-a-token' }] as Record<string, string>[]) {
@@ -419,7 +420,7 @@ await check(21, 'Anchor push without a valid projected token', async () => {
   return `no token ${String(statuses[0])}, fake token ${String(statuses[1])}`
 })
 
-await check(22, 'Real harness (claude-code)', async () => {
+await check('E22', 'Real harness (claude-code)', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const { name, ms } = await create(claude, SHORT)
   const c = await consumer(name)
@@ -456,7 +457,7 @@ function said(c: Consumer): string {
     .join('')
 }
 
-await check(23, 'Going out without a credential', async () => {
+await check('C1', 'Going out without a credential', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -469,14 +470,14 @@ await check(23, 'Going out without a credential', async () => {
   return `"${reply.slice(0, 90)}"; ${String(refused)} refusal(s)`
 })
 
-// The repos for case 26: the operator's throwaway repos with a real PAT (GITHUB_A, GITHUB_B), or
+// The repos for C4: the operator's throwaway repos with a real PAT (GITHUB_A, GITHUB_B), or
 // public stand-ins — then a request the gateway lets through is answered by GitHub (401 with the
 // stand-in PAT), and one it refuses never leaves: 403 "authorization failed".
 const REPO_A = process.env.GITHUB_A ?? 'octocat/Hello-World'
 const REPO_B = process.env.GITHUB_B ?? 'octocat/Spoon-Knife'
 const REPO_C = process.env.GITHUB_C ?? 'github/linguist'
 
-await check(24, 'Gateway, the chain alone', async () => {
+await check('C2', 'Gateway, the chain alone', async () => {
   const { name } = await create(mock, SHORT)
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 300, profiles: ['anthropic'] })
   assert(attached.accepted === true, JSON.stringify(attached))
@@ -508,7 +509,7 @@ async function haiku(name: string): Promise<string> {
   return `model ${String(current)}, "${reply.trim().slice(0, 40)}" in ${((Date.now() - started) / 1000).toFixed(1)} s`
 }
 
-await check(25, 'Gateway, real harness (haiku)', async () => {
+await check('C3', 'Gateway, real harness (haiku)', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const { name } = await create(claude, SHORT)
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles: ['anthropic'] })
@@ -519,7 +520,7 @@ await check(25, 'Gateway, real harness (haiku)', async () => {
   return `JWT until ${String(attached.expiresAt)}; ${detail}; api.anthropic.com:443 ×${String(outbound.count)} → ${String(outbound.lastStatus)}`
 })
 
-await check(26, 'Gateway, composition (A write, B read, C nothing)', async () => {
+await check('C4', 'Gateway, composition (A write, B read, C nothing)', async () => {
   const { name } = await create(mock, SHORT)
   const profiles = [`github:${REPO_A}:write`, `github:${REPO_B}:read`]
   const attached = await api('POST', `/api/executions/${name}/credentials`, { ttlSeconds: 600, profiles })
@@ -528,7 +529,7 @@ await check(26, 'Gateway, composition (A write, B read, C nothing)', async () =>
   const s = await c.session()
   // A real create when the PAT is real (201 on A); the same file on B must never exist.
   const file = `agora-spike-${String(Date.now())}.txt`
-  const createFile = JSON.stringify({ message: `agora: case 26 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
+  const createFile = JSON.stringify({ message: `agora: C4 ${file}`, content: Buffer.from(`${name}\n`).toString('base64') })
   const probes: [string, string, boolean][] = [
     [`GET https://api.github.com/repos/${REPO_A}`, 'A read', true],
     [`PUT https://api.github.com/repos/${REPO_A}/contents/${file} ${createFile}`, 'A write', true],
@@ -558,10 +559,10 @@ await check(26, 'Gateway, composition (A write, B read, C nothing)', async () =>
 })
 
 // Stopped sandboxes still count against the quota until their deadlines. The credential cases
-// fill the available slots; wait for their destruction before the last two execution cases.
+// fill the available slots; wait for their destruction before E27 and E28.
 await until('room after the credential cases', async () => (await snapshot()).executions.length <= 2, 180_000)
 
-await check(27, 'Agora away while the adapter writes', async () => {
+await check('E27', 'Agora away while the adapter writes', async () => {
   const { name } = await create(mock, SHORT)
   const c = await consumer(name)
   const s = await c.session()
@@ -584,7 +585,7 @@ await check(27, 'Agora away while the adapter writes', async () => {
   return 'output written while disconnected arrived complete; 3600 large chunks arrived in order'
 })
 
-await check(28, 'Restarted Agora never resends initialize', async () => {
+await check('E28', 'Restarted Agora never resends initialize', async () => {
   const { name } = await create(mock, SHORT)
   let c = await consumer(name)
   const s = await c.session()

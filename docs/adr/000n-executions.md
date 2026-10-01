@@ -44,7 +44,8 @@ flowchart LR
 - **Agora survives its own restart.** The claims say which executions still exist; the log says
   where each one stands.
 
-Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cases pass.
+Measured on g4 under Kata, 2026-09-27, replayed 2026-09-29: the 22 execution cases of the lab
+script pass. What each one proves is recorded in `reliability/executions.md`.
 
 ## What we tried
 
