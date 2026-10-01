@@ -107,7 +107,7 @@ describe('bridge', () => {
     assert.ok(second.messages.every((m) => !('seq' in m) && !('acp' in m) && !('hello' in m)))
   })
 
-  it('leaves disconnected output in the pipe, then delivers it in order without replay', async () => {
+  it('E27: leaves disconnected output in the pipe, then delivers it in order without replay', async () => {
     const target = await lab()
     const client = await connect(target)
     await initialize(client)
@@ -138,7 +138,7 @@ describe('bridge', () => {
     assert.deepEqual(client.binary, [false, false])
   })
 
-  it('blocks a disconnected writer, then delivers more than the former ring could retain in order', async () => {
+  it('E27: blocks a disconnected writer, then delivers more than the former ring could retain in order', async () => {
     const target = await stdio('stream')
     await new Promise((resolve) => setTimeout(resolve, 200))
     assert.equal(existsSync(join(target.home, 'done')), false, 'the writer must block while Agora is away')
