@@ -15,7 +15,7 @@ export interface Projector {
   version: string
   fold: (entries: Awaited<ReturnType<LogStore['entries']>>) => ProjectedObject[]
 }
-export const core: Projector = { name: 'core', version: '1', fold: project }
+export const core: Projector = { name: 'core', version: '2', fold: project }
 export class Projections {
   readonly store: LogStore
   readonly registry: Map<string, Projector>

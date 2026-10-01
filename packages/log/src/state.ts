@@ -29,6 +29,7 @@ export interface Execution {
   stopped: boolean
   ended: boolean
   lost: boolean
+  failed?: boolean
   clean: boolean
   initialized: boolean
 }
@@ -106,8 +107,9 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             turn.status = 'uncertain'
     }
     if (['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind) && execution) {
-      execution.ended = entry.kind !== 'execution.lost'
-      execution.lost = entry.kind === 'execution.lost'
+      if (entry.kind === 'execution.ended') execution.ended = true
+      if (entry.kind === 'execution.lost') execution.lost = true
+      if (entry.kind === 'execution.failed') execution.failed = true
       execution.connection = undefined
       for (const turn of state.turns.values())
         if (turn.execution === execution.id && !turn.answered) turn.status = 'failed'
@@ -153,7 +155,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         const request = entry.request_position
           ? state.requestPositions.get(entry.request_position)
           : state.requests.get(requestKey)
-        if (request && request.execution === entry.execution) {
+        if (request && request.execution === entry.execution && !state.answers.has(request.position)) {
           state.answers.add(request.position)
           if (state.permissions.get(requestKey)?.position === request.position) state.permissions.delete(requestKey)
           if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution)
@@ -245,8 +247,9 @@ export function project(entries: readonly Entry[]): ProjectedObject[] {
           stopped: execution?.stopped ?? false,
           ended: execution?.ended ?? false,
           lost: execution?.lost ?? false,
+          ...(execution?.failed ? { failed: true } : {}),
           unavailable:
-            execution === null || execution.ended || execution.lost || !execution.session || !execution.connection,
+            execution === null || execution.ended || execution.lost || execution.failed === true || !execution.session || !execution.connection,
           title: 'Workstream',
         },
         entry.position,

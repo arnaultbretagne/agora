@@ -77,7 +77,7 @@
   <p id="failure" role="alert"></p>
   <div class="actions">
     <select id="pool"></select
-    ><button id="create">Create execution</button><button id="credentials">Attach credential</button
+    ><button id="create">Create execution</button
     ><button id="cancel" disabled>Cancel turn</button><button id="stop" disabled>Stop execution</button>
   </div>
   <div id="thread" aria-live="polite"></div>
@@ -136,8 +136,7 @@
       $('prompt').disabled = $('send').disabled = disabled
       $('cancel').disabled = !snapshotComplete || !turn || view?.stopped
       $('stop').disabled = !snapshotComplete || !view || view.stopped || view.ended || view.lost
-      $('create').disabled = !workstream || (!view?.ended && !view?.lost && !!view?.execution)
-      $('credentials').disabled = !view?.execution || view.stopped || view.unavailable
+      $('create').disabled = !workstream || (!view?.ended && !!view?.execution)
       $('status').textContent = !snapshotComplete
         ? 'Loading history…'
         : view?.stopped
@@ -249,9 +248,6 @@
           limits: { leaseSeconds: 600, turnCapSeconds: 3600 },
         },
       ),
-    )
-    $('credentials').onclick = guard(() =>
-      post(`/api/workstreams/${workstream}/credentials`, { execution: view.execution }),
     )
     $('write').onsubmit = guard(async () => {
       await command(

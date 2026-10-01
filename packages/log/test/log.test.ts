@@ -7,7 +7,12 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { chromium, expect } from '@playwright/test'
 import { logHttp } from '../src/http.ts'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { GrantSigner } from '@agora/credentials'
+import { createAnchorReceiver } from '@agora/executions'
+import { gatewayCredentials } from '../src/credentials.ts'
 import { LogStore, type Command, type Entry, Transaction } from '../src/store.ts'
 import { LogDriver, claimName, type DriverOptions } from '../src/driver.ts'
 import { Projections, ThreadClient, core } from '../src/projection.ts'
@@ -346,6 +351,43 @@ describe('log / PostgreSQL 17 restricted runtime logins', () => {
       (await store.writer.query('SELECT ended_position FROM sessions WHERE id=$1', [s.session])).rows[0].ended_position,
     )
   })
+  it('L41: duplicate opening answers retain their original Session and apply once', async () => {
+    for (const method of ['session/new', 'session/resume', 'session/load']) {
+      const s = await seed()
+      const opening = await store.transaction(s.workstream, (tx) => tx.outgoing(s.execution, {
+        method, params: { cwd: '/work', mcpServers: [], ...(method === 'session/new' ? {} : { sessionId: 'native' }) },
+      }))
+      const reply = rpc({ id: opening.id, result: method === 'session/new' ? { sessionId: 'native' } : {} })
+      await store.incoming(s.workstream, s.execution, s.connection, '1', reply)
+      const opened = (await store.state(s.workstream)).current!.session!
+      await store.incoming(s.workstream, s.execution, s.connection, '2', reply)
+      assert.equal((await store.state(s.workstream)).current!.session, opened)
+      assert.equal((await store.writer.query('SELECT id FROM sessions WHERE execution=$1', [s.execution])).rowCount, 2)
+      const next = await store.transaction(s.workstream, (tx) => tx.outgoing(s.execution, {
+        method: 'session/new', params: { cwd: '/work', mcpServers: [] },
+      }))
+      await store.incoming(s.workstream, s.execution, s.connection, '3', rpc({ id: next.id, result: { sessionId: 'other' } }))
+      const current = (await store.state(s.workstream)).current!.session!
+      await store.incoming(s.workstream, s.execution, s.connection, '4', reply)
+      const entries = await store.entries(s.workstream)
+      assert.equal((await store.state(s.workstream)).current!.session, current)
+      assert.equal(entries.at(-1)!.session, opened)
+      assert.equal(entries.filter((e) => e.kind === 'session.opened').length, 3)
+      assert.equal(entries.filter((e) => e.direction === 'in' && e.request_position === opening.position).length, 3)
+      const pending = await store.transaction(s.workstream, (tx) => tx.outgoing(s.execution, {
+        method: 'session/new', params: { cwd: '/work', mcpServers: [] },
+      }))
+      await store.fact(s.workstream, { kind: 'execution.ended', execution: s.execution, content: { reason: 'claim_missing' } })
+      await store.incoming(s.workstream, s.execution, s.connection, '5', rpc({ id: pending.id, result: { sessionId: 'late' } }))
+      assert.equal((await store.state(s.workstream)).current!.session, current)
+      assert.equal((await store.entries(s.workstream)).filter((e) => e.kind === 'session.opened').length, 3)
+    }
+    const s = await seed(), answer = await prompt(s)
+    if (!answer.accepted) throw new Error('write_refused')
+    await store.incoming(s.workstream, s.execution, s.connection, '1', rpc({ id: answer.requestId, result: { stopReason: 'end_turn' } }))
+    await store.incoming(s.workstream, s.execution, s.connection, '2', rpc({ id: answer.requestId, error: { code: -1, message: 'duplicate error' } }))
+    assert.equal([...(await store.state(s.workstream)).turns.values()][0]!.status, 'done')
+  })
   it('L17: version rebuild removes stale objects and resets with other projectors intact', async () => {
     const s = await seed()
     await projections.run(s.workstream)
@@ -358,7 +400,7 @@ describe('log / PostgreSQL 17 restricted runtime logins', () => {
     }
     await projections.run(s.workstream, { name: 'other', version: '1', fold: () => [extra] })
     const before = await projections.run(s.workstream)
-    await projections.run(s.workstream, { ...core, version: '2', fold: () => [] })
+    await projections.run(s.workstream, { ...core, version: 'test-removed', fold: () => [] })
     const rows = await projections.objects(s.workstream)
     assert.equal(rows.length, 1)
     assert.equal(rows[0]?.id, extra.id)
@@ -550,6 +592,62 @@ describe('durable dispatcher / real bridge + mock agent', () => {
     assert.ok(lines.every((v) => !JSON.stringify(v).includes(token)))
     for (const v of lines.filter((v) => v.stage)) assert.ok(Number(v.durationMs) >= 0)
   })
+  it('L39: lab gateway grants are provisioned before opening with the real signer', async () => {
+    const { privateKey, publicKey } = keys(), kube = new FakeKube(publicKey)
+    const directory = await mkdtemp(join(tmpdir(), 'agora-log-signing-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    cleanups.push(() => kube.closeAll())
+    const keyFile = join(directory, 'grants.pem')
+    await writeFile(keyFile, privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 })
+    const signer = new GrantSigner({ proxy: '127.0.0.1:1', keyFile, keyId: 'test', issuer: 'agora', audience: 'agora-gateway' })
+    const grants: Parameters<GrantSigner['mint']>[0][] = [], tokens: string[] = []
+    const source = { describe: () => signer.describe(), mint: async (input: Parameters<GrantSigner['mint']>[0]) => {
+      grants.push(input)
+      const result = await signer.mint(input)
+      tokens.push(result.token)
+      return result
+    } }
+    const timings: Record<string, unknown>[] = []
+    const driver = new LogDriver({ store, kube, signingKey: privateKey, address: kube.address, tickMs: 50,
+      shutdownMs: 200, credentials: gatewayCredentials(store, kube, source),
+      sink: (line) => timings.push(JSON.parse(line)) })
+    cleanups.push(() => driver.stop())
+    await driver.start()
+    const workstream = await stream(), execution = randomUUID()
+    assert.equal((await driver.command(workstream, { id: randomUUID(), kind: 'Create', target: {},
+      body: { execution, pool: 'claude-test', limits: { leaseSeconds: 60, turnCapSeconds: 60 } } })).accepted, true)
+    await until(async () => (await store.state(workstream)).current?.session)
+    assert.equal(grants.length, 1)
+    assert.deepEqual(grants[0]!.profiles, ['anthropic'])
+    const opening = (await store.entries(workstream)).find((e) => e.method === 'session/new' && e.direction === 'out')!
+    const installed = timings.findIndex((e) => e.stage === 'credentials' && e.outcome === 'succeeded')
+    assert.ok(installed >= 0 && timings.findIndex((e) => e.stage === 'dispatch_write' && e.position === opening.position) > installed)
+    const server = createServer((req, res) => { void logHttp(driver, req, res, source).catch(() => res.destroy()) })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(async () => { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())) })
+    const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/workstreams/${workstream}/credentials`
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ execution }) })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { accepted: true })
+    assert.equal(grants.length, 2)
+    const mock = await stream(), mockExecution = randomUUID()
+    assert.equal((await driver.command(mock, { id: randomUUID(), kind: 'Create', target: {},
+      body: { execution: mockExecution, pool: 'mock-test', limits: { leaseSeconds: 60, turnCapSeconds: 60 } } })).accepted, true)
+    await until(async () => (await store.state(mock)).current?.session)
+    assert.equal(grants.length, 2)
+    const mockConnection = driver['connections'].get(mockExecution)!
+    const info = await fetch(`http://${mockConnection.address}/info`, { headers: {
+      authorization: `Bearer ${(await import('@agora/harness-bridge/token')).mintBridgeToken(privateKey, mockConnection.pod)}` } })
+    assert.equal((await info.json() as { outbound: { proxy: unknown } }).outbound.proxy, null)
+    const catalogue = kube.listPools.bind(kube)
+    kube.listPools = async () => (await catalogue()).map((pool) => pool.metadata.name === 'claude-test'
+      ? { ...pool, metadata: { ...pool.metadata, labels: { 'agora.bretagne.dev/harness': 'unreviewed' } } } : pool)
+    await assert.rejects(gatewayCredentials(store, kube, source)(workstream, execution), /unreviewed_harness/)
+    for (const token of tokens) {
+      assert.equal(encode(await store.entries(workstream)).includes(token), false)
+      assert.equal(JSON.stringify(timings).includes(token), false)
+    }
+  })
   it('L6-L8-L11-L22-L25: journaled creation, prompt, targeted cancellation, Stop and exclusive ownership', async () => {
     const l = await lab()
     const state = await store.state(l.workstream),
@@ -637,7 +735,7 @@ describe('durable dispatcher / real bridge + mock agent', () => {
 })
 
 describe('log fault windows', () => {
-  async function prepared() {
+  async function prepared(options: Partial<DriverOptions> = {}) {
     const { privateKey, publicKey } = keys(),
       kube = new FakeKube(publicKey),
       driver = new LogDriver({
@@ -647,6 +745,7 @@ describe('log fault windows', () => {
         address: kube.address,
         tickMs: 50,
         shutdownMs: 200,
+        ...options,
       })
     await driver.start()
     cleanups.push(() => kube.closeAll())
@@ -677,6 +776,107 @@ describe('log fault windows', () => {
     }
     return { driver, kube, workstream, execution, write }
   }
+  it('L37: a lost execution stays counted until its claim disappears, then finalizes', async () => {
+    const l = await prepared({ maxActive: 1 }), c = l.driver['connections'].get(l.execution)!
+    c.ws.close(1011)
+    await until(async () => (await store.state(l.workstream)).current?.lost)
+    const next: Command = { id: randomUUID(), kind: 'Create', target: {},
+      body: { execution: randomUUID(), pool: 'mock-test', limits: { leaseSeconds: 60, turnCapSeconds: 60 } } }
+    assert.deepEqual(await l.driver.command(l.workstream, next), { accepted: false, reason: 'replacement_unproven' })
+    assert.deepEqual(await l.driver.command(await stream(), { ...next, id: randomUUID() }), { accepted: false, reason: 'quota' })
+    await l.kube.bridges.get(c.pod)!.bridge.terminate()
+    l.kube.claims.delete(claimName(l.execution))
+    await until(async () => (await store.state(l.workstream)).current?.ended)
+    assert.equal((await store.entries(l.workstream)).filter((e) => e.kind === 'execution.ended').length, 1)
+    assert.equal((await l.driver.command(l.workstream, next)).accepted, true)
+    await until(async () => { const current = (await store.state(l.workstream)).current;
+      return current && current.id === next.body.execution && current.session })
+  })
+  it('L38: deletion and startup failure close access without announcing resource disappearance', async () => {
+    const l = await prepared({ maxActive: 1 }), c = l.driver['connections'].get(l.execution)!
+    l.kube.claims.get(claimName(l.execution))!.metadata.deletionTimestamp = new Date().toISOString()
+    await until(async () => c.closed)
+    assert.equal((await fetch(`http://${c.address}/healthz`)).status, 200)
+    assert.equal((await store.state(l.workstream)).current!.ended, false)
+    const next: Command = { id: randomUUID(), kind: 'Create', target: {},
+      body: { execution: randomUUID(), pool: 'mock-test', limits: { leaseSeconds: 60, turnCapSeconds: 60 } } }
+    assert.deepEqual(await l.driver.command(l.workstream, next), { accepted: false, reason: 'execution_active' })
+    await store.fact(l.workstream, { kind: 'execution.failed', execution: l.execution, content: { reason: 'startup_failed' } })
+    assert.equal((await store.state(l.workstream)).current!.ended, false)
+    assert.deepEqual(await l.driver.command(l.workstream, next), { accepted: false, reason: 'execution_active' })
+    assert.deepEqual(await l.driver.command(await stream(), { ...next, id: randomUUID() }), { accepted: false, reason: 'quota' })
+    await l.driver.stop()
+    const restarted = new LogDriver(l.driver.options)
+    cleanups.push(() => restarted.stop())
+    await restarted.start()
+    assert.equal((await store.state(l.workstream)).current!.ended, false)
+    assert.deepEqual(await restarted.command(l.workstream, next), { accepted: false, reason: 'execution_active' })
+    await l.kube.bridges.get(c.pod)!.bridge.terminate()
+    l.kube.claims.delete(claimName(l.execution))
+    await until(async () => (await store.state(l.workstream)).current?.ended)
+    assert.equal((await restarted.command(l.workstream, next)).accepted, true)
+    await until(async () => { const current = (await store.state(l.workstream)).current;
+      return current && current.id === next.body.execution && current.session })
+  })
+  it('L40: terminating Pod pushes its anchor through HTTP after Agora restarts without ACP', async () => {
+    const l = await prepared(), c = l.driver['connections'].get(l.execution)!
+    assert.equal((await l.driver.command(l.workstream, { ...l.write,
+      body: { prompt: [{ type: 'text', text: 'remember receiver restart' }] } })).accepted, true)
+    await until(async () => !(await store.state(l.workstream)).active && !l.driver['queues'].has(l.workstream))
+    let driver = l.driver, reviewedUid = 'uid'
+    const receiver = createAnchorReceiver({ namespace: 'agora-sandboxes',
+      verify: async (token) => { const pod = await l.kube.reviewToken(token); return pod ? { ...pod, podUid: reviewedUid } : null },
+      manager: { receiveAnchor: async (pod, bundle, raw, podUid) => {
+        const answer = await driver.receiveAnchor(pod, bundle, raw, podUid)
+        return answer.accepted ? { accepted: true, value: { anchorId: answer.command } } :
+          { accepted: false, status: answer.reason === 'unknown_execution' ? 404 : answer.reason === 'anchor_conflict' ? 409 : 503,
+            reason: answer.reason }
+      } } })
+    await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve))
+    cleanups.push(async () => { receiver.closeAllConnections(); await new Promise<void>((resolve) => receiver.close(() => resolve())) })
+    l.kube.anchorUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/anchors`
+    reviewedUid = 'foreign-pod'
+    const refused = await fetch(l.kube.anchorUrl, { method: 'POST', headers: { authorization: `Bearer pod:${c.pod}` },
+      body: JSON.stringify({ format: 'agora-anchor/1', harness: 'mock', files: [], stable: true }) })
+    assert.equal(refused.status, 409)
+    assert.equal((await store.anchors.query('SELECT id FROM anchors WHERE execution=$1', [l.execution])).rowCount, 0)
+    reviewedUid = 'uid'
+    const bridge = l.kube.bridges.get(c.pod)!.bridge, terminate = bridge.terminate.bind(bridge)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    bridge.terminate = async () => { await gate; return terminate() }
+    cleanups.push(async () => { release(); bridge.terminate = terminate })
+    await l.kube.patchClaim(claimName(l.execution), { spec: { lifecycle: { shutdownTime: new Date(Date.now() + 100).toISOString() } } })
+    await until(async () => l.kube.claims.get(claimName(l.execution))?.metadata.deletionTimestamp)
+    await driver.stop()
+    driver = new LogDriver(l.driver.options)
+    cleanups.push(() => driver.stop())
+    await driver.start()
+    assert.equal(driver['connections'].size, 0)
+    assert.equal((await store.state(l.workstream)).current!.ended, false)
+    const next: Command = { id: randomUUID(), kind: 'Create', target: {}, body: {
+      execution: randomUUID(), pool: 'mock-test', limits: { leaseSeconds: 60, turnCapSeconds: 60 } } }
+    assert.deepEqual(await driver.command(l.workstream, next), { accepted: false, reason: 'execution_active' })
+    release()
+    await until(async () => !(await l.kube.getClaim(claimName(l.execution))))
+    await until(async () => (await store.state(l.workstream)).current?.ended)
+    const anchors = await store.anchors.query('SELECT id,session,metadata::text,content FROM anchors WHERE execution=$1', [l.execution])
+    assert.equal(anchors.rowCount, 1)
+    const anchor = anchors.rows[0]!
+    assert.equal(anchor.session, l.write.target.session)
+    assert.equal(object(decode(anchor.metadata))?.harness, 'mock')
+    assert.equal((await store.entries(l.workstream)).filter((e) => e.kind === 'anchor.received').length, 1)
+    assert.equal(driver['connections'].size, 0)
+    const restored = await driver.command(l.workstream, { ...next, body: { ...next.body, anchor: anchor.id } })
+    assert.equal(restored.accepted, true)
+    const current = await until(async () => { const current = (await store.state(l.workstream)).current;
+      return current && current.id === next.body.execution && current.session ? current : false })
+    assert.notEqual(current.session, anchor.session)
+    assert.equal((await driver.command(l.workstream, { id: randomUUID(), kind: 'Write',
+      target: { execution: current.id, session: current.session }, body: { prompt: [{ type: 'text', text: '/recall' }] } })).accepted, true)
+    await until(async () => !(await store.state(l.workstream)).active)
+    assert.ok(project(await store.entries(l.workstream)).some((o) => String(o.object.text).includes('remember receiver restart')))
+  })
   it('L6: failed outgoing transaction sends nothing and does not accept a command', async () => {
     const l = await prepared(),
       before = (await store.entries(l.workstream)).length

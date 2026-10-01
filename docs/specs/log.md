@@ -110,6 +110,11 @@ If Agora dies between either step, the marker remains evidence of possible dispa
 error records `request.failed`; it is not proof that no bytes reached the harness. A callback
 success does not prove the adapter read the line. Neither event downgrades a recorded answer.
 
+Distinct duplicate answers remain distinct ACP occurrences. Only the first valid correlated
+answer applies its outcome. A repeated opening answer retains the Session of the original
+answer and cannot open or replace a Session again, including after another Session opened.
+An answer received after execution loss, failure or end cannot open a new Session.
+
 Saved lines retain their original target and id. A Stop prevents their dispatch. Pending
 `initialize` and session creation/resume keep their original correlation after restart; a
 timeout records a local failure and startup error, never a second context-creation attempt.
@@ -288,7 +293,7 @@ What a restarted Agora reads to take each execution back:
 
 | Needed | From |
 | --- | --- |
-| Which executions require recovery | Accepted Create entries without a terminal execution entry, joined with the claims Agora manages (`app.kubernetes.io/managed-by=agora`). Include Creates whose claim does not exist yet. |
+| Which executions require recovery | Accepted Create entries without `execution.ended`, joined with the claims Agora manages (`app.kubernetes.io/managed-by=agora`). Include lost/failed executions awaiting resource disappearance and Creates whose claim does not exist yet. |
 | Request id, claim name, initial deadline, pool, settings, anchor to restore | The Create command and `execution.obtained` for its claim UID. |
 | Bridge instance | The last `execution.connected`. |
 | The agent's capabilities, or initialization still pending | The answer to Agora's `initialize`, or its original outgoing line and dispatch markers. |
@@ -312,6 +317,19 @@ obtained, disappearance ends the execution; it never authorizes recreating its c
 different UID or incompatible claim is a conflict, with no mutation of that resource. If the
 initial deadline has passed before a claim was obtained, record startup failure rather than
 create a fresh lease. These checks do not prove physical extinction for a replacement.
+
+Expiry, `deletionTimestamp`, startup failure and adapter loss close ordinary dispatch and
+renewal; they do not establish claim disappearance. Continue checking the recorded claim,
+including for lost/failed executions, until its confirmed absence permits `execution.ended`.
+Until then, Create in the same Workstream is refused and the execution counts toward the quota.
+Anchor receipt does not release this barrier.
+
+An authenticated anchor is matched through the Pod's claim and the accepted Create's recorded
+name, labels and UID, independently of live ACP connections. The HTTP receiver also compares
+the Pod UID from TokenReview with the current Pod and checks the harness against the pool
+catalogue. A restart during foreground deletion can therefore receive and publish native files
+without reconnecting or sending ACP. Missing claims are refused; identity conflicts store no
+anchor. The restricted storage and publication commits retain their existing ordering.
 
 Then restore request correlations, Session attribution and Stop before connecting. Persist an
 unclean break for each connection without a completed drain. Reuse the initialization answer
@@ -427,6 +445,20 @@ readback. The following cases are distinct acceptance requirements, together wit
 | L34 | Crash or lost acknowledgement between application stages | Barrier reconstructed from canonical evidence; actual installation/settings verified; no possibly dispatched ACP request blindly resent. | Not measured. |
 | L35 | Reload while configuration is pending/applying/failed | Requested and applied values remain distinct; Write disabled with projected reason; Stop and existing turn actions follow their normal rules. | Not measured. |
 | L36 | Token becomes inadequate after admission, before dispatch marker | `request.failed` with `credentials_expiring`, no marker or transport write; no rotation under the saved turn and no automatic prompt retry. | Not measured. |
+
+### Lifecycle and lab regression cases
+
+Measured on 2026-10-01 with PostgreSQL 17.11, real local mock bridges and the lab's signer and
+HTTP receiver. Kubernetes allocation, TokenReview and foreground deletion use FakeKube. These
+cases do not establish real Claude termination-hook delivery or physical replacement safety.
+
+| # | Case | Expected | Measured |
+| --- | --- | --- | --- |
+| L37 | Adapter loss, then claim disappearance | No further dispatch/renewal; quota remains occupied until one end is recorded; a subsequent mock execution can open. | Passed: close 1011, blocked replacement/quota, terminated mock, claim removal and one recorded end. |
+| L38 | Foreground deletion or startup failure while the old resource exists | No premature end, Create or quota release, including after Agora restarts. | Passed: old adapter still returned health 200; admission and quota stayed closed until claim removal, then a new mock Session opened. |
+| L39 | Lab automatically supplies the selected harness's base JWT and its admin credential route is called | Claude-labelled pool receives Anthropic grants before initialize/Session opening; mock needs no JWT; unknown harness refused. | Passed: actual GrantSigner, local mock adapters, credentials-before-opening telemetry, HTTP 200 and no JWT in entries or telemetry. No new Claude model call. |
+| L40 | Agora restarts while an expiring mock Pod is held in foreground deletion, then its anchor is pushed over HTTP | Authenticated publication with no ACP connection, correct Session and one anchor; restore retains native history. | Passed: stubbed TokenReview, foreign Pod UID refused, mock termination/push, new driver with zero connections, claim end, native restore and recall. |
+| L41 | Repeated opening or terminal answer, including after a newer Session or execution end | Every occurrence captured; first valid outcome applies once; original attribution retained and no context reopened. | Passed: duplicate new/resume/load answers, newer Session, late post-end answer and first terminal prompt outcome retained. |
 
 ### Live Claude run
 

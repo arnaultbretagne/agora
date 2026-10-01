@@ -22,7 +22,7 @@ to sandboxes).
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
 | `LAB` | — | `true` to open the lab's routes. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Expected audience of the Pods' projected token. |
-| `GATEWAY_PROXY` | — | The gateway as sandboxes see it, `host:port`. Without it, no credential can be attached. |
+| `GATEWAY_PROXY` | — | The gateway as sandboxes see it, `host:port`. With the log, Claude's base JWT is supplied automatically before opening; without it, no credential can be attached. |
 | `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants. |
 | `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway. |
 
@@ -32,3 +32,9 @@ With the log mounted, Workstream commands use the journal, database anchors and 
 thread. Raw execution routes remain a separate diagnostic surface; their manager excludes
 claims carrying the execution-id label, so it cannot initialize or drive log-owned bridges.
 Log HTTP routes require `LAB=true` and the lab's existing trusted admin boundary.
+
+The log page requires no manual credential attachment. Its assigned Claude executions receive
+only the Anthropic base profile; mock executions need no JWT. The diagnostic credential endpoint
+uses the same reviewed base-profile selection. Warm-pool grants, provisioned resource access and
+between-turn application remain separate contracts. The anchor receiver uses the journal and
+claim to accept an ending Pod's files after a restart, without requiring an ACP connection.

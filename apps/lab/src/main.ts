@@ -10,7 +10,7 @@ import {
   HttpKube,
   privateKeyFrom,
 } from '@agora/executions'
-import { LogStore, LogDriver, logHttp } from '@agora/log'
+import { LogStore, LogDriver, logHttp, gatewayCredentials } from '@agora/log'
 import { GrantSigner } from '@agora/credentials'
 
 function number(name: string, fallback: number): number {
@@ -36,6 +36,16 @@ const kube = new HttpKube({
   tokenFile: process.env.KUBE_TOKEN_FILE ?? '/var/run/secrets/kubernetes.io/serviceaccount/token',
 })
 const signingKey = privateKeyFrom(readFileSync(required('SIGNING_KEY_FILE'), 'utf8'))
+const credentials =
+  process.env.GATEWAY_PROXY === undefined || process.env.GATEWAY_PROXY === ''
+    ? undefined
+    : new GrantSigner({
+        proxy: process.env.GATEWAY_PROXY,
+        keyFile: required('GRANTS_KEY_FILE'),
+        keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
+        issuer: process.env.GRANTS_ISSUER ?? 'agora',
+        audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
+      })
 const logConfigured = ['LOG_WRITER_URL', 'LOG_PROJECTOR_URL', 'LOG_ANCHORS_URL'].some((key) => process.env[key])
 const logStore = logConfigured
   ? new LogStore({
@@ -53,6 +63,7 @@ const logDriver = logStore
       renewSeconds: number('RENEW_SECONDS', 60),
       maxActive: number('MAX_ACTIVE', 4),
       sink: (line) => console.log(line),
+      ...(credentials ? { credentials: gatewayCredentials(logStore, kube, credentials) } : {}),
     })
   : null
 const manager = new ExecutionManager({
@@ -68,18 +79,6 @@ const manager = new ExecutionManager({
   bridgePort: number('BRIDGE_PORT', 8080),
   ...(logConfigured ? { log: null } : {}),
 })
-
-// docs/specs/credentials.md: without the gateway, executions have no credential and no way out.
-const credentials =
-  process.env.GATEWAY_PROXY === undefined || process.env.GATEWAY_PROXY === ''
-    ? undefined
-    : new GrantSigner({
-        proxy: process.env.GATEWAY_PROXY,
-        keyFile: required('GRANTS_KEY_FILE'),
-        keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
-        issuer: process.env.GRANTS_ISSUER ?? 'agora',
-        audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
-      })
 
 try {
   await logDriver?.start()
@@ -101,10 +100,11 @@ const server = createApi({
 server.listen(number('PORT', 8080), () => console.log(`- lab ready on :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({
   manager: {
-    receiveAnchor: async (pod, bundle, raw) => {
+    receiveAnchor: async (pod, bundle, raw, podUid) => {
       if (logDriver) {
-        const answer = await logDriver.receiveAnchor(pod, bundle, raw)
+        const answer = await logDriver.receiveAnchor(pod, bundle, raw, podUid)
         if (answer.accepted) return { accepted: true, value: { anchorId: answer.command } }
+        if (answer.reason === 'anchor_conflict') return { accepted: false, status: 409, reason: answer.reason }
         if (answer.reason !== 'unknown_execution') return { accepted: false, status: 503, reason: answer.reason }
       }
       return manager.receiveAnchor(pod, bundle, raw)

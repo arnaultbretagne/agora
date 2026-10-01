@@ -11,6 +11,7 @@ runtime URLs are configured. The contract is in `docs/specs/log.md`.
 | `src/projection.ts` | Atomic views/checkpoints, coordinated version rebuilds and decimal-cursor snapshot/tail. |
 | `src/driver.ts` | Exclusive driving, claim recovery, bridge capture/backpressure, dispatch markers, cancellation, renewal and drain. |
 | `src/http.ts` | Admin lab commands and resumable SSE thread. Product authorization belongs to its separate access contract. |
+| `src/credentials.ts` | Assigned lab executions' reviewed base profiles, supplied before opening; mock requires no JWT. |
 | `src/telemetry.ts` | Validated correlations and closed operation/outcome/error classes; no payloads or exception messages. |
 | `sql/001.sql` | Schema and the three NOLOGIN boundary roles. |
 | `scripts/migrate.ts` | Privileged provisioning, separate from the runtime. |
@@ -35,6 +36,12 @@ bridges and stops the driver; restart recovers its journal and records unclean b
 second driver cannot start while the first owns the lock. The bridge also permits one peer.
 These are dispatch ownership controls, not proof of physical extinction for a replacement.
 Create after execution loss is refused until an execution end has been recorded.
+
+Lost/failed executions remain counted and tracked until the claim disappears. Expiry and
+foreground deletion close dispatch without declaring resource disappearance. The anchor
+receiver reconstructs its binding from the journal and claim rather than a live ACP connection.
+Core projector version 2 publishes the corrected lifecycle and first-answer semantics through
+the existing version rebuild/reset path.
 
 The projector refolds canonical entries through one source position and publishes only changed
 objects. It deliberately keeps its folding state out of PostgreSQL; the cost grows with retained

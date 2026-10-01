@@ -177,7 +177,10 @@ export function createApi(options: HttpOptions): Server {
 }
 
 export interface AnchorReceiverOptions {
-  readonly manager: Pick<ExecutionManager, 'receiveAnchor'>
+  readonly manager: {
+    receiveAnchor(pod: string, bundle: ReturnType<typeof parseBundle>, raw: Uint8Array,
+      podUid?: string): ReturnType<ExecutionManager['receiveAnchor']>
+  }
   /** The namespace of the sandboxes: a token from anywhere else is refused. */
   readonly namespace: string
   /** TokenReview of the Pod's projected ServiceAccount token (audience agora-anchors). */
@@ -211,7 +214,7 @@ export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
       }
       const raw = new Uint8Array(Buffer.concat(chunks))
       const bundle = parseBundle(raw)
-      const result = await options.manager.receiveAnchor(pod.podName, bundle, raw)
+      const result = await options.manager.receiveAnchor(pod.podName, bundle, raw, pod.podUid)
       reply(res, result)
     })().catch((error: unknown) => {
       const status = error instanceof AnchorRefused ? error.status : 500

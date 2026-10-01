@@ -384,12 +384,18 @@ export class LogStore {
         return { handled: false, reason: result.reason }
       }
       const envelope = result.envelope
-      let session = request?.session ?? state.executions.get(execution)?.session ?? null
+      const previousAnswer = request ? entries.find((e) => e.kind === 'acp' && e.direction === 'in' &&
+        e.request_position === request.position && ['response', 'error'].includes(e.rpc_kind ?? '')) : undefined
+      let session = previousAnswer ? previousAnswer.session : request ? request.session :
+        state.executions.get(execution)?.session ?? null
+      const target = state.executions.get(execution)
       const params = object(request?.content.params),
         response = object(envelope.value.result)
       const opens =
         envelope.kind === 'response' &&
         request &&
+        !state.answers.has(request.position) &&
+        !target?.ended && !target?.lost && !target?.failed &&
         ['session/new', 'session/resume', 'session/load'].includes(request.method!)
       const acpId = opens ? (request!.method === 'session/new' ? response?.sessionId : params?.sessionId) : null
       if (opens && typeof acpId === 'string') session = randomUUID()

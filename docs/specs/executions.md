@@ -329,6 +329,19 @@ than the claim annotation; commit the anchor and then `anchor.received` before a
 exposing it. Recover unpublished stored anchors after a crash. TokenReview and Pod/claim
 authentication still precede storage, and Agora never interprets native file contents.
 
+The receiver finds the log-owned execution from the accepted Create and current claim, even
+when the restarted driver has no ACP connection. It verifies the recorded claim name, labels
+and UID and the Pod UID returned by TokenReview. Expiry or foreground deletion closes access
+but does not end the execution before the claim disappears. Lost/failed executions remain
+tracked and counted during that interval; a received anchor does not permit an early Create.
+
+With a configured gateway, the log lab supplies the assigned Claude execution's Anthropic-only
+base JWT before initialize and Session opening. The selected pool's harness label determines
+the reviewed base profile; local mock executions receive none and unknown harnesses are refused.
+Pool warmup authorization, image-digest verification and between-turn renewal/application retain
+the separate acceptance requirements in `credentials.md`. Cases L37–L41 in `log.md` record the
+local lifecycle, receiver and lab measurements.
+
 The lab mounts the log with PostgreSQL and creates one Workstream per execution. Its raw relay
 remains a test surface; capture and command admission follow the same journal rules as the
 server. Log cases are measured separately from the existing execution cases below.

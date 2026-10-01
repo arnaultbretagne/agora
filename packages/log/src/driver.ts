@@ -32,7 +32,7 @@ export interface DriverOptions {
   maxActive?: number
   shutdownMs?: number
   /** Supply a gateway grant before any ACP initialization/session opening on each connection. */
-  credentials?: (workstream: string, execution: string) => Promise<Credentials>
+  credentials?: (workstream: string, execution: string) => Promise<Credentials | null>
 }
 interface Connection {
   workstream: string
@@ -162,7 +162,7 @@ export class LogDriver {
           if (!catalogue.some((p) => p.metadata.name === pool)) return 'unknown_pool'
           await tx.client.query('SELECT pg_advisory_xact_lock($1)', [LOCK + 1])
           const active = await tx.client.query(
-            "SELECT count(*)::text AS count FROM commands c WHERE c.kind='Create' AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.execution=c.execution AND e.kind IN ('execution.ended','execution.failed','execution.lost'))",
+            "SELECT count(*)::text AS count FROM commands c WHERE c.kind='Create' AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.execution=c.execution AND e.kind='execution.ended')",
           )
           if (BigInt(active.rows[0].count) >= BigInt(this.options.maxActive ?? 4)) return 'quota'
           if (command.body.anchor !== undefined) {
@@ -186,11 +186,15 @@ export class LogDriver {
         if (!current || current.ended || current.lost) return 'execution_unavailable'
         if (command.target.execution !== current.id) return 'stale_execution'
         if (command.kind === 'Stop') return { execution: current.id, session: current.session ?? undefined }
+        if (current.failed) return 'execution_unavailable'
         if (current.stopped) return 'stopped'
         const connection = this.connections.get(current.id)
         if (command.kind === 'Write') {
           if (!connection || connection.blocked || connection.closed || connection.ws.readyState !== WebSocket.OPEN)
             return 'disconnected'
+          if (connection.claim.metadata.deletionTimestamp ||
+            Date.parse(connection.claim.spec?.lifecycle?.shutdownTime ?? String(current.body.deadline)) <= Date.now())
+            return 'execution_ending'
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
           if (!current.session || command.target.session !== current.session) return 'stale_session'
           if (
@@ -283,6 +287,7 @@ export class LogDriver {
         current.stopped ||
         current.ended ||
         current.lost ||
+        current.failed ||
         state.active
       )
         throw new Error('control_refused')
@@ -310,6 +315,7 @@ export class LogDriver {
         state.current.stopped ||
         state.current.ended ||
         state.current.lost ||
+        state.current.failed ||
         !c ||
         c.closed ||
         c.blocked
@@ -350,10 +356,15 @@ export class LogDriver {
     await this.ensureOwner()
     const state = await this.options.store.state(workstream),
       execution = state.current
-    if (!execution || execution.ended || execution.lost) return
+    if (!execution || execution.ended) return
     let claim = await this.timed('recover', 'claim_read', { workstream, execution: execution.id },
       () => this.options.kube.getClaim(execution.claimName))
     const deadline = String(execution.body.deadline)
+    if (execution.lost || execution.failed) {
+      this.suspend(execution.id)
+      if (!claim) await this.end(workstream, execution, 'claim_missing')
+      return
+    }
     if (!claim) {
       if (execution.uid) {
         await this.end(workstream, execution, 'claim_missing')
@@ -409,8 +420,10 @@ export class LogDriver {
         execution: execution.id,
         content: { uid: claim.metadata.uid, claimName: claim.metadata.name },
       })
+    const existing = this.connections.get(execution.id)
+    if (existing) existing.claim = claim
     if (claim.metadata.deletionTimestamp || Date.parse(claim.spec?.lifecycle?.shutdownTime ?? deadline) <= Date.now()) {
-      await this.end(workstream, execution, 'deadline_reached')
+      this.suspend(execution.id)
       return
     }
     const ready = claim.status?.conditions?.find((c) => c.type === 'Ready')
@@ -535,7 +548,7 @@ export class LogDriver {
       const credentials = await this.timed('connect', 'credential_provider', { workstream, execution: execution.id },
         () => this.options.credentials!(workstream, execution.id))
       await this.ensureOwner()
-      await this.putCredentials(c, credentials)
+      if (credentials) await this.putCredentials(c, credentials)
       c.credentialsReady = true
     }
     const entries = await this.options.store.entries(workstream),
@@ -802,7 +815,8 @@ export class LogDriver {
               ['response', 'error'].includes(committed.rpc_kind ?? '') &&
               !latestExecution?.stopped &&
               !latestExecution?.ended &&
-              !latestExecution?.lost
+              !latestExecution?.lost &&
+              !latestExecution?.failed
             ) {
               const lease = Number(schemaValue(object(execution.body.limits)?.leaseSeconds))
               await this.ensureOwner()
@@ -898,12 +912,15 @@ export class LogDriver {
     })
     c.blocked = false
   }
-  private async end(workstream: string, execution: Execution, reason: Reason): Promise<void> {
-    const c = this.connections.get(execution.id)
+  private suspend(execution: string): void {
+    const c = this.connections.get(execution)
     if (c && !c.closed) {
       c.blocked = true
       c.ws.terminate()
     }
+  }
+  private async end(workstream: string, execution: Execution, reason: Reason): Promise<void> {
+    this.suspend(execution.id)
     await this.options.store.fact(workstream, { kind: 'execution.ended', execution: execution.id, content: { reason } })
   }
   private async tick(): Promise<void> {
@@ -928,6 +945,7 @@ export class LogDriver {
             !execution.stopped &&
             !execution.ended &&
             !execution.lost &&
+            !execution.failed &&
             c &&
             !c.closed &&
             !c.blocked &&
@@ -954,17 +972,42 @@ export class LogDriver {
       this.ticking = false
     }
   }
-  async receiveAnchor(pod: string, bundle: Bundle, bytes: Uint8Array): Promise<Answer> {
-    const c = [...this.connections.values()].find((c) => c.pod === pod)
-    if (!c) return { accepted: false, reason: 'unknown_execution' }
-    return this.serial(c.workstream, async () => {
-      const state = await this.options.store.state(c.workstream),
-        execution = state.executions.get(c.execution)!
-      const id = identity(c.execution, c.claim.metadata.uid, createHash('sha256').update(bytes).digest('hex'), 'anchor')
+  async receiveAnchor(pod: string, bundle: Bundle, bytes: Uint8Array, podUid?: string): Promise<Answer> {
+    // An ending Pod may push before this process has ever connected to its bridge.
+    const matches = (await this.options.kube.listClaims(SELECTOR)).items.filter((claim) =>
+      claim.metadata.labels?.[MANAGED] === 'agora' &&
+      claim.metadata.labels?.[EXECUTION_LABEL] !== undefined && claim.status?.sandbox?.name === pod)
+    if (!matches.length) return { accepted: false, reason: 'unknown_execution' }
+    if (matches.length !== 1) return { accepted: false, reason: 'anchor_conflict' }
+    const observed = matches[0]!
+    let executionId: string
+    try { executionId = uuid(observed.metadata.labels?.[EXECUTION_LABEL]) }
+    catch { return { accepted: false, reason: 'anchor_conflict' } }
+    const recorded = await this.options.store.writer.query(
+      "SELECT workstream,claim_name FROM commands WHERE kind='Create' AND execution=$1", [executionId])
+    if (recorded.rowCount !== 1 || recorded.rows[0].claim_name !== observed.metadata.name)
+      return { accepted: false, reason: 'anchor_conflict' }
+    const workstream = recorded.rows[0].workstream as string
+    return this.serial(workstream, async () => {
+      const state = await this.options.store.state(workstream),
+        execution = state.executions.get(executionId),
+        claim = await this.options.kube.getClaim(observed.metadata.name)
+      if (!claim) return { accepted: false, reason: 'unknown_execution' }
+      if (!execution?.uid || execution.uid !== claim.metadata.uid ||
+        claim.metadata.labels?.[MANAGED] !== 'agora' ||
+        claim.metadata.labels?.[EXECUTION_LABEL] !== executionId ||
+        claim.metadata.labels?.[POOL] !== execution.body.pool || claim.status?.sandbox?.name !== pod)
+        return { accepted: false, reason: 'anchor_conflict' }
+      if (podUid !== undefined && object((await this.options.kube.getPod(pod))?.metadata)?.uid !== podUid)
+        return { accepted: false, reason: 'anchor_conflict' }
+      const harness = (await this.options.kube.listPools('agora.bretagne.dev/harness'))
+        .find((pool) => pool.metadata.name === execution.body.pool)?.metadata.labels?.['agora.bretagne.dev/harness']
+      if (bundle.harness !== harness) return { accepted: false, reason: 'anchor_conflict' }
+      const id = identity(executionId, claim.metadata.uid, createHash('sha256').update(bytes).digest('hex'), 'anchor')
       await this.options.store.anchor({
         id,
-        workstream: c.workstream,
-        execution: c.execution,
+        workstream,
+        execution: executionId,
         session: execution.session,
         metadata: {
           harness: bundle.harness,
@@ -980,10 +1023,10 @@ export class LogDriver {
       return {
         accepted: true,
         command: id,
-        position: (await this.options.store.entries(c.workstream)).find(
+        position: (await this.options.store.entries(workstream)).find(
           (e) => e.kind === 'anchor.received' && e.content.id === id,
         )!.position,
-        execution: c.execution,
+        execution: executionId,
       }
     })
   }

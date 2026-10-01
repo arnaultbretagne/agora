@@ -161,7 +161,7 @@ export class FakeKube implements KubeApi {
   }
 
   async getPod(): Promise<Json | null> {
-    return { status: { phase: 'Running' } }
+    return { metadata: { uid: 'uid' }, status: { phase: 'Running' } }
   }
 
   /** A projected token is `pod:<name>` here; anything else is refused, as TokenReview would. */

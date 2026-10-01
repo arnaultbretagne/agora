@@ -7,6 +7,7 @@ import type { CredentialSource } from '@agora/executions'
 import type { Command } from './store.ts'
 import { uuid, object, decode, encode, cursor } from './json.ts'
 import { MAX_LINE } from './acp.ts'
+import { gatewayCredentials } from './credentials.ts'
 export async function logHttp(
   driver: LogDriver,
   req: IncomingMessage,
@@ -86,8 +87,8 @@ export async function logHttp(
       }
       const input = await body(),
         execution = uuid(input.execution)
-      const secret = await credentials.mint({ label: `agora ${execution}`, ttlSeconds: 3600 })
-      await driver.attachCredentials(workstream, execution, secret)
+      const secret = await gatewayCredentials(driver.options.store, driver.options.kube, credentials)(workstream, execution)
+      if (secret) await driver.attachCredentials(workstream, execution, secret)
       reply(200, { accepted: true })
       return true
     }
