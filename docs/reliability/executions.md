@@ -8,7 +8,7 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | --- | --- | --- | --- | --- |
 | R1 | 2026-09-30 | `7afc4d7` | cluster | g4 under Kata, Agent Sandbox v1.0.3, thin bridge images: mock, and claude-code 2.1.261 with claude-agent-acp 0.75.1 and no credential. `apps/lab/scripts/live-cases.ts` against the deployed lab, where case E*n* was case *n*. Deadline cases with a 60 s lease, re-armed three times per lease. |
 | R2 | 2026-09-30 | `7afc4d7` | local | `npm run check`: the two bridge tests in `packages/harness-bridge/test/bridge.test.ts` now named E27. |
-| R3 | 2026-10-02 | `ce7a493` | local | `npm run check`: the mechanics against real bridges (`packages/executions`), and the cases the log decides with PostgreSQL 17.11 (`packages/log`, as in `log.md` R1); renewal step 1 s instead of a minute for E12 and E13. |
+| R3 | 2026-10-02 | `0669fc5` | local | `npm run check`: the mechanics against real bridges (`packages/executions`), and the cases the log decides with PostgreSQL 17.11 (`packages/log`, as in `log.md` R1); renewal step 1 s instead of a minute for E12 and E13. |
 
 ## Cases
 
