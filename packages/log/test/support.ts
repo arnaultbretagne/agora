@@ -287,7 +287,12 @@ export class Lab {
       await new Promise<void>((resolve) => lab.receiver!.listen(0, '127.0.0.1', resolve))
       lab.kube.anchorUrl = `http://127.0.0.1:${String((lab.receiver.address() as AddressInfo).port)}/anchors`
     }
-    await lab.workstreams.start()
+    try {
+      await lab.workstreams.start()
+    } catch (error) {
+      await lab.shutdown(options.kube === undefined)
+      throw error
+    }
     lab.api = createHttpServer((req, res) => {
       void logHttp(lab.workstreams, req, res, { lab: true }).then((handled) => {
         if (!handled) res.writeHead(404).end()
@@ -361,9 +366,13 @@ export class Lab {
     return this.command(workstream, 'Write', { execution: e.id, session: e.session }, { prompt: [{ type: 'text', text }] })
   }
 
+  /** The latest turn, once it has one of these statuses. */
   async turn(workstream: string, status: string | string[], timeoutMs = 15_000) {
     const wanted = Array.isArray(status) ? status : [status]
-    return until(`turn ${wanted.join('|')}`, async () => [...(await this.state(workstream)).turns.values()].findLast((t) => wanted.includes(t.status)), timeoutMs)
+    return until(`turn ${wanted.join('|')}`, async () => {
+      const latest = [...(await this.state(workstream)).turns.values()].at(-1)
+      return latest && wanted.includes(latest.status) ? latest : null
+    }, timeoutMs)
   }
 }
 

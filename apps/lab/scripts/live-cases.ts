@@ -74,7 +74,10 @@ class Workstream {
   }
   async turn(status: string | string[], timeoutMs = 60_000): Promise<Turn> {
     const wanted = Array.isArray(status) ? status : [status]
-    return until(`turn ${wanted.join('|')}`, async () => [...(await this.state()).turns.values()].findLast((t) => wanted.includes(t.status)), timeoutMs)
+    return until(`turn ${wanted.join('|')}`, async () => {
+      const latest = [...(await this.state()).turns.values()].at(-1)
+      return latest && wanted.includes(latest.status) ? latest : undefined
+    }, timeoutMs)
   }
   stop(): Promise<Json> {
     return this.command('Stop', { execution: this.execution })
@@ -193,14 +196,21 @@ await check('L9', 'Write during a turn', async () => {
   return `"${String(refused.reason)}"`
 })
 
-await check('L12', 'Cancel a turn', async () => {
-  const turn = await a.turn('in_progress', 10_000)
+await check('L12', 'Cancel on an uncertain turn still running', async () => {
+  const running = await a.turn('in_progress', 10_000)
+  const cut = await api('POST', `/api/lab/executions/${a.execution}/drop-bridge`, { pauseSeconds: 2 })
+  assert(cut.accepted === true, JSON.stringify(cut))
+  const turn = await a.turn('uncertain', 15_000)
+  assert(turn.id === running.id, 'another turn')
+  await until('reconnected', async () => (await a.state()).current?.connection, 30_000)
   assert((await a.command('Cancel', { execution: a.execution, turn: turn.id })).status === 200, 'Cancel refused')
   const ended = await a.turn('cancelled', 30_000)
   assert(ended.id === turn.id, 'another turn')
   assert((await a.write('after the cancel')).status === 200, 'Write refused after the cancel')
   await a.turn('done', 30_000)
-  return 'cancelled, then a Write accepted'
+  const cancels = (await a.entries()).filter((x) => x.kind === 'acp' && x.direction === 'out' && x.method === 'session/cancel')
+  assert(cancels.length === 1, `${String(cancels.length)} session/cancel`)
+  return 'uncertain after the cut, one session/cancel, cancelled, then a Write accepted'
 })
 
 await check('E27', 'Agora away while the adapter writes', async () => {
@@ -210,8 +220,12 @@ await check('E27', 'Agora away while the adapter writes', async () => {
   assert(cut.accepted === true, JSON.stringify(cut))
   await a.turn('uncertain', 15_000)
   await a.turn('done', 60_000)
+  // The adapter keeps writing while Agora is away: the pipe holds what is unread, then blocks it.
   const before = (await a.entries()).length
   assert((await a.write('/big 3600')).status === 200, 'Write refused')
+  await until('first chunk', async () => (await a.entries()).slice(before).some((x) => x.kind === 'acp' && x.method === 'session/update'), 10_000)
+  const away = await api('POST', `/api/lab/executions/${a.execution}/drop-bridge`, { pauseSeconds: 10 })
+  assert(away.accepted === true, JSON.stringify(away))
   await a.turn('done', 120_000)
   const numbered = (await a.entries()).slice(before)
     .filter((x) => x.kind === 'acp' && x.method === 'session/update')
@@ -219,7 +233,7 @@ await check('E27', 'Agora away while the adapter writes', async () => {
     .filter((text) => /^\d{5} /.test(text))
   assert(numbered.length === 3600, `missing output: ${String(numbered.length)}/3600 chunks`)
   for (let i = 0; i < numbered.length; i++) assert(numbered[i]!.startsWith(`${String(i).padStart(5, '0')} `), 'output out of order')
-  return 'output written while Agora was away arrived complete; 3600 large chunks in order'
+  return 'output written while Agora was away arrived complete and in order, short and 3600 large chunks'
 })
 
 async function restartLab(mode: 'clean' | 'kill'): Promise<void> {

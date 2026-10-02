@@ -188,3 +188,48 @@ test('L35 a line waiting for its commit: nothing more is read, then every line i
   const ordinals = received.map((x) => BigInt(x.receive_ordinal!))
   assert.deepEqual(ordinals, ordinals.map((_, i) => ordinals[0]! + BigInt(i)))
 })
+
+test('L40 the deadline cannot be moved when a prompt is dispatched: deadline_refused, the turn failed, nothing sent', async (t) => {
+  const { lab, ws } = await opened(t)
+  assert.ok((await lab.write(ws, 'before')).accepted)
+  await lab.turn(ws, 'done')
+  // Simulated: the Kubernetes API refuses the PATCH (fake-kube).
+  lab.kube.failPatches = true
+  assert.ok((await lab.write(ws, 'never sent')).accepted)
+  const line = lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!
+  const failed = await until('request.failed', async () => (await lab.entries(ws)).find((x) => x.kind === 'request.failed' && x.content.requestPosition === line.position))
+  assert.equal(failed.content.reason, 'deadline_refused')
+  assert.equal([...(await lab.state(ws)).turns.values()].find((x) => x.requestPosition === line.position)?.status, 'failed')
+  assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === line.position).length, 0)
+  lab.kube.failPatches = false
+  assert.ok((await lab.write(ws, '/recall')).accepted)
+  await lab.turn(ws, 'done')
+  const recall = texts(await lab.entries(ws)).find((text) => text.startsWith('You told me')) ?? ''
+  assert.ok(recall.includes('"before"') && !recall.includes('never sent'), recall)
+})
+
+test('L41 an invalid answer to initialize, then no valid one: diagnosed, then response_timeout and startup_failed', async (t) => {
+  const pair = keys()
+  const kube = new FakeKube(pair.publicKey)
+  kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { initializeInvalid: true })
+  const db = await database()
+  const lab = await Lab.start({ db, kube, keys: pair, workstreams: { responseTimeoutMs: 1500 } })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const ws = await lab.workstream()
+  assert.ok((await lab.command(ws, 'Create', {}, { pool: 'mock-test' })).accepted)
+  const failed = await until('execution.failed', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.failed'))
+  const entries = await lab.entries(ws)
+  const initialize = lines(entries, 'out', 'initialize')
+  assert.equal(initialize.length, 1)
+  const failures = entries.filter((x) => x.kind === 'request.failed' && x.content.requestPosition === initialize[0]!.position)
+  assert.deepEqual(failures.map((x) => x.content.reason), ['invalid_body', 'response_timeout'])
+  const diagnostic = await db.admin.query('SELECT reason FROM diagnostics WHERE id=$1', [failures[0]!.content.diagnostic])
+  assert.equal(diagnostic.rows[0]?.reason, 'invalid_body')
+  assert.deepEqual([failed.content.reason, failed.content.requestPosition], ['startup_failed', initialize[0]!.position])
+  assert.equal(lines(entries, 'in', 'initialize').length, 0)
+  await sleep(1000)
+  assert.equal(lines(await lab.entries(ws), 'out', 'initialize').length, 1)
+})

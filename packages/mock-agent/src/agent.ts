@@ -294,6 +294,8 @@ async function handle(message: Message): Promise<void> {
         appendFileSync(join(home, '.mock-agent', 'initialize-requests'), `${String(message.id)}\n`)
         await new Promise((resolve) => setTimeout(resolve, delay))
       }
+      // An answer whose body the schema refuses, for the log's validation (docs/specs/log.md, L41).
+      if (process.env.AGORA_MOCK_INITIALIZE_INVALID === '1') return send({ id: message.id, result: { protocolVersion: 'one' } })
       return send({
         id: message.id,
         result: {

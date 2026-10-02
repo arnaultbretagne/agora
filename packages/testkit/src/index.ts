@@ -20,13 +20,20 @@ export interface LabBridge {
   readonly url: string
 }
 
-export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', options: { home?: string; initializeDelayMs?: number } = {}): Promise<LabBridge> {
+export async function mockBridge(publicKey: KeyObject, podName = 'sbx-test', options: { home?: string; initializeDelayMs?: number; initializeInvalid?: boolean } = {}): Promise<LabBridge> {
   const home = options.home ?? mkdtempSync(join(tmpdir(), 'bridge-'))
   const workspace = join(home, 'work')
   const bridge = await startBridge({
     port: 0,
     host: '127.0.0.1',
-    adapterCommand: ['env', `HOME=${home}`, `AGORA_MOCK_INITIALIZE_DELAY_MS=${String(options.initializeDelayMs ?? 0)}`, process.execPath, MOCK_AGENT],
+    adapterCommand: [
+      'env',
+      `HOME=${home}`,
+      `AGORA_MOCK_INITIALIZE_DELAY_MS=${String(options.initializeDelayMs ?? 0)}`,
+      `AGORA_MOCK_INITIALIZE_INVALID=${options.initializeInvalid ? '1' : '0'}`,
+      process.execPath,
+      MOCK_AGENT,
+    ],
     workspace,
     podName,
     publicKey,

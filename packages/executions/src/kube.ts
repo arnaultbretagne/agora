@@ -129,7 +129,7 @@ export class HttpKube implements KubeApi {
   async watchClaims(selector: string, resourceVersion: string, onEvent: (event: WatchEvent) => void, signal: AbortSignal): Promise<void> {
     const query = `?watch=1&allowWatchBookmarks=true&timeoutSeconds=300&resourceVersion=${encodeURIComponent(resourceVersion)}&labelSelector=${encodeURIComponent(selector)}`
     const response = await fetch(this.url(CLAIMS, 'sandboxclaims', '', query), { headers: await this.headers(), signal })
-    if (response.status === 410) throw new WatchGone('resourceVersion trop ancien')
+    if (response.status === 410) throw new WatchGone('resourceVersion too old')
     if (!response.ok || response.body === null) throw new KubeError(response.status, `watch refused: ${String(response.status)}`)
     const decoder = new TextDecoder()
     let pending = ''
@@ -142,7 +142,7 @@ export class HttpKube implements KubeApi {
         const event = JSON.parse(line) as WatchEvent
         if (event.type === 'ERROR') {
           if (event.object.code === 410) throw new WatchGone(event.object.message ?? 'watch expired')
-          throw new KubeError(event.object.code ?? 500, event.object.message ?? 'erreur de watch')
+          throw new KubeError(event.object.code ?? 500, event.object.message ?? 'watch error')
         }
         onEvent(event)
       }

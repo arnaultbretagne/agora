@@ -293,10 +293,6 @@ export class LogStore {
     cached.sync = next.catch(() => {})
     return next.then(() => cached)
   }
-  /** Forgets a Workstream's cache: the next read folds its history from the start. */
-  forget(workstream: string): void {
-    this.cache.delete(workstream)
-  }
   async transaction<T>(workstream: string, run: (tx: Transaction) => Promise<T>): Promise<T> {
     const client = await this.writer.connect()
     let broken = false

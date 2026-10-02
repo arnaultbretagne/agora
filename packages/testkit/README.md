@@ -7,4 +7,4 @@ Tools shared by the bridge, executions and log tests: a local bridge in front of
 The local bridge speaks raw ACP lines. `Collector` keeps them, raw and parsed, with the instance
 upgrade header and the socket's close reason.
 
-`mockBridge` can delay initialization to exercise a restart with the handshake still pending.
+`mockBridge` can delay its answer to `initialize`, or make it invalid.

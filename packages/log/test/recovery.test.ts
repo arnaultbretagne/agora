@@ -273,7 +273,8 @@ test('L29 an anchor stored without its anchor.received gets one at the next star
 })
 
 test('L30 the adapter dies: execution.lost, no dispatch or renewal, counted until its claim disappears', async (t) => {
-  const { lab, ws, e } = await opened(t, { workstreams: { maxActive: 1 } })
+  // A renewal step of 1 s: a renewal after the loss would show within the window below.
+  const { lab, ws, e } = await opened(t, { workstreams: { maxActive: 1, renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
   assert.ok((await lab.write(ws, '/crash')).accepted)
   const lost = await until('execution.lost', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.lost'))
   assert.equal(lost.content.reason, 'adapter_exited')
@@ -295,18 +296,21 @@ test('L30 the adapter dies: execution.lost, no dispatch or renewal, counted unti
 })
 
 test('L31 the claim being deleted while its Pod lives, across a restart: admission closed, counted until it disappears', async (t) => {
-  const context = await opened(t)
+  const context = await opened(t, { workstreams: { maxActive: 1 } })
   const { ws, e } = context
+  const other = await context.lab.workstream()
   context.lab.kube.holdDeletion = true
   context.lab.kube.expireAt(e.claimName, new Date())
   await until('deletion started', () => context.lab.executions.claimOf(e.id)?.metadata.deletionTimestamp !== undefined)
   assert.deepEqual(await context.lab.write(ws, 'while ending'), { accepted: false, reason: 'execution_ending' })
   assert.deepEqual(await context.lab.command(ws, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'execution_active' })
+  assert.deepEqual(await context.lab.command(other, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'quota' })
   context.lab = await context.lab.restart('clean')
   await sleep(1000)
-  const refused = await context.lab.write(ws, 'after the restart')
-  assert.equal(refused.accepted, false)
+  // No connection is opened to an ending claim.
+  assert.deepEqual(await context.lab.write(ws, 'after the restart'), { accepted: false, reason: 'disconnected' })
   assert.deepEqual(await context.lab.command(ws, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'execution_active' })
+  assert.deepEqual(await context.lab.command(other, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'quota' })
   assert.equal((await context.lab.entries(ws)).filter((x) => x.kind === 'execution.ended').length, 0)
   context.lab.kube.releaseDeletion()
   await until('execution.ended', async () => (await context.lab.entries(ws)).some((x) => x.kind === 'execution.ended'))
@@ -362,15 +366,28 @@ test('L15 restore from an anchor: a new Session, the same ACP session id, and th
 })
 
 test('L36 a storage outage lasting past the deadline: the interruption shown, no fresh lease', async (t) => {
-  const { db, lab, ws, e } = await opened(t, {}, { limits: { leaseSeconds: 60 } })
+  // A renewal step of 1 s: the turn is renewed every second until the outage.
+  const { db, lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
+  const dispatched = lab.kube.deadlines.length
   assert.ok((await lab.write(ws, '/sleep 30')).accepted)
   const line = lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!
   await until('first chunk', async () => lines(await lab.entries(ws), 'in', 'session/update').length > 0)
+  // Control: renewed during the turn, before the outage.
+  await until('renewed during the turn', () => lab.kube.deadlines.length >= dispatched + 3, 10_000)
   const patches = lab.kube.deadlines.length
   // Real: PostgreSQL closes the database to new connections and ends Agora's open ones, but the
   // ownership connection.
   await db.connections(false)
   for (const role of ['writer', 'projector', 'anchors'] as const) await terminate(db, role, role === 'writer' ? 'others' : 'all')
+  // While a received line waits for its commit, no command is admitted.
+  await until('a capture blocked', () =>
+    lab.logs.some((l) => {
+      const line = JSON.parse(l) as Record<string, unknown>
+      return line.operation === 'capture' && line.outcome === 'blocked'
+    }),
+  )
+  const refused = await lab.workstreams.command(ws, { id: randomUUID(), kind: 'Write', target: { execution: e.id, session: e.session }, body: { prompt: [{ type: 'text', text: 'during the outage' }] } })
+  assert.deepEqual(refused, { accepted: false, reason: 'unavailable' })
   // Simulated: the deadline brought to now by the cluster (fake-kube); it passes during the outage.
   lab.kube.expireAt(e.claimName, new Date(Date.now() + 1500))
   await until('the claim gone', () => !lab.kube.claims.has(e.claimName), 20_000)
@@ -383,11 +400,13 @@ test('L36 a storage outage lasting past the deadline: the interruption shown, no
   assert.equal([...(await lab.state(ws)).turns.values()].find((x) => x.requestPosition === line.position)?.status, 'failed')
   assert.equal(lab.kube.deadlines.length, patches)
   assert.equal(lab.ownershipLost, 0)
-  t.diagnostic(`outage from the first chunk until the claim was gone; ${String(patches)} deadline PATCH(es) before, none after`)
+  t.diagnostic(`${String(patches - dispatched)} deadline PATCH(es) before the outage, none after; a Write refused during it`)
   await until('projected', async () => {
     const notices = (await lab.workstreams.projections.objects(ws)).filter((o) => o.kind === 'notice').map((o) => object(o.object)?.type)
     return notices.includes('execution.break') && notices.includes('execution.ended')
   })
+  // Once storage is back, the Workstream admits commands again.
+  assert.ok((await lab.command(ws, 'Create', {}, { pool: 'mock-test' })).accepted)
 })
 
 test('L38 the bridge restarts inside its Pod during a turn: execution.lost (instance_changed), nothing more dispatched or renewed', async (t) => {
@@ -407,4 +426,16 @@ test('L38 the bridge restarts inside its Pod during a turn: execution.lost (inst
   const after = (await lab.entries(ws)).filter((x) => BigInt(x.position) > BigInt(lost.position))
   assert.equal(after.filter((x) => x.kind === 'acp.dispatching' || x.kind === 'execution.connected').length, 0)
   assert.equal(lab.kube.deadlines.length, patches)
+})
+
+test('L39 a second server on the same database exits at start, writing nothing; the first goes on', async (t) => {
+  const run = await served(t)
+  const e = await open(run)
+  const before = (await entries(run)).length
+  // Real: another lab process, same database, same cluster.
+  await assert.rejects(Server.start({ db: run.db, api: run.c.api, keys: run.c.keys }), /lab exited/)
+  assert.equal((await entries(run)).length, before)
+  await write(run, e, 'still served')
+  const line = await prompt(run)
+  await until('the answer', async () => ((await turnOf(run, line)).status === 'done' ? true : null))
 })

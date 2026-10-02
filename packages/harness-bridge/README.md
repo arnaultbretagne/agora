@@ -13,6 +13,6 @@ which opens once Agora attaches a credential (`docs/specs/credentials.md`).
 Exports: `@agora/harness-bridge` (everything), `@agora/harness-bridge/token`,
 `@agora/harness-bridge/anchor`, `@agora/harness-bridge/outbound`.
 
-Agora owns initialization, positions and replay. The bridge stops reading while disconnected or
+Agora owns initialization and every record; the bridge numbers and replays nothing. It stops reading while disconnected or
 while the socket is full; stdin backpressure pauses the socket. Lines are bounded to 16 MiB.
 The instance is carried in the WebSocket upgrade header, never in an ACP message.

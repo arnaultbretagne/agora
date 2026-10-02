@@ -113,7 +113,7 @@ lost, failed or ended.
 
 | Timeout | Rule |
 | --- | --- |
-| `initialize`, Session opening | 60 s after `acp.sent`: `request.failed` (`response_timeout`), then `execution.failed`. Never resent. |
+| `initialize`, Session opening | 60 s after `acp.sent` without a valid answer — an invalid one does not stop the clock: `request.failed` (`response_timeout`), then `execution.failed`, in one transaction. Never resent. |
 | `session/prompt` | None: the turn ends with its answer, its execution, or the turn's maximum duration. |
 
 ### Backpressure and shutdown
@@ -137,8 +137,8 @@ connection left without one, before any dispatch.
 ### Database ownership
 
 The running server holds a PostgreSQL advisory lock on a dedicated connection; a second server is
-refused. If that connection fails, the process exits with a non-zero status and recovery runs on
-its restart.
+refused at its start. If that connection fails, or its check goes unanswered for 10 s, the process
+exits with a non-zero status and recovery runs on its restart.
 
 ## Sessions
 
@@ -159,12 +159,30 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | Rule | Detail |
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
-| Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
+| Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
 | Create | Carries the pool, the settings (lease, turn duration) and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, sending is open, and no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`). |
+| Write | Accepted only if the execution is connected with its Session open, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), and no permission is pending (`permission_pending`). |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
-| Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel`, and no renewal, even after a restart. |
+| Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
+
+| Refusal | When |
+| --- | --- |
+| `command_conflict` | The id was used for another request. |
+| `invalid_command` | A value PostgreSQL cannot hold, or a line that is not valid ACP (its reason instead: `invalid_body`, `unsupported_json_value`…). |
+| `unavailable` | Agora is stopping, or a received line is waiting for its commit. Answered 503. |
+| `execution_active` | Create while the Workstream's execution exists. |
+| `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; settings out of bounds; the active executions at their maximum. |
+| `unknown_anchor`, `anchor_incompatible` | Create: no such anchor; an anchor of another harness. |
+| `execution_conflict` | Create: the execution or claim name already recorded. |
+| `execution_unavailable` | No execution, or it has ended; or, except for Stop, it is lost or failed. |
+| `stale_execution` | The target is not the Workstream's execution. |
+| `stopped` | Stop already given; or a Write, Cancel or answer after it. |
+| `disconnected`, `execution_ending` | Write: no connection to the bridge; the claim being deleted or its deadline passed. |
+| `stale_session`, `opening_session`, `permission_pending` | Write: another Session; the Session still opening; a permission pending. |
+| `turn_active`, `turn_uncertain` | Write: a turn saved or in progress; a turn uncertain. |
+| `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
+| `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
 
 ### A turn's states
 
@@ -220,6 +238,7 @@ What the client reads (`assistant-ui.md`, "A workstream's thread").
 | --- | --- |
 | `POST /api/workstreams` | Creates a Workstream: `id`, `owner`. 409 if the id belongs to another owner. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
+| `GET /api/log-json.js` | The lossless JSON parser the page reads the thread with. |
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
 | `POST /api/workstreams/{id}/control` | Lab only: one `session/set_config_option` for the current Session, between turns. |
 | `POST /api/workstreams/{id}/credentials` | Lab only: hands a signed credential to the execution's bridge (`credentials.md`). |
@@ -246,8 +265,8 @@ the unclean breaks, then joins Creates and claims:
 
 | Situation | Recovery |
 | --- | --- |
-| No claim, no UID recorded, before the initial deadline | Create the claim with the recorded name, pool and deadline. |
-| No claim, no UID recorded, after the initial deadline | `execution.failed` (`startup_failed`); no fresh lease. |
+| No claim, no UID recorded, before the initial deadline | Create the claim with the recorded name, pool and deadline — unless the execution is stopped, lost or failed: then `execution.ended` (`claim_missing`). |
+| No claim, no UID recorded, after the initial deadline | `execution.failed` (`startup_failed`), then `execution.ended` (`claim_missing`); no fresh lease. |
 | No claim, a UID recorded | `execution.ended` (`claim_missing`); never recreated. |
 | A claim with other labels or another UID | `execution.lost` (`claim_conflict`); the claim is left untouched. |
 | Expiry, deletion in progress, adapter loss | Dispatch and renewal stop; the execution stays counted, and Create stays refused, until the claim has disappeared. |
@@ -274,8 +293,8 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | Role | May | May not |
 | --- | --- | --- |
 | `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread or checkpoints. |
-| `agora_projector` | Read entries; write views, checkpoints and the thread; update the thread's last position. | Write entries, commands or Sessions; read anchors; change thread rows. |
-| `agora_anchors` | Read execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
+| `agora_projector` | Read Workstream ids and owners, and entries; write views, checkpoints and the thread; update the thread's last position. | Write entries, commands or Sessions; read anchors; change thread rows. |
+| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
 
 | Rule | Detail |
 | --- | --- |
@@ -301,7 +320,7 @@ exception message.
 | L3 | Invalid received lines: a batch, a wrong direction, an id beyond 2⁵³, invalid UTF-8, two values, a duplicate key with an equal value, a `__proto__` key, `\u0000` | For each: one diagnostic with its reason, size and SHA-256, no content; no `acp` entry; nothing handled. |
 | L4 | An invalid answer to Agora's pending prompt, then a valid one | The diagnostic and a `request.failed` naming it, in one transaction; the turn uncertain; Write refused `turn_uncertain`; the valid answer closes the turn. |
 | L5 | An extension method and an unknown `session/update` type | `acp` entries, and generic elements in the thread. |
-| L6 | The insert of a Write's line fails | The command is refused; no `acp.dispatching`; nothing reaches the bridge. |
+| L6 | The insert of a Write's line fails | Answered 503; no command and no entry written; no `acp.dispatching`; nothing reaches the bridge. |
 | L7 | A capture connection is terminated during a turn | The line is retried and committed once, in order; the turn goes on to its answer. |
 | L8 | The ownership connection is terminated | The process exits with a non-zero status. On restart: an unclean break, the dispatched turn uncertain, never resent. |
 | L9 | Write during a turn, then during an uncertain turn | Refused `turn_active`, then `turn_uncertain`; nothing written. |
@@ -334,6 +353,9 @@ exception message.
 | L36 | A storage outage lasting past the execution's deadline | The interruption shown; no fresh lease. |
 | L37 | A permission answered; then another pending when a Cancel is sent | The answer goes to that request once, a second refused (`stale_permission`); the Cancel's `session/cancel` is followed by a `cancelled` answer to the pending one. |
 | L38 | The bridge restarts inside its Pod during a turn: a new instance | `execution.lost` (`instance_changed`), the turn failed; no dispatch, no renewal; Write refused. |
+| L39 | A second server started on the same database | It exits at start, writing nothing; the first goes on. |
+| L40 | The deadline cannot be moved when a prompt is dispatched | `request.failed` (`deadline_refused`); the turn failed; nothing sent; a Write accepted again. |
+| L41 | An invalid answer to `initialize`, then no valid one | The diagnostic and `request.failed` naming it; then `request.failed` (`response_timeout`) and `execution.failed` (`startup_failed`); no second `initialize`. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

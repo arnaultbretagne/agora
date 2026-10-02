@@ -206,6 +206,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label. |
 | `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
+| `GET /api/config` | Whether the lab's routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
@@ -220,7 +221,7 @@ The log decides each move and keeps the turn start; the mechanics apply it.
 | --- | --- |
 | Creation | now + lease |
 | Prompt dispatched | Before its first write, a single PATCH: min(now + lease, turn start + maximum duration). If it fails, the prompt fails (`deadline_refused`) and nothing is sent. |
-| Every minute of a turn | min(now + lease, turn start + maximum duration) |
+| Every minute of a turn, while connected to the bridge | min(now + lease, turn start + maximum duration) |
 | End of turn confirmed | now + lease, once, then nothing more until the next prompt |
 | Stop requested | Nothing more; `session/cancel` if a turn is in progress |
 | Adapter lost, instance changed, claim ending | Nothing more |
@@ -250,9 +251,10 @@ anchor received, if any.
 Agora has the projected token validated by the Kubernetes API (`TokenReview`, audience
 `agora-anchors`) and derives the namespace, the Pod and its UID. It finds that Pod's claim, checks
 its labels and its UID against the log, and the Pod's UID against the Pod's; the anchor is then
-stored in PostgreSQL by the anchor role, and `anchor.received` appended (`log.md`). A refused
-token: 401; a Pod without a claim: 404; a mismatch: 409; nothing is stored. With no push before
-the claim disappears, the execution ends without an anchor.
+stored in PostgreSQL by the anchor role, and `anchor.received` appended (`log.md`). A refused token:
+401; a Pod of another namespace: 403; a Pod without a claim: 404; a mismatch: 409; an anchor over 32
+MiB: 413; nothing is stored. With no push before the claim disappears, the execution ends without an
+anchor.
 
 ### What Agora writes on the claim
 

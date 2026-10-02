@@ -47,7 +47,11 @@ export interface State {
   outbox: Map<string, Entry>
   /** Outgoing requests without a valid answer, by position. */
   unanswered: Set<string>
+  /** The first valid answer to each request, by the request's position. */
+  answeredBy: Map<string, string>
   failures: Set<string>
+  /** Requests failed for want of an answer in time (`response_timeout`). */
+  timedOut: Set<string>
   turns: Map<string, Turn>
   active: Turn | null
   current: Execution | null
@@ -65,7 +69,9 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     sentAt: new Map(),
     outbox: new Map(),
     unanswered: new Set(),
+    answeredBy: new Map(),
     failures: new Set(),
+    timedOut: new Set(),
     turns: new Map(),
     active: null,
     current: null,
@@ -168,6 +174,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           : state.requests.get(requestKey)
         if (request && request.execution === entry.execution && !state.answers.has(request.position)) {
           state.answers.add(request.position)
+          state.answeredBy.set(request.position, entry.position)
           state.unanswered.delete(request.position)
           if (state.permissions.get(requestKey)?.position === request.position) state.permissions.delete(requestKey)
           if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution)
@@ -204,6 +211,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     if (entry.kind === 'request.failed') {
       const position = String(content.requestPosition)
       state.failures.add(position)
+      if (content.reason === 'response_timeout') state.timedOut.add(position)
       state.outbox.delete(position)
       const turn = turnsByRequest.get(position)
       if (turn && !turn.answered) {
@@ -437,26 +445,4 @@ export function project(entries: readonly Entry[]): ProjectedObject[] {
   const projection = new CoreProjection()
   projection.apply(entries)
   return [...projection.objects.values()].sort((a, b) => a.id.localeCompare(b.id))
-}
-/** The external assistant-ui store consumes this mapping, including explicit actions on uncertainty. */
-export function runtimeState(objects: readonly ProjectedObject[], snapshotComplete = true) {
-  const turns = objects.filter((o) => o.kind === 'turn')
-  const active = turns.find((o) => ['saved', 'in_progress', 'uncertain'].includes(String(o.object.status)))
-  const view = objects.find((o) => o.kind === 'workstream')?.object
-  const reason = !snapshotComplete
-    ? 'snapshot_incomplete'
-    : view?.stopped
-      ? 'stopped'
-      : active
-        ? String(active.object.status)
-        : !view || view.unavailable
-          ? 'unavailable'
-          : null
-  return {
-    isRunning: active?.object.status === 'saved' || active?.object.status === 'in_progress',
-    isSendDisabled: reason !== null,
-    reason,
-    cancelTurn: active?.id ?? null,
-    canStop: !!view?.execution && !view?.stopped && !view?.ended && !view?.lost,
-  }
 }

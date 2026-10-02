@@ -67,6 +67,8 @@ export class Workstreams implements Handler {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly owners = new Map<string, string>()
   private readonly blocked = new Set<string>()
+  /** The Workstreams whose execution has not ended: the clock visits these only. */
+  private readonly live = new Set<string>()
   /** Lines captured and not yet handled, per Workstream: a burst is projected once, at its end. */
   private readonly arriving = new Map<string, number>()
   private owner: pg.Client | null = null
@@ -108,7 +110,8 @@ export class Workstreams implements Handler {
   async start(): Promise<void> {
     if (!this.stopped) throw new Error('already_started')
     await this.store.assertBoundaries()
-    const owner = new pg.Client({ connectionString: this.store.urls.writer, application_name: 'agora-owner' })
+    // A half-open socket must not hold the clock: the check times out, and a timeout is a loss.
+    const owner = new pg.Client({ connectionString: this.store.urls.writer, application_name: 'agora-owner', keepAlive: true, query_timeout: 10_000 })
     owner.on('error', () => this.ownershipLost())
     await owner.connect()
     const locked = await owner.query('SELECT pg_try_advisory_lock($1) AS locked', [LOCK])
@@ -172,6 +175,7 @@ export class Workstreams implements Handler {
 
   private async follow(workstream: string, e: Execution): Promise<void> {
     this.owners.set(e.id, workstream)
+    this.live.add(workstream)
     await this.executions.run(this.target(e))
     if (e.lost || e.failed) this.executions.hold(e.id)
   }
@@ -284,9 +288,9 @@ export class Workstreams implements Handler {
       this.report({ operation: 'admission', outcome: answer.accepted ? 'accepted' : 'refused', workstream, command: command.id })
       if (answer.accepted) {
         if (command.kind === 'Create' && answer.execution) {
-          this.owners.set(answer.execution, workstream)
+          // A replayed Create answers as the first did; an execution that has ended is not run again.
           const e = (await this.store.state(workstream)).executions.get(answer.execution)
-          if (e) await this.executions.run(this.target(e))
+          if (e && !e.ended) await this.follow(workstream, e)
         }
         // Acceptance stands whatever the effects do next; their failures are read in the thread.
         await this.drive(workstream).catch(() => this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: 'unknown' }))
@@ -391,6 +395,7 @@ export class Workstreams implements Handler {
     const anchor = (await this.store.entries(workstream)).findLast((x) => x.kind === 'anchor.received' && x.execution === e.id)
     await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, anchor: anchor?.content.id ?? null } })
     this.executions.release(e.id)
+    this.live.delete(workstream)
   }
 
   private async fail(workstream: string, entry: Entry, reason: Reason): Promise<void> {
@@ -410,6 +415,8 @@ export class Workstreams implements Handler {
     if (!e || e.ended || e.lost || e.failed) return
     const connection = this.executions.connectionOf(e.id)
     if (connection === null || connection !== e.connection) return
+    // docs/specs/log.md, "An execution's memory": an ending claim stops every dispatch.
+    if (this.ending(e)) return
     if (!e.stopped) await this.setup(workstream, e)
     state = await this.store.state(workstream)
     const current = state.executions.get(e.id)!
@@ -448,9 +455,9 @@ export class Workstreams implements Handler {
           continue
         }
       }
-      await this.dispatch(workstream, entry, connection)
+      const sent = await this.dispatch(workstream, entry, connection)
       state = await this.store.state(workstream)
-      if (entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection)
+      if (sent && entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection)
     }
   }
 
@@ -517,7 +524,7 @@ export class Workstreams implements Handler {
    * docs/specs/log.md, "Dispatch and recovery": the marker commits before the transport is called, and
    * nothing after it can refuse the write. A failed write is a local failure, not proof of no delivery.
    */
-  private async dispatch(workstream: string, entry: Entry, connection: string): Promise<void> {
+  private async dispatch(workstream: string, entry: Entry, connection: string): Promise<boolean> {
     await this.options.fault?.('before_marker', { position: entry.position, method: entry.method })
     const marked = await this.store.transaction(workstream, async (tx) => {
       const state = tx.state
@@ -553,13 +560,13 @@ export class Workstreams implements Handler {
       })
       return true
     })
-    if (!marked) return
+    if (!marked) return false
     await this.options.fault?.('after_marker', { position: entry.position, method: entry.method })
     try {
       await this.executions.send(entry.execution!, connection, encode(entry.content))
     } catch {
       await this.fail(workstream, entry, 'transport_error')
-      return
+      return false
     }
     await this.options.fault?.('after_write', { position: entry.position, method: entry.method })
     await this.store.fact(workstream, {
@@ -568,6 +575,7 @@ export class Workstreams implements Handler {
       session: entry.session,
       content: { requestPosition: entry.position, connection },
     })
+    return true
   }
 
   private async project(workstream: string): Promise<void> {
@@ -620,7 +628,11 @@ export class Workstreams implements Handler {
         this.blocked.add(workstream)
         this.report({ operation: 'capture', outcome: 'blocked', workstream, execution, connection, errorClass: 'database', bytes: bytes.byteLength })
         const claim = this.executions.claimOf(execution)
-        if (this.stopped || Date.parse(claim?.spec?.lifecycle?.shutdownTime ?? '0') <= Date.now()) throw new Error('capture_abandoned')
+        if (this.stopped || Date.parse(claim?.spec?.lifecycle?.shutdownTime ?? '0') <= Date.now()) {
+          // Given up: the connection fails, and the Workstream admits commands again.
+          this.blocked.delete(workstream)
+          throw new Error('capture_abandoned')
+        }
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
     }
@@ -638,8 +650,7 @@ export class Workstreams implements Handler {
     else this.arriving.delete(workstream)
     if (this.stopped) return
     const state = await this.store.state(workstream)
-    const entries = await this.store.entries(workstream)
-    const entry = position === undefined ? undefined : entries.findLast((x) => x.position === position)
+    const entry = position === undefined ? undefined : (await this.store.entries(workstream)).findLast((x) => x.position === position)
     const e = state.executions.get(execution)
     if (
       entry?.correlated_method === 'session/prompt' &&
@@ -651,7 +662,7 @@ export class Workstreams implements Handler {
       !e.lost &&
       !e.failed &&
       !this.ending(e) &&
-      !entries.some((x) => x.kind === 'acp' && x.direction === 'in' && x.request_position === entry.request_position && BigInt(x.position) < BigInt(entry.position))
+      state.answeredBy.get(entry.request_position ?? '') === entry.position
     ) {
       try {
         await this.executions.renew(execution, e.uid, iso(Date.now() + limitsOf(e).leaseSeconds * 1000))
@@ -753,8 +764,7 @@ export class Workstreams implements Handler {
     try {
       if (this.owner !== null) await this.owner.query('SELECT 1').catch(() => this.ownershipLost())
       if (this.stopped) return
-      for (const workstream of new Set(this.owners.values())) {
-        if (workstream === '') continue
+      for (const workstream of [...this.live]) {
         await this.serial(workstream, async () => {
           const state = await this.store.state(workstream)
           const e = state.current
@@ -770,23 +780,35 @@ export class Workstreams implements Handler {
     }
   }
 
-  /** `initialize` and Session opening: answered within the timeout, or the execution fails. */
+  /**
+   * `initialize` and Session opening: answered within the timeout, or the execution fails. An invalid
+   * answer leaves the request pending (docs/specs/log.md, "Validation"): only a valid one stops the clock.
+   * Decided under the Workstream's lock, so an answer captured meanwhile wins.
+   */
   private async timeouts(workstream: string, state: State, e: Execution): Promise<void> {
     if (e.lost || e.failed) return
     const limit = this.options.responseTimeoutMs ?? 60_000
     for (const position of [...state.unanswered]) {
       const request = state.requestPositions.get(position)
       if (!request || request.execution !== e.id || !['initialize', ...OPENING].includes(request.method ?? '')) continue
-      if (state.failures.has(request.position)) continue
+      if (state.timedOut.has(request.position)) continue
       const sentAt = state.sentAt.get(request.position)
       if (sentAt === undefined || Date.parse(sentAt) + limit > Date.now()) continue
-      await this.fail(workstream, request, 'response_timeout')
-      await this.store.fact(workstream, {
-        kind: 'execution.failed',
-        execution: e.id,
-        content: { reason: request.method === 'initialize' || !e.body.anchor ? 'startup_failed' : 'restore_failed', requestPosition: request.position },
+      const reason = request.method === 'initialize' || !e.body.anchor ? 'startup_failed' : 'restore_failed'
+      const failed = await this.store.transaction(workstream, async (tx) => {
+        const current = tx.state.executions.get(e.id)
+        if (tx.state.answers.has(request.position) || tx.state.timedOut.has(request.position) || !current || current.lost || current.failed || current.ended) return false
+        await tx.append({
+          kind: 'request.failed',
+          execution: request.execution,
+          session: request.session,
+          content: { requestPosition: request.position, reason: 'response_timeout' },
+        })
+        await tx.append({ kind: 'execution.failed', execution: e.id, content: { reason, requestPosition: request.position } })
+        await tx.endSessions(e.id, reason)
+        return true
       })
-      this.executions.hold(e.id)
+      if (failed) this.executions.hold(e.id)
       return
     }
   }
@@ -795,6 +817,8 @@ export class Workstreams implements Handler {
   private async renew(workstream: string, state: State, e: Execution): Promise<void> {
     const turn = state.active
     if (!turn || !turn.dispatching || !turn.startedAt || !e.uid || e.stopped || e.lost || e.failed || this.ending(e) || this.blocked.has(workstream)) return
+    // Recovery is bounded by the deadline already granted: no renewal without the connection.
+    if (!e.connection || this.executions.connectionOf(e.id) !== e.connection) return
     const { leaseSeconds, turnCapSeconds } = limitsOf(e)
     const cap = Date.parse(turn.startedAt) + turnCapSeconds * 1000
     const next = Math.min(Date.now() + leaseSeconds * 1000, cap)

@@ -75,6 +75,8 @@ interface Connection {
   queue: Buffer[]
   reading: boolean
   readonly sends: Set<Promise<void>>
+  /** The handler's verdict on the connection, once asked: its close waits for it. */
+  accepting: Promise<void> | null
   done: Promise<void>
   finish: () => void
 }
@@ -320,10 +322,6 @@ export class ExecutionManager {
     return claim
   }
 
-  async getClaim(name: string): Promise<Claim | null> {
-    return this.options.kube.getClaim(name)
-  }
-
   /** Moves the deadline; refused if the claim's UID changed. */
   async renew(execution: string, uid: string, shutdownTime: string): Promise<Claim> {
     const run = this.runs.get(execution)
@@ -390,7 +388,8 @@ export class ExecutionManager {
 
   private ensureConnection(run: Run): void {
     if (this.stopped || run.held || this.handler === null || this.runs.get(run.target.execution) !== run) return
-    if (run.connection !== null && !run.connection.closed) return
+    // A connection is replaced only once its close has been reported.
+    if (run.connection !== null) return
     if (Date.now() < run.reconnectAt) return
     const claim = run.claim
     if (claim === null || claim.metadata.deletionTimestamp !== undefined) return
@@ -423,6 +422,7 @@ export class ExecutionManager {
       queue: [],
       reading: false,
       sends: new Set(),
+      accepting: null,
       done,
       finish,
     }
@@ -435,7 +435,7 @@ export class ExecutionManager {
     ws.on('open', () => {
       c.open = true
       ws.pause()
-      void this.accept(run, c)
+      c.accepting = this.accept(run, c)
     })
     ws.on('message', (data: RawData) => {
       // Paused until this line is committed: nothing more is read, the rest waits with the bridge.
@@ -448,6 +448,10 @@ export class ExecutionManager {
     ws.on('error', () => {})
     ws.on('close', (code) => {
       c.closed = true
+      // Set at once, so that no tick reconnects before this close is reported: no reconnection
+      // to a dead adapter (1011) or an ending Pod (1001); otherwise after a pause.
+      if (code === 1011 || code === 1001) run.held = true
+      else run.reconnectAt = Math.max(run.reconnectAt, Date.now() + (this.options.reconnectMs ?? 2000))
       void this.closeConnection(run, c, c.open ? code : null)
     })
   }
@@ -489,11 +493,13 @@ export class ExecutionManager {
       if (!c.closed && c.accepted) c.ws.resume()
     } finally {
       c.reading = false
-      if (c.closed && c.queue.length === 0) c.finish()
     }
   }
 
   private async closeConnection(run: Run, c: Connection, code: number | null): Promise<void> {
+    // The handler may be writing this connection down: its verdict comes first, so that a connection
+    // it recorded always gets its close.
+    await c.accepting?.catch(() => {})
     // Every line handed over settles before the close is reported. Lines that arrived before the
     // connection was accepted cannot be captured: the break records that output may be missing.
     if (!c.accepted) {
@@ -512,9 +518,6 @@ export class ExecutionManager {
       c.finish()
       if (run.connection === c) {
         run.connection = null
-        // No reconnection to a dead adapter (1011) or an ending Pod (1001); otherwise after a pause.
-        if (code === 1011 || code === 1001) run.held = true
-        else run.reconnectAt = Math.max(run.reconnectAt, Date.now() + (this.options.reconnectMs ?? 2000))
         this.emit(run)
       }
     }
@@ -523,7 +526,8 @@ export class ExecutionManager {
   /** Sends one line on that very connection; resolves when the write's callback succeeds. */
   send(execution: string, connection: string, text: string): Promise<void> {
     const c = this.runs.get(execution)?.connection
-    if (c === null || c === undefined || c.id !== connection || c.closed || !c.accepted || c.draining) return Promise.reject(new Error('transport_error'))
+    // Draining refuses nothing: a write whose marker is committed must still be attempted.
+    if (c === null || c === undefined || c.id !== connection || c.closed || !c.accepted) return Promise.reject(new Error('transport_error'))
     const write = new Promise<void>((resolve, reject) => c.ws.send(text, (error) => (error ? reject(new Error('transport_error')) : resolve())))
     c.sends.add(write)
     void write.finally(() => c.sends.delete(write)).catch(() => {})
