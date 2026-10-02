@@ -7,6 +7,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | Run | Date | Commit | Level | Environment |
 | --- | --- | --- | --- | --- |
 | R1 | 2026-10-02 | `0669fc5` | local, unit | `npm run check` on one machine: Node 24.20.0, PostgreSQL 17.11, each test in a database of its own cloned from a migrated template, under the three runtime logins. Kubernetes and Agent Sandbox simulated by FakeKube; real bridges with the mock agent. Agora in the test process, or as the real lab process (`apps/lab`) on FakeKube served over HTTP, with the lab's defaults (tick 1 s, reconnection 2 s). In process: tick 100 ms, reconnection 200 ms; response timeout 1 s for L34 and 1.5 s for L41; renewal step 1 s and lease 60 s for L14, L30, L36, L38. |
+| R2 | 2026-10-02 | `f240cd0` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The lab `agora-lab@sha256:1973a988…` built from that commit, on the `agora` database (CloudNativePG, PostgreSQL 17.4); pools `agora-harness-mock@sha256:1a1cc63c…` and `agora-harness-claude-code@sha256:5f3bb480…` (claude-agent-acp 0.75.1). `apps/lab/scripts/live-cases.ts` from that commit, against the deployed lab. Deadline cases with a 60 s lease and the lab's renewal step (a third of the lease). |
 
 ## Cases
 
@@ -21,15 +22,19 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L7 | real: PostgreSQL terminates the capture's connection (`pg_terminate_backend`), while it waits on a lock the test holds | local | R1 | proven | 1 backend terminated; the capture blocked once, then 5 lines committed once, ordinals 3–7. |
 | L8 | real: PostgreSQL terminates the ownership connection of the lab process | local | R1 | proven | The lab exited with code 1. |
 | L9 | real: the TCP connection to the bridge reset under it (relay) | local | R1 | proven | Every assertion held. |
+| L9 | — | cluster | R2 | partial: only the refusal during a turn is asserted | "turn_active". |
 | L10 | — | local | R1 | proven | Every assertion held. |
 | L11 | real: the bridge closes Agora's connection (4000), displaced by another client with a valid token | local | R1 | proven | Every assertion held. |
 | L12 | real: the TCP connection to the bridge reset under it (relay) | local | R1 | proven | Every assertion held. |
+| L12 | real: Agora terminates its connection to the bridge (lab `drop-bridge`) | cluster | R2 | proven | Uncertain after the cut, one `session/cancel`, cancelled, then a Write accepted. |
 | L13 | simulated: fault-point, the dispatcher held before the Cancel's marker until the turn's answer committed | local | R1 | proven | Every assertion held. |
 | L14 | — | local | R1 | proven | Every assertion held, in each of its three tests. |
 | L15 | simulated: fake-kube, the deadline brought to now | local | R1 | proven | Every assertion held. |
 | L16 | — | local | R1 | proven | Every assertion held. |
 | L17 | real: the lab process stopped by SIGTERM | local | R1 | proven | Exit 0; break code 1000, clean. |
+| L17 | real: the lab process stopped (lab `restart`, `clean`: SIGTERM); Kubernetes restarts it | cluster | R2 | proven | Break clean, turn in progress then done; one dispatch, one `initialize`. |
 | L18 | real: the lab process killed by SIGKILL | local | R1 | proven | Unclean break written at restart; uncertain, then done. |
+| L18 | real: the lab process ended on the spot (lab `restart`, `kill`: exit 137, nothing drained); Kubernetes restarts it | cluster | R2 | proven | Break unclean, turn uncertain then done; one dispatch, one `initialize`. |
 | L19 | real: the lab process killed by SIGKILL at its fault points `before_marker`, `after_marker`, `after_write` | local | R1 | proven | Every assertion held, in each of its three tests. |
 | L20 | real: the lab process killed by SIGKILL at its fault points `before_claim`, `after_claim`; simulated: fake-kube, the claim deleted, then replaced under another UID | local | R1 | proven | Every assertion held, in each of its four tests. |
 | L21 | real: the reply to the capture's COMMIT lost on the network (relay in front of PostgreSQL) | local | R1 | proven | One COMMIT reply dropped. |
