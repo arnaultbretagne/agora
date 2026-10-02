@@ -197,7 +197,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | Receive | Hand each received line to the log, with its connection and receive ordinal, and read nothing more until the log has committed it. |
 | Send | A line, on the connection the log names, only when asked; the write's callback settles the request. |
 | Hold | No new connection, the open one terminated: an execution lost or failed. |
-| Warm | Follow the pools' Sandboxes; hand each ready one a warm token, and renew it, until a claim binds it (`credentials.md`). |
+| Warm | Every 5 seconds, list the pools' Sandboxes; hand each ready one a warm token, and renew it, until a claim binds it (`credentials.md`). |
 | Bridge routes | `GET /info`, `PUT /anchor`, `PUT /credentials`, on the log's request. |
 | Anchors | Verify a Pod's projected token, and find the claim bound to that Pod. |
 

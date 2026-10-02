@@ -29,8 +29,9 @@
    holds.
 4. **The credential bounds, the grants cut.** One credential per host, as narrow as possible;
    each execution gets only the share its token grants.
-5. **Agora alone hands tokens to bridges.** It warms the pools' Pods and swaps the token at the
-   claim; replacing a token closes the tunnels opened with the previous one.
+5. **Agora alone hands tokens to bridges.** Every 5 seconds it looks at the pools' Sandboxes and
+   warms the ready ones; it swaps the token at the claim; replacing a token closes the tunnels
+   opened with the previous one.
 
 ```mermaid
 flowchart LR
@@ -116,6 +117,28 @@ kept as is. Dropped because it does not compose, and for what it demands of Agor
 | An identity per execution, created in the gateway | Created and cleaned up per execution; it is OneCLI's Agent model. |
 | Profiles in the token, expanded by the gateway | Moves the profile catalogue into the gateway's configuration. Kept in reserve if tokens grow too big (tens of repos). |
 
+### Warming on Sandbox events
+
+Watching the Sandboxes — a list then a watch, as Agora does for the claims — would hand a warm Pod
+its token as soon as it is Ready rather than within 5 seconds, with a timer per Pod for renewal.
+Not kept: a second watch to resume (expired versions, reconnections), timers to arm and cancel
+through Ready flips, adoptions and deletions, and a periodic resync kept anyway in case an event
+is missed. The sweep repairs itself after a restart or a cut, and renews in the same pass.
+
+The 5 seconds cost nothing measured: the execution's token leaves on the claim's event, which the
+claims' watch already gives, before `initialize` — that is where the 20 seconds went. A warm token
+only matters to a harness initializing in the pool, and none does. Reconsider when one does and
+the delay shows in the Session opening, or when the pools grow to where a list every 5 seconds
+weighs.
+
+### The Pod asking for its token
+
+The bridge could ask Agora for a warm token at start, authenticated by its projected
+ServiceAccount token as for the anchor. Dropped: the bridge would need renewal, and retries while
+Agora is away; and a warm token asked just before the claim could arrive after the execution's
+and replace it. Closing that race means teaching the bridge which token wins — the order a single
+issuer keeps for free.
+
 ### A short-lived credential per execution
 
 A GitHub App installation token scoped per execution. Dropped: per-execution state and cleanup
@@ -145,6 +168,8 @@ Dropped outright: vaults grow with the combinations.
   nothing.
 - A warm Pod can reach its base services before anyone uses it: base profiles are reviewed with
   the pool, cover services only — never a repository — and its token names the Pod.
+- A Pod waits up to 5 seconds after being Ready for its warm token: a claim in that window starts
+  without one, and still gets the execution's before `initialize`.
 - Whether a harness uses the way out to initialize in the pool is its own capability; a warm
   token makes it possible, it does not make it happen.
 - The token grows with the grants: a few hundred bytes for a few repos. Tens of repos would call
