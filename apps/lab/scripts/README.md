@@ -1,7 +1,7 @@
 # scripts
 
 `live-cases.ts` plays acceptance cases of `docs/specs/executions.md` (E…), `log.md` (L…) and
-`credentials.md` (C1–C4, C8–C14) against the deployed lab, with real Kata sandboxes destroyed by Agent
+`credentials.md` (C1–C4, C8–C15) against the deployed lab, with real Kata sandboxes destroyed by Agent
 Sandbox. From g4, the lab Pod's IP is reachable:
 
 ```sh

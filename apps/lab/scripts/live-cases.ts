@@ -1,5 +1,5 @@
 // Plays acceptance cases of docs/specs/executions.md (E…), docs/specs/log.md (L…) and
-// docs/specs/credentials.md (C1–C4, C8–C14) against the DEPLOYED lab, with real Kata sandboxes destroyed by
+// docs/specs/credentials.md (C1–C4, C8–C15) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
@@ -512,7 +512,7 @@ await check('C4', 'Gateway, composition (A write, B read, C nothing)', async () 
   return `${outcomes.join('; ')}; file ${file}`
 })
 
-// ---------------------------------------------------------------- warming (docs/specs/credentials.md, C8–C14)
+// ---------------------------------------------------------------- warming and z.ai (docs/specs/credentials.md, C8–C15)
 
 const kubectl = (process.env.KUBECTL ?? 'kubectl').split(' ')
 const sandboxNamespace = process.env.SANDBOX_NAMESPACE ?? 'agora-sandboxes'
@@ -664,6 +664,19 @@ await check('C14', 'A Create naming an unknown profile', async () => {
   assert(refused.status === 409 && refused.reason === 'unknown_profile', JSON.stringify(refused))
   assert((await w.entries()).length === 0, 'something written')
   return `"${String(refused.reason)}", nothing written`
+})
+
+await check('C15', 'Gateway, the chain to z.ai', async () => {
+  const w = new Workstream()
+  const since = new Date(Date.now() - 1000).toISOString()
+  await w.open(mock, { profiles: ['zai'], ...SHORT })
+  const reply = await fetched(w, 'https://api.z.ai/api/paas/v4/models')
+  await w.stop()
+  // Without a key, z.ai answers 401 ("Authentication parameter not received"): a 200 is the gateway's key.
+  assert(/^HTTP\/1\.1 200/.test(reply), reply.slice(0, 200))
+  const line = gatewayLines(since).find((l) => l.includes('http.host=api.z.ai') && l.includes(`jwt.sub=agora ${w.execution} `))
+  assert(line !== undefined, 'no request seen by the gateway')
+  return `"${reply.slice(0, 15)}", ${String((reply.match(/"id"/g) ?? []).length)} model(s) listed; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
 })
 
 // Last: a warm token lives 15 minutes, renewed with a third left.

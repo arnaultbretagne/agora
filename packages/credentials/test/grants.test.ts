@@ -18,6 +18,14 @@ describe('profiles', () => {
     assert.deepEqual(compileProfile('anthropic'), [{ host: 'api.anthropic.com' }])
   })
 
+  it('zai opens the whole z.ai API host, and nothing of Anthropic', () => {
+    const grants = compileProfile('zai')
+    assert.deepEqual(grants, [{ host: 'api.z.ai' }])
+    assert.equal(allowed(grants, 'api.z.ai', 'POST', '/api/paas/v4/chat/completions'), true)
+    assert.equal(allowed(grants, 'api.z.ai', 'POST', '/api/anthropic/v1/messages'), true)
+    assert.equal(allowed(grants, 'api.anthropic.com', 'POST', '/v1/messages'), false)
+  })
+
   it('composes write on one repo and read on another of the same host, without mixing them', () => {
     const grants = compileProfiles(['anthropic', 'github:octo/app:write', 'github:octo/docs.site:read'])
     const cases: [string, string, string, boolean][] = [
@@ -37,6 +45,7 @@ describe('profiles', () => {
       ['github.com', 'POST', '/octo/app.git/git-receive-pack', true],
       ['api.anthropic.com', 'POST', '/v1/messages', true],
       ['api.openai.com', 'POST', '/v1/responses', false],
+      ['api.z.ai', 'POST', '/api/paas/v4/chat/completions', false],
     ]
     for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
   })
@@ -72,6 +81,7 @@ describe('GrantSigner', () => {
   })
 
   it('reads a pool\'s base profiles: services only, never a repository', () => {
+    assert.deepEqual(baseProfiles('anthropic,zai'), { profiles: ['anthropic', 'zai'], refused: null })
     assert.deepEqual(baseProfiles('anthropic'), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(' anthropic , '), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(undefined), { profiles: [], refused: null })
