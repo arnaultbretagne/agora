@@ -269,6 +269,29 @@ export class LogStore {
   async workstreams(): Promise<string[]> {
     return (await this.writer.query('SELECT id FROM workstreams ORDER BY id')).rows.map((r) => r.id as string)
   }
+  /** What a start must read back: Workstreams with an execution not ended, or an anchor without its entry. */
+  async pending(): Promise<string[]> {
+    const result = await this.writer.query(
+      `SELECT c.workstream AS id FROM commands c WHERE c.kind='Create' AND NOT EXISTS
+         (SELECT 1 FROM entries e WHERE e.workstream=c.workstream AND e.execution=c.execution AND e.kind='execution.ended')
+       UNION SELECT a.workstream FROM anchors a WHERE NOT EXISTS
+         (SELECT 1 FROM entries e WHERE e.workstream=a.workstream AND e.kind='anchor.received' AND e.content->>'id'=a.id::text)
+       ORDER BY 1`,
+    )
+    return result.rows.map((r) => r.id as string)
+  }
+  /** The Workstreams whose core views are behind their entries. */
+  async behind(): Promise<string[]> {
+    const last = new Map((await this.writer.query('SELECT id, last_position FROM workstreams')).rows.map((r) => [r.id as string, BigInt(r.last_position)]))
+    const done = new Map(
+      (await this.projector.query("SELECT workstream, position FROM checkpoints WHERE projector='core'")).rows.map((r) => [r.workstream as string, BigInt(r.position)]),
+    )
+    return [...last].filter(([id, position]) => position > (done.get(id) ?? 0n)).map(([id]) => id)
+  }
+  /** Lets go of a Workstream's cached entries; the next read folds them again. */
+  forget(workstream: string): void {
+    this.cache.delete(workstream)
+  }
   private cached(workstream: string): Cached {
     let cached = this.cache.get(workstream)
     if (!cached) {

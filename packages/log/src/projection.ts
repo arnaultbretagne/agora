@@ -197,6 +197,10 @@ export class Projections {
       [workstream, projector.name, projector.version, projection.position],
     )
   }
+  /** Lets go of a Workstream's projections in memory; the next run folds up to its checkpoint again. */
+  forget(workstream: string): void {
+    for (const name of this.registry.keys()) this.memory.delete(`${workstream}:${name}`)
+  }
   async objects(workstream: string): Promise<ProjectedObject[]> {
     const rows = await this.store.projector.query(
       'SELECT kind,id,object::text,first_position,last_position FROM objects WHERE workstream=$1 ORDER BY id',

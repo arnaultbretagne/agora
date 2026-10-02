@@ -126,7 +126,8 @@ export class Workstreams implements Handler {
     this.stopped = false
     for (const row of (await this.store.writer.query("SELECT workstream,execution FROM commands WHERE kind='Create'")).rows)
       this.owners.set(row.execution as string, row.workstream as string)
-    for (const workstream of await this.store.workstreams()) {
+    // Only what is followed is read back: an execution not ended, an anchor without its entry.
+    for (const workstream of await this.store.pending()) {
       const state = await this.store.state(workstream)
       // docs/specs/log.md, "Backpressure and shutdown": a connection left without a break broke uncleanly.
       for (const e of state.executions.values())
@@ -136,7 +137,7 @@ export class Workstreams implements Handler {
       for (const e of state.executions.values()) if (!e.ended) await this.follow(workstream, e)
     }
     await this.executions.start(this)
-    for (const workstream of await this.store.workstreams()) await this.serial(workstream, () => this.project(workstream))
+    for (const workstream of new Set([...this.live, ...(await this.store.behind())])) await this.serial(workstream, () => this.project(workstream))
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
   }
 
@@ -403,6 +404,10 @@ export class Workstreams implements Handler {
     await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, anchor: anchor?.content.id ?? null } })
     this.executions.release(e.id)
     this.live.delete(workstream)
+    // Its views are written; what it needs again is read back from PostgreSQL.
+    await this.project(workstream)
+    this.store.forget(workstream)
+    this.projections.forget(workstream)
   }
 
   private async fail(workstream: string, entry: Entry, reason: Reason): Promise<void> {

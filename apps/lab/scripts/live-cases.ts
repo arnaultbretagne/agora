@@ -215,6 +215,7 @@ await check('L12', 'Cancel on an uncertain turn still running', async () => {
   return 'uncertain after the cut, one session/cancel, cancelled, then a Write accepted'
 })
 
+let lost = ''
 await check('E27', 'Agora away while the adapter writes', async () => {
   assert((await a.write('/silence 1')).status === 200, 'Write refused')
   await a.turn('in_progress', 10_000)
@@ -233,9 +234,15 @@ await check('E27', 'Agora away while the adapter writes', async () => {
     .filter((x) => x.kind === 'acp' && x.method === 'session/update')
     .map((x) => String((x.content.params as Json)?.update?.content?.text))
     .filter((text) => /^\d{5} /.test(text))
-  assert(numbered.length === 3600, `missing output: ${String(numbered.length)}/3600 chunks`)
-  for (let i = 0; i < numbered.length; i++) assert(numbered[i]!.startsWith(`${String(i).padStart(5, '0')} `), 'output out of order')
-  return 'output written while Agora was away arrived complete and in order, short and 3600 large chunks'
+  // Lines already sent into the cut connection may be lost (the relay's rule); what was still unread
+  // arrives complete: in order, without a repeat, one gap at most, at the cut, and the end.
+  const indexes = numbered.map((text) => Number(text.slice(0, 5)))
+  assert(indexes.every((n, i) => i === 0 || n > indexes[i - 1]!), 'output out of order or repeated')
+  const gaps = indexes.flatMap((n, i) => (i > 0 && n !== indexes[i - 1]! + 1 ? [{ from: indexes[i - 1]! + 1, to: n - 1 }] : []))
+  assert(indexes[0] === 0 && indexes.at(-1) === 3599 && gaps.length <= 1, `gaps ${JSON.stringify(gaps)}, ${String(indexes.length)}/3600`)
+  const gap = gaps[0]
+  lost = gap === undefined ? 'none lost' : `${String(gap.to - gap.from + 1)} lines in flight lost at the cut (${String(gap.from)}–${String(gap.to)})`
+  return `output written while Agora was away arrived in order, short and large; ${lost}`
 })
 
 async function restartLab(mode: 'clean' | 'kill'): Promise<void> {

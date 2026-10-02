@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { parse, stringify, isLosslessNumber } from 'lossless-json'
+import { LosslessNumber, stringify, isLosslessNumber } from 'lossless-json'
 
 /**
  * Refuses what a JavaScript object cannot hold faithfully: a key repeated in one object, even with
@@ -47,13 +47,16 @@ export function checkKeys(text: string): void {
   }
 }
 
+/**
+ * Parses losslessly: every number keeps its source text (a LosslessNumber). The native parser does
+ * the work: lossless-json builds each string a character at a time, and a parsed line kept in memory
+ * then costs tens of bytes per character.
+ */
 export function decode(text: string): unknown {
   checkKeys(text)
-  return parse(text, null, {
-    onDuplicateKey: () => {
-      throw new Error('duplicate_key')
-    },
-  })
+  return JSON.parse(text, (_key: string, value: unknown, context?: { source?: string }) =>
+    typeof value === 'number' ? new LosslessNumber(String(context?.source)) : value,
+  )
 }
 export function encode(value: unknown): string {
   const text = stringify(value)
