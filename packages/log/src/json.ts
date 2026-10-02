@@ -1,7 +1,54 @@
 import { createHash } from 'node:crypto'
 import { parse, stringify, isLosslessNumber } from 'lossless-json'
 
+/**
+ * Refuses what a JavaScript object cannot hold faithfully: a key repeated in one object, even with
+ * an equal value (lossless-json only reports differing ones), and `__proto__`, which an assignment
+ * would turn into the prototype instead of a member. Structure errors are left to the parser.
+ */
+export function checkKeys(text: string): void {
+  const stack: (Set<string> | null)[] = []
+  let expectKey = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c === 0x22) {
+      let j = i + 1
+      while (j < text.length) {
+        const d = text.charCodeAt(j)
+        if (d === 0x5c) j += 2
+        else if (d === 0x22) break
+        else j++
+      }
+      if (expectKey) {
+        const keys = stack.at(-1)
+        let key: string
+        try {
+          key = JSON.parse(text.slice(i, j + 1)) as string
+        } catch {
+          throw new Error('invalid_json')
+        }
+        if (key === '__proto__') throw new Error('unsafe_key')
+        if (keys?.has(key)) throw new Error('duplicate_key')
+        keys?.add(key)
+        expectKey = false
+      }
+      i = j
+    } else if (c === 0x7b) {
+      stack.push(new Set())
+      expectKey = true
+    } else if (c === 0x5b) {
+      stack.push(null)
+      expectKey = false
+    } else if (c === 0x7d || c === 0x5d) {
+      stack.pop()
+      expectKey = false
+    } else if (c === 0x2c) expectKey = stack.at(-1) instanceof Set
+    else if (c === 0x3a) expectKey = false
+  }
+}
+
 export function decode(text: string): unknown {
+  checkKeys(text)
   return parse(text, null, {
     onDuplicateKey: () => {
       throw new Error('duplicate_key')

@@ -119,13 +119,14 @@ lost, failed or ended.
 ### Backpressure and shutdown
 
 The lines of a connection are handled one at a time. The WebSocket is paused while a line is
-validated and committed, and resumed only once the commit succeeds: at most one received line and
-one frame already buffered by the WebSocket wait, 32 MiB in all. Beyond that, the connection is
-failed and its break recorded unclean.
+validated and committed, and resumed only once the commit succeeds: nothing more is read from the
+connection, and only what came with that line in the same read of the socket (64 KiB) may wait
+with it. The rest waits with the bridge, which stops reading the adapter.
 
 When a commit fails, the line is kept and retried first, with the same connection and receive
 ordinal; an ambiguous commit is resolved by that identity, never by comparing content. Meanwhile
 Agora sends nothing, admits no command and renews no deadline; deadlines already granted stand.
+Past the claim's deadline, or when Agora stops, the line is given up and the connection failed.
 
 A clean shutdown, within 5 s: admission and dispatch close, pending write callbacks settle, the
 close handshake runs while received lines keep being committed. If the peer completes the close,
@@ -162,7 +163,7 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | Create | Carries the pool, the settings (lease, turn duration) and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
 | Write | Accepted only if the execution is connected with its Session open, sending is open, and no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`). |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
-| Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. |
+| Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel`, and no renewal, even after a restart. |
 
 ### A turn's states
@@ -200,7 +201,7 @@ understands becomes a generic element.
 | Deterministic | A fold reads entries in position order and nothing else: no diagnostic row, clock or live execution. |
 | Version | Each projector has a version. A checkpoint records, per projector and Workstream, the version and the last position folded; a checkpoint from another version counts as none. |
 | Same transaction | Views, their thread updates and their checkpoint commit together, under a projector lock of their own, separate from the capture lock. |
-| Rebuild | For the same version and source position, gives the same identities and rows as the incremental run: a hash of the canonical encoding of the rows, sorted by kind and id, with no field left out. A rebuild publishes atomically and removes obsolete objects. |
+| Rebuild | For the same version and source position, gives the same identities and rows as the incremental run: a hash of the canonical encoding of the rows, sorted by id, with no field left out. A rebuild publishes atomically and removes obsolete objects. |
 
 ### The thread
 
@@ -223,6 +224,7 @@ What the client reads (`assistant-ui.md`, "A workstream's thread").
 | `POST /api/workstreams/{id}/control` | Lab only: one `session/set_config_option` for the current Session, between turns. |
 | `POST /api/workstreams/{id}/credentials` | Lab only: hands a signed credential to the execution's bridge (`credentials.md`). |
 | `GET /api/workstreams/{id}/entries` | Lab only: the entries, as stored. |
+| `GET /api/anchors`, `GET /api/anchors/{id}/content` | Lab only: the stored anchors, and an anchor's native files. |
 
 Bodies are UTF-8 JSON of at most 16 MiB, parsed losslessly. A malformed body is 400; a storage
 failure is 503; no answer carries an exception message.
@@ -258,7 +260,8 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 
 | Table | Key | Holds |
 | --- | --- | --- |
-| `workstreams` | id | Owner, last entry position, last thread position. |
+| `workstreams` | id | Owner, last entry position. |
+| `threads` | Workstream | The thread's last position; its row is the projector's lock. |
 | `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
 | `commands` | Workstream, id | Kind, target, SHA-256 of the canonical request, the answer, its entry's position, the execution and claim name of a Create. |
 | `sessions` | id | Workstream, execution, ACP session id, the positions where it opened and ended. |
@@ -271,7 +274,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | Role | May | May not |
 | --- | --- | --- |
 | `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread or checkpoints. |
-| `agora_projector` | Read entries; write views, checkpoints and the thread; update a Workstream's last thread position. | Write entries, commands or Sessions; read anchors; change thread rows. |
+| `agora_projector` | Read entries; write views, checkpoints and the thread; update the thread's last position. | Write entries, commands or Sessions; read anchors; change thread rows. |
 | `agora_anchors` | Read execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
 
 | Rule | Detail |
@@ -299,7 +302,7 @@ exception message.
 | L4 | An invalid answer to Agora's pending prompt, then a valid one | The diagnostic and a `request.failed` naming it, in one transaction; the turn uncertain; Write refused `turn_uncertain`; the valid answer closes the turn. |
 | L5 | An extension method and an unknown `session/update` type | `acp` entries, and generic elements in the thread. |
 | L6 | The insert of a Write's line fails | The command is refused; no `acp.dispatching`; nothing reaches the bridge. |
-| L7 | A capture connection is terminated during a turn | The line is retried and committed once, in order; at most 32 MiB wait; the turn goes on to its answer. |
+| L7 | A capture connection is terminated during a turn | The line is retried and committed once, in order; the turn goes on to its answer. |
 | L8 | The ownership connection is terminated | The process exits with a non-zero status. On restart: an unclean break, the dispatched turn uncertain, never resent. |
 | L9 | Write during a turn, then during an uncertain turn | Refused `turn_active`, then `turn_uncertain`; nothing written. |
 | L10 | A command replayed with the same id and request; then a different request; then two Writes at once | The first answer, one command entry; then `command_conflict`; then exactly one Write accepted. |
@@ -325,10 +328,12 @@ exception message.
 | L30 | The adapter dies | `execution.lost`; no dispatch or renewal; the execution counted and Create refused until the claim disappears; then one `execution.ended`, and a new execution can be created. |
 | L31 | The claim is being deleted while its Pod lives, across a restart | Admission closed; the execution counted and Create refused until the claim disappears. |
 | L32 | A Pod pushes its anchor after a restart, with no connection open | Stored, attributed to the original Session, one `anchor.received`; a push whose Pod UID differs is refused. |
-| L33 | The same opening or final answer received twice, including after a newer Session or the end of the execution | Each captured; the first valid applies once; no Session reopened. |
+| L33 | The same opening or final answer received twice, including after the end of the execution | Each captured; the first valid applies once; no Session reopened. |
 | L34 | `initialize` unanswered | `request.failed` (`response_timeout`), `execution.failed` (`startup_failed`); no second `initialize`. |
-| L35 | More than 32 MiB waiting on a connection | The connection failed; an unclean break; no drain claimed. |
+| L35 | A line waits for its commit while the agent keeps writing | Nothing more is read: what waits stays within the line and one read of the socket; then every line is captured once, in order. |
 | L36 | A storage outage lasting past the execution's deadline | The interruption shown; no fresh lease. |
+| L37 | A permission answered; then another pending when a Cancel is sent | The answer goes to that request once, a second refused (`stale_permission`); the Cancel's `session/cancel` is followed by a `cancelled` answer to the pending one. |
+| L38 | The bridge restarts inside its Pod during a turn: a new instance | `execution.lost` (`instance_changed`), the turn failed; no dispatch, no renewal; Write refused. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

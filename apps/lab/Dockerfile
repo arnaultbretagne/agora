@@ -1,5 +1,6 @@
-# The lab: Agora's executions (packages/executions) and the page that exercises them. Built from the
-# repository root (npm workspaces):  docker build -f apps/lab/Dockerfile .
+# The lab: the execution mechanics (packages/executions), the log (packages/log) and the page that
+# plays their cases. Built from the repository root (npm workspaces):
+#   docker build -f apps/lab/Dockerfile .
 # Node 24 runs the TypeScript sources directly (type stripping); nothing is compiled.
 FROM node:24-bookworm-slim
 WORKDIR /app

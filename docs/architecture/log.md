@@ -10,6 +10,7 @@ behaviour; the open questions close the document.
 | Actor | Role |
 | --- | --- |
 | The server | Writes each entry to the log before acting on it, projects the log into views, serves them to the client. |
+| The execution mechanics | Within the server: claims, bridge connections and deadlines, each effect on the server's request. They keep nothing. |
 | PostgreSQL | Holds the log, the views and the anchors. |
 | The bridge | Pipes ACP lines between the adapter and the server. It keeps nothing. |
 | The client | Reads a Workstream's thread from its last position and sends commands. |
@@ -91,6 +92,9 @@ be missing, and a dispatched turn becomes uncertain until its end is seen.
 When PostgreSQL is unavailable, Agora retains the line whose commit failed and applies bounded
 backpressure. It continues with that line first when storage returns. The execution's granted
 deadline still applies; backpressure does not guarantee that the sandbox survives a long outage.
+
+One server owns a database at a time. If it loses that ownership, it exits rather than write
+without it, and its restart recovers from the log.
 
 After a restart, the log supplies accepted creations, their exact targets and unresolved
 commands; the claims say which resources exist. A Create saved before its claim was requested

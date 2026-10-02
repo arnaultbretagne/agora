@@ -3,14 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The lab: mounts Agora's executions and serves a page to play every case.",
+  "description": "The lab: mounts Agora's execution mechanics and log, and serves a page to play every case.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@agora/credentials": "0.0.0",
     "@agora/executions": "0.0.0",
-    "ws": "8.22.0",
     "@agora/log": "0.0.0"
   }
 }

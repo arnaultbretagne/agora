@@ -1,60 +1,26 @@
 # log
 
-Agora's immutable Workstream journal, mounted by the admin lab when its three PostgreSQL
-runtime URLs are configured. The contract is in `docs/specs/log.md`.
+The Workstream log (`docs/specs/log.md`): commands, every ACP line, dispatch and capture, recovery,
+the views and the thread, in PostgreSQL. It mounts the execution mechanics of
+`@agora/executions` and decides everything they do.
 
-| Path | Responsibility |
+| Path | Content |
 | --- | --- |
-| `src/store.ts` | Canonical transactions, admission deduplication, raw ACP capture, Session attribution, anchor publication. |
-| `src/acp.ts` | ACP 1.5.1 method schemas, direction matrix and lossless JSON validation. |
-| `src/state.ts` | Canonical admission state and deterministic turns, chunks, tools, plans, permissions and notices. |
-| `src/projection.ts` | Atomic views/checkpoints, coordinated version rebuilds and decimal-cursor snapshot/tail. |
-| `src/driver.ts` | Exclusive driving, claim recovery, bridge capture/backpressure, dispatch markers, cancellation, renewal and drain. |
-| `src/http.ts` | Admin lab commands and resumable SSE thread. Product authorization belongs to its separate access contract. |
-| `src/credentials.ts` | Assigned lab executions' reviewed base profiles, supplied before opening; mock requires no JWT. |
-| `src/telemetry.ts` | Validated correlations and closed operation/outcome/error classes; no payloads or exception messages. |
-| `sql/001.sql` | Schema and the three NOLOGIN boundary roles. |
-| `scripts/migrate.ts` | Privileged provisioning, separate from the runtime. |
-| `test/` | Isolated PostgreSQL databases, actual restricted logins, real mock bridges, fault injection and Chromium. |
+| `src/workstreams.ts` | `Workstreams`: admission, dispatch, capture, recovery, deadlines, anchors; the mechanics' handler. |
+| `src/store.ts` | Entries, commands, Sessions, diagnostics and anchors, behind the three roles. |
+| `src/acp.ts` | Validation of a line against the pinned ACP schema. |
+| `src/state.ts` | The fold of the entries: executions, requests, turns; the core projector. |
+| `src/projection.ts` | Views, checkpoints, rebuilds and the thread. |
+| `src/http.ts` | The HTTP routes. |
+| `src/telemetry.ts` | The operational logger. |
+| `sql/001.sql` | The schema and the three roles. |
+| `scripts/` | Migration and login provisioning. |
+| `test/` | One test per acceptance case, on PostgreSQL 17, real bridges and the real lab process. |
 
-Provision a UTF-8 PostgreSQL 17 database with `node packages/log/scripts/migrate.ts`. Supply
-`LOG_MIGRATION_URL` for the schema owner and `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`,
-`LOG_ANCHORS_URL` for three distinct restricted logins in that database. New logins are
-provisioned by the script; existing login passwords are not changed. The application receives
-only the three runtime URLs. It rejects owners, superusers, privileged memberships and mixed
-boundary roles. Configure `LAB=true` to expose the log lab API and page.
+Provision a database: `scripts/README.md`. The server is given the three runtime URLs only.
 
-`npm run check` runs the database and browser cases. Set `LOG_TEST_ADMIN_URL` to a disposable
-PostgreSQL server's provisioning login. Without it, the runner can provision through the local
-PostgreSQL peer administrator via sudo. Each run creates and drops its own database and
-runtime logins. Install the pinned Chromium with `npx playwright install chromium` (CI installs
-its system dependencies too). No application operation in the tests uses the provisioning
-login; it is used only for migrations, test fault triggers and fixture setup.
-
-The database advisory lock admits one driver per database. Losing that connection closes its
-bridges and stops the driver; restart recovers its journal and records unclean breaks. A
-second driver cannot start while the first owns the lock. The bridge also permits one peer.
-These are dispatch ownership controls, not proof of physical extinction for a replacement.
-Create after execution loss is refused until an execution end has been recorded.
-
-Lost/failed executions remain counted and tracked until the claim disappears. Expiry and
-foreground deletion close dispatch without declaring resource disappearance. The anchor
-receiver reconstructs its binding from the journal and claim rather than a live ACP connection.
-Core projector version 2 publishes the corrected lifecycle and first-answer semantics through
-the existing version rebuild/reset path.
-
-The projector refolds canonical entries through one source position and publishes only changed
-objects. It deliberately keeps its folding state out of PostgreSQL; the cost grows with retained
-history. Version rebuilds refold every registered projector in the same transaction and refuse
-publication when a stored projector is absent from the registry. There is no retention policy.
-
-The old implementation informed method-specific ACP validation, immutable positions and
-column grants, UUIDv5 identities, sparse tool updates, canonical hashes and allow-list telemetry.
-The new dispatcher uses accepted commands and Agent Sandbox deadlines. It does not carry over
-Intent/Observation reconciliation, Saves, W/H frontiers, refills, OneCLI or annotation memory.
-
-Measurements in `docs/specs/log.md` cover PostgreSQL/mock/browser results, injected faults and
-a live Haiku run through the gateway under Kata. The captured Claude transcript runs in ordinary
-checks; the billed runner is opt-in. Whole-server failure, SIGKILL and assistant-ui remain unmeasured.
-The lab is a diagnostic surface; production identity, replacement proof, model readback,
-retention and history seeding remain separate contracts.
+Tests: `npm test -w @agora/log`. They need a PostgreSQL 17 server: `LOG_TEST_ADMIN_URL` names a
+login that may create databases and roles, or, without it, the local server is used through
+`sudo -u postgres`. Each run creates a template database and three logins, each test a database
+of its own, and drops them all. `node test/run.ts test/lines.test.ts --test-name-pattern='^L3 '`
+runs one file, or one case.

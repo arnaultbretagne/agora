@@ -41,6 +41,12 @@ export interface State {
   answers: Set<string>
   attempts: Set<string>
   sent: Set<string>
+  /** When each line's write was confirmed (`acp.sent`), by the line's position. */
+  sentAt: Map<string, string>
+  /** Outgoing lines never attempted nor failed, in position order. */
+  outbox: Map<string, Entry>
+  /** Outgoing requests without a valid answer, by position. */
+  unanswered: Set<string>
   failures: Set<string>
   turns: Map<string, Turn>
   active: Turn | null
@@ -56,6 +62,9 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     answers: new Set(),
     attempts: new Set(),
     sent: new Set(),
+    sentAt: new Map(),
+    outbox: new Map(),
+    unanswered: new Set(),
     failures: new Set(),
     turns: new Map(),
     active: null,
@@ -131,6 +140,8 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     }
     if (entry.kind === 'acp') {
       const key = `${entry.direction}:${idKey(entry.rpc_id)}`
+      if (entry.direction === 'out') state.outbox.set(entry.position, entry)
+      if (entry.rpc_kind === 'request' && entry.direction === 'out') state.unanswered.add(entry.position)
       if (entry.rpc_kind === 'request') {
         state.requests.set(key, entry)
         state.requestPositions.set(entry.position, entry)
@@ -157,6 +168,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           : state.requests.get(requestKey)
         if (request && request.execution === entry.execution && !state.answers.has(request.position)) {
           state.answers.add(request.position)
+          state.unanswered.delete(request.position)
           if (state.permissions.get(requestKey)?.position === request.position) state.permissions.delete(requestKey)
           if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution)
             execution.initialized = true
@@ -176,6 +188,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     if (entry.kind === 'acp.dispatching') {
       const position = String(content.requestPosition)
       state.attempts.add(position)
+      state.outbox.delete(position)
       const turn = turnsByRequest.get(position)
       if (turn && !turn.answered) {
         turn.dispatching = true
@@ -184,10 +197,14 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         if (!turn.startedAt && typeof content.startedAt === 'string') turn.startedAt = content.startedAt
       }
     }
-    if (entry.kind === 'acp.sent') state.sent.add(String(content.requestPosition))
+    if (entry.kind === 'acp.sent') {
+      state.sent.add(String(content.requestPosition))
+      state.sentAt.set(String(content.requestPosition), entry.time)
+    }
     if (entry.kind === 'request.failed') {
       const position = String(content.requestPosition)
       state.failures.add(position)
+      state.outbox.delete(position)
       const turn = turnsByRequest.get(position)
       if (turn && !turn.answered) {
         turn.failure = content.reason
@@ -206,201 +223,220 @@ export interface ProjectedObject {
   first_position: string
   last_position: string
 }
-export function project(entries: readonly Entry[]): ProjectedObject[] {
-  const objects = new Map<string, ProjectedObject>()
-  const ranks = new Map<string, number>(),
-    runs = new Map<string, { discriminator: string; id: string }>()
-  const put = (kind: ProjectedObject['kind'], id: string, value: Record<string, unknown>, position: string) => {
-    const previous = objects.get(id)
-    objects.set(id, {
-      kind,
-      id,
-      object: decode(
-        encode({ ...value, id, firstPosition: previous?.first_position ?? position, lastPosition: position }),
-      ) as Record<string, unknown>,
-      first_position: previous?.first_position ?? position,
-      last_position: position,
-    })
-  }
-  let folded: State | undefined
-  for (const entry of entries) {
-    const state = fold([entry], folded),
-      active = state.active
-    folded = state
-    for (const turn of state.turns.values()) {
-      const prior = objects.get(turn.id)
-      if (
-        !prior ||
-        encode({ ...prior.object, firstPosition: undefined, lastPosition: undefined }) !==
-          encode({ ...turn, id: turn.id })
-      )
+/**
+ * The core projector, incremental (docs/specs/log.md, "Views"): `apply` folds further entries and
+ * returns the objects they changed. Folding the same entries from the start gives the same objects.
+ */
+export class CoreProjection {
+  readonly objects = new Map<string, ProjectedObject>()
+  position = '0'
+  private folded: State | undefined
+  private readonly ranks = new Map<string, number>()
+  private readonly runs = new Map<string, { discriminator: string; id: string }>()
+  private readonly turnCodes = new Map<string, string>()
+  apply(entries: readonly Entry[]): Set<string> {
+    const changed = new Set<string>()
+    const objects = this.objects,
+      ranks = this.ranks,
+      runs = this.runs
+    const put = (kind: ProjectedObject['kind'], id: string, value: Record<string, unknown>, position: string) => {
+      const previous = objects.get(id)
+      objects.set(id, {
+        kind,
+        id,
+        object: decode(
+          encode({ ...value, id, firstPosition: previous?.first_position ?? position, lastPosition: position }),
+        ) as Record<string, unknown>,
+        first_position: previous?.first_position ?? position,
+        last_position: position,
+      })
+      changed.add(id)
+    }
+    for (const entry of entries) {
+      const state = fold([entry], this.folded),
+        active = state.active
+      this.folded = state
+      this.position = entry.position
+      // Only a turn without its answer, or the one this entry answers, can change.
+      for (const turn of state.turns.values()) {
+        if (turn.answered && this.turnCodes.has(turn.id) && turn.requestPosition !== entry.request_position) continue
+        const code = encode({ ...turn, id: turn.id })
+        if (this.turnCodes.get(turn.id) === code) continue
+        this.turnCodes.set(turn.id, code)
         put('turn', turn.id, { ...turn }, entry.position)
-    }
-    if (entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind === 'session.opened') {
-      const execution = state.current
-      put(
-        'workstream',
-        entry.workstream,
-        {
-          execution: execution?.id ?? null,
-          session: execution?.session ?? null,
-          stopped: execution?.stopped ?? false,
-          ended: execution?.ended ?? false,
-          lost: execution?.lost ?? false,
-          ...(execution?.failed ? { failed: true } : {}),
-          unavailable:
-            execution === null || execution.ended || execution.lost || execution.failed === true || !execution.session || !execution.connection,
-          title: 'Workstream',
-        },
-        entry.position,
-      )
-    }
-    if (
-      entry.kind === 'request.failed' ||
-      (entry.kind === 'execution.break' && entry.content.clean !== true) ||
-      ['execution.lost', 'execution.failed', 'execution.ended'].includes(entry.kind)
-    ) {
-      put(
-        'notice',
-        identity(entry.workstream, entry.position, 'notice'),
-        {
-          type: entry.kind,
-          reason: entry.content.reason ?? 'transport_error',
-          execution: entry.execution,
-          session: entry.session,
-        },
-        entry.position,
-      )
-    }
-    if (
-      entry.kind === 'session.ended' ||
-      ['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind)
-    )
-      for (const item of objects.values())
-        if (
-          item.object.type === 'permission' &&
-          item.object.status === 'pending' &&
-          (entry.kind === 'session.ended'
-            ? item.object.session === entry.session
-            : item.object.execution === entry.execution)
-        )
-          put('element', item.id, { ...item.object, status: 'cancelled' }, entry.position)
-    if (entry.kind !== 'acp') continue
-    const request =
-      entry.rpc_kind === 'request'
-        ? entry
-        : entry.request_position
-          ? state.requestPositions.get(entry.request_position)
-          : state.requests.get(`${entry.direction === 'in' ? 'out' : 'in'}:${idKey(entry.rpc_id)}`)
-    const turn =
-      entry.method === 'session/prompt'
-        ? [...state.turns.values()].find((t) => t.requestPosition === entry.position)
-        : (active ?? [...state.turns.values()].reverse().find((t) => t.session === entry.session))
-    const params = object(entry.content.params),
-      update = object(params?.update)
-    const type = update?.sessionUpdate
-    if (entry.method === 'session/prompt' && entry.direction === 'out') {
-      put(
-        'element',
-        identity(entry.session ?? entry.execution!, entry.position, 'prompt'),
-        { type: 'user', turn: turn?.id, session: entry.session, content: params?.prompt },
-        entry.position,
-      )
-    } else if (
-      entry.method === 'session/update' &&
-      update &&
-      ['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(String(type))
-    ) {
-      const scope = turn?.id ?? entry.session ?? entry.execution!
-      const discriminator = `${String(type)}:${String(update.messageId ?? '')}`
-      let run = runs.get(scope)
-      if (!run || run.discriminator !== discriminator) {
-        const rank = (ranks.get(scope) ?? 0) + 1
-        ranks.set(scope, rank)
-        run = { discriminator, id: identity(scope, String(rank), 'chunk') }
-        runs.set(scope, run)
       }
-      const previous = objects.get(run.id)
-      const content = object(update.content)
-      const chunks = Array.isArray(previous?.object.chunks) ? previous.object.chunks : []
-      put(
-        'element',
-        run.id,
-        {
-          type,
-          turn: turn?.id,
-          session: entry.session,
-          chunks: [...chunks, update.content],
-          text: String(previous?.object.text ?? '') + (content?.type === 'text' ? String(content.text) : ''),
-        },
-        entry.position,
+      if (entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind === 'session.opened') {
+        const execution = state.current
+        put(
+          'workstream',
+          entry.workstream,
+          {
+            execution: execution?.id ?? null,
+            session: execution?.session ?? null,
+            stopped: execution?.stopped ?? false,
+            ended: execution?.ended ?? false,
+            lost: execution?.lost ?? false,
+            ...(execution?.failed ? { failed: true } : {}),
+            unavailable:
+              execution === null || execution.ended || execution.lost || execution.failed === true || !execution.session || !execution.connection,
+            title: 'Workstream',
+          },
+          entry.position,
+        )
+      }
+      if (
+        entry.kind === 'request.failed' ||
+        (entry.kind === 'execution.break' && entry.content.clean !== true) ||
+        ['execution.lost', 'execution.failed', 'execution.ended'].includes(entry.kind)
+      ) {
+        put(
+          'notice',
+          identity(entry.workstream, entry.position, 'notice'),
+          {
+            type: entry.kind,
+            reason: entry.content.reason ?? 'transport_error',
+            execution: entry.execution,
+            session: entry.session,
+          },
+          entry.position,
+        )
+      }
+      if (
+        entry.kind === 'session.ended' ||
+        ['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind)
       )
-    } else if (
-      entry.method === 'session/update' &&
-      update &&
-      ['tool_call', 'tool_call_update'].includes(String(type)) &&
-      typeof update.toolCallId === 'string'
-    ) {
-      const id = identity(entry.session ?? entry.execution!, update.toolCallId, 'tool')
-      put(
-        'element',
-        id,
-        { ...objects.get(id)?.object, ...update, type: 'tool', turn: turn?.id, session: entry.session },
-        entry.position,
-      )
-      if (turn) runs.delete(turn.id)
-    } else if (entry.method === 'session/update' && type === 'plan') {
-      const scope = turn?.id ?? entry.session ?? entry.execution!
-      put(
-        'element',
-        identity(scope, 'plan'),
-        { type: 'plan', turn: turn?.id, session: entry.session, entries: update?.entries },
-        entry.position,
-      )
-      runs.delete(scope)
-    } else if (entry.method === 'session/request_permission') {
-      put(
-        'element',
-        identity(entry.session ?? entry.execution!, entry.position, 'permission'),
-        {
-          type: 'permission',
-          execution: entry.execution,
-          turn: turn?.id,
-          session: entry.session,
-          requestId: entry.rpc_id,
-          requestPosition: entry.position,
-          params: entry.content.params,
-          status: 'pending',
-        },
-        entry.position,
-      )
-    } else if (
-      request?.method === 'session/request_permission' &&
-      entry.direction === 'out' &&
-      ['response', 'error'].includes(entry.rpc_kind ?? '')
-    ) {
-      const id = identity(request.session ?? entry.execution!, request.position, 'permission')
-      put(
-        'element',
-        id,
-        { ...objects.get(id)?.object, status: 'answered', answer: entry.content.result ?? entry.content.error },
-        entry.position,
-      )
-    } else if (
-      !['initialize', 'session/prompt', 'session/new', 'session/resume', 'session/load', 'session/cancel'].includes(
-        entry.method ?? entry.correlated_method ?? '',
-      )
-    ) {
-      put(
-        'element',
-        identity(entry.workstream, entry.position, 'generic'),
-        { type: 'acp', session: entry.session, turn: turn?.id, line: entry.content },
-        entry.position,
-      )
-      if (turn) runs.delete(turn.id)
+        for (const item of objects.values())
+          if (
+            item.object.type === 'permission' &&
+            item.object.status === 'pending' &&
+            (entry.kind === 'session.ended'
+              ? item.object.session === entry.session
+              : item.object.execution === entry.execution)
+          )
+            put('element', item.id, { ...item.object, status: 'cancelled' }, entry.position)
+      if (entry.kind !== 'acp') continue
+      const request =
+        entry.rpc_kind === 'request'
+          ? entry
+          : entry.request_position
+            ? state.requestPositions.get(entry.request_position)
+            : state.requests.get(`${entry.direction === 'in' ? 'out' : 'in'}:${idKey(entry.rpc_id)}`)
+      const turn =
+        entry.method === 'session/prompt'
+          ? [...state.turns.values()].find((t) => t.requestPosition === entry.position)
+          : (active ?? [...state.turns.values()].reverse().find((t) => t.session === entry.session))
+      const params = object(entry.content.params),
+        update = object(params?.update)
+      const type = update?.sessionUpdate
+      if (entry.method === 'session/prompt' && entry.direction === 'out') {
+        put(
+          'element',
+          identity(entry.session ?? entry.execution!, entry.position, 'prompt'),
+          { type: 'user', turn: turn?.id, session: entry.session, content: params?.prompt },
+          entry.position,
+        )
+      } else if (
+        entry.method === 'session/update' &&
+        update &&
+        ['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(String(type))
+      ) {
+        const scope = turn?.id ?? entry.session ?? entry.execution!
+        const discriminator = `${String(type)}:${String(update.messageId ?? '')}`
+        let run = runs.get(scope)
+        if (!run || run.discriminator !== discriminator) {
+          const rank = (ranks.get(scope) ?? 0) + 1
+          ranks.set(scope, rank)
+          run = { discriminator, id: identity(scope, String(rank), 'chunk') }
+          runs.set(scope, run)
+        }
+        const previous = objects.get(run.id)
+        const content = object(update.content)
+        const chunks = Array.isArray(previous?.object.chunks) ? previous.object.chunks : []
+        put(
+          'element',
+          run.id,
+          {
+            type,
+            turn: turn?.id,
+            session: entry.session,
+            chunks: [...chunks, update.content],
+            text: String(previous?.object.text ?? '') + (content?.type === 'text' ? String(content.text) : ''),
+          },
+          entry.position,
+        )
+      } else if (
+        entry.method === 'session/update' &&
+        update &&
+        ['tool_call', 'tool_call_update'].includes(String(type)) &&
+        typeof update.toolCallId === 'string'
+      ) {
+        const id = identity(entry.session ?? entry.execution!, update.toolCallId, 'tool')
+        put(
+          'element',
+          id,
+          { ...objects.get(id)?.object, ...update, type: 'tool', turn: turn?.id, session: entry.session },
+          entry.position,
+        )
+        if (turn) runs.delete(turn.id)
+      } else if (entry.method === 'session/update' && type === 'plan') {
+        const scope = turn?.id ?? entry.session ?? entry.execution!
+        put(
+          'element',
+          identity(scope, 'plan'),
+          { type: 'plan', turn: turn?.id, session: entry.session, entries: update?.entries },
+          entry.position,
+        )
+        runs.delete(scope)
+      } else if (entry.method === 'session/request_permission') {
+        put(
+          'element',
+          identity(entry.session ?? entry.execution!, entry.position, 'permission'),
+          {
+            type: 'permission',
+            execution: entry.execution,
+            turn: turn?.id,
+            session: entry.session,
+            requestId: entry.rpc_id,
+            requestPosition: entry.position,
+            params: entry.content.params,
+            status: 'pending',
+          },
+          entry.position,
+        )
+      } else if (
+        request?.method === 'session/request_permission' &&
+        entry.direction === 'out' &&
+        ['response', 'error'].includes(entry.rpc_kind ?? '')
+      ) {
+        const id = identity(request.session ?? entry.execution!, request.position, 'permission')
+        put(
+          'element',
+          id,
+          { ...objects.get(id)?.object, status: 'answered', answer: entry.content.result ?? entry.content.error },
+          entry.position,
+        )
+      } else if (
+        !['initialize', 'session/prompt', 'session/new', 'session/resume', 'session/load', 'session/cancel'].includes(
+          entry.method ?? entry.correlated_method ?? '',
+        )
+      ) {
+        put(
+          'element',
+          identity(entry.workstream, entry.position, 'generic'),
+          { type: 'acp', session: entry.session, turn: turn?.id, line: entry.content },
+          entry.position,
+        )
+        if (turn) runs.delete(turn.id)
+      }
     }
+    return changed
   }
-  return [...objects.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+
+export function project(entries: readonly Entry[]): ProjectedObject[] {
+  const projection = new CoreProjection()
+  projection.apply(entries)
+  return [...projection.objects.values()].sort((a, b) => a.id.localeCompare(b.id))
 }
 /** The external assistant-ui store consumes this mapping, including explicit actions on uncertainty. */
 export function runtimeState(objects: readonly ProjectedObject[], snapshotComplete = true) {

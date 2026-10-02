@@ -99,7 +99,10 @@ export function validate(
   } catch (error) {
     return {
       ok: false,
-      reason: error instanceof Error && error.message === 'duplicate_key' ? 'unsupported_json_value' : 'invalid_json',
+      reason:
+        error instanceof Error && ['duplicate_key', 'unsafe_key'].includes(error.message)
+          ? 'unsupported_json_value'
+          : 'invalid_json',
     }
   }
   if (Array.isArray(value)) return { ok: false, reason: 'batch' }

@@ -1,10 +1,16 @@
+// The log's storage (docs/specs/log.md, "Entries", "ACP lines", "Storage"). Entries are appended under
+// a lock on their Workstream; the state folded from them is cached per Workstream and brought up to
+// date by reading only the entries after the last position folded — under that same lock inside a
+// transaction, so a decision always sees every committed entry.
 import { randomUUID, createHash } from 'node:crypto'
 import { Pool, types, type PoolClient } from 'pg'
 import { validate, idKey, requestMethod, type Direction, type Reason, type Envelope } from './acp.ts'
 import { decode, encode, hash, object, uuid, supported } from './json.ts'
 import { fold, type State } from './state.ts'
 
+// docs/specs/log.md, "Storage": bigint stays a decimal string; arithmetic uses JavaScript bigint.
 types.setTypeParser(20, (value) => value)
+
 export interface Entry {
   workstream: string
   position: string
@@ -55,17 +61,46 @@ export interface AcceptedEffect {
   session?: string
   body?: Record<string, unknown>
 }
+
+const COLUMNS =
+  'workstream,position,time::text,kind,execution,session,content::text,direction,rpc_kind,method,correlated_method,request_position,rpc_id::text,command,connection,receive_ordinal'
+
+function row(r: Record<string, unknown>): Entry {
+  return {
+    ...(r as unknown as Entry),
+    time: new Date(String(r.time)).toISOString(),
+    content: decode(String(r.content)) as Record<string, unknown>,
+    rpc_id: r.rpc_id === null ? null : decode(String(r.rpc_id)),
+  }
+}
+
+export async function readEntries(client: Pool | PoolClient, workstream: string, after = '0'): Promise<Entry[]> {
+  const result = await client.query(
+    `SELECT ${COLUMNS} FROM entries WHERE workstream=$1 AND position>$2 ORDER BY position`,
+    [workstream, after],
+  )
+  return result.rows.map(row)
+}
+
+interface Cached {
+  state: State
+  entries: Entry[]
+  position: bigint
+  sync: Promise<void>
+}
+
 export class Transaction {
   readonly client: PoolClient
   readonly workstream: string
+  readonly state: State
+  readonly entries: readonly Entry[]
   position: bigint
-  constructor(client: PoolClient, workstream: string, position: string) {
+  constructor(client: PoolClient, workstream: string, cached: Cached, position: bigint) {
     this.client = client
     this.workstream = workstream
-    this.position = BigInt(position)
-  }
-  async entries(): Promise<Entry[]> {
-    return readEntries(this.client, this.workstream)
+    this.state = cached.state
+    this.entries = cached.entries
+    this.position = position
   }
   async append(input: Append): Promise<string> {
     const position = String(++this.position)
@@ -93,6 +128,7 @@ export class Transaction {
     await this.client.query('UPDATE workstreams SET last_position=$2 WHERE id=$1', [this.workstream, position])
     return position
   }
+  /** Writes an outgoing line, never sent: the dispatcher sends it once `acp.dispatching` commits. */
   async outgoing(
     execution: string,
     line: AcceptedEffect['line'],
@@ -107,9 +143,8 @@ export class Transaction {
         ? `agora-${execution}-${String(this.position + 1n)}`
         : undefined
     const message = { jsonrpc: '2.0', ...line, ...(id === undefined ? {} : { id }) }
-    const state = fold(await this.entries())
     const correlation =
-      line.method === undefined && id !== undefined ? state.requests.get(`in:${idKey(id)}`) : undefined
+      line.method === undefined && id !== undefined ? this.state.requests.get(`in:${idKey(id)}`) : undefined
     const result = validate(
       encode(message),
       'out',
@@ -157,29 +192,36 @@ export class Transaction {
       ...(requestPosition ? { request_position: requestPosition } : {}),
     })
   }
+  /** Ends the execution's open Sessions, with the reason of the entry that ends them. */
+  async endSessions(execution: string, reason: unknown): Promise<void> {
+    const rows = await this.client.query('SELECT id FROM sessions WHERE execution=$1 AND ended_position IS NULL', [
+      execution,
+    ])
+    for (const r of rows.rows) {
+      const end = await this.append({ kind: 'session.ended', execution, session: r.id, content: { reason } })
+      await this.client.query('UPDATE sessions SET ended_position=$2 WHERE id=$1', [r.id, end])
+    }
+  }
 }
-export async function readEntries(client: Pool | PoolClient, workstream: string): Promise<Entry[]> {
-  const result = await client.query(
-    'SELECT workstream,position,time::text,kind,execution,session,content::text,direction,rpc_kind,method,correlated_method,request_position,rpc_id::text,command,connection,receive_ordinal FROM entries WHERE workstream=$1 ORDER BY position',
-    [workstream],
-  )
-  return result.rows.map((row) => ({
-    ...row,
-    time: new Date(row.time).toISOString(),
-    content: decode(row.content) as Record<string, unknown>,
-    rpc_id: row.rpc_id === null ? null : decode(row.rpc_id),
-  })) as Entry[]
-}
+
 export class LogStore {
   readonly writer: Pool
   readonly projector: Pool
   readonly anchors: Pool
+  private readonly cache = new Map<string, Cached>()
+  readonly urls: { readonly writer: string; readonly projector: string; readonly anchors: string }
   constructor(urls: { writer: string; projector: string; anchors: string }, max = 12) {
+    this.urls = urls
     this.writer = new Pool({ connectionString: urls.writer, max })
     this.projector = new Pool({ connectionString: urls.projector, max })
     this.anchors = new Pool({ connectionString: urls.anchors, max })
-    // Never let pg's asynchronous error event print connection strings or exception text.
-    for (const pool of [this.writer, this.projector, this.anchors]) pool.on('error', () => {})
+    // Never let pg's asynchronous error event print connection strings or exception text. pg-pool
+    // detaches its own listener while a client is checked out: without one of ours, a connection
+    // lost in the middle of a transaction would end the process instead of failing the transaction.
+    for (const pool of [this.writer, this.projector, this.anchors]) {
+      pool.on('error', () => {})
+      pool.on('connect', (client) => client.on('error', () => {}))
+    }
   }
   async assertBoundaries(): Promise<void> {
     for (const [pool, role] of [
@@ -192,8 +234,8 @@ export class LogStore {
         pg_has_role(current_user,$1,'MEMBER') AS member,
         EXISTS(SELECT 1 FROM pg_roles b WHERE b.rolname=$1 AND (b.rolcanlogin OR b.rolsuper OR b.rolcreaterole OR b.rolcreatedb OR b.rolbypassrls)) AS boundary_bad,
         EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolsuper OR p.rolcreaterole OR p.rolcreatedb OR p.rolbypassrls) AND pg_has_role(current_user,p.oid,'MEMBER')) AS privileged,
-        EXISTS(SELECT 1 FROM pg_roles p WHERE p.rolname=ANY($2) AND pg_has_role(current_user,p.oid,'MEMBER')) AS other,
-        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','entries','commands','sessions','diagnostics','anchors','objects','thread','checkpoints') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
+        EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolname=ANY($2) OR p.rolname IN ('pg_read_all_data','pg_write_all_data')) AND pg_has_role(current_user,p.oid,'MEMBER')) AS other,
+        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','threads','entries','commands','sessions','diagnostics','anchors','objects','thread','checkpoints') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
         FROM pg_roles r WHERE r.rolname=current_user`,
         [`agora_${role}`, ['writer', 'projector', 'anchors'].filter((r) => r !== role).map((r) => `agora_${r}`)],
       )
@@ -224,29 +266,63 @@ export class LogStore {
     const result = await this.writer.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])
     if (result.rows[0].owner !== owner) throw new Error('workstream_conflict')
   }
+  async workstreams(): Promise<string[]> {
+    return (await this.writer.query('SELECT id FROM workstreams ORDER BY id')).rows.map((r) => r.id as string)
+  }
+  private cached(workstream: string): Cached {
+    let cached = this.cache.get(workstream)
+    if (!cached) {
+      cached = { state: fold([]), entries: [], position: 0n, sync: Promise.resolve() }
+      cached.state.workstream = workstream
+      this.cache.set(workstream, cached)
+    }
+    return cached
+  }
+  /** Folds the committed entries after the cached position; serialized, so an entry is folded once. */
+  private sync(client: Pool | PoolClient, workstream: string): Promise<Cached> {
+    const cached = this.cached(workstream)
+    const next = cached.sync.then(async () => {
+      const delta = (await readEntries(client, workstream, String(cached.position))).filter(
+        (e) => BigInt(e.position) > cached.position,
+      )
+      if (!delta.length) return
+      fold(delta, cached.state)
+      cached.entries.push(...delta)
+      cached.position = BigInt(delta.at(-1)!.position)
+    })
+    cached.sync = next.catch(() => {})
+    return next.then(() => cached)
+  }
+  /** Forgets a Workstream's cache: the next read folds its history from the start. */
+  forget(workstream: string): void {
+    this.cache.delete(workstream)
+  }
   async transaction<T>(workstream: string, run: (tx: Transaction) => Promise<T>): Promise<T> {
     const client = await this.writer.connect()
+    let broken = false
     try {
       await client.query('BEGIN')
-      const locked = await client.query('SELECT id,last_position FROM workstreams WHERE id=$1 FOR UPDATE', [
-        uuid(workstream),
-      ])
+      // docs/specs/log.md, "Entries": the next position is the Workstream's, read under its lock.
+      const locked = await client.query('SELECT last_position FROM workstreams WHERE id=$1 FOR UPDATE', [uuid(workstream)])
       if (locked.rowCount !== 1) throw new Error('unknown_workstream')
-      const result = await run(new Transaction(client, workstream, locked.rows[0].last_position))
+      const cached = await this.sync(client, workstream)
+      const result = await run(new Transaction(client, workstream, cached, BigInt(locked.rows[0].last_position)))
       await client.query('COMMIT')
       return result
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => {})
+      // A connection that cannot even roll back is dropped, never handed out again.
+      await client.query('ROLLBACK').catch(() => (broken = true))
       throw error
     } finally {
-      client.release()
+      client.release(broken)
     }
   }
-  entries(workstream: string): Promise<Entry[]> {
-    return readEntries(this.writer, uuid(workstream))
+  /** The Workstream's entries, in position order: the cache itself, never to be modified. */
+  async entries(workstream: string): Promise<readonly Entry[]> {
+    return (await this.sync(this.writer, uuid(workstream))).entries
   }
   async state(workstream: string): Promise<State> {
-    return fold(await this.entries(workstream))
+    return (await this.sync(this.writer, uuid(workstream))).state
   }
   async accept(
     workstream: string,
@@ -266,7 +342,7 @@ export class LogStore {
           return found.rows[0].fingerprint === fingerprint
             ? (decode(found.rows[0].answer) as Answer)
             : { accepted: false, reason: 'command_conflict' }
-        const effect = await decide(fold(await tx.entries()), tx)
+        const effect = await decide(tx.state, tx)
         if (typeof effect === 'string') return { accepted: false, reason: effect }
         const position = await tx.append({
           kind: 'command',
@@ -326,6 +402,10 @@ export class LogStore {
       throw error
     }
   }
+  /**
+   * Captures one received line (docs/specs/log.md, "Backpressure and shutdown"): its connection and
+   * receive ordinal identify it, so a retry after an ambiguous commit finds the first write.
+   */
   async incoming(
     workstream: string,
     execution: string,
@@ -343,8 +423,7 @@ export class LogStore {
           handled: prior.rows[0].position !== null,
           ...(prior.rows[0].position === null ? {} : { position: prior.rows[0].position }),
         }
-      const entries = await tx.entries(),
-        state = fold(entries)
+      const state = tx.state
       let candidate: Record<string, unknown> | null = null
       try {
         candidate = object(
@@ -360,10 +439,11 @@ export class LogStore {
       const request = foundRequest?.execution === execution ? foundRequest : undefined
       const result = validate(raw, 'in', request ? { method: request.method!, direction: 'out' } : undefined)
       if (!result.ok) {
+        const diagnostic = randomUUID()
         await tx.client.query(
           'INSERT INTO diagnostics(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
           [
-            randomUUID(),
+            diagnostic,
             workstream,
             execution,
             connection,
@@ -374,20 +454,30 @@ export class LogStore {
             createHash('sha256').update(raw).digest('hex'),
           ],
         )
-        if (request)
+        if (request && !state.answers.has(request.position))
           await tx.append({
             kind: 'request.failed',
             execution,
             session: request.session,
-            content: { requestPosition: request.position, reason: result.reason },
+            content: { requestPosition: request.position, reason: result.reason, diagnostic },
           })
         return { handled: false, reason: result.reason }
       }
       const envelope = result.envelope
-      const previousAnswer = request ? entries.find((e) => e.kind === 'acp' && e.direction === 'in' &&
-        e.request_position === request.position && ['response', 'error'].includes(e.rpc_kind ?? '')) : undefined
-      let session = previousAnswer ? previousAnswer.session : request ? request.session :
-        state.executions.get(execution)?.session ?? null
+      const previousAnswer = request
+        ? tx.entries.find(
+            (e) =>
+              e.kind === 'acp' &&
+              e.direction === 'in' &&
+              e.request_position === request.position &&
+              ['response', 'error'].includes(e.rpc_kind ?? ''),
+          )
+        : undefined
+      let session = previousAnswer
+        ? previousAnswer.session
+        : request
+          ? request.session
+          : (state.executions.get(execution)?.session ?? null)
       const target = state.executions.get(execution)
       const params = object(request?.content.params),
         response = object(envelope.value.result)
@@ -395,7 +485,9 @@ export class LogStore {
         envelope.kind === 'response' &&
         request &&
         !state.answers.has(request.position) &&
-        !target?.ended && !target?.lost && !target?.failed &&
+        !target?.ended &&
+        !target?.lost &&
+        !target?.failed &&
         ['session/new', 'session/resume', 'session/load'].includes(request.method!)
       const acpId = opens ? (request!.method === 'session/new' ? response?.sessionId : params?.sessionId) : null
       if (opens && typeof acpId === 'string') session = randomUUID()
@@ -424,11 +516,18 @@ export class LogStore {
             end,
           ])
         }
+        const body = target?.body ?? {}
         const opened = await tx.append({
           kind: 'session.opened',
           execution,
           session,
-          content: { acpId, responsePosition: position },
+          content: {
+            acpId,
+            responsePosition: position,
+            pool: body.pool ?? null,
+            harness: body.harness ?? null,
+            origin: request!.method === 'session/new' ? 'new' : (body.anchor ?? 'new'),
+          },
         })
         await tx.client.query(
           'INSERT INTO sessions(id,workstream,execution,acp_id,opened_position) VALUES($1,$2,$3,$4,$5)',
@@ -438,27 +537,17 @@ export class LogStore {
       return { handled: true, position }
     })
   }
+  /** Appends a lifecycle entry; one that ends an execution also ends its open Sessions. */
   async fact(workstream: string, input: Append): Promise<string> {
     return this.transaction(workstream, async (tx) => {
       const position = await tx.append(input)
-      if (['execution.ended', 'execution.lost', 'execution.failed'].includes(input.kind) && input.execution) {
-        const rows = await tx.client.query('SELECT id FROM sessions WHERE execution=$1 AND ended_position IS NULL', [
-          input.execution,
-        ])
-        for (const row of rows.rows) {
-          const end = await tx.append({
-            kind: 'session.ended',
-            execution: input.execution,
-            session: row.id,
-            content: { reason: object(input.content)?.reason ?? 'stopped' },
-          })
-          await tx.client.query('UPDATE sessions SET ended_position=$2 WHERE id=$1', [row.id, end])
-        }
-      }
+      if (['execution.ended', 'execution.lost', 'execution.failed'].includes(input.kind) && input.execution)
+        await tx.endSessions(input.execution, object(input.content)?.reason ?? 'stopped')
       return position
     })
   }
-  async anchor(input: {
+  /** Stores an anchor with the anchor role; `publishAnchors` then appends its entry. */
+  async storeAnchor(input: {
     id: string
     workstream: string
     execution: string
@@ -477,23 +566,34 @@ export class LogStore {
         Buffer.from(input.bytes),
       ],
     )
-    await this.publishAnchors(input.workstream)
   }
+  /** Appends `anchor.received` for every stored anchor still without one (docs/specs/log.md). */
   async publishAnchors(workstream: string): Promise<void> {
     await this.transaction(workstream, async (tx) => {
-      const known = new Set((await tx.entries()).filter((e) => e.kind === 'anchor.received').map((e) => e.content.id))
+      const known = new Set(tx.entries.filter((e) => e.kind === 'anchor.received').map((e) => e.content.id))
       const rows = await tx.client.query(
-        'SELECT id,execution,session,metadata::text FROM anchors WHERE workstream=$1 ORDER BY time,id',
+        'SELECT id,execution,session,metadata::text FROM anchors WHERE workstream=$1 ORDER BY id',
         [workstream],
       )
-      for (const row of rows.rows)
-        if (!known.has(row.id))
+      for (const r of rows.rows)
+        if (!known.has(r.id))
           await tx.append({
             kind: 'anchor.received',
-            execution: row.execution,
-            session: row.session,
-            content: { id: row.id, metadata: decode(row.metadata) },
+            execution: r.execution,
+            session: r.session,
+            content: { id: r.id, metadata: decode(r.metadata) },
           })
     })
+  }
+  async anchorBytes(id: string): Promise<{ metadata: Record<string, unknown>; content: Buffer } | null> {
+    const result = await this.anchors.query('SELECT metadata::text,content FROM anchors WHERE id=$1', [uuid(id)])
+    if (!result.rowCount) return null
+    return { metadata: object(decode(result.rows[0].metadata)) ?? {}, content: result.rows[0].content as Buffer }
+  }
+  async anchorList(): Promise<{ id: string; workstream: string; execution: string; metadata: unknown }[]> {
+    const result = await this.writer.query(
+      'SELECT id,workstream,execution,metadata::text FROM anchors ORDER BY time DESC, id LIMIT 200',
+    )
+    return result.rows.map((r) => ({ id: r.id, workstream: r.workstream, execution: r.execution, metadata: decode(r.metadata) }))
   }
 }
