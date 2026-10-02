@@ -589,13 +589,22 @@ await check('C13', 'claude-code, from the Create to a Session open', async () =>
   const pod = await warmed()
   const w = new Workstream()
   const { ms } = await w.open(claude, SHORT)
-  const v = (await view(w.execution))!
+  const opened = (await view(w.execution))!
+  assert(opened.pod === pod, `claimed ${String(opened.pod)}, warmed ${pod}`)
+  // The mechanics read the bridge's counters at the hand-off and after each turn: one short turn
+  // on haiku (billed) shows what the opening sent out. The counters cover the Pod's whole life.
+  const model = await api('POST', `/api/workstreams/${w.id}/control`, { execution: w.execution, method: 'session/set_config_option', params: { configId: 'model', value: 'haiku' } })
+  await until('model answered', async () => (await w.entries()).find((x) => x.kind === 'acp' && x.direction === 'in' && x.rpc_id === model.requestId), 30_000)
+  assert((await w.write('What is the capital of France? Answer in one word.')).status === 200, 'Write refused')
+  const turn = await w.turn(['done', 'failed'], 120_000)
+  const after = await until('counters after the turn', async () => {
+    const v = (await view(w.execution))!
+    return (v.outbound?.tunnels ?? 0) > (opened.outbound?.tunnels ?? 0) ? v : undefined
+  }, 15_000)
   await w.stop()
-  assert(v.pod === pod, `claimed ${String(v.pod)}, warmed ${pod}`)
-  // The bridge counts refusals over the Pod's life: before the claim, only its warm token's.
-  const targets = Object.entries((v.outbound?.targets ?? {}) as Record<string, Json>).map(([target, t]) => `${target} ×${String(t.count)} → ${String(t.lastStatus)}`)
-  assert(ms < 5000 && v.outbound?.refused === 0, `${String(ms)} ms, ${String(v.outbound?.refused)} refused; ${targets.join(', ')}`)
-  return `Session open in ${String(ms)} ms on ${pod} (${String(v.launchType)}); ${String(v.outbound?.tunnels)} tunnel(s), 0 refused: ${targets.join(', ')}`
+  const targets = Object.entries((after.outbound?.targets ?? {}) as Record<string, Json>).map(([target, t]) => `${target} ×${String(t.count)} → ${String(t.lastStatus)}`)
+  assert(ms < 5000 && after.outbound?.refused === 0 && turn.status === 'done', `${String(ms)} ms, ${String(after.outbound?.refused)} refused, turn ${turn.status}; ${targets.join(', ')}`)
+  return `Session open in ${String(ms)} ms on ${pod} (${String(opened.launchType)}); the opening and one turn: ${String((after.outbound?.tunnels ?? 0) - (opened.outbound?.tunnels ?? 0))} tunnel(s), 0 refused over the Pod's life (${targets.join(', ')})`
 })
 
 await check('C10', 'At the claim: the execution’s token before initialize', async () => {
