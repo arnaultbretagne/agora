@@ -27,6 +27,13 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C5 | — | cluster | R0g | partial: probed by hand, no test | 401 for a missing, an expired and a foreign JWT. |
 | C6 | — | cluster | R0g | partial: probed by hand, no test | 403 for `..`, `.`, `%2e` and `%2f`. |
 | C7 | — | cluster | R0g | partial: probed by hand, no test | 404. |
+| C8 | — | — | — | not verified | — |
+| C9 | — | — | — | not verified | — |
+| C10 | — | — | — | not verified | — |
+| C11 | — | — | — | not verified | — |
+| C12 | — | — | — | not verified | — |
+| C13 | — | — | — | not verified | — |
+| C14 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 
