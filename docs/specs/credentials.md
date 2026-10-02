@@ -101,7 +101,9 @@ credential.
 
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
-reloaded about a minute after the merge, the time the kubelet takes to sync the Secret.
+reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. Its
+configuration is not watched: a new route takes a restart of the gateway (verified on 2026-10-02,
+the `zai` route answered 404 "route not found" until then).
 
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.
