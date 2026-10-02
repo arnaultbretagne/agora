@@ -1,9 +1,9 @@
 // Anchors (docs/specs/executions.md, "The end of the Pod and the anchor"): the harness's native files, saved en bloc and nothing
 // else. What is kept from the S9 custody driver of the previous implementation (arnaultbretagne/agora
-// main, harnesses/claude-code/src/driver.ts): the native location and claude-code's slug rule, the
-// stability read before a capture, the size limit, and restoration written beside the target, read
-// back, compared, then renamed. What changed: the whole native directory instead of one session's
-// file, pushed by the Pod when it ends rather than pulled.
+// main, harnesses/claude-code/src/driver.ts): the stability read before a capture, the size limit,
+// and restoration written beside the target, read back, compared, then renamed. What changed: the
+// whole native directory instead of one session's file, declared by the image, pushed by the Pod
+// when it ends rather than pulled.
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
@@ -12,21 +12,6 @@ export const ANCHOR_FORMAT = 'agora-anchor/1'
 export const MAX_ANCHOR_BYTES = 32 * 1024 * 1024
 export const STABILITY_WINDOW_MS = 250
 export const STABILITY_BUDGET_MS = 10_000
-
-/**
- * claude-code's own directory slug for a working directory, measured against the pinned adapter:
- * every character outside `[A-Za-z0-9-]` becomes `-`, case preserved (S9 findings).
- */
-export function workspaceSlug(workspace: string): string {
-  return workspace.replace(/[^A-Za-z0-9-]/g, '-')
-}
-
-/** Where each harness keeps its native state for a workspace — the directory saved en bloc. */
-export function nativeDir(harness: string, home: string, workspace: string): string {
-  if (harness === 'claude-code') return join(home, '.claude', 'projects', workspaceSlug(workspace))
-  if (harness === 'mock') return join(home, '.mock-agent', 'sessions', workspaceSlug(workspace))
-  throw new Error(`harness without a known native directory: ${harness}`)
-}
 
 export interface AnchorFile {
   /** Relative to the native directory. */

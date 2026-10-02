@@ -545,13 +545,23 @@ export class Workstreams implements Handler {
     return this.handToken(e)
   }
 
-  /** `initialize`, then the Session: new, or restored from the anchor (docs/specs/executions.md, "Restoring"). */
+  /** The token, the anchor if any, `initialize`, then the Session: new, or restored (docs/specs/executions.md, "Restoring"). */
   private async setup(workstream: string, e: Execution): Promise<void> {
     const state = await this.store.state(workstream)
     const requests = [...state.requests.values()].filter((r) => r.execution === e.id && r.direction === 'out')
     if (!requests.some((r) => r.method === 'initialize')) {
       // The execution's token first: a harness initializing without a way out stalls.
       if (!(await this.handToken(e))) return
+      // Then the anchor, before the adapter speaks: one that opens its files at start is restarted to read them.
+      if (e.body.anchor) {
+        const anchor = await this.store.anchorBytes(String(e.body.anchor))
+        if (!anchor) return this.failSetup(workstream, e, 'anchor_missing')
+        try {
+          await this.executions.putAnchor(e.id, anchor.content)
+        } catch {
+          return this.failSetup(workstream, e, 'restore_failed')
+        }
+      }
       await this.store.transaction(workstream, (tx) =>
         tx.outgoing(e.id, {
           method: 'initialize',
@@ -576,21 +586,16 @@ export class Workstreams implements Handler {
       )
       const caps = object(object(initialize?.content.result)?.agentCapabilities)
       method = object(caps?.sessionCapabilities)?.resume != null ? 'session/resume' : 'session/load'
-      if (!anchor || (method === 'session/load' && caps?.loadSession !== true)) {
-        await this.store.fact(workstream, { kind: 'execution.failed', execution: e.id, content: { reason: anchor ? 'restore_failed' : 'anchor_missing' } })
-        this.executions.hold(e.id)
-        return
-      }
-      try {
-        await this.executions.putAnchor(e.id, anchor.content)
-      } catch {
-        await this.store.fact(workstream, { kind: 'execution.failed', execution: e.id, content: { reason: 'restore_failed' } })
-        this.executions.hold(e.id)
-        return
-      }
+      if (!anchor) return this.failSetup(workstream, e, 'anchor_missing')
+      if (method === 'session/load' && caps?.loadSession !== true) return this.failSetup(workstream, e, 'restore_failed')
       params = { ...params, sessionId: anchor.metadata.sessionId }
     }
     await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method, params }))
+  }
+
+  private async failSetup(workstream: string, e: Execution, reason: 'anchor_missing' | 'restore_failed'): Promise<void> {
+    await this.store.fact(workstream, { kind: 'execution.failed', execution: e.id, content: { reason } })
+    this.executions.hold(e.id)
   }
 
   /**

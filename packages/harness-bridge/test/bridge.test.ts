@@ -2,14 +2,14 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startBridge, MAX_LINE_BYTES } from '../src/server.ts'
 import { after, describe, it } from 'node:test'
 import { mintBridgeToken } from '../src/token.ts'
-import { pushBundle, type Bundle } from '../src/anchor.ts'
+import { checksumOf, pushBundle, type Bundle } from '../src/anchor.ts'
 import { Collector, keys, mockBridge, type LabBridge } from '@agora/testkit'
 
 const { privateKey, publicKey } = keys()
@@ -22,6 +22,23 @@ async function lab(podName = 'sbx-test'): Promise<LabBridge> {
   const started = await mockBridge(publicKey, podName)
   running.push(started)
   return started
+}
+
+/** The 'holds' adapter has read its native file: its pid. */
+async function started(target: LabBridge): Promise<number> {
+  const marker = join(target.home, 'started')
+  for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise((resolve) => setTimeout(resolve, 25))
+  return Number(readFileSync(marker, 'utf8'))
+}
+
+/** An anchor of plain files, as a bridge pushes it. */
+function anchorOf(files: Record<string, string>): Bundle {
+  return {
+    format: 'agora-anchor/1',
+    harness: 'mock',
+    stable: true,
+    files: Object.entries(files).map(([path, text]) => ({ path, checksum: checksumOf(Buffer.from(text)), content: Buffer.from(text).toString('base64') })),
+  }
 }
 
 function auth(podName = 'sbx-test'): Record<string, string> {
@@ -51,12 +68,12 @@ async function say(client: Collector, id: number, sessionId: string, text: strin
   return client.response(id)
 }
 
-async function stdio(mode: string): Promise<LabBridge> {
+async function stdio(mode: string, restartOnAnchor = false): Promise<LabBridge> {
   const home = mkdtempSync(join(tmpdir(), 'stdio-bridge-'))
   const bridge = await startBridge({
     port: 0, host: '127.0.0.1',
     adapterCommand: [process.execPath, fileURLToPath(new URL('./stdio-adapter.ts', import.meta.url)), mode, home],
-    workspace: home, podName: 'sbx-test', publicKey, harness: 'mock', nativeDir: join(home, 'native'), log: () => {},
+    workspace: home, podName: 'sbx-test', publicKey, harness: 'mock', nativeDir: join(home, 'native'), restartOnAnchor, adapterStopMs: 1000, log: () => {},
   })
   const target = { bridge, home, workspace: home, url: `127.0.0.1:${String(bridge.port())}` }
   running.push(target)
@@ -248,6 +265,47 @@ describe('bridge', () => {
     assert.deepEqual((await resumed.response(1)).result, {})
     await say(resumed, 2, sessionId, '/recall')
     assert.ok(resumed.acp().some((message) => JSON.stringify(message).includes('mirabelle')))
+  })
+
+  it('E29 an adapter that opens its files at start: placing the anchor stops it, writes them, starts it again', async () => {
+    const target = await stdio('holds', true)
+    const first = await started(target)
+    // What the warm adapter wrote at start, like a database's journal.
+    writeFileSync(join(target.home, 'native', 'state.txt-wal'), 'warm')
+    // Agora is connected, as when it restores: token, anchor, then initialize.
+    const client = await connect(target)
+    const placed = await fetch(`http://${target.url}/anchor`, { method: 'PUT', body: JSON.stringify(anchorOf({ 'state.txt': 'restored' })), headers: auth() })
+    assert.equal(placed.status, 200)
+    assert.equal(((await placed.json()) as { restarted?: boolean }).restarted, true)
+    assert.equal((await fetch(`http://${target.url}/healthz`)).status, 200)
+    client.send({ jsonrpc: '2.0', id: 1, method: 'probe' })
+    const after = (await client.response(1)).result as { state: string; pid: number }
+    assert.equal(after.state, 'restored')
+    assert.notEqual(after.pid, first, 'another process')
+    assert.equal(existsSync(join(target.home, 'native', 'state.txt-wal')), false, 'the directory replaced as a whole')
+    assert.equal(client.closed, null, 'the connection outlives the restart')
+  })
+
+  it('E29 refused once a line has reached the adapter: 409, the files untouched, the same process', async () => {
+    const target = await stdio('holds', true)
+    await started(target)
+    const client = await connect(target)
+    client.send({ jsonrpc: '2.0', id: 1, method: 'probe' })
+    const before = (await client.response(1)).result as { state: null; pid: number }
+    const placed = await fetch(`http://${target.url}/anchor`, { method: 'PUT', body: JSON.stringify(anchorOf({ 'state.txt': 'too late' })), headers: auth() })
+    assert.equal(placed.status, 409)
+    assert.equal(existsSync(join(target.home, 'native', 'state.txt')), false)
+    client.send({ jsonrpc: '2.0', id: 2, method: 'probe' })
+    assert.deepEqual((await client.response(2)).result, before)
+  })
+
+  it('E29 control: without the declaration, an adapter that read its files at start never sees the anchor', async () => {
+    const target = await stdio('holds')
+    await started(target)
+    const client = await connect(target)
+    assert.equal((await fetch(`http://${target.url}/anchor`, { method: 'PUT', body: JSON.stringify(anchorOf({ 'state.txt': 'restored' })), headers: auth() })).status, 200)
+    client.send({ jsonrpc: '2.0', id: 1, method: 'probe' })
+    assert.equal(((await client.response(1)).result as { state: string | null }).state, null)
   })
 
   it('stays up when the adapter dies, and still hands back the files at the end', async () => {

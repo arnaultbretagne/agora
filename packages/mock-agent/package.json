@@ -5,7 +5,8 @@
   "type": "module",
   "description": "The lab's ACP agent without a model, with a real native file.",
   "exports": {
-    "./agent": "./src/agent.ts"
+    "./agent": "./src/agent.ts",
+    "./storage": "./src/storage.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

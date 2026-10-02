@@ -1,6 +1,6 @@
 // The image entrypoint (docs/specs/executions.md). Everything it reads is fixed by the image or the
 // template — never by a claim, which would force a cold start.
-import { nativeDir, pushBundle } from './anchor.ts'
+import { pushBundle } from './anchor.ts'
 import { publicKeyFrom } from './token.ts'
 import { startBridge } from './server.ts'
 
@@ -10,7 +10,6 @@ function required(name: string): string {
   return value
 }
 
-const home = required('HOME')
 const workspace = process.env.BRIDGE_WORKSPACE ?? '/home/harness/work'
 const harness = required('BRIDGE_DRIVER')
 const log = (message: string): void => console.log(`[bridge] ${message}`)
@@ -22,7 +21,9 @@ const bridge = await startBridge({
   podName: required('POD_NAME'),
   publicKey: publicKeyFrom(required('BRIDGE_PUBLIC_KEY')),
   harness,
-  nativeDir: nativeDir(harness, home, workspace),
+  // What differs between harnesses is declared by the image, not coded here (ADR Harnesses).
+  nativeDir: required('BRIDGE_NATIVE_DIR'),
+  restartOnAnchor: process.env.BRIDGE_RESTART_ON_ANCHOR === 'true',
   log,
 })
 

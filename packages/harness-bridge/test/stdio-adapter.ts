@@ -1,6 +1,7 @@
 // Controlled stdio peer for raw framing, output pressure and blocked stdin tests.
 import { once } from 'node:events'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 
 const mode = process.argv[2]
 const directory = process.argv[3]!
@@ -21,6 +22,15 @@ if (mode === 'split') {
     if (i % 100 === 0) writeFileSync(`${directory}/progress`, String(i))
   }
   writeFileSync(`${directory}/done`, 'done')
+} else if (mode === 'holds') {
+  // Like opencode with its database: reads its native file once, at start, and answers from memory.
+  const path = `${directory}/native/state.txt`
+  const state = existsSync(path) ? readFileSync(path, 'utf8') : null
+  writeFileSync(`${directory}/started`, String(process.pid))
+  for await (const line of createInterface({ input: process.stdin })) {
+    const { id } = JSON.parse(line) as { id: unknown }
+    await write(`${JSON.stringify({ jsonrpc: '2.0', id, result: { state, pid: process.pid } })}\n`)
+  }
 } else if (mode === 'stdin') {
   const timer = setInterval(() => {
     if (existsSync(`${directory}/read`)) {

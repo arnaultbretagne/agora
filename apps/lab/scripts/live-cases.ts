@@ -1,4 +1,4 @@
-// Plays acceptance cases of docs/specs/executions.md (E…), docs/specs/log.md (L…) and
+// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode), docs/specs/log.md (L…) and
 // docs/specs/credentials.md (C1–C4, C8–C15) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
@@ -125,6 +125,7 @@ const active = async () => ((await api('GET', '/api/executions')).executions as 
 const pools = (await api('GET', '/api/pools')).pools as Json[]
 const mock = pools.find((p) => p.harness === 'mock')!.name as string
 const claude = pools.find((p) => p.harness === 'claude-code')?.name as string | undefined
+const opencode = pools.find((p) => p.harness === 'opencode')?.name as string | undefined
 await until('room under the quota', async () => (await active()) <= 2, 660_000)
 await until('warm pool full', async () => ((await api('GET', '/api/pools')).pools as Json[]).find((p) => p.name === mock)?.readyReplicas === 2, 120_000)
 console.log(`pools: ${pools.map((p) => `${p.name as string} (${p.harness as string})`).join(', ')}`)
@@ -417,6 +418,39 @@ await check('E22', 'Real harness (claude-code)', async () => {
   }
   const info = (init.content.result as Json)?.agentInfo
   return `ready in ${String(ms)} ms, ${String(info?.name)}@${String(info?.version)}, prompt: ${answered === null ? 'no answer in 120 s, cancelled' : answered.status}; ${restored}`
+})
+
+await check('E30', 'Real harness (opencode)', async () => {
+  if (opencode === undefined) throw new Error('no opencode pool')
+  const w = new Workstream()
+  const { ms } = await w.open(opencode, SHORT)
+  const init = (await w.entries()).find((x) => x.kind === 'acp' && x.direction === 'in' && x.correlated_method === 'initialize')!
+  const agent = (init.content.result as Json)?.agentInfo
+  const launch = (await view(w.execution))?.launchType
+  assert(agent?.name === 'OpenCode' && launch === 'warm', `${String(agent?.name)}, ${String(launch)}`)
+  const started = Date.now()
+  assert((await w.write('Remember the word mirabelle. What is the capital of France? Answer in one word.')).status === 200, 'Write refused')
+  const turn = await w.turn(['done', 'failed'], 180_000)
+  const answer = await w.said()
+  const seconds = ((Date.now() - started) / 1000).toFixed(1)
+  // Read again by the mechanics after the turn: every tunnel the harness opened, since it started.
+  const out = await until('counters after the turn', async () => ((await view(w.execution))?.outbound?.tunnels ?? 0) > 0 && (await view(w.execution))!.outbound, 15_000)
+  const targets = Object.keys(out.targets ?? {})
+  assert(turn.status === 'done' && /paris/i.test(answer), `turn ${turn.status}: ${answer.slice(0, 120)}`)
+  assert(out.refused === 0 && targets.every((target) => target === 'api.z.ai:443'), `refused ${String(out.refused)}, ${targets.join(', ')}`)
+  await w.stop()
+  const end = await w.ended(180_000)
+  assert(typeof end.content.anchor === 'string', JSON.stringify(end.content))
+  const back = new Workstream()
+  const restored = await back.open(opencode, { anchor: end.content.anchor, ...SHORT })
+  const opened = (await back.entries()).findLast((x) => x.kind === 'session.opened')!
+  assert(opened.content.origin === end.content.anchor, `origin ${String(opened.content.origin)}`)
+  assert((await back.write('Which word did I ask you to remember? Answer with that word only.')).status === 200, 'Write refused')
+  await back.turn(['done', 'failed'], 180_000)
+  const recalled = await back.said()
+  await back.stop()
+  assert(/mirabelle/i.test(recalled), `amnesiac: ${recalled.slice(0, 120)}`)
+  return `ready in ${String(ms)} ms (${String(launch)}), ${String(agent.name)}@${String(agent.version)}; "${answer.trim().slice(0, 30)}" in ${seconds} s; tunnels ${targets.join(', ')} ×${String(out.tunnels)}, 0 refused; anchor ${String(end.content.anchor)} restored by a restart in ${String(restored.ms)} ms, recalls "${recalled.trim().slice(0, 30)}"`
 })
 
 // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)

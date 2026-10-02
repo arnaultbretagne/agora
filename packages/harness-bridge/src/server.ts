@@ -4,6 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { mkdir, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, WebSocket } from 'ws'
@@ -19,8 +20,13 @@ export interface BridgeOptions {
   readonly podName: string
   readonly publicKey: KeyObject
   readonly harness: string
-  /** The harness's native directory for this workspace: what an anchor holds. */
+  /** The harness's native directory, declared by its image: what an anchor holds. */
   readonly nativeDir: string
+  /**
+   * Declared by an image whose adapter opens its native files when it starts (opencode's database):
+   * placing an anchor stops it, writes the files, and starts it again — only before any ACP line.
+   */
+  readonly restartOnAnchor?: boolean
   readonly adapterStopMs?: number
   /** Loopback port of the outbound proxy the adapter goes through (docs/specs/credentials.md); 0 picks one. */
   readonly outboundPort?: number
@@ -43,6 +49,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const startedAt = new Date().toISOString()
 
   mkdirSync(options.workspace, { recursive: true })
+  mkdirSync(options.nativeDir, { recursive: true })
 
   // Started before the adapter, whose environment must point at it: no credential yet, only the
   // way out (docs/specs/credentials.md).
@@ -52,10 +59,14 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   const [command, ...args] = options.adapterCommand
   if (command === undefined) throw new Error('the adapter command is empty')
-  const child: ChildProcess = spawn(command, args, { cwd: options.workspace, env, stdio: ['pipe', 'pipe', 'inherit'] })
 
   const adapter = { alive: true, exitCode: null as number | null, signal: null as string | null }
-  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+  let child!: ChildProcess
+  let exited!: Promise<void>
+  /** A line has gone to or come from the adapter: from then on it is never restarted. */
+  let spoken = false
+  /** The process a restart is stopping: its end is not the adapter's. */
+  let replacing: ChildProcess | null = null
   let terminating = false
   let client: WebSocket | null = null
   let reading = false
@@ -99,6 +110,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts, lineBytes)
         parts = []
         lineBytes = 0
+        spoken = true
         const peer = client
         await new Promise<void>((resolve) => {
           peer.send(line, { binary: false }, (error) => {
@@ -116,21 +128,53 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       reading = false
     }
   }
-  child.stdout?.on('readable', () => void pipeOutput())
-  child.on('exit', (code, signal) => {
-    adapter.alive = false
-    adapter.exitCode = code
-    adapter.signal = signal
-    log(`adapter exited code=${String(code)} signal=${String(signal)}`)
-    if (!terminating) client?.close(1011, 'adapter exited')
-  })
-  child.on('error', () => {
-    adapter.alive = false
-    log('cannot start the adapter')
-    client?.close(1011, 'adapter failed to start')
-  })
-  child.stdin?.on('error', () => failAdapter('adapter stdin failed'))
-  child.stdout?.on('error', () => failAdapter('adapter stdout failed'))
+  const drain = (): void => {
+    if (client !== null && client.readyState === WebSocket.OPEN && !terminating) client.resume()
+  }
+
+  function startAdapter(): void {
+    const proc = spawn(command!, args, { cwd: options.workspace, env, stdio: ['pipe', 'pipe', 'inherit'] })
+    child = proc
+    exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()))
+    adapter.alive = true
+    adapter.exitCode = null
+    adapter.signal = null
+    // A process being replaced says nothing more: only the current one speaks for the adapter.
+    const current = (): boolean => child === proc && replacing !== proc
+    proc.stdout?.on('readable', () => { if (current()) void pipeOutput() })
+    proc.stdin?.on('drain', () => { if (current()) drain() })
+    proc.on('exit', (code, signal) => {
+      if (!current()) return
+      adapter.alive = false
+      adapter.exitCode = code
+      adapter.signal = signal
+      log(`adapter exited code=${String(code)} signal=${String(signal)}`)
+      if (!terminating) client?.close(1011, 'adapter exited')
+    })
+    proc.on('error', () => {
+      if (!current()) return
+      adapter.alive = false
+      log('cannot start the adapter')
+      client?.close(1011, 'adapter failed to start')
+    })
+    proc.stdin?.on('error', () => { if (current()) failAdapter('adapter stdin failed') })
+    proc.stdout?.on('error', () => { if (current()) failAdapter('adapter stdout failed') })
+  }
+
+  /** SIGTERM, then SIGKILL after the stop delay: what the end of the Pod and a restart both do. */
+  async function stopAdapter(): Promise<void> {
+    if (!adapter.alive) return
+    child.kill('SIGTERM')
+    const stopMs = options.adapterStopMs ?? 5000
+    const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), stopMs))])
+    if (!stopped) {
+      log(`adapter still there after ${String(stopMs)} ms: SIGKILL`)
+      child.kill('SIGKILL')
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+    }
+  }
+
+  startAdapter()
 
   function describe(): Record<string, unknown> {
     return {
@@ -197,9 +241,32 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         if (size > MAX_ANCHOR_BYTES * 1.4) throw new AnchorRefused(413, 'the anchor is too big')
         chunks.push(chunk as Buffer)
       }
-      const placed = await writeBundle(options.nativeDir, parseBundle(new Uint8Array(Buffer.concat(chunks))))
-      log(`anchor restored: ${String(placed.length)} file(s) in ${options.nativeDir}`)
-      return json(res, 200, { files: placed })
+      const bundle = parseBundle(new Uint8Array(Buffer.concat(chunks)))
+      if (!options.restartOnAnchor) {
+        const placed = await writeBundle(options.nativeDir, bundle)
+        log(`anchor restored: ${String(placed.length)} file(s) in ${options.nativeDir}`)
+        return json(res, 200, { files: placed })
+      }
+      // The adapter holds its native files open: it must not run while they are replaced.
+      if (spoken || !adapter.alive) return json(res, 409, { reason: spoken ? 'the adapter has already spoken: an anchor goes before initialize' : 'adapter not running' })
+      replacing = child
+      let placed: Awaited<ReturnType<typeof writeBundle>>
+      try {
+        await stopAdapter()
+        chunk = null
+        parts = []
+        lineBytes = 0
+        // Replaced as a whole: what the warm adapter wrote at start (a database's journal) must not
+        // outlive the files it belonged to.
+        await rm(options.nativeDir, { recursive: true, force: true })
+        await mkdir(options.nativeDir, { recursive: true })
+        placed = await writeBundle(options.nativeDir, bundle)
+      } finally {
+        replacing = null
+        startAdapter()
+      }
+      log(`anchor restored: ${String(placed.length)} file(s) in ${options.nativeDir}, adapter restarted`)
+      return json(res, 200, { files: placed, restarted: true })
     }
 
     json(res, 404, { reason: 'unknown route' })
@@ -244,20 +311,17 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       peer.close(1011, 'adapter exited')
       return
     }
-    const drain = (): void => {
-      if (client === peer && peer.readyState === WebSocket.OPEN && !terminating) peer.resume()
-    }
-    child.stdin?.on('drain', drain)
     if (child.stdin?.writableNeedDrain) peer.pause()
     peer.on('message', (data, isBinary) => {
       if (client !== peer || !adapter.alive || terminating) return
+      if (replacing !== null) { peer.close(1013, 'adapter restarting'); return }
       if (isBinary) { peer.close(1003, 'binary messages refused'); return }
       const line = data.toString()
       if (line.includes('\n')) { peer.close(1008, 'one line per message'); return }
+      spoken = true
       if (!child.stdin?.write(`${line}\n`)) peer.pause()
     })
     peer.on('close', () => {
-      child.stdin?.off('drain', drain)
       if (client === peer) client = null
     })
     peer.on('error', (error: Error & { code?: string }) => {
@@ -288,16 +352,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         if (client !== null && client.readyState === client.OPEN) {
           client.close(1001, 'Pod ending')
         }
-        if (adapter.alive) {
-          child.kill('SIGTERM')
-          const stopMs = options.adapterStopMs ?? 5000
-          const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), stopMs))])
-          if (!stopped) {
-            log(`adapter still there after ${String(stopMs)} ms: SIGKILL`)
-            child.kill('SIGKILL')
-            await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
-          }
-        }
+        await stopAdapter()
         await outbound.close()
         try {
           return await readBundle(options.harness, options.nativeDir)
