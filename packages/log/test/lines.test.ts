@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { isLosslessNumber } from 'lossless-json'
 import { canonical, decode, identity, object } from '../src/index.ts'
-import { base64, call, database, Lab, lines, opened, readThread } from './support.ts'
+import { base64, call, database, Lab, lines, opened, readThread, until } from './support.ts'
 
 test('L1 a received line keeps its exact integer, unknown members, _meta and array order', async (t) => {
   const { lab, ws, e } = await opened(t)
@@ -98,7 +98,11 @@ test('L5 an extension method and an unknown session/update type are entries and 
   const ping = received.find((x) => x.method === '_lab/ping')
   const widget = received.find((x) => object(object(x.content.params)?.update)?.sessionUpdate === 'lab_widget')
   assert.ok(ping && widget)
-  const read = await readThread(lab.url, ws, '0')
+  // Received lines are projected a moment later, a few times a second.
+  const read = await until('both projected', async () => {
+    const r = await readThread(lab.url, ws, '0')
+    return [ping, widget].every((x) => r.snapshot.some((row) => row.id === identity(ws, x.position, 'generic'))) && r
+  })
   assert.equal(read.status, 200)
   for (const entry of [ping, widget]) {
     const id = identity(ws, entry.position, 'generic')

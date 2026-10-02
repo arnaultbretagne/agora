@@ -32,6 +32,8 @@ const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
 const OPENING = ['session/new', 'session/resume', 'session/load']
 const CONTROL = new Set(['session/set_config_option'])
+/** A burst of received lines is projected a few times a second, never once per line. */
+const PROJECT_EVERY_MS = 250
 
 /** Where a test may stop the process (docs/reliability/README.md, rule 4). */
 export type FaultPoint = 'before_marker' | 'after_marker' | 'after_write' | 'before_claim' | 'after_claim' | 'after_anchor'
@@ -69,8 +71,9 @@ export class Workstreams implements Handler {
   private readonly blocked = new Set<string>()
   /** The Workstreams whose execution has not ended: the clock visits these only. */
   private readonly live = new Set<string>()
-  /** Lines captured and not yet handled, per Workstream: a burst is projected once, at its end. */
-  private readonly arriving = new Map<string, number>()
+  /** Projections asked by received lines, per Workstream: at most one every PROJECT_EVERY_MS. */
+  private readonly projecting = new Map<string, NodeJS.Timeout>()
+  private readonly projected = new Map<string, number>()
   private owner: pg.Client | null = null
   private stopped = true
   private halted = false
@@ -142,6 +145,8 @@ export class Workstreams implements Handler {
     if (this.stopped) return
     this.stopped = true
     if (this.timer !== null) clearInterval(this.timer)
+    for (const timer of this.projecting.values()) clearTimeout(timer)
+    this.projecting.clear()
     await this.executions.drain(this.options.shutdownMs ?? 5000)
     await Promise.allSettled([...this.queues.values()])
     await this.executions.stop()
@@ -157,6 +162,8 @@ export class Workstreams implements Handler {
     this.halted = true
     this.stopped = true
     if (this.timer !== null) clearInterval(this.timer)
+    for (const timer of this.projecting.values()) clearTimeout(timer)
+    this.projecting.clear()
     void this.executions.stop()
     if (this.owner !== null) {
       // As a dead process: the connection drops, and PostgreSQL releases the lock with it.
@@ -579,6 +586,7 @@ export class Workstreams implements Handler {
   }
 
   private async project(workstream: string): Promise<void> {
+    this.projected.set(workstream, Date.now())
     await this.projections.run(workstream).catch(() => this.report({ operation: 'project', outcome: 'blocked', workstream, errorClass: 'database' }))
   }
 
@@ -637,17 +645,13 @@ export class Workstreams implements Handler {
       }
     }
     this.blocked.delete(workstream)
-    this.arriving.set(workstream, (this.arriving.get(workstream) ?? 0) + 1)
     void this.serial(workstream, () => this.handled(workstream, execution, captured.position)).catch(() =>
       this.report({ operation: 'capture', outcome: 'blocked', workstream, execution, errorClass: 'database' }),
     )
   }
 
-  /** After a line is captured: the end of a turn grants one lease; then dispatch, and project the burst. */
+  /** After a line is captured: the end of a turn grants one lease; then dispatch, and project soon. */
   private async handled(workstream: string, execution: string, position: string | undefined): Promise<void> {
-    const left = (this.arriving.get(workstream) ?? 1) - 1
-    if (left > 0) this.arriving.set(workstream, left)
-    else this.arriving.delete(workstream)
     if (this.stopped) return
     const state = await this.store.state(workstream)
     const entry = position === undefined ? undefined : (await this.store.entries(workstream)).findLast((x) => x.position === position)
@@ -671,7 +675,20 @@ export class Workstreams implements Handler {
       }
     }
     await this.drive(workstream)
-    if (left === 0) await this.project(workstream)
+    this.projectSoon(workstream)
+  }
+
+  /** At most one projection every PROJECT_EVERY_MS for received lines; commands project at once. */
+  private projectSoon(workstream: string): void {
+    if (this.projecting.has(workstream) || this.stopped) return
+    const wait = Math.max(0, (this.projected.get(workstream) ?? 0) + PROJECT_EVERY_MS - Date.now())
+    this.projecting.set(
+      workstream,
+      setTimeout(() => {
+        this.projecting.delete(workstream)
+        void this.serial(workstream, () => this.project(workstream)).catch(() => {})
+      }, wait),
+    )
   }
 
   async closed(execution: string, connection: string, code: number | null, drained: boolean): Promise<void> {

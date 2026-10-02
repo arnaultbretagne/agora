@@ -1,5 +1,5 @@
 import { idKey } from './acp.ts'
-import { identity, object, schemaValue, encode, decode } from './json.ts'
+import { identity, object, schemaValue, encode } from './json.ts'
 import type { Entry } from './store.ts'
 
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
@@ -252,9 +252,9 @@ export class CoreProjection {
       objects.set(id, {
         kind,
         id,
-        object: decode(
-          encode({ ...value, id, firstPosition: previous?.first_position ?? position, lastPosition: position }),
-        ) as Record<string, unknown>,
+        // Not re-encoded here: a long text would cost its whole size at every chunk. It is encoded
+        // once per projection run, when written.
+        object: { ...value, id, firstPosition: previous?.first_position ?? position, lastPosition: position },
         first_position: previous?.first_position ?? position,
         last_position: position,
       })

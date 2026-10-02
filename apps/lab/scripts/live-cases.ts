@@ -5,7 +5,7 @@
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [case IDs…] (the receiver is on port 8081).
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { randomUUID } from 'node:crypto'
-import { fold, type Entry, type State, type Turn } from '@agora/log'
+import { canonical, fold, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
 const receiver = base.replace(/:8080$/, ':8081')
@@ -158,7 +158,8 @@ await check('E3', 'Create replayed with the same command id', async () => {
   await api('POST', '/api/workstreams', { id: w.id, owner: randomUUID() })
   const id = randomUUID()
   const [first, second] = await Promise.all([w.command('Create', {}, { pool: mock, ...SHORT }, id), w.command('Create', {}, { pool: mock, ...SHORT }, id)])
-  assert(first.status === 200 && JSON.stringify(first) === JSON.stringify(second), JSON.stringify({ first, second }))
+  // The replay is read back from the database: the same members, maybe in another order.
+  assert(first.status === 200 && canonical(first) === canonical(second), JSON.stringify({ first, second }))
   w.execution = String(first.execution)
   const claims = ((await api('GET', '/api/executions')).executions as Json[]).filter((v) => v.execution === w.execution).length
   assert(claims === 1 && (await w.state()).executions.size === 1, `${String(claims)} claims`)
