@@ -5,7 +5,7 @@
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [case IDs…] (the receiver is on port 8081).
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { randomUUID } from 'node:crypto'
-import { decode, fold, type Entry, type State, type Turn } from '@agora/log'
+import { fold, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
 const receiver = base.replace(/:8080$/, ':8081')
@@ -20,7 +20,8 @@ async function api(method: string, path: string, body?: unknown): Promise<Json> 
     signal: AbortSignal.timeout(90_000),
   })
   const text = await response.text()
-  return { status: response.status, ...((text === '' ? {} : decode(text)) as Json) }
+  // Plain JSON: the runner compares numbers, and needs no integer beyond 2^53.
+  return { status: response.status, ...((text === '' ? {} : JSON.parse(text)) as Json) }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -47,7 +48,7 @@ class Workstream {
   execution = ''
   session = ''
   async entries(): Promise<Entry[]> {
-    return (decode(await (await fetch(`${base}/api/workstreams/${this.id}/entries`)).text()) as Entry[]) ?? []
+    return ((await (await fetch(`${base}/api/workstreams/${this.id}/entries`)).json()) as Entry[]) ?? []
   }
   async state(): Promise<State> {
     return fold(await this.entries())
