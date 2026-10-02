@@ -1,9 +1,11 @@
 // Plays acceptance cases of docs/specs/executions.md (E…), docs/specs/log.md (L…) and
-// docs/specs/credentials.md (C1–C4) against the DEPLOYED lab, with real Kata sandboxes destroyed by
+// docs/specs/credentials.md (C1–C4, C8–C14) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
-// writes a dated file to GITHUB_A.
+// writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
+// (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
 // Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [case IDs…] (the receiver is on port 8081).
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { canonical, fold, type Entry, type State, type Turn } from '@agora/log'
 
@@ -508,6 +510,163 @@ await check('C4', 'Gateway, composition (A write, B read, C nothing)', async () 
   }
   await w.stop()
   return `${outcomes.join('; ')}; file ${file}`
+})
+
+// ---------------------------------------------------------------- warming (docs/specs/credentials.md, C8–C14)
+
+const kubectl = (process.env.KUBECTL ?? 'kubectl').split(' ')
+const sandboxNamespace = process.env.SANDBOX_NAMESPACE ?? 'agora-sandboxes'
+const gatewayNamespace = process.env.GATEWAY_NAMESPACE ?? 'agora-gateway'
+const kube = (...args: string[]) => execFileSync(kubectl[0]!, [...kubectl.slice(1), ...args], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 60_000 })
+
+/** The ready Sandboxes still owned by a warm pool. */
+function warmOf(pool: string): string[] {
+  const items = (JSON.parse(kube('-n', sandboxNamespace, 'get', 'sandboxes', '-o', 'json')) as { items: Json[] }).items
+  return items
+    .filter((x) => (x.metadata.ownerReferences as Json[] | undefined)?.some((o) => o.kind === 'SandboxWarmPool' && o.name === pool))
+    .filter((x) => (x.status?.conditions as Json[] | undefined)?.some((c) => c.type === 'Ready' && c.status === 'True'))
+    .map((x) => String(x.metadata.name))
+}
+
+/** The bridge's hand-overs, from its log: when, and until when. */
+function handOvers(pod: string): { at: number; until: number }[] {
+  return kube('-n', sandboxNamespace, 'logs', pod, '--timestamps')
+    .split('\n')
+    .map((line) => /^(\S+) \[bridge\] way out attached: \S+, until (\S+)$/.exec(line))
+    .filter((m) => m !== null)
+    .map((m) => ({ at: Date.parse(m[1]!), until: Date.parse(m[2]!) }))
+}
+
+// Run in the Pod: finds the bridge's proxy in the adapter's environment, tunnels to the URL's host,
+// sends a GET over TLS (the Pod trusts the gateway's root) and prints the first line of the answer —
+// the proxy's refusal, or the service's status, with "authorization failed" when the gateway refused.
+const PROBE = String.raw`
+const fs = require('node:fs'), net = require('node:net'), tls = require('node:tls')
+const target = new URL(process.argv[1])
+let proxy = null
+for (const pid of fs.readdirSync('/proc').filter((p) => /^\d+$/.test(p))) {
+  try { const m = /(?:^|\0)HTTPS_PROXY=([^\0]+)/.exec(fs.readFileSync('/proc/' + pid + '/environ', 'utf8')); if (m) { proxy = new URL(m[1]); break } } catch {}
+}
+if (proxy === null) { console.log('no proxy'); process.exit(0) }
+const socket = net.connect(Number(proxy.port), proxy.hostname, () => socket.write('CONNECT ' + target.hostname + ':443 HTTP/1.1\r\nHost: ' + target.hostname + ':443\r\n\r\n'))
+socket.on('error', (e) => { console.log('proxy error: ' + e.message); process.exit(0) })
+socket.once('data', (head) => {
+  const line = head.toString().split('\r\n')[0]
+  if (!/^HTTP\/1\.1 200/.test(line)) { console.log('proxy: ' + line); process.exit(0) }
+  const t = tls.connect({ socket, servername: target.hostname }, () => t.write('GET ' + target.pathname + target.search + ' HTTP/1.1\r\nHost: ' + target.hostname + '\r\nUser-Agent: agora-live-cases\r\nConnection: close\r\n\r\n'))
+  let reply = ''
+  t.on('data', (chunk) => { reply += chunk })
+  t.on('end', () => { console.log(reply.split('\r\n')[0] + (reply.includes('authorization failed') ? ' authorization failed' : '')); process.exit(0) })
+  t.on('error', (e) => { console.log('tls: ' + e.message); process.exit(0) })
+})
+`
+const fromPod = (pod: string, url: string) => kube('-n', sandboxNamespace, 'exec', pod, '--', 'node', '-e', PROBE, url).trim()
+const passed = (reply: string) => /^HTTP\/1\.1 \d{3}/.test(reply) && !reply.includes('authorization failed')
+const gatewayLines = (since: string) => kube('-n', gatewayNamespace, 'logs', 'deploy/gateway', `--since-time=${since}`).split('\n')
+
+/** A warm Pod of the claude-code pool holding its warm token. */
+const warmed = () => until('a warm claude-code Pod with its token', () => warmOf(claude!).find((pod) => handOvers(pod).length > 0), 240_000)
+
+await check('C8', 'Warm Pods: the base profiles, nothing else', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
+  const declared = Object.fromEntries(((await api('GET', '/api/pools')).pools as Json[]).map((p) => [p.harness, p.baseProfiles]))
+  assert(canonical(declared['claude-code']) === '["anthropic"]' && canonical(declared.mock) === '[]', JSON.stringify(declared))
+  const pod = await warmed()
+  const bare = await until('a warm mock Pod', () => warmOf(mock)[0], 120_000)
+  const since = new Date(Date.now() - 1000).toISOString()
+  const anthropic = fromPod(pod, 'https://api.anthropic.com/v1/models')
+  const github = fromPod(pod, 'https://api.github.com/zen')
+  const none = fromPod(bare, 'https://api.anthropic.com/v1/models')
+  assert(passed(anthropic), `anthropic: ${anthropic}`)
+  assert(github.startsWith('HTTP/1.1 403') && github.includes('authorization failed'), `github: ${github}`)
+  assert(none.startsWith('proxy: HTTP/1.1 503') && handOvers(bare).length === 0, `mock: ${none}`)
+  const named = await until('the gateway names the Pod', () => gatewayLines(since).find((l) => l.includes('http.host=api.anthropic.com') && l.includes(`jwt.sub=agora warm ${pod} `)), 15_000)
+  return `${pod}: anthropic "${anthropic}", github "${github}"; gateway jwt.sub "agora warm ${pod}" → ${String(/http\.status=(\d+)/.exec(named)?.[1])}; ${bare} (mock): "${none}"`
+})
+
+await check('C13', 'claude-code, from the Create to a Session open', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
+  const pod = await warmed()
+  const w = new Workstream()
+  const { ms } = await w.open(claude, SHORT)
+  const v = (await view(w.execution))!
+  await w.stop()
+  assert(v.pod === pod, `claimed ${String(v.pod)}, warmed ${pod}`)
+  assert(ms < 5000 && v.outbound?.refused === 0, `${String(ms)} ms, ${String(v.outbound?.refused)} refused`)
+  const targets = Object.entries((v.outbound?.targets ?? {}) as Record<string, Json>).map(([target, t]) => `${target} ×${String(t.count)} → ${String(t.lastStatus)}`)
+  return `Session open in ${String(ms)} ms on ${pod} (${String(v.launchType)}); ${String(v.outbound?.tunnels)} tunnel(s), 0 refused: ${targets.join(', ')}`
+})
+
+await check('C10', 'At the claim: the execution’s token before initialize', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
+  const pod = await warmed()
+  const since = new Date(Date.now() - 1000).toISOString()
+  const w = new Workstream()
+  await w.open(claude, { profiles: [`github:${REPO_B}:read`], ...SHORT })
+  const v = (await view(w.execution))!
+  assert(v.pod === pod, `claimed ${String(v.pod)}, warmed ${pod}`)
+  const entries = await w.entries()
+  const initialize = entries.find((x) => x.kind === 'acp' && x.direction === 'out' && x.method === 'initialize' && x.execution === w.execution)!
+  const dispatched = entries.find((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === initialize.position)!
+  const attached = Date.parse(String(v.outbound?.attachedAt))
+  assert(attached <= Date.parse(dispatched.time), `token at ${String(v.outbound?.attachedAt)}, initialize at ${dispatched.time}`)
+  const last = handOvers(pod).at(-1)!
+  assert(last.until === Date.parse(String(v.outbound?.expiresAt)), 'the bridge holds another token')
+  // The execution's rights, seen from the Pod: B readable now, which the warm token did not allow.
+  const b = fromPod(pod, `https://api.github.com/repos/${REPO_B}`)
+  const c = fromPod(pod, `https://api.github.com/repos/${REPO_C}`)
+  await w.stop()
+  assert(passed(b) && c.includes('authorization failed'), `B: ${b}; C: ${c}`)
+  const lines = gatewayLines(since).filter((l) => l.includes(`jwt.sub=agora warm ${pod} `) || l.includes(`jwt.sub=agora ${w.execution} `))
+  const late = lines.filter((l) => l.includes('jwt.sub=agora warm') && Date.parse(l.split(/\s/)[0]!) >= attached)
+  assert(late.length === 0, `warm token used after the hand-off: ${late[0] ?? ''}`)
+  return `token at ${String(v.outbound?.attachedAt)}, initialize dispatched at ${dispatched.time}; from the Pod: B "${b}", C "${c}"; gateway: ${String(lines.length)} request(s) under the execution's name, none warm after the hand-off`
+})
+
+await check('C12', 'A token that would run out during the next turn', async () => {
+  const w = new Workstream()
+  // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt.
+  await w.open(mock, { profiles: ['anthropic'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
+  const before = String((await view(w.execution))!.outbound?.expiresAt)
+  const since = new Date(Date.now() - 1000).toISOString()
+  const reply = await fetched(w, 'https://api.anthropic.com/v1/models')
+  const after = String((await view(w.execution))!.outbound?.expiresAt)
+  const pod = String((await view(w.execution))!.pod)
+  const handed = handOvers(pod)
+  await w.stop()
+  assert(Date.parse(after) > Date.parse(before) && handed.length === 2, `${before} → ${after}, ${String(handed.length)} hand-over(s)`)
+  assert(passed(reply), reply)
+  const used = gatewayLines(since).find((l) => l.includes('http.host=api.anthropic.com') && l.includes(`jwt.sub=agora ${w.execution} `))
+  assert(used !== undefined, 'no request seen by the gateway')
+  return `token until ${before} → ${after} before the prompt; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
+})
+
+await check('C14', 'A Create naming an unknown profile', async () => {
+  const w = new Workstream()
+  await api('POST', '/api/workstreams', { id: w.id, owner: randomUUID() })
+  const refused = await w.command('Create', {}, { pool: mock, profiles: ['dropbox:everything'], ...SHORT })
+  assert(refused.status === 409 && refused.reason === 'unknown_profile', JSON.stringify(refused))
+  assert((await w.entries()).length === 0, 'something written')
+  return `"${String(refused.reason)}", nothing written`
+})
+
+// Last: a warm token lives 15 minutes, renewed with a third left.
+await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {
+  if (claude === undefined) throw new Error('no claude-code pool')
+  const pod = await warmed()
+  const probes: string[] = []
+  let handed = handOvers(pod)
+  // A request every 30 s while the Pod waits, until the second token.
+  for (const deadline = Date.now() + 1_000_000; handed.length < 2 && Date.now() < deadline; handed = handOvers(pod)) {
+    probes.push(fromPod(pod, 'https://api.anthropic.com/v1/models'))
+    await sleep(30_000)
+  }
+  assert(handed.length >= 2, `${String(handed.length)} hand-over(s) in 16 minutes`)
+  const [first, next] = [handed[0]!, handed[1]!]
+  assert(next.at < first.until, `renewed at ${new Date(next.at).toISOString()}, the first ran out at ${new Date(first.until).toISOString()}`)
+  const refused = probes.filter((p) => !passed(p))
+  assert(refused.length === 0, `refused: ${refused[0] ?? ''}`)
+  return `${pod}: renewed ${String(Math.round((next.at - first.at) / 1000))} s after the first, ${String(Math.round((first.until - next.at) / 1000))} s before it ran out; ${String(probes.length)} requests, none refused`
 })
 
 console.log(`\n${String(results.filter((r) => r.ok).length)}/${String(results.length)} cases validated`)
