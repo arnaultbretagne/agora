@@ -6,7 +6,7 @@ import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KubeError, type Claim, type Json, type KubeApi, type PodIdentity, type Pool, type WatchEvent } from '../src/kube.ts'
+import { KubeError, type Claim, type Json, type KubeApi, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from '../src/kube.ts'
 import { pushBundle } from '@agora/harness-bridge/anchor'
 import { mockBridge, type LabBridge } from '@agora/testkit'
 
@@ -30,6 +30,10 @@ export class FakeKube implements KubeApi {
   readonly deadlines: { name: string; shutdownTime: string; at: number }[] = []
   /** Every claim created, by name, in order. */
   readonly created: string[] = []
+  /** The Sandboxes: owned by their warm pool while they wait, by their claim once bound. */
+  readonly sandboxes = new Map<string, { pool: string; owner: { kind: 'SandboxWarmPool' | 'SandboxClaim'; name: string } }>()
+  /** Each pool's `agora.bretagne.dev/base-profiles` annotation, when it has one. */
+  readonly baseProfiles: Record<string, string> = {}
   private readonly watchers = new Set<(event: WatchEvent) => void>()
   private readonly tokens = mkdtempSync(join(tmpdir(), 'tokens-'))
   private version = 1
@@ -97,11 +101,16 @@ export class FakeKube implements KubeApi {
     if (pool === 'no-such-pool') {
       claim.status = { conditions: [{ type: 'Ready', status: 'False', reason: 'WarmPoolNotFound', message: 'pool absent' }] }
     } else {
-      const podName = `${pool}-${String(++this.podCounter)}`
-      const bridge = await this.bridgeFactory(this.publicKey, podName)
-      // Closed while the Pod was starting: it never runs.
-      if (this.closed) return void (await bridge.bridge.close())
-      this.bridges.set(podName, bridge)
+      // A warm Sandbox of the pool if there is one, adopted; otherwise one started for the claim.
+      let podName = [...this.sandboxes].find(([, s]) => s.pool === pool && s.owner.kind === 'SandboxWarmPool')?.[0]
+      if (podName === undefined) {
+        podName = `${pool}-${String(++this.podCounter)}`
+        const bridge = await this.bridgeFactory(this.publicKey, podName)
+        // Closed while the Pod was starting: it never runs.
+        if (this.closed) return void (await bridge.bridge.close())
+        this.bridges.set(podName, bridge)
+      }
+      this.sandboxes.set(podName, { pool, owner: { kind: 'SandboxClaim', name } })
       claim.status = { conditions: [{ type: 'Ready', status: 'True', reason: 'SandboxReady' }], sandbox: { name: podName, serviceFQDN: `${podName}.${NAMESPACE}.svc.cluster.local` } }
     }
     this.bump(claim)
@@ -129,6 +138,7 @@ export class FakeKube implements KubeApi {
           await lab.bridge.close()
         }
         this.claims.delete(name)
+        if (podName !== undefined) this.sandboxes.delete(podName)
         this.emit('DELETED', claim)
       })()
     }
@@ -177,9 +187,33 @@ export class FakeKube implements KubeApi {
     return structuredClone(claim) as unknown as Claim
   }
 
+  /** Agent Sandbox filling a pool: Sandboxes started from its template, waiting for a claim. */
+  async warmUp(pool: string, count = 1): Promise<string[]> {
+    const names: string[] = []
+    for (let i = 0; i < count; i++) {
+      const name = `${pool}-w${String(++this.podCounter)}`
+      this.bridges.set(name, await this.bridgeFactory(this.publicKey, name))
+      this.sandboxes.set(name, { pool, owner: { kind: 'SandboxWarmPool', name: pool } })
+      names.push(name)
+    }
+    return names
+  }
+
+  async listSandboxes(): Promise<Sandbox[]> {
+    return [...this.sandboxes].map(([name, s]) => ({
+      metadata: { name, uid: name, ownerReferences: [s.owner] },
+      status: { conditions: [{ type: 'Ready', status: 'True' }], serviceFQDN: `${name}.${NAMESPACE}.svc.cluster.local` },
+    }))
+  }
+
   async listPools(): Promise<Pool[]> {
     const pool = (name: string, harness: string): Pool => ({
-      metadata: { name, uid: name, labels: { 'agora.bretagne.dev/harness': harness } },
+      metadata: {
+        name,
+        uid: name,
+        labels: { 'agora.bretagne.dev/harness': harness },
+        ...(this.baseProfiles[name] === undefined ? {} : { annotations: { 'agora.bretagne.dev/base-profiles': this.baseProfiles[name] } }),
+      },
       spec: { replicas: 2, sandboxTemplateRef: { name } },
       status: { readyReplicas: 2 },
     })

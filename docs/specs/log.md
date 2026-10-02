@@ -90,7 +90,7 @@ Closed reasons: `invalid_utf8`, `invalid_json`, `invalid_envelope`, `batch`, `wr
 `invalid_body`, `unsafe_id`, `line_too_large`, `unsupported_json_value`, `transport_error`,
 `response_timeout`, `deadline_refused`, `startup_failed`, `restore_failed`, `claim_conflict`,
 `claim_missing`, `adapter_exited`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`,
-`anchor_missing`. No parser, database or transport message becomes a reason.
+`anchor_missing`, `credentials_refused`. No parser, database or transport message becomes a reason.
 
 ### Dispatch and recovery
 

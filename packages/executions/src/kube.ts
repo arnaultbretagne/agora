@@ -22,6 +22,7 @@ export interface ObjectMeta {
   readonly deletionTimestamp?: string
   readonly labels?: Record<string, string>
   readonly annotations?: Record<string, string>
+  readonly ownerReferences?: readonly { readonly kind: string; readonly name: string }[]
 }
 
 export interface Claim {
@@ -39,6 +40,12 @@ export interface Pool {
   readonly metadata: ObjectMeta
   readonly spec?: { readonly replicas?: number; readonly sandboxTemplateRef?: { readonly name?: string } }
   readonly status?: { readonly replicas?: number; readonly readyReplicas?: number }
+}
+
+/** A Sandbox: owned by its warm pool while it waits, by its claim once bound. */
+export interface Sandbox {
+  readonly metadata: ObjectMeta
+  readonly status?: { readonly conditions?: readonly Condition[]; readonly serviceFQDN?: string }
 }
 
 export type Json = Record<string, unknown>
@@ -64,6 +71,7 @@ export interface KubeApi {
   listPools(selector: string): Promise<Pool[]>
   getTemplate(name: string): Promise<Json | null>
   getSandbox(name: string): Promise<Json | null>
+  listSandboxes(): Promise<Sandbox[]>
   getPod(name: string): Promise<Json | null>
   /** Who holds this projected ServiceAccount token, as the API server sees it (TokenReview). */
   reviewToken(token: string, audience: string): Promise<PodIdentity | null>
@@ -183,6 +191,10 @@ export class HttpKube implements KubeApi {
 
   getSandbox(name: string): Promise<Json | null> {
     return this.getOptional(this.url(SANDBOXES, 'sandboxes', name))
+  }
+
+  async listSandboxes(): Promise<Sandbox[]> {
+    return (await this.expect<{ items: Sandbox[] }>(await this.call('GET', this.url(SANDBOXES, 'sandboxes')), 200)).items
   }
 
   getPod(name: string): Promise<Json | null> {

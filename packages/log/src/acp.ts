@@ -31,6 +31,7 @@ export type Reason =
   | 'stopped'
   | 'replaced'
   | 'anchor_missing'
+  | 'credentials_refused'
 export interface Envelope {
   value: Record<string, unknown>
   raw: string

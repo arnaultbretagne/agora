@@ -4,9 +4,10 @@
 // every effect. It never deletes anything: the infrastructure destroys at the deadline.
 import { createHash, generateKeyPairSync, randomUUID, type KeyObject } from 'node:crypto'
 import { WebSocket, type RawData } from 'ws'
-import { KubeError, WatchGone, type Claim, type KubeApi, type WatchEvent } from './kube.ts'
+import { KubeError, WatchGone, type Claim, type KubeApi, type Sandbox, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
+import { BASE_PROFILES_ANNOTATION, baseProfiles } from '@agora/credentials'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
 export const MANAGER = 'agora'
@@ -51,6 +52,12 @@ export interface Handler {
   closed(execution: string, connection: string, code: number | null, drained: boolean): Promise<void>
 }
 
+/** Signs tokens for the gateway (docs/specs/credentials.md); the mechanics never keep one. */
+export interface CredentialSource {
+  describe(): Record<string, unknown>
+  mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
+}
+
 export interface ManagerOptions {
   readonly kube: KubeApi
   readonly signingKey: KeyObject
@@ -59,6 +66,11 @@ export interface ManagerOptions {
   readonly bridgeAddress?: (serviceFQDN: string, podName: string) => string
   readonly tickMs?: number
   readonly reconnectMs?: number
+  /** Warms the pools' Pods with their base profiles; without it, no Pod has a way out before its execution. */
+  readonly credentials?: CredentialSource
+  /** How often the pools' Sandboxes are looked at (5 s), and a warm token's life (15 min). */
+  readonly warmEveryMs?: number
+  readonly warmTtlSeconds?: number
 }
 
 interface Connection {
@@ -120,6 +132,10 @@ export interface PoolView {
   readonly image: string | null
   readonly replicas: number
   readonly readyReplicas: number
+  /** What its Pods get while they wait (docs/specs/credentials.md, "Base profiles"). */
+  readonly baseProfiles: readonly string[]
+  /** A declared profile that is not a base one: then the pool gets none. */
+  readonly refusedProfile: string | null
 }
 
 export type CommandResult<T> =
@@ -138,6 +154,11 @@ export class ExecutionManager {
   private readonly foreignKey = generateKeyPairSync('ed25519').privateKey
   private handler: Handler | null = null
   private poolCache: { at: number; pools: PoolView[] } | null = null
+  /** The warm Sandboxes: when their token runs out, and a hand-over in flight. */
+  private readonly warm = new Map<string, { until: number; inflight: Promise<void> | null }>()
+  /** Sandboxes a claim has bound: never warmed again. */
+  private readonly bound = new Set<string>()
+  private warmedAt = 0
   private tickTimer: NodeJS.Timeout | null = null
   private watchAbort: AbortController | null = null
   private stopped = false
@@ -360,6 +381,10 @@ export class ExecutionManager {
   }
 
   private async tick(): Promise<void> {
+    if (this.options.credentials !== undefined && Date.now() - this.warmedAt >= (this.options.warmEveryMs ?? 5000)) {
+      this.warmedAt = Date.now()
+      void this.warmPools().catch(() => {})
+    }
     for (const run of [...this.runs.values()]) {
       try {
         const claim = run.claim
@@ -376,8 +401,10 @@ export class ExecutionManager {
   // ---------------------------------------------------------------- bridge connections
 
   private address(run: Run): string {
-    const service = run.claim?.status?.sandbox?.serviceFQDN ?? ''
-    const pod = run.claim?.status?.sandbox?.name ?? ''
+    return this.addressOf(run.claim?.status?.sandbox?.serviceFQDN ?? '', run.claim?.status?.sandbox?.name ?? '')
+  }
+
+  private addressOf(service: string, pod: string): string {
     // A Service name never holds a port; a `host:port` comes from a test cluster and is used as is.
     return this.options.bridgeAddress?.(service, pod) ?? (service.includes(':') ? service : `${service}:${String(this.options.bridgePort)}`)
   }
@@ -569,8 +596,16 @@ export class ExecutionManager {
     if (!response.ok) throw new Error('anchor_refused')
   }
 
-  /** Hands the bridge its way out; the token is kept nowhere here. */
+  /**
+   * Hands the bridge its way out; the token is kept nowhere here. The Pod is warmed no more, and a
+   * warm hand-over still in flight settles first: the execution's token is the last one in place.
+   */
   async putCredentials(execution: string, credentials: Credentials): Promise<OutboundView> {
+    const pod = this.runs.get(execution)?.claim?.status?.sandbox?.name
+    if (pod !== undefined) {
+      this.bound.add(pod)
+      await this.warm.get(pod)?.inflight
+    }
     const response = await this.bridge(execution, 'PUT', '/credentials', JSON.stringify(credentials))
     const answer = (await response.json()) as OutboundView & { reason?: string }
     if (!response.ok) throw new Error('credentials_refused')
@@ -580,6 +615,52 @@ export class ExecutionManager {
       this.emit(run)
     }
     return answer
+  }
+
+  // ---------------------------------------------------------------- warming (docs/specs/credentials.md, "On Agora's side")
+
+  /** Hands each ready Sandbox of a pool declaring base profiles a warm token, renewed at two thirds of its life. */
+  private async warmPools(): Promise<void> {
+    const pools = new Map((await this.pools()).map((pool) => [pool.name, pool]))
+    for (const claim of this.claims.values()) if (claim.status?.sandbox?.name !== undefined) this.bound.add(claim.status.sandbox.name)
+    const sandboxes = await this.options.kube.listSandboxes()
+    const seen = new Set(sandboxes.map((sandbox) => sandbox.metadata.name))
+    for (const name of this.warm.keys()) if (!seen.has(name)) this.warm.delete(name)
+    for (const name of this.bound) if (!seen.has(name)) this.bound.delete(name)
+    const ttl = this.options.warmTtlSeconds ?? 900
+    for (const sandbox of sandboxes) {
+      const name = sandbox.metadata.name
+      const owner = sandbox.metadata.ownerReferences?.find((reference) => reference.kind === 'SandboxWarmPool')
+      const pool = owner === undefined ? undefined : pools.get(owner.name)
+      if (pool === undefined || pool.baseProfiles.length === 0 || this.bound.has(name)) continue
+      if (sandbox.status?.conditions?.find((c) => c.type === 'Ready')?.status !== 'True' || !sandbox.status.serviceFQDN) continue
+      const state = this.warm.get(name)
+      if (state?.inflight || (state !== undefined && state.until - Date.now() > (ttl * 1000) / 3)) continue
+      const inflight = this.handWarm(sandbox, pool.baseProfiles, ttl).finally(() => {
+        const current = this.warm.get(name)
+        if (current?.inflight === inflight) current.inflight = null
+      })
+      this.warm.set(name, { until: state?.until ?? 0, inflight })
+    }
+  }
+
+  private async handWarm(sandbox: Sandbox, profiles: readonly string[], ttl: number): Promise<void> {
+    const name = sandbox.metadata.name
+    try {
+      const credentials = await this.options.credentials!.mint({ label: `agora warm ${name}`, ttlSeconds: ttl, profiles })
+      if (this.bound.has(name)) return
+      const response = await fetch(`http://${this.addressOf(sandbox.status?.serviceFQDN ?? '', name)}/credentials`, {
+        method: 'PUT',
+        body: JSON.stringify(credentials),
+        headers: { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, name)}`, 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!response.ok) return
+      const state = this.warm.get(name)
+      if (state !== undefined) state.until = Date.parse(credentials.expiresAt ?? '') || Date.now() + ttl * 1000
+    } catch {
+      // Tried again at the next look.
+    }
   }
 
   // ---------------------------------------------------------------- catalogue
@@ -598,6 +679,10 @@ export class ExecutionManager {
         image: containers[0]?.image ?? null,
         replicas: pool.spec?.replicas ?? 0,
         readyReplicas: pool.status?.readyReplicas ?? 0,
+        ...(() => {
+          const declared = baseProfiles(pool.metadata.annotations?.[BASE_PROFILES_ANNOTATION])
+          return { baseProfiles: declared.profiles, refusedProfile: declared.refused }
+        })(),
       })
     }
     this.poolCache = { at: Date.now(), pools }

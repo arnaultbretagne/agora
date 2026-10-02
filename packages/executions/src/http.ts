@@ -4,16 +4,11 @@
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { PodIdentity } from './kube.ts'
-import type { CommandResult, ExecutionManager } from './manager.ts'
+import type { CommandResult, CredentialSource, ExecutionManager } from './manager.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, type Bundle } from '@agora/harness-bridge/anchor'
 import { bearerOf } from '@agora/harness-bridge/token'
-import type { Credentials } from '@agora/harness-bridge/outbound'
 
 /** Where an execution's credential comes from (docs/specs/credentials.md): Agora's signed grants for the gateway. */
-export interface CredentialSource {
-  describe(): Record<string, unknown>
-  mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
-}
 
 export interface HttpOptions {
   readonly manager: ExecutionManager

@@ -43,6 +43,22 @@ export function compileProfile(profile: string): Grant[] {
   throw new ProfileRefused(`unknown profile: ${profile}`)
 }
 
+/** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository. */
+export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic'])
+
+/** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
+export const BASE_PROFILES_ANNOTATION = 'agora.bretagne.dev/base-profiles'
+
+/** A pool's annotation, read: its base profiles, or none and the first profile refused. */
+export function baseProfiles(annotation: string | undefined): { profiles: string[]; refused: string | null } {
+  const profiles = (annotation ?? '')
+    .split(',')
+    .map((profile) => profile.trim())
+    .filter((profile) => profile !== '')
+  const refused = profiles.find((profile) => !BASE_PROFILES.has(profile)) ?? null
+  return refused === null ? { profiles, refused: null } : { profiles: [], refused }
+}
+
 export function compileProfiles(profiles: readonly string[]): Grant[] {
   if (profiles.length === 0) throw new ProfileRefused('no profile')
   return profiles.flatMap(compileProfile)
@@ -65,8 +81,8 @@ export class GrantSigner {
     this.options = options
   }
 
-  describe(): { proxy: string; profiles: string[] } {
-    return { proxy: this.options.proxy, profiles: ['anthropic', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'] }
+  describe(): { proxy: string; profiles: string[]; base: string[] } {
+    return { proxy: this.options.proxy, profiles: ['anthropic', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'], base: [...BASE_PROFILES] }
   }
 
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {

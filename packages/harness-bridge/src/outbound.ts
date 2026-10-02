@@ -108,6 +108,8 @@ export async function startOutbound(options: { port?: number; log: (message: str
   return {
     url,
     set: (next) => {
+      // The tunnels opened with the previous token close: the new one is the only one in use.
+      if (credentials !== null) for (const socket of open) socket.destroy()
       credentials = next
       attachedAt = new Date().toISOString()
       // Never the token.

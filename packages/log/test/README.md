@@ -14,6 +14,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |
+| `credentials.test.ts` | The execution's token before `initialize`, its renewal, the Create's profiles: C10, C12, C14. |
 | `support.ts` | A database per test; Agora in this process (`Lab`) or as the real lab process (`Server`); relays that cut a bridge connection or lose a COMMIT's reply. |
 | `run.ts` | Provisions the template database and the three logins, runs the tests, removes everything. |
 | `fixtures/` | The histories the tests replay. |

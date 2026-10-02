@@ -109,7 +109,7 @@ the reason for a refusal.
 | --- | --- |
 | Warming | Agora follows the pools' Sandboxes. To each one that is ready and still owned by a pool declaring base profiles, it hands a warm token (`PUT /credentials`), and a new one when less than a third of its life remains. |
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the Create's. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
-| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute. |
+| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. |
 | The Create | `profiles`, optional: checked against the catalogue, refused otherwise (`unknown_profile`); recorded with the command. |
 | `POST /api/workstreams/{id}/credentials` | Lab only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |

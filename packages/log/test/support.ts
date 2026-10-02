@@ -10,7 +10,9 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Pool } from 'pg'
-import { createAnchorReceiver, ExecutionManager, type ManagerOptions } from '@agora/executions'
+import { createAnchorReceiver, ExecutionManager, type CredentialSource, type ManagerOptions } from '@agora/executions'
+import { GrantSigner } from '@agora/credentials'
+import { generateKeyPairSync } from 'node:crypto'
 import { keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
@@ -204,6 +206,8 @@ export interface LabOptions {
   readonly receiver?: boolean
   /** The writer login goes through a PgRelay, at `lab.pg`. */
   readonly pgRelay?: boolean
+  /** Signs the tokens: the pools' Pods are warmed, executions get theirs before `initialize`. */
+  readonly credentials?: CredentialSource
   readonly workstreams?: Partial<WorkstreamsOptions>
   readonly executions?: Partial<ManagerOptions>
 }
@@ -247,6 +251,7 @@ export class Lab {
       bridgeAddress: options.relay ? relayed : this.kube.address,
       tickMs: 100,
       reconnectMs: 200,
+      ...(options.credentials === undefined ? {} : { credentials: options.credentials, warmEveryMs: 200 }),
       ...options.executions,
     })
     this.workstreams = new Workstreams({
@@ -261,6 +266,7 @@ export class Lab {
         this.ownershipLost++
       },
       sink: (line) => this.logs.push(line),
+      ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
       ...options.workstreams,
     })
   }
@@ -610,5 +616,36 @@ export async function expire(kube: FakeKube, claimName: string): Promise<void> {
     if (claim === undefined || claim.metadata.deletionTimestamp !== undefined) return true
     kube.expireAt(claimName, new Date())
     return false
+  })
+}
+
+export interface Minted {
+  readonly label: string
+  readonly profiles: readonly string[]
+  readonly sub: string
+  readonly expiresAt: string | null
+  readonly at: number
+}
+
+/**
+ * A real signer (a key of its own) that records what it signs. `fail` makes it refuse, as a signer
+ * that cannot sign would.
+ */
+export function grants(): { source: CredentialSource; minted: Minted[]; fail: boolean } {
+  const dir = mkdtempSync(join(tmpdir(), 'grants-'))
+  writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  const real = new GrantSigner({ proxy: '127.0.0.1:9', keyFile: join(dir, 'key.pem'), keyId: 'k', issuer: 'agora', audience: 'agora-gateway' })
+  const state = { minted: [] as Minted[], fail: false }
+  return Object.assign(state, {
+    source: {
+      describe: () => real.describe(),
+      async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }) {
+        if (state.fail) throw new Error('signer unavailable')
+        const credentials = await real.mint(input)
+        const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string }
+        state.minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, expiresAt: credentials.expiresAt, at: Date.now() })
+        return credentials
+      },
+    },
   })
 }
