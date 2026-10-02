@@ -43,6 +43,7 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | Profile | Grants |
 | --- | --- |
 | `anthropic` | `api.anthropic.com`, everything. |
+| `zai` | `api.z.ai`, everything: z.ai's OpenAI- and Anthropic-compatible APIs. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
@@ -58,6 +59,7 @@ service, never a repository.
 | Profile | Base |
 | --- | --- |
 | `anthropic` | Yes |
+| `zai` | Yes |
 | `github:…` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
@@ -93,6 +95,7 @@ credential.
 | Route | Host | Credential set |
 | --- | --- | --- |
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
+| `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
 | `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
 | `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 
@@ -154,6 +157,7 @@ call. The lab does it itself when the agent offers the option.
 | C12 | An execution whose token would expire during the next turn | A new token before the prompt leaves; the previous tunnels closed; no request refused for an expired token during the turn. |
 | C13 | claude-code, from the Create to a Session open | Under 5 s, with no refused connection. |
 | C14 | A Create naming an unknown profile | Refused, `unknown_profile`; nothing written. |
+| C15 | The chain to z.ai | `zai` profile, the mock's `/fetch https://api.z.ai/api/paas/v4/models`: 200 from z.ai, with the key the gateway set. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); changing an execution's
 grants between turns; count the responses to `CONNECT` by status, not just the last one; TLS trust

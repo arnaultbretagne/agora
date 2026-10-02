@@ -41,6 +41,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C13 | — | live | R4 | proven | Session open in 1,809 ms on a warm Pod. The opening and one turn on `haiku`: 7 tunnels to `api.anthropic.com:443`, none refused over the Pod's life. |
 | C14 | — | local | R3 | proven | Every assertion held. |
 | C14 | — | cluster | R4 | proven | `unknown_profile`, nothing written. |
+| C15 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 
