@@ -599,3 +599,16 @@ export async function hold(db: Db, workstream: string): Promise<() => Promise<vo
     client.release()
   }
 }
+
+/**
+ * The deadline brought to now by the cluster (FakeKube), again until the deletion starts: a renewal
+ * Agora grants meanwhile — at the end of a turn — would otherwise move it back.
+ */
+export async function expire(kube: FakeKube, claimName: string): Promise<void> {
+  await until('the claim expiring', () => {
+    const claim = kube.claims.get(claimName)
+    if (claim === undefined || claim.metadata.deletionTimestamp !== undefined) return true
+    kube.expireAt(claimName, new Date())
+    return false
+  })
+}

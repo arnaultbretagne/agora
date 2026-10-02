@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { ANCHOR_FORMAT, checksumOf } from '@agora/harness-bridge/anchor'
 import { LogStore, object, type Entry, type Execution } from '../src/index.ts'
-import { cluster, database, Lab, lines, opened, Server, sleep, terminate, until, type Db } from './support.ts'
+import { cluster, database, type Db, expire, Lab, lines, opened, Server, sleep, terminate, until } from './support.ts'
 
 interface Served {
   readonly db: Db
@@ -256,7 +256,7 @@ test('L29 an anchor stored without its anchor.received gets one at the next star
   const e = await open(run)
   await write(run, e, 'kept in the anchor')
   await until('the answer', async () => ((await run.reader.state(run.ws)).turns.size && [...(await run.reader.state(run.ws)).turns.values()].every((x) => x.status === 'done')) || null)
-  run.c.kube.expireAt(e.claimName, new Date())
+  await expire(run.c.kube, e.claimName)
   assert.equal((await run.server.exited).signal, 'SIGKILL')
   const [stored] = await run.reader.anchorList()
   assert.ok(stored)
@@ -287,7 +287,7 @@ test('L30 the adapter dies: execution.lost, no dispatch or renewal, counted unti
   const after = (await lab.entries(ws)).filter((x) => BigInt(x.position) > BigInt(lost.position))
   assert.equal(after.filter((x) => x.kind === 'acp.dispatching').length, 0)
   assert.equal(lab.kube.deadlines.length, patches)
-  lab.kube.expireAt(e.claimName, new Date())
+  await expire(lab.kube, e.claimName)
   await until('execution.ended', async () => (await lab.entries(ws)).some((x) => x.kind === 'execution.ended'))
   await sleep(500)
   assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'execution.ended').length, 1)
@@ -300,7 +300,7 @@ test('L31 the claim being deleted while its Pod lives, across a restart: admissi
   const { ws, e } = context
   const other = await context.lab.workstream()
   context.lab.kube.holdDeletion = true
-  context.lab.kube.expireAt(e.claimName, new Date())
+  await expire(context.lab.kube, e.claimName)
   await until('deletion started', () => context.lab.executions.claimOf(e.id)?.metadata.deletionTimestamp !== undefined)
   assert.deepEqual(await context.lab.write(ws, 'while ending'), { accepted: false, reason: 'execution_ending' })
   assert.deepEqual(await context.lab.command(ws, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'execution_active' })
@@ -333,7 +333,7 @@ test('L32 a Pod pushes its anchor after a restart, with no connection open: stor
   assert.deepEqual(await context.lab.store.anchorList(), [])
   context.lab.kube.podUids.delete(pod)
   context.lab = await context.lab.restart('halt')
-  context.lab.kube.expireAt(e.claimName, new Date())
+  await expire(context.lab.kube, e.claimName)
   const received = await until('anchor.received', async () => (await context.lab.entries(ws)).find((x) => x.kind === 'anchor.received'))
   const [stored] = await context.lab.store.anchorList()
   assert.equal(received.content.id, stored!.id)
@@ -348,7 +348,7 @@ test('L15 restore from an anchor: a new Session, the same ACP session id, and th
   const { lab, ws, e } = await opened(t, { receiver: true })
   assert.ok((await lab.write(ws, 'my name is Ada')).accepted)
   await lab.turn(ws, 'done')
-  lab.kube.expireAt(e.claimName, new Date())
+  await expire(lab.kube, e.claimName)
   const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended' && x.content.anchor))
   const anchor = String(ended.content.anchor)
   const restored = await lab.open(ws, { anchor })

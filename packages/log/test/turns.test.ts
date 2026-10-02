@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
 import { Collector, keys, mockBridge } from '@agora/testkit'
 import { object, type Entry } from '../src/index.ts'
-import { base64, database, FakeKube, hold, Lab, lines, opened, sleep, until, waiting } from './support.ts'
+import { base64, database, expire, FakeKube, hold, Lab, lines, opened, sleep, until, waiting } from './support.ts'
 
 const texts = (entries: readonly Entry[]) =>
   lines(entries, 'in', 'session/update')
@@ -116,7 +116,7 @@ test('L33 the same opening answer twice, then after the end of the execution: ca
   assert.equal(object(again[1]!.content.result)?.sessionId, 'duplicate-session')
   assert.equal((await lab.state(ws)).current?.session, e.session)
   // The execution ends: the deadline passes and the claim disappears.
-  lab.kube.expireAt(e.claimName, new Date())
+  await expire(lab.kube, e.claimName)
   await until('execution.ended', async () => (await lab.entries(ws)).some((x) => x.kind === 'execution.ended'))
   // Simulated: the same answer handed over once more, after the end (synthetic-event).
   const late = await lab.store.incoming(ws, e.id, e.connection!, '1000000', duplicate)

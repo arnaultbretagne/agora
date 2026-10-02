@@ -5,7 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { parseBundle } from '@agora/harness-bridge/anchor'
 import { LogStore, object, telemetry } from '../src/index.ts'
-import { base64, cluster, database, hold, Server, until, waiting } from './support.ts'
+import { base64, cluster, database, expire, hold, Server, until, waiting } from './support.ts'
 
 const secret = (what: string) => `${what}-${randomBytes(9).toString('base64url')}`
 
@@ -79,7 +79,7 @@ test('L28 the lab process, carrying secrets through prompts, tools, tokens, head
   }
   await until('the turn ends', async () => [...(await reader.state(ws)).turns.values()].every((x) => ['done', 'failed', 'cancelled'].includes(x.status)) || null)
   // The anchor, whose native files hold the prompt.
-  c.kube.expireAt(e.claimName, new Date())
+  await expire(c.kube, e.claimName)
   await until('anchor.received', async () => (await reader.entries(ws)).some((x) => x.kind === 'anchor.received'))
   const [stored] = await reader.anchorList()
   const files = parseBundle(new Uint8Array((await reader.anchorBytes(stored!.id))!.content)).files
