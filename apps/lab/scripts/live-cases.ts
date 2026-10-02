@@ -592,8 +592,9 @@ await check('C13', 'claude-code, from the Create to a Session open', async () =>
   const v = (await view(w.execution))!
   await w.stop()
   assert(v.pod === pod, `claimed ${String(v.pod)}, warmed ${pod}`)
-  assert(ms < 5000 && v.outbound?.refused === 0, `${String(ms)} ms, ${String(v.outbound?.refused)} refused`)
+  // The bridge counts refusals over the Pod's life: before the claim, only its warm token's.
   const targets = Object.entries((v.outbound?.targets ?? {}) as Record<string, Json>).map(([target, t]) => `${target} ×${String(t.count)} → ${String(t.lastStatus)}`)
+  assert(ms < 5000 && v.outbound?.refused === 0, `${String(ms)} ms, ${String(v.outbound?.refused)} refused; ${targets.join(', ')}`)
   return `Session open in ${String(ms)} ms on ${pod} (${String(v.launchType)}); ${String(v.outbound?.tunnels)} tunnel(s), 0 refused: ${targets.join(', ')}`
 })
 
@@ -628,17 +629,23 @@ await check('C12', 'A token that would run out during the next turn', async () =
   // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt.
   await w.open(mock, { profiles: ['anthropic'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
   const before = String((await view(w.execution))!.outbound?.expiresAt)
+  // The mock opens its Session within the second, and a token's expiry counts in seconds.
+  await sleep(2000)
   const since = new Date(Date.now() - 1000).toISOString()
   const reply = await fetched(w, 'https://api.anthropic.com/v1/models')
   const after = String((await view(w.execution))!.outbound?.expiresAt)
   const pod = String((await view(w.execution))!.pod)
   const handed = handOvers(pod)
+  const entries = await w.entries()
+  const prompt = entries.findLast((x) => x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt')!
+  const dispatched = Date.parse(entries.find((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === prompt.position)!.time)
   await w.stop()
-  assert(Date.parse(after) > Date.parse(before) && handed.length === 2, `${before} → ${after}, ${String(handed.length)} hand-over(s)`)
+  assert(Date.parse(after) > Date.parse(before) && handed.length === 2 && handed[1]!.until === Date.parse(after), `${before} → ${after}, hand-overs ${JSON.stringify(handed)}`)
+  assert(handed[1]!.at <= dispatched, `renewed at ${new Date(handed[1]!.at).toISOString()}, prompt at ${new Date(dispatched).toISOString()}`)
   assert(passed(reply), reply)
   const used = gatewayLines(since).find((l) => l.includes('http.host=api.anthropic.com') && l.includes(`jwt.sub=agora ${w.execution} `))
   assert(used !== undefined, 'no request seen by the gateway')
-  return `token until ${before} → ${after} before the prompt; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
+  return `token until ${before} → ${after}, renewed ${String(dispatched - handed[1]!.at)} ms before the prompt left; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
 })
 
 await check('C14', 'A Create naming an unknown profile', async () => {
