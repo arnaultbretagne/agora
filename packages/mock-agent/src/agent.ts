@@ -5,13 +5,13 @@
 // JSON-RPC 2.0 over newline-delimited stdio, the ACP transport. Method and field names are those of
 // the ACP 1.5.0 schema (@agentclientprotocol/sdk 1.5.0).
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import type { Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { connect as tlsConnect } from 'node:tls'
-import { nativeDir } from '@agora/harness-bridge/anchor'
+import { sessionsDir } from './storage.ts'
 
 type Id = string | number
 interface Message {
@@ -69,7 +69,7 @@ function request(method: string, params: Record<string, unknown>): Promise<Messa
 }
 
 function transcriptPath(session: Session): string {
-  return join(nativeDir('mock', home, session.cwd), `${session.id}.jsonl`)
+  return join(sessionsDir(home, session.cwd), `${session.id}.jsonl`)
 }
 
 function remember(session: Session, role: 'user' | 'agent', text: string): void {
@@ -80,14 +80,37 @@ function remember(session: Session, role: 'user' | 'agent', text: string): void 
   appendFileSync(path, `${JSON.stringify(entry)}\n`)
 }
 
+function readTranscript(path: string): Entry[] {
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Entry)
+}
+
+// AGORA_MOCK_READ_AT_START=1: like opencode with its database, the transcripts are read once, when
+// the agent starts, and never again — what an anchor placed later can only reach through a restart.
+const atStart = new Map<string, Entry[]>()
+if (process.env.AGORA_MOCK_READ_AT_START === '1') {
+  const dir = sessionsDir(home, process.cwd())
+  for (const name of existsSync(dir) ? readdirSync(dir) : []) {
+    if (name.endsWith('.jsonl')) atStart.set(name.slice(0, -'.jsonl'.length), readTranscript(join(dir, name)))
+  }
+  // Outside the native directory: the lab's tests wait for it, as a pool Pod has long been running.
+  mkdirSync(join(home, '.mock-agent'), { recursive: true })
+  writeFileSync(join(home, '.mock-agent', 'read-at-start'), String(process.pid))
+}
+
 function readSession(sessionId: string, cwd: string): Session | null {
   const session: Session = { id: sessionId, cwd, history: [] }
+  if (process.env.AGORA_MOCK_READ_AT_START === '1') {
+    const history = atStart.get(sessionId)
+    if (history === undefined) return null
+    session.history.push(...history)
+    return session
+  }
   const path = transcriptPath(session)
   if (!existsSync(path)) return null
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    if (line.trim() === '') continue
-    session.history.push(JSON.parse(line) as Entry)
-  }
+  session.history.push(...readTranscript(path))
   return session
 }
 

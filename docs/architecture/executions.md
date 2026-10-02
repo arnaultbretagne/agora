@@ -42,7 +42,7 @@ sequenceDiagram
     Agora->>AS: claim: pool, deadline
     AS-->>Agora: ready: this sandbox, its Service
     AS->>AS: starts another to refill the pool
-    Agora->>Pod: through the bridge: initialize, anchor, credentials
+    Agora->>Pod: through the bridge: credentials, anchor, initialize
 ```
 
 So every sandbox of a pool is interchangeable, and must stay so: nothing specific to an execution
@@ -101,8 +101,10 @@ ServiceAccount token Kubernetes gives it; Agora checks it with a TokenReview. Th
 names the execution, and the log gives the session the anchor will resume.
 
 Restoring an anchor puts those files back into a new sandbox, through the bridge once the claim
-is ready, and resumes the session there. It is a new session for the model: the whole context is
-paid again.
+is ready and before `initialize`, and resumes the session there. Most harnesses read their files
+when the session is resumed; one that opens them when it starts — opencode and its database — is
+restarted by the bridge onto them, as its image declares. It is a new session for the model: the
+whole context is paid again.
 
 ## Reaching the harness
 

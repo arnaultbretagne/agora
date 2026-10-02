@@ -23,6 +23,7 @@ ENV HOME=/home/harness \
     BRIDGE_DRIVER=claude-code \
     BRIDGE_ADAPTER='["node","/usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"]' \
     BRIDGE_WORKSPACE=/home/harness/work \
+    BRIDGE_NATIVE_DIR=/home/harness/.claude/projects/-home-harness-work \
     CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \

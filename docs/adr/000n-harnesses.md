@@ -11,6 +11,8 @@
   cancellation, configuration.
 - A harness runs in a hostile sandbox, started in a warm pool before any execution exists.
 - Whatever sits in the sandbox can be read, run or subverted by the agent.
+- Harnesses keep their state differently: claude-code reads its session files when a session is
+  resumed; opencode opens a database when it starts.
 
 ## Decision
 
@@ -22,12 +24,15 @@
    the sandbox is relied on for security.
 4. **The bridge is thin.** It starts the adapter and reports ready while it runs, checks Agora's
    token, pipes ACP lines between the adapter and a single connection, gives the adapter its only
-   way out, and puts back or pushes the anchor. It numbers nothing, keeps no line and sends no
-   ACP of its own; it reads the adapter only as fast as Agora takes the lines, and not at all
-   while Agora is away.
+   way out, and puts back or pushes the anchor — restarting, before any line, an adapter that
+   holds its files open. It numbers nothing, keeps no line and sends no ACP of its own; it reads
+   the adapter only as fast as Agora takes the lines, and not at all while Agora is away.
 5. **A harness declares, with its pool, the services it needs before any execution** — its base
    profiles. Agora treats every harness alike from there; whether the harness uses that way out
    to initialize in the pool is its own capability.
+6. **The image declares the rest of what differs**: its adapter, the native directory an anchor
+   saves, and whether the adapter opens that directory when it starts. Agora places an anchor
+   before `initialize`, so such an adapter is restarted onto it and then initialized.
 
 ```mermaid
 flowchart LR
@@ -51,7 +56,12 @@ flowchart LR
 - **Nothing to install at start.** The warm pool hands out a ready sandbox; installing would mean
   a way out to package registries and a cold start.
 - **What differs between harnesses is declared, not coded.** A new harness comes as an image, a
-  pool and its base profiles; Agora and the bridge do not change.
+  pool and its base profiles; Agora and the bridge do not change. opencode 1.18.34 came that way
+  (g4 under Kata, 2026-10-02): a glm-5.3 turn through the gateway on z.ai's Coding Plan, a session
+  resumed by a new process from its database.
+- **A restart costs only the restores.** opencode takes 2.6 s to start; warm, it answers
+  `initialize` in 8 ms and `session/new` in 155 ms (same measurement). Restarting it onto an anchor
+  keeps the warm pool for every new Session.
 - **A thin bridge keeps the hostile zone small.** It is the only Agora code in the sandbox. What
   must last — history, positions, Sessions — lives in Agora, where it is durable; the bridge
   rarely changes, so images rarely change.
@@ -70,6 +80,10 @@ flowchart LR
 | Image variants per right, persona or profile | A missing binary restricts nothing, and variants multiply pools. |
 | Installing tools at start | A way out to package registries, and a cold start. |
 | A bridge with state of its own: it numbered the lines, kept the last 2,000 for replay, and sent `initialize` itself | History and ACP state in the hostile zone, bounded by its memory; both belong to Agora. |
+| A list of harnesses and their native directories in the bridge | Every new harness changes the bridge, and so every image. |
+| Placing files under a running adapter, for every harness | opencode opens its database when it starts: files placed later are never read (measured, 2026-10-02). |
+| A capture and a restore command declared by the image (opencode's `export` and `import`) | Works — an import into the live database is seen by the running adapter (same measurement) — but the bridge would run commands the image supplies, and each harness would capture its own way. |
+| Starting the adapter only at the claim | Every Session would pay the adapter's start, 2.6 s for opencode; a restart charges only restores. |
 
 ## Consequences
 
@@ -83,3 +97,7 @@ flowchart LR
   to the same process.
 - A crash or a network drop between Agora and the bridge can lose the lines in flight; the log
   records the break.
+- Restoring onto opencode pays its start again, about 2.6 s, and its native directory is replaced
+  as a whole.
+- An image must close its harness's own egress at start: opencode fetches its model catalogue and
+  installs a plugin from npm unless its image ships the catalogue and a read-only configuration.

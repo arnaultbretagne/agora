@@ -17,6 +17,7 @@ ENV HOME=/home/harness \
     BRIDGE_DRIVER=mock \
     BRIDGE_ADAPTER='["node","/app/packages/mock-agent/src/agent.ts"]' \
     BRIDGE_WORKSPACE=/home/harness/work \
+    BRIDGE_NATIVE_DIR=/home/harness/.mock-agent/sessions/-home-harness-work \
     NODE_NO_WARNINGS=1
 USER 10001:10001
 EXPOSE 8080

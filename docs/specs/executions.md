@@ -77,7 +77,7 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
 
 ### Startup, in the pool
 
-1. Create the fixed workspace `/home/harness/work`.
+1. Create the fixed workspace `/home/harness/work`, and the native directory the image declares.
 2. Start the outbound proxy on loopback, closed until Agora attaches a token: a warm one, if the
    pool declares base profiles (`credentials.md`).
 3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
@@ -98,7 +98,7 @@ Port **8080**. Every route except `/healthz` requires Agora's token.
 | `GET /healthz` | 200 while the adapter runs and the Pod is not ending, 503 otherwise. This is the Pod's readiness. |
 | `GET /info` | Instance, Pod, workspace, start time, adapter state (alive, exit code, signal), ending, the way out (`outbound`). |
 | `GET /acp` | WebSocket: the ACP relay. |
-| `PUT /anchor` | Restores an anchor before the session is resumed. |
+| `PUT /anchor` | Restores an anchor, before `initialize`. |
 | `PUT /credentials` | Attaches the credential through which the adapter goes out (`credentials.md`). |
 
 The token is signed by Agora with **Ed25519**, names the target sandbox and expires after
@@ -142,11 +142,15 @@ The anchor keeps what the previous implementation measured: the harness's native
 nothing else — no `.claude.json`, no authentication file, no global setting
 (`harnesses/claude-code/src/driver.ts`, `docs/field-findings.md` §2.2 on `main`).
 
-| Harness | Native directory, saved as a whole | Resume |
-| --- | --- | --- |
-| claude-code | `$HOME/.claude/projects/<workspace slug>/` | `session/resume` |
-| codex | `$HOME/.codex/sessions/` | `session/resume` — to be ported |
-| mock (lab) | `$HOME/.mock-agent/sessions/<workspace slug>/` | `session/resume` or `session/load` |
+Each image declares its native directory (`BRIDGE_NATIVE_DIR`), and whether its adapter opens it
+when it starts (`BRIDGE_RESTART_ON_ANCHOR`): the bridge has no list of harnesses.
+
+| Harness | Native directory, saved as a whole | Opened at start | Resume |
+| --- | --- | --- | --- |
+| claude-code | `$HOME/.claude/projects/<workspace slug>/` | No | `session/resume` |
+| opencode | `$HOME/.local/share/opencode/agora/`: its SQLite database (`OPENCODE_DB`) | Yes | `session/resume` |
+| codex | `$HOME/.codex/sessions/` | — | `session/resume` — to be ported |
+| mock (lab) | `$HOME/.mock-agent/sessions/<workspace slug>/` | No | `session/resume` or `session/load` |
 
 The slug is claude-code's: every character outside `[A-Za-z0-9-]` becomes `-`.
 That is why the workspace is the same path in every image.
@@ -155,7 +159,7 @@ That is why the workspace is the same path in every image.
 | --- | --- |
 | **Push** | `POST` to `AGORA_ANCHOR_URL`. The body lists each file: path relative to the native directory, sha256 checksum, content. 32 MiB at most. |
 | **Pod identity** | `Authorization: Bearer` + the ServiceAccount token projected by the kubelet (audience `agora-anchors`, 10 minutes, renewed all the way into the Kata VM), re-read on each push. |
-| **Restoring** | `PUT /anchor` with the same body. Each file is written alongside, read back, compared, then renamed. The adapter reads the file at `session/resume`, not at startup: a pool Pod, already running, can receive it. |
+| **Restoring** | `PUT /anchor` with the same body. Each file is written alongside, read back, compared, then renamed. An adapter that reads its files at `session/resume` receives them while it runs. One that opens them at start is stopped first (SIGTERM, then SIGKILL after 5 seconds), the directory replaced as a whole, and the adapter started again; refused (409) once a line has gone to or come from the adapter. |
 
 ### What the template provides
 
@@ -274,10 +278,12 @@ after a restart, is the log's (`log.md`, "An execution's memory").
 
 ### Restoring
 
-Create with an anchor. Once connected, Agora hands the execution's token, sends `initialize`, then
-places the anchor (`PUT /anchor`) and sends `session/resume`, or `session/load` if the agent
-advertises only `loadSession`. A missing anchor or a refused placement fails the execution
-(`anchor_missing`, `restore_failed`); so does an opening left unanswered.
+Create with an anchor. Once connected, Agora hands the execution's token, places the anchor
+(`PUT /anchor`), sends `initialize`, then `session/resume`, or `session/load` if the agent
+advertises only `loadSession`. The anchor goes before the adapter speaks, so an adapter restarted
+onto it is the one Agora initializes. A missing anchor, a refused placement or an agent that can
+neither resume nor load fails the execution (`anchor_missing`, `restore_failed`); so does an
+opening left unanswered.
 
 ### Permissions
 
@@ -330,6 +336,8 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E21 | Anchor push without a valid projected token | 401, nothing is stored. |
 | E22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. |
 | E27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. |
+| E29 | Restore onto an adapter that opens its files at start | Declared by its image: the anchor placed before `initialize`, the adapter restarted onto it, the agent remembers. Refused (409) once a line has reached the adapter; without the declaration, the anchor goes unseen. |
+| E30 | Real harness (opencode) | Real `initialize` and `session/new` on a warm Pod; a turn on GLM through the gateway, its only way out `api.z.ai`; anchor pushed, then restored by a restart, the agent remembers. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).
