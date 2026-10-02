@@ -78,7 +78,7 @@
   <div class="actions">
     <select id="pool"></select
     ><select id="anchor"><option value="">no anchor</option></select
-    ><button id="create">Create execution</button
+    ><input id="profiles" size="28" placeholder="profiles, e.g. github:owner/repo:read" /><button id="create">Create execution</button
     ><button id="cancel" disabled>Cancel turn</button><button id="stop" disabled>Stop execution</button
     ><button id="credentials" disabled>Attach anthropic</button>
   </div>
@@ -257,9 +257,14 @@
       await post('/api/workstreams', { id, owner })
       open(id)
     })
-    $('create').onclick = guard(() =>
-      command('Create', {}, { pool: $('pool').value, ...($('anchor').value ? { anchor: $('anchor').value } : {}) }),
-    )
+    $('create').onclick = guard(() => {
+      const profiles = $('profiles').value.split(',').map((p) => p.trim()).filter((p) => p !== '')
+      return command('Create', {}, {
+        pool: $('pool').value,
+        ...(profiles.length ? { profiles } : {}),
+        ...($('anchor').value ? { anchor: $('anchor').value } : {}),
+      })
+    })
     $('credentials').onclick = guard(() => post(`${path(workstream)}/credentials`, { execution: view.execution, profiles: ['anthropic'] }))
     const executions = new Map()
     const events = new EventSource('/api/events')

@@ -68,7 +68,38 @@ async function putCredentials(target: LabBridge, body: unknown, headers = auth()
   return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
+/** A CONNECT through the outbound proxy; resolves with the socket once the tunnel is open. */
+function tunnel(url: string, target: string): Promise<Socket> {
+  const { port } = new URL(url)
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), '127.0.0.1', () => socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`))
+    socket.once('data', (chunk: Buffer) => (chunk.toString('latin1').startsWith('HTTP/1.1 200') ? resolve(socket) : reject(new Error(chunk.toString('latin1')))))
+    socket.on('error', () => {})
+  })
+}
+
 describe('outbound proxy', () => {
+  it('C10 replacing the token closes the tunnels opened with the previous one', async () => {
+    const proxy = await upstreamProxy((socket) => socket.write('HTTP/1.1 200 Connection established\r\n\r\n'))
+    const outbound = await startOutbound({ log: () => {} })
+    cleanups.push(() => outbound.close())
+    outbound.set({ proxy: proxy.address, token: 'warm-token', expiresAt: null })
+    const first = await tunnel(outbound.url, 'api.anthropic.com:443')
+    const closed = new Promise<void>((resolve) => first.once('close', () => resolve()))
+    // Control: the tunnel stays open while the token is unchanged.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(first.destroyed, false)
+    outbound.set({ proxy: proxy.address, token: 'execution-token', expiresAt: null })
+    await closed
+    const second = await tunnel(outbound.url, 'api.anthropic.com:443')
+    second.destroy()
+    assert.deepEqual(
+      proxy.heads.map((head) => /Proxy-Authorization: Bearer (\S+)/.exec(head)?.[1]),
+      ['warm-token', 'execution-token'],
+    )
+  })
+
+
   it('refuses to open anything before a credential is attached', async () => {
     const target = await lab()
     assert.match(await ask(target, '/fetch https://api.example.test/v1/models'), /CONNECT api\.example\.test:443 refused by the proxy: 503/)

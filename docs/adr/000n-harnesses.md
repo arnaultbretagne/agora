@@ -1,7 +1,7 @@
 # ADR 000n — Harnesses
 
 - **Status:** accepted
-- **Date:** 2026-09-30
+- **Date:** 2026-10-02
 
 ## Context
 
@@ -25,6 +25,9 @@
    way out, and puts back or pushes the anchor. It numbers nothing, keeps no line and sends no
    ACP of its own; it reads the adapter only as fast as Agora takes the lines, and not at all
    while Agora is away.
+5. **A harness declares, with its pool, the services it needs before any execution** — its base
+   profiles. Agora treats every harness alike from there; whether the harness uses that way out
+   to initialize in the pool is its own capability.
 
 ```mermaid
 flowchart LR
@@ -47,6 +50,8 @@ flowchart LR
   an image without a tool restricts nothing. The same tools everywhere keep images and pools few.
 - **Nothing to install at start.** The warm pool hands out a ready sandbox; installing would mean
   a way out to package registries and a cold start.
+- **What differs between harnesses is declared, not coded.** A new harness comes as an image, a
+  pool and its base profiles; Agora and the bridge do not change.
 - **A thin bridge keeps the hostile zone small.** It is the only Agora code in the sandbox. What
   must last — history, positions, Sessions — lives in Agora, where it is durable; the bridge
   rarely changes, so images rarely change.
@@ -71,6 +76,8 @@ flowchart LR
 - A harness without a stable ACP v1 adapter is not supported; the adapter is pinned with its
   harness.
 - Adding or upgrading a tool rebuilds and tests every image.
+- The pool's readiness, a harness initialized in the pool and a Session ready for a prompt are
+  three separate facts; only the harness can turn a warm token into the second.
 - The pool's readiness proves the adapter runs, not that it speaks ACP: Agora's `initialize`, on
   the first connection, is the first proof. codex refuses a second one, so Agora never resends it
   to the same process.

@@ -13,6 +13,7 @@ import {
   TERMINAL_CLAIM_REASONS,
   type Claim,
   type CommandResult,
+  type CredentialSource,
   type ExecutionManager,
   type Handler,
   type Limits,
@@ -27,6 +28,7 @@ import { Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
+import { compileProfile } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -48,6 +50,8 @@ export interface WorkstreamsOptions {
   readonly responseTimeoutMs?: number
   readonly shutdownMs?: number
   readonly sink?: (line: string) => void
+  /** Signs the executions' tokens (docs/specs/credentials.md); without it, no execution has a way out. */
+  readonly credentials?: CredentialSource
   /** The database ownership connection failed (docs/specs/log.md, "Database ownership"). Default: exit. */
   readonly onOwnershipLost?: () => void
   /** Called at each fault point with what is at stake there; a test stops the process, or holds it, there. */
@@ -69,6 +73,8 @@ export class Workstreams implements Handler {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly owners = new Map<string, string>()
   private readonly blocked = new Set<string>()
+  /** When each execution's token runs out, as handed by this process. */
+  private readonly tokens = new Map<string, number>()
   /** The Workstreams whose execution has not ended: the clock visits these only. */
   private readonly live = new Set<string>()
   /** Projections asked by received lines, per Workstream: at most one every PROJECT_EVERY_MS. */
@@ -225,6 +231,13 @@ export class Workstreams implements Handler {
             "SELECT count(*)::text AS count FROM commands c WHERE c.kind='Create' AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.workstream=c.workstream AND e.execution=c.execution AND e.kind='execution.ended')",
           )
           if (BigInt(active.rows[0].count) >= BigInt(this.options.maxActive)) return 'quota'
+          const profiles = command.body.profiles === undefined ? [] : command.body.profiles
+          if (!Array.isArray(profiles) || profiles.some((p) => typeof p !== 'string')) return 'invalid_create'
+          try {
+            for (const profile of profiles as string[]) compileProfile(profile)
+          } catch {
+            return 'unknown_profile'
+          }
           let anchor: string | undefined
           if (command.body.anchor !== undefined) {
             anchor = uuid(command.body.anchor)
@@ -242,6 +255,7 @@ export class Workstreams implements Handler {
               harness: pool.harness,
               limits,
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
+              ...(profiles.length > 0 ? { profiles } : {}),
               ...(anchor ? { anchor } : {}),
               execution,
             },
@@ -329,7 +343,9 @@ export class Workstreams implements Handler {
     return this.serial(workstream, async () => {
       const e = (await this.store.state(workstream)).current
       if (!e || e.id !== execution || e.ended || e.lost || e.failed) throw new Error('execution_unavailable')
-      return this.executions.putCredentials(e.id, credentials)
+      const view = await this.executions.putCredentials(e.id, credentials)
+      this.tokens.set(e.id, Date.parse(credentials.expiresAt ?? '') || 0)
+      return view
     })
   }
 
@@ -404,6 +420,7 @@ export class Workstreams implements Handler {
     await this.store.fact(workstream, { kind: 'execution.ended', execution: e.id, content: { reason, anchor: anchor?.content.id ?? null } })
     this.executions.release(e.id)
     this.live.delete(workstream)
+    this.tokens.delete(e.id)
     // Its views are written; what it needs again is read back from PostgreSQL.
     await this.project(workstream)
     this.store.forget(workstream)
@@ -454,6 +471,11 @@ export class Workstreams implements Handler {
       if (entry.method !== 'initialize' && !latest.initialized) continue
       if (entry.method === 'session/prompt' && !latest.session) continue
       if (entry.method === 'session/prompt') {
+        // The token must last the whole turn (docs/specs/credentials.md, "Between turns").
+        if (!(await this.ensureToken(e))) {
+          await this.fail(workstream, entry, 'credentials_refused')
+          continue
+        }
         const { leaseSeconds, turnCapSeconds } = limitsOf(e)
         const until = Math.min(Date.now() + leaseSeconds * 1000, Date.parse(entry.time) + turnCapSeconds * 1000)
         if (until <= Date.now() || !latest.uid) {
@@ -486,11 +508,50 @@ export class Workstreams implements Handler {
     }
   }
 
+  /** The execution's rights: its pool's base profiles and its own. */
+  private async profilesOf(e: Execution): Promise<string[]> {
+    const pool = (await this.executions.pools()).find((p) => p.name === e.body.pool)
+    const own = Array.isArray(e.body.profiles) ? e.body.profiles.map(String) : []
+    return [...new Set([...(pool?.baseProfiles ?? []), ...own])]
+  }
+
+  /** Hands the execution its token, naming it: true once the bridge has it, or when it needs none. */
+  private async handToken(e: Execution): Promise<boolean> {
+    const source = this.options.credentials
+    const profiles = await this.profilesOf(e)
+    if (source === undefined || profiles.length === 0) return true
+    const { leaseSeconds, turnCapSeconds } = limitsOf(e)
+    try {
+      const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: turnCapSeconds + leaseSeconds, profiles })
+      await this.executions.putCredentials(e.id, credentials)
+      this.tokens.set(e.id, Date.parse(credentials.expiresAt ?? '') || 0)
+      return true
+    } catch {
+      this.report({ operation: 'dispatch', outcome: 'blocked', execution: e.id, errorClass: 'transport' })
+      return false
+    }
+  }
+
+  /** A new token before a prompt if the current one would run out within the turn and a minute. */
+  private async ensureToken(e: Execution): Promise<boolean> {
+    if (this.options.credentials === undefined || (await this.profilesOf(e)).length === 0) return true
+    let until = this.tokens.get(e.id)
+    if (until === undefined) {
+      // After a restart: what the bridge holds.
+      until = Date.parse((await this.executions.info(e.id).catch(() => null))?.outbound.expiresAt ?? '') || 0
+      this.tokens.set(e.id, until)
+    }
+    if (until - Date.now() >= (limitsOf(e).turnCapSeconds + 60) * 1000) return true
+    return this.handToken(e)
+  }
+
   /** `initialize`, then the Session: new, or restored from the anchor (docs/specs/executions.md, "Restoring"). */
   private async setup(workstream: string, e: Execution): Promise<void> {
     const state = await this.store.state(workstream)
     const requests = [...state.requests.values()].filter((r) => r.execution === e.id && r.direction === 'out')
     if (!requests.some((r) => r.method === 'initialize')) {
+      // The execution's token first: a harness initializing without a way out stalls.
+      if (!(await this.handToken(e))) return
       await this.store.transaction(workstream, (tx) =>
         tx.outgoing(e.id, {
           method: 'initialize',

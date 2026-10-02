@@ -19,7 +19,7 @@ against the execution's grants and sets the credential on the way through.**
 
 | Response | Meaning |
 | --- | --- |
-| 503 from the bridge, on `CONNECT` | No credential attached to this execution. |
+| 503 from the bridge, on `CONNECT` | No token attached: a warm Pod whose pool declares no base profile, or before Agora hands one. |
 | 502 from the bridge, on `CONNECT` | Gateway unreachable. |
 | 401 from the gateway | JWT missing, expired or signed by another key. |
 | 403 from the gateway | None of the execution's grants covers this host, path and method. |
@@ -29,7 +29,7 @@ against the execution's grants and sets the credential on the way through.**
 
 | Element | Rule |
 | --- | --- |
-| `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token: later tunnels use the new one, open tunnels carry on. |
+| `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token and closes the tunnels opened with it: later tunnels use the new one. |
 | `GET /info`, `outbound` field | Proxy, expiry, when the credential was attached, number of tunnels, number of refusals, and for each target the number of tunnels and the last response to the `CONNECT`. Never the token. |
 | Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`. |
 | What is relayed | `CONNECT` only. An `http://` request is refused (501): it has no credential to carry. |
@@ -48,6 +48,21 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
+### Base profiles
+
+What a harness needs before any execution — its SDK initializing, for instance — is declared on
+its pool, the `SandboxWarmPool`, in the annotation `agora.bretagne.dev/base-profiles`: profiles
+separated by commas. Only profiles the catalogue marks as base may be declared: those naming a
+service, never a repository.
+
+| Profile | Base |
+| --- | --- |
+| `anthropic` | Yes |
+| `github:…` | No |
+
+A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
+the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
+
 ## The token
 
 An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`.
@@ -55,8 +70,8 @@ An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`
 | Claim | Content |
 | --- | --- |
 | `iss`, `aud` | `agora`, `agora-gateway`: required by the gateway. |
-| `sub` | The execution (`agora <name>`), written in every log line. |
-| `exp` | The duration requested when attaching, from 60 s to 24 h. |
+| `sub` | The execution (`agora <execution>`), or the warm Pod (`agora warm <sandbox>`); written in every log line. |
+| `exp` | A warm token: 15 minutes. An execution's: the turn's maximum duration plus the lease, from when it is handed over. Between 60 s and 24 h. |
 | `jti` | One id per token. |
 | `grants` | The compiled grants. |
 | `profiles` | The requested profiles, for the record. |
@@ -92,14 +107,15 @@ the reason for a refusal.
 
 | Element | Rule |
 | --- | --- |
-| `POST /api/executions/{name}/credentials` | Body: the profiles, the duration in seconds (3,600 by default). Agora compiles and signs, then hands the token to the bridge; the response is the bridge's `outbound` field. |
+| Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready and still owned by a pool declaring base profiles, it hands a warm token (`PUT /credentials`), and a new one when less than a third of its life remains. |
+| At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the Create's. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
+| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. |
+| The Create | `profiles`, optional: checked against the catalogue, refused otherwise (`unknown_profile`); recorded with the command. |
+| `POST /api/workstreams/{id}/credentials` | Lab only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
 | `GET /api/config` | `credentials` field: the gateway and the known profiles, or nothing. |
-| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`. Without `GATEWAY_PROXY`, no execution has a way out. |
-
-The lab attaches a credential by hand; attaching it when the execution is created is still to
-be specified (below).
+| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
 
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
 CLI in OAuth mode: it then sends a Bearer and `anthropic-beta: oauth-…`. The gateway replaces the
@@ -131,8 +147,15 @@ call. The lab does it itself when the agent offers the option.
 | C5 | A JWT missing, expired or signed by another key, sent straight to the gateway | 401 from the gateway. |
 | C6 | Crafted paths (`..`, `.`, `%2e`, `%2f`) under a granted repo | 403 from the gateway. |
 | C7 | A host with no route | 404 from the gateway. |
+| C8 | A pool declaring `anthropic`, a pool declaring none | A warm Pod of the first can reach `api.anthropic.com` before any claim, and nothing else (403); its token names the Pod. The second's Pod has no way out (503). |
+| C9 | A warm Pod waiting beyond two thirds of its token's life | A new token before the old one expires; no request refused in between. |
+| C10 | A claim on a warm Pod, the Create naming `github:A:read` | Before `initialize`, a token naming the execution, with `anthropic` and `github:A:read`; the tunnels of the warm token closed. |
+| C11 | A warm token being handed over when the claim binds the Pod | The execution's token is the one in place; no warm token after it. |
+| C12 | An execution whose token would expire during the next turn | A new token before the prompt leaves; the previous tunnels closed; no request refused for an expired token during the turn. |
+| C13 | claude-code, from the Create to a Session open | Under 5 s, with no refused connection. |
+| C14 | A Create naming an unknown profile | Refused, `unknown_profile`; nothing written. |
 
-**To be specified:** attach at creation and renew the token when the deadline goes past it,
-since a JWT cannot be revoked before it expires; count the responses to `CONNECT` by status, not
-just the last one; TLS trust for git (libcurl does not read `NODE_EXTRA_CA_CERTS`) and for codex,
-which are not Node; read access to GraphQL.
+**To be specified:** a harness initializing in the pool (claude-code's SDK); changing an execution's
+grants between turns; count the responses to `CONNECT` by status, not just the last one; TLS trust
+for git (libcurl does not read `NODE_EXTRA_CA_CERTS`) and for codex, which are not Node; read access
+to GraphQL.

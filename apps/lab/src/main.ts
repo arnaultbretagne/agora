@@ -46,6 +46,8 @@ const executions = new ExecutionManager({
   kube,
   signingKey: privateKeyFrom(readFileSync(required('SIGNING_KEY_FILE'), 'utf8')),
   bridgePort: number('BRIDGE_PORT', 8080),
+  // docs/specs/credentials.md: the pools' Pods are warmed with their base profiles.
+  ...(credentials === undefined ? {} : { credentials }),
 })
 // A fault point for tests (docs/reliability/README.md, rule 4): AGORA_FAULT=<point>[:<method>] kills
 // this process there, as a crash would.
@@ -65,6 +67,7 @@ const workstreams = new Workstreams({
   maxActive: number('MAX_ACTIVE', 4),
   renewSeconds: number('RENEW_SECONDS', 60),
   sink,
+  ...(credentials === undefined ? {} : { credentials }),
 })
 
 try {

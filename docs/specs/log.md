@@ -90,7 +90,7 @@ Closed reasons: `invalid_utf8`, `invalid_json`, `invalid_envelope`, `batch`, `wr
 `invalid_body`, `unsafe_id`, `line_too_large`, `unsupported_json_value`, `transport_error`,
 `response_timeout`, `deadline_refused`, `startup_failed`, `restore_failed`, `claim_conflict`,
 `claim_missing`, `adapter_exited`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`,
-`anchor_missing`. No parser, database or transport message becomes a reason.
+`anchor_missing`, `credentials_refused`. No parser, database or transport message becomes a reason.
 
 ### Dispatch and recovery
 
@@ -160,7 +160,7 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
-| Create | Carries the pool, the settings (lease, turn duration) and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
+| Create | Carries the pool, the settings (lease, turn duration), the profiles to grant and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
 | Write | Accepted only if the execution is connected with its Session open, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), and no permission is pending (`permission_pending`). |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
@@ -173,6 +173,7 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | `unavailable` | Agora is stopping, or a received line is waiting for its commit. Answered 503. |
 | `execution_active` | Create while the Workstream's execution exists. |
 | `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; settings out of bounds; the active executions at their maximum. |
+| `unknown_profile` | Create: a profile the catalogue does not know. |
 | `unknown_anchor`, `anchor_incompatible` | Create: no such anchor; an anchor of another harness. |
 | `execution_conflict` | Create: the execution or claim name already recorded. |
 | `execution_unavailable` | No execution, or it has ended; or, except for Stop, it is lost or failed. |

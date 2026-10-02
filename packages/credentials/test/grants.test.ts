@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { compileProfile, compileProfiles, GrantSigner, type Grant } from '../src/index.ts'
+import { baseProfiles, compileProfile, compileProfiles, GrantSigner, type Grant } from '../src/index.ts'
 
 /** What the gateway's single rule decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -69,5 +69,12 @@ describe('GrantSigner', () => {
     assert.equal(credentials.expiresAt, new Date((claims.exp as number) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'))
     await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] }), /no profile/)
     await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /out of bounds/)
+  })
+
+  it('reads a pool\'s base profiles: services only, never a repository', () => {
+    assert.deepEqual(baseProfiles('anthropic'), { profiles: ['anthropic'], refused: null })
+    assert.deepEqual(baseProfiles(' anthropic , '), { profiles: ['anthropic'], refused: null })
+    assert.deepEqual(baseProfiles(undefined), { profiles: [], refused: null })
+    assert.deepEqual(baseProfiles('anthropic,github:o/r:read'), { profiles: [], refused: 'github:o/r:read' })
   })
 })

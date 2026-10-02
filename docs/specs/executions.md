@@ -78,13 +78,14 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
 ### Startup, in the pool
 
 1. Create the fixed workspace `/home/harness/work`.
-2. Start the outbound proxy on loopback, closed until a credential is attached
-   (`credentials.md`).
+2. Start the outbound proxy on loopback, closed until Agora attaches a token: a warm one, if the
+   pool declares base profiles (`credentials.md`).
 3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
    outbound proxy.
 4. Listen immediately after spawning the adapter; answer ready on `/healthz` while it runs.
 
-All of this happens before the claim, with no user and no credential. The bridge sends no ACP.
+All of this happens before the claim, with no user; the only token is the warm one, for the
+pool's base profiles. The bridge sends no ACP.
 Agora sends `initialize` on its first connection, with `fs` and `terminal` set to *no*, and keeps
 the answer. codex refuses a second `initialize`: Agora never resends it to the same instance.
 
@@ -196,6 +197,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | Receive | Hand each received line to the log, with its connection and receive ordinal, and read nothing more until the log has committed it. |
 | Send | A line, on the connection the log names, only when asked; the write's callback settles the request. |
 | Hold | No new connection, the open one terminated: an execution lost or failed. |
+| Warm | Every 5 seconds, list the pools' Sandboxes; hand each ready one a warm token, and renew it, until a claim binds it (`credentials.md`). |
 | Bridge routes | `GET /info`, `PUT /anchor`, `PUT /credentials`, on the log's request. |
 | Anchors | Verify a Pod's projected token, and find the claim bound to that Pod. |
 
@@ -203,7 +205,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 
 | Route | Role |
 | --- | --- |
-| `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label. |
+| `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles. |
 | `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
 | `GET /api/config` | Whether the lab's routes are open, and the credential profiles on offer. |
@@ -272,10 +274,10 @@ after a restart, is the log's (`log.md`, "An execution's memory").
 
 ### Restoring
 
-Create with an anchor. Once connected, Agora sends `initialize`, then places the anchor
-(`PUT /anchor`) and sends `session/resume`, or `session/load` if the agent advertises only
-`loadSession`. A missing anchor or a refused placement fails the execution (`anchor_missing`,
-`restore_failed`); so does an opening left unanswered.
+Create with an anchor. Once connected, Agora hands the execution's token, sends `initialize`, then
+places the anchor (`PUT /anchor`) and sends `session/resume`, or `session/load` if the agent
+advertises only `loadSession`. A missing anchor or a refused placement fails the execution
+(`anchor_missing`, `restore_failed`); so does an opening left unanswered.
 
 ### Permissions
 
