@@ -1,38 +1,22 @@
-// Agora's executions (docs/specs/executions.md). It holds ONE connection per bridge, follows turns by
-// watching the ACP traffic it relays, and re-arms each claim's deadline while a turn runs
-// (docs/specs/executions.md: min(now + lease, turn start + max turn)). It never deletes anything: the
-// infrastructure destroys at the deadline, and the Pod pushes its anchor on the way out.
-// Everything it must know after a restart is written on the claim itself.
+// The execution mechanics (docs/specs/executions.md): claims, bridge connections, deadlines, the bridge's
+// HTTP routes. It keeps no history and decides nothing about ACP: whoever mounts it (the log's
+// Workstreams) says which executions to run, receives every event through a Handler, and asks for
+// every effect. It never deletes anything: the infrastructure destroys at the deadline.
 import { createHash, generateKeyPairSync, randomUUID, type KeyObject } from 'node:crypto'
-import { WebSocket } from 'ws'
-import type { AnchorMeta, AnchorStore } from './anchors.ts'
+import { WebSocket, type RawData } from 'ws'
 import { KubeError, WatchGone, type Claim, type KubeApi, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
-import type { Bundle } from '@agora/harness-bridge/anchor'
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
 export const MANAGER = 'agora'
 export const POOL_LABEL = 'agora.bretagne.dev/pool'
 export const HARNESS_LABEL = 'agora.bretagne.dev/harness'
-export const ANNOTATION = {
-  requestId: 'agora.bretagne.dev/request-id',
-  limits: 'agora.bretagne.dev/limits',
-  restoreAnchor: 'agora.bretagne.dev/restore-anchor',
-  restored: 'agora.bretagne.dev/restored',
-  instance: 'agora.bretagne.dev/instance',
-  initialize: 'agora.bretagne.dev/initialize',
-  sessionId: 'agora.bretagne.dev/session-id',
-  turn: 'agora.bretagne.dev/turn',
-  idleSince: 'agora.bretagne.dev/idle-since',
-  stopped: 'agora.bretagne.dev/stopped',
-} as const
-const SELECTOR = `${MANAGED_BY}=${MANAGER}`
-const RING_LIMIT = 2000
-const RING_BYTES = 16 * 1024 * 1024
-const HISTORY_LIMIT = 100
-const LOG_LIMIT = 300
-const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
+export const EXECUTION_LABEL = 'agora.bretagne.dev/execution-id'
+const SELECTOR = `${MANAGED_BY}=${MANAGER},${EXECUTION_LABEL}`
+/** One line, one WebSocket message (docs/specs/log.md, "ACP lines"). */
+export const MAX_LINE = 16 * 1024 * 1024
+export const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
 
 export interface Limits {
   readonly leaseSeconds: number
@@ -44,130 +28,90 @@ export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   turnCapSeconds: [30, 3600],
 }
 
+export function claimName(execution: string): string {
+  return `sbx-${createHash('sha256').update(execution).digest('hex').slice(0, 10)}`
+}
+
+/** An execution to run, as its log records it. */
+export interface Target {
+  readonly execution: string
+  readonly claimName: string
+  readonly pool: string
+}
+
+/** What the mechanics report; the handler answers and orders every effect. */
+export interface Handler {
+  /** The claim of a run execution changed, or disappeared (`null`). */
+  claim(execution: string, claim: Claim | null): Promise<void>
+  /** A connection is open; `true` lets its lines flow, `false` closes it. */
+  connected(execution: string, connection: string, instance: string): Promise<boolean>
+  /** A received line. Nothing more is read from the connection until this settles; a rejection fails it. */
+  line(execution: string, connection: string, ordinal: bigint, bytes: Buffer): Promise<void>
+  /** The connection closed, after every line handed over settled. `drained`: Agora closed it cleanly. */
+  closed(execution: string, connection: string, code: number | null, drained: boolean): Promise<void>
+}
+
 export interface ManagerOptions {
   readonly kube: KubeApi
-  readonly anchors: AnchorStore
   readonly signingKey: KeyObject
-  readonly defaults: Limits
-  readonly renewSeconds: number
-  readonly maxActive: number
   readonly bridgePort: number
   /** Test seam: where to reach a sandbox's bridge. Defaults to its Service (`serviceFQDN`). */
   readonly bridgeAddress?: (serviceFQDN: string, podName: string) => string
   readonly tickMs?: number
-  readonly log?: (message: string) => void
+  readonly reconnectMs?: number
 }
 
-type Id = string | number
-
-interface Turn {
-  readonly startedAt: string
-  readonly requestId: Id
-  readonly sessionId: string | null
-}
-
-interface InitializeResult {
-  readonly agentInfo?: { name?: string; version?: string }
-  readonly agentCapabilities?: { loadSession?: boolean; sessionCapabilities?: { resume?: unknown } }
-  readonly [key: string]: unknown
-}
-interface Initialization {
-  readonly requestId: string
-  readonly result: InitializeResult | null
-}
-interface BridgeInfo {
-  readonly instance: string
-  readonly workspace: string
-  readonly adapter: { alive: boolean; exitCode: number | null; signal: string | null }
-  readonly outbound: OutboundView
-}
-
-export interface Ending {
-  readonly name: string
-  readonly pool: string
-  /** Why the deadline was reached: stop asked, turn limit, end of lease after a turn… */
-  readonly reason: string
-  readonly anchor: AnchorMeta | null
-  readonly anchorError: string | null
-  readonly at: string
-}
-
-export interface LogEntry {
-  readonly at: string
-  readonly execution: string | null
-  readonly message: string
-}
-
-interface SandboxRecord {
-  readonly name: string
-  readonly uid: string
-  readonly pool: string
-  readonly requestId: string
-  readonly createdAt: number
-  readonly limits: Limits
-  readonly restoreAnchor: string | null
-  // From the claim, refreshed on every event.
-  ready: boolean
-  readyReason: string
-  readyMessage: string
-  podName: string | null
-  serviceFQDN: string | null
-  shutdownTime: string | null
-  ending: boolean
-  // Written on the claim by Agora; read from it only once, when the record is first built.
+interface Connection {
+  readonly id: string
+  readonly ws: WebSocket
   instance: string | null
-  sessionId: string | null
-  turn: Turn | null
-  idleSince: string | null
-  restored: boolean
-  stopped: { reason: string; at: string } | null
-  // Live, in this process only.
+  open: boolean
+  accepted: boolean
+  closed: boolean
+  draining: boolean
+  failed: boolean
+  ordinal: bigint
+  pending: number
+  queue: Buffer[]
+  reading: boolean
+  readonly sends: Set<Promise<void>>
+  /** The handler's verdict on the connection, once asked: its close waits for it. */
+  accepting: Promise<void> | null
+  done: Promise<void>
+  finish: () => void
+}
+
+interface Run {
+  readonly target: Target
+  claim: Claim | null
+  held: boolean
+  connection: Connection | null
+  reconnectAt: number
   launchType: string | null
   podDetail: string | null
-  bridge: WebSocket | null
-  bridgeState: 'none' | 'connecting' | 'connected'
-  reconnectTimer: NodeJS.Timeout | null
-  info: BridgeInfo | null
-  initialization: Initialization | null
-  initializing: boolean
-  initializationPersisted: boolean
-  readonly recovered: boolean
-  lastSeq: number
-  ring: { seq: number; acp: string }[]
-  ringBytes: number
-  consumer: WebSocket | null
-  consumerPending: Map<string, { method: string; sessionId: string | null }>
-  permissions: Set<string>
-  ownPending: Map<string, (message: AcpMessage) => void>
-  admitting: boolean
-  restoring: boolean
-  lastRenewedAt: number
-  renewals: number
-  lastTurn: { outcome: string; endedAt: string } | null
-  anchor: AnchorMeta | null
-  anchorError: string | null
-  /** What the bridge says of its way out (docs/specs/credentials.md) — never the token. */
   outbound: OutboundView | null
-  error: string | null
-  lost: string | null
-  uncertain: string | null
 }
 
-interface AcpMessage {
-  readonly id?: Id | null
-  readonly method?: string
-  readonly params?: Record<string, unknown>
-  readonly result?: Record<string, unknown> | null
-  readonly error?: { code?: number; message?: string }
+export interface ExecutionView {
+  readonly execution: string
+  readonly claimName: string
+  readonly pool: string
+  readonly uid: string | null
+  readonly ready: boolean
+  readonly reason: string
+  readonly ending: boolean
+  readonly shutdownTime: string | null
+  readonly pod: string | null
+  readonly podDetail: string | null
+  readonly launchType: string | null
+  readonly bridge: 'none' | 'connecting' | 'connected'
+  readonly instance: string | null
+  readonly connection: string | null
+  /** Bytes received and not yet handed over: at most one line. */
+  readonly pending: number
+  readonly held: boolean
+  readonly outbound: OutboundView | null
 }
-
-export type ManagerEvent =
-  | { readonly type: 'execution'; readonly execution: ExecutionView }
-  | { readonly type: 'ended'; readonly ending: Ending }
-  | { readonly type: 'anchor'; readonly anchor: AnchorMeta }
-  | { readonly type: 'log'; readonly entry: LogEntry }
-
-export type ExecutionView = ReturnType<ExecutionManager['view']>
 
 export interface PoolView {
   readonly name: string
@@ -178,35 +122,22 @@ export interface PoolView {
   readonly readyReplicas: number
 }
 
-export type CommandResult<T> = { readonly accepted: true; readonly value: T } | { readonly accepted: false; readonly reason: string; readonly status: number }
+export type CommandResult<T> =
+  | { readonly accepted: true; readonly value: T }
+  | { readonly accepted: false; readonly reason: string; readonly status: number }
 
 function refused(reason: string, status = 409): { accepted: false; reason: string; status: number } {
   return { accepted: false, reason, status }
 }
 
-function iso(ms: number): string {
-  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
-}
-
-function idKey(id: Id): string {
-  return typeof id === 'number' ? `n:${String(id)}` : `s:${id}`
-}
-
-export function claimName(requestId: string): string {
-  return `sbx-${createHash('sha256').update(requestId).digest('hex').slice(0, 10)}`
-}
-
 export class ExecutionManager {
   private readonly options: ManagerOptions
-  private readonly records = new Map<string, SandboxRecord>()
-  private readonly gone = new Set<string>()
-  private readonly history: Ending[] = []
-  private readonly logs: LogEntry[] = []
-  private readonly listeners = new Set<(event: ManagerEvent) => void>()
+  private readonly runs = new Map<string, Run>()
+  private readonly claims = new Map<string, Claim>()
+  private readonly listeners = new Set<(view: ExecutionView) => void>()
   private readonly foreignKey = generateKeyPairSync('ed25519').privateKey
+  private handler: Handler | null = null
   private poolCache: { at: number; pools: PoolView[] } | null = null
-  private readonly epoch = randomUUID()
-  private ownCounter = 0
   private tickTimer: NodeJS.Timeout | null = null
   private watchAbort: AbortController | null = null
   private stopped = false
@@ -215,27 +146,99 @@ export class ExecutionManager {
     this.options = options
   }
 
-  // ---------------------------------------------------------------- lifecycle of the manager
+  // ---------------------------------------------------------------- lifecycle
 
-  async start(): Promise<void> {
+  /** Lists the claims, then follows them. Runs registered before or after receive their claim. */
+  async start(handler: Handler): Promise<void> {
+    this.handler = handler
     const { items, resourceVersion } = await this.options.kube.listClaims(SELECTOR)
-    for (const claim of items) this.upsert(claim)
-    this.log(null, `startup: ${String(items.length)} claim(s) found`)
+    for (const claim of items) this.claims.set(this.executionOf(claim) ?? claim.metadata.name, claim)
+    for (const run of this.runs.values()) await this.observe(run, this.claims.get(run.target.execution) ?? null)
     void this.watchLoop(resourceVersion)
-    this.tickTimer = setInterval(() => void this.tick(), this.options.tickMs ?? 5000)
+    this.tickTimer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
   }
 
+  /** Stops following claims and terminates what is still open; `drain` first for a clean stop. */
   async stop(): Promise<void> {
     this.stopped = true
     if (this.tickTimer !== null) clearInterval(this.tickTimer)
     this.watchAbort?.abort()
-    for (const record of this.records.values()) {
-      if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
-      record.bridge?.terminate()
-      for (const [, resolve] of record.ownPending) resolve({ error: { message: 'Agora stopping' } })
-      record.ownPending.clear()
-      record.consumer?.close(1001, 'Agora stopping')
-    }
+    for (const run of this.runs.values()) if (run.connection !== null && !run.connection.closed) run.connection.ws.terminate()
+  }
+
+  /** Closes every connection cleanly within `ms`: sends settle, the close handshake runs, lines keep flowing. */
+  async drain(ms: number): Promise<void> {
+    this.stopped = true
+    const deadline = Date.now() + ms
+    await Promise.all(
+      [...this.runs.values()].map(async (run) => {
+        const c = run.connection
+        if (c === null || c.closed) return
+        c.draining = true
+        await Promise.race([Promise.allSettled([...c.sends]), new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))])
+        if (c.ws.readyState === WebSocket.OPEN) c.ws.close(1000, 'Agora stopping')
+        const timer = setTimeout(() => {
+          c.draining = false
+          c.ws.terminate()
+        }, Math.max(0, deadline - Date.now()))
+        await c.done
+        clearTimeout(timer)
+      }),
+    )
+  }
+
+  // ---------------------------------------------------------------- runs
+
+  /** Runs an execution: its claim is reported, and its bridge connected while the claim is ready. */
+  async run(target: Target): Promise<void> {
+    let run = this.runs.get(target.execution)
+    if (run !== undefined) return
+    run = { target, claim: null, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null }
+    this.runs.set(target.execution, run)
+    if (this.handler !== null) await this.observe(run, this.claims.get(target.execution) ?? null)
+  }
+
+  /** No new connection; the open one is terminated. The claim is still followed until it disappears. */
+  hold(execution: string): void {
+    const run = this.runs.get(execution)
+    if (run === undefined) return
+    run.held = true
+    if (run.connection !== null && !run.connection.closed) run.connection.ws.terminate()
+    this.emit(run)
+  }
+
+  /** Forgets an execution whose claim has disappeared. */
+  release(execution: string): void {
+    const run = this.runs.get(execution)
+    if (run === undefined) return
+    if (run.connection !== null && !run.connection.closed) run.connection.ws.terminate()
+    this.runs.delete(execution)
+  }
+
+  claimOf(execution: string): Claim | null {
+    return this.runs.get(execution)?.claim ?? null
+  }
+
+  /** The claim bound to a Pod, and its execution, as the cluster reports it now. */
+  async claimForPod(pod: string): Promise<{ execution: string; claim: Claim }[]> {
+    const { items } = await this.options.kube.listClaims(SELECTOR)
+    return items
+      .filter((claim) => claim.status?.sandbox?.name === pod)
+      .flatMap((claim) => {
+        const execution = this.executionOf(claim)
+        return execution === null ? [] : [{ execution, claim }]
+      })
+  }
+
+  async podUid(pod: string): Promise<string | null> {
+    const found = (await this.options.kube.getPod(pod)) as { metadata?: { uid?: string } } | null
+    return found?.metadata?.uid ?? null
+  }
+
+  // ---------------------------------------------------------------- claims
+
+  private executionOf(claim: Claim): string | null {
+    return claim.metadata.labels?.[EXECUTION_LABEL] ?? null
   }
 
   private async watchLoop(initialVersion: string): Promise<void> {
@@ -247,18 +250,22 @@ export class ExecutionManager {
       } catch (error) {
         if (this.stopped) return
         if (error instanceof WatchGone) {
-          this.log(null, 'watch expired: new LIST')
           try {
             const list = await this.options.kube.listClaims(SELECTOR)
             version = list.resourceVersion
-            const seen = new Set(list.items.map((claim) => claim.metadata.name))
-            for (const claim of list.items) this.upsert(claim)
-            for (const record of [...this.records.values()]) if (!seen.has(record.name)) this.claimGone(record)
-          } catch (listError) {
-            this.log(null, `LIST impossible : ${String(listError)}`)
+            const seen = new Set<string>()
+            for (const claim of list.items) {
+              const execution = this.executionOf(claim)
+              if (execution === null) continue
+              seen.add(execution)
+              this.claims.set(execution, claim)
+              const run = this.runs.get(execution)
+              if (run !== undefined) void this.observe(run, claim)
+            }
+            for (const [execution, run] of this.runs) if (!seen.has(execution)) void this.observe(run, null)
+          } catch {
+            // Listed again on the next turn of the loop.
           }
-        } else {
-          this.log(null, `watch interrompu : ${error instanceof Error ? error.message : String(error)}`)
         }
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
@@ -268,656 +275,314 @@ export class ExecutionManager {
   private onWatchEvent(event: WatchEvent): string | undefined {
     const version = event.object.metadata?.resourceVersion
     if (event.type === 'BOOKMARK') return version
+    const execution = this.executionOf(event.object)
+    if (execution === null) return version
     if (event.type === 'DELETED') {
-      const record = this.records.get(event.object.metadata.name)
-      if (record !== undefined && record.uid === event.object.metadata.uid) this.claimGone(record)
+      if (this.claims.get(execution)?.metadata.uid === event.object.metadata.uid) this.claims.delete(execution)
+      const run = this.runs.get(execution)
+      if (run !== undefined && run.claim?.metadata.uid === event.object.metadata.uid) void this.observe(run, null)
       return version
     }
-    this.upsert(event.object)
+    this.claims.set(execution, event.object)
+    const run = this.runs.get(execution)
+    if (run !== undefined) void this.observe(run, event.object)
     return version
   }
 
-  // ---------------------------------------------------------------- claims → records
-
-  private upsert(claim: Claim): void {
-    const { name, uid } = claim.metadata
-    if (this.gone.has(uid)) return
-    let record = this.records.get(name)
-    if (record !== undefined && record.uid !== uid) {
-      this.claimGone(record)
-      record = undefined
-    }
-    if (record === undefined) {
-      record = this.newRecord(claim)
-      this.records.set(name, record)
-    }
-    const ready = claim.status?.conditions?.find((condition) => condition.type === 'Ready')
-    record.ready = ready?.status === 'True'
-    record.readyReason = ready?.reason ?? ''
-    record.readyMessage = ready?.message ?? ''
-    record.podName = claim.status?.sandbox?.name ?? record.podName
-    record.serviceFQDN = claim.status?.sandbox?.serviceFQDN || record.serviceFQDN
-    record.shutdownTime = claim.spec?.lifecycle?.shutdownTime ?? null
-    if (claim.metadata.deletionTimestamp !== undefined && !record.ending) {
-      record.ending = true
-      this.log(record.name, `the infrastructure is deleting the claim (${this.endReason(record)}): anchor expected from the Pod`)
-    }
-    if (!record.ready && !record.ending && TERMINAL_CLAIM_REASONS.has(record.readyReason) && record.error === null) {
-      record.error = `${record.readyReason} : ${record.readyMessage}`
-      this.log(record.name, `the claim will not succeed: ${record.error}`)
-    }
-    if (record.launchType === null && record.podName !== null) void this.readLaunchType(record)
-    this.ensureBridge(record)
-    this.emitRecord(record)
+  private async observe(run: Run, claim: Claim | null): Promise<void> {
+    run.claim = claim
+    if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) void this.readLaunchType(run)
+    this.emit(run)
+    await this.handler?.claim(run.target.execution, claim)
+    this.ensureConnection(run)
   }
 
-  /** Warm or cold, as Agent Sandbox labels the Sandbox it bound (`agents.x-k8s.io/launch-type`). */
-  private async readLaunchType(record: SandboxRecord): Promise<void> {
+  /** Creates the claim with the recorded name, pool and deadline; a claim already there is returned. */
+  async createClaim(target: Target, shutdownTime: string): Promise<Claim> {
+    const body = {
+      apiVersion: 'extensions.agents.x-k8s.io/v1beta1',
+      kind: 'SandboxClaim',
+      metadata: {
+        name: target.claimName,
+        labels: { [MANAGED_BY]: MANAGER, [POOL_LABEL]: target.pool, [EXECUTION_LABEL]: target.execution },
+      },
+      spec: { warmPoolRef: { name: target.pool }, lifecycle: { shutdownTime, shutdownPolicy: 'DeleteForeground' } },
+    }
+    let claim: Claim | null
     try {
-      const sandbox = await this.options.kube.getSandbox(record.podName ?? '')
+      claim = await this.options.kube.createClaim(body)
+    } catch (error) {
+      if (!(error instanceof KubeError) || error.status !== 409) throw error
+      claim = await this.options.kube.getClaim(target.claimName)
+      if (claim === null) throw error
+    }
+    this.claims.set(target.execution, claim)
+    const run = this.runs.get(target.execution)
+    if (run !== undefined) await this.observe(run, claim)
+    return claim
+  }
+
+  /** Moves the deadline; refused if the claim's UID changed. */
+  async renew(execution: string, uid: string, shutdownTime: string): Promise<Claim> {
+    const run = this.runs.get(execution)
+    if (run === undefined) throw new Error('unknown_execution')
+    const claim = await this.options.kube.patchClaim(run.target.claimName, { metadata: { uid }, spec: { lifecycle: { shutdownTime } } })
+    run.claim = claim
+    this.claims.set(execution, claim)
+    this.emit(run)
+    return claim
+  }
+
+  private async readLaunchType(run: Run): Promise<void> {
+    try {
+      const sandbox = await this.options.kube.getSandbox(run.claim?.status?.sandbox?.name ?? '')
       const labels = (sandbox?.metadata as { labels?: Record<string, string> } | undefined)?.labels
       const launchType = labels?.['agents.x-k8s.io/launch-type'] ?? null
-      if (launchType !== null && record.launchType === null) {
-        record.launchType = launchType
-        this.emitRecord(record)
+      if (launchType !== null) {
+        run.launchType = launchType
+        this.emit(run)
       }
     } catch {
       // The tick tries again.
     }
   }
 
-  private newRecord(claim: Claim): SandboxRecord {
-    const annotations = claim.metadata.annotations ?? {}
-    const parse = <T>(value: string | undefined): T | null => {
-      if (value === undefined) return null
-      try {
-        return JSON.parse(value) as T
-      } catch {
-        return null
-      }
-    }
-    const limits = parse<Partial<Limits>>(annotations[ANNOTATION.limits]) ?? {}
-    return {
-      name: claim.metadata.name,
-      uid: claim.metadata.uid,
-      pool: claim.metadata.labels?.[POOL_LABEL] ?? claim.spec?.warmPoolRef?.name ?? '?',
-      requestId: annotations[ANNOTATION.requestId] ?? '',
-      createdAt: Date.parse(claim.metadata.creationTimestamp ?? new Date().toISOString()),
-      limits: {
-        leaseSeconds: limits.leaseSeconds ?? this.options.defaults.leaseSeconds,
-        turnCapSeconds: limits.turnCapSeconds ?? this.options.defaults.turnCapSeconds,
-      },
-      restoreAnchor: annotations[ANNOTATION.restoreAnchor] ?? null,
-      ready: false,
-      readyReason: '',
-      readyMessage: '',
-      podName: null,
-      serviceFQDN: null,
-      shutdownTime: null,
-      ending: false,
-      instance: annotations[ANNOTATION.instance] ?? null,
-      sessionId: annotations[ANNOTATION.sessionId] ?? null,
-      turn: parse<Turn>(annotations[ANNOTATION.turn]),
-      idleSince: annotations[ANNOTATION.idleSince] ?? null,
-      restored: annotations[ANNOTATION.restored] !== undefined,
-      stopped: parse<{ reason: string; at: string }>(annotations[ANNOTATION.stopped]),
-      launchType: null,
-      podDetail: null,
-      bridge: null,
-      bridgeState: 'none',
-      reconnectTimer: null,
-      info: null,
-      initialization: parse<Initialization>(annotations[ANNOTATION.initialize]),
-      initializing: false,
-      initializationPersisted: parse<Initialization>(annotations[ANNOTATION.initialize])?.result != null,
-      recovered: annotations[ANNOTATION.instance] !== undefined,
-      lastSeq: 0,
-      ring: [],
-      ringBytes: 0,
-      consumer: null,
-      consumerPending: new Map(),
-      permissions: new Set(),
-      ownPending: new Map(),
-      admitting: false,
-      restoring: false,
-      lastRenewedAt: 0,
-      renewals: 0,
-      lastTurn: null,
-      anchor: null,
-      anchorError: null,
-      outbound: null,
-      error: null,
-      lost: null,
-      uncertain: annotations[ANNOTATION.turn] === undefined ? null : 'Agora restarted before the final answer was seen',
-    }
-  }
-
-  // ---------------------------------------------------------------- the bridge connection
-
-  private address(record: SandboxRecord): string {
-    const service = record.serviceFQDN ?? ''
-    return this.options.bridgeAddress?.(service, record.podName ?? '') ?? `${service}:${String(this.options.bridgePort)}`
-  }
-
-  private token(record: SandboxRecord): string {
-    return mintBridgeToken(this.options.signingKey, record.podName ?? '')
-  }
-
-  private bridgeOpen(record: SandboxRecord): boolean {
-    return record.bridge !== null && record.bridge.readyState === WebSocket.OPEN && record.initialization?.result != null && !record.initializing && record.bridgeState === 'connected'
-  }
-
-  private ensureBridge(record: SandboxRecord): void {
-    if (this.stopped || !record.ready || record.serviceFQDN === null || record.podName === null) return
-    if (record.bridge !== null || record.reconnectTimer !== null || record.ending || record.lost !== null) return
-    const socket = new WebSocket(`ws://${this.address(record)}/acp`, { headers: { authorization: `Bearer ${this.token(record)}` }, maxPayload: 16 * 1024 * 1024 })
-    record.bridge = socket
-    record.bridgeState = 'connecting'
-    let instance: string | null = null
-    socket.on('upgrade', (response) => {
-      const header = response.headers['agora-bridge-instance']
-      instance = typeof header === 'string' && header.length > 0 ? header : null
-      if (instance === null || (record.instance !== null && record.instance !== instance)) {
-        this.lose(record, instance === null ? 'bridge instance header missing' : `process replaced: instance ${instance}, expected ${record.instance}`)
-        socket.close(1000, 'process identity lost')
-      }
-    })
-    socket.on('open', () => {
-      if (record.lost === null && instance !== null) void this.joinBridge(record, socket, instance)
-    })
-    socket.on('message', (data) => this.onBridgeMessage(record, socket, data.toString()))
-    socket.on('close', (code, reason) => this.onBridgeClose(record, socket, code, reason.toString()))
-    socket.on('error', (error) => this.log(record.name, `bridge : ${error.message}`))
-    this.emitRecord(record)
-  }
-
-  private onBridgeClose(record: SandboxRecord, socket: WebSocket, code: number, reason: string): void {
-    if (record.bridge !== socket) return
-    record.bridge = null
-    record.bridgeState = 'none'
-    if (this.records.get(record.name) !== record || this.stopped) return
-    this.log(record.name, `bridge connection closed (${String(code)}${reason === '' ? '' : ` ${reason}`})`)
-    if (record.turn !== null) record.uncertain ??= 'bridge connection broke before the final answer was seen'
-    if (code === 1001) {
-      record.ending = true
-      this.toConsumer(record, { event: { type: 'terminating' } })
-    } else if (code === 1011) this.lose(record, 'the adapter died')
-    else if (!record.ending && record.lost === null && record.reconnectTimer === null) {
-      record.reconnectTimer = setTimeout(() => {
-        record.reconnectTimer = null
-        this.ensureBridge(record)
-      }, 2000)
-    }
-    this.emitRecord(record)
-  }
-
-  /** No live context any more: the deadline is no longer re-armed (docs/specs/executions.md, "The deadline"). */
-  private lose(record: SandboxRecord, reason: string): void {
-    if (record.lost !== null) return
-    record.lost = reason
-    if (record.turn !== null) record.uncertain = 'the end of the turn left with the process'
-    this.log(record.name, `lost: ${reason}; no more renewal, ends at the deadline ${String(record.shutdownTime)}`)
-    this.emitRecord(record)
-  }
-
-  private onBridgeMessage(record: SandboxRecord, socket: WebSocket, text: string): void {
-    if (record.bridge !== socket || record.lost !== null) return
-    this.onFrame(record, ++record.lastSeq, text)
-  }
-
-  private async joinBridge(record: SandboxRecord, socket: WebSocket, instance: string): Promise<void> {
-    if (record.initializing) return
-    record.initializing = true
-    try {
-      // Install the waiter before any asynchronous work: a pending initialize answer can be the
-      // very first unread line on reconnection, including after this manager restarted.
-      const first = record.instance === null
-      if (first) {
-        record.instance = instance
-        record.initialization = { requestId: `agora-initialize-${randomUUID()}`, result: null }
-        record.idleSince ??= new Date().toISOString()
-        await this.annotate(record, {
-          [ANNOTATION.instance]: instance,
-          [ANNOTATION.initialize]: JSON.stringify(record.initialization),
-          [ANNOTATION.idleSince]: record.idleSince,
-        })
-      }
-      if (record.initialization === null) throw new Error('initialization record missing for an existing instance; refusing to resend')
-      if (record.initialization.result === null) {
-        const request = record.initialization
-        const answer = await this.ownRequest(record, 'initialize', {
-          protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-          clientInfo: { name: 'agora', version: '1' },
-        }, 30_000, request.requestId, !first)
-        if (answer.error !== undefined || answer.result == null) throw new Error(`initialize refused: ${String(answer.error?.message ?? 'missing result')}`)
-        record.initialization = { requestId: request.requestId, result: answer.result }
-        record.initializationPersisted = false
-      }
-      if (!record.initializationPersisted) {
-        await this.annotate(record, { [ANNOTATION.initialize]: JSON.stringify(record.initialization) })
-        record.initializationPersisted = true
-      }
-      const response = await fetch(`http://${this.address(record)}/info`, {
-        headers: { authorization: `Bearer ${this.token(record)}` }, signal: AbortSignal.timeout(5000),
-      })
-      if (!response.ok) throw new Error(`bridge info refused (${String(response.status)})`)
-      const info = await response.json() as BridgeInfo
-      if (info.instance !== instance) { this.lose(record, 'process replaced while reading bridge info'); socket.close(); return }
-      if (record.bridge?.readyState !== WebSocket.OPEN || record.lost !== null || record.ending) return
-      record.error = null
-      record.info = info
-      record.outbound = info.outbound
-      record.bridgeState = 'connected'
-      this.log(record.name, first ? `bridge joined: instance ${instance}, ${String(record.initialization.result?.agentInfo?.name)}` : 'bridge rejoined, without replay or initialize')
-      this.toConsumer(record, { event: { type: 'bridge', instance } })
-    } catch (error) {
-      record.error = `bridge initialization failed: ${error instanceof Error ? error.message : String(error)}`
-      this.log(record.name, record.error)
-    } finally {
-      record.initializing = false
-      if (this.bridgeOpen(record) && record.error === null && record.restoreAnchor !== null && !record.restored && !record.restoring) void this.restore(record)
-      this.emitRecord(record)
-    }
-  }
-
-  private onFrame(record: SandboxRecord, seq: number, line: string): void {
-    record.ring.push({ seq, acp: line })
-    record.ringBytes += Buffer.byteLength(line)
-    while (record.ring.length > RING_LIMIT || record.ringBytes > RING_BYTES) {
-      record.ringBytes -= Buffer.byteLength(record.ring.shift()!.acp)
-    }
-    this.toConsumer(record, { seq, acp: line })
-
-    let message: AcpMessage
-    try {
-      message = JSON.parse(line) as AcpMessage
-    } catch {
-      return
-    }
-    if (message.method === undefined && message.id !== undefined && message.id !== null) {
-      const key = idKey(message.id)
-      const own = record.ownPending.get(key)
-      if (own !== undefined) {
-        record.ownPending.delete(key)
-        own(message)
-      }
-      if (record.turn !== null && idKey(record.turn.requestId) === key) void this.endTurn(record, message)
-      const pending = record.consumerPending.get(key)
-      if (pending !== undefined) {
-        record.consumerPending.delete(key)
-        const sessionId = pending.method === 'session/new' ? (message.result?.sessionId as string | undefined) ?? null : pending.sessionId
-        if (message.error === undefined && sessionId !== null) this.setSession(record, sessionId)
-      }
-      return
-    }
-    if (message.method === 'session/request_permission' && message.id !== undefined && message.id !== null) {
-      record.permissions.add(idKey(message.id))
-      this.emitRecord(record)
-    }
-  }
-
-  /** A confirmed end: 10 more minutes without renewal (docs/specs/executions.md, "Between two turns"). */
-  private async endTurn(record: SandboxRecord, message: AcpMessage): Promise<void> {
-    const outcome = message.error !== undefined ? `error: ${String(message.error.message)}` : `end: ${String(message.result?.stopReason)}`
-    record.turn = null
-    record.uncertain = null
-    record.permissions.clear()
-    record.idleSince = new Date().toISOString()
-    record.lastTurn = { outcome, endedAt: record.idleSince }
-    const grant = record.stopped === null && record.lost === null && !record.ending
-    const shutdownTime = iso(Date.now() + record.limits.leaseSeconds * 1000)
-    this.log(record.name, `turn closed (${outcome})${grant ? `, deadline ${shutdownTime} without renewal` : ''}`)
-    this.emitRecord(record)
-    if (record.outbound !== null) void this.refreshOutbound(record)
-    try {
-      await this.annotate(record, { [ANNOTATION.turn]: null, [ANNOTATION.idleSince]: record.idleSince }, grant ? { shutdownTime } : undefined)
-      if (grant) {
-        record.shutdownTime = shutdownTime
-        this.emitRecord(record)
-      }
-    } catch {
-      // Logged by annotate; the deadline already granted stands.
-    }
-  }
-
-  private setSession(record: SandboxRecord, sessionId: string): void {
-    if (record.sessionId === sessionId) return
-    record.sessionId = sessionId
-    void this.annotate(record, { [ANNOTATION.sessionId]: sessionId }).catch(() => {})
-    this.log(record.name, `session ${sessionId}`)
-    this.emitRecord(record)
-  }
-
-  private async annotate(record: SandboxRecord, annotations: Record<string, string | null>, lifecycle?: { shutdownTime: string }): Promise<void> {
-    try {
-      await this.options.kube.patchClaim(record.name, {
-        metadata: { uid: record.uid, annotations },
-        ...(lifecycle === undefined ? {} : { spec: { lifecycle } }),
-      })
-    } catch (error) {
-      this.log(record.name, `PATCH refused: ${error instanceof Error ? error.message : String(error)}`)
-      throw error
-    }
-  }
-
-  private ownRequest(record: SandboxRecord, method: string, params: Record<string, unknown>, timeoutMs: number, id = `agora-${this.epoch}-${String(++this.ownCounter)}`, waitOnly = false): Promise<AcpMessage> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        record.ownPending.delete(idKey(id))
-        reject(new Error(`${method} unanswered after ${String(timeoutMs)} ms`))
-      }, timeoutMs)
-      record.ownPending.set(idKey(id), (message) => {
-        clearTimeout(timer)
-        resolve(message)
-      })
-      if (!waitOnly) record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
-    })
-  }
-
-  // ---------------------------------------------------------------- restoration
-
-  private async restore(record: SandboxRecord): Promise<void> {
-    const anchorId = record.restoreAnchor
-    if (anchorId === null) return
-    record.restoring = true
-    this.emitRecord(record)
-    try {
-      const meta = await this.options.anchors.meta(anchorId)
-      const bundle = await this.options.anchors.bundle(anchorId)
-      if (meta === null || bundle === null) throw new Error(`anchor ${anchorId} not found`)
-      if (meta.sessionId === null) throw new Error(`anchor ${anchorId} does not know its session`)
-      const response = await fetch(`http://${this.address(record)}/anchor`, {
-        method: 'PUT',
-        body: bundle as unknown as BodyInit,
-        headers: { authorization: `Bearer ${this.token(record)}`, 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(30_000),
-      })
-      const placement = (await response.json()) as { files?: unknown[]; reason?: string }
-      if (!response.ok) throw new Error(`placement refused (${String(response.status)}): ${String(placement.reason)}`)
-      this.log(record.name, `anchor ${anchorId} placed: ${String(placement.files?.length)} file(s)`)
-
-      const capabilities = record.initialization?.result?.agentCapabilities
-      const method = capabilities?.sessionCapabilities?.resume != null ? 'session/resume' : capabilities?.loadSession === true ? 'session/load' : null
-      if (method === null) throw new Error('the agent announces neither session/resume nor session/load')
-      const answer = await this.ownRequest(record, method, { sessionId: meta.sessionId, cwd: record.info?.workspace, mcpServers: [] }, 60_000)
-      if (answer.error !== undefined) throw new Error(`${method} refused: ${String(answer.error.message)}`)
-
-      record.restored = true
-      record.sessionId = meta.sessionId
-      await this.annotate(record, { [ANNOTATION.restored]: new Date().toISOString(), [ANNOTATION.sessionId]: meta.sessionId })
-      this.log(record.name, `session ${meta.sessionId} resumed by ${method}`)
-    } catch (error) {
-      record.error = `restore failed: ${error instanceof Error ? error.message : String(error)}`
-      this.log(record.name, record.error)
-    } finally {
-      record.restoring = false
-      this.emitRecord(record)
-    }
-  }
-
-  // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
-
-  /** Hands the bridge the proxy to go out through and its token; the token is kept nowhere here. */
-  async attachCredentials(name: string, credentials: Credentials): Promise<CommandResult<OutboundView>> {
-    const record = this.records.get(name)
-    if (record === undefined) return refused(`unknown execution: ${name}`, 404)
-    if (record.ending) return refused('the infrastructure is already destroying this sandbox')
-    if (!record.ready || record.serviceFQDN === null || record.podName === null) return refused('sandbox not ready yet')
-    try {
-      const response = await fetch(`http://${this.address(record)}/credentials`, {
-        method: 'PUT',
-        body: JSON.stringify(credentials),
-        headers: { authorization: `Bearer ${this.token(record)}`, 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(10_000),
-      })
-      const answer = (await response.json()) as OutboundView & { reason?: string }
-      if (!response.ok) return refused(`the bridge refused (${String(response.status)}): ${String(answer.reason)}`, 502)
-      record.outbound = answer
-      this.log(name, `credential attached: ${credentials.proxy}${credentials.expiresAt === null ? '' : `, valid until ${credentials.expiresAt}`}`)
-      this.emitRecord(record)
-      return { accepted: true, value: answer }
-    } catch (error) {
-      return refused(`bridge unreachable: ${error instanceof Error ? error.message : String(error)}`, 502)
-    }
-  }
-
-  /** After a turn, what went out through the bridge (tunnels, the proxy's answers). */
-  private async refreshOutbound(record: SandboxRecord): Promise<void> {
-    try {
-      const response = await fetch(`http://${this.address(record)}/info`, { headers: { authorization: `Bearer ${this.token(record)}` }, signal: AbortSignal.timeout(5000) })
-      if (!response.ok) return
-      record.outbound = ((await response.json()) as { outbound?: OutboundView }).outbound ?? record.outbound
-      this.emitRecord(record)
-    } catch {
-      // Shown again at the next turn.
-    }
-  }
-
-  // ---------------------------------------------------------------- the consumer relay
-
-  attachConsumer(name: string, socket: WebSocket, after: number | null, epoch: string | null = null): void {
-    const record = this.records.get(name)
-    if (record === undefined) {
-      socket.close(4404, 'unknown execution')
-      return
-    }
-    if (record.consumer !== null) record.consumer.close(4000, 'replaced by a newer consumer')
-    record.consumer = socket
-    socket.send(JSON.stringify({ event: { type: 'reset', epoch: this.epoch, position: 0 } }))
-    if (epoch !== this.epoch && (epoch !== null || record.recovered)) after = after === null ? null : 0
-    socket.send(JSON.stringify({ event: { type: 'attached', execution: this.view(record), initialize: record.initialization?.result ?? null } }))
-    if (after !== null) {
-      const replay = record.ring.filter((frame) => frame.seq > after)
-      const oldest = record.ring[0]?.seq ?? record.lastSeq + 1
-      const gap = after < record.lastSeq && after + 1 < oldest
-      socket.send(JSON.stringify({ event: { type: 'replay', from: replay[0]?.seq ?? null, count: replay.length, gap } }))
-      for (const frame of replay) socket.send(JSON.stringify(frame))
-    }
-    socket.on('message', (data, isBinary) => {
-      if (!isBinary) void this.onConsumerMessage(record, socket, data.toString())
-    })
-    socket.on('close', () => {
-      if (record.consumer === socket) {
-        record.consumer = null
-        this.emitRecord(record)
-      }
-    })
-    socket.on('error', () => {})
-    this.emitRecord(record)
-  }
-
-  private toConsumer(record: SandboxRecord, message: unknown): void {
-    if (record.consumer !== null && record.consumer.readyState === WebSocket.OPEN) record.consumer.send(JSON.stringify(message))
-  }
-
-  private answer(record: SandboxRecord, socket: WebSocket, id: Id, payload: { result?: unknown; error?: { code: number; message: string } }): void {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ local: JSON.stringify({ jsonrpc: '2.0', id, ...payload }) }))
-    if (payload.error !== undefined) this.log(record.name, `request ${JSON.stringify(id)} refused: ${payload.error.message}`)
-  }
-
-  private async onConsumerMessage(record: SandboxRecord, socket: WebSocket, text: string): Promise<void> {
-    let message: AcpMessage
-    try {
-      message = JSON.parse(text) as AcpMessage
-    } catch {
-      socket.send(JSON.stringify({ event: { type: 'error', message: 'invalid JSON' } }))
-      return
-    }
-    const id = message.id
-    const isRequest = message.method !== undefined && id !== undefined && id !== null
-    if (isRequest && typeof id === 'string' && id.startsWith('agora-')) {
-      return this.answer(record, socket, id, { error: { code: -32600, message: 'agora-… ids are reserved for Agora' } })
-    }
-    if (message.method === 'initialize' && isRequest) {
-      if (record.initialization?.result == null) return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge not joined yet' } })
-      return this.answer(record, socket, id, { result: record.initialization.result })
-    }
-    if (!this.bridgeOpen(record)) {
-      if (isRequest) return this.answer(record, socket, id, { error: { code: -32000, message: `refused: bridge not connected (${this.state(record).state})` } })
-      socket.send(JSON.stringify({ event: { type: 'error', message: 'bridge not connected: message lost' } }))
-      return
-    }
-    if (message.method === 'session/prompt' && isRequest) return this.admitPrompt(record, socket, message, id, text)
-    if (isRequest && (message.method === 'session/new' || message.method === 'session/load' || message.method === 'session/resume')) {
-      record.consumerPending.set(idKey(id), { method: message.method, sessionId: (message.params?.sessionId as string | undefined) ?? null })
-    }
-    if (message.method === undefined && id !== undefined && id !== null && record.permissions.delete(idKey(id))) this.emitRecord(record)
-    record.bridge?.send(text)
-  }
-
-  private async admitPrompt(record: SandboxRecord, socket: WebSocket, message: AcpMessage, id: Id, text: string): Promise<void> {
-    const { state } = this.state(record)
-    const refusal =
-      record.admitting ? 'a prompt is already being admitted'
-      : record.turn !== null ? 'a turn is already in progress'
-      : state !== 'ready' ? `sandbox ${state}`
-      : null
-    if (refusal !== null) return this.answer(record, socket, id, { error: { code: -32000, message: `refused: ${refusal}` } })
-
-    record.admitting = true
-    const now = Date.now()
-    const turn: Turn = { startedAt: new Date(now).toISOString(), requestId: id, sessionId: (message.params?.sessionId as string | undefined) ?? null }
-    const shutdownTime = iso(Math.min(now + record.limits.leaseSeconds * 1000, now + record.limits.turnCapSeconds * 1000))
-    try {
-      // One PATCH: the turn is written and its deadline accepted before the prompt leaves.
-      await this.annotate(record, { [ANNOTATION.turn]: JSON.stringify(turn) }, { shutdownTime })
-    } catch (error) {
-      record.admitting = false
-      return this.answer(record, socket, id, { error: { code: -32000, message: `refused: deadline not accepted (${error instanceof Error ? error.message : String(error)})` } })
-    }
-    record.admitting = false
-    if (!this.bridgeOpen(record) || record.stopped !== null) {
-      void this.annotate(record, { [ANNOTATION.turn]: null }).catch(() => {})
-      return this.answer(record, socket, id, { error: { code: -32000, message: 'refused: bridge lost or stop during admission' } })
-    }
-    record.turn = turn
-    record.shutdownTime = shutdownTime
-    record.lastRenewedAt = now
-    record.renewals += 1
-    record.uncertain = null
-    record.bridge?.send(text)
-    this.log(record.name, `turn opened (request ${JSON.stringify(id)}), deadline ${shutdownTime}`)
-    this.emitRecord(record)
-  }
-
-  // ---------------------------------------------------------------- the deadline
-
-  private async tick(): Promise<void> {
-    const now = Date.now()
-    for (const record of [...this.records.values()]) {
-      try {
-        // Every minute (docs/specs/executions.md); a lease shorter than three minutes, possible in the lab,
-        // is re-armed three times per lease so the renewal never races the deadline.
-        const every = Math.min(this.options.renewSeconds, record.limits.leaseSeconds / 3) * 1000
-        if (this.renews(record) && now - record.lastRenewedAt >= every) await this.renew(record, now)
-        if (!record.ready && !record.ending && record.podName !== null) await this.diagnose(record)
-        if (record.launchType === null && record.podName !== null) await this.readLaunchType(record)
-      } catch (error) {
-        this.log(record.name, `tick: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-  }
-
-  /** Re-armed only during a turn, and never once stopped, lost or already being destroyed. */
-  private renews(record: SandboxRecord): boolean {
-    return record.turn !== null && record.stopped === null && record.lost === null && !record.ending
-  }
-
-  private async renew(record: SandboxRecord, now: number): Promise<void> {
-    const turn = record.turn
-    if (turn === null) return
-    const shutdownTime = iso(Math.min(now + record.limits.leaseSeconds * 1000, Date.parse(turn.startedAt) + record.limits.turnCapSeconds * 1000))
-    if (shutdownTime === record.shutdownTime) return
-    try {
-      await this.options.kube.patchClaim(record.name, { metadata: { uid: record.uid }, spec: { lifecycle: { shutdownTime } } })
-      record.shutdownTime = shutdownTime
-      record.lastRenewedAt = now
-      record.renewals += 1
-      this.emitRecord(record)
-    } catch (error) {
-      if (error instanceof KubeError && error.status === 404) return
-      this.log(record.name, `renewal refused: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  private async diagnose(record: SandboxRecord): Promise<void> {
-    const pod = await this.options.kube.getPod(record.podName ?? '')
+  private async diagnose(run: Run): Promise<void> {
+    const pod = await this.options.kube.getPod(run.claim?.status?.sandbox?.name ?? '')
     const status = pod?.status as { phase?: string; containerStatuses?: { state?: Record<string, { reason?: string; message?: string }> }[]; conditions?: { type: string; status: string; reason?: string; message?: string }[] } | undefined
     const waiting = status?.containerStatuses?.[0]?.state?.waiting ?? status?.containerStatuses?.[0]?.state?.terminated
     const unscheduled = status?.conditions?.find((condition) => condition.type === 'PodScheduled' && condition.status === 'False')
-    const detail = waiting !== undefined ? `${String(waiting.reason)}${waiting.message === undefined ? '' : ` : ${waiting.message}`}` : unscheduled !== undefined ? `${String(unscheduled.reason)} : ${String(unscheduled.message)}` : status?.phase ?? null
-    if (detail !== record.podDetail) {
-      record.podDetail = detail
-      this.emitRecord(record)
+    const detail = waiting !== undefined ? `${String(waiting.reason)}${waiting.message === undefined ? '' : `: ${waiting.message}`}` : unscheduled !== undefined ? `${String(unscheduled.reason)}: ${String(unscheduled.message)}` : status?.phase ?? null
+    if (detail !== run.podDetail) {
+      run.podDetail = detail
+      this.emit(run)
     }
   }
 
-  private endReason(record: SandboxRecord): string {
-    if (record.stopped !== null) return record.stopped.reason
-    if (record.lost !== null) return `lost: ${record.lost}`
-    if (record.turn !== null) return 'turn in progress at the deadline (turn limit or unseen end)'
-    return 'deadline after the last turn'
-  }
-
-  // ---------------------------------------------------------------- the anchor pushed by the Pod
-
-  /** docs/specs/executions.md, "Receiving an anchor": the Pod is already authenticated by TokenReview. */
-  async receiveAnchor(podName: string, bundle: Bundle, raw: Uint8Array): Promise<CommandResult<{ anchorId: string | null }>> {
-    const record = [...this.records.values()].find((candidate) => candidate.podName === podName)
-    if (record === undefined) return refused(`no known claim for Pod ${podName}`, 404)
-    const files = bundle.files.map((file) => ({ path: file.path, byteLength: Buffer.from(file.content, 'base64').byteLength }))
-    if (files.length === 0) {
-      record.anchorError = bundle.error ?? 'no native file (no session written)'
-      this.log(record.name, `empty anchor received: ${record.anchorError}`)
-    } else {
-      const anchor = await this.options.anchors.save(
-        {
-          harness: bundle.harness,
-          pool: record.pool,
-          format: bundle.format,
-          sessionId: record.sessionId,
-          files,
-          byteLength: files.reduce((total, file) => total + file.byteLength, 0),
-          stable: bundle.stable,
-          execution: record.name,
-          reason: this.endReason(record),
-        },
-        raw,
-      )
-      record.anchor = anchor
-      record.anchorError = null
-      this.log(record.name, `anchor ${anchor.id} received from the Pod: ${String(files.length)} file(s), ${String(anchor.byteLength)} bytes${bundle.stable ? '' : ', NOT stable'}`)
-      this.emit({ type: 'anchor', anchor })
+  private async tick(): Promise<void> {
+    for (const run of [...this.runs.values()]) {
+      try {
+        const claim = run.claim
+        const ready = claim?.status?.conditions?.find((c) => c.type === 'Ready')?.status === 'True'
+        if (claim !== null && !ready && claim.status?.sandbox?.name !== undefined) await this.diagnose(run)
+        if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) await this.readLaunchType(run)
+        this.ensureConnection(run)
+      } catch {
+        // Diagnostics only: tried again on the next tick.
+      }
     }
-    this.finish(record)
-    return { accepted: true, value: { anchorId: record.anchor?.id ?? null } }
   }
 
-  /** The claim is gone from Kubernetes: whatever was received is all there will be. */
-  private claimGone(record: SandboxRecord): void {
-    if (record.anchor === null && record.anchorError === null) record.anchorError = 'no anchor received before the claim disappeared'
-    this.finish(record)
+  // ---------------------------------------------------------------- bridge connections
+
+  private address(run: Run): string {
+    const service = run.claim?.status?.sandbox?.serviceFQDN ?? ''
+    const pod = run.claim?.status?.sandbox?.name ?? ''
+    // A Service name never holds a port; a `host:port` comes from a test cluster and is used as is.
+    return this.options.bridgeAddress?.(service, pod) ?? (service.includes(':') ? service : `${service}:${String(this.options.bridgePort)}`)
   }
 
-  private finish(record: SandboxRecord): Ending {
-    const ending: Ending = { name: record.name, pool: record.pool, reason: this.endReason(record), anchor: record.anchor, anchorError: record.anchorError, at: new Date().toISOString() }
-    if (this.records.get(record.name) === record) this.records.delete(record.name)
-    if (this.gone.has(record.uid)) return ending
-    this.gone.add(record.uid)
-    if (record.reconnectTimer !== null) clearTimeout(record.reconnectTimer)
-    record.bridge?.close(1000, 'end of the sandbox')
-    record.bridge = null
-    record.consumer?.close(4001, `execution ended: ${ending.reason}`)
-    for (const [, resolve] of record.ownPending) resolve({ error: { message: 'execution ended' } })
-    this.history.unshift(ending)
-    this.history.splice(HISTORY_LIMIT)
-    this.log(record.name, `ended (${ending.reason}); ${ending.anchor === null ? `no anchor: ${String(ending.anchorError)}` : `anchor ${ending.anchor.id}`}`)
-    this.emit({ type: 'ended', ending })
-    return ending
+  private token(run: Run): string {
+    return mintBridgeToken(this.options.signingKey, run.claim?.status?.sandbox?.name ?? '')
   }
 
-  // ---------------------------------------------------------------- commands
+  private ensureConnection(run: Run): void {
+    if (this.stopped || run.held || this.handler === null || this.runs.get(run.target.execution) !== run) return
+    // A connection is replaced only once its close has been reported.
+    if (run.connection !== null) return
+    if (Date.now() < run.reconnectAt) return
+    const claim = run.claim
+    if (claim === null || claim.metadata.deletionTimestamp !== undefined) return
+    if (claim.status?.conditions?.find((c) => c.type === 'Ready')?.status !== 'True') return
+    if (claim.status.sandbox?.name === undefined || !claim.status.sandbox.serviceFQDN) return
+    this.connect(run)
+  }
+
+  private connect(run: Run): void {
+    const ws = new WebSocket(`ws://${this.address(run)}/acp`, {
+      headers: { authorization: `Bearer ${this.token(run)}` },
+      maxPayload: MAX_LINE,
+      // UTF-8 is the log's to check: an invalid line becomes a diagnostic, not a closed connection.
+      skipUTF8Validation: true,
+      handshakeTimeout: 5000,
+    })
+    let finish = (): void => {}
+    const done = new Promise<void>((resolve) => (finish = resolve))
+    const c: Connection = {
+      id: randomUUID(),
+      ws,
+      instance: null,
+      open: false,
+      accepted: false,
+      closed: false,
+      draining: false,
+      failed: false,
+      ordinal: 0n,
+      pending: 0,
+      queue: [],
+      reading: false,
+      sends: new Set(),
+      accepting: null,
+      done,
+      finish,
+    }
+    run.connection = c
+    this.emit(run)
+    ws.on('upgrade', (response) => {
+      const header = response.headers['agora-bridge-instance']
+      c.instance = typeof header === 'string' && header.length > 0 ? header : null
+    })
+    ws.on('open', () => {
+      c.open = true
+      ws.pause()
+      c.accepting = this.accept(run, c)
+    })
+    ws.on('message', (data: RawData) => {
+      // Paused until this line is committed: nothing more is read, the rest waits with the bridge.
+      const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer)
+      c.pending += bytes.byteLength
+      ws.pause()
+      c.queue.push(bytes)
+      if (c.accepted) void this.read(run, c)
+    })
+    ws.on('error', () => {})
+    ws.on('close', (code) => {
+      c.closed = true
+      // Set at once, so that no tick reconnects before this close is reported: no reconnection
+      // to a dead adapter (1011) or an ending Pod (1001); otherwise after a pause.
+      if (code === 1011 || code === 1001) run.held = true
+      else run.reconnectAt = Math.max(run.reconnectAt, Date.now() + (this.options.reconnectMs ?? 2000))
+      void this.closeConnection(run, c, c.open ? code : null)
+    })
+  }
+
+  private async accept(run: Run, c: Connection): Promise<void> {
+    try {
+      if (c.instance === null || this.handler === null) throw new Error('instance header missing')
+      const accepted = await this.handler.connected(run.target.execution, c.id, c.instance)
+      if (!accepted) {
+        c.ws.close(1000, 'process identity lost')
+        return
+      }
+      c.accepted = true
+      this.emit(run)
+      await this.read(run, c)
+    } catch {
+      c.failed = true
+      c.ws.terminate()
+    }
+  }
+
+  private async read(run: Run, c: Connection): Promise<void> {
+    if (c.reading || !c.accepted) return
+    c.reading = true
+    try {
+      while (c.queue.length > 0) {
+        const bytes = c.queue.shift()!
+        c.ordinal += 1n
+        try {
+          await this.handler!.line(run.target.execution, c.id, c.ordinal, bytes)
+        } catch {
+          c.failed = true
+          c.ws.terminate()
+          c.queue.length = 0
+          return
+        }
+        c.pending -= bytes.byteLength
+      }
+      if (!c.closed && c.accepted) c.ws.resume()
+    } finally {
+      c.reading = false
+    }
+  }
+
+  private async closeConnection(run: Run, c: Connection, code: number | null): Promise<void> {
+    // The handler may be writing this connection down: its verdict comes first, so that a connection
+    // it recorded always gets its close.
+    await c.accepting?.catch(() => {})
+    // Every line handed over settles before the close is reported. Lines that arrived before the
+    // connection was accepted cannot be captured: the break records that output may be missing.
+    if (!c.accepted) {
+      c.pending = 0
+      c.queue.length = 0
+    }
+    while (c.reading || c.queue.length > 0) {
+      if (!c.reading && c.queue.length > 0) await this.read(run, c)
+      else await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    await Promise.allSettled([...c.sends])
+    const drained = c.draining && code === 1000 && !c.failed && c.pending === 0
+    try {
+      if (c.accepted) await this.handler?.closed(run.target.execution, c.id, code, drained)
+    } finally {
+      c.finish()
+      if (run.connection === c) {
+        run.connection = null
+        this.emit(run)
+      }
+    }
+  }
+
+  /** Sends one line on that very connection; resolves when the write's callback succeeds. */
+  send(execution: string, connection: string, text: string): Promise<void> {
+    const c = this.runs.get(execution)?.connection
+    // Draining refuses nothing: a write whose marker is committed must still be attempted.
+    if (c === null || c === undefined || c.id !== connection || c.closed || !c.accepted) return Promise.reject(new Error('transport_error'))
+    const write = new Promise<void>((resolve, reject) => c.ws.send(text, (error) => (error ? reject(new Error('transport_error')) : resolve())))
+    c.sends.add(write)
+    void write.finally(() => c.sends.delete(write)).catch(() => {})
+    return write
+  }
+
+  /** The open, accepted connection of an execution, if any. */
+  connectionOf(execution: string): string | null {
+    const c = this.runs.get(execution)?.connection
+    return c !== null && c !== undefined && c.accepted && !c.closed && !c.draining ? c.id : null
+  }
+
+  private async bridge(execution: string, method: string, path: string, body?: Uint8Array | string, timeoutMs = 10_000): Promise<Response> {
+    const run = this.runs.get(execution)
+    if (run === undefined || run.claim?.status?.sandbox?.name === undefined) throw new Error('unknown_execution')
+    return fetch(`http://${this.address(run)}${path}`, {
+      method,
+      ...(body === undefined ? {} : { body: body as BodyInit }),
+      headers: { authorization: `Bearer ${this.token(run)}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  }
+
+  async info(execution: string): Promise<{ instance: string; workspace: string; adapter: unknown; outbound: OutboundView }> {
+    const response = await this.bridge(execution, 'GET', '/info', undefined, 5000)
+    if (!response.ok) throw new Error('bridge_info_refused')
+    const info = (await response.json()) as { instance: string; workspace: string; adapter: unknown; outbound: OutboundView }
+    const run = this.runs.get(execution)
+    if (run !== undefined) {
+      run.outbound = info.outbound
+      this.emit(run)
+    }
+    return info
+  }
+
+  /** Places an anchor's native files before the session is resumed. */
+  async putAnchor(execution: string, bundle: Uint8Array): Promise<void> {
+    const response = await this.bridge(execution, 'PUT', '/anchor', bundle, 30_000)
+    if (!response.ok) throw new Error('anchor_refused')
+  }
+
+  /** Hands the bridge its way out; the token is kept nowhere here. */
+  async putCredentials(execution: string, credentials: Credentials): Promise<OutboundView> {
+    const response = await this.bridge(execution, 'PUT', '/credentials', JSON.stringify(credentials))
+    const answer = (await response.json()) as OutboundView & { reason?: string }
+    if (!response.ok) throw new Error('credentials_refused')
+    const run = this.runs.get(execution)
+    if (run !== undefined) {
+      run.outbound = answer
+      this.emit(run)
+    }
+    return answer
+  }
+
+  // ---------------------------------------------------------------- catalogue
 
   async pools(): Promise<PoolView[]> {
     if (this.poolCache !== null && Date.now() - this.poolCache.at < 10_000) return this.poolCache.pools
@@ -939,131 +604,40 @@ export class ExecutionManager {
     return pools
   }
 
-  async create(input: { requestId?: unknown; pool?: unknown; anchorId?: unknown; limits?: Partial<Record<keyof Limits, unknown>> }): Promise<CommandResult<{ name: string; existing: boolean }>> {
-    const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : ''
-    if (requestId === '' || requestId.length > 200) return refused('request id missing or too long', 400)
-    const poolName = typeof input.pool === 'string' ? input.pool : ''
-    const name = claimName(requestId)
-
-    const known = this.records.get(name)
-    if (known !== undefined) {
-      return known.requestId === requestId ? { accepted: true, value: { name, existing: true } } : refused(`name ${name} is already taken by another request`)
-    }
-
-    this.poolCache = null
-    const pool = (await this.pools()).find((candidate) => candidate.name === poolName)
-    if (pool === undefined) return refused(`pool not in the catalogue: ${poolName}`, 400)
-
-    const limits: Record<string, number> = { ...this.options.defaults }
-    for (const key of Object.keys(LIMIT_BOUNDS) as (keyof Limits)[]) {
-      const raw = input.limits?.[key]
-      if (raw === undefined || raw === null || raw === '') continue
-      const value = Number(raw)
-      const [min, max] = LIMIT_BOUNDS[key]
-      if (!Number.isInteger(value) || value < min || value > max) return refused(`${key} out of bounds: ${String(raw)} (${String(min)} to ${String(max)})`, 400)
-      limits[key] = value
-    }
-
-    let anchorId: string | null = null
-    if (typeof input.anchorId === 'string' && input.anchorId !== '') {
-      const meta = await this.options.anchors.meta(input.anchorId)
-      if (meta === null) return refused(`unknown anchor: ${input.anchorId}`, 400)
-      if (meta.harness !== pool.harness) return refused(`anchor from harness ${meta.harness}, pool of harness ${pool.harness}`, 400)
-      anchorId = meta.id
-    }
-
-    const active = [...this.records.values()].filter((record) => !record.ending).length
-    if (active >= this.options.maxActive) return refused(`quota reached: ${String(active)} active executions out of ${String(this.options.maxActive)}`, 429)
-
-    const now = Date.now()
-    const claim = {
-      apiVersion: 'extensions.agents.x-k8s.io/v1beta1',
-      kind: 'SandboxClaim',
-      metadata: {
-        name,
-        labels: { [MANAGED_BY]: MANAGER, [POOL_LABEL]: pool.name },
-        annotations: {
-          [ANNOTATION.requestId]: requestId,
-          [ANNOTATION.limits]: JSON.stringify(limits),
-          ...(anchorId === null ? {} : { [ANNOTATION.restoreAnchor]: anchorId }),
-        },
-      },
-      spec: {
-        warmPoolRef: { name: pool.name },
-        lifecycle: { shutdownTime: iso(now + (limits.leaseSeconds ?? this.options.defaults.leaseSeconds) * 1000), shutdownPolicy: 'DeleteForeground' },
-      },
-    }
-    try {
-      const created = await this.options.kube.createClaim(claim)
-      this.upsert(created)
-      this.log(name, `claim created on ${pool.name}${anchorId === null ? '' : `, restoring ${anchorId}`}`)
-      return { accepted: true, value: { name, existing: false } }
-    } catch (error) {
-      if (error instanceof KubeError && error.status === 409) {
-        const existing = await this.options.kube.getClaim(name)
-        if (existing?.metadata.annotations?.[ANNOTATION.requestId] === requestId) {
-          this.upsert(existing)
-          return { accepted: true, value: { name, existing: true } }
-        }
-        return refused(`name ${name} is already taken by another request`)
-      }
-      return refused(`Kubernetes refused: ${error instanceof Error ? error.message : String(error)}`, 502)
-    }
-  }
-
-  /** Stop: close sends, cancel the turn, stop re-arming. The infrastructure destroys at the deadline. */
-  async stopSandbox(name: string): Promise<CommandResult<{ name: string; shutdownTime: string | null }>> {
-    const record = this.records.get(name)
-    if (record === undefined) return refused(`unknown execution: ${name}`, 404)
-    if (record.stopped !== null) return refused(`stop already requested (${record.stopped.at})`)
-    if (record.ending) return refused('the infrastructure is already destroying this sandbox')
-    record.stopped = { reason: 'stop requested', at: new Date().toISOString() }
-    try {
-      await this.annotate(record, { [ANNOTATION.stopped]: JSON.stringify(record.stopped) })
-    } catch (error) {
-      record.stopped = null
-      return refused(`PATCH refused: ${error instanceof Error ? error.message : String(error)}`, 502)
-    }
-    if (record.turn !== null && this.bridgeOpen(record)) {
-      record.bridge?.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: record.turn.sessionId } }))
-    }
-    this.log(name, `stop requested: no more renewal, ends at the deadline ${String(record.shutdownTime)}`)
-    this.emitRecord(record)
-    return { accepted: true, value: { name, shutdownTime: record.shutdownTime } }
-  }
-
   // ---------------------------------------------------------------- lab hooks (docs/specs/executions.md, "The lab")
 
+  private byName(name: string): Run | undefined {
+    return [...this.runs.values()].find((run) => run.target.claimName === name || run.target.execution === name)
+  }
+
   lab = {
+    /** Terminates Agora's connection, then reconnects after `pauseSeconds`. */
     dropBridge: (name: string, pauseSeconds = 0): CommandResult<string> => {
-      const record = this.records.get(name)
-      if (record === undefined) return refused(`unknown execution: ${name}`, 404)
-      if (record.bridge === null) return refused('no bridge connection')
+      const run = this.byName(name)
+      if (run === undefined) return refused(`unknown execution: ${name}`, 404)
+      if (run.connection === null || run.connection.closed) return refused('no bridge connection')
       if (!Number.isInteger(pauseSeconds) || pauseSeconds < 0 || pauseSeconds > 60) return refused('pauseSeconds must be 0 to 60', 400)
-      if (pauseSeconds > 0) {
-        record.reconnectTimer = setTimeout(() => { record.reconnectTimer = null; this.ensureBridge(record) }, pauseSeconds * 1000)
-      }
-      record.bridge.terminate()
-      this.log(name, 'lab: bridge connection cut')
+      run.reconnectAt = Date.now() + Math.max(pauseSeconds * 1000, this.options.reconnectMs ?? 2000)
+      run.connection.ws.terminate()
       return { accepted: true, value: 'cut' }
     },
     probeAuth: async (name: string): Promise<CommandResult<{ case: string; info: number; acp: number }[]>> => {
-      const record = this.records.get(name)
-      if (record === undefined || record.podName === null || record.serviceFQDN === null) return refused('unknown execution or no Service', 404)
-      const podName = record.podName
+      const run = this.byName(name)
+      const podName = run?.claim?.status?.sandbox?.name
+      if (run === undefined || podName === undefined) return refused('unknown execution or no Pod', 404)
       const cases: [string, Record<string, string>][] = [
         ['no token', {}],
         ['expired token', { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, podName, { now: Date.now() - 120_000 })}` }],
         ['token for another sandbox', { authorization: `Bearer ${mintBridgeToken(this.options.signingKey, 'sbx-autre')}` }],
         ['token signed by another key', { authorization: `Bearer ${mintBridgeToken(this.foreignKey, podName)}` }],
-        ['valid token (control)', { authorization: `Bearer ${this.token(record)}` }],
+        ['valid token (control)', { authorization: `Bearer ${this.token(run)}` }],
       ]
       const results: { case: string; info: number; acp: number }[] = []
       for (const [label, headers] of cases) {
-        const info = (await fetch(`http://${this.address(record)}/info`, { headers, signal: AbortSignal.timeout(5000) })).status
+        const info = (await fetch(`http://${this.address(run)}/info`, { headers, signal: AbortSignal.timeout(5000) })).status
         // A bare upgrade request: only the status line matters, the socket is never kept.
         const acp = await new Promise<number>((resolve) => {
-          const socket = new WebSocket(`ws://${this.address(record)}/acp`, { headers })
+          const socket = new WebSocket(`ws://${this.address(run)}/acp`, { headers })
           socket.on('unexpected-response', (_request, response) => {
             resolve(response.statusCode ?? 0)
             socket.terminate()
@@ -1076,93 +650,50 @@ export class ExecutionManager {
         })
         results.push({ case: label, info, acp })
       }
-      this.log(name, `lab: token probe ${JSON.stringify(results)}`)
-      // The witness connection took the bridge over; Agora reconnects on its own.
+      // The control connection displaced Agora's; Agora reconnects on its own.
       return { accepted: true, value: results }
     },
   }
 
-  // ---------------------------------------------------------------- views and events
+  // ---------------------------------------------------------------- views
 
-  private state(record: SandboxRecord): { state: string; reason: string } {
-    if (record.ending) return { state: 'ending', reason: `${this.endReason(record)}; anchor expected from the Pod` }
-    if (record.error !== null) return { state: 'error', reason: record.error }
-    if (record.lost !== null) return { state: 'lost', reason: record.lost }
-    if (record.stopped !== null) return { state: 'stopped', reason: 'no more renewal, ends at the deadline' }
-    if (!record.ready) return { state: 'starting', reason: [record.readyReason, record.readyMessage, record.podDetail].filter((part) => part !== '' && part !== null).join(' — ') }
-    if (record.uncertain !== null) return { state: 'uncertain', reason: record.uncertain }
-    if (!this.bridgeOpen(record)) return { state: 'connecting', reason: `bridge: ${record.bridgeState}` }
-    if (record.restoring) return { state: 'restoring', reason: `anchor ${String(record.restoreAnchor)}` }
-    if (record.turn !== null) return { state: 'in turn', reason: `since ${record.turn.startedAt}` }
-    return { state: 'ready', reason: '' }
-  }
-
-  view(record: SandboxRecord) {
-    const { state, reason } = this.state(record)
+  view(run: Run): ExecutionView {
+    const claim = run.claim
+    const ready = claim?.status?.conditions?.find((c) => c.type === 'Ready')
+    const c = run.connection
     return {
-      name: record.name,
-      uid: record.uid,
-      pool: record.pool,
-      requestId: record.requestId,
-      createdAt: new Date(record.createdAt).toISOString(),
-      state,
-      reason,
-      launchType: record.launchType,
-      pod: record.podName,
-      service: record.serviceFQDN,
-      podDetail: record.podDetail,
-      shutdownTime: record.shutdownTime,
-      renewing: this.renews(record),
-      limits: record.limits,
-      lastRenewedAt: record.lastRenewedAt === 0 ? null : new Date(record.lastRenewedAt).toISOString(),
-      renewals: record.renewals,
-      bridge: {
-        state: record.bridgeState,
-        instance: record.instance,
-        agent: record.initialization?.result?.agentInfo ?? null,
-        adapter: record.info?.adapter ?? null,
-        workspace: record.info?.workspace ?? null,
-      },
-      instance: record.instance,
-      sessionId: record.sessionId,
-      turn: record.turn,
-      lastTurn: record.lastTurn,
-      idleSince: record.idleSince,
-      stopped: record.stopped,
-      lastSeq: record.lastSeq,
-      restoreAnchor: record.restoreAnchor,
-      restored: record.restored,
-      consumer: record.consumer !== null,
-      pendingPermissions: record.permissions.size,
-      outbound: record.outbound,
+      execution: run.target.execution,
+      claimName: run.target.claimName,
+      pool: run.target.pool,
+      uid: claim?.metadata.uid ?? null,
+      ready: ready?.status === 'True',
+      reason: [ready?.reason ?? '', ready?.message ?? ''].filter((part) => part !== '').join(': '),
+      ending: claim?.metadata.deletionTimestamp !== undefined,
+      shutdownTime: claim?.spec?.lifecycle?.shutdownTime ?? null,
+      pod: claim?.status?.sandbox?.name ?? null,
+      podDetail: run.podDetail,
+      launchType: run.launchType,
+      bridge: c === null || c.closed ? 'none' : c.accepted ? 'connected' : 'connecting',
+      instance: c?.instance ?? null,
+      connection: c !== null && c.accepted && !c.closed ? c.id : null,
+      pending: c === null || c.closed ? 0 : c.pending,
+      held: run.held,
+      outbound: run.outbound,
     }
   }
 
-  snapshot(): { executions: ExecutionView[]; history: Ending[]; logs: LogEntry[] } {
-    return { executions: [...this.records.values()].map((record) => this.view(record)), history: [...this.history], logs: [...this.logs] }
+  views(): ExecutionView[] {
+    return [...this.runs.values()].map((run) => this.view(run))
   }
 
-  subscribe(listener: (event: ManagerEvent) => void): () => void {
+  subscribe(listener: (view: ExecutionView) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
 
-  private emit(event: ManagerEvent): void {
-    for (const listener of this.listeners) listener(event)
-  }
-
-  private emitRecord(record: SandboxRecord): void {
-    if (this.records.get(record.name) !== record) return
-    const view = this.view(record)
-    this.emit({ type: 'execution', execution: view })
-    this.toConsumer(record, { event: { type: 'execution', execution: view } })
-  }
-
-  private log(execution: string | null, message: string): void {
-    const entry: LogEntry = { at: new Date().toISOString(), execution, message }
-    this.logs.unshift(entry)
-    this.logs.splice(LOG_LIMIT)
-    ;(this.options.log ?? ((line: string) => console.log(line)))(`${execution ?? '-'} ${message}`)
-    this.emit({ type: 'log', entry })
+  private emit(run: Run): void {
+    if (this.runs.get(run.target.execution) !== run) return
+    const view = this.view(run)
+    for (const listener of this.listeners) listener(view)
   }
 }

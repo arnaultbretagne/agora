@@ -44,6 +44,9 @@ const turns = new Map<string, Turn>()
 const outgoing = new Map<Id, (message: Message) => void>()
 let initialized = false
 let nextOutgoing = 1
+/** The id of the prompt being answered, for the behaviours that write its answer themselves. */
+let promptId: Id | undefined
+let answerTwice = false
 
 function send(message: Message): void {
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
@@ -169,6 +172,28 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       remember(session, 'agent', `${String(kib)} KiB sent.`)
       return 'end_turn'
     }
+    case '/raw': {
+      // Lines written byte for byte as given (base64 of newline-separated lines), invalid UTF-8
+      // included: what the log must keep or refuse.
+      const bytes = Buffer.from(argument ?? '', 'base64')
+      for (let start = 0; start < bytes.length; ) {
+        const newline = bytes.indexOf(0x0a, start)
+        const end = newline < 0 ? bytes.length : newline
+        if (end > start) process.stdout.write(Buffer.concat([bytes.subarray(start, end), Buffer.from('\n')]))
+        start = end + 1
+      }
+      return 'end_turn'
+    }
+    case '/invalid-then-valid': {
+      // An answer to this very prompt whose body is invalid, then, a moment later, the valid one.
+      process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: promptId, result: { stopReason: 42 } })}\n`)
+      if (await pause(turn, 1000)) return 'cancelled'
+      return 'end_turn'
+    }
+    case '/answer-twice': {
+      answerTwice = true
+      return 'end_turn'
+    }
     case '/crash': {
       process.stderr.write('mock-agent: /crash asked, exiting with code 3\n')
       process.exit(3)
@@ -269,6 +294,8 @@ async function handle(message: Message): Promise<void> {
         appendFileSync(join(home, '.mock-agent', 'initialize-requests'), `${String(message.id)}\n`)
         await new Promise((resolve) => setTimeout(resolve, delay))
       }
+      // An answer whose body the schema refuses, for the log's validation (docs/specs/log.md, L41).
+      if (process.env.AGORA_MOCK_INITIALIZE_INVALID === '1') return send({ id: message.id, result: { protocolVersion: 'one' } })
       return send({
         id: message.id,
         result: {
@@ -316,8 +343,11 @@ async function handle(message: Message): Promise<void> {
       const turn: Turn = { cancelled: false, wake: () => {} }
       turns.set(session.id, turn)
       try {
+        promptId = message.id
         const stopReason = await prompt(session, text, turn)
         send({ id: message.id, result: { stopReason } })
+        if (answerTwice) send({ id: message.id, result: { stopReason } })
+        answerTwice = false
       } finally {
         turns.delete(session.id)
       }

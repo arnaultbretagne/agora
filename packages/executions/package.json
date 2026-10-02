@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agora's executions: Agent Sandbox claims, deadline, ACP relay, anchors, credential hand-off.",
+  "description": "Agora's execution mechanics: Agent Sandbox claims, bridge connections, deadlines, anchor authentication.",
   "exports": {
     ".": "./src/index.ts"
   },

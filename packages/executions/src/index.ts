@@ -1,7 +1,24 @@
-// What the executions package offers to whatever mounts it (today apps/lab, tomorrow Agora's
-// server): the manager, its Kubernetes client and anchor store, and its HTTP surfaces.
-export { ExecutionManager, LIMIT_BOUNDS, type Limits, type ManagerOptions } from './manager.ts'
-export { HttpKube, type KubeApi } from './kube.ts'
-export { AnchorStore, type AnchorMeta } from './anchors.ts'
+// What the executions package offers to whatever mounts it (the lab, Agora's server): the execution
+// mechanics, its Kubernetes client, and its HTTP surfaces.
+export {
+  ExecutionManager,
+  LIMIT_BOUNDS,
+  MAX_LINE,
+  EXECUTION_LABEL,
+  HARNESS_LABEL,
+  POOL_LABEL,
+  MANAGED_BY,
+  MANAGER,
+  TERMINAL_CLAIM_REASONS,
+  claimName,
+  type Limits,
+  type ManagerOptions,
+  type Handler,
+  type Target,
+  type ExecutionView,
+  type PoolView,
+  type CommandResult,
+} from './manager.ts'
+export { HttpKube, KubeError, type KubeApi, type Claim, type PodIdentity } from './kube.ts'
 export { createApi, createAnchorReceiver, type CredentialSource } from './http.ts'
 export { privateKeyFrom } from '@agora/harness-bridge/token'

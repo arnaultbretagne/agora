@@ -1,6 +1,6 @@
 # ADR 000n — Log
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-29
 
 ## Context
@@ -16,17 +16,19 @@
 ## Decision
 
 1. **The log is Agora's, and only Agora's.** It holds the entries — every user command and every
-   ACP line exchanged with a harness, in both directions, stored whole, as written. Neither the
-   bridge nor the harness keeps a history Agora relies on.
+   ACP line exchanged with a harness, in both directions, with its complete semantic content.
+   Neither the bridge nor the harness keeps a history Agora relies on.
 2. **One ordered stream per Workstream.** Agora gives each entry its position when it writes it.
    A Session attributes entries to one ACP session in one execution; it is a filter on the
    stream, not a log of its own. Restoring from an anchor opens a new Session; changing the model
    does not.
 3. **Written before acted on.** An outgoing line is written before it is sent; an incoming line
-   before Agora handles it or shows it. A break with the bridge is written too.
+   before Agora handles it or shows it. Dispatch attempts, correlated local failures and breaks
+   with the bridge are written too.
 4. **What the client shows is a projection** of the log: deterministic, versioned, rebuilt from
    the log. History is never edited.
-5. **One turn at a time per Workstream.** A second prompt is refused while a turn is in progress.
+5. **One turn at a time per Workstream.** A second prompt is refused while a turn is saved, in
+   progress or uncertain. A local failure does not prove that the harness finished.
 6. **PostgreSQL** holds the log, the projections and the anchors.
 
 ```mermaid
@@ -44,8 +46,9 @@ flowchart LR
   fixed by rebuilding it, never by editing history. PostgreSQL keeps `9007199254740993` exact
   when given the line's text (measured by the previous implementation, PostgreSQL 17,
   2026-07-29).
-- **Crash-safe.** Nothing is sent or shown before it is written: after a restart, the log is
-  exactly as far as anything went.
+- **Crash-safe recovery.** Nothing is sent or shown before it is written. A recorded dispatch
+  may have reached the harness; a missing answer is never permission to resend it. The log
+  distinguishes proven never-attempted work from possible acceptance without inventing certainty.
 - **One history, in one place.** A sandbox can disappear, a bridge can restart: no history goes
   with them.
 - **Honest attribution.** Every entry belongs to the Session it happened in; successive Sessions
@@ -82,5 +85,7 @@ flowchart LR
   the request, the settings, the session, the turns and the stop are entries. After a restart,
   the claims say which executions still exist, the log everything else.
 - Changing a projection bumps its version and rebuilds it.
-- An invalid line is not an entry; only its size, digest and reason are kept.
+- Invalid content is never an ACP entry. Safe diagnostics and ordered correlated failures keep
+  the incident visible and reconstructible without retaining that content.
+- Writing the journal, projecting it and storing opaque anchor bytes use separate database roles.
 - Agora never interprets the harness's files inside an anchor.

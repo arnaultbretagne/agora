@@ -30,7 +30,7 @@ One document per subject that has acceptance cases, named like its spec, in thre
 | --- | --- |
 | `—` | A nominal case: nothing fails. |
 | `real: …` | The failure itself happened — a process exited or was killed, a connection was cut, PostgreSQL stopped, an adapter died, a deadline passed. The cell says which, and from which side. |
-| `simulated: …` | A stand-in, named by its mechanism: `sql-trigger`, `stub` (a function replaced), `forced-state` (the test sets internal state), `synthetic-event` (the test emits an event or a message), `fake-kube` (Kubernetes simulated). |
+| `simulated: …` | A stand-in, named by its mechanism: `sql-trigger`, `stub` (a function replaced), `forced-state` (the test sets internal state), `synthetic-event` (the test emits an event or a message), `fake-kube` (Kubernetes simulated), `fault-point` (a component held at a point it declares for tests). |
 
 **Verdict** — what the test asserts, against Expected.
 

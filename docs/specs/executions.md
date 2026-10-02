@@ -36,8 +36,8 @@ authorizations. **The claim precedes the WS connection; Ready alone does not pro
 The UI shows startup, then availability or the error. On stop, Agora closes
 access and stops renewing; the sandbox disappears at the deadline, without the user waiting.
 
-The claim name comes from the request: `sbx-` + the first 10 hexadecimal characters
-of the SHA-256 of the request id.
+The claim name comes from the execution: `sbx-` + the first 10 hexadecimal characters
+of the SHA-256 of the execution id.
 
 ### A 10-minute lease, a 1-hour turn at most
 
@@ -179,107 +179,103 @@ new template and a new pool, never an in-place modification.
 
 ## On Agora's side
 
+Two parts share the work. The **execution mechanics** (`@agora/executions`) handle the claims, the
+bridge connections, the deadlines and the anchors' authentication; they keep no history and decide
+nothing about ACP. The **log** (`log.md`) decides: it accepts the commands, writes every line
+before acting on it, names the executions to run and asks the mechanics for every effect.
+
+### The mechanics
+
+| Operation | What the mechanics do |
+| --- | --- |
+| Run | Follow an execution the log names — its claim name and pool — until its claim disappears. |
+| Claims | LIST and WATCH the claims labelled `app.kubernetes.io/managed-by=agora`; report each change, and the disappearance, to the log. |
+| Create the claim | With the name, pool and deadline the log recorded; a claim already there under that name is taken as is. |
+| Renew | PATCH `shutdownTime`, with the claim's UID as precondition. |
+| Connect | Once the claim is Ready and not being deleted, to its bridge with a fresh token. The upgrade's `agora-bridge-instance` goes to the log, which accepts the connection or closes it. After a close, reconnect in 2 s — never after 1011 (adapter dead) or 1001 (Pod ending). |
+| Receive | Hand each received line to the log, with its connection and receive ordinal, and read nothing more until the log has committed it. |
+| Send | A line, on the connection the log names, only when asked; the write's callback settles the request. |
+| Hold | No new connection, the open one terminated: an execution lost or failed. |
+| Bridge routes | `GET /info`, `PUT /anchor`, `PUT /credentials`, on the log's request. |
+| Anchors | Verify a Pod's projected token, and find the claim bound to that Pod. |
+
 ### The API
 
 | Route | Role |
 | --- | --- |
 | `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label. |
-| `GET /api/executions` | Live executions and recent ends. |
+| `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
-| `POST /api/executions` | Create: request id, pool, anchor to restore (optional), settings. |
-| `POST /api/executions/{name}/stop` | Stop: close sending, cancel the turn, stop renewing. |
-| `POST /api/executions/{name}/credentials` | Attach a credential (`credentials.md`). |
-| `GET /api/executions/{name}/acp` | WebSocket: the consumer's ACP relay. |
-| `GET /api/anchors` | The stored anchors. |
-| `GET /api/anchors/{id}/content` | An anchor's content. |
+| `GET /api/config` | Whether the lab's routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
 
-Each command answers *accepted* or *refused, with the reason*. An execution's settings
-are bounded: 60 to 600 s for the lease, 30 to 3,600 s for a turn's duration.
+The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
+(`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 3,600 s for
+a turn's duration.
 
 ### The deadline
+
+The log decides each move and keeps the turn start; the mechanics apply it.
 
 | Moment | `shutdownTime` |
 | --- | --- |
 | Creation | now + lease |
-| Prompt admitted | A single PATCH: turn start and now + lease. If it fails, the prompt is refused. |
-| Every minute of a turn | min(now + lease, turn start + maximum duration) |
-| End of turn confirmed | now + lease, then nothing more until the next prompt |
+| Prompt dispatched | Before its first write, a single PATCH: min(now + lease, turn start + maximum duration). If it fails, the prompt fails (`deadline_refused`) and nothing is sent. |
+| Every minute of a turn, while connected to the bridge | min(now + lease, turn start + maximum duration) |
+| End of turn confirmed | now + lease, once, then nothing more until the next prompt |
 | Stop requested | Nothing more; `session/cancel` if a turn is in progress |
-| Adapter lost, process replaced | Nothing more |
+| Adapter lost, instance changed, claim ending | Nothing more |
 
 ### An execution's states
 
+Each state is read from the log, and from the claim for its readiness and its end.
+
 | State | Meaning | What proves it |
 | --- | --- | --- |
-| **starting** | Claim created, not ready yet. | `Ready` false; the claim's reason, the Pod's waiting reason. |
-| **connecting** | Claim ready, bridge not reached yet. | `Ready` true, no open connection with a completed `initialize`. |
-| **restoring** | Anchor placed, resume in progress. | `initialize` answered, then `PUT /anchor` and `session/resume` (or `session/load`) in progress. |
-| **ready** | Connected, `initialize` answered, no turn. | Same instance verified by the upgrade header and initialization answer retained by Agora. |
-| **in turn** | `session/prompt` sent, final response not received yet. | Turn annotation on the claim. |
-| **uncertain** | The end of the turn could not be seen. | A bridge connection breaks during a turn, or Agora restarts with its turn annotation. Only the final answer resolves it. |
-| **lost** | The adapter died or the process was replaced. | Close 1011, or an upgrade header different from the recorded instance. |
-| **stopped** | Sending closed, no more renewal. | Stop annotation on the claim. |
-| **error** | Startup or restore failed. | The claim's reason (for example `WarmPoolNotFound`), a refused/timed-out initialization, or a failed restore. |
-| **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim. |
+| **starting** | Claim created, not ready yet. | No `execution.connected`; `Ready` false, the claim's reason, the Pod's waiting reason. |
+| **connecting** | Claim ready, `initialize` not answered yet. | `execution.connected`, no answer to `initialize`. |
+| **restoring** | Anchor placed, resume in progress. | `session/resume` or `session/load` sent, not answered. |
+| **ready** | A Session open, no turn. | `session.opened`, no turn in progress. |
+| **in turn** | `session/prompt` dispatched, final response not received yet. | Its `acp.dispatching`, no answer. |
+| **uncertain** | The end of the turn could not be seen. | An unclean break or a local failure since the dispatch. Only its answer, or the end of the execution, resolves it. |
+| **lost** | The adapter died, the bridge instance changed, or the claim conflicts with the record. | `execution.lost`. |
+| **stopped** | Sending closed, no more renewal. | The Stop command. |
+| **error** | Startup or restore failed. | `execution.failed`: a claim's terminal reason (for example `WarmPoolNotFound`), an unanswered `initialize`, a failed restore. |
+| **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim, or its deadline passed. |
 
-The execution leaves the list when its anchor is received or when its claim has disappeared; the
-end row keeps the anchor, or the reason it is missing.
-
-### The consumer relay
-
-The consumer is whatever mounts the executions: the lab, or Agora's log.
-
-| Rule | Detail |
-| --- | --- |
-| Received | Agora's `{seq, acp}` frames, numbered in receive order; `{local}`, Agora's own responses (`initialize`, refusals); state `{event}`s. |
-| Resume | `?after=N&epoch=E` replays what Agora still has in memory after N, with `gap` if some are missing. Memory holds at most 2,000 lines / 16 MiB. Positions start again after an Agora restart: each attachment carries a `reset` event naming this Agora process, which the consumer compares with its previous process before reusing a position. A previous epoch restarts replay at zero. |
-| `session/prompt` | Refused with a JSON-RPC error if the execution is not ready, if a turn is in progress, or if it is stopped. |
-| Session | The response to `session/new`, `session/load` or `session/resume` sets the session an anchor will resume. |
-| Permissions | `session/request_permission` goes to the consumer and waits for its answer, even if it has left. |
-| Ids | Agora's requests carry `agora-…` ids, never numeric ones. |
+The execution ends with `execution.ended` once its claim has disappeared; the entry names the
+anchor received, if any.
 
 ### Receiving an anchor
 
 Agora has the projected token validated by the Kubernetes API (`TokenReview`, audience
-`agora-anchors`), derives the namespace and the Pod from it, finds that Pod's claim and stores
-the anchor with the session recorded on the claim. A refused token: 401; a Pod without a claim:
-404; nothing is stored. With no push before the claim disappears, the end is recorded
-without an anchor. Anchors are stored on the lab's volume.
+`agora-anchors`) and derives the namespace, the Pod and its UID. It finds that Pod's claim, checks
+its labels and its UID against the log, and the Pod's UID against the Pod's; the anchor is then
+stored in PostgreSQL by the anchor role, and `anchor.received` appended (`log.md`). A refused token:
+401; a Pod of another namespace: 403; a Pod without a claim: 404; a mismatch: 409; an anchor over 32
+MiB: 413; nothing is stored. With no push before the claim disappears, the execution ends without an
+anchor.
 
 ### What Agora writes on the claim
 
-The lab stores its recovery memory on the claim until the log owns it. This table is transitional;
-the log replaces these annotations rather than duplicating them.
-
-| Key | Content |
+| Field | Content |
 | --- | --- |
+| `metadata.name` | `sbx-` + the first 10 hexadecimal characters of the SHA-256 of the execution id |
 | label `app.kubernetes.io/managed-by` | `agora`: what Agora lists and watches |
-| label `agora.bretagne.dev/pool` | the requested pool |
-| `agora.bretagne.dev/request-id` | the request id |
-| `agora.bretagne.dev/limits` | this execution's lease and turn duration |
-| `agora.bretagne.dev/restore-anchor`, `…/restored` | the anchor to restore, then the date it was restored |
-| `agora.bretagne.dev/instance` | the bridge instance seen on the first connection |
-| `agora.bretagne.dev/initialize` | The initialization request id, followed by the agent information and capabilities returned for this instance. A pending request is never resent; its eventual answer completes it. |
-| `agora.bretagne.dev/session-id` | the session an anchor will resume |
-| `agora.bretagne.dev/turn` | the turn in progress: start, id of the request, session |
-| `agora.bretagne.dev/idle-since` | the end of the last turn |
-| `agora.bretagne.dev/stopped` | the requested stop, and its date |
+| label `agora.bretagne.dev/pool` | the pool |
+| label `agora.bretagne.dev/execution-id` | the execution |
+| `spec.warmPoolRef.name` | the pool |
+| `spec.lifecycle` | `shutdownTime`, and `shutdownPolicy: DeleteForeground` |
 
-On restart: LIST the labelled claims, mark any saved turn *uncertain*, then connect to each bridge
-without `after`. Verify the upgrade header, reuse the saved initialization answer, and take the
-unread lines from the pipe. A pending `initialize` waits for the same request's answer, never a
-second request. Its 30-second timeout leaves the execution in *error*, without claiming readiness.
-A different instance means *lost*. A final answer for the saved turn clears uncertainty.
-
-A break during a turn marks it *uncertain* until its final answer arrives. Close 1011 means *lost*;
-1001 means *ending*. Other closes reconnect after 2 seconds, bounded by the execution's deadline.
+Nothing else: no annotation. What Agora must remember about an execution, and how it recovers
+after a restart, is the log's (`log.md`, "An execution's memory").
 
 ### Restoring
 
-Create with an anchor. Once connected, Agora sends `initialize` and retains its answer before
-placing the anchor (`PUT /anchor`), then sends `session/resume`, or `session/load` if the agent
-advertises only `loadSession`. A failure leaves the execution in *error*.
+Create with an anchor. Once connected, Agora sends `initialize`, then places the anchor
+(`PUT /anchor`) and sends `session/resume`, or `session/load` if the agent advertises only
+`loadSession`. A missing anchor or a refused placement fails the execution (`anchor_missing`,
+`restore_failed`); so does an opening left unanswered.
 
 ### Permissions
 
@@ -289,26 +285,28 @@ advertises only `loadSession`. A failure leaves the execution in *error*.
 | `sandboxwarmpools`, `sandboxtemplates`, `sandboxes`, `pods` | get, list, watch |
 | `tokenreviews` (cluster) | create |
 
-A namespace quota bounds the resources; Agora also bounds the number of
-active executions, since a pool is not a concurrency limit. A stopped execution counts
-until it is destroyed.
+A namespace quota bounds the resources; Agora also bounds the number of active executions, since
+a pool is not a concurrency limit. A stopped, lost or failed execution counts until its claim has
+disappeared.
 
 ## The lab
 
-The `apps/lab` deployable mounts the `executions` package and serves a page on `agora-lab.bretagne.dev`, behind Pocket-ID (admin
-group). It creates executions, relays ACP by hand, attaches credentials, shows deadlines, anchors and
-ends, and offers three actions reserved for the lab:
+The `apps/lab` deployable mounts the mechanics and the log, with PostgreSQL, and serves a page on
+`agora-lab.bretagne.dev`, behind Pocket-ID (admin group). It creates a Workstream per execution,
+sends the commands, reads the thread, attaches credentials, and shows deadlines, anchors and
+ends. Besides the log's lab routes (`log.md`, "HTTP"), three actions are reserved for the lab:
 
 | Route | Effect |
 | --- | --- |
-| `POST /api/lab/executions/{name}/drop-bridge` | Cuts the connection to the bridge; Agora reconnects without replay. Optional `pauseSeconds` (0–60) delays reconnection to exercise an absent reader. A turn remains uncertain until its final answer. |
+| `POST /api/lab/executions/{name}/drop-bridge` | Agora terminates its connection to the bridge, and reconnects after `pauseSeconds` (0–60) to exercise an absent reader. |
 | `POST /api/lab/executions/{name}/probe-auth` | Tries the bridge with no token, with an expired token, with one for another sandbox, with one signed by another key. |
-| `POST /api/lab/restart` | Stops the lab process; Kubernetes restarts it. |
+| `POST /api/lab/restart` | `{"mode": "clean"}` stops the process as a SIGTERM would; `{"mode": "kill"}` ends it on the spot, nothing drained or written, with the status a kill leaves. Kubernetes restarts it. |
 
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
 with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long
-text, recalls the session, sends a request through its way out, or dies. It writes a real native
-file and reads it back at `session/resume`.
+text, recalls the session, writes given lines byte for byte, answers twice or invalidly, sends a
+request through its way out, or dies. It writes a real native file and reads it back at
+`session/resume`.
 
 ## Acceptance cases
 
@@ -316,30 +314,25 @@ file and reads it back at `session/resume`.
 | --- | --- | --- |
 | E1 | Create from a warm pool | Ready includes Agora's `initialize`; `warm` launch. |
 | E2 | Create beyond the warm pool | Ready includes Agora's `initialize`: `cold`, or `warm` on a pool Sandbox still starting. |
-| E3 | Create twice with the same id | Same execution, a single claim. |
-| E4 | Pool not in the catalogue, quota reached | Refused, with the reason. |
-| E5 | Relay: `initialize`, `session/new`, prompt | `initialize` answered by Agora, positions numbered by Agora, turn closed. |
-| E6 | Second prompt during a turn | Refused with a JSON-RPC error. |
-| E7 | Cancel a turn | Ends `cancelled`, execution ready. |
-| E8 | Permission, consumer gone then back | The request is replayed, the answer unblocks the turn. |
-| E9 | Consumer disconnected during a turn | The turn continues; resuming returns the missed frames. |
-| E10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. |
-| E11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. |
+| E3 | Create replayed with the same command id | The first answer: one execution, a single claim. |
+| E4 | Pool not in the catalogue, quota reached | Refused, with the reason: `unknown_pool`, `quota`. |
 | E12 | Deadline during a turn | Moves forward every minute, never beyond start + maximum duration. |
 | E13 | End of turn | Deadline at now + lease, then no more renewal. |
 | E14 | Deadline reached between two turns | Destroyed by the infrastructure; the anchor arrives during the grace period. |
 | E15 | Turn too long | Destroyed at start + maximum duration; the anchor arrives. |
 | E16 | Stop | No more renewal, destruction at the deadline, anchor received. |
 | E17 | Stop during a turn | Turn cancelled, then as in E16. |
-| E18 | Restore an anchor | New execution, same session, the agent remembers. |
+| E18 | Restore an anchor | New execution, same ACP session, the agent remembers. |
 | E19 | Dead adapter | *Lost*, no more renewal; the anchor still leaves with the Pod. |
 | E20 | Bridge with no token, expired, for another sandbox, another key | 401 every time. |
 | E21 | Anchor push without a valid projected token | 401, nothing is stored. |
 | E22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. |
 | E27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. |
-| E28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. |
 
-**To be specified:** anchor storage in the database, codex's native directory, detached tasks,
-resuming after the process is lost. Credentials: `credentials.md`.
+What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
+restarts — is the log's, with its cases (`log.md`).
+
+**To be specified:** codex's native directory, detached tasks, resuming after the process is lost.
+Credentials: `credentials.md`.
 
 Reference: [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go).

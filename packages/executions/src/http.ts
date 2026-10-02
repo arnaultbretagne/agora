@@ -1,13 +1,11 @@
-// The HTTP surface of the executions (docs/specs/executions.md, "On Agora's side"), and a deployable's page. Every command answers accepted
-// or refused with its reason; the effects are read from /api/events, never from the answer alone.
+// The HTTP surface of the execution mechanics (docs/specs/executions.md, "The lab"): the catalogue, what
+// the mechanics see of each execution, and the lab's hooks. Commands and the thread are the log's
+// (docs/specs/log.md, "HTTP"); a deployable mounts both through `handle`.
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import type { Duplex } from 'node:stream'
-import { WebSocketServer } from 'ws'
-import type { AnchorStore } from './anchors.ts'
 import type { PodIdentity } from './kube.ts'
 import type { CommandResult, ExecutionManager } from './manager.ts'
-import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle } from '@agora/harness-bridge/anchor'
+import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, type Bundle } from '@agora/harness-bridge/anchor'
 import { bearerOf } from '@agora/harness-bridge/token'
 import type { Credentials } from '@agora/harness-bridge/outbound'
 
@@ -19,14 +17,15 @@ export interface CredentialSource {
 
 export interface HttpOptions {
   readonly manager: ExecutionManager
-  readonly anchors: AnchorStore
+  /** Routes of the mounting deployable, tried first (the log's). */
+  readonly handle?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
   /** Opens the lab's own routes (docs/specs/executions.md, "The lab"). */
   readonly lab: boolean
   /** A page to serve at `/`, if the deployable has one. */
   readonly page?: string
-  /** Opens POST /api/executions/{name}/credentials. */
   readonly credentials?: CredentialSource
-  readonly onRestart?: () => void
+  /** The lab's restart: `clean` drains like a SIGTERM, `kill` dies like a SIGKILL. */
+  readonly onRestart?: (mode: 'clean' | 'kill') => void
 }
 const NAME = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
 
@@ -45,7 +44,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0
   for await (const chunk of req) {
     size += (chunk as Buffer).byteLength
-    if (size > 64 * 1024) throw new Error('corps trop grand')
+    if (size > 64 * 1024) throw new Error('body too large')
     chunks.push(chunk as Buffer)
   }
   if (chunks.length === 0) return {}
@@ -53,9 +52,10 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 export function createApi(options: HttpOptions): Server {
-  const { manager, anchors } = options
+  const { manager } = options
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (options.handle !== undefined && (await options.handle(req, res))) return
     const url = new URL(req.url ?? '/', 'http://agora')
     const path = url.pathname
     const method = req.method ?? 'GET'
@@ -74,67 +74,28 @@ export function createApi(options: HttpOptions): Server {
       res.end(await readFile(options.page))
       return
     }
-
     if (method === 'GET' && path === '/api/pools') return json(res, 200, { pools: await manager.pools() })
-    if (method === 'GET' && path === '/api/executions') return json(res, 200, manager.snapshot())
-    if (method === 'GET' && path === '/api/anchors') return json(res, 200, { anchors: await anchors.list() })
+    if (method === 'GET' && path === '/api/executions') return json(res, 200, { executions: manager.views() })
     if (method === 'GET' && path === '/api/events') return events(req, res)
-    if (method === 'GET' && path === '/api/config') {
-      return json(res, 200, { lab: options.lab, credentials: options.credentials?.describe() ?? null })
-    }
+    if (method === 'GET' && path === '/api/config') return json(res, 200, { lab: options.lab, credentials: options.credentials?.describe() ?? null })
 
-    const anchorContent = /^\/api\/anchors\/([^/]+)\/content$/.exec(path)
-    if (method === 'GET' && anchorContent !== null) {
-      const bytes = await anchors.bundle(anchorContent[1]!)
-      if (bytes === null) return json(res, 404, { accepted: false, reason: 'unknown anchor' })
-      // The native files, one after the other, readable in a browser tab.
-      const bundle = parseBundle(bytes)
-      const text = bundle.files.map((file) => `===== ${file.path} (${file.checksum})\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n')
-      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-      res.end(text)
-      return
-    }
-
-    if (method === 'POST' && path === '/api/executions') {
-      const input = await body(req)
-      return reply(res, await manager.create(input as Parameters<ExecutionManager['create']>[0]))
-    }
-
-    const command = /^\/api\/(lab\/)?executions\/([^/]+)\/([a-z-]+)$/.exec(path)
-    if (method === 'POST' && command !== null) {
-      const [, labPrefix, name, verb] = command
-      if (!NAME.test(name!)) return json(res, 400, { accepted: false, reason: 'invalid name' })
-      if (labPrefix === undefined && verb === 'stop') return reply(res, await manager.stopSandbox(name!))
-      if (labPrefix === undefined && verb === 'credentials') return attachCredentials(res, name!, await body(req))
-      if (labPrefix !== undefined && options.lab) {
-        if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!, Number((await body(req)).pauseSeconds ?? 0)))
-        if (verb === 'probe-auth') {
-          const result = await manager.lab.probeAuth(name!)
-          return result.accepted ? json(res, 200, { accepted: true, results: result.value }) : reply(res, result)
-        }
+    const command = /^\/api\/lab\/executions\/([^/]+)\/([a-z-]+)$/.exec(path)
+    if (method === 'POST' && command !== null && options.lab) {
+      const [, name, verb] = command
+      if (!NAME.test(name!) && !/^[0-9a-f-]{36}$/.test(name!)) return json(res, 400, { accepted: false, reason: 'invalid name' })
+      if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!, Number((await body(req)).pauseSeconds ?? 0)))
+      if (verb === 'probe-auth') {
+        const result = await manager.lab.probeAuth(name!)
+        return result.accepted ? json(res, 200, { accepted: true, results: result.value }) : reply(res, result)
       }
     }
     if (method === 'POST' && path === '/api/lab/restart' && options.lab) {
-      json(res, 200, { accepted: true, value: 'the lab process stops; Kubernetes restarts it' })
-      setTimeout(() => (options.onRestart ?? (() => process.exit(0)))(), 300)
+      const mode = (await body(req)).mode === 'kill' ? 'kill' : 'clean'
+      json(res, 200, { accepted: true, value: mode === 'kill' ? 'the lab process is killed; Kubernetes restarts it' : 'the lab process stops cleanly; Kubernetes restarts it' })
+      setTimeout(() => (options.onRestart ?? (() => process.exit(0)))(mode), 300)
       return
     }
     json(res, 404, { accepted: false, reason: 'unknown route' })
-  }
-
-  async function attachCredentials(res: ServerResponse, name: string, input: Record<string, unknown>): Promise<void> {
-    const source = options.credentials
-    if (source === undefined) return json(res, 503, { accepted: false, reason: 'no credential source configured' })
-    const ttlSeconds = input.ttlSeconds === undefined ? 3600 : Number(input.ttlSeconds)
-    const profiles = Array.isArray(input.profiles) ? input.profiles.filter((p): p is string => typeof p === 'string') : undefined
-    let credentials: Credentials
-    try {
-      credentials = await source.mint({ label: `agora ${name}`, ttlSeconds, ...(profiles === undefined ? {} : { profiles }) })
-    } catch (error) {
-      const status = typeof (error as { status?: unknown }).status === 'number' ? (error as { status: number }).status : 502
-      return json(res, status, { accepted: false, reason: error instanceof Error ? error.message : String(error) })
-    }
-    return reply(res, await manager.attachCredentials(name, credentials))
   }
 
   function events(req: IncomingMessage, res: ServerResponse): void {
@@ -142,8 +103,8 @@ export function createApi(options: HttpOptions): Server {
     const send = (data: unknown): void => {
       res.write(`data: ${JSON.stringify(data)}\n\n`)
     }
-    void anchors.list().then((list) => send({ type: 'snapshot', ...manager.snapshot(), anchors: list }))
-    const unsubscribe = manager.subscribe(send)
+    send({ type: 'snapshot', executions: manager.views() })
+    const unsubscribe = manager.subscribe((execution) => send({ type: 'execution', execution }))
     const keepAlive = setInterval(() => res.write(': ping\n\n'), 20_000)
     req.on('close', () => {
       clearInterval(keepAlive)
@@ -151,31 +112,17 @@ export function createApi(options: HttpOptions): Server {
     })
   }
 
-  const server = createServer((req, res) => {
-    handle(req, res).catch((error: unknown) => {
-      if (!res.headersSent) json(res, 500, { accepted: false, reason: error instanceof Error ? error.message : String(error) })
+  return createServer((req, res) => {
+    handle(req, res).catch(() => {
+      if (!res.headersSent) json(res, 500, { accepted: false, reason: 'unavailable' })
       else res.destroy()
     })
   })
-
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 })
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = new URL(req.url ?? '/', 'http://agora')
-    const match = /^\/api\/executions\/([^/]+)\/acp$/.exec(url.pathname)
-    if (match === null || !NAME.test(match[1]!)) {
-      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
-      return
-    }
-    const afterParam = url.searchParams.get('after')
-    const after = afterParam === null || afterParam === '' ? null : Number(afterParam)
-    wss.handleUpgrade(req, socket, head, (peer) => manager.attachConsumer(match[1]!, peer, after !== null && Number.isFinite(after) ? after : null, url.searchParams.get('epoch')))
-  })
-
-  return server
 }
 
 export interface AnchorReceiverOptions {
-  readonly manager: ExecutionManager
+  /** Stores an authenticated Pod's anchor (the log's Workstreams). */
+  readonly receive: (pod: PodIdentity, bundle: Bundle, raw: Uint8Array) => Promise<CommandResult<{ anchorId: string }>>
   /** The namespace of the sandboxes: a token from anywhere else is refused. */
   readonly namespace: string
   /** TokenReview of the Pod's projected ServiceAccount token (audience agora-anchors). */
@@ -199,7 +146,7 @@ export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
       const token = bearerOf(req.headers.authorization)
       const pod = token === undefined ? null : await options.verify(token).catch(() => null)
       if (pod === null) return json(res, 401, { accepted: false, reason: 'projected token missing or refused' })
-      if (pod.namespace !== options.namespace) return json(res, 403, { accepted: false, reason: `namespace ${pod.namespace} refused` })
+      if (pod.namespace !== options.namespace) return json(res, 403, { accepted: false, reason: 'namespace refused' })
       const chunks: Buffer[] = []
       let size = 0
       for await (const chunk of req) {
@@ -208,12 +155,10 @@ export function createAnchorReceiver(options: AnchorReceiverOptions): Server {
         chunks.push(chunk as Buffer)
       }
       const raw = new Uint8Array(Buffer.concat(chunks))
-      const bundle = parseBundle(raw)
-      const result = await options.manager.receiveAnchor(pod.podName, bundle, raw)
-      reply(res, result)
+      reply(res, await options.receive(pod, parseBundle(raw), raw))
     })().catch((error: unknown) => {
-      const status = error instanceof AnchorRefused ? error.status : 500
-      if (!res.headersSent) json(res, status, { accepted: false, reason: error instanceof Error ? error.message : String(error) })
+      const status = error instanceof AnchorRefused ? error.status : 503
+      if (!res.headersSent) json(res, status, { accepted: false, reason: error instanceof AnchorRefused ? error.message : 'unavailable' })
       else res.destroy()
     })
   })

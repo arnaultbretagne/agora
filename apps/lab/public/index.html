@@ -1,454 +1,312 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Executions lab</title>
-<style>
-  body { font: 13px/1.35 system-ui, sans-serif; margin: 12px; background: #fff; color: #111; }
-  h1 { font-size: 18px; margin: 0 0 8px; }
-  h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #ccc; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 3px 5px; text-align: left; vertical-align: top; }
-  th { background: #eee; }
-  code, pre, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
-  pre { background: #f6f6f6; border: 1px solid #ddd; padding: 6px; max-height: 420px; overflow: auto; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
-  button { font-size: 12px; margin: 1px; }
-  input, select, textarea { font-size: 12px; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
-  .muted { color: #666; }
-  .err { color: #b00; }
-  .ok { color: #070; }
-  .state { font-weight: bold; }
-  .sel { background: #ffd; }
-  .panel { border: 1px solid #999; padding: 8px; margin-top: 6px; }
-  .perm { background: #fee; border: 1px solid #c66; padding: 6px; margin: 4px 0; }
-  td.wrap { max-width: 280px; word-break: break-word; }
-</style>
-</head>
-<body>
-<h1>Executions lab</h1>
-<div class="row">
-  <span>State stream: <b id="sse">…</b></span>
-  <button id="restart" title="POST /api/lab/restart">Restart the lab</button>
-  <span class="muted">Contract: docs/specs/executions.md</span>
-</div>
-
-<h2>Create an execution</h2>
-<div class="row">
-  <label>Pool <select id="pool"></select></label>
-  <label>Request id <input id="requestId" size="38"></label>
-  <button id="newId">new id</button>
-  <label>Anchor to restore <select id="anchor"><option value="">none</option></select></label>
-</div>
-<div class="row">
-  <label>Lease (s) <input id="leaseSeconds" size="5" placeholder="600"></label>
-  <label>Turn cap (s) <input id="turnCapSeconds" size="5" placeholder="3600"></label>
-  <button id="create">Create</button>
-  <button id="createTwice" title="Two POSTs with the same id">Create 2× (same id)</button>
-</div>
-<div class="row">
-  <span>Credentials: <b id="credentialSource">…</b></span>
-  <label>profiles <input id="profiles" size="70" value="anthropic"></label>
-  <label>duration (s) <input id="credentialTtl" size="6" value="3600"></label>
-  <span class="muted">docs/specs/credentials.md — profiles: anthropic, github:owner/repo:read, github:owner/repo:write</span>
-</div>
-<pre id="createResult" class="muted">—</pre>
-<div id="pools" class="muted"></div>
-
-<h2>Live executions</h2>
-<table>
-  <thead><tr><th>Name</th><th>Pool</th><th>State</th><th>Reason</th><th>Launch</th><th>Pod / Service</th><th>Deadline</th><th>Renew.</th><th>Instance</th><th>Session</th><th>Turn</th><th>Seq</th><th>Way out</th><th>Actions</th></tr></thead>
-  <tbody id="sandboxes"></tbody>
-</table>
-
-<div class="panel" id="acpPanel">
-  <b>ACP relay</b> — execution: <b id="acpName">none (ACP button on a row)</b> — connection: <b id="acpConn">closed</b> — last position received: <b id="acpSeq">0</b>
-  <div class="row">
-    <button id="acpConnect">Connect (live)</button>
-    <button id="acpResume">Reconnect after my last position</button>
-    <button id="acpClose">Disconnect</button>
-    <label><input type="checkbox" id="hideChunks" checked> hide text chunks</label>
-    <button id="acpClear">clear</button>
-  </div>
-  <div class="row">
-    <button data-acp="initialize">initialize</button>
-    <button data-acp="new">session/new</button>
-    <label>session <input id="sessionId" size="38"></label>
-    <button data-acp="resume">session/resume</button>
-    <button data-acp="load">session/load</button>
-    <button data-acp="cancel">session/cancel</button>
-  </div>
-  <div class="row">
-    <label>model <input id="model" size="12" value="haiku"></label>
-    <button data-acp="model">session/set_config_option model</button>
-    <span class="muted">applied automatically after session/new if the agent offers the "model" option (claude-code)</span>
-  </div>
-  <div class="row">
-    <input id="promptText" size="50" value="hello">
-    <button data-acp="prompt">session/prompt</button>
-    <span class="muted">quick:</span>
-    <button data-quick="/sleep 30">/sleep 30</button>
-    <button data-quick="/silence 20">/silence 20</button>
-    <button data-quick="/permission">/permission</button>
-    <button data-quick="/tool">/tool</button>
-    <button data-quick="/big 64">/big 64</button>
-    <button data-quick="/recall">/recall</button>
-    <button data-quick="/crash">/crash</button>
-    <button data-quick="/fetch https://api.anthropic.com/v1/models">/fetch</button>
-  </div>
-  <div id="permissions"></div>
-  <div class="row">
-    <textarea id="raw" rows="2" cols="90">{"jsonrpc":"2.0","id":99,"method":"session/prompt","params":{"sessionId":"","prompt":[{"type":"text","text":"raw"}]}}</textarea>
-    <button id="sendRaw">send as is</button>
-  </div>
-  <pre id="acpLog"></pre>
-</div>
-
-<h2>Stored anchors</h2>
-<table>
-  <thead><tr><th>Id</th><th>Harness</th><th>Pool</th><th>Session</th><th>Size</th><th>Checksum</th><th>Execution</th><th>Reason</th><th>Date</th><th></th></tr></thead>
-  <tbody id="anchors"></tbody>
-</table>
-
-<h2>Endings (destroyed by the infrastructure)</h2>
-<table>
-  <thead><tr><th>Date</th><th>Name</th><th>Pool</th><th>Reason</th><th>Anchor</th></tr></thead>
-  <tbody id="history"></tbody>
-</table>
-
-<h2>Token probe</h2>
-<pre id="probe" class="muted">—</pre>
-
-<h2>Lab log</h2>
-<pre id="logs"></pre>
-
-<h2>Cases to validate (docs/specs/executions.md)</h2>
-<table>
-  <thead><tr><th>#</th><th>Case</th><th>How to play it here</th><th>Expected</th></tr></thead>
-  <tbody id="cases"></tbody>
-</table>
-
-<script>
-const $ = (id) => document.getElementById(id)
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-const state = { sandboxes: new Map(), anchors: [], history: [], logs: [], pools: [], selected: null, ws: null, lastSeq: 0, nextId: 1, pending: new Map(), permissions: new Map(), newIds: new Set() }
-
-// ---------------------------------------------------------------- state stream
-function connectEvents() {
-  const source = new EventSource('/api/events')
-  source.onopen = () => { $('sse').textContent = 'connected'; $('sse').className = 'ok' }
-  source.onerror = () => { $('sse').textContent = 'disconnected, reconnecting…'; $('sse').className = 'err' }
-  source.onmessage = (message) => {
-    const event = JSON.parse(message.data)
-    if (event.type === 'snapshot') {
-      state.sandboxes = new Map(event.executions.map((s) => [s.name, s]))
-      state.history = event.history; state.logs = event.logs; state.anchors = event.anchors
-      renderAll()
-    } else if (event.type === 'execution') {
-      state.sandboxes.set(event.execution.name, event.execution); renderSandboxes()
-    } else if (event.type === 'ended') {
-      state.sandboxes.delete(event.ending.name); state.history.unshift(event.ending); renderSandboxes(); renderHistory()
-    } else if (event.type === 'anchor') {
-      state.anchors.unshift(event.anchor); renderAnchors()
-    } else if (event.type === 'log') {
-      state.logs.unshift(event.entry); state.logs.length = Math.min(state.logs.length, 300); renderLogs()
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Agora · Lab</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 900px;
+      margin: 3rem auto;
+      padding: 0 1rem;
+      background: #faf9f6;
+      color: #242424;
     }
-  }
-}
-
-async function loadConfig() {
-  const config = await (await fetch('/api/config')).json()
-  $('credentialSource').textContent = config.credentials ? `grants signed by Agora, gateway ${config.credentials.proxy}` : 'no gateway configured'
-}
-
-async function loadPools() {
-  const response = await fetch('/api/pools')
-  const { pools } = await response.json()
-  state.pools = pools
-  $('pool').innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.harness)})</option>`).join('') + '<option value="no-such-pool">no-such-pool (not in the catalogue)</option>'
-  $('pools').innerHTML = 'Catalogue: ' + pools.map((p) => `<b>${esc(p.name)}</b> — harness ${esc(p.harness)}, warm pool ${p.readyReplicas}/${p.replicas}, <code>${esc(p.image)}</code>`).join(' · ')
-}
-
-function renderAll() { renderSandboxes(); renderAnchors(); renderHistory(); renderLogs() }
-
-function secondsLeft(iso) {
-  if (!iso) return '—'
-  const s = Math.round((Date.parse(iso) - Date.now()) / 1000)
-  return `${s} s`
-}
-
-function renderSandboxes() {
-  const rows = [...state.sandboxes.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((s) => `
-    <tr class="${s.name === state.selected ? 'sel' : ''}">
-      <td class="mono">${esc(s.name)}<br><span class="muted">${esc(s.requestId)}</span></td>
-      <td>${esc(s.pool)}</td>
-      <td class="state">${esc(s.state)}${s.pendingPermissions ? `<br><span class="err">${s.pendingPermissions} permission(s)</span>` : ''}${s.consumer ? '<br><span class="muted">consumer</span>' : ''}</td>
-      <td class="wrap">${esc(s.reason)}${s.lastTurn ? `<br><span class="muted">last turn: ${esc(s.lastTurn.outcome)}</span>` : ''}${s.restoreAnchor ? `<br><span class="muted">restore ${esc(s.restoreAnchor)}: ${s.restored ? 'done' : 'pending'}</span>` : ''}</td>
-      <td>${esc(s.launchType ?? '?')}</td>
-      <td class="mono">${esc(s.pod)}<br>${esc(s.service)}${s.podDetail ? `<br><span class="muted">${esc(s.podDetail)}</span>` : ''}</td>
-      <td class="mono" data-deadline="${esc(s.shutdownTime)}">${secondsLeft(s.shutdownTime)}<br><span class="muted">${esc(s.shutdownTime)}</span></td>
-      <td>${s.renewals}${s.renewing ? '<br><b class="ok">re-armed (turn)</b>' : '<br><span class="muted">not re-armed</span>'}<br><span class="muted">lease ${s.limits.leaseSeconds} / turn ${s.limits.turnCapSeconds}</span></td>
-      <td class="mono wrap">${esc(s.instance)}<br><span class="muted">bridge ${esc(s.bridge.state)} ${esc(s.bridge.agent ? s.bridge.agent.name + '@' + s.bridge.agent.version : '')}</span></td>
-      <td class="mono wrap">${esc(s.sessionId)}</td>
-      <td class="mono wrap">${s.turn ? `req ${esc(JSON.stringify(s.turn.requestId))}<br>since ${esc(s.turn.startedAt)}<br>session ${esc(s.turn.sessionId)}` : `<span class="muted">idle since ${esc(s.idleSince)}</span>`}</td>
-      <td>${s.lastSeq}</td>
-      <td class="mono wrap">${outbound(s.outbound)}</td>
-      <td>
-        <button data-select="${esc(s.name)}">ACP</button>
-        <button data-stop="${esc(s.name)}">Stop</button><br>
-        <button data-credentials="${esc(s.name)}">attach credential</button><br>
-        <button data-lab="drop-bridge" data-name="${esc(s.name)}">cut bridge</button>
-        <button data-lab="drop-bridge" data-pause="10" data-name="${esc(s.name)}">pause bridge 10s</button>
-<br>
-        <button data-lab="probe-auth" data-name="${esc(s.name)}">probe token</button>
-      </td>
-    </tr>`).join('')
-  $('sandboxes').innerHTML = rows || '<tr><td colspan="14" class="muted">none</td></tr>'
-}
-
-function outbound(o) {
-  if (!o) return '<span class="muted">?</span>'
-  if (!o.proxy) return `<span class="muted">no credential</span>${o.refused ? `<br>${o.refused} refused` : ''}`
-  const targets = Object.entries(o.targets ?? {}).map(([t, v]) => `${esc(t)} ×${v.count} → ${esc(v.lastStatus ?? '?')}`).join('<br>')
-  return `${esc(o.proxy)}<br><span class="muted">until ${esc(o.expiresAt ?? '?')}</span><br>${o.tunnels} tunnel(s), ${o.refused} refused${targets ? `<br>${targets}` : ''}`
-}
-
-function renderAnchors() {
-  $('anchor').innerHTML = '<option value="">none</option>' + state.anchors.map((a) => `<option value="${esc(a.id)}">${esc(a.id)} — ${esc(a.harness)} — ${esc(a.sessionId)}</option>`).join('')
-  $('anchors').innerHTML = state.anchors.map((a) => `
-    <tr><td class="mono">${esc(a.id)}</td><td>${esc(a.harness)}</td><td>${esc(a.pool)}</td><td class="mono">${esc(a.sessionId)}</td><td>${a.byteLength}</td>
-    <td class="mono">${esc(a.checksum.slice(0, 19))}…</td><td class="mono">${esc(a.execution)}</td><td>${esc(a.reason)}</td><td>${esc(a.createdAt)}</td>
-    <td><a href="/api/anchors/${esc(a.id)}/content" target="_blank">view</a> <button data-restore="${esc(a.id)}" data-pool="${esc(a.pool)}">restore</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">none</td></tr>'
-}
-
-function renderHistory() {
-  $('history').innerHTML = state.history.map((h) => `
-    <tr><td>${esc(h.at)}</td><td class="mono">${esc(h.name)}</td><td>${esc(h.pool)}</td><td>${esc(h.reason)}</td>
-    <td>${h.anchor ? `<span class="ok">${esc(h.anchor.id)}</span> (${h.anchor.byteLength} B)` : `<span class="err">none</span>: ${esc(h.anchorError)}`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">none</td></tr>'
-}
-
-function renderLogs() {
-  $('logs').textContent = state.logs.map((l) => `${l.at}  ${l.execution ?? '-'}  ${l.message}`).join('\n')
-}
-
-setInterval(() => {
-  for (const cell of document.querySelectorAll('[data-deadline]')) {
-    const first = cell.firstChild
-    if (first && first.nodeType === 3) first.textContent = secondsLeft(cell.dataset.deadline)
-  }
-}, 1000)
-
-// ---------------------------------------------------------------- commands
-// crypto.randomUUID only exists in a secure context: the page must also work over plain HTTP.
-function uuid() {
-  if (crypto.randomUUID) return crypto.randomUUID()
-  const b = crypto.getRandomValues(new Uint8Array(16))
-  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128
-  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
-}
-function newRequestId() { $('requestId').value = uuid() }
-
-function limits() {
-  const out = {}
-  for (const key of ['leaseSeconds', 'turnCapSeconds']) if ($(key).value.trim() !== '') out[key] = $(key).value.trim()
-  return out
-}
-
-async function post(path, body) {
-  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
-  const data = await response.json().catch(() => ({}))
-  return { status: response.status, ...data }
-}
-
-async function create(times) {
-  const body = { requestId: $('requestId').value, pool: $('pool').value, anchorId: $('anchor').value || undefined, limits: limits() }
-  const results = await Promise.all(Array.from({ length: times }, () => post('/api/executions', body)))
-  $('createResult').textContent = results.map((r) => JSON.stringify(r)).join('\n')
-  $('createResult').className = results.every((r) => r.accepted) ? 'ok' : 'err'
-  newRequestId()
-}
-
-document.addEventListener('click', async (event) => {
-  const target = event.target
-  if (!(target instanceof HTMLElement)) return
-  if (target.dataset.select) selectSandbox(target.dataset.select)
-  if (target.dataset.credentials) {
-    const profiles = $('profiles').value.split(/[\s,]+/).filter(Boolean)
-    const r = await post(`/api/executions/${target.dataset.credentials}/credentials`, { ttlSeconds: Number($('credentialTtl').value), profiles })
-    $('createResult').textContent = 'Credential: ' + JSON.stringify(r)
-    $('createResult').className = r.accepted ? 'ok' : 'err'
-  }
-  if (target.dataset.stop) {
-    target.disabled = true
-    const r = await post(`/api/executions/${target.dataset.stop}/stop`)
-    $('createResult').textContent = 'Stop: ' + JSON.stringify(r)
-  }
-  if (target.dataset.lab) {
-    const r = await post(`/api/lab/executions/${target.dataset.name}/${target.dataset.lab}`, target.dataset.pause ? { pauseSeconds: Number(target.dataset.pause) } : undefined)
-    if (target.dataset.lab === 'probe-auth') {
-      $('probe').textContent = r.accepted ? r.results.map((x) => `${x.case.padEnd(32)}  /info → ${x.info}   /acp → ${x.acp}`).join('\n') : JSON.stringify(r)
-    } else $('createResult').textContent = `${target.dataset.lab}: ${JSON.stringify(r)}`
-  }
-  if (target.dataset.restore) {
-    $('anchor').value = target.dataset.restore
-    const pool = state.pools.find((p) => p.name === target.dataset.pool) ? target.dataset.pool : state.pools[0]?.name
-    if (pool) $('pool').value = pool
-    $('createResult').textContent = `Anchor ${target.dataset.restore} selected: click "Create".`
-  }
-  if (target.dataset.quick) { $('promptText').value = target.dataset.quick; acp('prompt') }
-  if (target.dataset.acp) acp(target.dataset.acp)
-  if (target.dataset.permission) answerPermission(target.dataset.permission, target.dataset.option)
-})
-
-$('newId').onclick = newRequestId
-$('create').onclick = () => create(1)
-$('createTwice').onclick = () => create(2)
-$('restart').onclick = async () => { $('createResult').textContent = JSON.stringify(await post('/api/lab/restart')) }
-
-// ---------------------------------------------------------------- ACP relay
-function selectSandbox(name) {
-  if (state.selected !== name) { closeAcp(); state.lastSeq = 0; state.epoch = null; $('acpLog').textContent = ''; state.permissions.clear(); renderPermissions() }
-  state.selected = name
-  $('acpName').textContent = name
-  const s = state.sandboxes.get(name)
-  if (s?.sessionId) $('sessionId').value = s.sessionId
-  renderSandboxes()
-  openAcp(false)
-}
-
-function logLine(direction, text) {
-  const pre = $('acpLog')
-  pre.textContent += `${direction} ${text}\n`
-  if (pre.textContent.length > 400000) pre.textContent = pre.textContent.slice(-300000)
-  pre.scrollTop = pre.scrollHeight
-}
-
-function openAcp(resume) {
-  if (!state.selected) return
-  closeAcp()
-  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-  const url = `${scheme}://${location.host}/api/executions/${state.selected}/acp${resume ? `?after=${state.lastSeq}${state.epoch ? `&epoch=${encodeURIComponent(state.epoch)}` : ''}` : ''}`
-  const ws = new WebSocket(url)
-  state.ws = ws
-  $('acpConn').textContent = 'connecting…'
-  ws.onopen = () => { $('acpConn').textContent = resume ? `open (resumed after ${state.lastSeq})` : 'open (live)'; $('acpConn').className = 'ok' }
-  ws.onclose = (e) => { if (state.ws === ws) { $('acpConn').textContent = `closed (${e.code} ${e.reason})`; $('acpConn').className = 'err'; state.ws = null } }
-  ws.onmessage = (message) => {
-    const data = JSON.parse(message.data)
-    if (data.event?.type === 'reset') {
-      if (state.epoch !== data.event.epoch) { state.lastSeq = 0; $('acpSeq').textContent = '0' }
-      state.epoch = data.event.epoch
-      return
+    header,
+    form,
+    .actions {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      flex-wrap: wrap;
     }
-    if (typeof data.seq === 'number') {
-      state.lastSeq = Math.max(state.lastSeq, data.seq); $('acpSeq').textContent = state.lastSeq
-      onAcp(data.acp, `← ${String(data.seq).padStart(5)}`)
-    } else if (typeof data.local === 'string') onAcp(data.local, '← local')
-    else if (data.event) {
-      if (data.event.type === 'execution') return
-      logLine('· event', JSON.stringify(data.event))
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+      padding: 0.5rem;
+      border: 1px solid #aaa;
+      border-radius: 5px;
     }
-  }
-}
-
-function onAcp(line, prefix) {
-  let m = null
-  try { m = JSON.parse(line) } catch { /* shown raw */ }
-  if (m && m.method === 'session/request_permission') { state.permissions.set(JSON.stringify(m.id), m); renderPermissions() }
-  if (m && m.method === 'session/update' && m.params?.update?.sessionUpdate === 'agent_message_chunk' && $('hideChunks').checked) {
-    logLine(prefix, `[text] ${m.params.update.content?.text?.slice(0, 120).replace(/\n/g, '⏎')}`)
-    return
-  }
-  if (m && m.result && m.result.sessionId) $('sessionId').value = m.result.sessionId
-  // The model, before the first prompt: that prompt is the first billed call.
-  if (m && state.newIds.delete(m.id) && m.result?.configOptions?.some((o) => o.id === 'model') && $('model').value.trim() !== '') {
-    setTimeout(() => acp('model'), 0)
-  }
-  logLine(prefix, line.length > 2000 ? line.slice(0, 2000) + '…' : line)
-}
-
-function closeAcp() { if (state.ws) { const ws = state.ws; state.ws = null; ws.close(); $('acpConn').textContent = 'closed'; $('acpConn').className = '' } }
-
-function send(message) {
-  if (!state.ws || state.ws.readyState !== 1) { logLine('!', 'relay not connected'); return }
-  const text = JSON.stringify(message)
-  state.ws.send(text)
-  logLine('→', text)
-}
-
-function acp(kind) {
-  const s = state.sandboxes.get(state.selected)
-  const cwd = s?.bridge?.workspace ?? '/home/harness/work'
-  const sessionId = $('sessionId').value.trim()
-  const id = state.nextId++
-  if (kind === 'initialize') send({ jsonrpc: '2.0', id, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } } })
-  if (kind === 'new') { state.newIds.add(id); send({ jsonrpc: '2.0', id, method: 'session/new', params: { cwd, mcpServers: [] } }) }
-  if (kind === 'model') send({ jsonrpc: '2.0', id, method: 'session/set_config_option', params: { sessionId, configId: 'model', value: $('model').value.trim() } })
-  if (kind === 'resume') send({ jsonrpc: '2.0', id, method: 'session/resume', params: { sessionId, cwd, mcpServers: [] } })
-  if (kind === 'load') send({ jsonrpc: '2.0', id, method: 'session/load', params: { sessionId, cwd, mcpServers: [] } })
-  if (kind === 'cancel') send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } })
-  if (kind === 'prompt') send({ jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: $('promptText').value }] } })
-}
-
-function renderPermissions() {
-  $('permissions').innerHTML = [...state.permissions.entries()].map(([key, m]) => `
-    <div class="perm">Permission requested (request ${esc(key)}): ${esc(m.params?.toolCall?.title)} —
-    ${(m.params?.options ?? []).map((o) => `<button data-permission="${esc(key)}" data-option="${esc(o.optionId)}">${esc(o.name)} (${esc(o.kind)})</button>`).join(' ')}
-    <button data-permission="${esc(key)}" data-option="">cancelled</button></div>`).join('')
-}
-
-function answerPermission(key, optionId) {
-  const m = state.permissions.get(key)
-  if (!m) return
-  send({ jsonrpc: '2.0', id: m.id, result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } } })
-  state.permissions.delete(key); renderPermissions()
-}
-
-$('acpConnect').onclick = () => openAcp(false)
-$('acpResume').onclick = () => openAcp(true)
-$('acpClose').onclick = closeAcp
-$('acpClear').onclick = () => { $('acpLog').textContent = '' }
-$('sendRaw').onclick = () => { try { const m = JSON.parse($('raw').value); send(m) } catch (e) { logLine('!', 'invalid JSON: ' + e.message) } }
-
-// ---------------------------------------------------------------- the cases
-const CASES = [
-  ['Create from a warm pool', 'Create on a pool with ready replicas.', 'Ready in under a second, launch warm.'],
-  ['Create beyond the warm pool', 'Create several sandboxes in a row.', 'Ready in a few seconds, launch cold.'],
-  ['Create twice, same id', '"Create 2× (same id)".', 'Same name twice, a single execution.'],
-  ['Pool not in the catalogue, quota', 'Pool "no-such-pool"; or create beyond the quota.', 'Refused with the reason.'],
-  ['ACP relay', 'ACP → initialize, session/new, session/prompt.', 'initialize answered locally, numbered frames, turn closed.'],
-  ['Second prompt during a turn', '/sleep 30 then session/prompt right away.', 'JSON-RPC error "refused: a turn is already in progress".'],
-  ['Cancel a turn', '/sleep 30 then session/cancel.', 'stopReason cancelled, execution ready.'],
-  ['Permission, consumer gone then back', '/permission, "Disconnect", "Reconnect after my last position".', 'The request is replayed; answering it unblocks the turn.'],
-  ['Consumer disconnected during a turn', '/sleep 30, "Disconnect", wait, reconnect after the last position.', 'Missed frames replayed, end of turn visible.'],
-  ['Bridge connection cut', '/sleep 30 then "cut bridge".', 'Reconnection without replay; uncertain until the final answer, then the turn closes.'],
-  ['Agora restarted during a turn', '/sleep 60 then "Restart the lab".', 'Once back, the turn is found again, then closed.'],
-  ['Deadline during a turn', '/sleep 150 and watch the Deadline column.', 'Moves forward every minute, never past start + max turn.'],
-  ['End of turn', 'A short turn, then watch the deadline.', 'Now + lease, then no more renewals.'],
-  ['Deadline between two turns', 'Create with lease 60, one turn, wait.', 'Destroyed by the infrastructure, anchor received from the Pod.'],
-  ['Turn too long', 'Create with max turn 30, then /sleep 120.', 'Destroyed at start + 30 s, anchor received from the Pod.'],
-  ['Stop', '"Stop" on a ready execution (lease 60 to avoid waiting).', 'No more renewals, end at the deadline, anchor received.'],
-  ['Stop during a turn', '/sleep 60 then "Stop".', 'Turn cancelled, then as above.'],
-  ['Restore an anchor', 'Anchors → "restore" → "Create", then ACP and /recall.', 'Same session, the agent remembers.'],
-  ['Dead adapter', 'One turn, then /crash.', 'State lost, no more renewals, anchor received at the end of the Pod.'],
-  ['Refused tokens', '"probe token".', '401 everywhere except the control.'],
-  ['Push without a projected token', 'Outside the page: POST on port 8081 without a valid token.', '401, nothing is stored.'],
-  ['Real harness', 'Pool claude-code: initialize, session/new, a prompt, "Stop", "restore".', 'Real initialize; without a credential the prompt fails.'],
-  ['Going out without a credential (docs/specs/credentials.md)', 'Pool mock: /fetch.', 'CONNECT refused by the bridge: 503; 1 refused in "Way out".'],
-  ['Gateway, chain only', 'Pool mock, profile anthropic: "attach credential", then /fetch.', 'Answer from Anthropic (no 403 from the gateway, no TLS error); tunnel counted.'],
-  ['Gateway, real harness', 'Pool claude-code, profile anthropic: "attach credential", session/new (model haiku applied), a short prompt.', 'Real answer from the model, end of turn end_turn.'],
-  ['Gateway, composition', 'Pool mock, profiles github:A:write github:B:read: /fetch on A, B and C.', 'A read and written, B read only, C refused: 403 from the gateway on what is not granted.'],
-  ['Agora away', '/sleep 5 then "pause bridge 10s".', 'Uncertain while disconnected; all unread output arrives in order, then ready.'],
-  ['Restarted Agora initializes once', '"Restart the lab" while idle, reconnect ACP, initialize, then prompt.', 'Same capabilities and context; new positions epoch, no second initialize to the adapter.'],
-]
-$('cases').innerHTML = CASES.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td></tr>`).join('')
-
-newRequestId()
-connectEvents()
-loadPools().catch((e) => { $('pools').textContent = 'catalogue unavailable: ' + e.message })
-loadConfig().catch((e) => { $('credentialSource').textContent = 'configuration unavailable: ' + e.message })
-</script>
-</body>
+    textarea {
+      width: 100%;
+      min-height: 5rem;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+    .entry {
+      padding: 1rem;
+      margin: 1rem 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .notice {
+      border-color: #c88820;
+      background: #fff6df;
+    }
+    small {
+      color: #666;
+    }
+    #status {
+      min-height: 1.6rem;
+    }
+    #failure {
+      color: #9b2424;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+  <header>
+    <h1>Agora · Lab</h1>
+    <button id="new">New Workstream</button><a href="/api/executions">Executions, as the mechanics see them</a>
+  </header>
+  <p><small>The lab plays the cases of the executions, credentials and log specs. Who may read a Workstream is not decided yet.</small></p>
+  <form id="open">
+    <label>Workstream <input id="workstream" size="38" required /></label><button>Open</button>
+  </form>
+  <p id="status">Open or create a Workstream.</p>
+  <p id="failure" role="alert"></p>
+  <div class="actions">
+    <select id="pool"></select
+    ><select id="anchor"><option value="">no anchor</option></select
+    ><button id="create">Create execution</button
+    ><button id="cancel" disabled>Cancel turn</button><button id="stop" disabled>Stop execution</button
+    ><button id="credentials" disabled>Attach anthropic</button>
+  </div>
+  <div class="actions">
+    <button id="drop" disabled>Drop the bridge for 10 s</button><button id="probe" disabled>Probe the bridge's tokens</button
+    ><button id="restart-clean">Restart the lab</button><button id="restart-kill">Kill the lab</button>
+  </div>
+  <p><small id="mechanics"></small></p>
+  <p><small id="probed"></small></p>
+  <div id="thread" aria-live="polite"></div>
+  <form id="write">
+    <label for="prompt">Message</label><textarea id="prompt" required disabled></textarea
+    ><button id="send" disabled>Send</button>
+  </form>
+  <script src="/api/log-json.js"></script>
+  <script>
+    const parse = LosslessJSON.parse,
+      stringify = LosslessJSON.stringify
+    const $ = (id) => document.getElementById(id),
+      objects = new Map()
+    let cursor = '0',
+      source = null,
+      snapshotComplete = false,
+      workstream = '',
+      view = null,
+      turn = null
+    const ownerKey = 'agora-log-lab-owner'
+    let owner = localStorage.getItem(ownerKey)
+    if (!owner) {
+      owner = crypto.randomUUID()
+      localStorage.setItem(ownerKey, owner)
+    }
+    async function post(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: stringify(body),
+      })
+      const answer = await response.json()
+      if (!response.ok) throw new Error(answer.reason || 'unavailable')
+      return answer
+    }
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const path = (id) => {
+      if (!UUID.test(id)) throw new Error('invalid Workstream id')
+      return `/api/workstreams/${encodeURIComponent(id)}`
+    }
+    async function command(kind, target, body = {}) {
+      return post(`${path(workstream)}/commands`, { id: crypto.randomUUID(), kind, target, body })
+    }
+    function guard(run) {
+      return async (event) => {
+        event?.preventDefault()
+        $('failure').textContent = ''
+        try {
+          await run()
+        } catch (error) {
+          $('failure').textContent = error.message
+        }
+      }
+    }
+    function render() {
+      view = [...objects.values()].find((o) => o.kind === 'workstream')?.object
+      turn = [...objects.values()].find(
+        (o) => o.kind === 'turn' && ['saved', 'in_progress', 'uncertain'].includes(o.object.status),
+      )?.object
+      const disabled = !snapshotComplete || !view || view.stopped || view.unavailable || !!turn
+      $('prompt').disabled = $('send').disabled = disabled
+      $('cancel').disabled = !snapshotComplete || !turn || view?.stopped
+      $('stop').disabled = !snapshotComplete || !view || view.stopped || view.ended || view.lost
+      $('create').disabled = !workstream || (!view?.ended && !!view?.execution)
+      $('credentials').disabled = !view?.execution || view.ended || view.lost
+      $('drop').disabled = $('probe').disabled = !view?.execution || view.ended
+      const live = executions.get(view?.execution)
+      $('mechanics').textContent = live
+        ? `claim ${live.claimName} · ${live.ready ? 'ready' : `starting ${live.reason}`} · ${live.launchType ?? ''} · bridge ${live.bridge} · deadline ${live.shutdownTime ?? '—'}${live.ending ? ' · ending' : ''}`
+        : ''
+      $('status').textContent = !snapshotComplete
+        ? 'Loading history…'
+        : view?.stopped
+          ? 'Execution stopped'
+          : turn?.status === 'uncertain'
+            ? 'Delivery is uncertain. Wait for the answer, cancel this turn, or stop the execution.'
+            : view?.unavailable
+              ? 'Execution unavailable'
+              : turn
+                ? `Turn ${turn.status}`
+                : `Ready · cursor ${cursor}`
+      const thread = $('thread')
+      thread.replaceChildren()
+      for (const row of [...objects.values()]
+        .filter((o) => ['element', 'notice'].includes(o.kind))
+        .sort((a, b) => (BigInt(a.object.firstPosition) < BigInt(b.object.firstPosition) ? -1 : 1))) {
+        const el = document.createElement('div')
+        el.className = `entry ${row.kind === 'notice' ? 'notice' : ''}`
+        const o = row.object
+        el.textContent =
+          o.text ??
+          (o.type === 'user' ? o.content.map((c) => c.text ?? stringify(c)).join('\n') : stringify(o, null, 2))
+        if (o.type === 'permission' && o.status === 'pending') {
+          for (const option of o.params.options) {
+            const button = document.createElement('button')
+            button.textContent = option.name
+            button.onclick = guard(() =>
+              command(
+                'RespondPermission',
+                { execution: view.execution, session: o.session, requestPosition: o.requestPosition },
+                { requestId: o.requestId, outcome: { outcome: 'selected', optionId: option.optionId } },
+              ),
+            )
+            el.append(button)
+          }
+        }
+        thread.append(el)
+      }
+    }
+    function apply(row) {
+      if (row.operation === 'reset') objects.clear()
+      else if (row.operation === 'remove') objects.delete(row.id)
+      else if (row.id) objects.set(row.id, row)
+    }
+    function persist() {
+      localStorage.setItem(`agora-log:${workstream}`, stringify({ cursor, objects: [...objects.values()] }))
+    }
+    function open(id) {
+      if (!UUID.test(id)) throw new Error('invalid Workstream id')
+      source?.close()
+      workstream = id
+      $('workstream').value = id
+      location.hash = id
+      objects.clear()
+      cursor = '0'
+      snapshotComplete = false
+      view = null
+      turn = null
+      const saved = localStorage.getItem(`agora-log:${id}`)
+      if (saved) {
+        try {
+          const state = parse(saved)
+          BigInt(state.cursor)
+          cursor = state.cursor
+          for (const o of state.objects) objects.set(o.id, o)
+        } catch {
+          objects.clear()
+          cursor = '0'
+        }
+      }
+      render()
+      source = new EventSource(`${path(id)}/thread?after=${encodeURIComponent(cursor)}`)
+      source.onmessage = (event) => {
+        const row = parse(event.data)
+        if (row.type === 'snapshot-end') {
+          cursor = row.position
+          snapshotComplete = true
+          persist()
+        } else if (row.type === 'snapshot') {
+          snapshotComplete = false
+          apply(row)
+        } else if (row.type === 'live' && BigInt(row.position) > BigInt(cursor)) {
+          apply(row)
+          cursor = row.position
+          persist()
+        }
+        render()
+      }
+      source.onerror = () => {
+        snapshotComplete = false
+        render()
+        source.close()
+        setTimeout(() => open(workstream), 1000)
+      }
+    }
+    $('open').onsubmit = guard(() => open($('workstream').value))
+    $('new').onclick = guard(async () => {
+      const id = crypto.randomUUID()
+      await post('/api/workstreams', { id, owner })
+      open(id)
+    })
+    $('create').onclick = guard(() =>
+      command('Create', {}, { pool: $('pool').value, ...($('anchor').value ? { anchor: $('anchor').value } : {}) }),
+    )
+    $('credentials').onclick = guard(() => post(`${path(workstream)}/credentials`, { execution: view.execution, profiles: ['anthropic'] }))
+    const executions = new Map()
+    const events = new EventSource('/api/events')
+    events.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      if (data.type === 'snapshot') for (const e of data.executions) executions.set(e.execution, e)
+      if (data.type === 'execution') executions.set(data.execution.execution, data.execution)
+      render()
+    }
+    fetch('/api/anchors')
+      .then((r) => r.json())
+      .then((data) => {
+        for (const anchor of data.anchors ?? []) {
+          const option = document.createElement('option')
+          option.value = anchor.id
+          option.textContent = `${anchor.metadata.harness} · ${anchor.id.slice(0, 8)}`
+          $('anchor').append(option)
+        }
+      })
+    $('write').onsubmit = guard(async () => {
+      await command(
+        'Write',
+        { execution: view.execution, session: view.session },
+        { prompt: [{ type: 'text', text: $('prompt').value }] },
+      )
+      $('prompt').value = ''
+    })
+    $('drop').onclick = guard(() => post(`/api/lab/executions/${view.execution}/drop-bridge`, { pauseSeconds: 10 }))
+    $('probe').onclick = guard(async () => {
+      const answer = await post(`/api/lab/executions/${view.execution}/probe-auth`, {})
+      $('probed').textContent = answer.results.map((r) => `${r.case}: ${r.info} / ${r.acp}`).join(' · ')
+    })
+    $('restart-clean').onclick = guard(() => post('/api/lab/restart', { mode: 'clean' }))
+    $('restart-kill').onclick = guard(() => post('/api/lab/restart', { mode: 'kill' }))
+    $('cancel').onclick = guard(() => command('Cancel', { execution: view.execution, turn: turn.id }))
+    $('stop').onclick = guard(() => command('Stop', { execution: view.execution }))
+    fetch('/api/pools')
+      .then((r) => r.json())
+      .then((data) => {
+        for (const pool of data.pools) {
+          const option = document.createElement('option')
+          option.value = pool.name
+          option.textContent = pool.name
+          $('pool').append(option)
+        }
+      })
+    if (UUID.test(location.hash.slice(1))) open(location.hash.slice(1))
+    else render()
+  </script>
 </html>

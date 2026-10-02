@@ -10,6 +10,7 @@ behaviour; the open questions close the document.
 | Actor | Role |
 | --- | --- |
 | The server | Writes each entry to the log before acting on it, projects the log into views, serves them to the client. |
+| The execution mechanics | Within the server: claims, bridge connections and deadlines, each effect on the server's request. They keep nothing. |
 | PostgreSQL | Holds the log, the views and the anchors. |
 | The bridge | Pipes ACP lines between the adapter and the server. It keeps nothing. |
 | The client | Reads a Workstream's thread from its last position and sends commands. |
@@ -33,7 +34,8 @@ the harness answered, in the log.
 
 1. Authorize the user on the Workstream and deduplicate their request.
 2. Check the target Session, the connection to the bridge and the turn in progress.
-3. Write the command, then the `session/prompt` line, before sending it.
+3. Commit the command and its `session/prompt` line together, then record the dispatch attempt
+   before sending it.
 4. Write each line received, then follow the turn and update the views.
 
 ```mermaid
@@ -44,6 +46,7 @@ sequenceDiagram
     participant Bridge
     Client->>Server: Write
     Server->>DB: the command, then the session/prompt line
+    Server->>DB: dispatch may occur
     Server->>Bridge: session/prompt
     Bridge-->>Server: session/update
     Server->>DB: the line, at the next position
@@ -51,9 +54,11 @@ sequenceDiagram
     Server-->>Client: a thread update, with its position
 ```
 
-A line is stored whole, as the harness wrote it: members no view knows yet, large integers and
-order included. A line that is not valid ACP for its method and direction is not an entry; only
-its size, digest and reason are kept.
+A line preserves all its semantic content: members no view knows yet, exact large integers and
+array order. PostgreSQL may change its textual representation. A line that is not valid ACP for
+its method and direction is not stored as ACP; its diagnostic keeps only correlations, size,
+digest and reason. A correlated local request failure is an ordered entry of its own, so the
+interface can rebuild the failure without reading the invalid content.
 
 The usual path does not re-read Kubernetes, the grants or the native transcript before each
 message. An open connection is not proof of progress: a timeout makes the stall visible; it
@@ -68,8 +73,10 @@ version: changing how it is built rebuilds it from the log, which never changes.
 understands stays in the log and shows as a generic item.
 
 Each change to a view is an update of the Workstream's thread, with its own increasing position.
-The client reads the thread from the last position it has: opening, reloading and reconnecting
-are the same action, with nothing lost and nothing received twice.
+The client reads the thread from its last completed position: a consistent snapshot through a
+recorded high-water mark, then live updates beyond it. A snapshot interrupted before its end can
+be applied again without duplicating objects. Opening, reloading and reconnecting give the same
+state.
 
 ## Breaks
 
@@ -77,28 +84,39 @@ The bridge reads the adapter only as fast as the server takes the lines, and not
 server is away: the adapter waits, and nothing is kept in between. The server writes every break
 into the log.
 
-A clean restart of Agora loses nothing: the server closes the connection and writes everything it
-received before leaving. A crash or a network drop can lose the lines in flight: the view shows
-where output may be missing, and a turn in progress becomes uncertain until its end is seen.
+A restart is clean only after the server stops new dispatch, completes the connection's close
+handshake and commits every received line and settled write. Failure to drain makes the break
+unclean. A crash or a network drop can lose the lines in flight: the view shows where output may
+be missing, and a dispatched turn becomes uncertain until its end is seen.
 
-After a restart, the claims say which executions still exist and the log where each one stands;
-the server connects to the bridges again and carries on.
+When PostgreSQL is unavailable, Agora retains the line whose commit failed and applies bounded
+backpressure. It continues with that line first when storage returns. The execution's granted
+deadline still applies; backpressure does not guarantee that the sandbox survives a long outage.
+
+One server owns a database at a time. If it loses that ownership, it exits rather than write
+without it, and its restart recovers from the log.
+
+After a restart, the log supplies accepted creations, their exact targets and unresolved
+commands; the claims say which resources exist. A Create saved before its claim was requested
+is recovered too. The server reconnects to the same bridge instances and resumes only what the
+recorded evidence permits.
 
 ## Commands and recovery
 
-A single turn at a time per Workstream: a Write is refused while a turn is in progress, because
-adapters disagree on a second prompt. Configuration changes, sends and stops share an explicit
-ordering rule. Cancellation can interrupt the active turn; a late cancellation must not hit the
-next one.
+A single turn at a time per Workstream: a Write is refused while a turn is saved, in progress or
+uncertain, because adapters disagree on a second prompt. Commands and their dispatch share one
+ordering, including Stop and any future configuration changes. Cancellation rechecks its target
+immediately before sending; a late cancellation must not hit the next turn.
 
 After a crash, Agora finds the unresolved commands and their targets again. A retried
 sandbox request must find the same resource when its creation succeeded despite
 the lost response.
 
-For ACP, "saved", "possibly sent" and "done" are distinct. A lost response does
-not trigger an automatic resend. Agora looks for proof from the same context if the
-harness allows it, otherwise it exposes the uncertainty. An Agora command id does
-not guarantee deduplication on the harness side.
+For ACP, the log distinguishes a saved line from an attempted dispatch and a confirmed answer.
+A local write callback does not prove harness acceptance. A lost or invalid response does not
+trigger an automatic resend or release the turn. Agora looks for proof from the same context if
+the harness allows it, otherwise it exposes the uncertainty. An Agora command id does not
+guarantee deduplication on the harness side.
 
 This targeted recovery is necessary. It does not bring back a loop that constantly
 re-evaluates every dependency and the whole desired configuration.
@@ -154,6 +172,5 @@ message that the model still has the whole history.
 
 1. The functional scope.
 2. Workspace storage and the resume actually promised for each harness.
-3. Command ordering, recovery of uncertain sends and the buffering limits when the log is
-   unavailable.
+3. Releasing an uncertain turn without stopping the execution.
 4. User access, ACP permissions and data retention.

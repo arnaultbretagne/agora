@@ -58,9 +58,9 @@ flowchart TB
 | **Harness** | A coding agent (claude-code, codex, …) behind its ACP adapter. | Its native files, in the sandbox only. |
 
 The server has three parts, each with its own document: the log (`log.md`), the executions
-(`executions.md`) and the credentials (`credentials.md`). The lab is a server without the client
-and the log: it mounts the executions and the credentials, and serves a page that plays every
-case.
+(`executions.md`) and the credentials (`credentials.md`). The lab mounts these parts, with
+PostgreSQL and one Workstream per execution, without the product client, and serves a page that
+plays every case.
 
 ## The prerequisites
 
@@ -105,6 +105,7 @@ sequenceDiagram
     User->>Client: writes
     Client->>Server: Write command
     Server->>DB: writes the command and the prompt
+    Server->>DB: records the dispatch attempt
     Server->>Bridge: session/prompt
     Bridge->>Harness: session/prompt
     Harness->>Bridge: HTTPS to the model

@@ -28,6 +28,8 @@ export class FakeKube implements KubeApi {
   readonly bridges = new Map<string, LabBridge>()
   /** Every PATCH of a claim's deadline, in order: the tests read the renewal policy from it. */
   readonly deadlines: { name: string; shutdownTime: string; at: number }[] = []
+  /** Every claim created, by name, in order. */
+  readonly created: string[] = []
   private readonly watchers = new Set<(event: WatchEvent) => void>()
   private readonly tokens = mkdtempSync(join(tmpdir(), 'tokens-'))
   private version = 1
@@ -38,7 +40,10 @@ export class FakeKube implements KubeApi {
   anchorUrl = ''
   allocationDelayMs = 50
   failPatches = false
+  /** Foreground deletion held: past its deadline a claim gets its deletionTimestamp, and stays with its Pod. */
+  holdDeletion = false
   bridgeFactory: (publicKey: KeyObject, podName: string) => Promise<LabBridge> = mockBridge
+  private closed = false
 
   constructor(publicKey: KeyObject) {
     this.publicKey = publicKey
@@ -74,6 +79,7 @@ export class FakeKube implements KubeApi {
     const claim = structuredClone(input) as unknown as Mutable
     const name = claim.metadata.name as string
     if (this.claims.has(name)) throw new KubeError(409, `sandboxclaims "${name}" already exists`)
+    this.created.push(name)
     claim.metadata.uid = randomUUID()
     claim.metadata.creationTimestamp = new Date().toISOString()
     claim.status = { conditions: [{ type: 'Ready', status: 'False', reason: 'SandboxNotReady' }] }
@@ -92,7 +98,10 @@ export class FakeKube implements KubeApi {
       claim.status = { conditions: [{ type: 'Ready', status: 'False', reason: 'WarmPoolNotFound', message: 'pool absent' }] }
     } else {
       const podName = `${pool}-${String(++this.podCounter)}`
-      this.bridges.set(podName, await this.bridgeFactory(this.publicKey, podName))
+      const bridge = await this.bridgeFactory(this.publicKey, podName)
+      // Closed while the Pod was starting: it never runs.
+      if (this.closed) return void (await bridge.bridge.close())
+      this.bridges.set(podName, bridge)
       claim.status = { conditions: [{ type: 'Ready', status: 'True', reason: 'SandboxReady' }], sandbox: { name: podName, serviceFQDN: `${podName}.${NAMESPACE}.svc.cluster.local` } }
     }
     this.bump(claim)
@@ -107,6 +116,7 @@ export class FakeKube implements KubeApi {
       claim.metadata.deletionTimestamp = new Date().toISOString()
       this.bump(claim)
       this.emit('MODIFIED', claim)
+      if (this.holdDeletion) continue
       const podName = (claim.status?.sandbox as { name?: string } | undefined)?.name
       void (async () => {
         const lab = podName === undefined ? undefined : this.bridges.get(podName)
@@ -122,6 +132,30 @@ export class FakeKube implements KubeApi {
         this.emit('DELETED', claim)
       })()
     }
+  }
+
+  /** Ends a held foreground deletion: the Pod is terminated and pushes its anchor, then the claim goes. */
+  releaseDeletion(): void {
+    this.holdDeletion = false
+    for (const claim of this.claims.values()) if (claim.metadata.deletionTimestamp !== undefined) delete claim.metadata.deletionTimestamp
+  }
+
+  /** A claim removed by someone else than Agent Sandbox at the deadline: gone at once, Pod left as is. */
+  deleteClaim(name: string): void {
+    const claim = this.claims.get(name)
+    if (claim === undefined) return
+    this.claims.delete(name)
+    this.bump(claim)
+    this.emit('DELETED', claim)
+  }
+
+  /** The deadline moved by the cluster, not by Agora: not recorded in `deadlines`. */
+  expireAt(name: string, shutdownTime: Date): void {
+    const claim = this.claims.get(name)
+    if (claim === undefined) return
+    ;(claim.spec.lifecycle as { shutdownTime?: string }).shutdownTime = shutdownTime.toISOString()
+    this.bump(claim)
+    this.emit('MODIFIED', claim)
   }
 
   async getClaim(name: string): Promise<Claim | null> {
@@ -160,13 +194,16 @@ export class FakeKube implements KubeApi {
     return { metadata: { labels: { 'agents.x-k8s.io/launch-type': 'warm' } } }
   }
 
-  async getPod(): Promise<Json | null> {
-    return { status: { phase: 'Running' } }
+  /** A Pod recreated under the same name gets another UID than the one its old tokens carry. */
+  readonly podUids = new Map<string, string>()
+
+  async getPod(name = ''): Promise<Json | null> {
+    return { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Running' } }
   }
 
   /** A projected token is `pod:<name>` here; anything else is refused, as TokenReview would. */
   async reviewToken(token: string): Promise<PodIdentity | null> {
-    return token.startsWith('pod:') ? { namespace: NAMESPACE, podName: token.slice(4), podUid: 'uid' } : null
+    return token.startsWith('pod:') ? { namespace: NAMESPACE, podName: token.slice(4), podUid: `uid-${token.slice(4)}` } : null
   }
 
   /** The Sandbox controller recreating a Pod that vanished: same name, new bridge instance. */
@@ -176,6 +213,7 @@ export class FakeKube implements KubeApi {
   }
 
   async closeAll(): Promise<void> {
+    this.closed = true
     clearInterval(this.controller)
     for (const lab of this.bridges.values()) await lab.bridge.close().catch(() => {})
   }
