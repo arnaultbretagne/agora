@@ -10,6 +10,7 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R2 | 2026-09-30 | `7afc4d7` | local | `npm run check`: the two bridge tests in `packages/harness-bridge/test/bridge.test.ts` now named E27. |
 | R3 | 2026-10-02 | `0669fc5` | local | `npm run check`: the mechanics against real bridges (`packages/executions`), and the cases the log decides with PostgreSQL 17.11 (`packages/log`, as in `log.md` R1); renewal step 1 s instead of a minute for E12 and E13. |
 | R4 | 2026-10-02 | `f240cd0` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The lab `agora-lab@sha256:1973a988…` built from that commit, on the `agora` database (CloudNativePG, PostgreSQL 17.4); pools `agora-harness-mock@sha256:1a1cc63c…` and `agora-harness-claude-code@sha256:5f3bb480…` (claude-agent-acp 0.75.1). `apps/lab/scripts/live-cases.ts` from that commit, against the deployed lab. Deadline cases with a 60 s lease and the lab's renewal step (a third of the lease). |
+| R5 | 2026-10-02 | `31456b0` | local | `npm run check`: real bridges; a stdio adapter that reads its native file once, when it starts, and the mock agent in the same mode (`AGORA_MOCK_READ_AT_START`), waited for as a pool Pod; PostgreSQL 17.11 for the log's tests. |
 
 ## Cases
 
@@ -66,6 +67,8 @@ own cases (`log.md`). Their rows are evidence for `7afc4d7`.
 | E27 | real: no client connected | local | R3 | proven | Every assertion held. |
 | E27 | real: Agora terminates its connection and stays away 10 s (lab `drop-bridge`), during a short and a 3,600-line answer | cluster | R4 | partial: the blocked writer is not asserted | Output arrived in order, without a repeat; 165 lines in flight lost at the cut (61–225), the rest and the end arrived. |
 | E28 | real: the lab process exits (lab `restart`); Kubernetes restarts it | cluster | R1 | proven | Same capabilities and session after restart; new positions epoch. The mock completed another prompt without a second `initialize`. |
+| E29 | real: an adapter that reads its native file only at start | local | R5 | proven | Every assertion held, in each of its five tests (three in the bridge, two in the log). |
+| E30 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 
