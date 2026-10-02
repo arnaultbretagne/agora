@@ -80,8 +80,10 @@ const server = createApi({
   page: join(import.meta.dirname, '..', 'public', 'index.html'),
   handle: (req, res) => logHttp(workstreams, req, res, { lab, ...(credentials === undefined ? {} : { credentials }) }),
   ...(credentials === undefined ? {} : { credentials }),
-  // docs/specs/executions.md, "The lab": a clean stop drains like a SIGTERM; a kill leaves no trace.
-  onRestart: (mode) => process.kill(process.pid, mode === 'kill' ? 'SIGKILL' : 'SIGTERM'),
+  // docs/specs/executions.md, "The lab": a clean stop drains like a SIGTERM; a kill ends the process
+  // on the spot, nothing drained or written. In a container the lab is PID 1, which cannot SIGKILL
+  // itself: it exits at once instead, with the status a kill leaves.
+  onRestart: (mode) => (mode === 'kill' ? process.exit(137) : process.kill(process.pid, 'SIGTERM')),
 })
 server.listen(number('PORT', 8080), () => console.log(`- lab ready on :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({

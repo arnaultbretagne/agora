@@ -679,6 +679,9 @@ export class Workstreams implements Handler {
         this.report({ operation: 'renew', outcome: 'failed', workstream, execution, errorClass: 'transport' })
       }
     }
+    // After a turn, what went out through the bridge: tunnels, the proxy's answers, in the mechanics' view.
+    if (entry?.correlated_method === 'session/prompt' && ['response', 'error'].includes(entry.rpc_kind ?? ''))
+      void this.executions.info(execution).catch(() => {})
     await this.drive(workstream)
     this.projectSoon(workstream)
   }

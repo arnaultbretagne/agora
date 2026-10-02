@@ -436,7 +436,7 @@ await check('C1', 'Going out without a credential', async () => {
   const w = new Workstream()
   await w.open(mock, SHORT)
   const reply = await fetched(w, 'https://api.anthropic.com/v1/models')
-  const refused = await until('refusal counted', async () => (await view(w.execution))?.outbound?.refused, 10_000)
+  const refused = await until('refusal counted', async () => ((await view(w.execution))?.outbound?.refused ?? 0) >= 1 && (await view(w.execution))!.outbound.refused, 10_000)
   await w.stop()
   assert(reply.includes('refused by the proxy: 503'), reply)
   return `"${reply.slice(0, 90)}"; ${String(refused)} refusal(s)`

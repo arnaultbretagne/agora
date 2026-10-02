@@ -300,7 +300,7 @@ ends. Besides the log's lab routes (`log.md`, "HTTP"), three actions are reserve
 | --- | --- |
 | `POST /api/lab/executions/{name}/drop-bridge` | Agora terminates its connection to the bridge, and reconnects after `pauseSeconds` (0–60) to exercise an absent reader. |
 | `POST /api/lab/executions/{name}/probe-auth` | Tries the bridge with no token, with an expired token, with one for another sandbox, with one signed by another key. |
-| `POST /api/lab/restart` | `{"mode": "clean"}` stops the process as a SIGTERM would; `{"mode": "kill"}` kills it. Kubernetes restarts it. |
+| `POST /api/lab/restart` | `{"mode": "clean"}` stops the process as a SIGTERM would; `{"mode": "kill"}` ends it on the spot, nothing drained or written, with the status a kill leaves. Kubernetes restarts it. |
 
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
 with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long
