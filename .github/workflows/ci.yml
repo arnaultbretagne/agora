@@ -38,7 +38,6 @@ jobs:
       - name: Typecheck and test every workspace
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
           npm run check
 
   image:
