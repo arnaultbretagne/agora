@@ -1,17 +1,25 @@
 // The connection point (docs/specs/assistant-ui.md, "The connection point: useExternalStoreRuntime"):
 // the objects become messages, the user's actions become commands, and what the screen offers follows
 // the Workstream's state. A refused command shows its reason; its effect, if any, comes from the thread.
-import {
-  AssistantRuntimeProvider,
-  useExternalStoreRuntime,
-  type ThreadMessageLike,
-} from '@assistant-ui/react'
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
-import type { Answer, Api, CommandKind } from './api.ts'
+//
+// Sending with no execution running starts one first (docs/specs/assistant-ui.md, "Sending"): a new
+// Workstream is created on its first message, never before; the message waits, shown, until its
+// Session is open, then is written.
+import { AssistantRuntimeProvider, useExternalStoreRuntime, type ThreadMessageLike } from '@assistant-ui/react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { Answer, Api, CommandKind, Pool } from './api.ts'
 import { useThread, useWorkstreams } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
-import { composerOf, messagesOf, workstreamOf, type Composer, type WorkstreamView } from './view.ts'
+import { composerOf, createBody, firstMessageStep, messagesOf, workstreamOf, type Composer, type WorkstreamView } from './view.ts'
+
+/** A first message waiting for the Session its Create opens. */
+export interface Pending {
+  readonly workstream: string
+  readonly execution: string
+  readonly text: string
+  readonly harness: string
+}
 
 export interface Agora {
   readonly api: Api
@@ -21,11 +29,19 @@ export interface Agora {
   readonly composer: Composer
   readonly connection: Connection
   readonly workstreams: readonly WorkstreamView[]
+  readonly pools: readonly Pool[] | null
+  /** The pool a new execution starts in. */
+  readonly pool: string | null
+  readonly pending: Pending | null
   /** The reason of the last command refused, until the next one. */
   readonly refusal: string | null
+  /** A message given back to the composer after its execution failed to start. */
+  readonly returned: string | null
+  choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
-  open(id: string): void
-  create(): Promise<void>
+  answer(permission: string, optionId: string): Promise<void>
+  open(id: string | null): void
+  takeReturned(): void
 }
 
 const AgoraContext = createContext<Agora | null>(null)
@@ -41,27 +57,72 @@ const REFUSALS: Record<string, string> = {
   turn_uncertain: 'The last turn is uncertain: cancel it or stop the execution.',
   permission_pending: 'Answer the permission request first.',
   execution_active: 'An execution is already running.',
-  quota: 'Too many executions are running; try again once one has ended.',
+  quota: 'Too many sandboxes are running; try again once one has ended.',
   disconnected: 'The sandbox is not connected.',
   stopped: 'The execution is stopped.',
   unreachable: 'The server cannot be reached.',
+  unknown_pool: 'This harness is no longer available.',
+  startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
 export const refusalText = (reason: string): string => REFUSALS[reason] ?? `Refused (${reason}).`
 
-export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string) => void; children: ReactNode }) {
-  const { workstreams, loading, reload } = useWorkstreams(api)
+const POOL_KEY = 'agora:pool'
+const storedPool = (): string | null => {
+  try {
+    return localStorage.getItem(POOL_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string | null) => void; children: ReactNode }) {
+  const { workstreams, reload } = useWorkstreams(api)
   const { state, connection } = useThread(api, id)
   const [refusal, setRefusal] = useState<string | null>(null)
+  const [pools, setPools] = useState<Pool[] | null>(null)
+  // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
+  const [picked, setPicked] = useState<{ for: string | null; pool: string } | null>(null)
+  const [pending, setPending] = useState<Pending | null>(null)
+  const [returned, setReturned] = useState<string | null>(null)
   const view = useMemo(() => workstreamOf(state, id ?? ''), [state, id])
-  const composer = useMemo(() => composerOf(state, view), [state, view])
-  const messages = useMemo(() => messagesOf(state), [state])
+  // A draft has no thread to wait for: sending is offered at once, and starts everything.
+  const composer = useMemo<Composer>(
+    () => (id === null ? { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null } : composerOf(state, view)),
+    [state, view, id],
+  )
+
+  useEffect(() => {
+    void api.pools().then(setPools, () => setPools([]))
+  }, [api])
+  // The pool offered: the one picked here; else the Workstream's own, so that it continues from its
+  // anchor; else, in a draft, the one picked last; else the first.
+  const pool = useMemo(() => {
+    if (pools === null || pools.length === 0) return null
+    const valid = (name: string | null | undefined): name is string => !!name && pools.some((p) => p.name === name)
+    if (picked?.for === id && valid(picked.pool)) return picked.pool
+    if (id !== null && valid(view.pool)) return view.pool
+    const last = storedPool()
+    return valid(last) ? last : pools[0]!.name
+  }, [pools, picked, view.pool, id])
+  const choosePool = useCallback(
+    (next: string) => {
+      setPicked({ for: id, pool: next })
+      try {
+        localStorage.setItem(POOL_KEY, next)
+      } catch {
+        // Remembered for this page only.
+      }
+    },
+    [id],
+  )
+  const harnessOf = useCallback((name: string) => pools?.find((p) => p.name === name)?.harness ?? name, [pools])
 
   const send = useCallback(
-    async (kind: CommandKind, target: Json, body: Json): Promise<Answer> => {
+    async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id): Promise<Answer> => {
       setRefusal(null)
-      if (id === null) return { accepted: false, reason: 'no_workstream' }
-      const answer = await api.command(id, kind, target, body)
+      if (workstream === null) return { accepted: false, reason: 'no_workstream' }
+      const answer = await api.command(workstream, kind, target, body)
       if (!answer.accepted) setRefusal(refusalText(answer.reason ?? 'unavailable'))
       reload()
       return answer
@@ -69,54 +130,114 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [api, id, reload],
   )
 
-  const create = useCallback(async () => {
-    const workstream = crypto.randomUUID()
-    const answer = await api.create(workstream)
-    if (!answer.accepted) return setRefusal(refusalText(answer.reason ?? 'unavailable'))
-    reload()
-    onOpen(workstream)
-  }, [api, onOpen, reload])
+  const answer = useCallback(
+    async (permissionId: string, optionId: string) => {
+      const permission = state.objects.get(permissionId)?.object
+      if (!permission) return
+      await send(
+        'RespondPermission',
+        { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
+        { requestId: permission.requestId, outcome: { outcome: 'selected', optionId } },
+      )
+    },
+    [state, send],
+  )
+
+  /** A message with no execution running: a Create first, the Write once its Session is open. */
+  const start = useCallback(
+    async (text: string) => {
+      if (pool === null) return setRefusal('No harness is available.')
+      let workstream = id
+      if (workstream === null) {
+        workstream = crypto.randomUUID()
+        const created = await api.create(workstream)
+        if (!created.accepted) return setRefusal(refusalText(created.reason ?? 'unavailable'))
+      }
+      const created = await send('Create', {}, id === null ? { pool } : createBody(view, pool), workstream)
+      if (!created.accepted || created.execution === undefined) {
+        setReturned(text)
+        if (id === null) onOpen(workstream)
+        return
+      }
+      setPending({ workstream, execution: created.execution, text, harness: harnessOf(pool) })
+      if (id === null) onOpen(workstream)
+    },
+    [api, id, pool, view, send, onOpen, harnessOf],
+  )
+
+  // The waiting message is written once its execution's Session is open, and given back if it failed.
+  const writing = useRef(false)
+  useEffect(() => {
+    if (pending === null || pending.workstream !== id || writing.current) return
+    const step = firstMessageStep(pending.execution, view, state.complete)
+    if (step === 'wait') return
+    if (step === 'give back') {
+      setReturned(pending.text)
+      setRefusal(refusalText('startup'))
+      setPending(null)
+      return
+    }
+    writing.current = true
+    void send('Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text: pending.text }] }).finally(() => {
+      writing.current = false
+      setPending(null)
+    })
+  }, [pending, id, state.complete, view, send])
+
+  const messages = useMemo(() => {
+    const own = messagesOf(state)
+    if (pending === null || pending.workstream !== id) return own
+    const custom = { turnStatus: 'pending', harness: pending.harness }
+    return [
+      ...own,
+      { id: 'pending:user', role: 'user', content: [{ type: 'text', text: pending.text }], metadata: { custom } },
+      { id: 'pending:assistant', role: 'assistant', content: [], status: { type: 'running' }, metadata: { custom } },
+    ] satisfies ThreadMessageLike[]
+  }, [state, pending, id])
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages,
     convertMessage: (message) => message,
-    isRunning: composer.running,
-    isSendDisabled: !composer.open,
-    isDisabled: view.state === 'none' || view.state === 'ended',
+    isRunning: composer.running || (pending !== null && pending.workstream === id),
+    isSendDisabled: !composer.open || (pending !== null && pending.workstream === id),
     onNew: async (message) => {
       const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+      if (composer.create) return start(text)
       await send('Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text }] })
     },
     onCancel: async () => {
       if (composer.cancellable) await send('Cancel', { execution: view.execution, turn: composer.cancellable.id }, {})
     },
-    onRespondToToolApproval: async ({ approvalId, optionId, approved }) => {
-      const permission = state.objects.get(approvalId)?.object
-      if (!permission) return
-      const options = ((permission.params as Json | undefined)?.options ?? []) as Json[]
-      // Without an option chosen, the first of the kind the answer means.
-      const chosen = optionId ?? String(options.find((o) => String(o.kind).startsWith(approved ? 'allow' : 'reject'))?.optionId ?? '')
-      await send(
-        'RespondPermission',
-        { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
-        { requestId: permission.requestId, outcome: { outcome: 'selected', optionId: chosen } },
-      )
-    },
-    adapters: {
-      threadList: {
-        threadId: id ?? undefined,
-        isLoading: loading,
-        threads: workstreams.map((w) => ({ id: w.id, status: 'regular' as const, title: w.title, custom: { state: w.state, harness: w.harness } })),
-        onSwitchToThread: (threadId) => {
-          setRefusal(null)
-          onOpen(threadId)
-        },
-        onSwitchToNewThread: () => void create(),
-      },
-    },
   })
 
-  const agora: Agora = { api, id, state, view, composer, connection, workstreams, refusal, send, open: onOpen, create }
+  const open = useCallback(
+    (next: string | null) => {
+      setRefusal(null)
+      onOpen(next)
+    },
+    [onOpen],
+  )
+  const takeReturned = useCallback(() => setReturned(null), [])
+
+  const agora: Agora = {
+    api,
+    id,
+    state,
+    view,
+    composer,
+    connection,
+    workstreams,
+    pools,
+    pool,
+    pending: pending !== null && pending.workstream === id ? pending : null,
+    refusal,
+    returned,
+    choosePool,
+    send: (kind, target, body) => send(kind, target, body),
+    answer,
+    open,
+    takeReturned,
+  }
   return (
     <AgoraContext.Provider value={agora}>
       <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
