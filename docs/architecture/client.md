@@ -1,8 +1,9 @@
 # The client
 
 The client is a screen on Agora's log. It shows the Workstreams and the thread of the one open,
-and turns what the user does into commands; it never shows a state the log does not hold. It runs
-in the browser, served by the server at `agora.bretagne.dev`, behind the identity proxy.
+and turns what the user does into commands; it shows no state the log does not hold, but a first
+message waiting for its sandbox. It runs in the browser, served by the server at
+`agora.bretagne.dev`, behind the identity proxy.
 
 ## Who does what
 
@@ -52,6 +53,26 @@ sequenceDiagram
 The answer to a command only says whether it was taken; what it did appears in the thread, like
 everything else. Sent twice after a network failure, with the same id, it runs once.
 
+## Starting with a message
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Client
+    participant Server
+    User->>Client: picks a harness, writes
+    Client->>Server: a new Workstream, then Create
+    Note over Client: the message shown, waiting for the sandbox
+    Server-->>Client: thread: starting, then ready with its Session
+    Client->>Server: Write
+    Server-->>Client: thread: the turn, saved, then the response
+```
+
+Nothing exists on the server before the first message: a new Workstream is a draft in the
+browser. When no execution runs — none yet, or the last one failed or ended — sending starts one
+first; in the same harness as an ended one, from its anchor, so the agent remembers. If the
+execution fails before its Session opens, the message goes back to the composer.
+
 ## From objects to the screen
 
 A turn becomes the user's message and the agent's response; the response's parts are the turn's
@@ -60,9 +81,13 @@ them. A notice becomes a line of its own between turns: a Session that starts or
 connection lost, a request that failed, an execution that ends.
 
 The Workstream view's state decides what the composer offers: writing when the execution is
-ready and no turn holds it; a reason when it is not; and once the execution has ended, continuing
-from its anchor or starting a new one. An uncertain turn keeps its badge until the log proves
-how it ended; its banner offers to cancel it or stop the execution, never to send it again.
+ready and no turn holds it; a reason when it is not; and with no execution running, starting one
+with the message. An uncertain turn keeps its note until the log proves how it ended; its banner
+offers to cancel it or stop the execution, never to send it again.
+
+The screen follows assistant-ui's base skin, with the first Agora's colours and mark. A
+response's steps — reasoning, tools, the plan — are one line each, opened on demand; a permission
+the agent waits for is a card under its tool, with the agent's own options.
 
 ## Open questions
 
