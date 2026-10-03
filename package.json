@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agora — rewrite: executions, credentials, the lab, harness images.",
+  "description": "Agora \u2014 rewrite: executions, credentials, the lab, harness images.",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -14,7 +14,7 @@
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test && npm run test:browser -w @agora/web"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

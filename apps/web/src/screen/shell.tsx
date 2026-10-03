@@ -155,7 +155,11 @@ const Title: FC = () => {
           <span aria-hidden>·</span>
           {harnessName(pending?.harness ?? view.harness)}
           <span aria-hidden>·</span>
-          {state === 'starting' || state === 'interrupted' ? <ShimmerLabel>{STATE_LABEL[state]}</ShimmerLabel> : STATE_LABEL[state]}
+          {state === 'starting' || state === 'interrupted' ? (
+            <ShimmerLabel data-state={state}>{STATE_LABEL[state]}</ShimmerLabel>
+          ) : (
+            <span data-state={state}>{STATE_LABEL[state]}</span>
+          )}
         </span>
       )}
       <span className="flex-1" />

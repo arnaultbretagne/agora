@@ -263,6 +263,15 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U13 | Real codex and opencode histories: shell commands, some failing, a todo list, reasoning | Commands without their shell; the failures marked; the todo list as entries; the reasoning kept. |
 | U14 | Workstreams changed today, yesterday, this week, before, and two with no entry | Grouped by day; those with no entry left out unless open; a search keeps the titles that contain it. |
 | U15 | A first message, while its execution starts, opens, or fails | Waits; is written once that execution is `ready` with its Session; is given back if it fails, ends or is lost first. |
+| U16 | In a browser, **New workstream** from an open Workstream, then Back | The draft at `/`, the greeting, no message of the other; Back: that Workstream and its messages. |
+| U17 | In a browser, two Workstreams switched in the list | Each shows its own messages only; the open one marked in the list. |
+| U18 | In a browser, a first message from the draft | Nothing on the server before it; then the message at once, the address `/w/{id}`, the agent's answer, the Workstream in the list. |
+| U19 | In a browser, a permission | The card with the agent's options; sending closed with its reason; Allow: the agent goes on, the card gone, sending open again. |
+| U20 | In a browser, a reload on a Workstream | The same messages, each once. |
+| U21 | In a browser, **Stop** | The state `stopped`, **Stop** gone, sending closed with its reason. |
+| U22 | In a browser, the theme toggled, the page reloaded, then another browser | Dark, still dark after the reload; light in the other. |
+| U23 | In a browser, a Workstream whose execution ended, then a message | The harness offered to continue the last session; the restored Session's notice; the agent recalls the earlier message. |
+| U24 | In a browser, a tool with a diff | Its line labelled with its action and file, noted with the lines added and removed; opened, the diff. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
