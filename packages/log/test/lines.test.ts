@@ -140,6 +140,12 @@ test('L26 positions and cursors beyond 2^53 - 1 keep exact arithmetic, order, re
   assert.equal(prompt.rpc_id, `agora-${prompt.execution!}-${prompt.position}`)
   assert.equal(BigInt(prompt.position), BigInt(answer.position) + 1n)
   assert.equal(answer.requestId, prompt.rpc_id)
+  // The thread is projected after the log, a moment later: read it once the projection's checkpoint
+  // has reached the last entry read above.
+  const last = BigInt(entries.at(-1)!.position)
+  await until('the thread caught up with the log', async () =>
+    (await db.admin.query('SELECT position FROM checkpoints WHERE workstream=$1', [ws])).rows.some((r) => BigInt(r.position) >= last),
+  )
   const all = await readThread(lab.url, ws, String(start))
   assert.equal(all.status, 200)
   assert.ok(all.end !== null && BigInt(all.end) > start)
