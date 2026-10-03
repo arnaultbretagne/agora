@@ -9,6 +9,8 @@ export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 
 export interface Answer {
   readonly accepted: boolean
   readonly reason?: string
+  /** The execution a Create started. */
+  readonly execution?: string
 }
 
 export interface Pool {
@@ -66,7 +68,8 @@ export class Api {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ id, kind, target, body }),
         })
-        return answer.accepted === true ? { accepted: true } : { accepted: false, reason: String(answer.reason ?? 'unavailable') }
+        if (answer.accepted !== true) return { accepted: false, reason: String(answer.reason ?? 'unavailable') }
+        return typeof answer.execution === 'string' ? { accepted: true, execution: answer.execution } : { accepted: true }
       } catch (error) {
         if (attempt === 2) return { accepted: false, reason: error instanceof Error && error.name === 'AbortError' ? 'aborted' : 'unreachable' }
         await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))

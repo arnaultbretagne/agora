@@ -35,12 +35,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Typecheck and test every workspace
+      # The client's browser tests (apps/web/test/browser) drive Playwright's headless Chromium.
+      - name: Typecheck and test every workspace, the client in a browser
         run: |
           npm ci --no-audit --no-fund
+          npx -w @agora/web playwright install --with-deps --only-shell chromium
           npm run check
-      - name: Build the client
-        run: npm run build -w @agora/web
 
   image:
     needs: check

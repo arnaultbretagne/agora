@@ -54,7 +54,12 @@ export function useThread(api: Api, id: string | null): { state: ThreadState; co
   const [state, setState] = useState<ThreadState>(empty)
   const [connection, setConnection] = useState<Connection>('connecting')
   useEffect(() => {
-    if (id === null) return
+    // A draft has no thread: nothing of the Workstream left behind stays on screen.
+    if (id === null) {
+      setState(empty)
+      setConnection('connected')
+      return
+    }
     const initial = stored(id)
     setState(initial)
     let saved = initial.cursor
