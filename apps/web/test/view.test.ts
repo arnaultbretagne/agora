@@ -7,7 +7,21 @@ import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
-import { composerOf, continueBody, createBody, firstMessageStep, messagesOf, noticeText, planItems, sections, workstreamOf, type WorkstreamView } from '../src/agora/view.ts'
+import {
+  commandsMatching,
+  composerOf,
+  continueBody,
+  createBody,
+  firstMessageStep,
+  messagesOf,
+  modelChoice,
+  noticeText,
+  planItems,
+  poolSettings,
+  sections,
+  workstreamOf,
+  type WorkstreamView,
+} from '../src/agora/view.ts'
 
 const fixture = decode(await readFile(new URL('fixtures/mock.json', import.meta.url), 'utf8')) as {
   workstream: string
@@ -259,4 +273,42 @@ test('U15 a first message waits for the Session its Create opens: written once r
   assert.equal(firstMessageStep('e1', { ...base, execution: 'e0', state: 'ended' }, true), 'wait')
   assert.equal(firstMessageStep('e1', { ...base, state: 'ready', session: 's' }, true), 'write')
   for (const state of ['failed', 'ended', 'lost'] as const) assert.equal(firstMessageStep('e1', { ...base, state }, true), 'give back')
+})
+
+test('U25 the real harnesses settings: the model and the effort without default, the current marked; no mode offered', async () => {
+  const pick = async (harness: string) => {
+    const { state } = await real(harness)
+    const f = decode(await readFile(new URL(`fixtures/${harness}.json`, import.meta.url), 'utf8')) as { workstream: string }
+    return modelChoice(workstreamOf(state, f.workstream).settings)
+  }
+  const claude = await pick('claude-code')
+  assert.deepEqual(claude.models.map((o) => o.value), ['sonnet', 'opus', 'haiku'])
+  assert.deepEqual(claude.efforts.map((o) => o.value), ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(claude.current, { model: null, effort: null }, 'its current values are default: none shown as chosen')
+  const codex = await pick('codex')
+  assert.equal(codex.models.length, 8)
+  assert.deepEqual(codex.current, { model: 'gpt-6.1-sol', effort: 'low' })
+  assert.deepEqual(codex.efforts.map((o) => o.value), ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+  const opencode = await pick('opencode')
+  assert.deepEqual(opencode.efforts.map((o) => o.value), ['low', 'high', 'max'])
+  assert.equal(opencode.current.model, 'zai-coding-plan/glm-5.3')
+  // Neither picker reads the mode.
+  for (const c of [claude, codex, opencode]) assert.deepEqual([c.model?.category, c.effort?.category], ['model', 'thought_level'])
+  // Before a Session: the pool's declared values stand for the current ones; a pick wins over both.
+  const settings = workstreamOf((await real('claude-code')).state, (decode(await readFile(new URL('fixtures/claude-code.json', import.meta.url), 'utf8')) as { workstream: string }).workstream).settings
+  const declared = poolSettings({ sessionConfig: [{ id: 'model', value: 'opus' }, { id: 'effort', value: 'high' }], settings })
+  assert.deepEqual(modelChoice(declared).current, { model: 'opus', effort: 'high' })
+  assert.deepEqual(modelChoice(declared, { model: 'haiku' }).current, { model: 'haiku', effort: 'high' })
+})
+
+test('U26 the commands: all at /, those starting with what is typed, none once a space follows', async () => {
+  const { state } = await real('codex')
+  const f = decode(await readFile(new URL('fixtures/codex.json', import.meta.url), 'utf8')) as { workstream: string }
+  const commands = workstreamOf(state, f.workstream).commands ?? []
+  assert.ok(commands.length >= 10)
+  assert.equal(commandsMatching(commands, '/').length, commands.length)
+  assert.deepEqual(commandsMatching(commands, '/re').map((c) => c.name), ['review', 'review-branch', 'review-commit', 'rename'].filter((n) => commands.some((c) => c.name === n)))
+  assert.deepEqual(commandsMatching(commands, '/RE').map((c) => c.name), commandsMatching(commands, '/re').map((c) => c.name))
+  assert.deepEqual(commandsMatching(commands, '/review the branch'), [])
+  assert.deepEqual(commandsMatching(commands, 'review'), [])
 })
