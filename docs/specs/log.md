@@ -410,7 +410,7 @@ exception message.
 | L36 | A storage outage lasting past the execution's deadline | The interruption shown; no fresh lease. |
 | L37 | A permission answered; then another pending when a Cancel is sent | The answer goes to that request once, a second refused (`stale_permission`); the Cancel's `session/cancel` is followed by a `cancelled` answer to the pending one. |
 | L38 | The bridge restarts inside its Pod during a turn: a new instance | `execution.lost` (`instance_changed`), the turn failed; no dispatch, no renewal; Write refused. |
-| L39 | A second server started on the same database | It exits at start, writing nothing; the first goes on. |
+| L39 | A second server started on the same database | It exits at start, writing nothing, its log saying the recovery refused (`conflict`); the first goes on. |
 | L40 | The deadline cannot be moved when a prompt is dispatched | `request.failed` (`deadline_refused`); the turn failed; nothing sent; a Write accepted again. |
 | L41 | An invalid answer to `initialize`, then no valid one | The diagnostic and `request.failed` naming it; then `request.failed` (`response_timeout`) and `execution.failed` (`startup_failed`); no second `initialize`. |
 | L42 | Workstreams listed while one changes | Every Workstream's view; the one changed last first. |

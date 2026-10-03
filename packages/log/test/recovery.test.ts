@@ -433,7 +433,7 @@ test('L39 a second server on the same database exits at start, writing nothing; 
   const e = await open(run)
   const before = (await entries(run)).length
   // Real: another lab process, same database, same cluster.
-  await assert.rejects(Server.start({ db: run.db, api: run.c.api, keys: run.c.keys }), /lab exited/)
+  await assert.rejects(Server.start({ db: run.db, api: run.c.api, keys: run.c.keys }), /lab exited: .*"operation":"recover","outcome":"refused","errorClass":"conflict"/s)
   assert.equal((await entries(run)).length, before)
   await write(run, e, 'still served')
   const line = await prompt(run)

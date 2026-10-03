@@ -73,8 +73,10 @@ const workstreams = new Workstreams({
 
 try {
   await workstreams.start()
-} catch {
-  telemetry({ operation: 'recover', outcome: 'failed', errorClass: 'database' }, sink)
+} catch (error) {
+  // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.
+  const owned = error instanceof Error && error.message === 'dispatch_owner_exists'
+  telemetry({ operation: 'recover', outcome: owned ? 'refused' : 'failed', errorClass: owned ? 'conflict' : 'database' }, sink)
   process.exit(1)
 }
 
