@@ -8,6 +8,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | --- | --- | --- | --- | --- |
 | R1 | 2026-10-02 | `0669fc5` | local, unit | `npm run check` on one machine: Node 24.20.0, PostgreSQL 17.11, each test in a database of its own cloned from a migrated template, under the three runtime logins. Kubernetes and Agent Sandbox simulated by FakeKube; real bridges with the mock agent. Agora in the test process, or as the real lab process (`apps/lab`) on FakeKube served over HTTP, with the lab's defaults (tick 1 s, reconnection 2 s). In process: tick 100 ms, reconnection 200 ms; response timeout 1 s for L34 and 1.5 s for L41; renewal step 1 s and lease 60 s for L14, L30, L36, L38. |
 | R2 | 2026-10-02 | `f240cd0` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The lab `agora-lab@sha256:1973a988…` built from that commit, on the `agora` database (CloudNativePG, PostgreSQL 17.4); pools `agora-harness-mock@sha256:1a1cc63c…` and `agora-harness-claude-code@sha256:5f3bb480…` (claude-agent-acp 0.75.1). `apps/lab/scripts/live-cases.ts` from that commit, against the deployed lab. Deadline cases with a 60 s lease and the lab's renewal step (a third of the lease). |
+| R3 | 2026-10-03 | `9100a20` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; real bridges and the mock agent on FakeKube, the relay cut for a break, anchors received and restored. |
 
 ## Cases
 
@@ -59,9 +60,9 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L39 | real: a second lab process started on the same database | local | R1 | proven | Every assertion held. |
 | L40 | simulated: fake-kube, the deadline's PATCH refused | local | R1 | proven | Every assertion held. |
 | L41 | real: the adapter answers `initialize` with an invalid body, and never validly | local | R1 | proven | Every assertion held. |
-| L42 | — | — | — | not verified | — |
-| L43 | — | — | — | not verified | — |
-| L44 | — | — | — | not verified | — |
+| L42 | — | local | R3 | proven | A Workstream with no entry first, in state `none`; then the one written last; titles from the first Write. |
+| L43 | real: the relay between Agora and the bridge cut | local | R3 | proven | `starting`, `ready`, `interrupted`, `ready`, `stopped`, `ended`; the title from the first Write, then the agent's; `pool`, `harness`, `anchor` at the end, no Session. |
+| L44 | — | local | R3 | proven | Opened `new` with `mock`, then from the anchor; two `session.ended`, each with its reason, the first before the restore. |
 
 ## Not covered
 
