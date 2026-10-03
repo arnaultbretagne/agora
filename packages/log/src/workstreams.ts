@@ -29,7 +29,7 @@ import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
-import { compileProfile } from '@agora/credentials'
+import { compileProfile, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -63,6 +63,9 @@ function iso(ms: number): string {
   return new Date(ms).toISOString()
 }
 
+/** A set of profiles, as the tokens map compares them. */
+const key = (profiles: readonly string[]): string => [...profiles].sort().join(',')
+
 function limitsOf(e: Execution): Limits {
   const limits = object(e.body.limits) ?? {}
   return { leaseSeconds: Number(schemaValue(limits.leaseSeconds)), turnCapSeconds: Number(schemaValue(limits.turnCapSeconds)) }
@@ -74,8 +77,11 @@ export class Workstreams implements Handler {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly owners = new Map<string, string>()
   private readonly blocked = new Set<string>()
-  /** When each execution's token runs out, as handed by this process. */
-  private readonly tokens = new Map<string, number>()
+  /**
+   * Each execution's token, as handed by this process: when it runs out, and the profiles it names
+   * (sorted, joined), or null when not known — after a restart.
+   */
+  private readonly tokens = new Map<string, { until: number; profiles: string | null }>()
   /** The Workstreams whose execution has not ended: the clock visits these only. */
   private readonly live = new Set<string>()
   /** Projections asked by received lines, per Workstream: at most one every PROJECT_EVERY_MS. */
@@ -236,13 +242,9 @@ export class Workstreams implements Handler {
           const own = ownSettings(command.body.settings)
           if (own === null) return 'invalid_create'
           const settings = resolveSettings(pool.sessionConfig, own)
-          const profiles = command.body.profiles === undefined ? [] : command.body.profiles
-          if (!Array.isArray(profiles) || profiles.some((p) => typeof p !== 'string')) return 'invalid_create'
-          try {
-            for (const profile of profiles as string[]) compileProfile(profile)
-          } catch {
-            return 'unknown_profile'
-          }
+          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles)
+          if (profiles === 'invalid') return 'invalid_create'
+          if (typeof profiles === 'string') return profiles
           let anchor: string | undefined
           if (command.body.anchor !== undefined) {
             anchor = uuid(command.body.anchor)
@@ -301,6 +303,14 @@ export class Workstreams implements Handler {
             line: { method: 'session/set_config_option', params: { sessionId: current.acpId, configId: command.body.configId, value: command.body.value } },
           }
         }
+        if (command.kind === 'Scope') {
+          // docs/specs/log.md, "Commands": between turns; the token follows once accepted.
+          if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
+          const profiles = this.checkProfiles(command.body.profiles)
+          if (profiles === 'invalid') return 'invalid_scope'
+          if (typeof profiles === 'string') return profiles
+          return { execution: current.id, body: { profiles } }
+        }
         if (command.kind === 'Cancel') {
           if (!state.active || !['in_progress', 'uncertain'].includes(state.active.status) || command.target.turn !== state.active.id)
             return 'stale_turn'
@@ -336,12 +346,27 @@ export class Workstreams implements Handler {
           const e = (await this.store.state(workstream)).executions.get(answer.execution)
           if (e && !e.ended) await this.follow(workstream, e)
         }
+        if (command.kind === 'Scope') await this.rescope(workstream)
         // Acceptance stands whatever the effects do next; their failures are read in the thread.
         await this.drive(workstream).catch(() => this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: 'unknown' }))
       }
       await this.project(workstream)
       return answer
     })
+  }
+
+  /** A Create's or a Scope's profiles, checked (docs/specs/credentials.md, "Offered profiles"): each once, or the refusal. */
+  private checkProfiles(value: unknown): string[] | 'invalid' | 'unknown_profile' | 'profile_not_offered' {
+    if (!Array.isArray(value) || value.some((p) => typeof p !== 'string')) return 'invalid'
+    const profiles = [...new Set(value as string[])]
+    try {
+      for (const profile of profiles) compileProfile(profile)
+    } catch {
+      return 'unknown_profile'
+    }
+    const offered = this.options.credentials?.offered ?? []
+    if (offered.length > 0 && profiles.some((p) => !offersProfile(offered, p))) return 'profile_not_offered'
+    return profiles
   }
 
   /**
@@ -382,7 +407,8 @@ export class Workstreams implements Handler {
       const e = (await this.store.state(workstream)).current
       if (!e || e.id !== execution || e.ended || e.lost || e.failed) throw new Error('execution_unavailable')
       const view = await this.executions.putCredentials(e.id, credentials)
-      this.tokens.set(e.id, Date.parse(credentials.expiresAt ?? '') || 0)
+      // A test token stands for the execution's own profiles until it runs out or a Scope changes them.
+      this.tokens.set(e.id, { until: Date.parse(credentials.expiresAt ?? '') || 0, profiles: key(await this.profilesOf(e)) })
       return view
     })
   }
@@ -549,20 +575,23 @@ export class Workstreams implements Handler {
   /** The execution's rights: its pool's base profiles and its own. */
   private async profilesOf(e: Execution): Promise<string[]> {
     const pool = (await this.executions.pools()).find((p) => p.name === e.body.pool)
-    const own = Array.isArray(e.body.profiles) ? e.body.profiles.map(String) : []
-    return [...new Set([...(pool?.baseProfiles ?? []), ...own])]
+    return [...new Set([...(pool?.baseProfiles ?? []), ...e.profiles])]
   }
 
-  /** Hands the execution its token, naming it: true once the bridge has it, or when it needs none. */
+  /**
+   * Hands the execution its token, naming it: true once the bridge has it, or when it needs none. With
+   * no profile left after one was handed, a token with no grant withdraws it.
+   */
   private async handToken(e: Execution): Promise<boolean> {
     const source = this.options.credentials
     const profiles = await this.profilesOf(e)
-    if (source === undefined || profiles.length === 0) return true
+    const held = this.tokens.get(e.id)
+    if (source === undefined || (profiles.length === 0 && (held === undefined || held.profiles === ''))) return true
     const { leaseSeconds, turnCapSeconds } = limitsOf(e)
     try {
       const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: turnCapSeconds + leaseSeconds, profiles })
       await this.executions.putCredentials(e.id, credentials)
-      this.tokens.set(e.id, Date.parse(credentials.expiresAt ?? '') || 0)
+      this.tokens.set(e.id, { until: Date.parse(credentials.expiresAt ?? '') || 0, profiles: key(profiles) })
       return true
     } catch {
       this.report({ operation: 'dispatch', outcome: 'blocked', execution: e.id, errorClass: 'transport' })
@@ -570,17 +599,32 @@ export class Workstreams implements Handler {
     }
   }
 
-  /** A new token before a prompt if the current one would run out within the turn and a minute. */
+  /**
+   * A new token before a prompt if the current one would run out within the turn and a minute, or
+   * names other profiles than the execution's.
+   */
   private async ensureToken(e: Execution): Promise<boolean> {
-    if (this.options.credentials === undefined || (await this.profilesOf(e)).length === 0) return true
-    let until = this.tokens.get(e.id)
-    if (until === undefined) {
-      // After a restart: what the bridge holds.
-      until = Date.parse((await this.executions.info(e.id).catch(() => null))?.outbound.expiresAt ?? '') || 0
-      this.tokens.set(e.id, until)
+    if (this.options.credentials === undefined) return true
+    const profiles = key(await this.profilesOf(e))
+    let held = this.tokens.get(e.id)
+    if (held === undefined) {
+      // After a restart: what the bridge holds; which profiles it names is not known, unless none.
+      const outbound = (await this.executions.info(e.id).catch(() => null))?.outbound
+      held = { until: Date.parse(outbound?.expiresAt ?? '') || 0, profiles: outbound !== undefined && outbound.proxy === null ? '' : null }
+      this.tokens.set(e.id, held)
     }
-    if (until - Date.now() >= (limitsOf(e).turnCapSeconds + 60) * 1000) return true
+    if (held.profiles === profiles && (profiles === '' || held.until - Date.now() >= (limitsOf(e).turnCapSeconds + 60) * 1000)) return true
     return this.handToken(e)
+  }
+
+  /** After a Scope (docs/specs/credentials.md, "On Agora's side"): the new token at once, if the execution has had its first. */
+  private async rescope(workstream: string): Promise<void> {
+    const state = await this.store.state(workstream)
+    const e = state.current
+    if (!e || e.ended || e.lost || e.failed || e.stopped || !e.connection || this.executions.connectionOf(e.id) !== e.connection) return
+    if (![...state.requests.values()].some((r) => r.execution === e.id && r.direction === 'out' && r.method === 'initialize')) return
+    // If it fails, the next prompt hands it, or fails.
+    await this.ensureToken(e)
   }
 
   /** The token, the anchor if any, `initialize`, then the Session: new, or restored (docs/specs/executions.md, "Restoring"). */

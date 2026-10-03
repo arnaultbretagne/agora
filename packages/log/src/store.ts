@@ -50,7 +50,7 @@ export type Answer =
   | { accepted: false; reason: string }
 export interface Command {
   id: string
-  kind: 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Stop'
+  kind: 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop'
   target: Record<string, unknown>
   body: Record<string, unknown>
 }

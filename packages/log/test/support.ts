@@ -638,13 +638,14 @@ export interface Minted {
  * A real signer (a key of its own) that records what it signs. `fail` makes it refuse, as a signer
  * that cannot sign would.
  */
-export function grants(): { source: CredentialSource; minted: Minted[]; fail: boolean } {
+export function grants(offered: readonly string[] = []): { source: CredentialSource; minted: Minted[]; fail: boolean } {
   const dir = mkdtempSync(join(tmpdir(), 'grants-'))
   writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
-  const real = new GrantSigner({ proxy: '127.0.0.1:9', keyFile: join(dir, 'key.pem'), keyId: 'k', issuer: 'agora', audience: 'agora-gateway' })
+  const real = new GrantSigner({ proxy: '127.0.0.1:9', keyFile: join(dir, 'key.pem'), keyId: 'k', issuer: 'agora', audience: 'agora-gateway', offered })
   const state = { minted: [] as Minted[], fail: false }
   return Object.assign(state, {
     source: {
+      offered: real.offered,
       describe: () => real.describe(),
       async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }) {
         if (state.fail) throw new Error('signer unavailable')

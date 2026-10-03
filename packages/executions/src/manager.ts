@@ -74,6 +74,8 @@ export interface Handler {
 /** Signs tokens for the gateway (docs/specs/credentials.md); the mechanics never keep one. */
 export interface CredentialSource {
   describe(): Record<string, unknown>
+  /** What an execution may be given beyond its pool's base profiles (docs/specs/credentials.md, "Offered profiles"); any profile when empty. */
+  readonly offered?: readonly string[]
   mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
 }
 

@@ -5,11 +5,11 @@ import { test } from 'node:test'
 import { keys } from '@agora/testkit'
 import { database, FakeKube, grants, Lab, lines, until } from './support.ts'
 
-async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}) {
+async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}, offered: string[] = []) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
   Object.assign(kube.baseProfiles, base)
-  const signer = grants()
+  const signer = grants(offered)
   const db = await database()
   const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source })
   t.after(async () => {
@@ -86,4 +86,13 @@ test('C14 a Create naming an unknown profile is refused, unknown_profile, and no
   assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['dropbox:everything'] }), { accepted: false, reason: 'unknown_profile' })
   assert.equal((await lab.entries(ws)).length, 0)
   assert.equal(lab.kube.created.length, 0)
+})
+
+test('C20 github:A:write and github:B:read offered: a Create may name A read or write, not B write', async (t) => {
+  const { lab, ws } = await started(t, {}, ['github:owner/a:write', 'github:owner/b:read'])
+  const create = async (profiles: string[]) => lab.command(await lab.workstream(), 'Create', {}, { pool: 'mock-test', profiles })
+  assert.ok((await create(['github:owner/a:read'])).accepted)
+  assert.ok((await create(['github:owner/a:write', 'github:owner/b:read'])).accepted)
+  assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['github:owner/b:write'] }), { accepted: false, reason: 'profile_not_offered' })
+  assert.equal((await lab.entries(ws)).length, 0)
 })

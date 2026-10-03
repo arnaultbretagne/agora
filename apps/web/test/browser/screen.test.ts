@@ -2,11 +2,14 @@
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { generateKeyPairSync } from 'node:crypto'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
-import { cluster, database, expire, Server, type Db } from '../../../../packages/log/test/support.ts'
+import { cluster, database, expire, Server, until, type Db } from '../../../../packages/log/test/support.ts'
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
@@ -19,8 +22,13 @@ before(async () => {
   c = await cluster()
   // As the pools in the cluster: every Session starts with full access.
   c.kube.sessionConfig['mock-test'] = 'mode=full-access'
+  // A signer of its own and two repositories offered (docs/specs/credentials.md, "Offered profiles"); the
+  // gateway is never reached.
+  const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+  writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '20' } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '20', ...credentials } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -69,6 +77,9 @@ async function started(page: Page, text: string): Promise<string> {
 
 const entriesOf = async (id: string) => (await (await fetch(`${server.url}/api/workstreams/${id}/entries`)).json()) as { kind: string; content: Record<string, unknown> }[]
 const modelPicker = (page: Page) => page.getByRole('button', { name: 'Model', exact: true })
+const accessPicker = (page: Page) => page.getByRole('button', { name: 'Access', exact: true })
+/** One choice in the access menu, the menu open: it stays open. */
+const accessChoice = (page: Page, repository: string, choice: string) => page.getByRole('group', { name: repository }).getByRole('menuitemradio', { name: choice })
 
 const workstreams = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string }[] }).workstreams
 
@@ -241,4 +252,43 @@ test('U29 / in the composer: the commands listed; one chosen with the keyboard; 
   await composerInput(page).pressSequentially('the code')
   await page.getByRole('button', { name: 'Send' }).click()
   await thread(page).getByText('Echo #2: /review the code.').waitFor()
+})
+
+test('U34 an access picked in the draft: carried by the Create, shown once the Session is ready', async () => {
+  const config = (await (await fetch(`${server.url}/api/config`)).json()) as { credentials: { offered: string[] } }
+  assert.deepEqual(config.credentials.offered, ['github:owner/a:write', 'github:owner/b:read'])
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  assert.equal(await accessPicker(page).innerText(), 'No access')
+  await accessPicker(page).click()
+  assert.deepEqual(await page.getByRole('group', { name: 'owner/a' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read', 'Write'])
+  assert.deepEqual(await page.getByRole('group', { name: 'owner/b' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read'])
+  await accessChoice(page, 'owner/a', 'Write').click()
+  // The menu, still open, hides the rest of the page from the accessibility tree.
+  await page.keyboard.press('Escape')
+  assert.equal(await accessPicker(page).innerText(), 'a · Write')
+  await send(page, 'with an access')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText('Echo #1: with an access.').waitFor()
+  const create = (await entriesOf(idOf(page))).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
+  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write'])
+  assert.equal(await accessPicker(page).innerText(), 'a · Write')
+})
+
+test('U35 another access picked in an open Workstream: Scope sent with the whole set, shown at once and once the view has it', async () => {
+  const page = await fresh()
+  const id = await started(page, 'before the access')
+  await accessPicker(page).click()
+  await accessChoice(page, 'owner/b', 'Read').click()
+  // The menu stays open: a second choice, from what the first gave.
+  await accessChoice(page, 'owner/a', 'Read').click()
+  await page.keyboard.press('Escape')
+  assert.equal(await accessPicker(page).innerText(), '2 repos')
+  await until('both Scopes', async () => (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').length === 2)
+  const scopes = (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').map((e) => e.content.body)
+  assert.deepEqual(scopes, [{ profiles: ['github:owner/b:read'] }, { profiles: ['github:owner/a:read', 'github:owner/b:read'] }])
+  await send(page, 'after the access')
+  await thread(page).getByText('Echo #2: after the access.').waitFor()
+  assert.equal(await accessPicker(page).innerText(), '2 repos')
 })

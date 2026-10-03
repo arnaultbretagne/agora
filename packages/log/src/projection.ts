@@ -24,7 +24,7 @@ export interface Projector {
   version: string
   create(): Projection
 }
-export const core: Projector = { name: 'core', version: '3', create: () => new CoreProjection() }
+export const core: Projector = { name: 'core', version: '4', create: () => new CoreProjection() }
 
 /** A projector from a pure fold over all entries: simple, and quadratic; for tests and small views. */
 export function fromFold(name: string, version: string, fold: (entries: readonly Entry[]) => ProjectedObject[]): Projector {
