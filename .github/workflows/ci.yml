@@ -124,3 +124,74 @@ jobs:
             echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p digests && echo "${{ steps.push.outputs.digest }}" > "digests/${{ matrix.name }}"
+
+      # For the infra proposal below: one file per image, named after it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: digests/${{ matrix.name }}
+          retention-days: 7
+
+  # Proposes the images just published to infra-k8s (README.md, "Images in the cluster"): one pull
+  # request, kept up to date, for the base branch; one per branch for a run started by hand. Those whose
+  # inputs did not change are left as they are. Merging stays the operator's.
+  propose-infra:
+    needs: image
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/design/agora-foundations')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      INFRA_K8S_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
+    steps:
+      - name: Check the token
+        id: token
+        run: |
+          if [ -z "$INFRA_K8S_TOKEN" ]; then
+            echo "::notice::INFRA_K8S_TOKEN is not set: no infra-k8s pull request proposed."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/checkout@v4
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: arnaultbretagne/infra-k8s
+          token: ${{ secrets.INFRA_K8S_TOKEN }}
+          path: infra
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Write the digests into infra-k8s
+        id: propose
+        if: steps.token.outputs.ok == 'true'
+        run: node scripts/propose-infra.ts --infra infra --digests digests --ref "${{ github.ref_name }}" --sha "${{ github.sha }}" > body.md
+      - name: Open or update the pull request
+        if: steps.token.outputs.ok == 'true' && steps.propose.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
+        run: |
+          if [ "${{ github.ref_name }}" = design/agora-foundations ]; then branch=agora/images; else branch="agora/images-$(echo '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
+          title="feat(agora): images from ${{ github.ref_name }} ${GITHUB_SHA::7}"
+          cd infra
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git commit -qam "$title" -m "Proposed by Agora's CI from arnaultbretagne/agora@${GITHUB_SHA}."
+          git push -f origin "$branch"
+          if gh pr view "$branch" --repo arnaultbretagne/infra-k8s --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --repo arnaultbretagne/infra-k8s --title "$title" --body-file ../body.md
+          else
+            gh pr create --repo arnaultbretagne/infra-k8s --base main --head "$branch" --title "$title" --body-file ../body.md
+          fi
+          gh pr view "$branch" --repo arnaultbretagne/infra-k8s --json url -q .url >> "$GITHUB_STEP_SUMMARY"
