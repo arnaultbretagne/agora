@@ -50,3 +50,19 @@ npm run check      # typecheck, then each workspace's tests
 
 CI checks every push and every PR to the base, then publishes the images by digest;
 infra-k8s pins them (`apps/agora-sandboxes`, `apps/agora`).
+
+## Images in the cluster
+
+After a push to the base, CI proposes the images it published to infra-k8s, in one pull request kept
+up to date (branch `agora/images`). The operator merges it, and Flux deploys.
+
+| Step | Detail |
+| --- | --- |
+| Which images | Those whose inputs changed since the image deployed. An image's inputs are what its Dockerfile copies, and the Dockerfile itself, fingerprinted by their git object ids. Builds are not reproducible, so a digest alone would change on every push. |
+| The server | Its digest goes into `apps/agora/kustomization.yaml` (`images`), and its source and inputs into `apps/agora/server-image.yaml`. |
+| A harness | Its folder of the catalogue, `apps/agora-sandboxes/catalogue/<harness>/harness.yaml`, gets its name, image, versions, source and inputs. The name holds the digest: a new image is a new template and pool, and the warm sandboxes come up in it. A new harness gets its folder by hand. |
+| A branch | Run CI by hand (workflow_dispatch) on it: its own pull request, `agora/images-<branch>`, for a preview. |
+| The token | `INFRA_K8S_TOKEN`, a fine-grained token on infra-k8s alone: contents and pull requests, read and write. Without it, CI only notes that nothing was proposed. |
+
+`scripts/propose-infra.ts` does the writing. It runs anywhere with an infra-k8s checkout:
+`node scripts/propose-infra.ts --infra <checkout> --digests <dir> --ref <branch> --sha <commit>`.
