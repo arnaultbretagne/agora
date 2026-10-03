@@ -20,6 +20,25 @@ export interface WorkstreamView {
   readonly anchor: string | null
   /** When the view last changed, as the server stamps it; absent before any entry. */
   readonly changedAt?: string | null
+  /** The last Session's settings, its commands, and whether a change is unanswered (docs/specs/log.md). */
+  readonly settings?: readonly Setting[] | null
+  readonly commands?: readonly AgentCommand[]
+  readonly configuring?: boolean
+}
+
+export interface Setting {
+  readonly id: string
+  readonly name: string
+  readonly category: string | null
+  readonly type: string
+  readonly currentValue: unknown
+  readonly options: readonly { readonly value: string; readonly name: string; readonly description: string | null }[]
+}
+
+export interface AgentCommand {
+  readonly name: string
+  readonly description: string
+  readonly hint: string | null
 }
 
 const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent' }
@@ -47,6 +66,9 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     execution: text(o.execution) || null,
     session: text(o.session) || null,
     anchor: text(o.anchor) || null,
+    settings: Array.isArray(o.settings) ? (o.settings as Setting[]) : null,
+    commands: Array.isArray(o.commands) ? (o.commands as AgentCommand[]) : [],
+    configuring: o.configuring === true,
   }
 }
 
@@ -99,12 +121,19 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
     ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending' && e.object.session === view.session) ?? null
   const running = last !== undefined && ['saved', 'in_progress'].includes(status(last))
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
+  const settling = view.state === 'ready' && view.configuring === true
   const reason = !state.complete
     ? 'Loading…'
     : STATE_REASON[view.state] ??
-      (pendingPermission ? 'Answer the permission request above.' : uncertain ? 'The end of the last turn could not be confirmed.' : null)
+      (pendingPermission
+        ? 'Answer the permission request above.'
+        : settling
+          ? 'Applying the settings…'
+          : uncertain
+            ? 'The end of the last turn could not be confirmed.'
+            : null)
   const create = state.complete && IDLE.includes(view.state)
-  const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null)
+  const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null && !settling)
   return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission }
 }
 
@@ -302,6 +331,77 @@ export function firstMessageStep(execution: string, view: WorkstreamView, comple
   if (!complete || view.execution !== execution) return 'wait'
   if (view.state === 'failed' || view.state === 'ended' || view.state === 'lost') return 'give back'
   return view.state === 'ready' && view.session !== null ? 'write' : 'wait'
+}
+
+// ---------------------------------------------------------------- settings and commands
+
+/** The values a picker offers: the real ones, never `default`. */
+const real = (setting: Setting | undefined) => (setting?.options ?? []).filter((o) => o.value !== 'default')
+
+export interface ModelChoice {
+  readonly model: Setting | undefined
+  readonly effort: Setting | undefined
+  readonly models: Setting['options']
+  readonly efforts: Setting['options']
+  /** The values shown as chosen. */
+  readonly current: { readonly model: string | null; readonly effort: string | null }
+}
+
+/**
+ * What the model picker offers (docs/specs/assistant-ui.md, "Settings and commands"): the setting in
+ * category `model` and the one in `thought_level`, without `default`. Chosen: what was picked here,
+ * else the value the Session starts with or has, when it is a real one.
+ */
+export function modelChoice(settings: readonly Setting[] | null | undefined, chosen: Readonly<Record<string, string>> = {}): ModelChoice {
+  const model = settings?.find((s) => s.category === 'model')
+  const effort = settings?.find((s) => s.category === 'thought_level')
+  const value = (s: Setting | undefined): string | null => {
+    if (!s) return null
+    const v = chosen[s.id] ?? (typeof s.currentValue === 'string' ? s.currentValue : null)
+    return v !== null && real(s).some((o) => o.value === v) ? v : null
+  }
+  return { model, effort, models: real(model), efforts: real(effort), current: { model: value(model), effort: value(effort) } }
+}
+
+/**
+ * A pool's settings as a draft sees them: what its last Session offered, each current value the one
+ * its Sessions start with, when the pool declares one.
+ */
+export function poolSettings(pool: { sessionConfig?: readonly { id: string; value: string }[]; settings?: readonly Setting[] | null } | undefined): Setting[] | null {
+  if (!pool?.settings) return null
+  return pool.settings.map((s) => {
+    const declared = pool.sessionConfig?.find((w) => w.id === s.id)
+    return declared ? { ...s, currentValue: declared.value } : s
+  })
+}
+
+/** The pools the screen offers: all but those kept for the tests. */
+export const offeredPools = <P extends { readonly testing?: boolean }>(pools: readonly P[]): P[] => pools.filter((p) => p.testing !== true)
+
+/**
+ * The pool a new execution starts in (docs/specs/assistant-ui.md, "Sending"): the one picked here;
+ * else the Workstream's own, so it continues; else the one picked last; else the first offered.
+ */
+export function poolOffered(
+  pools: readonly { readonly name: string; readonly testing?: boolean }[],
+  picked: string | null,
+  own: string | null,
+  last: string | null,
+): string | null {
+  const offered = offeredPools(pools)
+  const valid = (name: string | null): name is string => name !== null && offered.some((p) => p.name === name)
+  if (valid(picked)) return picked
+  if (valid(own)) return own
+  if (valid(last)) return last
+  return offered[0]?.name ?? null
+}
+
+/** The commands `/` lists: while the composer holds `/` and a name being typed, those it starts. */
+export function commandsMatching(commands: readonly AgentCommand[], text: string): AgentCommand[] {
+  const typed = /^\/(\S*)$/.exec(text)
+  if (typed === null) return []
+  const prefix = typed[1]!.toLowerCase()
+  return commands.filter((c) => c.name.toLowerCase().startsWith(prefix))
 }
 
 // ---------------------------------------------------------------- the list

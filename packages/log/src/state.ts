@@ -1,6 +1,9 @@
 import { idKey } from './acp.ts'
 import { identity, object, schemaValue, encode } from './json.ts'
+import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
+
+const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
 export interface Turn {
@@ -32,6 +35,12 @@ export interface Execution {
   failed?: boolean
   clean: boolean
   initialized: boolean
+  /** The open Session's `configOptions`, as it last gave them (docs/specs/log.md, "Sessions"). */
+  settings: unknown[] | null
+  /** The settings this Session was asked to change, by id, in order. */
+  configSent: string[]
+  /** The open Session's last `availableCommands`. */
+  commands: unknown[]
 }
 export interface State {
   workstream: string
@@ -92,6 +101,9 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         lost: false,
         clean: false,
         initialized: false,
+        settings: null,
+        configSent: [],
+        commands: [],
       }
       state.executions.set(execution.id, execution)
       state.current = execution
@@ -152,6 +164,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         state.requests.set(key, entry)
         state.requestPositions.set(entry.position, entry)
         if (entry.method === 'session/request_permission' && entry.direction === 'in') state.permissions.set(key, entry)
+        if (entry.method === 'session/set_config_option' && entry.direction === 'out' && execution && entry.session === execution.session) {
+          const id = object(content.params)?.configId
+          if (typeof id === 'string') execution.configSent.push(id)
+        }
         if (entry.method === 'session/prompt' && entry.direction === 'out' && entry.execution) {
           const turn: Turn = {
             id: identity(entry.session ?? entry.execution, idKey(entry.rpc_id), 'turn'),
@@ -179,6 +195,16 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           if (state.permissions.get(requestKey)?.position === request.position) state.permissions.delete(requestKey)
           if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution)
             execution.initialized = true
+          // A Session's settings: those its opening answer gives, then each answer to a change.
+          if (entry.rpc_kind === 'response' && execution && entry.session) {
+            const given = object(content.result)?.configOptions
+            if (OPENING_METHODS.includes(request.method ?? '')) {
+              execution.settings = Array.isArray(given) ? given : null
+              execution.configSent = []
+              execution.commands = []
+            } else if (request.method === 'session/set_config_option' && Array.isArray(given) && request.session === execution.session)
+              execution.settings = given
+          }
           const turn = turnsByRequest.get(request.position)
           if (turn) {
             turn.answered = true
@@ -191,6 +217,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
         }
       }
+    }
+    if (entry.kind === 'acp' && entry.direction === 'in' && entry.method === 'session/update' && execution && entry.session === execution.session) {
+      const update = object(object(content.params)?.update)
+      if (update?.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) execution.settings = update.configOptions
+      if (update?.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) execution.commands = update.availableCommands
     }
     if (entry.kind === 'acp.dispatching') {
       const position = String(content.requestPosition)
@@ -248,6 +279,8 @@ export class CoreProjection {
   /** The anchor each ended execution names, and the Sessions that have ended. */
   private readonly anchors = new Map<string, string>()
   private readonly endedSessions = new Set<string>()
+  /** What the view last showed of the settings, to put it only when that changes. */
+  private settingsCode = ''
   apply(entries: readonly Entry[]): Set<string> {
     const changed = new Set<string>()
     const objects = this.objects,
@@ -295,7 +328,14 @@ export class CoreProjection {
       }
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
-      if (titled || entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind.startsWith('session.')) {
+      // Settings and commands change with ACP lines too: the view is put when what it shows of them changed.
+      const execution0 = state.current
+      const settingsCode = execution0
+        ? encode({ s: execution0.settings, c: execution0.commands, k: configuring(state, execution0), o: settled(state, execution0) })
+        : ''
+      const settingsChanged = settingsCode !== this.settingsCode
+      this.settingsCode = settingsCode
+      if (titled || settingsChanged || entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind.startsWith('session.')) {
         const execution = state.current
         const session = execution?.session && !this.endedSessions.has(execution.session) ? execution.session : null
         put(
@@ -311,7 +351,10 @@ export class CoreProjection {
             unavailable:
               execution === null || execution.ended || execution.lost || execution.failed === true || !session || !execution.connection,
             title: this.agentTitle ?? this.firstWrite ?? 'New workstream',
-            state: workstreamState(execution, session),
+            state: workstreamState(execution, session, execution !== null && settled(state, execution)),
+            settings: execution && execution.settings !== null ? settingsOf(execution.settings) : null,
+            commands: execution ? commandsOf(execution.commands) : [],
+            configuring: execution !== null && session !== null && configuring(state, execution),
             pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
@@ -469,13 +512,14 @@ export class CoreProjection {
 }
 
 /** docs/specs/log.md, "The Workstream view": the first state that applies. */
-function workstreamState(execution: Execution | null, session: string | null): string {
+function workstreamState(execution: Execution | null, session: string | null, opened: boolean): string {
   if (!execution) return 'none'
   if (execution.ended) return 'ended'
   if (execution.failed) return 'failed'
   if (execution.lost) return 'lost'
   if (execution.stopped) return 'stopped'
-  if (session && execution.connection) return 'ready'
+  // Ready once its opening settings are settled (docs/specs/log.md, "Sessions").
+  if (session && execution.connection) return opened ? 'ready' : 'starting'
   if (session) return 'interrupted'
   return 'starting'
 }

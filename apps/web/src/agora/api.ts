@@ -2,9 +2,9 @@
 // is given, for the tests.
 import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
-import type { WorkstreamView } from './view.ts'
+import type { AgentCommand, Setting, WorkstreamView } from './view.ts'
 
-export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Stop'
+export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Stop'
 
 export interface Answer {
   readonly accepted: boolean
@@ -17,6 +17,13 @@ export interface Pool {
   readonly name: string
   readonly harness: string
   readonly readyReplicas: number
+  /** The settings its Sessions start with, as its catalogue entry declares them. */
+  readonly sessionConfig?: readonly { readonly id: string; readonly value: string }[]
+  /** What its last Session offered, or null: what a draft shows before it has a Session. */
+  readonly settings?: readonly Setting[] | null
+  readonly commands?: readonly AgentCommand[]
+  /** Kept for the tests: not offered by the screen. */
+  readonly testing?: boolean
 }
 
 export class Api {

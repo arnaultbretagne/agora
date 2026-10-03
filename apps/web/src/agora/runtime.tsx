@@ -11,7 +11,19 @@ import type { Answer, Api, CommandKind, Pool } from './api.ts'
 import { useThread, useWorkstreams } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
-import { composerOf, createBody, firstMessageStep, messagesOf, workstreamOf, type Composer, type WorkstreamView } from './view.ts'
+import {
+  composerOf,
+  createBody,
+  firstMessageStep,
+  messagesOf,
+  poolOffered,
+  poolSettings,
+  workstreamOf,
+  type AgentCommand,
+  type Composer,
+  type Setting,
+  type WorkstreamView,
+} from './view.ts'
 
 /** A first message waiting for the Session its Create opens. */
 export interface Pending {
@@ -33,6 +45,14 @@ export interface Agora {
   /** The pool a new execution starts in. */
   readonly pool: string | null
   readonly pending: Pending | null
+  /** The settings the model picker offers: the open Session's, or, when sending starts one, its pool's. */
+  readonly settings: readonly Setting[] | null
+  /** The values picked for the execution a message will start. */
+  readonly chosen: Readonly<Record<string, string>>
+  /** The commands `/` lists: the Session's, or its pool's. */
+  readonly commands: readonly AgentCommand[]
+  /** Picks a setting: kept for the next Create, or sent at once (Configure) to the open Session. */
+  chooseSetting(id: string, value: string): void
   /** The reason of the last command refused, until the next one. */
   readonly refusal: string | null
   /** A message given back to the composer after its execution failed to start. */
@@ -84,6 +104,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
   const [picked, setPicked] = useState<{ for: string | null; pool: string } | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
+  // Settings picked before a Create, for the Workstream and pool they were picked in.
+  const [chosenFor, setChosenFor] = useState<{ for: string | null; pool: string | null; values: Record<string, string> }>({ for: null, pool: null, values: {} })
   const [returned, setReturned] = useState<string | null>(null)
   const view = useMemo(() => workstreamOf(state, id ?? ''), [state, id])
   // A draft has no thread to wait for: sending is offered at once, and starts everything.
@@ -92,19 +114,16 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [state, view, id],
   )
 
+  // The catalogue, read again on each move: what a draft offers follows the Sessions just opened.
   useEffect(() => {
-    void api.pools().then(setPools, () => setPools([]))
-  }, [api])
+    void api.pools().then(setPools, () => setPools((p) => p ?? []))
+  }, [api, id])
   // The pool offered: the one picked here; else the Workstream's own, so that it continues from its
   // anchor; else, in a draft, the one picked last; else the first.
-  const pool = useMemo(() => {
-    if (pools === null || pools.length === 0) return null
-    const valid = (name: string | null | undefined): name is string => !!name && pools.some((p) => p.name === name)
-    if (picked?.for === id && valid(picked.pool)) return picked.pool
-    if (id !== null && valid(view.pool)) return view.pool
-    const last = storedPool()
-    return valid(last) ? last : pools[0]!.name
-  }, [pools, picked, view.pool, id])
+  const pool = useMemo(
+    () => poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool()),
+    [pools, picked, view.pool, id],
+  )
   const choosePool = useCallback(
     (next: string) => {
       setPicked({ for: id, pool: next })
@@ -117,6 +136,15 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [id],
   )
   const harnessOf = useCallback((name: string) => pools?.find((p) => p.name === name)?.harness ?? name, [pools])
+  const chosen = useMemo(() => (chosenFor.for === id && chosenFor.pool === pool ? chosenFor.values : {}), [chosenFor, id, pool])
+  const settings = useMemo(
+    () => (composer.create ? poolSettings(pools?.find((p) => p.name === pool)) : (view.settings ?? null)),
+    [composer.create, pools, pool, view.settings],
+  )
+  const commands = useMemo(
+    () => (composer.create ? (pools?.find((p) => p.name === pool)?.commands ?? []) : (view.commands ?? [])),
+    [composer.create, pools, pool, view.commands],
+  )
 
   const send = useCallback(
     async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id): Promise<Answer> => {
@@ -153,7 +181,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         const created = await api.create(workstream)
         if (!created.accepted) return setRefusal(refusalText(created.reason ?? 'unavailable'))
       }
-      const created = await send('Create', {}, id === null ? { pool } : createBody(view, pool), workstream)
+      const base = id === null ? { pool } : createBody(view, pool)
+      const created = await send('Create', {}, Object.keys(chosen).length > 0 ? { ...base, settings: chosen } : base, workstream)
       if (!created.accepted || created.execution === undefined) {
         setReturned(text)
         if (id === null) onOpen(workstream)
@@ -162,7 +191,18 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       setPending({ workstream, execution: created.execution, text, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, view, send, onOpen, harnessOf],
+    [api, id, pool, view, send, onOpen, harnessOf, chosen],
+  )
+
+  const chooseSetting = useCallback(
+    (configId: string, value: string) => {
+      if (composer.create) {
+        setChosenFor((c) => ({ for: id, pool, values: { ...(c.for === id && c.pool === pool ? c.values : {}), [configId]: value } }))
+        return
+      }
+      void send('Configure', { execution: view.execution, session: view.session }, { configId, value })
+    },
+    [composer.create, id, pool, send, view.execution, view.session],
   )
 
   // The waiting message is written once its execution's Session is open, and given back if it failed.
@@ -230,6 +270,10 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     pools,
     pool,
     pending: pending !== null && pending.workstream === id ? pending : null,
+    settings,
+    chosen,
+    commands,
+    chooseSetting,
     refusal,
     returned,
     choosePool,

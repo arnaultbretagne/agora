@@ -32,6 +32,32 @@ interface Session {
   readonly id: string
   readonly cwd: string
   readonly history: Entry[]
+  /** Its settings' current values, by id (docs/specs/log.md, "Sessions"). */
+  readonly settings: Record<string, string>
+}
+
+// The settings and commands the mock offers, shaped as claude-code's and codex's: a mode, a model with a
+// `default`, an effort. `mock-broken` is listed but refused when chosen, for an answer in error.
+const SETTINGS: { id: string; name: string; category: string; values: string[] }[] = [
+  { id: 'mode', name: 'Mode', category: 'mode', values: ['default', 'full-access'] },
+  { id: 'model', name: 'Model', category: 'model', values: ['default', 'mock-small', 'mock-large', 'mock-broken'] },
+  { id: 'effort', name: 'Effort', category: 'thought_level', values: ['default', 'low', 'high'] },
+]
+const COMMANDS = [
+  { name: 'recall', description: 'Repeat what was said before', input: null },
+  { name: 'review', description: 'Review the changes', input: { hint: 'what to review' } },
+]
+
+const defaults = (): Record<string, string> => Object.fromEntries(SETTINGS.map((s) => [s.id, 'default']))
+function configOptions(session: Session): unknown[] {
+  return SETTINGS.map((s) => ({
+    id: s.id,
+    name: s.name,
+    category: s.category,
+    type: 'select',
+    currentValue: session.settings[s.id],
+    options: s.values.map((value) => ({ value, name: value === 'default' ? 'Default' : value })),
+  }))
 }
 interface Turn {
   cancelled: boolean
@@ -101,7 +127,7 @@ if (process.env.AGORA_MOCK_READ_AT_START === '1') {
 }
 
 function readSession(sessionId: string, cwd: string): Session | null {
-  const session: Session = { id: sessionId, cwd, history: [] }
+  const session: Session = { id: sessionId, cwd, history: [], settings: defaults() }
   if (process.env.AGORA_MOCK_READ_AT_START === '1') {
     const history = atStart.get(sessionId)
     if (history === undefined) return null
@@ -131,6 +157,19 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
   const n = Math.max(1, Math.min(3600, Number(argument ?? '5') || 5))
 
   switch (command) {
+    // The agent changes a setting itself, and says so (docs/specs/log.md, L51).
+    case '/config': {
+      const [id, value] = (argument ?? '').split('=')
+      if (id && value) session.settings[id] = value
+      update(session.id, { sessionUpdate: 'config_option_update', configOptions: configOptions(session) })
+      say(session.id, `Setting ${String(id)} is now ${String(value)}.`)
+      return 'end_turn'
+    }
+    case '/commands': {
+      update(session.id, { sessionUpdate: 'available_commands_update', availableCommands: [...COMMANDS, { name: 'compact', description: 'Compact the context', input: null }] })
+      say(session.id, 'Commands changed.')
+      return 'end_turn'
+    }
     case '/sleep': {
       for (let i = 1; i <= n; i++) {
         if (await pause(turn, 1000)) return 'cancelled'
@@ -334,9 +373,22 @@ async function handle(message: Message): Promise<void> {
       })
     }
     case 'session/new': {
-      const session: Session = { id: randomUUID(), cwd: String(params.cwd ?? '/home/harness/work'), history: [] }
+      const session: Session = { id: randomUUID(), cwd: String(params.cwd ?? '/home/harness/work'), history: [], settings: defaults() }
       sessions.set(session.id, session)
-      return send({ id: message.id, result: { sessionId: session.id } })
+      send({ id: message.id, result: { sessionId: session.id, configOptions: configOptions(session) } })
+      return update(session.id, { sessionUpdate: 'available_commands_update', availableCommands: COMMANDS })
+    }
+    case 'session/set_config_option': {
+      const session = sessions.get(String(params.sessionId))
+      if (session === undefined) return fail(message.id, -32002, `unknown session: ${String(params.sessionId)}`)
+      const setting = SETTINGS.find((s) => s.id === params.configId)
+      if (setting === undefined || typeof params.value !== 'string' || !setting.values.includes(params.value))
+        return fail(message.id, -32602, `invalid setting: ${String(params.configId)}=${String(params.value)}`)
+      // Answered after a while, as an agent that reloads its model does: the change can be seen pending.
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      if (params.value === 'mock-broken') return fail(message.id, -32603, 'this model cannot be used')
+      session.settings[setting.id] = params.value
+      return send({ id: message.id, result: { configOptions: configOptions(session) } })
     }
     case 'session/load':
     case 'session/resume': {
@@ -351,7 +403,8 @@ async function handle(message: Message): Promise<void> {
           })
         }
       }
-      return send({ id: message.id, result: {} })
+      send({ id: message.id, result: { configOptions: configOptions(session) } })
+      return update(session.id, { sessionUpdate: 'available_commands_update', availableCommands: COMMANDS })
     }
     case 'session/prompt': {
       const session = sessions.get(String(params.sessionId))

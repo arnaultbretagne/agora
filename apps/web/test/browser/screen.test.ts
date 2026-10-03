@@ -17,6 +17,8 @@ before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
   db = await database()
   c = await cluster()
+  // As the pools in the cluster: every Session starts with full access.
+  c.kube.sessionConfig['mock-test'] = 'mode=full-access'
   // Room for every case's sandbox: a stopped one counts until its deadline.
   server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '20' } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
@@ -64,6 +66,9 @@ async function started(page: Page, text: string): Promise<string> {
   await thread(page).getByText(`Echo #1: ${text}.`).waitFor()
   return idOf(page)
 }
+
+const entriesOf = async (id: string) => (await (await fetch(`${server.url}/api/workstreams/${id}/entries`)).json()) as { kind: string; content: Record<string, unknown> }[]
+const modelPicker = (page: Page) => page.getByRole('button', { name: 'Model', exact: true })
 
 const workstreams = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string }[] }).workstreams
 
@@ -183,4 +188,57 @@ test('U24 a tool with a diff: its line labelled and noted; opened, the diff', as
   assert.match(await line.innerText(), /\+1 −1/)
   await line.click()
   await page.locator('.aui-diff-viewer').getByText('after').first().waitFor()
+})
+
+test('U27 a model and an effort picked in the draft: carried by the Create, shown once the Session is ready', async () => {
+  const page = await fresh()
+  // A Session in the pool first: the draft offers what it gave.
+  await started(page, 'a session for the catalogue')
+  await page.getByRole('button', { name: 'New workstream' }).click()
+  await pickHarness(page, 'Mock agent')
+  await modelPicker(page).click()
+  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['mock-small', 'mock-large', 'mock-broken', 'low', 'high'], 'no default offered')
+  await page.getByRole('menuitem', { name: 'mock-large' }).click()
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'high' }).click()
+  assert.match(await modelPicker(page).innerText(), /mock-large\s*·\s*high/)
+  await send(page, 'with a chosen model')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText('Echo #1: with a chosen model.').waitFor()
+  const create = (await entriesOf(idOf(page))).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
+  assert.deepEqual((create.content.body as { settings: unknown }).settings, [
+    { id: 'mode', value: 'full-access' },
+    { id: 'model', value: 'mock-large' },
+    { id: 'effort', value: 'high' },
+  ])
+  assert.match(await modelPicker(page).innerText(), /mock-large\s*·\s*high/)
+})
+
+test('U28 another model picked in an open Workstream: Configure sent, the picker shows it once answered', async () => {
+  const page = await fresh()
+  const id = await started(page, 'before the switch')
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'mock-small' }).click()
+  await page.waitForFunction(() => /mock-small/.test(document.querySelector('[aria-label="Model"]')?.textContent ?? ''))
+  const configure = (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Configure')
+  assert.deepEqual(configure.map((e) => e.content.body), [{ configId: 'model', value: 'mock-small' }])
+  await send(page, 'after the switch')
+  await thread(page).getByText('Echo #2: after the switch.').waitFor()
+})
+
+test('U29 / in the composer: the commands listed; one chosen with the keyboard; sent, the agent receives it', async () => {
+  const page = await fresh()
+  await started(page, 'before the command')
+  await composerInput(page).fill('/')
+  const list = page.getByRole('listbox', { name: 'Commands' })
+  await list.waitFor()
+  assert.deepEqual(await list.getByRole('option').allInnerTexts().then((t) => t.map((x) => x.split(/\s/)[0])), ['/recall', '/review'])
+  await composerInput(page).fill('/re')
+  await composerInput(page).press('ArrowDown')
+  await composerInput(page).press('Enter')
+  assert.equal(await composerInput(page).inputValue(), '/review ')
+  assert.equal(await list.count(), 0)
+  await composerInput(page).pressSequentially('the code')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await thread(page).getByText('Echo #2: /review the code.').waitFor()
 })

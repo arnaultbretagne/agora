@@ -13,6 +13,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R5 | 2026-10-03 | `c17acf5` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a projector version left behind by hand on an ended Workstream, then Agora restarted. |
 | R6 | 2026-10-03 | `05fbbb8` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:31c1d086…` built from that commit, in the namespace `agora` behind agora.bretagne.dev, on the `agora` database (CloudNativePG, PostgreSQL 17.4); the pools mock `1a1cc63c…`, claude-code `5f3bb480…`, opencode `5b7b6182…` and codex `0eae81a3…`, their warm Pods recreated for the server's anchor address. `apps/server/scripts/live-cases.ts` from that commit, all 34 cases in one run; C10 and C12–C16 refused `quota` there — the run's stopped executions count until their deadline — and were played again once no claim was left. Started after the move with views of core projector 1 on 75 ended Workstreams: all rebuilt at start (L46). |
 | R7 | 2026-10-03 | `5e2b0f8` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a second server process on the same database, its output read. |
+| R8 | 2026-10-03 | `d82682f` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; real bridges and the mock agent, which offers a mode, a model (with `default` and a model it refuses) and an effort, answers a change after 400 ms, and gives its commands at the Session's opening; FakeKube pools annotated `agora.bretagne.dev/session-config`. |
+| R9 | 2026-10-03 | `d82682f` | cluster, live | g4 under Kata. The server `agora-server@sha256:2d0064e7…` built from that commit, the pools annotated by infra-k8s #193 (claude-code `mode=bypassPermissions,model=opus,effort=high`, codex `mode=agent-full-access,model=gpt-6.1-sol,reasoning_effort=high`, opencode `mode=build,model=zai-coding-plan/glm-5.3,effort=high`). Driven over the API: a Create in each pool, a task writing a file and running a command, a Configure to another model, a question. Billed on the three subscriptions. |
 
 ## Cases
 
@@ -74,6 +76,15 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L44 | — | local | R3 | proven | Opened `new` with `mock`, then from the anchor; two `session.ended`, each with its reason, the first before the restore. |
 | L45 | — | local | R4 | proven | Owned by the identity's name-based UUID despite another `owner` in the body; the same identity again 200, another 409. |
 | L46 | simulated: the checkpoint's version and the view rewritten as an older projector left them | local | R5 | proven | Rebuilt at start: state `ended`, the title from the first Write, the checkpoint at version 2. Without the fix, never rebuilt (seen on the cluster after the move to core v2). |
+| L47 | — | local | R8 | proven | The body's settings `mode`, `model` (the Create's), `effort`; three changes one at a time, answered before the next, all before the prompt; `ready` only after the third answer. |
+| L47 | — | live | R9 | proven | claude-code: `mode`, `model`, `effort` sent in that order, each answered, ready in 2.8 s, bypassPermissions, opus, high; codex: `mode` and `reasoning_effort` (its model already gpt-6.1-sol); opencode: `effort` only (build and glm-5.3 already current). No permission asked by any of them for a file written and a command run. |
+| L48 | — | local | R8 | proven | Of `mode=default, bogus=x, model=nope, effort=low` under the Create's `model=mock-broken`: `model=mock-broken` (answered in error) then `effort=low`; ready; the model still `default`. |
+| L49 | — | local | R8 | proven | Configure accepted; a Write at once `settings_pending`; the line under the command's id; the model `mock-large` once answered, `configuring` false. |
+| L49 | — | live | R9 | proven | claude-code to sonnet ("I'm Claude Sonnet 5."), codex to gpt-6-astra ("I’m Codex, based on GPT-6."), opencode to glm-5.2 ("I'm GLM (glm-5.2)…"). |
+| L50 | — | local | R8 | proven | `unknown_setting` twice, `turn_active` during `/sleep`; no `set_config_option` line. |
+| L51 | — | local | R8 | proven | `recall`, `review` with its hint; `effort` high after `/config`; `compact` added after `/commands`. |
+| L52 | — | local | R8 | proven | `mock-test` with its `sessionConfig`, its model `mock-small`, `recall` and `review`; `claude-test` null and empty. |
+| L53 | — | local | R8 | proven | `settings` `{model: 3}` and `['model']`: `invalid_create`. |
 
 ## Not covered
 

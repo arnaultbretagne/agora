@@ -41,7 +41,7 @@ export async function logHttp(
     return true
   }
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors) return false
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools') return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -80,6 +80,7 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views() }), true
+    if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
       // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
@@ -104,7 +105,7 @@ export async function logHttp(
       const input = await body(),
         target = object(input.target),
         content = object(input.body)
-      if (!['Create', 'Write', 'Cancel', 'RespondPermission', 'Stop'].includes(String(input.kind)) || !target || !content)
+      if (!['Create', 'Write', 'Cancel', 'RespondPermission', 'Configure', 'Stop'].includes(String(input.kind)) || !target || !content)
         throw new Error('invalid_body')
       const answer = await workstreams.command(workstream, { id: uuid(input.id), kind: input.kind as Command['kind'], target, body: content })
       reply(answer.accepted ? 200 : answer.reason === 'unavailable' ? 503 : 409, answer)

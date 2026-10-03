@@ -12,7 +12,7 @@ test('L1 a received line keeps its exact integer, unknown members, _meta and arr
   const line = `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"${e.acpId}","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"exact"}},"_meta":{"n":9007199254740993,"order":["b","a","c"],"unknown":{"z":[3,1,2]}}}}`
   await lab.write(ws, `/raw ${base64(line)}`)
   await lab.turn(ws, 'done')
-  const [entry] = lines(await lab.entries(ws), 'in', 'session/update')
+  const [entry] = lines(await lab.entries(ws), 'in', 'session/update').filter((x) => JSON.stringify(x.content).includes('"exact"'))
   assert.ok(entry)
   const stored = await lab.store.writer.query('SELECT content::text AS text FROM entries WHERE workstream=$1 AND position=$2', [ws, entry.position])
   const text = String(stored.rows[0].text)
@@ -50,6 +50,7 @@ test('L3 invalid received lines leave a diagnostic each, no content, no entry, n
     ['unsupported_json_value', Buffer.from('{"jsonrpc":"2.0","method":"_lab/ping","params":{"a":"\\u0000"}}')],
   ]
   const before = (await lab.entries(ws)).length
+  const lastBefore = BigInt((await lab.entries(ws)).at(-1)!.position)
   await lab.write(ws, `/raw ${base64(...invalid.map(([, bytes]) => bytes))}`)
   const turn = await lab.turn(ws, 'done')
   const after = (await lab.entries(ws)).slice(before)
@@ -83,9 +84,9 @@ test('L3 invalid received lines leave a diagnostic each, no content, no entry, n
     columns.rows.map((r) => r.column_name),
     ['connection', 'direction', 'execution', 'id', 'reason', 'receive_ordinal', 'sha256', 'size', 'time', 'workstream'],
   )
-  // Nothing projected from them.
+  // Nothing projected from them: no generic element from the turn's lines.
   const objects = await lab.workstreams.projections.objects(ws)
-  assert.equal(objects.filter((o) => o.object.type === 'acp').length, 0)
+  assert.equal(objects.filter((o) => o.object.type === 'acp' && BigInt(String(o.object.firstPosition)) > lastBefore).length, 0)
 })
 
 test('L5 an extension method and an unknown session/update type are entries and generic elements', async (t) => {

@@ -262,7 +262,8 @@ describe('bridge', () => {
     const resumed = await connect(target, '', 'sbx-target')
     await initialize(resumed)
     resumed.send({ jsonrpc: '2.0', id: 1, method: 'session/resume', params: { sessionId, cwd: target.workspace } })
-    assert.deepEqual((await resumed.response(1)).result, {})
+    // The resumed Session answers with its settings, as at its opening.
+    assert.ok(Array.isArray(((await resumed.response(1)).result as { configOptions?: unknown }).configOptions))
     await say(resumed, 2, sessionId, '/recall')
     assert.ok(resumed.acp().some((message) => JSON.stringify(message).includes('mirabelle')))
   })

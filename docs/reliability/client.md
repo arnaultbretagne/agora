@@ -11,6 +11,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R3 | 2026-10-03 | `a3a78a4` | local | `npm test` and the type check of `@agora/web`: Node 24.20.0, `@assistant-ui/react` 0.15.23. The mock history as in R1, and three real ones: claude-code, codex and opencode given one tool-heavy task on the deployed server (`agora-server` from `05fbbb8`), every permission allowed once, captured by `scripts/capture.real.ts`. |
 | R4 | 2026-10-03 | `a3a78a4` | cluster | The client from that commit, served by Vite on localhost, its `/api` proxied through `kubectl port-forward` to the deployed server (`05fbbb8`, namespace `agora`), in Chromium's headless shell: the harness picked in the composer (Mock agent), `/permission` sent from the draft, the card answered, Stop. |
 | R5 | 2026-10-03 | `180814b` | local | `npm run check`, with `npm run test:browser`: the client built by Vite, served by the real server (`apps/server`, TEST_ROUTES) on PostgreSQL 17.11 with FakeKube, real bridges and the mock agent, its Pods pushing anchors to the server; driven in Playwright 1.63.0's headless Chromium (153), one browser context per case. |
+| R6 | 2026-10-03 | `d82682f` | local | `npm run check`, with `npm run test:browser`, as R3 and R5; the browser cases against the mock agent with settings and commands, its pool starting in `full-access`. |
 
 ## Cases
 
@@ -56,6 +57,11 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U22 | — | local | R5 | proven | `dark` on the root after the toggle and after the reload; not in a new context. |
 | U23 | — | local | R5 | proven | After Stop and the deadline: `ended`, the picker's "continues the last session"; "Session restored with Mock agent…"; "Before, you told me \"remember mirabelle\"". |
 | U24 | — | local | R5 | proven | "Edit demo.txt" noted "+1 −1"; opened, the diff viewer's "after". |
+| U25 | — | local | R6 | proven | claude-code: sonnet, opus, haiku and five efforts, nothing current (its values are `default`); codex: eight models, gpt-6.1-sol and low current, six efforts; opencode: three efforts, glm-5.3 current; both pickers read `model` and `thought_level` only; the pool's declared values stand for the current ones, a pick wins. |
+| U26 | — | local | R6 | proven | All of codex's commands at `/`; review, review-branch, review-commit, rename at `/re` and `/RE`; none after a space or without `/`. |
+| U27 | — | local | R6 | proven | The draft's picker: mock-small, mock-large, mock-broken, low, high (no default); the Create's settings `mode` (the pool's), `model`, `effort`; "mock-large · high" once ready. |
+| U28 | — | local | R6 | proven | One Configure `model=mock-small`; the picker shows it; the next message answered. |
+| U29 | — | local | R6 | proven | `/recall`, `/review` at `/`; `/re`, ArrowDown, Enter: `/review `, the list gone; sent: "Echo #2: /review the code." |
 
 ## Not covered
 

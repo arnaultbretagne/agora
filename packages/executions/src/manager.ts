@@ -29,6 +29,25 @@ export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   turnCapSeconds: [30, 3600],
 }
 
+/** A pool kept for the tests: offered by the API, not by the screen (docs/specs/executions.md). */
+export const PURPOSE_ANNOTATION = 'agora.bretagne.dev/purpose'
+
+/** The settings each Session of a pool starts with (docs/specs/executions.md, "The API"). */
+export const SESSION_CONFIG_ANNOTATION = 'agora.bretagne.dev/session-config'
+
+/** `id=value` pairs separated by commas, in order; a malformed pair, or a repeated id, is left out. */
+export function sessionConfig(annotation: string | undefined): { id: string; value: string }[] {
+  if (!annotation) return []
+  const out: { id: string; value: string }[] = []
+  for (const pair of annotation.split(',')) {
+    const at = pair.indexOf('=')
+    const id = pair.slice(0, at).trim(),
+      value = pair.slice(at + 1).trim()
+    if (at > 0 && id !== '' && value !== '' && !out.some((w) => w.id === id)) out.push({ id, value })
+  }
+  return out
+}
+
 export function claimName(execution: string): string {
   return `sbx-${createHash('sha256').update(execution).digest('hex').slice(0, 10)}`
 }
@@ -136,6 +155,10 @@ export interface PoolView {
   readonly baseProfiles: readonly string[]
   /** A declared profile that is not a base one: then the pool gets none. */
   readonly refusedProfile: string | null
+  /** The settings its Sessions start with, in order. */
+  readonly sessionConfig: readonly { readonly id: string; readonly value: string }[]
+  /** Kept for the tests (`agora.bretagne.dev/purpose: testing`): the screen does not offer it. */
+  readonly testing: boolean
 }
 
 export type CommandResult<T> =
@@ -683,6 +706,8 @@ export class ExecutionManager {
           const declared = baseProfiles(pool.metadata.annotations?.[BASE_PROFILES_ANNOTATION])
           return { baseProfiles: declared.profiles, refusedProfile: declared.refused }
         })(),
+        sessionConfig: sessionConfig(pool.metadata.annotations?.[SESSION_CONFIG_ANNOTATION]),
+        testing: pool.metadata.annotations?.[PURPOSE_ANNOTATION] === 'testing',
       })
     }
     this.poolCache = { at: Date.now(), pools }
