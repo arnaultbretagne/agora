@@ -13,6 +13,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R3 | 2026-10-02 | `b8bbc95` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent, FakeKube with warm Sandboxes, a real signer with a key of its own; PostgreSQL 17.11 for the log's tests. The gateway is not run: what it answers is not shown at this level. |
 | R4 | 2026-10-02 | `76334b4` | cluster, live | g4 under Kata, Agent Sandbox v1.0.3. The lab `agora-lab@sha256:9dc72442…` built from that commit; the claude-code pool declaring `agora.bretagne.dev/base-profiles: anthropic`, the mock's nothing; harness images as in R2. `apps/lab/scripts/live-cases.ts` from `9b13107` (only the runner changed since), reading the bridges' and the gateway's logs and sending requests from a Pod through its bridge, as the operator. agentgateway as deployed by infra-k8s; GitHub cases against the public stand-ins. C13 billed, on `haiku`. |
 | R5 | 2026-10-02 | `e96543a` | cluster | g4 under Kata. The lab `agora-lab@sha256:130368d1…` built from that commit; the gateway with the route `zai` and the operator's z.ai key (infra-k8s #180), restarted to load the route. `apps/lab/scripts/live-cases.ts` from that commit. |
+| R6 | 2026-10-03 | `4b26f3c` | cluster | g4 under Kata. The lab `agora-lab@sha256:251558cc…` built from that commit; the gateway with the route `chatgpt` and the cluster's own ChatGPT session (Plus, its own device-code login), kept by `chatgpt-refresher` (infra-k8s #182), restarted to load the route. `apps/lab/scripts/live-cases.ts` from that commit. |
 
 ## Cases
 
@@ -43,7 +44,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C14 | — | local | R3 | proven | Every assertion held. |
 | C14 | — | cluster | R4 | proven | `unknown_profile`, nothing written. |
 | C15 | — | cluster | R5 | proven | 200 from z.ai, four models listed; the gateway's route `zai` answered 200 under the execution's name. |
-| C16 | — | — | — | not verified | — |
+| C16 | — | cluster | R6 | proven | `codex/models`: 200 from ChatGPT with the session the gateway set, the sandbox's `chatgpt-account-id` removed; `/backend-api/conversations`: 403 from the gateway. |
 
 The partial verdicts are tracked in #107.
 
