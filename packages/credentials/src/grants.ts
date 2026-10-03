@@ -30,6 +30,9 @@ export function compileProfile(profile: string): Grant[] {
   if (profile === 'anthropic') return [{ host: 'api.anthropic.com' }]
   // z.ai (GLM): its OpenAI- and Anthropic-compatible APIs share the host.
   if (profile === 'zai') return [{ host: 'api.z.ai' }]
+  // ChatGPT, for codex: only its backend's codex and account paths — the session reaches the whole
+  // account, conversations included.
+  if (profile === 'chatgpt') return [{ host: 'chatgpt.com', path: '^/backend-api/(codex|wham)(/[^?]*)?(\\?.*)?$' }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -46,7 +49,7 @@ export function compileProfile(profile: string): Grant[] {
 }
 
 /** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository. */
-export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai'])
+export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt'])
 
 /** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
 export const BASE_PROFILES_ANNOTATION = 'agora.bretagne.dev/base-profiles'
@@ -84,7 +87,7 @@ export class GrantSigner {
   }
 
   describe(): { proxy: string; profiles: string[]; base: string[] } {
-    return { proxy: this.options.proxy, profiles: ['anthropic', 'zai', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'], base: [...BASE_PROFILES] }
+    return { proxy: this.options.proxy, profiles: ['anthropic', 'zai', 'chatgpt', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'], base: [...BASE_PROFILES] }
   }
 
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {

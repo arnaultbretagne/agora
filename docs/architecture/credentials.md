@@ -1,6 +1,6 @@
 # Credentials
 
-A harness needs credentials — Claude, z.ai, GitHub — but its sandbox never holds one. Everything it
+A harness needs credentials — Claude, z.ai, ChatGPT, GitHub — but its sandbox never holds one. Everything it
 sends out goes through the gateway, which checks each request against the rights Agora gave the
 execution, and sets the real credential on the way.
 
@@ -25,7 +25,7 @@ agent can use the way out, not take the token with it, and the network lets it g
 
 ## Profiles and grants
 
-A **profile** is a right expressed for humans: `anthropic`, `zai`, `github:owner/repo:read`,
+A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `github:owner/repo:read`,
 `github:owner/repo:write`. Agora compiles each profile into **grants**, which the gateway can
 check on a request: a host, a pattern on the path, and the allowed methods.
 
@@ -33,6 +33,7 @@ check on a request: a host, a pattern on the path, and the allowed methods.
 | --- | --- |
 | `anthropic` | `api.anthropic.com`, everything |
 | `zai` | `api.z.ai`, everything |
+| `chatgpt` | `chatgpt.com` on `/backend-api/codex…` and `/backend-api/wham…` |
 | `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
 | `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
 

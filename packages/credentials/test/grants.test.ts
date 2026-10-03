@@ -18,6 +18,23 @@ describe('profiles', () => {
     assert.deepEqual(compileProfile('anthropic'), [{ host: 'api.anthropic.com' }])
   })
 
+  it('chatgpt opens codex and account paths on chatgpt.com, never the conversations', () => {
+    const grants = compileProfile('chatgpt')
+    const cases: [string, string, string, boolean][] = [
+      ['chatgpt.com', 'POST', '/backend-api/codex/responses', true],
+      ['chatgpt.com', 'GET', '/backend-api/codex/models?client_version=0.159.3', true],
+      ['chatgpt.com', 'GET', '/backend-api/wham/accounts/check', true],
+      ['chatgpt.com', 'GET', '/backend-api/codex', true],
+      ['chatgpt.com', 'GET', '/backend-api/conversations?offset=0', false],
+      ['chatgpt.com', 'GET', '/backend-api/codexx/responses', false],
+      ['chatgpt.com', 'GET', '/backend-api/me', false],
+      ['chatgpt.com', 'GET', '/', false],
+      ['auth.openai.com', 'POST', '/oauth/token', false],
+      ['api.openai.com', 'POST', '/v1/responses', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+  })
+
   it('zai opens the whole z.ai API host, and nothing of Anthropic', () => {
     const grants = compileProfile('zai')
     assert.deepEqual(grants, [{ host: 'api.z.ai' }])
@@ -81,7 +98,7 @@ describe('GrantSigner', () => {
   })
 
   it('reads a pool\'s base profiles: services only, never a repository', () => {
-    assert.deepEqual(baseProfiles('anthropic,zai'), { profiles: ['anthropic', 'zai'], refused: null })
+    assert.deepEqual(baseProfiles('anthropic,zai,chatgpt'), { profiles: ['anthropic', 'zai', 'chatgpt'], refused: null })
     assert.deepEqual(baseProfiles('anthropic'), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(' anthropic , '), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(undefined), { profiles: [], refused: null })

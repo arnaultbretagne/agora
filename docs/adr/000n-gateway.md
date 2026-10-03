@@ -175,6 +175,8 @@ Dropped outright: vaults grow with the combinations.
 - The token grows with the grants: a few hundred bytes for a few repos. Tens of repos would call
   for profiles expanded by the gateway instead.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
+- A credential that rotates — the ChatGPT session codex uses — needs a refresher beside the gateway,
+  and a login of its own: its refresh token may be spent once, so nothing else may hold it.
 - git and codex must trust the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`.
 - agentgateway is young and moves fast (1.5 made `iss` and `aud` mandatory): pinned by digest,
   upgraded deliberately, lab cases replayed first.

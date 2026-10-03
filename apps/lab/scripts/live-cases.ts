@@ -1,5 +1,5 @@
 // Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode), docs/specs/log.md (L…) and
-// docs/specs/credentials.md (C1–C4, C8–C15) against the DEPLOYED lab, with real Kata sandboxes destroyed by
+// docs/specs/credentials.md (C1–C4, C8–C16) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
@@ -711,6 +711,20 @@ await check('C15', 'Gateway, the chain to z.ai', async () => {
   const line = gatewayLines(since).find((l) => l.includes('http.host=api.z.ai') && l.includes(`jwt.sub=agora ${w.execution} `))
   assert(line !== undefined, 'no request seen by the gateway')
   return `"${reply.slice(0, 15)}", ${String((reply.match(/"id"/g) ?? []).length)} model(s) listed; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
+})
+
+await check('C16', 'Gateway, the chain to ChatGPT', async () => {
+  const w = new Workstream()
+  const since = new Date(Date.now() - 1000).toISOString()
+  await w.open(mock, { profiles: ['chatgpt'], ...SHORT })
+  const models = await fetched(w, 'https://chatgpt.com/backend-api/codex/models?client_version=0.159.3')
+  const conversations = await fetched(w, 'https://chatgpt.com/backend-api/conversations?offset=0&limit=1')
+  await w.stop()
+  assert(/^HTTP\/1\.1 200/.test(models), `models: ${models.slice(0, 200)}`)
+  assert(/^HTTP\/1\.1 403/.test(conversations) && conversations.includes('authorization failed'), `conversations: ${conversations.slice(0, 200)}`)
+  const line = gatewayLines(since).find((l) => l.includes('http.host=chatgpt.com') && l.includes('/backend-api/codex/models') && l.includes(`jwt.sub=agora ${w.execution} `))
+  assert(line !== undefined, 'no request seen by the gateway')
+  return `codex/models "${models.slice(0, 15)}", ${String((models.match(/"slug"/g) ?? []).length)} model(s); conversations "${conversations.slice(0, 15)}" authorization failed; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
 })
 
 // Last: a warm token lives 15 minutes, renewed with a third left.
