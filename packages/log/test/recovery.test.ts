@@ -48,12 +48,13 @@ async function open(run: Served, body: Record<string, unknown> = {}): Promise<Ex
     const current = (await run.reader.state(run.ws)).current
     return current?.session && current.connection ? current : null
   })
-  // The mock gives its commands right after the Session opens: waited for, as in Lab.open.
-  const e = await until('the agent commands', async () => {
-    const current = (await run.reader.state(run.ws)).current
-    return current?.commands.length ? current : null
+  // The mock gives its commands right after the Session opens: waited for in the projected view, as in
+  // Lab.open, so that their capture has returned.
+  await until('the agent commands', async () => {
+    const views = (await (await fetch(`${run.server.url}/api/workstreams`)).json()) as { workstreams: { id: string; commands?: unknown[] }[] }
+    return (views.workstreams.find((w) => w.id === run.ws)?.commands?.length ?? 0) > 0
   })
-  return { ...e }
+  return { ...(await run.reader.state(run.ws)).current! }
 }
 
 /** A Write over HTTP; the process may die while answering, at a fault point. */
@@ -243,7 +244,8 @@ test('L21 a capture commit succeeds but its acknowledgement is lost: the retry f
   const { lab, ws } = await opened(t, { pgRelay: true })
   // Real: the reply to the next capture's COMMIT is lost on the network.
   lab.pg!.arm('UNION ALL SELECT NULL AS position FROM diagnostics')
-  assert.ok((await lab.write(ws, 'acknowledged once')).accepted)
+  const written = await lab.write(ws, 'acknowledged once')
+  assert.ok(written.accepted, JSON.stringify(written))
   await lab.turn(ws, 'done')
   assert.equal(lab.pg!.dropped, 1)
   t.diagnostic('one COMMIT reply dropped on the network')

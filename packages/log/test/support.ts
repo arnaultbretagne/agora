@@ -365,9 +365,12 @@ export class Lab {
       const e = (await this.state(workstream)).current
       return e?.session && e.connection ? e : null
     })
-    // The mock gives its commands right after the Session opens: waited for, so that a test's next line
-    // is the one it means.
-    await until('the agent commands', async () => (await this.state(workstream)).current?.commands.length)
+    // The mock gives its commands right after the Session opens: waited for in the projected view —
+    // projected only once their capture has returned — so that a test's next line is the one it means.
+    await until('the agent commands', async () => {
+      const view = (await this.workstreams.projections.objects(workstream)).find((o) => o.kind === 'workstream')
+      return Array.isArray(view?.object.commands) && view.object.commands.length > 0
+    })
     return (await this.state(workstream)).current!
   }
 
