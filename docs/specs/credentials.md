@@ -44,6 +44,7 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | --- | --- |
 | `anthropic` | `api.anthropic.com`, everything. |
 | `zai` | `api.z.ai`, everything: z.ai's OpenAI- and Anthropic-compatible APIs. |
+| `chatgpt` | `chatgpt.com`, only `/backend-api/codex…` and `/backend-api/wham…`: what codex uses. The session reaches the whole ChatGPT account, conversations included. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
@@ -60,6 +61,7 @@ service, never a repository.
 | --- | --- |
 | `anthropic` | Yes |
 | `zai` | Yes |
+| `chatgpt` | Yes |
 | `github:…` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
@@ -96,6 +98,7 @@ credential.
 | --- | --- | --- |
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
 | `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
+| `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
 | `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
 | `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 
@@ -104,6 +107,12 @@ watches these files: a rotation is a commit, with no restart. Verified: a replac
 reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. Its
 configuration is not watched: a new route takes a restart of the gateway (verified on 2026-10-02,
 the `zai` route answered 404 "route not found" until then).
+
+The ChatGPT session is the one credential that rotates: an OAuth set from the cluster's own codex
+login, never the operator's. Its access token lives 10 days; its refresh token may be spent once.
+It sits in a Secret infra-k8s keeps out of git (`chatgpt-session`), which a daily job renews five
+days before expiry; nothing in the sandbox can refresh it — its `auth.json` is a placeholder and
+`auth.openai.com` has no route.
 
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.
@@ -160,6 +169,7 @@ call. The lab does it itself when the agent offers the option.
 | C13 | claude-code, from the Create to a Session open | Under 5 s, with no refused connection. |
 | C14 | A Create naming an unknown profile | Refused, `unknown_profile`; nothing written. |
 | C15 | The chain to z.ai | `zai` profile, the mock's `/fetch https://api.z.ai/api/paas/v4/models`: 200 from z.ai, with the key the gateway set. |
+| C16 | The chain to ChatGPT | `chatgpt` profile, the mock's `/fetch https://chatgpt.com/backend-api/codex/models`: 200 from ChatGPT with the session the gateway set; `/backend-api/conversations`: 403 from the gateway. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); changing an execution's
 grants between turns; count the responses to `CONNECT` by status, not just the last one; TLS trust

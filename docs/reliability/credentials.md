@@ -43,6 +43,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C14 | — | local | R3 | proven | Every assertion held. |
 | C14 | — | cluster | R4 | proven | `unknown_profile`, nothing written. |
 | C15 | — | cluster | R5 | proven | 200 from z.ai, four models listed; the gateway's route `zai` answered 200 under the execution's name. |
+| C16 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 
