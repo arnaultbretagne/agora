@@ -113,13 +113,16 @@ for (const [image, { dockerfile, harness }] of images()) {
       skipped.push(`${image} (inputs unchanged)`)
       continue
     }
+    const before = getLine(current, 'versions'),
+      after = versions(dockerfile) || before
     let next = setLine(current, 'name', `${harness}-${digest.slice(7, 19)}`)
     next = setLine(next, 'image', `${REGISTRY}/${image}@${digest}`)
-    next = setLine(next, 'versions', versions(dockerfile) || getLine(current, 'versions'))
+    next = setLine(next, 'versions', after)
     next = setLine(next, 'source', source)
     next = setLine(next, 'inputs', `"${fingerprint}"`)
     writeFileSync(data, next)
-    rows.push(`| ${harness} | new pool \`${harness}-${digest.slice(7, 19)}\` (was \`${getLine(current, 'name')}\`) | ${versions(dockerfile) || '—'} |`)
+    // Versions shown as they were and become: a branch behind the one deployed shows as going back.
+    rows.push(`| ${harness} | new pool \`${harness}-${digest.slice(7, 19)}\` (was \`${getLine(current, 'name')}\`) | ${before === after ? after || '—' : `${before || '?'} → **${after}**`} |`)
   }
 }
 

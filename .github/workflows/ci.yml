@@ -181,7 +181,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
         run: |
-          if [ "${{ github.ref_name }}" = design/agora-foundations ]; then branch=agora/images; else branch="agora/images-$(echo '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
+          if [ "${{ github.ref_name }}" = design/agora-foundations ]; then branch=agora/images; else branch="agora/images-$(printf '%s' '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
           title="feat(agora): images from ${{ github.ref_name }} ${GITHUB_SHA::7}"
           cd infra
           git config user.name 'github-actions[bot]'
