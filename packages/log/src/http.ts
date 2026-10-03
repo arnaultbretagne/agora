@@ -7,7 +7,7 @@ import type { CredentialSource } from '@agora/executions'
 import { parseBundle } from '@agora/harness-bridge/anchor'
 import type { Workstreams } from './workstreams.ts'
 import type { Command } from './store.ts'
-import { uuid, object, decode, encode, cursor } from './json.ts'
+import { uuid, object, decode, encode, cursor, identity } from './json.ts'
 import { MAX_LINE } from './acp.ts'
 
 const VALIDATION = new Set([
@@ -78,10 +78,13 @@ export async function logHttp(
       res.end(bundle.files.map((file) => `===== ${file.path}\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n'))
       return true
     }
+    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
+      // The identity the proxy in front passes, as a name-based UUID; the body's owner without one.
+      const identityHeader = req.headers['x-auth-request-email']
       const id = uuid(input.id),
-        owner = uuid(input.owner)
+        owner = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : uuid(input.owner)
       try {
         await store.create(id, owner)
       } catch (error) {

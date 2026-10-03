@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { canonical, core, CoreProjection, decode, encode, fromFold, hash, identity, LogStore, object, project, Projections, ThreadClient, type Entry, type ProjectedObject } from '../src/index.ts'
-import { call, database, opened, readThread, sleep, until } from './support.ts'
+import { call, database, expire, Lab, opened, readThread, sleep, until } from './support.ts'
 
 test('L22 the real claude-code transcript, folded incrementally and through a rebuild, gives the recorded hash', async (t) => {
   const fixture = decode(await readFile(new URL('fixtures/claude-code.json', import.meta.url), 'utf8')) as {
@@ -129,4 +129,103 @@ test('L24 the thread read while updates commit, cut before snapshot-end, then re
   assert.deepEqual([negative.status, negative.body.reason], [400, 'invalid_cursor'])
   const beyond = await call(lab.url, 'GET', `/api/workstreams/${ws}/thread?after=${String(BigInt(rest.end!) + 1n)}`)
   assert.deepEqual([beyond.status, beyond.body.reason], [400, 'future_cursor'])
+})
+
+// docs/specs/log.md, "The Workstream view", "Notices" and "HTTP": what the client reads of a Workstream.
+const views = async (lab: Lab) => (await call(lab.url, 'GET', '/api/workstreams')).body.workstreams as Record<string, unknown>[]
+/** The Workstream view through the entries, one at a time, as the projector folds them. */
+function viewsOver(entries: readonly Entry[]): Record<string, unknown>[] {
+  const projection = new CoreProjection()
+  const seen: Record<string, unknown>[] = []
+  for (const entry of entries) {
+    projection.apply([entry])
+    const view = projection.objects.get(entry.workstream)?.object as Record<string, unknown> | undefined
+    if (view && view !== seen.at(-1)) seen.push(view)
+  }
+  return seen
+}
+const sessionInfo = (acpId: string, title: string) =>
+  `/raw ${Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acpId, update: { sessionUpdate: 'session_info_update', title } } })).toString('base64')}`
+
+test('L42 Workstreams listed while one changes: every view, a new one first, then the one changed last', async (t) => {
+  const { lab, ws } = await opened(t)
+  const second = await lab.workstream()
+  await lab.open(second)
+  const fresh = await lab.workstream()
+  assert.deepEqual((await views(lab)).map((v) => v.id), [fresh, second, ws])
+  assert.equal((await views(lab))[0]!.state, 'none')
+  assert.ok((await lab.write(ws, 'a change')).accepted)
+  const listed = await views(lab)
+  assert.deepEqual(listed.map((v) => v.id), [fresh, ws, second])
+  assert.deepEqual(listed.map((v) => v.title), ['New workstream', 'a change', 'New workstream'])
+})
+
+test('L43 a Workstream through Create, a Session, a break, Stop and its end: the view\'s state, fields and title', async (t) => {
+  const db = await database()
+  const lab = await Lab.start({ db, relay: true, receiver: true })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const ws = await lab.workstream()
+  assert.equal((await views(lab)).find((v) => v.id === ws)?.state, 'none')
+  const e = await lab.open(ws)
+  assert.ok((await lab.write(ws, 'Fix the login page\nwith a second line')).accepted)
+  await lab.turn(ws, 'done')
+  const breaks = (await lab.entries(ws)).filter((x) => x.kind === 'execution.break').length
+  lab.cut()
+  await until('reconnected', async () => {
+    const entries = await lab.entries(ws)
+    const broken = entries.filter((x) => x.kind === 'execution.break')
+    return broken.length > breaks && entries.findLast((x) => x.kind.startsWith('execution.'))?.kind === 'execution.connected'
+  })
+  const acpId = String((await lab.entries(ws)).find((x) => x.kind === 'session.opened')!.content.acpId)
+  assert.ok((await lab.write(ws, sessionInfo(acpId, 'The agent names it'))).accepted)
+  await lab.turn(ws, 'done')
+  assert.ok((await lab.command(ws, 'Stop', { execution: e.id })).accepted)
+  await expire(lab.kube, e.claimName)
+  const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended'))
+  const seen = viewsOver(await lab.entries(ws))
+  const states = seen.map((v) => v.state).filter((s, i, all) => i === 0 || s !== all[i - 1])
+  assert.deepEqual(states, ['starting', 'ready', 'interrupted', 'ready', 'stopped', 'ended'])
+  assert.deepEqual(
+    [...new Set(seen.map((v) => v.title))],
+    ['New workstream', 'Fix the login page', 'The agent names it'],
+  )
+  const last = (await views(lab)).find((v) => v.id === ws)!
+  assert.deepEqual(
+    [last.state, last.pool, last.harness, last.execution, last.session, last.anchor, last.title],
+    ['ended', 'mock-test', 'mock', e.id, null, ended.content.anchor, 'The agent names it'],
+  )
+  assert.equal(typeof ended.content.anchor, 'string')
+})
+
+test('L44 a Session opened new, then restored from an anchor, then ended: its notices', async (t) => {
+  const db = await database()
+  const lab = await Lab.start({ db, receiver: true })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const ws = await lab.workstream()
+  const e = await lab.open(ws)
+  assert.ok((await lab.write(ws, 'mirabelle')).accepted)
+  await lab.turn(ws, 'done')
+  await expire(lab.kube, e.claimName)
+  const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended'))
+  const anchor = String(ended.content.anchor)
+  const restored = await lab.open(ws, { anchor })
+  await lab.command(ws, 'Stop', { execution: restored.id })
+  await expire(lab.kube, restored.claimName)
+  await until('the second end', async () => (await lab.entries(ws)).filter((x) => x.kind === 'execution.ended').length === 2)
+  const notices = project(await lab.entries(ws))
+    .filter((o) => o.kind === 'notice')
+    .map((o) => o.object as Record<string, unknown>)
+    .sort((a, b) => Number(BigInt(String(a.firstPosition)) - BigInt(String(b.firstPosition))))
+  const opened = notices.filter((n) => n.type === 'session.opened')
+  assert.deepEqual(opened.map((n) => [n.origin, n.harness]), [['new', 'mock'], [anchor, 'mock']])
+  const endedSessions = notices.filter((n) => n.type === 'session.ended')
+  assert.equal(endedSessions.length, 2)
+  assert.ok(endedSessions.every((n) => typeof n.reason === 'string' && n.reason !== ''))
+  assert.ok(BigInt(String(endedSessions[0]!.firstPosition)) < BigInt(String(opened[1]!.firstPosition)))
 })

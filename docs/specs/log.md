@@ -249,6 +249,7 @@ agent's title.
 | `pool`, `harness` | The last execution's, or null. |
 | `anchor` | The anchor its `execution.ended` names, or null. |
 | `stopped`, `ended`, `lost`, `failed`, `unavailable` | The last execution's flags; `unavailable` while no Session is open and connected. |
+| `changedAt` | The time of the entry that changed the view last. |
 
 | `state` | When, the first that applies |
 | --- | --- |
@@ -288,8 +289,8 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/workstreams` | The Workstream views, the most recently changed first. |
-| `POST /api/workstreams` | Creates a Workstream: `id`; the owner is the identity the proxy passes (`X-Auth-Request-Email`), or the body's `owner` without one. 409 if the id belongs to another owner. |
+| `GET /api/workstreams` | The Workstream views, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
+| `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Auth-Request-Email`), or the body's `owner` without one. 409 if the id belongs to another owner. |
 | `GET /api/pools` | The catalogue (`executions.md`). |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |

@@ -10,7 +10,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `commands.test.ts` | Admission, Cancel, Stop, permissions: L6, L9, L10, L12–L14, L16, L37. |
 | `turns.test.ts` | A turn across failures: L4, L7, L11, L33–L35, L40, L41. |
 | `recovery.test.ts` | Agora stopped, killed, cut from PostgreSQL; the claim and the bridge against the record: L8, L15, L17–L21, L29–L32, L36, L38, L39. |
-| `views.test.ts` | Folds, rebuilds, the thread: L22–L24. |
+| `views.test.ts` | Folds, rebuilds, the thread, the Workstream view and list, the Session notices: L22–L24, L42–L44. |
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |
