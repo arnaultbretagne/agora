@@ -50,7 +50,8 @@ test('L28 the lab process, carrying secrets through prompts, tools, tokens, head
   assert.equal((await server.command(ws, 'Create', {}, { pool: 'mock-test' })).status, 200)
   const e = await until('Session open', async () => {
     const current = (await reader.state(ws)).current
-    return current?.session && current.connection ? { ...current } : null
+    // Open, and its commands given: the mock's last line before the test's own.
+    return current?.session && current.connection && current.commands.length ? { ...current } : null
   })
   const write = async (text: string) => {
     const answer = await server.command(ws, 'Write', { execution: e.id, session: e.session }, { prompt: [{ type: 'text', text }] })

@@ -44,9 +44,14 @@ const entries = (run: Served) => run.reader.entries(run.ws)
 async function open(run: Served, body: Record<string, unknown> = {}): Promise<Execution> {
   const answer = await run.server.command(run.ws, 'Create', {}, { pool: 'mock-test', ...body })
   assert.equal(answer.status, 200, JSON.stringify(answer.body))
-  const e = await until('Session open', async () => {
+  await until('Session open', async () => {
     const current = (await run.reader.state(run.ws)).current
     return current?.session && current.connection ? current : null
+  })
+  // The mock gives its commands right after the Session opens: waited for, as in Lab.open.
+  const e = await until('the agent commands', async () => {
+    const current = (await run.reader.state(run.ws)).current
+    return current?.commands.length ? current : null
   })
   return { ...e }
 }

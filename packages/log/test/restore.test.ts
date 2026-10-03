@@ -39,7 +39,8 @@ test('E29 restoring onto an adapter that reads its files at start: anchor before
   const { lab, ws, anchor, execution } = await restored(t, true)
   const e = await until('Session open', async () => {
     const current = (await lab.state(ws)).current
-    return current?.id === execution && current.session && current.connection ? current : null
+    // Open, and its commands given: the mock's last line before the test's own.
+    return current?.id === execution && current.session && current.connection && current.commands.length ? current : null
   })
   const opening = (await lab.entries(ws)).findLast((x) => x.kind === 'session.opened')!
   assert.equal(opening.content.origin, anchor)
