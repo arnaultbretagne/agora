@@ -39,6 +39,9 @@ check on a request: a host, a pattern on the path, and the allowed methods.
 
 Grants add up: any mix of profiles is just a longer list.
 
+Which repositories an execution may reach is declared by the operator — the **offered** profiles,
+each at its widest access — and picked by the user, before the execution or between its turns.
+
 Grants are the only restriction, so they stop at what the gateway can check: a host, a path, a
 method. An ACP permission, an installed tool or an instruction given to the model restricts
 nothing on the service's side. If the gateway refuses or does not answer, the request fails;
@@ -56,6 +59,7 @@ services its harness needs from the start — its **base profiles**, `anthropic`
 | In the pool | The pool's base profiles, naming the warm Pod. Renewed while the Pod waits. |
 | At the claim, before `initialize` | The base profiles and the execution's own, naming the execution. |
 | Between turns, when it would run out | The same rights in a new token. |
+| Between turns, when the user changes its access | The base profiles and the new own ones, at once. |
 
 Agora is the only one handing tokens over: once it sees the claim bound to the Pod, it stops
 warming it, and the execution's token replaces the warm one. Each replacement closes the tunnels

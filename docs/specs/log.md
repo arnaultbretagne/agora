@@ -154,8 +154,8 @@ exits with a non-zero status and recovery runs on its restart.
 
 ## Commands
 
-The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Stop
-(`assistant-ui.md`).
+The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Scope,
+Stop (`assistant-ui.md`).
 
 | Rule | Detail |
 | --- | --- |
@@ -164,6 +164,7 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
 | Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). |
 | Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
+| Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
@@ -177,15 +178,16 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; limits out of bounds, or `settings` not an object of strings; the active executions at their maximum. |
 | `settings_pending` | Write or Configure while the opening settings are not settled, or another setting is being changed. |
 | `unknown_setting` | Configure: a setting the Session does not offer, or a value it does not list. |
-| `unknown_profile` | Create: a profile the catalogue does not know. |
+| `unknown_profile`, `profile_not_offered` | Create or Scope: a profile the catalogue does not know; one beyond those offered (`credentials.md`, "Offered profiles"). |
+| `invalid_scope` | Scope: `profiles` not a list of strings. |
 | `unknown_anchor`, `anchor_incompatible` | Create: no such anchor; an anchor of another harness. |
 | `execution_conflict` | Create: the execution or claim name already recorded. |
 | `execution_unavailable` | No execution, or it has ended; or, except for Stop, it is lost or failed. |
 | `stale_execution` | The target is not the Workstream's execution. |
-| `stopped` | Stop already given; or a Write, Cancel or answer after it. |
+| `stopped` | Stop already given; or a Write, Configure, Scope, Cancel or answer after it. |
 | `disconnected`, `execution_ending` | Write: no connection to the bridge; the claim being deleted or its deadline passed. |
 | `stale_session`, `opening_session`, `permission_pending` | Write: another Session; the Session still opening; a permission pending. |
-| `turn_active`, `turn_uncertain` | Write: a turn saved or in progress; a turn uncertain. |
+| `turn_active`, `turn_uncertain` | Write, Configure or Scope: a turn saved or in progress; a turn uncertain. |
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
 
@@ -256,6 +258,7 @@ agent's title.
 | `settings` | The last Session's settings as it last gave them, kept once it has ended: each with `id`, `name`, `category`, `type`, `currentValue` and `options` (`value`, `name`, `description`; groups flattened); or null. |
 | `commands` | The last Session's last `available_commands_update`, kept once it has ended: each with `name`, `description` and its input's `hint`; or empty. |
 | `configuring` | A `session/set_config_option` of the open Session is unanswered. |
+| `profiles` | The last execution's own profiles: its Create's, then its last Scope's; or empty. |
 | `changedAt` | The time of the entry that changed the view last. |
 
 | `state` | When, the first that applies |
@@ -432,6 +435,8 @@ exception message.
 | L51 | `config_option_update` and `available_commands_update` from the agent | The view's `settings` and `commands` replaced. |
 | L52 | `GET /api/pools` after a Session in a pool, another annotated for the tests | That pool's `settings` and `commands` as the Session gave them; the other `testing`. |
 | L53 | A Create whose `settings` is not an object of strings | `invalid_create`. |
+| L54 | A Create with profiles, then a Scope with others | The view's `profiles`: the Create's, then the Scope's; the Scope recorded with the command. |
+| L55 | A Scope whose `profiles` is not a list of strings; one targeting a past execution; one after Stop | `invalid_scope`; `stale_execution`; `stopped`. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

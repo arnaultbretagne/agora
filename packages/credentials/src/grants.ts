@@ -69,6 +69,20 @@ export function compileProfiles(profiles: readonly string[]): Grant[] {
   return profiles.flatMap(compileProfile)
 }
 
+/** `OFFERED_PROFILES`, read (docs/specs/credentials.md, "Offered profiles"): each profile once, all known to the catalogue. */
+export function offeredProfiles(value: string | undefined): string[] {
+  const profiles = [...new Set((value ?? '').split(',').map((p) => p.trim()).filter((p) => p !== ''))]
+  for (const profile of profiles) compileProfile(profile)
+  return profiles
+}
+
+/** Whether a profile may be named, given those offered: itself, or a repository's read under its write. */
+export function offers(offered: readonly string[], profile: string): boolean {
+  if (offered.includes(profile)) return true
+  const read = /^(github:[^:]+):read$/.exec(profile)
+  return read !== null && offered.includes(`${read[1]!}:write`)
+}
+
 export interface GrantSignerOptions {
   /** The gateway's CONNECT listener as the bridge reaches it, `host:port`. */
   readonly proxy: string
@@ -76,6 +90,8 @@ export interface GrantSignerOptions {
   readonly keyId: string
   readonly issuer: string
   readonly audience: string
+  /** What an execution may be given beyond its pool's base profiles; any profile when empty. */
+  readonly offered?: readonly string[]
 }
 
 export class GrantSigner {
@@ -83,16 +99,27 @@ export class GrantSigner {
   private key: KeyObject | null = null
 
   constructor(options: GrantSignerOptions) {
+    for (const profile of options.offered ?? []) compileProfile(profile)
     this.options = options
   }
 
-  describe(): { proxy: string; profiles: string[]; base: string[] } {
-    return { proxy: this.options.proxy, profiles: ['anthropic', 'zai', 'chatgpt', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'], base: [...BASE_PROFILES] }
+  get offered(): readonly string[] {
+    return this.options.offered ?? []
   }
 
+  describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
+    return {
+      proxy: this.options.proxy,
+      profiles: ['anthropic', 'zai', 'chatgpt', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
+      base: [...BASE_PROFILES],
+      offered: [...this.offered],
+    }
+  }
+
+  /** A token for these profiles; for none, a token with no grant, which withdraws the one before it. */
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {
     if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 60 || input.ttlSeconds > 24 * 3600) throw new ProfileRefused('duration out of bounds: 60 to 86,400 s')
-    const grants = compileProfiles(input.profiles ?? [])
+    const grants = (input.profiles ?? []).flatMap(compileProfile)
     this.key ??= createPrivateKey(await readFile(this.options.keyFile))
     const now = Math.floor(Date.now() / 1000)
     const exp = now + input.ttlSeconds

@@ -4,7 +4,7 @@ import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
 import type { AgentCommand, Setting, WorkstreamView } from './view.ts'
 
-export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Stop'
+export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop'
 
 export interface Answer {
   readonly accepted: boolean
@@ -47,6 +47,12 @@ export class Api {
 
   async workstreams(): Promise<WorkstreamView[]> {
     return ((await this.read('/api/workstreams')).body.workstreams ?? []) as WorkstreamView[]
+  }
+
+  /** The profiles the access picker offers (docs/specs/credentials.md, "Offered profiles"). */
+  async offered(): Promise<string[]> {
+    const credentials = (await this.read('/api/config')).body.credentials as { offered?: unknown } | null | undefined
+    return Array.isArray(credentials?.offered) ? credentials.offered.filter((p): p is string => typeof p === 'string') : []
   }
 
   async pools(): Promise<Pool[]> {
