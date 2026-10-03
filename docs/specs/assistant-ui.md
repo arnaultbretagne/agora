@@ -30,7 +30,7 @@ Workstream.
 | Exchange | Route | Content |
 | --- | --- | --- |
 | Workstreams | `GET /api/workstreams` | Every Workstream's view, the most recently active first. Read again whenever the thread on screen changes, and every 10 seconds. |
-| Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`). The choice offered for a new execution. |
+| Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
 | A new Workstream | `POST /api/workstreams` | On its first message, never before. Its id, chosen by the client; the owner is the identity the proxy passes. |
 | A Workstream's thread | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows (`log.md`, "The thread"). |
 | Commands | `POST /api/workstreams/{id}/commands` | Below. |
@@ -50,7 +50,7 @@ What the client reads of each view object. Every object also carries `id`, `firs
 
 | Kind | Fields read |
 | --- | --- |
-| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, and in the list `changedAt` |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, and in the list `changedAt` |
 | `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
 | `element` | `type`, `turn`, `session`, and per type below |
 | `notice` | `type`, `reason`, `origin`, `harness` |
@@ -63,7 +63,8 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 
 | Command | Target | Body | Offered |
 | --- | --- | --- | --- |
-| Create | — | `pool`, from the catalogue; `anchor`, to continue | With a message sent while no execution runs ("Sending"). |
+| Create | — | `pool`, from the catalogue; `anchor`, to continue; `settings`, the model and effort picked | With a message sent while no execution runs ("Sending"). |
+| Configure | `execution`, `session` | `configId`, `value` | When sending is open, from the model picker ("Settings and commands"). |
 | Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
 | RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
@@ -86,8 +87,9 @@ in the header, after the harness.
 | `ended` | ended | Open: sending starts a new execution, from the view's `anchor` in the same pool. |
 
 In `ready`, sending is open when the snapshot is complete, no turn is saved, in progress or
-uncertain, and no permission is pending. Otherwise the reason shows above the composer: the
-state's, then "Answer the permission request above.", then the uncertain turn's banner.
+uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
+above the composer: the state's, then "Answer the permission request above.", then "Applying the
+settings…", then the uncertain turn's banner.
 
 ## Sending
 
@@ -98,9 +100,22 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | --- | --- |
 | The harness | Picked inside the composer, among the catalogue's pools. Offered first: the one picked in this Workstream; else the Workstream's own pool, so that it continues; else, in a draft, the one picked last, remembered in the browser; else the first. |
 | The Workstream | A draft gets its id and `POST /api/workstreams`, then its address `/w/{id}`. |
-| Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. |
+| Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. `settings`: the model and effort picked, if any. |
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
+
+## Settings and commands
+
+What an agent offers to change, and the commands it runs, come from its Session (`log.md`, "The
+Workstream view": `settings`, `commands`). A draft has no Session: it shows what the pool's last
+Session gave (`GET /api/pools`).
+
+| Element | Rule |
+| --- | --- |
+| The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their names; the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, choosing one sends **Configure**; sending waits for its answer. |
+| The effort | In the same picker, under the model: the options of the setting in category `thought_level`, without `default`. Chosen like the model. |
+| The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access. |
+| Commands | `/` at the start of the composer lists the commands, filtered by what follows it; choosing one puts `/{name} ` in the composer, with its input's hint as the placeholder. Sent as the prompt's text: that is how ACP runs a command. |
 
 ## The connection point: `useExternalStoreRuntime`
 
@@ -228,6 +243,8 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | Notice, for `system` messages | **ours** |
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
+| Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
+| Composer | The commands, over the composer while it starts with `/` | **ours** |
 | Composer | Above it: a refusal; the uncertain turn's banner (**Cancel the turn**, **Stop the sandbox**); why sending is closed | **ours** |
 
 Registry components kept: `MarkdownText`, `DiffViewer`, and the `surfaces` helpers. Every string is
@@ -272,6 +289,11 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U22 | In a browser, the theme toggled, the page reloaded, then another browser | Dark, still dark after the reload; light in the other. |
 | U23 | In a browser, a Workstream whose execution ended, then a message | The harness offered to continue the last session; the restored Session's notice; the agent recalls the earlier message. |
 | U24 | In a browser, a tool with a diff | Its line labelled with its action and file, noted with the lines added and removed; opened, the diff. |
+| U25 | A Session's settings: claude-code's, codex's and opencode's | The model's options without `default`, by name, the current one marked; the effort's likewise; no mode offered. |
+| U26 | Commands, then `/re` typed | All listed, then those whose name starts with `re`; choosing one gives `/{name} `. |
+| U27 | In a browser, a model and an effort picked in the draft, then a first message | The Create carries them; the picker shows them once the Session is ready. |
+| U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
+| U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen: `/{name} ` in the composer; sent: the agent receives it. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

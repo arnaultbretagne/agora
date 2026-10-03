@@ -209,7 +209,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 
 | Route | Role |
 | --- | --- |
-| `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles. |
+| `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles and their Session settings: the annotation `agora.bretagne.dev/session-config`, `id=value` pairs separated by commas, in order (a malformed pair is left out). Each Session of the pool starts with them (`log.md`, "Sessions"). |
 | `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
 | `GET /api/config` | Whether the test routes are open, and the credential profiles on offer. |

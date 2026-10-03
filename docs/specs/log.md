@@ -146,22 +146,24 @@ exits with a non-zero status and recovery runs on its restart.
 | --- | --- |
 | Opening | `session.opened` commits with the answer that creates or resumes the ACP session. The Session gets an Agora id; the ACP session id is recorded, never used as its identity. |
 | Restoring | A restore from an anchor opens a new Session, even with the same ACP session id. |
-| Changing the model | `session/set_config_option` is an ACP line like any other: the Session goes on. |
+| Settings | The Session's settings are the `configOptions` of the answer that opens it, replaced whole by each answer to `session/set_config_option` and each `config_option_update`. Changing one is an ACP line like any other: the Session goes on. |
+| Opening settings | Those the Create resolves (below). Once the Session opens, and before any prompt, Agora sends one `session/set_config_option` at a time, in the order resolved: only for a setting the Session offers, with a value it lists, that is not already the current one; each sent once, whatever its answer. They are settled when none is left to send or unanswered. |
 | Another ACP session in the same execution | Ends the current Session and opens another. |
 | Opening requests | `initialize` and the opening requests belong to the execution only. |
 | Reconnecting | To the same bridge instance, the Session goes on; to another instance, the execution is lost. |
 
 ## Commands
 
-The commands are the interface's: Create, Write, Cancel, Respond to a permission, Stop
+The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Stop
 (`assistant-ui.md`).
 
 | Rule | Detail |
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
-| Create | Carries the pool, the settings (lease, turn duration), the profiles to grant and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), and no permission is pending (`permission_pending`). |
+| Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). |
+| Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
@@ -172,7 +174,9 @@ The commands are the interface's: Create, Write, Cancel, Respond to a permission
 | `invalid_command` | A value PostgreSQL cannot hold, or a line that is not valid ACP (its reason instead: `invalid_body`, `unsupported_json_value`…). |
 | `unavailable` | Agora is stopping, or a received line is waiting for its commit. Answered 503. |
 | `execution_active` | Create while the Workstream's execution exists. |
-| `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; settings out of bounds; the active executions at their maximum. |
+| `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; limits out of bounds, or `settings` not an object of strings; the active executions at their maximum. |
+| `settings_pending` | Write or Configure while the opening settings are not settled, or another setting is being changed. |
+| `unknown_setting` | Configure: a setting the Session does not offer, or a value it does not list. |
 | `unknown_profile` | Create: a profile the catalogue does not know. |
 | `unknown_anchor`, `anchor_incompatible` | Create: no such anchor; an anchor of another harness. |
 | `execution_conflict` | Create: the execution or claim name already recorded. |
@@ -249,6 +253,9 @@ agent's title.
 | `pool`, `harness` | The last execution's, or null. |
 | `anchor` | The anchor its `execution.ended` names, or null. |
 | `stopped`, `ended`, `lost`, `failed`, `unavailable` | The last execution's flags; `unavailable` while no Session is open and connected. |
+| `settings` | The open Session's settings as it last gave them: each with `id`, `name`, `category`, `type`, `currentValue` and `options` (`value`, `name`, `description`; groups flattened); or null. |
+| `commands` | The open Session's last `available_commands_update`: each with `name`, `description` and its input's `hint`; or empty. |
+| `configuring` | A `session/set_config_option` of the open Session is unanswered. |
 | `changedAt` | The time of the entry that changed the view last. |
 
 | `state` | When, the first that applies |
@@ -258,7 +265,7 @@ agent's title.
 | `failed` | It has `execution.failed`. |
 | `lost` | It has `execution.lost`. |
 | `stopped` | Its Stop is accepted. |
-| `ready` | Its Session is open and its connection too. |
+| `ready` | Its Session is open, its opening settings settled, and its connection open. |
 | `interrupted` | Its Session is open, its connection broken since. |
 | `starting` | Otherwise. |
 
@@ -291,7 +298,7 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 | --- | --- |
 | `GET /api/workstreams` | The Workstream views, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
-| `GET /api/pools` | The catalogue (`executions.md`). |
+| `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings` and `commands` the last Session opened in it gave, or null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
@@ -418,6 +425,13 @@ exception message.
 | L44 | A Session opened new, restored from an anchor, then ended | A `session.opened` notice with origin `new`, one with the anchor, then a `session.ended` notice with its reason. |
 | L45 | A Workstream created with the proxy's identity and another `owner` in the body, again, then with another identity | Owned by the identity's name-based UUID; the second accepted; the third 409. |
 | L46 | Agora started after its core projector changed version, with a Workstream whose execution has ended | That Workstream's objects rebuilt at start, its view under the new version; its checkpoint at the new version. |
+| L47 | A Create with `settings`, in a pool that declares others | The Create's body records the pool's, each replaced by the Create's own, then its others; once the Session opens, one `session/set_config_option` at a time for each not current, before any prompt; the view `starting` until the last is answered, then `ready` with the new `settings`. |
+| L48 | Opening settings the Session does not offer, with a value it does not list, or already current; one answered with an error | None sent for the first three; the error's sent once; the Session ready. |
+| L49 | Configure between turns | Accepted, its line committed with it; `configuring` until the answer, then `settings` from it; a Write meanwhile refused `settings_pending`. |
+| L50 | Configure for a setting the Session does not offer, a value it does not list, during a turn | `unknown_setting`, `unknown_setting`, `turn_active`; nothing sent. |
+| L51 | `config_option_update` and `available_commands_update` from the agent | The view's `settings` and `commands` replaced. |
+| L52 | `GET /api/pools` after a Session in a pool | That pool's `settings` and `commands` as the Session gave them. |
+| L53 | A Create whose `settings` is not an object of strings | `invalid_create`. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and
