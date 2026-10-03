@@ -60,7 +60,12 @@ async function initialize(client: Collector): Promise<void> {
 async function newSession(client: Collector, target: LabBridge, id = 1): Promise<string> {
   client.send({ jsonrpc: '2.0', id, method: 'session/new', params: { cwd: target.workspace, mcpServers: [] } })
   const response = await client.response(id)
-  return (response.result as { sessionId: string }).sessionId
+  const sessionId = (response.result as { sessionId: string }).sessionId
+  // The mock gives its commands right after: received here, so that they are no later line's.
+  await client.until(() =>
+    client.acp().find((m) => m.method === 'session/update' && (m.params as { update?: { sessionUpdate?: string } }).update?.sessionUpdate === 'available_commands_update'),
+  )
+  return sessionId
 }
 
 async function say(client: Collector, id: number, sessionId: string, text: string): Promise<Record<string, unknown>> {
