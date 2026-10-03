@@ -155,7 +155,7 @@ reloading rebuilds both from the thread.
 | `id` | its id |
 | `options` | `params.options`: `optionId` → `id`, `name` → `label`, `kind` with its underscore turned into a dash (`allow_once` → `allow-once`, and likewise `allow-always`, `reject-once`, `reject-always`) |
 | `optionId` | `answer.outcome.optionId`, once `answered` |
-| `resolution` | `cancelled`, when its `status` is `cancelled` |
+| `resolution` | `cancelled`, when its `status` is `cancelled`, or Agora answered it `cancelled` (a Cancel sent while it was pending) |
 
 | Plan entry `status` | `TodoList` |
 | --- | --- |
