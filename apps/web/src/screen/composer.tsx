@@ -65,18 +65,10 @@ const ModelPicker: FC = () => {
   const effort = name(choice.efforts, choice.current.effort)
   const changing = !composer.create && view.configuring === true
   const closed = !composer.create && (!composer.open || changing)
-  const item = (setting: string, value: string, label: string, current: string | null, description?: string | null) => (
+  const item = (setting: string, value: string, label: string, current: string | null) => (
     <DropdownMenu.Item key={`${setting}:${value}`} className={menuItemClass} onSelect={() => chooseSetting(setting, value)}>
       <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', value === current ? 'opacity-100' : 'opacity-0')} />
-      <span className="flex min-w-0 flex-col">
-        <span>{label}</span>
-        {description && description !== label && (
-          <span className="text-muted-foreground max-w-72 text-[12px]">
-            {/* The agent often repeats the name first: "Opus 5.5 · Best for…". */}
-            {description.startsWith(label) ? description.slice(label.length).replace(/^\s*·\s*/, '') : description}
-          </span>
-        )}
-      </span>
+      <span>{label}</span>
     </DropdownMenu.Item>
   )
   return (
@@ -92,7 +84,7 @@ const ModelPicker: FC = () => {
       <DropdownMenu.Portal>
         <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
           <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">Model</DropdownMenu.Label>
-          {choice.models.map((o) => item(choice.model!.id, o.value, o.name, choice.current.model, o.description))}
+          {choice.models.map((o) => item(choice.model!.id, o.value, o.name, choice.current.model))}
           {choice.effort && choice.efforts.length > 0 && (
             <>
               <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />
