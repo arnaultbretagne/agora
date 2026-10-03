@@ -11,6 +11,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R3 | 2026-10-03 | `9100a20` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; real bridges and the mock agent on FakeKube, the relay cut for a break, anchors received and restored. |
 | R4 | 2026-10-03 | `fca86f4` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; the owner read from the proxy's header. |
 | R5 | 2026-10-03 | `c17acf5` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a projector version left behind by hand on an ended Workstream, then Agora restarted. |
+| R6 | 2026-10-03 | `05fbbb8` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:31c1d086…` built from that commit, in the namespace `agora` behind agora.bretagne.dev, on the `agora` database (CloudNativePG, PostgreSQL 17.4); the pools mock `1a1cc63c…`, claude-code `5f3bb480…`, opencode `5b7b6182…` and codex `0eae81a3…`, their warm Pods recreated for the server's anchor address. `apps/server/scripts/live-cases.ts` from that commit, all 34 cases in one run; C10 and C12–C16 refused `quota` there — the run's stopped executions count until their deadline — and were played again once no claim was left. Started after the move with views of core projector 1 on 75 ended Workstreams: all rebuilt at start (L46). |
+| R7 | 2026-10-03 | `5e2b0f8` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a second server process on the same database, its output read. |
 
 ## Cases
 
@@ -26,18 +28,22 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L8 | real: PostgreSQL terminates the ownership connection of the lab process | local | R1 | proven | The lab exited with code 1. |
 | L9 | real: the TCP connection to the bridge reset under it (relay) | local | R1 | proven | Every assertion held. |
 | L9 | — | cluster | R2 | partial: only the refusal during a turn is asserted | "turn_active". |
+| L9 | — | cluster | R6 | partial: only the refusal during a turn is asserted | "turn_active". |
 | L10 | — | local | R1 | proven | Every assertion held. |
 | L11 | real: the bridge closes Agora's connection (4000), displaced by another client with a valid token | local | R1 | proven | Every assertion held. |
 | L12 | real: the TCP connection to the bridge reset under it (relay) | local | R1 | proven | Every assertion held. |
 | L12 | real: Agora terminates its connection to the bridge (lab `drop-bridge`) | cluster | R2 | proven | Uncertain after the cut, one `session/cancel`, cancelled, then a Write accepted. |
+| L12 | real: Agora terminates its connection to the bridge (test route `drop-bridge`) | cluster | R6 | proven | Uncertain after the cut, one `session/cancel`, cancelled, then a Write accepted. |
 | L13 | simulated: fault-point, the dispatcher held before the Cancel's marker until the turn's answer committed | local | R1 | proven | Every assertion held. |
 | L14 | — | local | R1 | proven | Every assertion held, in each of its three tests. |
 | L15 | simulated: fake-kube, the deadline brought to now | local | R1 | proven | Every assertion held. |
 | L16 | — | local | R1 | proven | Every assertion held. |
 | L17 | real: the lab process stopped by SIGTERM | local | R1 | proven | Exit 0; break code 1000, clean. |
 | L17 | real: the lab process stopped (lab `restart`, `clean`: SIGTERM); Kubernetes restarts it | cluster | R2 | proven | Break clean, turn in progress then done; one dispatch, one `initialize`. |
+| L17 | real: the server process stopped (test route `restart`, `clean`: SIGTERM); Kubernetes restarts it | cluster | R6 | proven | Break clean, the turn in progress then done; one dispatch, one `initialize`. |
 | L18 | real: the lab process killed by SIGKILL | local | R1 | proven | Unclean break written at restart; uncertain, then done. |
 | L18 | real: the lab process ended on the spot (lab `restart`, `kill`: exit 137, nothing drained); Kubernetes restarts it | cluster | R2 | proven | Break unclean, turn uncertain then done; one dispatch, one `initialize`. |
+| L18 | real: the server process ended on the spot (test route `restart`, `kill`: exit 137, nothing drained); Kubernetes restarts it | cluster | R6 | proven | Break unclean, the turn uncertain then done; one dispatch, one `initialize`. |
 | L19 | real: the lab process killed by SIGKILL at its fault points `before_marker`, `after_marker`, `after_write` | local | R1 | proven | Every assertion held, in each of its three tests. |
 | L20 | real: the lab process killed by SIGKILL at its fault points `before_claim`, `after_claim`; simulated: fake-kube, the claim deleted, then replaced under another UID | local | R1 | proven | Every assertion held, in each of its four tests. |
 | L21 | real: the reply to the capture's COMMIT lost on the network (relay in front of PostgreSQL) | local | R1 | proven | One COMMIT reply dropped. |
@@ -60,6 +66,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L37 | — | local | R1 | proven | Every assertion held. |
 | L38 | real: the Pod's bridge replaced by a new process, a new instance | local | R1 | proven | Every assertion held. |
 | L39 | real: a second lab process started on the same database | local | R1 | proven | Every assertion held. |
+| L39 | real: a second server process started on the same database | local | R7 | proven | Exited at start with `recover` `refused` (`conflict`) in its log, nothing written; the first answered the next turn. |
 | L40 | simulated: fake-kube, the deadline's PATCH refused | local | R1 | proven | Every assertion held. |
 | L41 | real: the adapter answers `initialize` with an invalid body, and never validly | local | R1 | proven | Every assertion held. |
 | L42 | — | local | R3 | proven | A Workstream with no entry first, in state `none`; then the one written last; titles from the first Write. |
