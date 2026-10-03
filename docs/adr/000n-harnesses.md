@@ -58,7 +58,9 @@ flowchart LR
 - **What differs between harnesses is declared, not coded.** A new harness comes as an image, a
   pool and its base profiles; Agora and the bridge do not change. opencode 1.18.34 came that way
   (g4 under Kata, 2026-10-02): a glm-5.3 turn through the gateway on z.ai's Coding Plan, a session
-  resumed by a new process from its database.
+  resumed by a new process from its database. So did codex 0.159.3 with codex-acp 2.1.1
+  (2026-10-03): a turn on the ChatGPT subscription through the gateway, its rollouts read when a
+  session is resumed, so no restart.
 - **A restart costs only the restores.** opencode takes 2.6 s to start; warm, it answers
   `initialize` in 8 ms and `session/new` in 155 ms (same measurement). Restarting it onto an anchor
   keeps the warm pool for every new Session.

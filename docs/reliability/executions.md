@@ -74,6 +74,7 @@ own cases (`log.md`). Their rows are evidence for `7afc4d7`.
 | E29 | real: an adapter that reads its native file only at start | local | R5 | proven | Every assertion held, in each of its five tests (three in the bridge, two in the log). |
 | E29 | — | cluster | R6 | partial: the refusal and the control are shown locally only | Through E30: the bridge logged "anchor restored: 3 file(s) … adapter restarted" 65 ms after the execution's token, before `initialize`; the restarted opencode recalled "mirabelle". |
 | E30 | — | live | R6 | proven | Ready in 679 ms on a warm Pod, OpenCode 1.18.34; "Paris" from glm-5.3 in 4.4 s; tunnels only to `api.z.ai:443` (2), none refused; the anchor restored by a restart in 2,831 ms, the agent recalls "mirabelle". |
+| E31 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 

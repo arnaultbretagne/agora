@@ -177,7 +177,8 @@ Dropped outright: vaults grow with the combinations.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
 - A credential that rotates — the ChatGPT session codex uses — needs a refresher beside the gateway,
   and a login of its own: its refresh token may be spent once, so nothing else may hold it.
-- git and codex must trust the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`.
+- What is not Node trusts the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`: codex, a Rust
+  binary, through `SSL_CERT_FILE`; git is still to settle.
 - agentgateway is young and moves fast (1.5 made `iss` and `aud` mandatory): pinned by digest,
   upgraded deliberately, lab cases replayed first.
 - Replacing the gateway leaves the bridge's side unchanged: a token handed at runtime, joined to

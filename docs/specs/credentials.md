@@ -173,5 +173,5 @@ call. The lab does it itself when the agent offers the option.
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); changing an execution's
 grants between turns; count the responses to `CONNECT` by status, not just the last one; TLS trust
-for git (libcurl does not read `NODE_EXTRA_CA_CERTS`) and for codex, which are not Node; read access
+for git (libcurl does not read `NODE_EXTRA_CA_CERTS`); read access
 to GraphQL.
