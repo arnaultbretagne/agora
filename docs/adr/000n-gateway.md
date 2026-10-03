@@ -127,9 +127,11 @@ is missed. The sweep repairs itself after a restart or a cut, and renews in the 
 
 The 5 seconds cost nothing measured: the execution's token leaves on the claim's event, which the
 claims' watch already gives, before `initialize` — that is where the 20 seconds went. A warm token
-only matters to a harness initializing in the pool, and none does. Reconsider when one does and
-the delay shows in the Session opening, or when the pools grow to where a list every 5 seconds
-weighs.
+only matters to a harness initializing in the pool. codex does — it asks ChatGPT for its models and
+its account as soon as it starts — and when that comes before the sweep, those calls are refused:
+7 in one of two runs (g4, 2026-10-03), with no effect on the Session, ready in about half a second
+on a warm Pod. Reconsider when the delay shows in the Session opening, or when the pools grow to
+where a list every 5 seconds weighs.
 
 ### The Pod asking for its token
 
@@ -177,7 +179,8 @@ Dropped outright: vaults grow with the combinations.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
 - A credential that rotates — the ChatGPT session codex uses — needs a refresher beside the gateway,
   and a login of its own: its refresh token may be spent once, so nothing else may hold it.
-- git and codex must trust the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`.
+- What is not Node trusts the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`: codex, a Rust
+  binary, through `SSL_CERT_FILE`; git is still to settle.
 - agentgateway is young and moves fast (1.5 made `iss` and `aud` mandatory): pinned by digest,
   upgraded deliberately, lab cases replayed first.
 - Replacing the gateway leaves the bridge's side unchanged: a token handed at runtime, joined to

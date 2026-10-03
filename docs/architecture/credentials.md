@@ -49,7 +49,7 @@ nothing ever widens the grants.
 A harness may need its services before anyone uses it: claude-code's SDK initializes against
 Anthropic, and without a way out it retries for some twenty seconds. So the pool says which
 services its harness needs from the start — its **base profiles**, `anthropic` for claude-code,
-`zai` for opencode, none for the mock — and Agora treats every pool alike.
+`zai` for opencode, `chatgpt` for codex, none for the mock — and Agora treats every pool alike.
 
 | Moment | The bridge's token |
 | --- | --- |

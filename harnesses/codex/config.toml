@@ -1,0 +1,20 @@
+# codex's configuration in the sandbox, copied into CODEX_HOME at start (start.sh).
+
+# ChatGPT over HTTPS: the built-in provider tries WebSockets first, which do not cross the gateway
+# (405, then five retries and a warning in the answer).
+model_provider = "chatgpt"
+
+[model_providers.chatgpt]
+name = "ChatGPT, over HTTPS"
+base_url = "https://chatgpt.com/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+
+# Nothing beyond the profile `chatgpt`: plugins and apps call /backend-api/ps/…, analytics report usage.
+[features]
+plugins = false
+apps = false
+
+[analytics]
+enabled = false

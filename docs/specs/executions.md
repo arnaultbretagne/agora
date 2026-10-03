@@ -149,7 +149,7 @@ when it starts (`BRIDGE_RESTART_ON_ANCHOR`): the bridge has no list of harnesses
 | --- | --- | --- | --- |
 | claude-code | `$HOME/.claude/projects/<workspace slug>/` | No | `session/resume` |
 | opencode | `$HOME/.local/share/opencode/agora/`: its SQLite database (`OPENCODE_DB`) | Yes | `session/resume` |
-| codex | `$HOME/.codex/sessions/` | — | `session/resume` — to be ported |
+| codex | `$HOME/.codex/sessions/`: its rollouts; `auth.json` stays outside | No | `session/resume` |
 | mock (lab) | `$HOME/.mock-agent/sessions/<workspace slug>/` | No | `session/resume` or `session/load` |
 
 The slug is claude-code's: every character outside `[A-Za-z0-9-]` becomes `-`.
@@ -338,11 +338,12 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E27 | Agora away while the adapter writes | Unread output arrives complete, in order; the pipe bounds memory and eventually blocks the writer. |
 | E29 | Restore onto an adapter that opens its files at start | Declared by its image: the anchor placed before `initialize`, the adapter restarted onto it, the agent remembers. Refused (409) once a line has reached the adapter; without the declaration, the anchor goes unseen. |
 | E30 | Real harness (opencode) | Real `initialize` and `session/new` on a warm Pod; a turn on GLM through the gateway, its only way out `api.z.ai`; anchor pushed, then restored by a restart, the agent remembers. |
+| E31 | Real harness (codex) | Real `initialize` and `session/new` on a warm Pod; a turn on the ChatGPT subscription through the gateway, its only way out `chatgpt.com`; anchor pushed, then restored, the agent remembers. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).
 
-**To be specified:** codex's native directory, detached tasks, resuming after the process is lost.
+**To be specified:** detached tasks, resuming after the process is lost.
 Credentials: `credentials.md`.
 
 Reference: [SandboxClaim v1.0.3](https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.3/extensions/api/v1beta1/sandboxclaim_types.go).

@@ -1,0 +1,11 @@
+{
+  "name": "agora-harness-codex",
+  "private": true,
+  "description": "What the codex image installs: the ACP adapter, and codex pinned under it.",
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "2.1.1"
+  },
+  "overrides": {
+    "@openai/codex": "0.159.3"
+  }
+}

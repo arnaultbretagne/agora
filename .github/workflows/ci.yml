@@ -52,6 +52,7 @@ jobs:
           - { name: agora-harness-mock, dockerfile: harnesses/mock/Dockerfile, harness: true }
           - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
           - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
+          - { name: agora-harness-codex, dockerfile: harnesses/codex/Dockerfile, harness: true }
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     steps:
