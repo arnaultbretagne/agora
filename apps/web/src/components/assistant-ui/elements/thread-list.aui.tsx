@@ -169,7 +169,7 @@ export const useThreadListGroups = (searchQuery = "") => {
       .filter(
         ({ id }) =>
           !query ||
-          (itemsById.get(id)?.title || "New Chat")
+          (itemsById.get(id)?.title || "New workstream")
             .toLowerCase()
             .includes(query),
       )
@@ -276,7 +276,7 @@ export const ThreadListNew = forwardRef<
               data-slot="aui_thread-list-new-label"
               className={cn("whitespace-nowrap", labelClassName)}
             >
-              New Thread
+              New workstream
             </span>
           </>
         )}
@@ -310,6 +310,11 @@ const ThreadListSkeleton: FC = () => {
 
 export const ThreadListItem: FC = () => {
   const isRunning = useAuiState((s) => s.threadListItem.isRunning);
+  // Agora: the Workstream's state, from the list's view.
+  const state = useAuiState((s) => {
+    const custom = (s.threadListItem as { custom?: Record<string, unknown> }).custom;
+    return typeof custom?.state === "string" ? custom.state : null;
+  });
   const [isRenaming, setIsRenaming] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
@@ -349,12 +354,19 @@ export const ThreadListItem: FC = () => {
             data-slot="aui_thread-list-item-title"
             className="min-w-0 flex-1 truncate"
           >
-            <ThreadListItemPrimitive.Title fallback="New Chat" />
+            <ThreadListItemPrimitive.Title fallback="New workstream" />
           </span>
+          {state && state !== "none" && (
+            <span
+              data-slot="aui_thread-list-item-state"
+              className="text-muted-foreground ms-2 shrink-0 text-xs"
+            >
+              {state === "interrupted" ? "reconnecting" : state}
+            </span>
+          )}
           {isRunning && <span className="sr-only">Running</span>}
         </ThreadListItemPrimitive.Trigger>
       )}
-      <ThreadListItemMore onRename={() => setIsRenaming(true)} />
     </ThreadListItemPrimitive.Root>
   );
 };

@@ -39,6 +39,8 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run check
+      - name: Build the client
+        run: npm run build -w @agora/web
 
   image:
     needs: check
