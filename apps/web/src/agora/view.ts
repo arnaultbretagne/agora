@@ -375,6 +375,27 @@ export function poolSettings(pool: { sessionConfig?: readonly { id: string; valu
   })
 }
 
+/** The pools the screen offers: all but those kept for the tests. */
+export const offeredPools = <P extends { readonly testing?: boolean }>(pools: readonly P[]): P[] => pools.filter((p) => p.testing !== true)
+
+/**
+ * The pool a new execution starts in (docs/specs/assistant-ui.md, "Sending"): the one picked here;
+ * else the Workstream's own, so it continues; else the one picked last; else the first offered.
+ */
+export function poolOffered(
+  pools: readonly { readonly name: string; readonly testing?: boolean }[],
+  picked: string | null,
+  own: string | null,
+  last: string | null,
+): string | null {
+  const offered = offeredPools(pools)
+  const valid = (name: string | null): name is string => name !== null && offered.some((p) => p.name === name)
+  if (valid(picked)) return picked
+  if (valid(own)) return own
+  if (valid(last)) return last
+  return offered[0]?.name ?? null
+}
+
 /** The commands `/` lists: while the composer holds `/` and a name being typed, those it starts. */
 export function commandsMatching(commands: readonly AgentCommand[], text: string): AgentCommand[] {
   const typed = /^\/(\S*)$/.exec(text)

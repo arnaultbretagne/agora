@@ -13,6 +13,7 @@ export {
   claimName,
   sessionConfig,
   SESSION_CONFIG_ANNOTATION,
+  PURPOSE_ANNOTATION,
   type Limits,
   type ManagerOptions,
   type Handler,

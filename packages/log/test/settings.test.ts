@@ -8,11 +8,12 @@ import { CoreProjection, object, type Entry } from '../src/index.ts'
 import { call, database, FakeKube, Lab, lines, until } from './support.ts'
 
 /** A Lab whose pool `mock-test` declares these opening settings. */
-async function labWith(t: { after(fn: () => Promise<void>): void }, sessionConfig?: string) {
+async function labWith(t: { after(fn: () => Promise<void>): void }, sessionConfig?: string, purpose: Record<string, string> = {}) {
   const db = await database()
   const keys = generateKeyPairSync('ed25519')
   const kube = new FakeKube(keys.publicKey)
   if (sessionConfig !== undefined) kube.sessionConfig['mock-test'] = sessionConfig
+  Object.assign(kube.purpose, purpose)
   const lab = await Lab.start({ db, kube, keys })
   t.after(async () => {
     await lab.close()
@@ -131,8 +132,8 @@ test('L51 the agent changes a setting and its commands itself: the view replaced
   await until('commands replaced', async () => ((await view(lab, ws)).commands as { name: string }[]).map((c) => c.name).includes('compact'), 5_000)
 })
 
-test('L52 GET /api/pools after a Session in a pool: its settings and commands', async (t) => {
-  const lab = await labWith(t, 'model=mock-small')
+test('L52 GET /api/pools after a Session in a pool: its settings and commands; a pool kept for the tests marked', async (t) => {
+  const lab = await labWith(t, 'model=mock-small', { 'claude-test': 'testing' })
   const ws = await lab.workstream()
   await lab.open(ws)
   await until('ready', async () => (await view(lab, ws)).state === 'ready', 10_000)
@@ -143,6 +144,7 @@ test('L52 GET /api/pools after a Session in a pool: its settings and commands', 
   assert.deepEqual((mock.commands as { name: string }[]).map((c) => c.name), ['recall', 'review'])
   const claude = pools.find((p) => p.name === 'claude-test')!
   assert.deepEqual([claude.settings, claude.commands], [null, []])
+  assert.deepEqual([mock.testing, claude.testing], [false, true])
 })
 
 test('L53 a Create whose settings is not an object of strings: invalid_create', async (t) => {

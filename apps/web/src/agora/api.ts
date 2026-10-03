@@ -22,6 +22,8 @@ export interface Pool {
   /** What its last Session offered, or null: what a draft shows before it has a Session. */
   readonly settings?: readonly Setting[] | null
   readonly commands?: readonly AgentCommand[]
+  /** Kept for the tests: not offered by the screen. */
+  readonly testing?: boolean
 }
 
 export class Api {

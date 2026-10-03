@@ -430,7 +430,7 @@ exception message.
 | L49 | Configure between turns | Accepted, its line committed with it; `configuring` until the answer, then `settings` from it; a Write meanwhile refused `settings_pending`. |
 | L50 | Configure for a setting the Session does not offer, a value it does not list, during a turn | `unknown_setting`, `unknown_setting`, `turn_active`; nothing sent. |
 | L51 | `config_option_update` and `available_commands_update` from the agent | The view's `settings` and `commands` replaced. |
-| L52 | `GET /api/pools` after a Session in a pool | That pool's `settings` and `commands` as the Session gave them. |
+| L52 | `GET /api/pools` after a Session in a pool, another annotated for the tests | That pool's `settings` and `commands` as the Session gave them; the other `testing`. |
 | L53 | A Create whose `settings` is not an object of strings | `invalid_create`. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;

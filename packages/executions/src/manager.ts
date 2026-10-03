@@ -29,6 +29,9 @@ export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   turnCapSeconds: [30, 3600],
 }
 
+/** A pool kept for the tests: offered by the API, not by the screen (docs/specs/executions.md). */
+export const PURPOSE_ANNOTATION = 'agora.bretagne.dev/purpose'
+
 /** The settings each Session of a pool starts with (docs/specs/executions.md, "The API"). */
 export const SESSION_CONFIG_ANNOTATION = 'agora.bretagne.dev/session-config'
 
@@ -154,6 +157,8 @@ export interface PoolView {
   readonly refusedProfile: string | null
   /** The settings its Sessions start with, in order. */
   readonly sessionConfig: readonly { readonly id: string; readonly value: string }[]
+  /** Kept for the tests (`agora.bretagne.dev/purpose: testing`): the screen does not offer it. */
+  readonly testing: boolean
 }
 
 export type CommandResult<T> =
@@ -702,6 +707,7 @@ export class ExecutionManager {
           return { baseProfiles: declared.profiles, refusedProfile: declared.refused }
         })(),
         sessionConfig: sessionConfig(pool.metadata.annotations?.[SESSION_CONFIG_ANNOTATION]),
+        testing: pool.metadata.annotations?.[PURPOSE_ANNOTATION] === 'testing',
       })
     }
     this.poolCache = { at: Date.now(), pools }

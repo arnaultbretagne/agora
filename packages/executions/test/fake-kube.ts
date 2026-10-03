@@ -36,6 +36,8 @@ export class FakeKube implements KubeApi {
   readonly baseProfiles: Record<string, string> = {}
   /** Each pool's `agora.bretagne.dev/session-config`, when set. */
   readonly sessionConfig: Record<string, string> = {}
+  /** Each pool's `agora.bretagne.dev/purpose`, when set. */
+  readonly purpose: Record<string, string> = {}
   private readonly watchers = new Set<(event: WatchEvent) => void>()
   private readonly tokens = mkdtempSync(join(tmpdir(), 'tokens-'))
   private version = 1
@@ -217,6 +219,7 @@ export class FakeKube implements KubeApi {
         annotations: {
           ...(this.baseProfiles[name] === undefined ? {} : { 'agora.bretagne.dev/base-profiles': this.baseProfiles[name] }),
           ...(this.sessionConfig[name] === undefined ? {} : { 'agora.bretagne.dev/session-config': this.sessionConfig[name] }),
+          ...(this.purpose[name] === undefined ? {} : { 'agora.bretagne.dev/purpose': this.purpose[name] }),
         },
       },
       spec: { replicas: 2, sandboxTemplateRef: { name } },

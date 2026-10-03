@@ -8,7 +8,7 @@ import { DropdownMenu } from 'radix-ui'
 import { useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { commandsMatching, harnessName, modelChoice } from '../agora/view.ts'
+import { commandsMatching, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
 
 const menuContentClass =
   'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
@@ -22,7 +22,8 @@ const HarnessPicker: FC = () => {
   const current = pools?.find((p) => p.name === pool)
   if (!composer.create) return view.harness ? <span className="text-muted-foreground px-2 text-[13px]">{harnessName(view.harness)}</span> : null
   if (pools === null) return <span className="text-muted-foreground px-2 text-[13px]">…</span>
-  if (pools.length === 0) return <span className="text-destructive px-2 text-[13px]">No harness available</span>
+  const offered = offeredPools(pools)
+  if (offered.length === 0) return <span className="text-destructive px-2 text-[13px]">No harness available</span>
   const continues = (name: string) => view.state === 'ended' && view.anchor !== null && view.pool === name
   return (
     <DropdownMenu.Root>
@@ -34,7 +35,7 @@ const HarnessPicker: FC = () => {
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
-          {pools.map((p) => (
+          {offered.map((p) => (
             <DropdownMenu.Item key={p.name} className={menuItemClass} onSelect={() => choosePool(p.name)}>
               <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', p.name === pool ? 'opacity-100' : 'opacity-0')} />
               <span className="flex flex-col">
@@ -64,10 +65,18 @@ const ModelPicker: FC = () => {
   const effort = name(choice.efforts, choice.current.effort)
   const changing = !composer.create && view.configuring === true
   const closed = !composer.create && (!composer.open || changing)
-  const item = (setting: string, value: string, label: string, current: string | null) => (
+  const item = (setting: string, value: string, label: string, current: string | null, description?: string | null) => (
     <DropdownMenu.Item key={`${setting}:${value}`} className={menuItemClass} onSelect={() => chooseSetting(setting, value)}>
       <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', value === current ? 'opacity-100' : 'opacity-0')} />
-      <span>{label}</span>
+      <span className="flex min-w-0 flex-col">
+        <span>{label}</span>
+        {description && description !== label && (
+          <span className="text-muted-foreground max-w-72 text-[12px]">
+            {/* The agent often repeats the name first: "Opus 5.5 · Best for…". */}
+            {description.startsWith(label) ? description.slice(label.length).replace(/^\s*·\s*/, '') : description}
+          </span>
+        )}
+      </span>
     </DropdownMenu.Item>
   )
   return (
@@ -83,7 +92,7 @@ const ModelPicker: FC = () => {
       <DropdownMenu.Portal>
         <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
           <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">Model</DropdownMenu.Label>
-          {choice.models.map((o) => item(choice.model!.id, o.value, o.name, choice.current.model))}
+          {choice.models.map((o) => item(choice.model!.id, o.value, o.name, choice.current.model, o.description))}
           {choice.effort && choice.efforts.length > 0 && (
             <>
               <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />

@@ -98,7 +98,7 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 
 | Step | What happens |
 | --- | --- |
-| The harness | Picked inside the composer, among the catalogue's pools. Offered first: the one picked in this Workstream; else the Workstream's own pool, so that it continues; else, in a draft, the one picked last, remembered in the browser; else the first. |
+| The harness | Picked inside the composer, among the catalogue's pools but those kept for the tests (`testing`). Offered first: the one picked in this Workstream; else the Workstream's own pool, so that it continues; else, in a draft, the one picked last, remembered in the browser; else the first. |
 | The Workstream | A draft gets its id and `POST /api/workstreams`, then its address `/w/{id}`. |
 | Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. `settings`: the model and effort picked, if any. |
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
@@ -112,7 +112,7 @@ Session gave (`GET /api/pools`).
 
 | Element | Rule |
 | --- | --- |
-| The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their names; the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, choosing one sends **Configure**; sending waits for its answer. |
+| The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their names, each with its description (the agent's own: version, use, price); the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, choosing one sends **Configure**; sending waits for its answer. |
 | The effort | In the same picker, under the model: the options of the setting in category `thought_level`, without `default`. Chosen like the model. |
 | The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access. |
 | Commands | `/` at the start of the composer lists the commands — name, description, its input's hint — filtered by what follows it; arrows move, Enter or Tab chooses, Escape hides. Choosing one puts `/{name} ` in the composer. Sent as the prompt's text: that is how ACP runs a command. |
@@ -294,6 +294,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U27 | In a browser, a model and an effort picked in the draft, then a first message | The Create carries them; the picker shows them once the Session is ready. |
 | U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
 | U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen: `/{name} ` in the composer; sent: the agent receives it. |
+| U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool | The pool not offered; the ended Workstream's harness offered first is another. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

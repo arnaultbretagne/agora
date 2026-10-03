@@ -16,6 +16,7 @@ import {
   createBody,
   firstMessageStep,
   messagesOf,
+  poolOffered,
   poolSettings,
   workstreamOf,
   type AgentCommand,
@@ -119,14 +120,10 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [api, id])
   // The pool offered: the one picked here; else the Workstream's own, so that it continues from its
   // anchor; else, in a draft, the one picked last; else the first.
-  const pool = useMemo(() => {
-    if (pools === null || pools.length === 0) return null
-    const valid = (name: string | null | undefined): name is string => !!name && pools.some((p) => p.name === name)
-    if (picked?.for === id && valid(picked.pool)) return picked.pool
-    if (id !== null && valid(view.pool)) return view.pool
-    const last = storedPool()
-    return valid(last) ? last : pools[0]!.name
-  }, [pools, picked, view.pool, id])
+  const pool = useMemo(
+    () => poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool()),
+    [pools, picked, view.pool, id],
+  )
   const choosePool = useCallback(
     (next: string) => {
       setPicked({ for: id, pool: next })

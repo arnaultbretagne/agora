@@ -16,6 +16,8 @@ import {
   messagesOf,
   modelChoice,
   noticeText,
+  offeredPools,
+  poolOffered,
   planItems,
   poolSettings,
   sections,
@@ -311,4 +313,18 @@ test('U26 the commands: all at /, those starting with what is typed, none once a
   assert.deepEqual(commandsMatching(commands, '/RE').map((c) => c.name), commandsMatching(commands, '/re').map((c) => c.name))
   assert.deepEqual(commandsMatching(commands, '/review the branch'), [])
   assert.deepEqual(commandsMatching(commands, 'review'), [])
+})
+
+test('U30 a pool kept for the tests: not offered; an ended Workstream of that pool continues in another', () => {
+  const pools = [
+    { name: 'mock-1', testing: true },
+    { name: 'claude-1', testing: false },
+    { name: 'codex-1' },
+  ]
+  assert.deepEqual(offeredPools(pools).map((p) => p.name), ['claude-1', 'codex-1'])
+  assert.equal(poolOffered(pools, null, 'mock-1', null), 'claude-1', 'its own pool is for the tests')
+  assert.equal(poolOffered(pools, null, 'mock-1', 'codex-1'), 'codex-1', 'the one picked last')
+  assert.equal(poolOffered(pools, null, 'codex-1', 'claude-1'), 'codex-1', 'its own, so it continues')
+  assert.equal(poolOffered(pools, 'mock-1', null, null), 'claude-1', 'never one kept for the tests')
+  assert.equal(poolOffered([{ name: 'mock-1', testing: true }], null, null, null), null)
 })
