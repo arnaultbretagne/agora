@@ -59,8 +59,14 @@ function versions(dockerfile: string): string {
     const pkg = JSON.parse(readFileSync(source, 'utf8')) as { dependencies?: Record<string, string>; overrides?: Record<string, string> }
     for (const [name, version] of Object.entries({ ...pkg.dependencies, ...pkg.overrides })) out.set(name.replace(/^@[\w.-]+\//, ''), version)
   }
-  return [...out].map(([name, version]) => `${name} ${version}`).join(', ')
+  return [...out]
+    .map(([name, version]) => `${name} ${version}`)
+    .sort()
+    .join(', ')
 }
+
+/** Versions compared whatever their order. */
+const same = (a: string, b: string): boolean => a.split(/,\s*/).sort().join(', ') === b.split(/,\s*/).sort().join(', ')
 
 /** A data file's `data:` section, where its values are: what comes before it is left alone. */
 function split(text: string): [string, string] {
@@ -122,7 +128,7 @@ for (const [image, { dockerfile, harness }] of images()) {
     next = setLine(next, 'inputs', `"${fingerprint}"`)
     writeFileSync(data, next)
     // Versions shown as they were and become: a branch behind the one deployed shows as going back.
-    rows.push(`| ${harness} | new pool \`${harness}-${digest.slice(7, 19)}\` (was \`${getLine(current, 'name')}\`) | ${before === after ? after || '—' : `${before || '?'} → **${after}**`} |`)
+    rows.push(`| ${harness} | new pool \`${harness}-${digest.slice(7, 19)}\` (was \`${getLine(current, 'name')}\`) | ${same(before, after) ? after || '—' : `${before || '?'} → **${after}**`} |`)
   }
 }
 
