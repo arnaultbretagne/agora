@@ -229,3 +229,24 @@ test('L44 a Session opened new, then restored from an anchor, then ended: its no
   assert.ok(endedSessions.every((n) => typeof n.reason === 'string' && n.reason !== ''))
   assert.ok(BigInt(String(endedSessions[0]!.firstPosition)) < BigInt(String(opened[1]!.firstPosition)))
 })
+
+test('L45 a Workstream created through the proxy: owned by the identity it passes, whatever the body says; refused to another', async (t) => {
+  const db = await database()
+  const lab = await Lab.start({ db })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const create = (id: string, email: string, owner?: string) =>
+    fetch(`${lab.url}/api/workstreams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-email': email },
+      body: JSON.stringify(owner === undefined ? { id } : { id, owner }),
+    }).then((r) => r.status)
+  const ws = randomUUID()
+  assert.equal(await create(ws, 'operator@example.org', randomUUID()), 200)
+  const { rows } = await db.admin.query('SELECT owner FROM workstreams WHERE id=$1', [ws])
+  assert.equal(rows[0].owner, identity('owner', 'operator@example.org'))
+  assert.equal(await create(ws, 'operator@example.org'), 200)
+  assert.equal(await create(ws, 'someone@example.org'), 409)
+})

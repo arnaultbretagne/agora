@@ -82,8 +82,9 @@ export async function logHttp(
     if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
-      // The identity the proxy in front passes, as a name-based UUID; the body's owner without one.
-      const identityHeader = req.headers['x-auth-request-email']
+      // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
+      // name-based UUID; the body's owner without one.
+      const identityHeader = req.headers['x-forwarded-email']
       const id = uuid(input.id),
         owner = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : uuid(input.owner)
       try {
