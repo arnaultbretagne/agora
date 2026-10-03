@@ -461,6 +461,8 @@ await check('E31', 'Real harness (codex)', async () => {
   const init = (await w.entries()).find((x) => x.kind === 'acp' && x.direction === 'in' && x.correlated_method === 'initialize')!
   const agent = (init.content.result as Json)?.agentInfo
   const launch = (await view(w.execution))?.launchType
+  // The bridge's counters as of the execution's token: what the Pod met while it waited in the pool.
+  const pooled = (await view(w.execution))?.outbound?.refused ?? 0
   assert(String(agent?.name).includes('codex-acp') && launch === 'warm', `${String(agent?.name)}, ${String(launch)}`)
   const started = Date.now()
   assert((await w.write('Remember the word mirabelle. What is the capital of France? Answer in one word.')).status === 200, 'Write refused')
@@ -471,7 +473,9 @@ await check('E31', 'Real harness (codex)', async () => {
   const out = await until('counters after the turn', async () => ((await view(w.execution))?.outbound?.tunnels ?? 0) > 0 && (await view(w.execution))!.outbound, 15_000)
   const targets = Object.keys(out.targets ?? {})
   assert(turn.status === 'done' && /paris/i.test(answer), `turn ${turn.status}: ${answer.slice(0, 120)}`)
-  assert(out.refused === 0 && targets.every((target) => target === 'chatgpt.com:443'), `refused ${String(out.refused)}, ${targets.join(', ')}`)
+  // codex calls ChatGPT as soon as it starts, before Agora's sweep hands the Pod its warm token: those
+  // refusals belong to the pool. Once the execution's token is in place, none.
+  assert(out.refused === pooled && targets.every((target) => target === 'chatgpt.com:443'), `refused ${String(pooled)} in the pool, ${String(out.refused)} in all; ${targets.join(', ')}`)
   await w.stop()
   const end = await w.ended(180_000)
   assert(typeof end.content.anchor === 'string', JSON.stringify(end.content))
@@ -484,7 +488,7 @@ await check('E31', 'Real harness (codex)', async () => {
   const recalled = await back.said()
   await back.stop()
   assert(/mirabelle/i.test(recalled), `amnesiac: ${recalled.slice(0, 120)}`)
-  return `ready in ${String(ms)} ms (${String(launch)}), ${String(agent.name)}@${String(agent.version)}; "${answer.trim().slice(0, 30)}" in ${seconds} s; tunnels ${targets.join(', ')} ×${String(out.tunnels)}, 0 refused; anchor ${String(end.content.anchor)} restored in ${String(restored.ms)} ms, recalls "${recalled.trim().slice(0, 30)}"`
+  return `ready in ${String(ms)} ms (${String(launch)}), ${String(agent.name)}@${String(agent.version)}; "${answer.trim().slice(0, 30)}" in ${seconds} s; tunnels ${targets.join(', ')} ×${String(out.tunnels)}, ${String(pooled)} refused in the pool before its warm token and none after; anchor ${String(end.content.anchor)} restored in ${String(restored.ms)} ms, recalls "${recalled.trim().slice(0, 30)}"`
 })
 
 // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
