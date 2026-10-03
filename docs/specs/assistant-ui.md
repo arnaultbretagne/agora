@@ -1,181 +1,233 @@
-# Agora ↔ assistant-ui interface
+# The client
 
-Contract to implement — `@assistant-ui/react` **0.15.21**.
+Contract to implement — `@assistant-ui/react` **0.15.23** (`@assistant-ui/core` 0.3.22), React
+19, pinned exactly. The objects it reads are the log's views (`log.md`, "Views"); the choice of
+assistant-ui and the options studied before it are in the interface ADR.
 
-**Agora owns the thread and the commands. assistant-ui displays the thread and passes
-up the user's actions.**
-
-The choice of assistant-ui and the options studied before it are in the interface ADR.
+**Agora owns the thread and the commands. The client displays what the thread holds and turns the
+user's actions into commands.**
 
 ## Who does what
 
-- **The Agora server** projects the ACP log into turns, elements and notices, in the
-  database, and applies the commands.
-- **The Agora client** holds the received thread in memory, converts it into
-  assistant-ui messages and turns actions into commands.
-- **assistant-ui** provides the `useExternalStoreRuntime` runtime, the primitives
-  and the registry components.
-
-Registry components are copied into Agora's code (`npx assistant-ui add <name>`,
-shadcn model): we modify them freely. Only `@assistant-ui/react` and its runtime
-are dependencies.
-
-The interface invents no state. Even the message the user just wrote appears only
-once the server has saved it. A command's effect is read in the thread, never in
-the response to the command.
-
-## The three exchanges
-
-| Exchange | Content |
+| Part | Role |
 | --- | --- |
-| **Workstream list** | Simple read: id, title, execution state. |
-| **A workstream's thread** | A single stream, opened from the last completed cursor (zero at first). A consistent snapshot gives the latest state/removal of objects changed through high-water mark H, then snapshot-end carrying H, then live changes after H. Each update replaces a whole object: workstream, turn, element or notice. |
-| **Commands** | Create, Write, Cancel, Respond to a permission, Stop. |
+| The server (`apps/server`) | Serves the client at `/` and the API under `/api` (`log.md`, "HTTP"), behind the identity proxy. Projects the log into the objects the client reads, and applies the commands. |
+| The client (`apps/web`) | Holds the objects of the Workstream on screen and the Workstream list, converts them into assistant-ui messages, and sends the commands. |
+| assistant-ui | `useExternalStoreRuntime`, the primitives, and the registry components. |
 
-Each live update carries a strictly increasing position, encoded as a decimal string and
-compared losslessly. The client advances its snapshot cursor only at snapshot-end, then applies
-each live object and its cursor together. A reset clears the objects before a complete snapshot
-is applied. An interrupted snapshot may be redelivered; whole-object replacements and removals
-are idempotent. A cursor is reused only with its matching object state; an empty browser starts
-at zero. Commands stay disabled until snapshot-end. Opening, reloading and reconnecting have
-the same result, with no skipped change or duplicate object. The exact snapshot and tail rules
-are in `log.md`.
+Registry components are copied into `apps/web` (`npx assistant-ui add <name>`, shadcn model) and
+modified freely. Only `@assistant-ui/react` and `@assistant-ui/react-markdown` are dependencies.
 
-Each command carries an id chosen by the interface. If replayed, it runs only once.
-The server's response is *accepted* or *refused, with the reason*.
+The client invents no state. Even the message the user just wrote appears only once the server
+has saved it. A command's effect is read in the thread, never in the answer to the command.
 
-| Command | Carries | Rule |
+One operator: the server sits behind the identity proxy (Pocket-ID), and the list shows every
+Workstream.
+
+## The exchanges
+
+| Exchange | Route | Content |
 | --- | --- | --- |
-| **Create** | the harness chosen among the allowed options | — |
-| **Write** | the text | Refused if a turn is saved, in progress or uncertain, or if sending is closed. |
-| **Cancel** | the targeted turn id | Available for an in-progress or uncertain turn. No effect if that turn is over; never touches the next turn. Sending Cancel alone does not prove completion. |
-| **Respond to a permission** | the request and the chosen option | Refused if the request is no longer pending. |
-| **Stop** | — | Closes sending and stops renewing the deadline; the execution disappears when the infrastructure destroys it (`executions.md`). |
+| Workstreams | `GET /api/workstreams` | Every Workstream's view, the most recently active first. Read again whenever the thread on screen changes, and every 10 seconds. |
+| Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`). The choice offered for a new execution. |
+| A new Workstream | `POST /api/workstreams` | Its id, chosen by the client; the owner is the identity the proxy passes. |
+| A Workstream's thread | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows (`log.md`, "The thread"). |
+| Commands | `POST /api/workstreams/{id}/commands` | Below. |
+
+| Thread rule | Detail |
+| --- | --- |
+| Parsing | Each event's data is parsed losslessly; a position is a decimal string, compared as an integer. |
+| Cursor | Advances at `snapshot-end`, then with each `live` row applied; stored in the browser with the objects it belongs to, and reused only with them. An empty browser starts at zero. |
+| Snapshot | Rows replace or remove whole objects. A `reset` clears the objects before the complete state is applied. A snapshot cut before its end is read again from the same cursor. |
+| Reconnection | On an error or a close, the stream is opened again from the last cursor, after 1 s, then doubling up to 10 s. Opening, reloading and reconnecting give the same objects, with no change skipped or applied twice. |
+| Commands | Disabled until `snapshot-end`. |
+
+## The objects
+
+What the client reads of each view object. Every object also carries `id`, `firstPosition` and
+`lastPosition`.
+
+| Kind | Fields read |
+| --- | --- |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor` |
+| `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
+| `element` | `type`, `turn`, `session`, and per type below |
+| `notice` | `type`, `reason`, `origin`, `harness` |
+
+## Commands
+
+Each command carries an id chosen by the client, kept when the same action is retried after a
+network failure: replayed, it runs once. The answer is *accepted*, or *refused* with a reason
+(`log.md`, "Commands"), shown where the action was made; the thread is not touched.
+
+| Command | Target | Body | Offered |
+| --- | --- | --- | --- |
+| Create | — | `pool`, from the catalogue; `anchor`, to continue | Without an execution, or once it has ended. |
+| Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
+| Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
+| RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
+| Stop | `execution` | — | For an execution neither stopped nor ended. |
+
+## The Workstream's state
+
+The view's `state` (`log.md`, "The Workstream view") decides what the screen offers.
+
+| `state` | Badge | Composer |
+| --- | --- | --- |
+| `none` | — | Replaced by the harness choice: **Create**. |
+| `starting` | starting | Closed: "Starting the sandbox…" |
+| `ready` | ready | Open, unless a turn or a permission holds it (below). |
+| `interrupted` | reconnecting | Closed: "Connection to the sandbox lost, reconnecting…" |
+| `stopped` | stopped | Closed: "Stopped. The sandbox ends at its deadline." |
+| `lost` | lost | Closed: "The sandbox was lost." |
+| `failed` | failed | Closed: "The execution could not start." |
+| `ended` | ended | Replaced by **Continue** (Create with the view's `pool` and `anchor`) when there is an anchor, and **New execution** (the harness choice). |
+
+Sending is open when the snapshot is complete, the state is `ready`, no turn is saved, in progress
+or uncertain, and no permission is pending. Otherwise the reason shows above the composer:
+the state's, then "Answer the permission request first.", then the uncertain turn's banner.
 
 ## The connection point: `useExternalStoreRuntime`
 
-It is the only point of contact between Agora's data and assistant-ui.
+The only point of contact between Agora's objects and assistant-ui.
 
 | Property | Fed by |
 | --- | --- |
-| `messages` + `convertMessage` | The thread's turns and notices. A turn gives a `user` message and an `assistant` message; a notice gives a `system` message. |
+| `messages` + `convertMessage` | The turns and notices, in position order (below). |
 | `isRunning` | The last turn is saved or in progress. |
-| `isSendDisabled` | Sending closed: execution starting/in error/stopped, storage unavailable, or an unresolved saved/in-progress/uncertain turn. Also disabled while the thread snapshot is incomplete. The server's Workstream view supplies the closure reason. |
-| `isDisabled` | Workstream stopped: the thread stays readable. |
-| `onNew` | **Write** |
-| `onCancel` | **Cancel**, carrying the in-progress turn id known to the interface. The uncertain-turn action uses the same targeted command handler. |
-| `onRespondToToolApproval` | **Respond to a permission**: `approvalId` = the request, `optionId` = the choice. |
-| `adapters.threadList` | The workstream list (see the sidebar). |
+| `isSendDisabled` | Sending is not open. |
+| `isDisabled` | The state is `none` or `ended`: the thread stays readable, the composer is replaced. |
+| `onNew` | **Write**, with the composer's text. |
+| `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
+| `onRespondToToolApproval` | **RespondPermission**: `approvalId` is the permission element's id, which gives the target and `requestId`; `optionId` is the ACP option chosen. |
+| `adapters.threadList` | `threads`: the Workstreams, with `title`, and `state` and `harness` in `custom`; `threadId`: the one on screen; `onSwitchToThread`: opens it; `onSwitchToNewThread`: a new Workstream, then the harness choice. |
 
-Not provided, so the features are absent from the interface: `onEdit`, `onReload`,
-`onDelete`, `setMessages`, `queue`, `suggestions` and the `attachments`,
-`feedback`, `speech`, `dictation` adapters.
+Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `setMessages`,
+`queue`, `suggestions`, and the `attachments`, `feedback`, `speech`, `dictation` adapters.
 
-## A turn's states
+## Messages
 
-| Turn | User message | Response (`status`) |
+| From | Message | Placed at |
 | --- | --- | --- |
-| **saved** — written by Agora, not yet sent | "saved" badge | `running`, empty: ● indicator |
-| **in progress** — dispatch begun, completion not yet confirmed | — | `running` |
-| **done** — the agent has finished | — | `complete` |
-| **cancelled** — stopped on request | — | `incomplete` / `cancelled`; a pending permission moves to `resolution: cancelled` |
-| **failed** — valid agent error, proven failure before dispatch, or execution lost/ended before the answer | — | `incomplete` / `error`, with the recorded error or interruption explanation |
-| **uncertain** — completion could not be proved after a break, local transport failure, timeout or invalid answer | "uncertain" badge, clearly visible; Write disabled with reason | `incomplete` / `other`, with the explanation; targeted Cancel and Stop stay available |
+| A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
+| A notice | A `system` message, id the notice's. | Its `firstPosition`. |
 
-An uncertain turn is never resent automatically. It changes state only on proof.
-The turn's state and any local failure class travel in the user message's `metadata.custom`.
-An invalid answer produces a failure notice and keeps the turn uncertain; it is not presented
-as a completed agent error. Reloading reconstructs both from the thread.
+Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown.
 
-## The screen, area by area
+### A turn's states
 
-### Sidebar
-
-| Element | Component | Wiring |
+| `status` | User message | Assistant message `status` |
 | --- | --- | --- |
-| Workstream list | `ThreadList` (registry) | `threadList.threads`: id, title; execution state in `custom` |
-| Open a workstream | `ThreadListItemPrimitive.Trigger` | `onSwitchToThread` → opens the thread |
-| New workstream | `ThreadListPrimitive.New` + harness choice (**ours**) | `onSwitchToNewThread` → choice → **Create** |
-| Execution state | `Badge` (registry) | starting, available, error, stopped |
+| `saved` | "saved" badge | `running`, empty: an indicator |
+| `in_progress` | — | `running` |
+| `done` | — | `complete` |
+| `cancelled` | — | `incomplete`, reason `cancelled` |
+| `failed` | — | `incomplete`, reason `error`, with the failure: the agent's error message, or the closed reason |
+| `uncertain` | "uncertain" badge | `incomplete`, reason `other`, "The end of this turn could not be confirmed." |
 
-### Thread
+An uncertain turn is never resent. Its banner offers **Cancel** for that turn and **Stop**; it
+changes state only on proof. The turn's status travels in the user message's `metadata.custom`;
+reloading rebuilds both from the thread.
 
-| Element | Component | Wiring |
+### Parts of a response
+
+| Element `type` | Part | Component |
 | --- | --- | --- |
-| Container, scrolling | `Thread` (registry) | — |
-| User message | `UserMessage` (in `Thread`) + turn state badge | `role: user` |
-| Agent response | `AssistantMessage` (in `Thread`) | `role: assistant`, `status` according to the turn's states |
-| Turn error | `MessagePrimitive.Error` (already in `AssistantMessage`) | failed turn |
-| Notice | `Notice` (**ours**) | `role: system`, code in `metadata.custom` |
-| Execution starting, execution error | execution banner (**ours**) | the workstream's execution state |
-| Thread connection lost | `ConnectionState` (registry `elements-connection-state`) | stream state in the browser, not Agora data |
+| `agent_message_chunk` | `text`: its `text` | `MarkdownText` (registry) |
+| `agent_thought_chunk` | `reasoning`: its `text` | `Reasoning` (registry), grouped |
+| `tool` | `tool-call` (below) | `ToolFallback` (registry), showing the title; consecutive tools grouped by `ToolGroup` (registry) |
+| `tool` with a `diff` content | the same | `DiffViewer` (registry `code-diff`) for each diff |
+| `permission` | the `approval` of the tool call with the same `toolCallId`; a tool call of its own, from `params.toolCall`, when there is none | the approval buttons of `ToolFallback` |
+| `plan` | `data` named `plan`: its `entries` | `TodoList` (registry `todo-list`) |
 
-`Thread` currently renders every non-`user` message as a response: we add the
-`system` → `Notice` case.
+| `tool-call` field | From the `tool` element |
+| --- | --- |
+| `toolCallId` | `toolCallId` |
+| `toolName` | `kind`, or `other` |
+| `args` | `rawInput`, or nothing |
+| `result` | `rawOutput`, or the text of its `content` blocks |
+| `isError` | `status` `failed` |
+| `artifact` | `title`, `locations`, and its `diff` contents |
+| running | `status` `pending` or `in_progress` |
 
-Notices: session started, session ended, context lost, harness lost, local request failure.
+| `approval` field | From the `permission` element |
+| --- | --- |
+| `id` | its id |
+| `options` | `params.options`: `optionId` → `id`, `name` → `label`, `kind` with its underscore turned into a dash (`allow_once` → `allow-once`, and likewise `allow-always`, `reject-once`, `reject-always`) |
+| `optionId` | `answer.outcome.optionId`, once `answered` |
+| `resolution` | `cancelled`, when its `status` is `cancelled` |
 
-### Blocks of a response
+| Plan entry `status` | `TodoList` |
+| --- | --- |
+| `pending` | `pending` |
+| `in_progress` | `active` |
+| `completed` | `done` |
 
-Built on the server, in the database, from the ACP log.
+### Notices
 
-| Element | Built from | assistant-ui part | Component |
-| --- | --- | --- | --- |
-| **Text** | consecutive message chunks | `text` | `MarkdownText` (registry) |
-| **Reasoning** | consecutive thought chunks | `reasoning` | `Reasoning` (registry), grouped automatically |
-| **Tool** | the call then its updates, merged | `tool-call` | `ToolFallback` (registry), modified to show the title; consecutive tools grouped by `ToolGroup` (registry) |
-| **`edit` tool** | same | same | `DiffViewer` (registry) via `makeAssistantToolUI` |
-| **`execute` tool** | same | same | `TerminalBlock` (registry `elements-terminal-block`) via `makeAssistantToolUI` |
-| **Permission** | the ACP request, attached to its tool | `approval` field of the `tool-call` | buttons already in `ToolFallback` |
-| **Plan** | the last plan received in the turn | `data` named `plan` | `TodoList` (registry `elements-todo-list`) via `makeAssistantDataUI` |
+| `type` | Text |
+| --- | --- |
+| `session.opened`, `origin` `new`, the Workstream's first | "Session started with {harness}." |
+| `session.opened`, `origin` `new`, after another | "New session: the agent does not know the history above." |
+| `session.opened`, `origin` an anchor | "Session restored: the agent remembers the history above." |
+| `session.ended` | "Session ended ({reason})." |
+| `execution.break` | "Connection to the sandbox lost, reconnecting…" |
+| `request.failed` | "A request failed ({reason})." |
+| `execution.lost` | "The sandbox was lost ({reason}). The history is kept." |
+| `execution.failed` | "The execution could not start ({reason})." |
+| `execution.ended` | "The execution has ended." |
 
-Field mappings:
+## The screen
 
-- **Tool** — `toolCallId` = ACP id; `toolName` = ACP kind (`read`, `edit`,
-  `execute`…); `args` = input; `result` = result; `isError` = failure;
-  `artifact` = title and locations.
-- **Diff** — `DiffViewer` receives the ACP diff directly: path, old text,
-  new text.
-- **Permission** — `approval.id` = the request; `approval.options` = the ACP options.
-  The four kinds are identical on both sides: `allow-once`, `allow-always`,
-  `reject-once`, `reject-always`. `approval.optionId` = the answer.
-- **Plan** — `pending` / `in_progress` / `completed` become `pending` / `active` /
-  `done`.
-
-### Composer
-
-| Element | Component | Wiring |
+| Area | Element | Component |
 | --- | --- | --- |
-| Input | `ComposerPrimitive.Input` | — |
-| Send | `ComposerPrimitive.Send` | `onNew` → **Write** |
-| Cancel | `ComposerPrimitive.Cancel`, visible while in progress | `onCancel` → **Cancel**, with that turn's id |
-| Uncertain turn actions | buttons in the uncertainty banner (**ours**) | **Cancel**, with that turn's id, and **Stop**; available while sending is disabled and `isRunning` is false |
-| Closure reason | banner above the composer (**ours**) | sending closed |
+| Sidebar | Workstream list | `ThreadList` (registry), with the state badge |
+| Sidebar | New Workstream | `ThreadListPrimitive.New`, then the harness choice (**ours**) |
+| Header | Title, harness, state badge, **Stop** | **ours** |
+| Thread | Container, scrolling | `Thread` (registry) |
+| Thread | User message, with the turn badge | `UserMessage` (in `Thread`) |
+| Thread | Response | `AssistantMessage` (in `Thread`); the turn's failure in `MessagePrimitive.Error` |
+| Thread | Notice | `Notice` (**ours**), for `system` messages |
+| Thread | Connection to the server | `ConnectionState` (registry `connection-state`): the stream's state in the browser |
+| Composer | Input, Send, Cancel | `ComposerPrimitive.Input`, `.Send`, `.Cancel` |
+| Composer | Why sending is closed | banner (**ours**) |
+| Composer | Uncertain turn: **Cancel**, **Stop** | banner (**ours**) |
+| Composer | **Continue**, **New execution** | panel (**ours**), replacing the composer |
 
-To remove from the copied components: `BranchPicker`, the Edit, Reload and
-Feedback actions, `EditComposer`, attachments and dictation. Copy stays.
+`Thread` renders every non-`user` message as a response: the `system` case goes to `Notice`.
+Removed from the copied components: `BranchPicker`, the Edit, Reload and Feedback actions,
+`EditComposer`, attachments and dictation. Copy stays. Every string is in English.
 
 ## Outside this contract, already available
 
 | Future need | Existing component |
 | --- | --- |
 | Switch model or mode | `ModelSelector` (registry) |
-| Slash commands (ACP `available_commands`) | `ComposerTriggerPopover` (registry) |
-| Context consumption (ACP `usage`) | `ContextDisplay` (registry) |
+| Slash commands (ACP `available_commands_update`) | `ComposerTriggerPopover` (registry) |
+| Context consumption (ACP `usage_update`) | `ContextDisplay` (registry) |
 | Attachments | `Attachment` (registry) |
 
-What each registry element can receive from ACP is in
-`assistant-ui-elements.md`.
+What each registry element can receive from ACP is in `assistant-ui-elements.md`.
 
-## The components to write
+## Acceptance cases
 
-`Notice`, the harness choice, the turn state badge, the execution banner and the
-sending-closed banner with uncertain-turn actions. Everything else comes from the registry or
-the primitives.
+| ID | Case | Expected |
+| --- | --- | --- |
+| U1 | A Workstream's objects read from zero, then again from its cursor | The same messages, in position order; commands disabled before `snapshot-end`. |
+| U2 | A turn saved, in progress, then done | A "saved" badge and an empty running response; then running; then complete, its text and reasoning in order. |
+| U3 | An uncertain turn | The "uncertain" badge; the response incomplete with its explanation; sending closed; Cancel targeting that turn and Stop offered. |
+| U4 | A permission pending, answered; another pending when its turn is cancelled | The approval on its tool call, its four options with dashed kinds; then the option answered; then `resolution` `cancelled`. |
+| U5 | A tool through its updates, an edit with a diff, a plan | One tool call, merged, with its title, result and error; the diff; the plan's statuses mapped. |
+| U6 | A `reset` in the stream | The objects cleared, the complete state applied, no message twice. |
+| U7 | A command refused | Its reason shown; the objects unchanged. |
+| U8 | The stream cut, then back | Opened again from the last cursor; no change skipped or applied twice. |
+| U9 | An execution ended with an anchor | **Continue** sends Create with the view's pool and anchor; the restored Session's notice follows. |
+| U10 | Each notice type | Its text, with its harness and reason. |
+| U11 | Each Workstream state | Its badge, and the composer's state and reason. |
 
-**To be specified:** pagination of long threads, and pinning the assistant-ui version —
-`adapters.threadList`, `onSwitchToThread` and `onSwitchToNewThread` are marked
-unstable in 0.15.
+**To be specified:** pagination of long threads; several operators, and who may read and write a
+Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
+outside a turn (a `session/load` replay).
 
 References: [ExternalStoreAdapter](https://github.com/assistant-ui/assistant-ui/blob/main/packages/core/src/runtimes/external-store/external-store-adapter.ts),
 [component registry](https://r.assistant-ui.com/registry.json).

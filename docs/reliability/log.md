@@ -59,6 +59,9 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L39 | real: a second lab process started on the same database | local | R1 | proven | Every assertion held. |
 | L40 | simulated: fake-kube, the deadline's PATCH refused | local | R1 | proven | Every assertion held. |
 | L41 | real: the adapter answers `initialize` with an invalid body, and never validly | local | R1 | proven | Every assertion held. |
+| L42 | — | — | — | not verified | — |
+| L43 | — | — | — | not verified | — |
+| L44 | — | — | — | not verified | — |
 
 ## Not covered
 

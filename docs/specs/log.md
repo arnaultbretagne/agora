@@ -14,7 +14,7 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `Workstreams` (`@agora/log`) | Accepts commands, writes entries, decides every dispatch, captures every received line, recovers after a restart, projects the views and serves the thread. |
 | `ExecutionManager` (`@agora/executions`) | The execution mechanics (`executions.md`): claims, bridge connections, deadlines, anchor authentication. It keeps no history, sends a line only when asked, and hands each received line over before reading the next. |
 | PostgreSQL | The log, the views, the thread and the anchors, behind three roles. |
-| The lab | Mounts both with PostgreSQL, creates one Workstream per execution, and serves a page that plays every case. |
+| The server (`apps/server`) | Mounts both with PostgreSQL, serves the client (`assistant-ui.md`) and the API. With its test routes open (`TEST_ROUTES` `true`), it also serves a page that plays every case. |
 
 ## Entries
 
@@ -201,9 +201,8 @@ Cancel reaches a turn still running — or the end of its execution.
 
 ## Views
 
-The client's objects — Workstream, turn, element, notice — are projections of the entries. Their
-folds from ACP are those of `assistant-ui.md` ("Blocks of a response"); a line no fold
-understands becomes a generic element.
+The client's objects — Workstream, turn, element, notice — are projections of the entries. How
+the client shows them is `assistant-ui.md`.
 
 | Object | Identity: name-based UUID of |
 | --- | --- |
@@ -212,6 +211,7 @@ understands becomes a generic element.
 | Permission | The Session and the request's position. |
 | Text, reasoning | The turn and the rank of the run of consecutive chunks. |
 | Plan | The turn. |
+| Workstream | The Workstream's id. |
 | Notice | The Workstream and the position of the entry it comes from. |
 | Generic element | The Workstream and the position of the line. |
 
@@ -222,9 +222,60 @@ understands becomes a generic element.
 | Same transaction | Views, their thread updates and their checkpoint commit together, under a projector lock of their own, separate from the capture lock. |
 | Rebuild | For the same version and source position, gives the same identities and rows as the incremental run: a hash of the canonical encoding of the rows, sorted by id, with no field left out. A rebuild publishes atomically and removes obsolete objects. |
 
+### Elements
+
+| `type` | Folded from | Fields |
+| --- | --- | --- |
+| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks |
+| `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
+| `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
+| `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
+| `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
+| `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel` | `turn`, `session`, `line`: the line whole |
+
+A pending permission becomes `cancelled` when its Session ends, or its execution is lost, fails or
+ends.
+
+### The Workstream view
+
+One object per Workstream, changed by its commands, its execution entries, its Sessions and the
+agent's title.
+
+| Field | Value |
+| --- | --- |
+| `title` | The agent's last `session_info_update` title in the Workstream; otherwise the first line of the first Write's text, at most 80 characters; otherwise "New workstream". |
+| `state` | Below. |
+| `execution`, `session` | The last execution's id and its open Session's, or null. |
+| `pool`, `harness` | The last execution's, or null. |
+| `anchor` | The anchor its `execution.ended` names, or null. |
+| `stopped`, `ended`, `lost`, `failed`, `unavailable` | The last execution's flags; `unavailable` while no Session is open and connected. |
+
+| `state` | When, the first that applies |
+| --- | --- |
+| `none` | No Create accepted. |
+| `ended` | The last execution has `execution.ended`. |
+| `failed` | It has `execution.failed`. |
+| `lost` | It has `execution.lost`. |
+| `stopped` | Its Stop is accepted. |
+| `ready` | Its Session is open and its connection too. |
+| `interrupted` | Its Session is open, its connection broken since. |
+| `starting` | Otherwise. |
+
+### Notices
+
+| `type` | From | Fields |
+| --- | --- | --- |
+| `session.opened` | `session.opened` | `origin`: `new` or the anchor restored; `harness` |
+| `session.ended` | `session.ended` | `reason` |
+| `execution.break` | an unclean `execution.break` | `reason` `transport_error` |
+| `request.failed` | `request.failed` | `reason` |
+| `execution.lost`, `execution.failed`, `execution.ended` | the same entry | `reason` |
+
+Every notice also names its execution and Session.
+
 ### The thread
 
-What the client reads (`assistant-ui.md`, "A workstream's thread").
+What the client reads (`assistant-ui.md`, "The exchanges").
 
 | Rule | Detail |
 | --- | --- |
@@ -237,14 +288,18 @@ What the client reads (`assistant-ui.md`, "A workstream's thread").
 
 | Route | Answer |
 | --- | --- |
-| `POST /api/workstreams` | Creates a Workstream: `id`, `owner`. 409 if the id belongs to another owner. |
+| `GET /api/workstreams` | The Workstream views, the most recently changed first. |
+| `POST /api/workstreams` | Creates a Workstream: `id`; the owner is the identity the proxy passes (`X-Auth-Request-Email`), or the body's `owner` without one. 409 if the id belongs to another owner. |
+| `GET /api/pools` | The catalogue (`executions.md`). |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
-| `GET /api/log-json.js` | The lossless JSON parser the page reads the thread with. |
+| `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
-| `POST /api/workstreams/{id}/control` | Lab only: one `session/set_config_option` for the current Session, between turns. |
-| `POST /api/workstreams/{id}/credentials` | Lab only: hands a signed credential to the execution's bridge (`credentials.md`). |
-| `GET /api/workstreams/{id}/entries` | Lab only: the entries, as stored. |
-| `GET /api/anchors`, `GET /api/anchors/{id}/content` | Lab only: the stored anchors, and an anchor's native files. |
+| `POST /api/workstreams/{id}/control` | Test only: one `session/set_config_option` for the current Session, between turns. |
+| `POST /api/workstreams/{id}/credentials` | Test only: hands a signed credential to the execution's bridge (`credentials.md`). |
+| `GET /api/workstreams/{id}/entries` | Test only: the entries, as stored. |
+| `GET /api/anchors`, `GET /api/anchors/{id}/content` | Test only: the stored anchors, and an anchor's native files. |
+
+The test routes answer only while `TEST_ROUTES` is `true`; otherwise 404.
 
 Bodies are UTF-8 JSON of at most 16 MiB, parsed losslessly. A malformed body is 400; a storage
 failure is 503; no answer carries an exception message.
@@ -357,6 +412,9 @@ exception message.
 | L39 | A second server started on the same database | It exits at start, writing nothing; the first goes on. |
 | L40 | The deadline cannot be moved when a prompt is dispatched | `request.failed` (`deadline_refused`); the turn failed; nothing sent; a Write accepted again. |
 | L41 | An invalid answer to `initialize`, then no valid one | The diagnostic and `request.failed` naming it; then `request.failed` (`response_timeout`) and `execution.failed` (`startup_failed`); no second `initialize`. |
+| L42 | Workstreams listed while one changes | Every Workstream's view; the one changed last first. |
+| L43 | A Workstream through Create, a Session, a break and its reconnection, Stop, the end with an anchor | The view's `state`: `none`, `starting`, `ready`, `interrupted`, `ready`, `stopped`, `ended`; its `pool`, `harness`, `session` and `anchor`; its `title` from the first Write, then the agent's. |
+| L44 | A Session opened new, restored from an anchor, then ended | A `session.opened` notice with origin `new`, one with the anchor, then a `session.ended` notice with its reason. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

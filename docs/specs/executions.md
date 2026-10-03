@@ -150,7 +150,7 @@ when it starts (`BRIDGE_RESTART_ON_ANCHOR`): the bridge has no list of harnesses
 | claude-code | `$HOME/.claude/projects/<workspace slug>/` | No | `session/resume` |
 | opencode | `$HOME/.local/share/opencode/agora/`: its SQLite database (`OPENCODE_DB`) | Yes | `session/resume` |
 | codex | `$HOME/.codex/sessions/`: its rollouts; `auth.json` stays outside | No | `session/resume` |
-| mock (lab) | `$HOME/.mock-agent/sessions/<workspace slug>/` | No | `session/resume` or `session/load` |
+| mock (tests) | `$HOME/.mock-agent/sessions/<workspace slug>/` | No | `session/resume` or `session/load` |
 
 The slug is claude-code's: every character outside `[A-Za-z0-9-]` becomes `-`.
 That is why the workspace is the same path in every image.
@@ -212,7 +212,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles. |
 | `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
-| `GET /api/config` | Whether the lab's routes are open, and the credential profiles on offer. |
+| `GET /api/config` | Whether the test routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
@@ -297,18 +297,19 @@ A namespace quota bounds the resources; Agora also bounds the number of active e
 a pool is not a concurrency limit. A stopped, lost or failed execution counts until its claim has
 disappeared.
 
-## The lab
+## The server
 
-The `apps/lab` deployable mounts the mechanics and the log, with PostgreSQL, and serves a page on
-`agora-lab.bretagne.dev`, behind Pocket-ID (admin group). It creates a Workstream per execution,
-sends the commands, reads the thread, attaches credentials, and shows deadlines, anchors and
-ends. Besides the log's lab routes (`log.md`, "HTTP"), three actions are reserved for the lab:
+The `apps/server` deployable mounts the mechanics and the log, with PostgreSQL, and serves the
+client (`assistant-ui.md`) on `agora.bretagne.dev`, behind Pocket-ID (admin group). With its test
+routes open (`TEST_ROUTES` `true`), it also serves the test page at `/test/`: a Workstream per
+execution, the commands, the thread, credentials, deadlines, anchors and ends. Besides the log's
+test routes (`log.md`, "HTTP"), three actions are reserved for tests:
 
 | Route | Effect |
 | --- | --- |
-| `POST /api/lab/executions/{name}/drop-bridge` | Agora terminates its connection to the bridge, and reconnects after `pauseSeconds` (0–60) to exercise an absent reader. |
-| `POST /api/lab/executions/{name}/probe-auth` | Tries the bridge with no token, with an expired token, with one for another sandbox, with one signed by another key. |
-| `POST /api/lab/restart` | `{"mode": "clean"}` stops the process as a SIGTERM would; `{"mode": "kill"}` ends it on the spot, nothing drained or written, with the status a kill leaves. Kubernetes restarts it. |
+| `POST /api/test/executions/{name}/drop-bridge` | Agora terminates its connection to the bridge, and reconnects after `pauseSeconds` (0–60) to exercise an absent reader. |
+| `POST /api/test/executions/{name}/probe-auth` | Tries the bridge with no token, with an expired token, with one for another sandbox, with one signed by another key. |
+| `POST /api/test/restart` | `{"mode": "clean"}` stops the process as a SIGTERM would; `{"mode": "kill"}` ends it on the spot, nothing drained or written, with the status a kill leaves. Kubernetes restarts it. |
 
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
 with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long
