@@ -300,7 +300,7 @@ export class Lab {
       throw error
     }
     lab.api = createHttpServer((req, res) => {
-      void logHttp(lab.workstreams, req, res, { lab: true }).then((handled) => {
+      void logHttp(lab.workstreams, req, res, { testRoutes: true }).then((handled) => {
         if (!handled) res.writeHead(404).end()
       })
     })
@@ -404,7 +404,7 @@ export class Server {
     writeFileSync(join(dir, 'signing.pem'), options.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }))
     writeFileSync(join(dir, 'token'), 'test')
     const [port, anchorPort] = [await freePort(), await freePort()]
-    const child = spawn(process.execPath, [new URL('../../../apps/lab/src/main.ts', import.meta.url).pathname], {
+    const child = spawn(process.execPath, [new URL('../../../apps/server/src/main.ts', import.meta.url).pathname], {
       env: {
         ...process.env,
         SANDBOX_NAMESPACE: 'agora-sandboxes',
@@ -416,7 +416,7 @@ export class Server {
         LOG_ANCHORS_URL: options.db.urls.anchors,
         PORT: String(port),
         ANCHOR_PORT: String(anchorPort),
-        LAB: 'true',
+        TEST_ROUTES: 'true',
         ...options.env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

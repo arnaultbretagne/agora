@@ -1,5 +1,5 @@
-// The HTTP surface of the execution mechanics (docs/specs/executions.md, "The lab"): the catalogue, what
-// the mechanics see of each execution, and the lab's hooks. Commands and the thread are the log's
+// The HTTP surface of the execution mechanics (docs/specs/executions.md, "The server"): the catalogue, what
+// the mechanics see of each execution, and the test hooks. Commands and the thread are the log's
 // (docs/specs/log.md, "HTTP"); a deployable mounts both through `handle`.
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -14,12 +14,12 @@ export interface HttpOptions {
   readonly manager: ExecutionManager
   /** Routes of the mounting deployable, tried first (the log's). */
   readonly handle?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
-  /** Opens the lab's own routes (docs/specs/executions.md, "The lab"). */
-  readonly lab: boolean
-  /** A page to serve at `/`, if the deployable has one. */
-  readonly page?: string
+  /** Opens the test routes (docs/specs/executions.md, "The server"). */
+  readonly testRoutes: boolean
+  /** The test page, served at `/test/` with the test routes. */
+  readonly testPage?: string
   readonly credentials?: CredentialSource
-  /** The lab's restart: `clean` drains like a SIGTERM, `kill` dies like a SIGKILL. */
+  /** The test restart: `clean` drains like a SIGTERM, `kill` dies like a SIGKILL. */
   readonly onRestart?: (mode: 'clean' | 'kill') => void
 }
 const NAME = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
@@ -60,22 +60,22 @@ export function createApi(options: HttpOptions): Server {
       res.end('ok\n')
       return
     }
-    if (method === 'GET' && (path === '/' || path === '/index.html') && options.page !== undefined) {
+    if (method === 'GET' && (path === '/test' || path === '/test/') && options.testRoutes && options.testPage !== undefined) {
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'",
       })
-      res.end(await readFile(options.page))
+      res.end(await readFile(options.testPage))
       return
     }
     if (method === 'GET' && path === '/api/pools') return json(res, 200, { pools: await manager.pools() })
     if (method === 'GET' && path === '/api/executions') return json(res, 200, { executions: manager.views() })
     if (method === 'GET' && path === '/api/events') return events(req, res)
-    if (method === 'GET' && path === '/api/config') return json(res, 200, { lab: options.lab, credentials: options.credentials?.describe() ?? null })
+    if (method === 'GET' && path === '/api/config') return json(res, 200, { testRoutes: options.testRoutes, credentials: options.credentials?.describe() ?? null })
 
-    const command = /^\/api\/lab\/executions\/([^/]+)\/([a-z-]+)$/.exec(path)
-    if (method === 'POST' && command !== null && options.lab) {
+    const command = /^\/api\/test\/executions\/([^/]+)\/([a-z-]+)$/.exec(path)
+    if (method === 'POST' && command !== null && options.testRoutes) {
       const [, name, verb] = command
       if (!NAME.test(name!) && !/^[0-9a-f-]{36}$/.test(name!)) return json(res, 400, { accepted: false, reason: 'invalid name' })
       if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!, Number((await body(req)).pauseSeconds ?? 0)))
@@ -84,9 +84,9 @@ export function createApi(options: HttpOptions): Server {
         return result.accepted ? json(res, 200, { accepted: true, results: result.value }) : reply(res, result)
       }
     }
-    if (method === 'POST' && path === '/api/lab/restart' && options.lab) {
+    if (method === 'POST' && path === '/api/test/restart' && options.testRoutes) {
       const mode = (await body(req)).mode === 'kill' ? 'kill' : 'clean'
-      json(res, 200, { accepted: true, value: mode === 'kill' ? 'the lab process is killed; Kubernetes restarts it' : 'the lab process stops cleanly; Kubernetes restarts it' })
+      json(res, 200, { accepted: true, value: mode === 'kill' ? 'the server is killed; Kubernetes restarts it' : 'the server stops cleanly; Kubernetes restarts it' })
       setTimeout(() => (options.onRestart ?? (() => process.exit(0)))(mode), 300)
       return
     }

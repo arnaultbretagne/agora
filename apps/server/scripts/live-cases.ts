@@ -3,7 +3,7 @@
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
-// Usage: node apps/lab/scripts/live-cases.ts http://<lab>:8080 [case IDs…] (the receiver is on port 8081).
+// Usage: node apps/server/scripts/live-cases.ts http://<server>:8080 [case IDs…] (the receiver is on port 8081).
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -204,7 +204,7 @@ await check('L9', 'Write during a turn', async () => {
 
 await check('L12', 'Cancel on an uncertain turn still running', async () => {
   const running = await a.turn('in_progress', 10_000)
-  const cut = await api('POST', `/api/lab/executions/${a.execution}/drop-bridge`, { pauseSeconds: 2 })
+  const cut = await api('POST', `/api/test/executions/${a.execution}/drop-bridge`, { pauseSeconds: 2 })
   assert(cut.accepted === true, JSON.stringify(cut))
   const turn = await a.turn('uncertain', 15_000)
   assert(turn.id === running.id, 'another turn')
@@ -223,7 +223,7 @@ let lost = ''
 await check('E27', 'Agora away while the adapter writes', async () => {
   assert((await a.write('/silence 1')).status === 200, 'Write refused')
   await a.turn('in_progress', 10_000)
-  const cut = await api('POST', `/api/lab/executions/${a.execution}/drop-bridge`, { pauseSeconds: 10 })
+  const cut = await api('POST', `/api/test/executions/${a.execution}/drop-bridge`, { pauseSeconds: 10 })
   assert(cut.accepted === true, JSON.stringify(cut))
   await a.turn('uncertain', 15_000)
   await a.turn('done', 60_000)
@@ -231,7 +231,7 @@ await check('E27', 'Agora away while the adapter writes', async () => {
   const before = (await a.entries()).length
   assert((await a.write('/big 3600')).status === 200, 'Write refused')
   await until('first chunk', async () => (await a.entries()).slice(before).some((x) => x.kind === 'acp' && x.method === 'session/update'), 10_000)
-  const away = await api('POST', `/api/lab/executions/${a.execution}/drop-bridge`, { pauseSeconds: 10 })
+  const away = await api('POST', `/api/test/executions/${a.execution}/drop-bridge`, { pauseSeconds: 10 })
   assert(away.accepted === true, JSON.stringify(away))
   await a.turn('done', 120_000)
   const numbered = (await a.entries()).slice(before)
@@ -250,7 +250,7 @@ await check('E27', 'Agora away while the adapter writes', async () => {
 })
 
 async function restartLab(mode: 'clean' | 'kill'): Promise<void> {
-  await api('POST', '/api/lab/restart', { mode }).catch(() => undefined)
+  await api('POST', '/api/test/restart', { mode }).catch(() => undefined)
   await until('lab down', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then(() => false, () => true), 30_000).catch(() => true)
   await until('lab back', async () => fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false), 180_000)
 }
@@ -376,7 +376,7 @@ await check('E19', 'Adapter died', async () => {
 await check('E20', 'Tokens refused', async () => {
   const w = new Workstream()
   await w.open(mock, SHORT)
-  const probe = await api('POST', `/api/lab/executions/${w.execution}/probe-auth`)
+  const probe = await api('POST', `/api/test/executions/${w.execution}/probe-auth`)
   const rows = probe.results as Json[]
   const bad = rows.slice(0, -1).filter((r) => r.info !== 401 || r.acp !== 401)
   assert(bad.length === 0 && rows.at(-1)!.info === 200 && rows.at(-1)!.acp === 101, JSON.stringify(rows))

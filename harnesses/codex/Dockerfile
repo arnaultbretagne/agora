@@ -12,7 +12,7 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force \
 COPY harnesses/codex/config.toml harnesses/codex/placeholder-auth.mjs harnesses/codex/start.sh /etc/agora/codex/
 WORKDIR /app
 COPY package.json package-lock.json ./
-COPY apps/lab/package.json apps/lab/
+COPY apps/server/package.json apps/server/
 COPY packages/credentials/package.json packages/credentials/
 COPY packages/executions/package.json packages/executions/
 COPY packages/harness-bridge/package.json packages/harness-bridge/

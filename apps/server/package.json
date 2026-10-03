@@ -1,9 +1,9 @@
 {
-  "name": "@agora/lab",
+  "name": "@agora/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The lab: mounts Agora's execution mechanics and log, and serves a page to play every case.",
+  "description": "The server: mounts Agora's execution mechanics and log, and serves the client; with TEST_ROUTES, the test routes and page.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },

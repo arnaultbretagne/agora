@@ -292,13 +292,13 @@
       )
       $('prompt').value = ''
     })
-    $('drop').onclick = guard(() => post(`/api/lab/executions/${view.execution}/drop-bridge`, { pauseSeconds: 10 }))
+    $('drop').onclick = guard(() => post(`/api/test/executions/${view.execution}/drop-bridge`, { pauseSeconds: 10 }))
     $('probe').onclick = guard(async () => {
-      const answer = await post(`/api/lab/executions/${view.execution}/probe-auth`, {})
+      const answer = await post(`/api/test/executions/${view.execution}/probe-auth`, {})
       $('probed').textContent = answer.results.map((r) => `${r.case}: ${r.info} / ${r.acp}`).join(' · ')
     })
-    $('restart-clean').onclick = guard(() => post('/api/lab/restart', { mode: 'clean' }))
-    $('restart-kill').onclick = guard(() => post('/api/lab/restart', { mode: 'kill' }))
+    $('restart-clean').onclick = guard(() => post('/api/test/restart', { mode: 'clean' }))
+    $('restart-kill').onclick = guard(() => post('/api/test/restart', { mode: 'kill' }))
     $('cancel').onclick = guard(() => command('Cancel', { execution: view.execution, turn: turn.id }))
     $('stop').onclick = guard(() => command('Stop', { execution: view.execution }))
     fetch('/api/pools')

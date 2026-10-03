@@ -1,6 +1,6 @@
 // docs/specs/log.md, "Dispatch and recovery", "Database ownership" and "An execution's memory": Agora
 // stopped, killed, cut from PostgreSQL, and the claim against the record. Most cases run the real lab
-// (apps/lab) as its own process, on FakeKube served over HTTP: a kill is a real kill.
+// (apps/server) as its own process, on FakeKube served over HTTP: a kill is a real kill.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'

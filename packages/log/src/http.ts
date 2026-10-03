@@ -23,7 +23,8 @@ const VALIDATION = new Set([
 
 export interface LogHttpOptions {
   /** Opens the lab-only routes: control, credentials, entries, anchors. */
-  readonly lab: boolean
+  /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
+  readonly testRoutes: boolean
   readonly credentials?: CredentialSource
 }
 
@@ -66,7 +67,7 @@ export async function logHttp(
   }
   try {
     if (anchors) {
-      if (!options.lab || req.method !== 'GET') return reply(404, { reason: 'unknown_route' }), true
+      if (!options.testRoutes || req.method !== 'GET') return reply(404, { reason: 'unknown_route' }), true
       if (url.pathname === '/api/anchors') return reply(200, { anchors: await store.anchorList() }), true
       const content = /^\/api\/anchors\/([^/]+)\/content$/.exec(url.pathname)
       if (!content) return reply(404, { reason: 'unknown_route' }), true
@@ -109,7 +110,7 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)
-    if (!options.lab) return reply(404, { reason: 'unknown_route' }), true
+    if (!options.testRoutes) return reply(404, { reason: 'unknown_route' }), true
     if (req.method === 'POST' && verb === 'control') {
       const input = await body(),
         params = object(input.params)

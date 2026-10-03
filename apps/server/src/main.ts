@@ -1,11 +1,12 @@
-// The lab: the execution mechanics (packages/executions) and the log (packages/log) mounted together,
-// with the page that plays the cases of docs/specs/executions.md, credentials.md and log.md.
-// Configuration comes from the environment.
+// The server: the execution mechanics (packages/executions) and the log (packages/log) mounted together,
+// serving the client (apps/web) at `/`; with TEST_ROUTES, the test routes and the page that plays the
+// cases of docs/specs/executions.md, credentials.md and log.md. Configuration comes from the environment.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
 import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
 import { GrantSigner } from '@agora/credentials'
+import { serveClient } from './client.ts'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -24,7 +25,7 @@ function required(name: string): string {
 const sink = (line: string): void => console.log(line)
 const namespace = required('SANDBOX_NAMESPACE')
 const audience = process.env.ANCHOR_AUDIENCE ?? 'agora-anchors'
-const lab = process.env.LAB === 'true'
+const testRoutes = process.env.TEST_ROUTES === 'true'
 const kube = new HttpKube({
   apiBase: process.env.KUBE_API ?? 'https://kubernetes.default.svc',
   namespace,
@@ -77,18 +78,20 @@ try {
   process.exit(1)
 }
 
+const client = serveClient(process.env.CLIENT_DIR ?? join(import.meta.dirname, '..', '..', 'web', 'dist'))
 const server = createApi({
   manager: executions,
-  lab,
-  page: join(import.meta.dirname, '..', 'public', 'index.html'),
-  handle: (req, res) => logHttp(workstreams, req, res, { lab, ...(credentials === undefined ? {} : { credentials }) }),
+  testRoutes,
+  testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
+  handle: async (req, res) =>
+    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) || client(req, res),
   ...(credentials === undefined ? {} : { credentials }),
-  // docs/specs/executions.md, "The lab": a clean stop drains like a SIGTERM; a kill ends the process
-  // on the spot, nothing drained or written. In a container the lab is PID 1, which cannot SIGKILL
+  // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process
+  // on the spot, nothing drained or written. In a container the server is PID 1, which cannot SIGKILL
   // itself: it exits at once instead, with the status a kill leaves.
   onRestart: (mode) => (mode === 'kill' ? process.exit(137) : process.kill(process.pid, 'SIGTERM')),
 })
-server.listen(number('PORT', 8080), () => console.log(`- lab ready on :${String(number('PORT', 8080))}`))
+server.listen(number('PORT', 8080), () => console.log(`- server ready on :${String(number('PORT', 8080))}`))
 const receiver = createAnchorReceiver({
   receive: (pod, bundle, raw) => workstreams.receiveAnchor(pod, bundle, raw),
   namespace,

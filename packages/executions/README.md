@@ -11,4 +11,4 @@ every effect. Nothing here creates or deletes a sandbox.
 | `src/` | The manager, the Kubernetes client, the HTTP routes and the anchor receiver. |
 | `test/` | The mechanics against real bridges; FakeKube, an in-memory Kubernetes API and Agent Sandbox controller, also served over HTTP. |
 
-`npm test -w @agora/executions`. Mounted by `apps/lab` with the log.
+`npm test -w @agora/executions`. Mounted by `apps/server` with the log.
