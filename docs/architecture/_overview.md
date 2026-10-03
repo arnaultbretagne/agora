@@ -58,9 +58,9 @@ flowchart TB
 | **Harness** | A coding agent (claude-code, codex, …) behind its ACP adapter. | Its native files, in the sandbox only. |
 
 The server has three parts, each with its own document: the log (`log.md`), the executions
-(`executions.md`) and the credentials (`credentials.md`). The lab mounts these parts, with
-PostgreSQL and one Workstream per execution, without the product client, and serves a page that
-plays every case.
+(`executions.md`) and the credentials (`credentials.md`). One process mounts them with
+PostgreSQL and serves the client on `agora.bretagne.dev`, behind the identity proxy; with its test
+routes open, it also serves a page that plays every case, and the live cases drive it.
 
 ## The prerequisites
 

@@ -242,6 +242,12 @@ export class CoreProjection {
   private readonly ranks = new Map<string, number>()
   private readonly runs = new Map<string, { discriminator: string; id: string }>()
   private readonly turnCodes = new Map<string, string>()
+  /** The Workstream view's title sources (docs/specs/log.md, "The Workstream view"). */
+  private firstWrite: string | null = null
+  private agentTitle: string | null = null
+  /** The anchor each ended execution names, and the Sessions that have ended. */
+  private readonly anchors = new Map<string, string>()
+  private readonly endedSessions = new Set<string>()
   apply(entries: readonly Entry[]): Set<string> {
     const changed = new Set<string>()
     const objects = this.objects,
@@ -273,42 +279,63 @@ export class CoreProjection {
         this.turnCodes.set(turn.id, code)
         put('turn', turn.id, { ...turn }, entry.position)
       }
-      if (entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind === 'session.opened') {
+      let titled = false
+      if (entry.kind === 'command' && entry.content.kind === 'Write' && this.firstWrite === null) {
+        const blocks = Array.isArray(object(entry.content.body)?.prompt) ? (object(entry.content.body)!.prompt as unknown[]) : []
+        const text = blocks.map((b) => object(b)).find((b) => b?.type === 'text' && typeof b.text === 'string')?.text as string | undefined
+        const line = text?.split('\n').map((l) => l.trim()).find((l) => l !== '')
+        if (line) this.firstWrite = line.slice(0, 80)
+      }
+      if (entry.kind === 'acp' && entry.method === 'session/update') {
+        const update = object(object(entry.content.params)?.update)
+        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title')) {
+          this.agentTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
+          titled = true
+        }
+      }
+      if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
+      if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
+      if (titled || entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind.startsWith('session.')) {
         const execution = state.current
+        const session = execution?.session && !this.endedSessions.has(execution.session) ? execution.session : null
         put(
           'workstream',
           entry.workstream,
           {
             execution: execution?.id ?? null,
-            session: execution?.session ?? null,
+            session,
             stopped: execution?.stopped ?? false,
             ended: execution?.ended ?? false,
             lost: execution?.lost ?? false,
             ...(execution?.failed ? { failed: true } : {}),
             unavailable:
-              execution === null || execution.ended || execution.lost || execution.failed === true || !execution.session || !execution.connection,
-            title: 'Workstream',
+              execution === null || execution.ended || execution.lost || execution.failed === true || !session || !execution.connection,
+            title: this.agentTitle ?? this.firstWrite ?? 'New workstream',
+            state: workstreamState(execution, session),
+            pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
+            harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
+            anchor: (execution && this.anchors.get(execution.id)) ?? null,
+            changedAt: entry.time,
           },
           entry.position,
         )
       }
-      if (
-        entry.kind === 'request.failed' ||
-        (entry.kind === 'execution.break' && entry.content.clean !== true) ||
-        ['execution.lost', 'execution.failed', 'execution.ended'].includes(entry.kind)
-      ) {
+      const notice =
+        entry.kind === 'session.opened'
+          ? { origin: entry.content.origin ?? 'new', harness: entry.content.harness ?? null }
+          : entry.kind === 'session.ended' ||
+              entry.kind === 'request.failed' ||
+              (entry.kind === 'execution.break' && entry.content.clean !== true) ||
+              ['execution.lost', 'execution.failed', 'execution.ended'].includes(entry.kind)
+            ? { reason: entry.content.reason ?? 'transport_error' }
+            : null
+      if (notice)
         put(
           'notice',
           identity(entry.workstream, entry.position, 'notice'),
-          {
-            type: entry.kind,
-            reason: entry.content.reason ?? 'transport_error',
-            execution: entry.execution,
-            session: entry.session,
-          },
+          { type: entry.kind, ...notice, execution: entry.execution, session: entry.session },
           entry.position,
         )
-      }
       if (
         entry.kind === 'session.ended' ||
         ['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind)
@@ -439,6 +466,18 @@ export class CoreProjection {
     }
     return changed
   }
+}
+
+/** docs/specs/log.md, "The Workstream view": the first state that applies. */
+function workstreamState(execution: Execution | null, session: string | null): string {
+  if (!execution) return 'none'
+  if (execution.ended) return 'ended'
+  if (execution.failed) return 'failed'
+  if (execution.lost) return 'lost'
+  if (execution.stopped) return 'stopped'
+  if (session && execution.connection) return 'ready'
+  if (session) return 'interrupted'
+  return 'starting'
 }
 
 export function project(entries: readonly Entry[]): ProjectedObject[] {

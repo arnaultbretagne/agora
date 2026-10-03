@@ -125,7 +125,7 @@ the reason for a refusal.
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the Create's. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
 | Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. |
 | The Create | `profiles`, optional: checked against the catalogue, refused otherwise (`unknown_profile`); recorded with the command. |
-| `POST /api/workstreams/{id}/credentials` | Lab only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
+| `POST /api/workstreams/{id}/credentials` | Test only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
 | `GET /api/config` | `credentials` field: the gateway and the known profiles, or nothing. |
@@ -148,7 +148,7 @@ On the other side, the gateway accepts only the sandboxes and goes out only on p
 
 The model is chosen over ACP: `session/set_config_option` with `configId` `model`, for example
 `haiku`. It is sent after `session/new` and before the first prompt, which is the first billed
-call. The lab does it itself when the agent offers the option.
+call. The test page does it itself when the agent offers the option.
 
 ## Acceptance cases
 

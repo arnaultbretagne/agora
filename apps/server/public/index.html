@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Agora · Lab</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 900px;
+      margin: 3rem auto;
+      padding: 0 1rem;
+      background: #faf9f6;
+      color: #242424;
+    }
+    header,
+    form,
+    .actions {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+      padding: 0.5rem;
+      border: 1px solid #aaa;
+      border-radius: 5px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 5rem;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+    .entry {
+      padding: 1rem;
+      margin: 1rem 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .notice {
+      border-color: #c88820;
+      background: #fff6df;
+    }
+    small {
+      color: #666;
+    }
+    #status {
+      min-height: 1.6rem;
+    }
+    #failure {
+      color: #9b2424;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+  <header>
+    <h1>Agora · Lab</h1>
+    <button id="new">New Workstream</button><a href="/api/executions">Executions, as the mechanics see them</a>
+  </header>
+  <p><small>The lab plays the cases of the executions, credentials and log specs. Who may read a Workstream is not decided yet.</small></p>
+  <form id="open">
+    <label>Workstream <input id="workstream" size="38" required /></label><button>Open</button>
+  </form>
+  <p id="status">Open or create a Workstream.</p>
+  <p id="failure" role="alert"></p>
+  <div class="actions">
+    <select id="pool"></select
+    ><select id="anchor"><option value="">no anchor</option></select
+    ><input id="profiles" size="28" placeholder="profiles, e.g. github:owner/repo:read" /><button id="create">Create execution</button
+    ><button id="cancel" disabled>Cancel turn</button><button id="stop" disabled>Stop execution</button
+    ><button id="credentials" disabled>Attach anthropic</button>
+  </div>
+  <div class="actions">
+    <button id="drop" disabled>Drop the bridge for 10 s</button><button id="probe" disabled>Probe the bridge's tokens</button
+    ><button id="restart-clean">Restart the lab</button><button id="restart-kill">Kill the lab</button>
+  </div>
+  <p><small id="mechanics"></small></p>
+  <p><small id="probed"></small></p>
+  <div id="thread" aria-live="polite"></div>
+  <form id="write">
+    <label for="prompt">Message</label><textarea id="prompt" required disabled></textarea
+    ><button id="send" disabled>Send</button>
+  </form>
+  <script src="/api/log-json.js"></script>
+  <script>
+    const parse = LosslessJSON.parse,
+      stringify = LosslessJSON.stringify
+    const $ = (id) => document.getElementById(id),
+      objects = new Map()
+    let cursor = '0',
+      source = null,
+      snapshotComplete = false,
+      workstream = '',
+      view = null,
+      turn = null
+    const ownerKey = 'agora-log-lab-owner'
+    let owner = localStorage.getItem(ownerKey)
+    if (!owner) {
+      owner = crypto.randomUUID()
+      localStorage.setItem(ownerKey, owner)
+    }
+    async function post(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: stringify(body),
+      })
+      const answer = await response.json()
+      if (!response.ok) throw new Error(answer.reason || 'unavailable')
+      return answer
+    }
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const path = (id) => {
+      if (!UUID.test(id)) throw new Error('invalid Workstream id')
+      return `/api/workstreams/${encodeURIComponent(id)}`
+    }
+    async function command(kind, target, body = {}) {
+      return post(`${path(workstream)}/commands`, { id: crypto.randomUUID(), kind, target, body })
+    }
+    function guard(run) {
+      return async (event) => {
+        event?.preventDefault()
+        $('failure').textContent = ''
+        try {
+          await run()
+        } catch (error) {
+          $('failure').textContent = error.message
+        }
+      }
+    }
+    function render() {
+      view = [...objects.values()].find((o) => o.kind === 'workstream')?.object
+      turn = [...objects.values()].find(
+        (o) => o.kind === 'turn' && ['saved', 'in_progress', 'uncertain'].includes(o.object.status),
+      )?.object
+      const disabled = !snapshotComplete || !view || view.stopped || view.unavailable || !!turn
+      $('prompt').disabled = $('send').disabled = disabled
+      $('cancel').disabled = !snapshotComplete || !turn || view?.stopped
+      $('stop').disabled = !snapshotComplete || !view || view.stopped || view.ended || view.lost
+      $('create').disabled = !workstream || (!view?.ended && !!view?.execution)
+      $('credentials').disabled = !view?.execution || view.ended || view.lost
+      $('drop').disabled = $('probe').disabled = !view?.execution || view.ended
+      const live = executions.get(view?.execution)
+      $('mechanics').textContent = live
+        ? `claim ${live.claimName} · ${live.ready ? 'ready' : `starting ${live.reason}`} · ${live.launchType ?? ''} · bridge ${live.bridge} · deadline ${live.shutdownTime ?? '—'}${live.ending ? ' · ending' : ''}`
+        : ''
+      $('status').textContent = !snapshotComplete
+        ? 'Loading history…'
+        : view?.stopped
+          ? 'Execution stopped'
+          : turn?.status === 'uncertain'
+            ? 'Delivery is uncertain. Wait for the answer, cancel this turn, or stop the execution.'
+            : view?.unavailable
+              ? 'Execution unavailable'
+              : turn
+                ? `Turn ${turn.status}`
+                : `Ready · cursor ${cursor}`
+      const thread = $('thread')
+      thread.replaceChildren()
+      for (const row of [...objects.values()]
+        .filter((o) => ['element', 'notice'].includes(o.kind))
+        .sort((a, b) => (BigInt(a.object.firstPosition) < BigInt(b.object.firstPosition) ? -1 : 1))) {
+        const el = document.createElement('div')
+        el.className = `entry ${row.kind === 'notice' ? 'notice' : ''}`
+        const o = row.object
+        el.textContent =
+          o.text ??
+          (o.type === 'user' ? o.content.map((c) => c.text ?? stringify(c)).join('\n') : stringify(o, null, 2))
+        if (o.type === 'permission' && o.status === 'pending') {
+          for (const option of o.params.options) {
+            const button = document.createElement('button')
+            button.textContent = option.name
+            button.onclick = guard(() =>
+              command(
+                'RespondPermission',
+                { execution: view.execution, session: o.session, requestPosition: o.requestPosition },
+                { requestId: o.requestId, outcome: { outcome: 'selected', optionId: option.optionId } },
+              ),
+            )
+            el.append(button)
+          }
+        }
+        thread.append(el)
+      }
+    }
+    function apply(row) {
+      if (row.operation === 'reset') objects.clear()
+      else if (row.operation === 'remove') objects.delete(row.id)
+      else if (row.id) objects.set(row.id, row)
+    }
+    function persist() {
+      localStorage.setItem(`agora-log:${workstream}`, stringify({ cursor, objects: [...objects.values()] }))
+    }
+    function open(id) {
+      if (!UUID.test(id)) throw new Error('invalid Workstream id')
+      source?.close()
+      workstream = id
+      $('workstream').value = id
+      location.hash = id
+      objects.clear()
+      cursor = '0'
+      snapshotComplete = false
+      view = null
+      turn = null
+      const saved = localStorage.getItem(`agora-log:${id}`)
+      if (saved) {
+        try {
+          const state = parse(saved)
+          BigInt(state.cursor)
+          cursor = state.cursor
+          for (const o of state.objects) objects.set(o.id, o)
+        } catch {
+          objects.clear()
+          cursor = '0'
+        }
+      }
+      render()
+      source = new EventSource(`${path(id)}/thread?after=${encodeURIComponent(cursor)}`)
+      source.onmessage = (event) => {
+        const row = parse(event.data)
+        if (row.type === 'snapshot-end') {
+          cursor = row.position
+          snapshotComplete = true
+          persist()
+        } else if (row.type === 'snapshot') {
+          snapshotComplete = false
+          apply(row)
+        } else if (row.type === 'live' && BigInt(row.position) > BigInt(cursor)) {
+          apply(row)
+          cursor = row.position
+          persist()
+        }
+        render()
+      }
+      source.onerror = () => {
+        snapshotComplete = false
+        render()
+        source.close()
+        setTimeout(() => open(workstream), 1000)
+      }
+    }
+    $('open').onsubmit = guard(() => open($('workstream').value))
+    $('new').onclick = guard(async () => {
+      const id = crypto.randomUUID()
+      await post('/api/workstreams', { id, owner })
+      open(id)
+    })
+    $('create').onclick = guard(() => {
+      const profiles = $('profiles').value.split(',').map((p) => p.trim()).filter((p) => p !== '')
+      return command('Create', {}, {
+        pool: $('pool').value,
+        ...(profiles.length ? { profiles } : {}),
+        ...($('anchor').value ? { anchor: $('anchor').value } : {}),
+      })
+    })
+    $('credentials').onclick = guard(() => post(`${path(workstream)}/credentials`, { execution: view.execution, profiles: ['anthropic'] }))
+    const executions = new Map()
+    const events = new EventSource('/api/events')
+    events.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      if (data.type === 'snapshot') for (const e of data.executions) executions.set(e.execution, e)
+      if (data.type === 'execution') executions.set(data.execution.execution, data.execution)
+      render()
+    }
+    fetch('/api/anchors')
+      .then((r) => r.json())
+      .then((data) => {
+        for (const anchor of data.anchors ?? []) {
+          const option = document.createElement('option')
+          option.value = anchor.id
+          option.textContent = `${anchor.metadata.harness} · ${anchor.id.slice(0, 8)}`
+          $('anchor').append(option)
+        }
+      })
+    $('write').onsubmit = guard(async () => {
+      await command(
+        'Write',
+        { execution: view.execution, session: view.session },
+        { prompt: [{ type: 'text', text: $('prompt').value }] },
+      )
+      $('prompt').value = ''
+    })
+    $('drop').onclick = guard(() => post(`/api/test/executions/${view.execution}/drop-bridge`, { pauseSeconds: 10 }))
+    $('probe').onclick = guard(async () => {
+      const answer = await post(`/api/test/executions/${view.execution}/probe-auth`, {})
+      $('probed').textContent = answer.results.map((r) => `${r.case}: ${r.info} / ${r.acp}`).join(' · ')
+    })
+    $('restart-clean').onclick = guard(() => post('/api/test/restart', { mode: 'clean' }))
+    $('restart-kill').onclick = guard(() => post('/api/test/restart', { mode: 'kill' }))
+    $('cancel').onclick = guard(() => command('Cancel', { execution: view.execution, turn: turn.id }))
+    $('stop').onclick = guard(() => command('Stop', { execution: view.execution }))
+    fetch('/api/pools')
+      .then((r) => r.json())
+      .then((data) => {
+        for (const pool of data.pools) {
+          const option = document.createElement('option')
+          option.value = pool.name
+          option.textContent = pool.name
+          $('pool').append(option)
+        }
+      })
+    if (UUID.test(location.hash.slice(1))) open(location.hash.slice(1))
+    else render()
+  </script>
+</html>

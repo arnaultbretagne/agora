@@ -4,3 +4,4 @@
 docs
 **/test
 apps/*/scripts
+**/dist

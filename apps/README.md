@@ -1,7 +1,8 @@
 # apps
 
-What gets deployed. Each folder produces its own image.
+What gets deployed or built. Each folder with a Dockerfile produces its own image.
 
 | Folder | Image | Role |
 | --- | --- | --- |
-| `lab/` | `agora-lab` | The lab: mounts the executions and serves a page to play every case. |
+| `server/` | `agora-server` | The server: mounts the executions and the log, serves the client and the API; with `TEST_ROUTES`, the test page. |
+| `web/` | — (in `agora-server`) | The client: assistant-ui on the log's thread. |

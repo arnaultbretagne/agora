@@ -8,7 +8,7 @@ unless it is written in `docs/`.
 | Folder | Content |
 | --- | --- |
 | `docs/` | Architecture (how it works), specs (what to implement) and ADRs (why). |
-| `apps/` | What gets deployed: today, the lab. |
+| `apps/` | What gets deployed: the server, with the client. |
 | `harnesses/` | The harness images Agent Sandbox starts in its pools. |
 | `packages/` | Shared code: executions, credentials, the bridge, the mock agent, test tools. |
 | `.github/workflows/` | CI: checks and image publishing. |
@@ -49,4 +49,4 @@ npm run check      # typecheck, then each workspace's tests
 ```
 
 CI checks every push and every PR to the base, then publishes the images by digest;
-infra-k8s pins them (`apps/agora-sandboxes`, `apps/agora-lab`).
+infra-k8s pins them (`apps/agora-sandboxes`, `apps/agora`).

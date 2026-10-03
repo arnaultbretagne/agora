@@ -1,6 +1,6 @@
 # The CI: checks every workspace on each push and each PR to the base branch, then — on
-# pushes only — builds, tries and publishes the lab and the harness images by digest. infra-k8s
-# pins the digests (apps/agora-sandboxes, apps/agora-lab), never a tag.
+# pushes only — builds, tries and publishes the server and the harness images by digest. infra-k8s
+# pins the digests (apps/agora-sandboxes, apps/agora), never a tag.
 name: ci
 
 on:
@@ -39,6 +39,8 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run check
+      - name: Build the client
+        run: npm run build -w @agora/web
 
   image:
     needs: check
@@ -48,7 +50,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: agora-lab, dockerfile: apps/lab/Dockerfile, harness: false }
+          - { name: agora-server, dockerfile: apps/server/Dockerfile, harness: false }
           - { name: agora-harness-mock, dockerfile: harnesses/mock/Dockerfile, harness: true }
           - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
           - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
@@ -84,10 +86,10 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
           docker logs harness
 
-      - name: Start the lab far enough to fail on its configuration
+      - name: Start the server far enough to fail on its configuration
         if: ${{ !matrix.harness }}
         run: |
-          docker run --rm --read-only --cap-drop ALL agora-lab:test 2>&1 | tee out.txt || true
+          docker run --rm --read-only --cap-drop ALL agora-server:test 2>&1 | tee out.txt || true
           grep -q 'SANDBOX_NAMESPACE is required' out.txt
 
       - uses: docker/login-action@v3

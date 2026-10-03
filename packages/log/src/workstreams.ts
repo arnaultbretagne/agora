@@ -24,7 +24,7 @@ import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Command, type Entry } from './store.ts'
 import type { Execution, State } from './state.ts'
-import { Projections } from './projection.ts'
+import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
@@ -143,7 +143,7 @@ export class Workstreams implements Handler {
       for (const e of state.executions.values()) if (!e.ended) await this.follow(workstream, e)
     }
     await this.executions.start(this)
-    for (const workstream of new Set([...this.live, ...(await this.store.behind())])) await this.serial(workstream, () => this.project(workstream))
+    for (const workstream of new Set([...this.live, ...(await this.store.behind(core.version))])) await this.serial(workstream, () => this.project(workstream))
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
   }
 

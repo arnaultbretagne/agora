@@ -1,0 +1,15 @@
+{
+  "name": "@agora/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The server: mounts Agora's execution mechanics and log, and serves the client; with TEST_ROUTES, the test routes and page.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agora/credentials": "0.0.0",
+    "@agora/executions": "0.0.0",
+    "@agora/log": "0.0.0"
+  }
+}

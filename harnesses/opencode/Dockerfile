@@ -12,7 +12,8 @@ COPY harnesses/opencode/opencode.json /etc/agora/xdg/opencode/opencode.json
 COPY harnesses/opencode/models.json /etc/agora/opencode-models.json
 RUN printf 'node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n' > /etc/agora/xdg/opencode/.gitignore
 COPY package.json package-lock.json ./
-COPY apps/lab/package.json apps/lab/
+COPY apps/server/package.json apps/server/
+COPY apps/web/package.json apps/web/
 COPY packages/credentials/package.json packages/credentials/
 COPY packages/executions/package.json packages/executions/
 COPY packages/harness-bridge/package.json packages/harness-bridge/

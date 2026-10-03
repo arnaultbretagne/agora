@@ -3,8 +3,11 @@
 What each element of the assistant-ui registry ([assistant-ui.com/elements](https://www.assistant-ui.com/elements))
 can expect to receive from a harness that speaks ACP.
 
-**Reference: the ACP 1.5.0 standard** (schema of `@agentclientprotocol/sdk` 1.5.0, 21 September 2026),
+**Reference: the ACP standard** as pinned by the log (schema of `@agentclientprotocol/sdk` 1.5.1),
 stable part only. Not the extensions of any particular implementation.
+
+Agora's `initialize` announces neither file system nor terminal (`fs` and `terminal` set to no):
+what an agent can send only to a client that does is marked **No** here.
 
 Each agent announces which parts of the standard it supports (`initialize`, session and prompt
 capabilities, configuration options). An "ACP" element appears only if the connected agent provides
@@ -27,9 +30,9 @@ the data; the interface hides the rest.
 | tool-call, tool-group, tool-timeline | **ACP** | `tool_call` / `tool_call_update`: kind, title, status, files touched, raw input and output | — |
 | tool-error | **ACP** | `failed` status of a tool | No "Retry": ACP does not rerun a single tool. |
 | code-diff | **ACP** | `diff` tool content (path, old text, new text) | — |
-| terminal-block | **ACP** | `terminal` tool content and `terminal/*` methods | Agora holds the terminal: the output is read live. |
+| terminal-block | **No** | `terminal` tool content and `terminal/*` methods | Agora announces no terminal: a command's output arrives as the tool's text content, shown by the tool call. |
 | agent-plan, todo-list | **ACP** | `plan`: steps, priority, status | Three states only; no "failed" step. |
-| approval-card | **ACP** | `session/request_permission`, `allow_once`, `allow_always`, `reject_once`, `reject_always` options | — |
+| approval-card | **ACP** | `session/request_permission`, `allow_once`, `allow_always`, `reject_once`, `reject_always` options | assistant-ui spells the kinds with a dash: `allow-once`. |
 | elicitation-form | **ACP** | `elicitation`: form described by a schema, or URL | Capability Agora must announce. |
 | stopped-run | **ACP** | `session/cancel`, stop reason `cancelled` | "Continue" is a new prompt. |
 | guardrail-notice | **ACP** | stop reason `refusal` | No alternatives offered. |
@@ -51,7 +54,7 @@ the data; the interface hides the rest.
 | subagent-list, task-card, agent-handoff | **Partial** | tool calls, if the agent exposes its subagents through them | ACP does not know about subagents. |
 | message-actions | **Partial** | — | Copy and rate: yes. Regenerate: no (see regenerate-menu). |
 | mcp-server-panel | **Partial** | MCP servers declared by Agora when the session is created | No server state; dynamic connection unstable. |
-| thread-list, thread-search, conversation-search, shared-conversation | **Agora** | Agora log; title via `session_info_update` | ACP also has `session/list`, but the log is authoritative. |
+| thread-list, thread-search, conversation-search, shared-conversation | **Agora** | The Workstream views; their title from `session_info_update` or the first prompt | ACP also has `session/list`, but the log is authoritative. |
 | speaker-identity | **Agora** | attribution of exchanges to Sessions | — |
 | connection-state, agent-status, loading-state | **Agora** | connection and turn state | — |
 | message-timing | **Agora** | frame timestamps | Approximate token throughput. |
@@ -77,6 +80,6 @@ the data; the interface hides the rest.
 
 ## Unstable, to watch
 
-These messages exist in the 1.5.0 schema but are still marked unstable:
+These messages exist in the pinned schema but are still marked unstable:
 `plan_update` and `plan_removed` (partial plan), `notice`, `compaction_update`, providers,
 dynamic MCP connection, and above all `session/fork`, which would enable branches.

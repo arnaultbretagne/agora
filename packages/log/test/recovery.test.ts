@@ -1,6 +1,6 @@
 // docs/specs/log.md, "Dispatch and recovery", "Database ownership" and "An execution's memory": Agora
 // stopped, killed, cut from PostgreSQL, and the claim against the record. Most cases run the real lab
-// (apps/lab) as its own process, on FakeKube served over HTTP: a kill is a real kill.
+// (apps/server) as its own process, on FakeKube served over HTTP: a kill is a real kill.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
@@ -433,7 +433,7 @@ test('L39 a second server on the same database exits at start, writing nothing; 
   const e = await open(run)
   const before = (await entries(run)).length
   // Real: another lab process, same database, same cluster.
-  await assert.rejects(Server.start({ db: run.db, api: run.c.api, keys: run.c.keys }), /lab exited/)
+  await assert.rejects(Server.start({ db: run.db, api: run.c.api, keys: run.c.keys }), /lab exited: .*"operation":"recover","outcome":"refused","errorClass":"conflict"/s)
   assert.equal((await entries(run)).length, before)
   await write(run, e, 'still served')
   const line = await prompt(run)

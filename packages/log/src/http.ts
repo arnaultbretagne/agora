@@ -7,7 +7,7 @@ import type { CredentialSource } from '@agora/executions'
 import { parseBundle } from '@agora/harness-bridge/anchor'
 import type { Workstreams } from './workstreams.ts'
 import type { Command } from './store.ts'
-import { uuid, object, decode, encode, cursor } from './json.ts'
+import { uuid, object, decode, encode, cursor, identity } from './json.ts'
 import { MAX_LINE } from './acp.ts'
 
 const VALIDATION = new Set([
@@ -23,7 +23,8 @@ const VALIDATION = new Set([
 
 export interface LogHttpOptions {
   /** Opens the lab-only routes: control, credentials, entries, anchors. */
-  readonly lab: boolean
+  /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
+  readonly testRoutes: boolean
   readonly credentials?: CredentialSource
 }
 
@@ -66,7 +67,7 @@ export async function logHttp(
   }
   try {
     if (anchors) {
-      if (!options.lab || req.method !== 'GET') return reply(404, { reason: 'unknown_route' }), true
+      if (!options.testRoutes || req.method !== 'GET') return reply(404, { reason: 'unknown_route' }), true
       if (url.pathname === '/api/anchors') return reply(200, { anchors: await store.anchorList() }), true
       const content = /^\/api\/anchors\/([^/]+)\/content$/.exec(url.pathname)
       if (!content) return reply(404, { reason: 'unknown_route' }), true
@@ -78,10 +79,14 @@ export async function logHttp(
       res.end(bundle.files.map((file) => `===== ${file.path}\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n'))
       return true
     }
+    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
+      // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
+      // name-based UUID; the body's owner without one.
+      const identityHeader = req.headers['x-forwarded-email']
       const id = uuid(input.id),
-        owner = uuid(input.owner)
+        owner = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : uuid(input.owner)
       try {
         await store.create(id, owner)
       } catch (error) {
@@ -106,7 +111,7 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)
-    if (!options.lab) return reply(404, { reason: 'unknown_route' }), true
+    if (!options.testRoutes) return reply(404, { reason: 'unknown_route' }), true
     if (req.method === 'POST' && verb === 'control') {
       const input = await body(),
         params = object(input.params)

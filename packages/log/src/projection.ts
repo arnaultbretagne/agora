@@ -24,7 +24,7 @@ export interface Projector {
   version: string
   create(): Projection
 }
-export const core: Projector = { name: 'core', version: '1', create: () => new CoreProjection() }
+export const core: Projector = { name: 'core', version: '2', create: () => new CoreProjection() }
 
 /** A projector from a pure fold over all entries: simple, and quadratic; for tests and small views. */
 export function fromFold(name: string, version: string, fold: (entries: readonly Entry[]) => ProjectedObject[]): Projector {
@@ -208,6 +208,21 @@ export class Projections {
     )
     return rows.rows.map((r) => ({ ...r, object: decode(r.object) })) as ProjectedObject[]
   }
+  /** docs/specs/log.md, "HTTP": every Workstream's view, the most recently changed first. */
+  async views(): Promise<Record<string, unknown>[]> {
+    const rows = await this.store.projector.query(
+      "SELECT w.id, o.object::text AS object FROM workstreams w LEFT JOIN objects o ON o.workstream=w.id AND o.kind='workstream' AND o.projector=$1",
+      [core.name],
+    )
+    // A Workstream with no entry yet has no view: listed as new, first.
+    const views = rows.rows.map((r) =>
+      r.object === null
+        ? { id: r.id as string, title: 'New workstream', state: 'none', execution: null, session: null, pool: null, harness: null, anchor: null, changedAt: null }
+        : (decode(r.object as string) as Record<string, unknown>),
+    )
+    return views.sort((a, b) => (a.changedAt === null ? -1 : b.changedAt === null ? 1 : String(b.changedAt).localeCompare(String(a.changedAt))))
+  }
+
   async snapshot(workstream: string, after: string): Promise<{ rows: ThreadRow[]; end: string }> {
     cursor(after)
     const client = await this.store.projector.connect()

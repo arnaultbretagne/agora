@@ -11,7 +11,8 @@ RUN npm install --global --no-audit --no-fund \
     && claude --version \
     && node /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --cli --version
 COPY package.json package-lock.json ./
-COPY apps/lab/package.json apps/lab/
+COPY apps/server/package.json apps/server/
+COPY apps/web/package.json apps/web/
 COPY packages/credentials/package.json packages/credentials/
 COPY packages/executions/package.json packages/executions/
 COPY packages/harness-bridge/package.json packages/harness-bridge/
