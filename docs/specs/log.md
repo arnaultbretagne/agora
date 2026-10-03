@@ -253,8 +253,8 @@ agent's title.
 | `pool`, `harness` | The last execution's, or null. |
 | `anchor` | The anchor its `execution.ended` names, or null. |
 | `stopped`, `ended`, `lost`, `failed`, `unavailable` | The last execution's flags; `unavailable` while no Session is open and connected. |
-| `settings` | The open Session's settings as it last gave them: each with `id`, `name`, `category`, `type`, `currentValue` and `options` (`value`, `name`, `description`; groups flattened); or null. |
-| `commands` | The open Session's last `available_commands_update`: each with `name`, `description` and its input's `hint`; or empty. |
+| `settings` | The last Session's settings as it last gave them, kept once it has ended: each with `id`, `name`, `category`, `type`, `currentValue` and `options` (`value`, `name`, `description`; groups flattened); or null. |
+| `commands` | The last Session's last `available_commands_update`, kept once it has ended: each with `name`, `description` and its input's `hint`; or empty. |
 | `configuring` | A `session/set_config_option` of the open Session is unanswered. |
 | `changedAt` | The time of the entry that changed the view last. |
 

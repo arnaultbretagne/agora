@@ -28,6 +28,7 @@ import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
+import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { compileProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -231,6 +232,10 @@ export class Workstreams implements Handler {
             "SELECT count(*)::text AS count FROM commands c WHERE c.kind='Create' AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.workstream=c.workstream AND e.execution=c.execution AND e.kind='execution.ended')",
           )
           if (BigInt(active.rows[0].count) >= BigInt(this.options.maxActive)) return 'quota'
+          // docs/specs/log.md, "Commands": the opening settings, the pool's under the Create's own.
+          const own = ownSettings(command.body.settings)
+          if (own === null) return 'invalid_create'
+          const settings = resolveSettings(pool.sessionConfig, own)
           const profiles = command.body.profiles === undefined ? [] : command.body.profiles
           if (!Array.isArray(profiles) || profiles.some((p) => typeof p !== 'string')) return 'invalid_create'
           try {
@@ -257,6 +262,7 @@ export class Workstreams implements Handler {
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
               ...(profiles.length > 0 ? { profiles } : {}),
               ...(anchor ? { anchor } : {}),
+              ...(settings.length > 0 ? { settings } : {}),
               execution,
             },
           }
@@ -273,10 +279,26 @@ export class Workstreams implements Handler {
           if (!current.session || command.target.session !== current.session) return 'stale_session'
           if (this.opening(state, current)) return 'opening_session'
           if (state.permissions.size) return 'permission_pending'
+          if (!settled(state, current)) return 'settings_pending'
           return {
             execution: current.id,
             session: current.session,
             line: { method: 'session/prompt', params: { sessionId: current.acpId, prompt: command.body.prompt } },
+          }
+        }
+        if (command.kind === 'Configure') {
+          if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
+          if (this.ending(current)) return 'execution_ending'
+          if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
+          if (!current.session || command.target.session !== current.session) return 'stale_session'
+          if (this.opening(state, current)) return 'opening_session'
+          if (state.permissions.size) return 'permission_pending'
+          if (!settled(state, current)) return 'settings_pending'
+          if (typeof command.body.configId !== 'string' || !offers(current, command.body.configId, command.body.value)) return 'unknown_setting'
+          return {
+            execution: current.id,
+            session: current.session,
+            line: { method: 'session/set_config_option', params: { sessionId: current.acpId, configId: command.body.configId, value: command.body.value } },
           }
         }
         if (command.kind === 'Cancel') {
@@ -319,6 +341,22 @@ export class Workstreams implements Handler {
       }
       await this.project(workstream)
       return answer
+    })
+  }
+
+  /**
+   * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings and commands its last
+   * Session gave: what a draft offers before it has a Session of its own.
+   */
+  async catalogue(): Promise<Record<string, unknown>[]> {
+    const [pools, views] = await Promise.all([this.executions.pools(), this.projections.views()])
+    const latest = (pool: string) =>
+      views
+        .filter((v) => v.pool === pool && v.settings !== null && v.settings !== undefined)
+        .sort((a, b) => String(b.changedAt ?? '').localeCompare(String(a.changedAt ?? '')))[0]
+    return pools.map((p) => {
+      const last = latest(p.name)
+      return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [] }
     })
   }
 
@@ -570,7 +608,16 @@ export class Workstreams implements Handler {
       )
       return
     }
-    if (!e.initialized || e.session || requests.some((r) => OPENING.includes(r.method ?? ''))) return
+    // docs/specs/log.md, "Sessions": once it opens, its opening settings, one at a time.
+    if (e.session) {
+      const next = nextOpening(e)
+      if (next === null || configuring(state, e)) return
+      await this.store.transaction(workstream, (tx) =>
+        tx.outgoing(e.id, { method: 'session/set_config_option', params: { sessionId: e.acpId, configId: next.id, value: next.value } }, e.session ?? undefined),
+      )
+      return
+    }
+    if (!e.initialized || requests.some((r) => OPENING.includes(r.method ?? ''))) return
     const info = await this.executions.info(e.id)
     if (info.instance !== e.instance) {
       await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason: 'instance_changed' } })

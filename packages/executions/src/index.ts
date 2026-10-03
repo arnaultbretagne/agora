@@ -11,6 +11,8 @@ export {
   MANAGER,
   TERMINAL_CLAIM_REASONS,
   claimName,
+  sessionConfig,
+  SESSION_CONFIG_ANNOTATION,
   type Limits,
   type ManagerOptions,
   type Handler,

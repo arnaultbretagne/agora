@@ -361,10 +361,14 @@ export class Lab {
   async open(workstream: string, body: Record<string, unknown> = {}): Promise<Execution> {
     const answer = await this.command(workstream, 'Create', {}, { pool: POOL, ...body })
     if (!answer.accepted) throw new Error(`Create refused: ${answer.reason}`)
-    return until('Session open', async () => {
+    const e = await until('Session open', async () => {
       const e = (await this.state(workstream)).current
       return e?.session && e.connection ? e : null
     })
+    // The mock gives its commands right after the Session opens: waited for, so that a test's next line
+    // is the one it means.
+    await until('the agent commands', async () => (await this.state(workstream)).current?.commands.length)
+    return (await this.state(workstream)).current!
   }
 
   async write(workstream: string, text: string): Promise<Answer> {
