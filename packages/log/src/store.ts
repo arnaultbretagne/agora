@@ -280,11 +280,14 @@ export class LogStore {
     )
     return result.rows.map((r) => r.id as string)
   }
-  /** The Workstreams whose core views are behind their entries. */
-  async behind(): Promise<string[]> {
+  /** The Workstreams whose core views are behind their entries; a checkpoint of another version counts as none. */
+  async behind(version: string): Promise<string[]> {
     const last = new Map((await this.writer.query('SELECT id, last_position FROM workstreams')).rows.map((r) => [r.id as string, BigInt(r.last_position)]))
     const done = new Map(
-      (await this.projector.query("SELECT workstream, position FROM checkpoints WHERE projector='core'")).rows.map((r) => [r.workstream as string, BigInt(r.position)]),
+      (await this.projector.query("SELECT workstream, position FROM checkpoints WHERE projector='core' AND version=$1", [version])).rows.map((r) => [
+        r.workstream as string,
+        BigInt(r.position),
+      ]),
     )
     return [...last].filter(([id, position]) => position > (done.get(id) ?? 0n)).map(([id]) => id)
   }

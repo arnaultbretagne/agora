@@ -250,3 +250,21 @@ test('L45 a Workstream created through the proxy: owned by the identity it passe
   assert.equal(await create(ws, 'operator@example.org'), 200)
   assert.equal(await create(ws, 'someone@example.org'), 409)
 })
+
+test('L46 Agora started after its core projector changed version: a Workstream no longer followed is rebuilt too', async (t) => {
+  const context = await opened(t)
+  const { db, ws, e } = context
+  assert.ok((await context.lab.write(ws, 'before the upgrade')).accepted)
+  await context.lab.turn(ws, 'done')
+  await context.lab.command(ws, 'Stop', { execution: e.id })
+  await expire(context.lab.kube, e.claimName)
+  await until('ended and projected', async () => (await views(context.lab)).find((v) => v.id === ws)?.state === 'ended')
+  // As an older version of the projector left it.
+  await db.admin.query("UPDATE checkpoints SET version='0' WHERE workstream=$1 AND projector='core'", [ws])
+  await db.admin.query(`UPDATE objects SET object='{"title":"Workstream"}'::jsonb WHERE workstream=$1 AND projector='core' AND kind='workstream'`, [ws])
+  context.lab = await context.lab.restart('clean')
+  const view = await until('rebuilt', async () => (await views(context.lab)).find((v) => v.id === ws && v.state === 'ended'), 10_000)
+  assert.equal(view.title, 'before the upgrade')
+  const { rows } = await db.admin.query("SELECT version FROM checkpoints WHERE workstream=$1 AND projector='core'", [ws])
+  assert.equal(rows[0].version, core.version)
+})

@@ -417,6 +417,7 @@ exception message.
 | L43 | A Workstream through Create, a Session, a break and its reconnection, Stop, the end with an anchor | The view's `state`: `none`, `starting`, `ready`, `interrupted`, `ready`, `stopped`, `ended`; its `pool`, `harness`, `session` and `anchor`; its `title` from the first Write, then the agent's. |
 | L44 | A Session opened new, restored from an anchor, then ended | A `session.opened` notice with origin `new`, one with the anchor, then a `session.ended` notice with its reason. |
 | L45 | A Workstream created with the proxy's identity and another `owner` in the body, again, then with another identity | Owned by the identity's name-based UUID; the second accepted; the third 409. |
+| L46 | Agora started after its core projector changed version, with a Workstream whose execution has ended | That Workstream's objects rebuilt at start, its view under the new version; its checkpoint at the new version. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and
