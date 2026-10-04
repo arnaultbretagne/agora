@@ -6,4 +6,7 @@ marker that puts the CLI in OAuth mode; the gateway sets the real token on the w
 execution's grants are attached (`docs/specs/credentials.md`). Native directory saved:
 `$HOME/.claude/projects/<workspace slug>/`.
 
+git is in the image, for the agent's repositories: it reaches GitHub through the gateway, whose
+root it trusts by `GIT_SSL_CAINFO`, which the template sets.
+
 `docker build -f harnesses/claude-code/Dockerfile .` from the root.
