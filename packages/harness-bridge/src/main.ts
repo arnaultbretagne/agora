@@ -1,5 +1,7 @@
 // The image entrypoint (docs/specs/executions.md). Everything it reads is fixed by the image or the
 // template — never by a claim, which would force a cold start.
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { pushBundle } from './anchor.ts'
 import { publicKeyFrom } from './token.ts'
 import { startBridge } from './server.ts'
@@ -24,6 +26,8 @@ const bridge = await startBridge({
   // What differs between harnesses is declared by the image, not coded here (ADR Harnesses).
   nativeDir: required('BRIDGE_NATIVE_DIR'),
   restartOnAnchor: process.env.BRIDGE_RESTART_ON_ANCHOR === 'true',
+  // Fixed: the agent's instructions name this path.
+  accessFile: join(homedir(), '.agora', 'access.json'),
   log,
 })
 

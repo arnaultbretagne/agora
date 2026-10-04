@@ -10,6 +10,7 @@ import { startBridge, MAX_LINE_BYTES } from '../src/server.ts'
 import { after, describe, it } from 'node:test'
 import { mintBridgeToken } from '../src/token.ts'
 import { checksumOf, pushBundle, type Bundle } from '../src/anchor.ts'
+import { INSTRUCTIONS } from '../src/instructions.ts'
 import { Collector, keys, mockBridge, type LabBridge } from '@agora/testkit'
 
 const { privateKey, publicKey } = keys()
@@ -29,6 +30,12 @@ async function started(target: LabBridge): Promise<number> {
   const marker = join(target.home, 'started')
   for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise((resolve) => setTimeout(resolve, 25))
   return Number(readFileSync(marker, 'utf8'))
+}
+
+/** A file the adapter writes once it has done what its mode says. */
+async function written(path: string): Promise<Buffer> {
+  for (let i = 0; i < 400 && !existsSync(path); i++) await new Promise((resolve) => setTimeout(resolve, 25))
+  return readFileSync(path)
 }
 
 /** An anchor of plain files, as a bridge pushes it. */
@@ -73,11 +80,11 @@ async function say(client: Collector, id: number, sessionId: string, text: strin
   return client.response(id)
 }
 
-async function stdio(mode: string, restartOnAnchor = false): Promise<LabBridge> {
+async function stdio(mode: string, restartOnAnchor = false, prefix: string[] = []): Promise<LabBridge> {
   const home = mkdtempSync(join(tmpdir(), 'stdio-bridge-'))
   const bridge = await startBridge({
     port: 0, host: '127.0.0.1',
-    adapterCommand: [process.execPath, fileURLToPath(new URL('./stdio-adapter.ts', import.meta.url)), mode, home],
+    adapterCommand: [...prefix, process.execPath, fileURLToPath(new URL('./stdio-adapter.ts', import.meta.url)), mode, home],
     workspace: home, podName: 'sbx-test', publicKey, harness: 'mock', nativeDir: join(home, 'native'), restartOnAnchor, adapterStopMs: 1000, log: () => {},
   })
   const target = { bridge, home, workspace: home, url: `127.0.0.1:${String(bridge.port())}` }
@@ -97,6 +104,33 @@ describe('bridge', () => {
     assert.deepEqual(client.raw, [], 'nothing is sent before Agora writes ACP')
     await initialize(client) // the mock rejects any second initialize, including one sent by the bridge
     assert.deepEqual(client.binary, [false])
+  })
+
+  it('E32 writes the agent’s instructions into the workspace as AGENTS.md, before the adapter starts', async () => {
+    const target = await stdio('instructions')
+    const expected = readFileSync(INSTRUCTIONS)
+    assert.ok(expected.length > 0)
+    assert.deepEqual(readFileSync(join(target.workspace, 'AGENTS.md')), expected)
+    assert.deepEqual(await written(join(target.home, 'seen')), expected, 'the adapter found them in its working directory as it started')
+  })
+
+  it('C24 Node’s own fetch, from the adapter’s environment, goes through the outbound proxy', async () => {
+    const target = await stdio('fetch')
+    const [flag, outcome] = (await written(join(target.home, 'fetched'))).toString('utf8').split('\n')
+    assert.equal(flag, '1')
+    assert.match(outcome ?? '', /^failed: /)
+    // The outbound proxy, with no credential yet, refused it: the request reached the proxy, not the Internet.
+    const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { outbound: { refused: number } }
+    assert.equal(info.outbound.refused, 1)
+  })
+
+  it('C24 control: without NODE_USE_ENV_PROXY, the same fetch never reaches the outbound proxy', async () => {
+    const target = await stdio('fetch', false, ['env', '-u', 'NODE_USE_ENV_PROXY'])
+    const [flag, outcome] = (await written(join(target.home, 'fetched'))).toString('utf8').split('\n')
+    assert.equal(flag, 'undefined')
+    assert.match(outcome ?? '', /^failed: /)
+    const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { outbound: { refused: number } }
+    assert.equal(info.outbound.refused, 0)
   })
 
   it('refuses a missing, expired, foreign or forged token', async () => {

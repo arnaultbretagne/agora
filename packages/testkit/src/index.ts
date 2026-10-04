@@ -45,6 +45,7 @@ export async function mockBridge(
     harness: 'mock',
     nativeDir: sessionsDir(home, workspace),
     restartOnAnchor: options.restartOnAnchor ?? false,
+    accessFile: join(home, '.agora', 'access.json'),
     adapterStopMs: 1000,
     log: () => {},
   })

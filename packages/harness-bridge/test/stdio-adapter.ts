@@ -1,6 +1,7 @@
 // Controlled stdio peer for raw framing, output pressure and blocked stdin tests.
 import { once } from 'node:events'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 const mode = process.argv[2]
@@ -31,6 +32,20 @@ if (mode === 'split') {
     const { id } = JSON.parse(line) as { id: unknown }
     await write(`${JSON.stringify({ jsonrpc: '2.0', id, result: { state, pid: process.pid } })}\n`)
   }
+} else if (mode === 'instructions') {
+  // What a harness finds in its working directory as it starts, where it loads project instructions.
+  const path = join(process.cwd(), 'AGENTS.md')
+  writeFileSync(`${directory}/seen`, existsSync(path) ? readFileSync(path) : 'missing')
+} else if (mode === 'fetch') {
+  // A script of the agent's: Node's own fetch, with nothing but the environment it inherits.
+  let outcome: string
+  try {
+    outcome = `status ${String((await fetch('https://api.example.test/')).status)}`
+  } catch (error) {
+    const cause = (error as { cause?: { message?: string } }).cause
+    outcome = `failed: ${cause?.message ?? (error as Error).message}`
+  }
+  writeFileSync(`${directory}/fetched`, `${String(process.env.NODE_USE_ENV_PROXY)}\n${outcome}`)
 } else if (mode === 'stdin') {
   const timer = setInterval(() => {
     if (existsSync(`${directory}/read`)) {

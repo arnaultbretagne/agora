@@ -1,6 +1,9 @@
 // The way out (docs/specs/credentials.md): the adapter goes through the bridge's outbound proxy, which
 // holds no credential until Agora hands it one, then forwards each CONNECT with it.
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createServer, connect, type Server, type Socket } from 'node:net'
 import { after, describe, it } from 'node:test'
 import { mintBridgeToken } from '../src/token.ts'
@@ -68,6 +71,13 @@ async function putCredentials(target: LabBridge, body: unknown, headers = auth()
   return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
+/** A JWT as Agora signs it, with a stand-in signature: the bridge never verifies it. */
+function jwt(claims: Record<string, unknown>): { token: string; signature: string; claims: Record<string, unknown> } {
+  const part = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const signature = randomBytes(64).toString('base64url')
+  return { token: `${part({ alg: 'EdDSA', kid: 'agora-grants-1' })}.${part(claims)}.${signature}`, signature, claims }
+}
+
 /** A CONNECT through the outbound proxy; resolves with the socket once the tunnel is open. */
 function tunnel(url: string, target: string): Promise<Socket> {
   const { port } = new URL(url)
@@ -119,6 +129,23 @@ describe('outbound proxy', () => {
     const info = await (await fetch(`http://${target.url}/info`, { headers: auth() })).text()
     assert.ok(info.includes('vault:14322') && info.includes('2030-01-01T00:00:00Z'))
     assert.ok(!info.includes('secret'), 'the token never leaves the bridge')
+  })
+
+  it('C23 writes the claims of each token for the agent before answering, never the token', async () => {
+    const target = await lab()
+    const file = join(target.home, '.agora', 'access.json')
+    assert.ok(!existsSync(file))
+    const first = jwt({ sub: 'agora e1', profiles: ['anthropic', 'github:a/b:read'], grants: [{ host: 'api.anthropic.com' }, { host: 'api.github.com', path: '^/repos/a/b(/[^?]*)?(\\?.*)?$', methods: ['GET', 'HEAD'] }] })
+    assert.equal((await putCredentials(target, { proxy: 'gateway:3000', token: first.token })).status, 200)
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), first.claims)
+    const second = jwt({ sub: 'agora e1', profiles: ['anthropic'], grants: [{ host: 'api.anthropic.com' }] })
+    assert.equal((await putCredentials(target, { proxy: 'gateway:3000', token: second.token })).status, 200)
+    const text = readFileSync(file, 'utf8')
+    assert.deepEqual(JSON.parse(text), second.claims, 'replaced as a whole')
+    for (const secret of [first.token, first.signature, second.token, second.signature]) assert.ok(!text.includes(secret), 'never the token')
+    // A token whose claims cannot be read leaves no stale access behind.
+    assert.equal((await putCredentials(target, { proxy: 'gateway:3000', token: 'opaque' })).status, 200)
+    assert.ok(!existsSync(file))
   })
 
   it('forwards the adapter’s CONNECT with the token, and hands back the proxy’s answer', async () => {
