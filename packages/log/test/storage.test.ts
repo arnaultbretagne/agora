@@ -125,9 +125,12 @@ test('L27 migrations run at once in two databases of one cluster: both succeed, 
     (await memberships()).filter((m) => created.has(m.member)).map((m) => `${m.role} ${m.member}`).sort(),
     logins.map((l) => `agora_${l.role} ${l.user}`).sort(),
   )
-  // Other databases are untouched; the new ones are open only to their owner and the log's roles.
+  // Other databases are untouched; the new ones are open only to their owner and the log's roles. Test
+  // files running alongside create and drop their own meanwhile: those there before and after are compared.
   const aclsAfter = await acls()
-  assert.deepEqual(aclsAfter.filter((a) => a.datname !== first.name && a.datname !== second.name), aclsBefore.filter((a) => a.datname !== first.name && a.datname !== second.name))
+  const kept = (rows: typeof aclsAfter, other: typeof aclsAfter) =>
+    rows.filter((a) => a.datname !== first.name && a.datname !== second.name && other.some((o) => o.datname === a.datname))
+  assert.deepEqual(kept(aclsAfter, aclsBefore), kept(aclsBefore, aclsAfter))
   for (const db of [first, second]) {
     const acl = String(aclsAfter.find((a) => a.datname === db.name)?.datacl)
     const grantees = acl.replace(/[{}"]/g, '').split(',').map((item) => item.split('=')[0])

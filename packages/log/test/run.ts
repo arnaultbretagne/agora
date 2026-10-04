@@ -4,6 +4,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import { Pool } from 'pg'
 import { scramVerifier } from '../scripts/scram.ts'
 
@@ -47,7 +48,9 @@ try {
   const only = process.argv.slice(2).filter((a) => !a.startsWith('--'))
   const files = only.length ? only : (await readdir(new URL('.', import.meta.url))).filter((f) => f.endsWith('.test.ts')).map((f) => `test/${f}`)
   const status = await new Promise<number>((resolve) => {
-    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', '--test-timeout=90000', ...options, ...files], { cwd: new URL('..', import.meta.url), env, stdio: 'inherit' })
+    // Files run side by side, each test on a database of its own; LOG_TEST_CONCURRENCY=1 runs them one by one.
+    const concurrency = process.env.LOG_TEST_CONCURRENCY ?? String(Math.min(4, availableParallelism()))
+    const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, '--test-timeout=90000', ...options, ...files], { cwd: new URL('..', import.meta.url), env, stdio: 'inherit' })
     child.on('exit', (code) => resolve(code ?? 1))
   })
   process.exitCode = status
