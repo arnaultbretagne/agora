@@ -1,6 +1,9 @@
 # The CI: checks every workspace on each push and each PR to the base branch, then — on
 # pushes only — builds, tries and publishes the server and the harness images by digest. infra-k8s
 # pins the digests (apps/agora-sandboxes, apps/agora), never a tag.
+#
+# Nothing is done twice (README.md, "Check and build"): after a merge, a tree already checked at the
+# pull request's head is not checked again; an image whose inputs already have one is not built again.
 name: ci
 
 on:
@@ -16,6 +19,9 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  # To find the pull request a merge comes from, and whether its head passed.
+  actions: read
+  pull-requests: read
 
 jobs:
   check:
@@ -32,11 +38,32 @@ jobs:
       LOG_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # A merge whose tree is exactly its pull request's head, which a push run of this workflow passed:
+      # the same files were checked there.
+      - name: Already checked at the pull request's head?
+        id: checked
+        if: github.event_name == 'push' && github.ref == 'refs/heads/design/agora-foundations'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          for head in $(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" -q '.[].head.sha'); do
+            [ "$(gh api "repos/$REPO/git/commits/$head" -q .tree.sha)" = "$tree" ] || continue
+            passed=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head&event=push&status=success" -q .total_count)
+            if [ "${passed:-0}" -gt 0 ]; then
+              echo "::notice::Same tree as $head, checked by a run that passed: not checked again."
+              echo "done=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+      - if: steps.checked.outputs.done != 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 24
       # The client's browser tests (apps/web/test/browser) drive Playwright's headless Chromium.
       - name: Typecheck and test every workspace, the client in a browser
+        if: steps.checked.outputs.done != 'true'
         run: |
           npm ci --no-audit --no-fund
           npx -w @agora/web playwright install --with-deps --only-shell chromium
@@ -59,9 +86,32 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Each image is tagged with its inputs' fingerprint (scripts/inputs.ts): if that tag exists, the
+      # image is the same, and its digest is taken as is.
+      - name: Its image, if its inputs already have one
+        id: existing
+        run: |
+          inputs=$(node scripts/inputs.ts ${{ matrix.name }})
+          echo "inputs=$inputs" >> "$GITHUB_OUTPUT"
+          if manifest=$(docker buildx imagetools inspect "$IMAGE:inputs-$inputs" --format '{{json .Manifest}}' 2>/dev/null); then
+            echo "digest=$(jq -r .digest <<<"$manifest")" >> "$GITHUB_OUTPUT"
+            echo "::notice::$IMAGE:inputs-$inputs already exists: not built again."
+          fi
+
+      - if: steps.existing.outputs.digest == ''
+        uses: docker/setup-buildx-action@v3
 
       - name: Build the image locally
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -74,7 +124,7 @@ jobs:
       # A harness image starts as in the cluster: non-root, read-only root, HOME on tmpfs, and is ready
       # while the adapter process runs; Agora initializes it over the authenticated relay.
       - name: Start the harness image read-only and probe it
-        if: matrix.harness
+        if: steps.existing.outputs.digest == '' && matrix.harness
         run: |
           openssl genpkey -algorithm ed25519 -out key.pem
           openssl pkey -in key.pem -pubout -out pub.pem
@@ -87,44 +137,44 @@ jobs:
           docker logs harness
 
       - name: Start the server far enough to fail on its configuration
-        if: ${{ !matrix.harness }}
+        if: steps.existing.outputs.digest == '' && !matrix.harness
         run: |
           docker run --rm --read-only --cap-drop ALL agora-server:test 2>&1 | tee out.txt || true
           grep -q 'SANDBOX_NAMESPACE is required' out.txt
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - id: push
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:inputs-${{ steps.existing.outputs.inputs }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
 
-      - uses: actions/attest-build-provenance@v2
+      - if: steps.existing.outputs.digest == ''
+        uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
       - name: Record the digest
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.push.outputs.digest }}
         run: |
           {
             echo '### ${{ matrix.name }}'
             echo ''
             echo '```'
-            echo "${{ env.IMAGE }}@${{ steps.push.outputs.digest }}"
+            echo "$IMAGE@$DIGEST"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p digests && echo "${{ steps.push.outputs.digest }}" > "digests/${{ matrix.name }}"
+          mkdir -p digests && echo "$DIGEST" > "digests/${{ matrix.name }}"
 
       # For the infra proposal below: one file per image, named after it.
       - uses: actions/upload-artifact@v4

@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R9 | 2026-10-03 | `d82682f` | cluster, live | g4 under Kata. The server `agora-server@sha256:2d0064e7…` built from that commit, the pools annotated by infra-k8s #193 (claude-code `mode=bypassPermissions,model=opus,effort=high`, codex `mode=agent-full-access,model=gpt-6.1-sol,reasoning_effort=high`, opencode `mode=build,model=zai-coding-plan/glm-5.3,effort=high`). Driven over the API: a Create in each pool, a task writing a file and running a command, a Configure to another model, a question. Billed on the three subscriptions. |
 | R10 | 2026-10-03 | `0c75f9b` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a real signer offering `github:owner/a:write` and `github:owner/b:read`; the core projector at version 4. |
 | R11 | 2026-10-04 | `af896c7` | cluster | g4. The server `agora-server@sha256:0f3edc12…` built from that commit, started on the `agora` database whose views were of core projector 3; the views read over the API through a port-forward. |
+| R12 | 2026-10-04 | `c89faf2` | local | `npm run check`'s log tests with the files four at a time (`--test-concurrency=4`), each test on a database of its own: Node 24.20.0, PostgreSQL 17.11; three runs, 87–88 s each, all green. |
 
 ## Cases
 
@@ -58,6 +59,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L25 | — | local | R1 | proven | Every assertion held. |
 | L26 | simulated: forced-state, the Workstream's and the thread's last positions set beyond 2⁵³ | local | R1 | proven | Every assertion held. |
 | L27 | real: two migration processes at once, the same new logins | local | R1 | proven | Every assertion held. |
+| L27 | real: two migration processes at once, the same new logins, other test files creating and dropping their databases meanwhile | local | R12 | proven | Every assertion held in each of the three runs; the databases compared are those there both before and after. |
 | L28 | — | unit | R1 | proven | Every assertion held. |
 | L28 | real: PostgreSQL terminates a capture's connection during a turn | local | R1 | proven | 5 log lines checked; no fragment of the 6 secrets nor of the anchor's files. |
 | L29 | real: the lab process killed by SIGKILL at its fault point `after_anchor`; simulated: fake-kube, the deadline brought to now | local | R1 | proven | Every assertion held. |
