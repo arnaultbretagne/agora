@@ -178,6 +178,7 @@ That is why the workspace is the same path in every image.
 | `HOME` | `emptyDir` mounted on `/home/harness` |
 | User | 10001, read-only root, no capabilities |
 | Egress | Through the gateway only, and its TLS trust (`credentials.md`) |
+| git identity | `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` `Agora`, `GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_EMAIL` `agent@agora.bretagne.dev`: an address of no GitHub account, so a commit shows that name, not the operator's. The same for every execution, until agents have names of their own. Pushing is the gateway's PAT. |
 
 One template and one pool per image, named after its digest. Changing the image means a
 new template and a new pool, never an in-place modification.
