@@ -12,6 +12,8 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R4 | 2026-10-03 | `a3a78a4` | cluster | The client from that commit, served by Vite on localhost, its `/api` proxied through `kubectl port-forward` to the deployed server (`05fbbb8`, namespace `agora`), in Chromium's headless shell: the harness picked in the composer (Mock agent), `/permission` sent from the draft, the card answered, Stop. |
 | R5 | 2026-10-03 | `180814b` | local | `npm run check`, with `npm run test:browser`: the client built by Vite, served by the real server (`apps/server`, TEST_ROUTES) on PostgreSQL 17.11 with FakeKube, real bridges and the mock agent, its Pods pushing anchors to the server; driven in Playwright 1.63.0's headless Chromium (153), one browser context per case. |
 | R6 | 2026-10-03 | `d82682f` | local | `npm run check`, with `npm run test:browser`, as R3 and R5; the browser cases against the mock agent with settings and commands, its pool starting in `full-access`. |
+| R7 | 2026-10-03 | `0c75f9b` | local | `npm run check`, with `npm run test:browser`, as R6; the server with a signer of its own and `OFFERED_PROFILES` `github:owner/a:write,github:owner/b:read`, the gateway never reached. |
+| R8 | 2026-10-04 | `af896c7` | cluster | The client built into `agora-server@sha256:0f3edc12…`, in the namespace `agora`, offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write`; read in Chromium's headless shell through `kubectl port-forward`, the access picker opened in the draft, a screenshot taken. |
 
 ## Cases
 
@@ -62,6 +64,13 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U27 | — | local | R6 | proven | The draft's picker: mock-small, mock-large, mock-broken, low, high (no default); the Create's settings `mode` (the pool's), `model`, `effort`; "mock-large · high" once ready. |
 | U28 | — | local | R6 | proven | One Configure `model=mock-small`; the picker shows it; the next message answered. |
 | U29 | — | local | R6 | proven | `/recall`, `/review` at `/`; `/re`, ArrowDown, Enter: `/review `, the list gone; sent: "Echo #2: /review the code." |
+| U30 | — | local | R7 | proven | Every assertion held: the pool kept for the tests not offered; the ended Workstream of that pool continues in another; never one kept for the tests. |
+| U31 | — | local | R7 | proven | `o/a` None, Read, Write; `o/b` None, Read; z.ai Off, On; the button "No access", "a · Read", "2 repos", "2 grants"; nothing offered: no entry. |
+| U31 | — | cluster | R8 | partial: seen on a screenshot, not asserted | "No access" in the draft; `arnaultbretagne/agora` and `arnaultbretagne/infra-k8s`, each None, Read, Write. |
+| U32 | — | local | R7 | proven | `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`; a profile beyond those offered kept, at the end. |
+| U33 | — | local | R7 | proven | From an ended Workstream: `pool`, `anchor` and `profiles` `github:o/a:read`; None picked instead: no `profiles`, the settings kept; a draft: the pool alone. |
+| U34 | — | local | R7 | proven | `GET /api/config` offering both; "No access"; `owner/a` None, Read, Write and `owner/b` None, Read; Write picked: "a · Write"; the Create's `profiles` `github:owner/a:write`; still "a · Write" once ready. |
+| U35 | — | local | R7 | proven | `owner/b` Read, then `owner/a` Read with the menu still open: "2 repos"; two Scopes, `github:owner/b:read`, then `github:owner/a:read` and `github:owner/b:read`; the next message answered; still "2 repos". |
 
 ## Not covered
 
