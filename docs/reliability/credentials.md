@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R7 | 2026-10-03 | `05fbbb8` | cluster, live | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:31c1d086…` built from that commit, in the namespace `agora` behind agora.bretagne.dev, on the `agora` database (CloudNativePG, PostgreSQL 17.4); the pools mock `1a1cc63c…`, claude-code `5f3bb480…`, opencode `5b7b6182…` and codex `0eae81a3…`, their warm Pods recreated for the server's anchor address. `apps/server/scripts/live-cases.ts` from that commit, all 34 cases in one run; C10 and C12–C16 refused `quota` there — the run's stopped executions count until their deadline — and were played again once no claim was left. C3 and C13 billed, on Anthropic. |
 | R8 | 2026-10-03 | `0c75f9b` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent, FakeKube, a real signer with a key of its own offering `github:owner/a:write` and `github:owner/b:read`; PostgreSQL 17.11 for the log's tests. The gateway is not run. |
 | R9 | 2026-10-04 | `a2d4230` | cluster | g4 under Kata. The server `agora-server@sha256:0f3edc12…` built from `af896c7` (its inputs unchanged since), offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write` (infra-k8s #200, #201); the claude-code pool `agora-harness-claude-code@sha256:6d3f437e…` built from that commit, with git 2.39.5, `GIT_SSL_CAINFO` and the git identity from the template (infra-k8s #204, #207); the gateway with the operator's fine-grained PAT on those two repositories (infra-k8s #202). An execution created over the API with `github:arnaultbretagne/agora:read`, git run in its sandbox by `kubectl exec` through its bridge, and a Scope sent over the API; no model call. |
+| R10 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent and the stdio test adapter; tokens shaped like Agora's JWTs, with stand-in signatures, which the bridge never verifies. The gateway is not run. |
 
 ## Cases
 
@@ -67,6 +68,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C20 | — | local | R8 | partial: `GET /api/config` is asserted by U34 (`client.md`, R7) | `github:owner/a:read`, then `github:owner/a:write` with `github:owner/b:read`, accepted; `github:owner/b:write` refused `profile_not_offered`, nothing written. |
 | C21 | real: Agora stopped cleanly and started again | local | R8 | proven | A second token naming `anthropic` and `github:owner/b:read`, handed before the prompt after the restart was dispatched. |
 | C22 | — | cluster | R9 | proven | With `github:arnaultbretagne/agora:read`: `git ls-remote` listed `design/agora-foundations` and `main`, no TLS error; `infra-k8s`, not granted: 403. In a warm Pod whose token names `anthropic` only: 403 from the gateway ("authorization failed"). The control, without `GIT_SSL_CAINFO`: "Problem with the SSL CA cert". A commit there: author and committer `Agora <agent@agora.bretagne.dev>`. |
+| C23 | — | local | R10 | proven | Every assertion held. |
+| C24 | — | local | R10 | proven | Every assertion held, the control's too. |
 
 The partial verdicts are tracked in #107.
 
