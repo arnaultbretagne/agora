@@ -12,13 +12,16 @@ import { useThread, useWorkstreams } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
 import {
+  accessGranted,
   composerOf,
-  createBody,
   firstMessageStep,
   messagesOf,
   poolOffered,
   poolSettings,
+  startBody,
+  withAccess,
   workstreamOf,
+  type AccessEntry,
   type AgentCommand,
   type Composer,
   type Setting,
@@ -53,6 +56,12 @@ export interface Agora {
   readonly commands: readonly AgentCommand[]
   /** Picks a setting: kept for the next Create, or sent at once (Configure) to the open Session. */
   chooseSetting(id: string, value: string): void
+  /** The profiles the access picker offers (docs/specs/assistant-ui.md, "Access"). */
+  readonly offered: readonly string[]
+  /** The access shown: picked for the next Create, sent and not yet in the view, or the execution's own. */
+  readonly access: readonly string[]
+  /** Gives an entry a choice: kept for the next Create, or sent at once (Scope) with the whole set. */
+  chooseAccess(entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): void
   /** The reason of the last command refused, until the next one. */
   readonly refusal: string | null
   /** A message given back to the composer after its execution failed to start. */
@@ -82,6 +91,8 @@ const REFUSALS: Record<string, string> = {
   stopped: 'The execution is stopped.',
   unreachable: 'The server cannot be reached.',
   unknown_pool: 'This harness is no longer available.',
+  profile_not_offered: 'This access is no longer offered.',
+  unknown_profile: 'This access is not known.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
@@ -107,6 +118,10 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // Settings picked before a Create, for the Workstream and pool they were picked in.
   const [chosenFor, setChosenFor] = useState<{ for: string | null; pool: string | null; values: Record<string, string> }>({ for: null, pool: null, values: {} })
   const [returned, setReturned] = useState<string | null>(null)
+  // The access picked: for the next Create of this Workstream or draft (no execution), or sent to its
+  // execution and shown until the view has it.
+  const [pickedAccess, setPickedAccess] = useState<{ for: string | null; execution: string | null; profiles: readonly string[] } | null>(null)
+  const [offered, setOffered] = useState<string[]>([])
   const view = useMemo(() => workstreamOf(state, id ?? ''), [state, id])
   // A draft has no thread to wait for: sending is offered at once, and starts everything.
   const composer = useMemo<Composer>(
@@ -114,6 +129,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [state, view, id],
   )
 
+  useEffect(() => {
+    void api.offered().then(setOffered, () => setOffered([]))
+  }, [api])
   // The catalogue, read again on each move: what a draft offers follows the Sessions just opened.
   useEffect(() => {
     void api.pools().then(setPools, () => setPools((p) => p ?? []))
@@ -145,6 +163,17 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     () => (composer.create ? (pools?.find((p) => p.name === pool)?.commands ?? []) : (view.commands ?? [])),
     [composer.create, pools, pool, view.commands],
   )
+  const accessKey = composer.create ? null : view.execution
+  const access = useMemo(
+    () => accessGranted(pickedAccess !== null && pickedAccess.for === id && pickedAccess.execution === accessKey ? pickedAccess.profiles : null, view),
+    [pickedAccess, id, accessKey, view],
+  )
+  // A Scope shown until the view has it: then the view's own again.
+  useEffect(() => {
+    if (pickedAccess === null || pickedAccess.execution === null || pickedAccess.execution !== view.execution) return
+    const own = view.profiles ?? []
+    if (own.length === pickedAccess.profiles.length && own.every((p) => pickedAccess.profiles.includes(p))) setPickedAccess(null)
+  }, [pickedAccess, view.execution, view.profiles])
 
   const send = useCallback(
     async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id): Promise<Answer> => {
@@ -181,8 +210,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         const created = await api.create(workstream)
         if (!created.accepted) return setRefusal(refusalText(created.reason ?? 'unavailable'))
       }
-      const base = id === null ? { pool } : createBody(view, pool)
-      const created = await send('Create', {}, Object.keys(chosen).length > 0 ? { ...base, settings: chosen } : base, workstream)
+      const created = await send('Create', {}, startBody(view, pool, id === null, chosen, access), workstream)
       if (!created.accepted || created.execution === undefined) {
         setReturned(text)
         if (id === null) onOpen(workstream)
@@ -191,7 +219,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       setPending({ workstream, execution: created.execution, text, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, view, send, onOpen, harnessOf, chosen],
+    [api, id, pool, view, send, onOpen, harnessOf, chosen, access],
   )
 
   const chooseSetting = useCallback(
@@ -203,6 +231,19 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       void send('Configure', { execution: view.execution, session: view.session }, { configId, value })
     },
     [composer.create, id, pool, send, view.execution, view.session],
+  )
+
+  const chooseAccess = useCallback(
+    (entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null) => {
+      const profiles = withAccess(access, entries, entry, profile)
+      setPickedAccess({ for: id, execution: accessKey, profiles })
+      if (accessKey === null) return
+      void send('Scope', { execution: accessKey }, { profiles }).then((answer) => {
+        // Refused: back to what the execution has.
+        if (!answer.accepted) setPickedAccess((p) => (p?.profiles === profiles ? null : p))
+      })
+    },
+    [access, id, accessKey, send],
   )
 
   // The waiting message is written once its execution's Session is open, and given back if it failed.
@@ -274,6 +315,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     chosen,
     commands,
     chooseSetting,
+    offered,
+    access,
+    chooseAccess,
     refusal,
     returned,
     choosePool,

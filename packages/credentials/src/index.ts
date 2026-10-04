@@ -9,6 +9,8 @@ export {
   baseProfiles,
   compileProfile,
   compileProfiles,
+  offeredProfiles,
+  offers,
   type Grant,
   type GrantSignerOptions,
 } from './grants.ts'

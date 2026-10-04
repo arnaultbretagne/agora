@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
 import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
-import { GrantSigner } from '@agora/credentials'
+import { GrantSigner, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 
 function number(name: string, fallback: number): number {
@@ -41,6 +41,8 @@ const credentials =
         keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
         issuer: process.env.GRANTS_ISSUER ?? 'agora',
         audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
+        // What the interface offers beyond the pools' base profiles; an unknown profile stops the server here.
+        offered: offeredProfiles(process.env.OFFERED_PROFILES),
       })
 const store = new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') })
 const executions = new ExecutionManager({

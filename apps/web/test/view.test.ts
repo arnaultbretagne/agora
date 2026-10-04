@@ -8,6 +8,10 @@ import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
 import {
+  accessEntries,
+  accessGranted,
+  accessLabel,
+  accessOf,
   commandsMatching,
   composerOf,
   continueBody,
@@ -21,6 +25,8 @@ import {
   planItems,
   poolSettings,
   sections,
+  startBody,
+  withAccess,
   workstreamOf,
   type WorkstreamView,
 } from '../src/agora/view.ts'
@@ -327,4 +333,39 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(pools, null, 'codex-1', 'claude-1'), 'codex-1', 'its own, so it continues')
   assert.equal(poolOffered(pools, 'mock-1', null, null), 'claude-1', 'never one kept for the tests')
   assert.equal(poolOffered([{ name: 'mock-1', testing: true }], null, null, null), null)
+})
+
+test('U31 the access picker: each offered repository with None, Read and, when offered, Write; a service Off and On; the button', () => {
+  const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai'])
+  assert.deepEqual(
+    entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
+    [
+      ['o/a', ['None', 'Read', 'Write']],
+      ['o/b', ['None', 'Read']],
+      ['z.ai', ['Off', 'On']],
+    ],
+  )
+  assert.equal(accessLabel([], entries), 'No access')
+  assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
+  assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
+  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), '2 repos')
+  assert.equal(accessLabel(['github:o/a:write', 'zai'], entries), '2 grants')
+  assert.deepEqual(accessEntries([]), [])
+})
+
+test('U32 an access choice gives the whole set: the entries in the order offered, then what was granted beyond them', () => {
+  const entries = accessEntries(['github:o/a:write', 'github:o/b:read'])
+  const [a] = entries
+  const granted = withAccess(['github:o/b:read'], entries, a!, 'github:o/a:write')
+  assert.deepEqual(granted, ['github:o/a:write', 'github:o/b:read'])
+  assert.deepEqual(withAccess(granted, entries, a!, null), ['github:o/b:read'])
+  assert.deepEqual(withAccess(['github:x/y:read'], entries, a!, 'github:o/a:read'), ['github:o/a:read', 'github:x/y:read'])
+})
+
+test('U33 an ended Workstream whose execution had profiles: its Create carries them; another access picked, that one', () => {
+  const view = { ...workstreamOf(at(fixture.marks.ended!), ws), profiles: ['github:o/a:read'] }
+  assert.deepEqual(startBody(view, 'mock-test', false, {}, accessGranted(null, view)), { pool: 'mock-test', anchor: view.anchor, profiles: ['github:o/a:read'] })
+  assert.deepEqual(startBody(view, 'mock-test', false, { model: 'mock-large' }, accessGranted([], view)), { pool: 'mock-test', anchor: view.anchor, settings: { model: 'mock-large' } })
+  const draft = workstreamOf(empty, '')
+  assert.deepEqual(startBody(draft, 'mock-test', true, {}, accessGranted(null, draft)), { pool: 'mock-test' })
 })

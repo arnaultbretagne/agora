@@ -1,14 +1,14 @@
 // The composer (docs/specs/assistant-ui.md, "Sending"), in assistant-ui's base skin: one bordered
-// field, the harness picker inside it where their model picker sits, Send on the right, or Cancel
-// while the agent works. Above it, what the user must know before sending: a refusal, an uncertain
-// turn, why sending waits.
+// field, the harness, model and access pickers inside it where their model picker sits, Send on the
+// right, or Cancel while the agent works. Above it, what the user must know before sending: a
+// refusal, an uncertain turn, why sending waits.
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, LoaderCircleIcon, SquareIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
-import { useEffect, useState, type FC, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { commandsMatching, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
+import { accessEntries, accessLabel, accessOf, commandsMatching, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
 
 const menuContentClass =
   'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
@@ -40,9 +40,8 @@ const HarnessPicker: FC = () => {
               <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', p.name === pool ? 'opacity-100' : 'opacity-0')} />
               <span className="flex flex-col">
                 <span>{harnessName(p.harness)}</span>
-                <span className="text-muted-foreground text-[12px]">
-                  {continues(p.name) ? 'continues the last session' : p.readyReplicas > 0 ? 'ready at once' : 'starts in a few seconds'}
-                </span>
+                {/* Only what changes what sending does: an ended session's own harness continues it. */}
+                {continues(p.name) && <span className="text-muted-foreground text-[12px]">continues the last session</span>}
               </span>
             </DropdownMenu.Item>
           ))}
@@ -92,6 +91,49 @@ const ModelPicker: FC = () => {
               {choice.efforts.map((o) => item(choice.effort!.id, o.value, o.name, choice.current.effort))}
             </>
           )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
+/**
+ * What the agent may reach beyond its harness's service (docs/specs/assistant-ui.md, "Access"): the
+ * offered repositories, each with None, Read and Write. The menu stays open from one choice to the next.
+ */
+const AccessPicker: FC = () => {
+  const { offered, access, chooseAccess, composer, view } = useAgora()
+  const entries = accessEntries(offered)
+  if (entries.length === 0) return null
+  const closed = !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild disabled={closed}>
+        <button type="button" aria-label="Access" className={cn(quietButton, 'flex min-w-0 items-center gap-1 disabled:opacity-50')}>
+          <KeyRoundIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{accessLabel(access, entries)}</span>
+          <ChevronDownIcon className="size-3.5 shrink-0" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
+          {entries.map((entry, i) => {
+            const current = accessOf(access, entry) ?? ''
+            return (
+              <Fragment key={entry.key}>
+                {i > 0 && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />}
+                <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">{entry.name}</DropdownMenu.Label>
+                <DropdownMenu.RadioGroup aria-label={entry.name} value={current} onValueChange={(value) => chooseAccess(entries, entry, value === '' ? null : value)}>
+                  {entry.choices.map((c) => (
+                    <DropdownMenu.RadioItem key={c.label} value={c.profile ?? ''} className={menuItemClass} onSelect={(e) => e.preventDefault()}>
+                      <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', (c.profile ?? '') === current ? 'opacity-100' : 'opacity-0')} />
+                      <span>{c.label}</span>
+                    </DropdownMenu.RadioItem>
+                  ))}
+                </DropdownMenu.RadioGroup>
+              </Fragment>
+            )
+          })}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -192,6 +234,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           <div className="flex min-w-0 items-center gap-1">
             <HarnessPicker />
             <ModelPicker />
+            <AccessPicker />
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {pending ? (

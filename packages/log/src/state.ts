@@ -41,6 +41,8 @@ export interface Execution {
   configSent: string[]
   /** The open Session's last `availableCommands`. */
   commands: unknown[]
+  /** Its own profiles (docs/specs/credentials.md): its Create's, then its last Scope's. */
+  profiles: string[]
 }
 export interface State {
   workstream: string
@@ -66,6 +68,12 @@ export interface State {
   current: Execution | null
   permissions: Map<string, Entry>
 }
+/** The profiles a Create or a Scope recorded. */
+function profilesIn(body: unknown): string[] {
+  const profiles = object(body)?.profiles
+  return Array.isArray(profiles) ? profiles.map(String) : []
+}
+
 export function fold(entries: readonly Entry[], initial?: State): State {
   const state: State = initial ?? {
     workstream: entries[0]?.workstream ?? '',
@@ -104,12 +112,14 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         settings: null,
         configSent: [],
         commands: [],
+        profiles: profilesIn(content.body),
       }
       state.executions.set(execution.id, execution)
       state.current = execution
     }
     const execution = entry.execution ? state.executions.get(entry.execution) : undefined
     if (entry.kind === 'command' && content.kind === 'Stop' && execution) execution.stopped = true
+    if (entry.kind === 'command' && content.kind === 'Scope' && execution) execution.profiles = profilesIn(content.body)
     if (entry.kind === 'execution.obtained' && execution) execution.uid = String(content.uid)
     if (entry.kind === 'execution.connected' && execution) {
       execution.instance = String(content.instance)
@@ -355,6 +365,7 @@ export class CoreProjection {
             settings: execution && execution.settings !== null ? settingsOf(execution.settings) : null,
             commands: execution ? commandsOf(execution.commands) : [],
             configuring: execution !== null && session !== null && configuring(state, execution),
+            profiles: execution?.profiles ?? [],
             pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
             anchor: (execution && this.anchors.get(execution.id)) ?? null,

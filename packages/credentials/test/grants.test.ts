@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { baseProfiles, compileProfile, compileProfiles, GrantSigner, type Grant } from '../src/index.ts'
+import { baseProfiles, compileProfile, compileProfiles, GrantSigner, offeredProfiles, offers, type Grant } from '../src/index.ts'
 
 /** What the gateway's single rule decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -93,8 +93,30 @@ describe('GrantSigner', () => {
     assert.deepEqual(claims.grants, [{ host: 'api.anthropic.com' }])
     assert.equal((claims.exp as number) - (claims.iat as number), 600)
     assert.equal(credentials.expiresAt, new Date((claims.exp as number) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'))
-    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] }), /no profile/)
+    // No profile: a token with no grant, which withdraws the one before it.
+    const none = await signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] })
+    assert.deepEqual(JSON.parse(Buffer.from(none.token.split('.')[1]!, 'base64url').toString()).grants, [])
     await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /out of bounds/)
+  })
+
+  it('reads the offered profiles, and what they let a Create or a Scope name', () => {
+    assert.deepEqual(offeredProfiles(' github:o/a:write, github:o/b:read,zai,github:o/a:write '), ['github:o/a:write', 'github:o/b:read', 'zai'])
+    assert.deepEqual(offeredProfiles(undefined), [])
+    assert.throws(() => offeredProfiles('github:o/a:admin'), /unknown profile/)
+    const offered = ['github:o/a:write', 'github:o/b:read', 'zai']
+    const cases: [string, boolean][] = [
+      ['github:o/a:write', true],
+      ['github:o/a:read', true],
+      ['github:o/b:read', true],
+      ['github:o/b:write', false],
+      ['github:o/c:read', false],
+      ['zai', true],
+      ['anthropic', false],
+    ]
+    for (const [profile, expected] of cases) assert.equal(offers(offered, profile), expected, profile)
+    const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+    assert.throws(() => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered: ['dropbox'] }), /unknown profile/)
+    assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
   })
 
   it('reads a pool\'s base profiles: services only, never a repository', () => {

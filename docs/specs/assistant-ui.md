@@ -63,8 +63,9 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 
 | Command | Target | Body | Offered |
 | --- | --- | --- | --- |
-| Create | — | `pool`, from the catalogue; `anchor`, to continue; `settings`, the model and effort picked | With a message sent while no execution runs ("Sending"). |
+| Create | — | `pool`, from the catalogue; `anchor`, to continue; `settings`, the model and effort picked; `profiles`, the access picked | With a message sent while no execution runs ("Sending"). |
 | Configure | `execution`, `session` | `configId`, `value` | When sending is open, from the model picker ("Settings and commands"). |
+| Scope | `execution` | `profiles`: the whole access picked | When no turn runs, from the access picker ("Access"). |
 | Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
 | RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
@@ -100,7 +101,7 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | --- | --- |
 | The harness | Picked inside the composer, among the catalogue's pools but those kept for the tests (`testing`). Offered first: the one picked in this Workstream; else the Workstream's own pool, so that it continues; else, in a draft, the one picked last, remembered in the browser; else the first. |
 | The Workstream | A draft gets its id and `POST /api/workstreams`, then its address `/w/{id}`. |
-| Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. `settings`: the model and effort picked, if any. |
+| Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. `settings`: the model and effort picked, if any. `profiles`: the access picked, if any ("Access"). |
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
 
@@ -116,6 +117,18 @@ Session gave (`GET /api/pools`).
 | The effort | In the same picker, under the model: the options of the setting in category `thought_level`, without `default`. Chosen like the model. |
 | The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access. |
 | Commands | `/` at the start of the composer lists the commands — name, description, its input's hint — filtered by what follows it; arrows move, Enter or Tab chooses, Escape hides. Choosing one puts `/{name} ` in the composer. Sent as the prompt's text: that is how ACP runs a command. |
+
+## Access
+
+What the agent may reach beyond its harness's own service: the profiles Agora offers
+(`GET /api/config`, `credentials.offered`; `credentials.md`, "Offered profiles"). Its own grants
+are the execution's (`log.md`, "The Workstream view": `profiles`).
+
+| Element | Rule |
+| --- | --- |
+| The picker | After the model, when anything is offered. Each offered repository by its `owner/repo`, with **None**, **Read** and, when offered, **Write**; an offered service by its name, with **Off** and **On**. The choices stay open in the menu, one after the other. The button: "No access", the one repository and its access ("agora · Write"), or how many ("3 repos"). |
+| Before an execution | The choice goes into the Create's `profiles`. It starts empty in a draft; when sending continues an ended or failed execution, from that execution's `profiles`. |
+| During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
 
 ## The connection point: `useExternalStoreRuntime`
 
@@ -244,6 +257,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
+| Composer | The access picker, after the model | **ours** (Radix menu) |
 | Composer | The commands, over the composer while it starts with `/` | **ours** |
 | Composer | Above it: a refusal; the uncertain turn's banner (**Cancel the turn**, **Stop the sandbox**); why sending is closed | **ours** |
 
@@ -295,6 +309,11 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
 | U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen: `/{name} ` in the composer; sent: the agent receives it. |
 | U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool | The pool not offered; the ended Workstream's harness offered first is another. |
+| U31 | Offered `github:o/a:write`, `github:o/b:read` and `zai`; none granted, then `github:o/a:read` | `o/a` with None, Read, Write; `o/b` with None, Read; z.ai with Off, On; the button "No access", then "a · Read"; nothing offered: no picker. |
+| U32 | An access choice: Write for `o/a`, then None for it, with `github:o/b:read` granted | The whole set each time: `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`. |
+| U33 | An ended Workstream whose execution had profiles, a message sent | The Create carries its `profiles`; another chosen before sending: those instead. |
+| U34 | In a browser, an access picked in the draft, then a first message | The Create carries its `profiles`; the picker shows them once the Session is ready. |
+| U35 | In a browser, another access picked in an open Workstream | Scope sent with the whole set; the picker shows it at once, and still once the view has it. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

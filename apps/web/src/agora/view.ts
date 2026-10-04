@@ -24,6 +24,8 @@ export interface WorkstreamView {
   readonly settings?: readonly Setting[] | null
   readonly commands?: readonly AgentCommand[]
   readonly configuring?: boolean
+  /** The last execution's own profiles (docs/specs/credentials.md). */
+  readonly profiles?: readonly string[]
 }
 
 export interface Setting {
@@ -69,6 +71,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     settings: Array.isArray(o.settings) ? (o.settings as Setting[]) : null,
     commands: Array.isArray(o.commands) ? (o.commands as AgentCommand[]) : [],
     configuring: o.configuring === true,
+    profiles: Array.isArray(o.profiles) ? o.profiles.filter((p): p is string => typeof p === 'string') : [],
   }
 }
 
@@ -394,6 +397,78 @@ export function poolOffered(
   if (valid(own)) return own
   if (valid(last)) return last
   return offered[0]?.name ?? null
+}
+
+// ---------------------------------------------------------------- access
+
+/** One thing the access picker offers: a repository, or a service, with what it may be given. */
+export interface AccessEntry {
+  readonly key: string
+  readonly name: string
+  readonly repository: boolean
+  /** None first (no profile), then each profile it may be given, narrowest first. */
+  readonly choices: readonly { readonly label: string; readonly profile: string | null }[]
+}
+
+const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT' }
+
+/**
+ * What the access picker offers (docs/specs/assistant-ui.md, "Access"): each offered repository with
+ * None, Read and, when offered, Write; each offered service with Off and On.
+ */
+export function accessEntries(offered: readonly string[]): AccessEntry[] {
+  return offered.map((profile) => {
+    const repo = /^github:([^:]+):(read|write)$/.exec(profile)
+    if (repo === null) return { key: profile, name: SERVICE_NAMES[profile] ?? profile, repository: false, choices: [{ label: 'Off', profile: null }, { label: 'On', profile }] }
+    const read = { label: 'Read', profile: `github:${repo[1]!}:read` }
+    return {
+      key: `github:${repo[1]!}`,
+      name: repo[1]!,
+      repository: true,
+      choices: [{ label: 'None', profile: null }, read, ...(repo[2] === 'write' ? [{ label: 'Write', profile }] : [])],
+    }
+  })
+}
+
+const belongs = (entry: AccessEntry, profile: string) => entry.choices.some((c) => c.profile === profile)
+
+/** The profile granted for an entry, or null. */
+export const accessOf = (granted: readonly string[], entry: AccessEntry): string | null => granted.find((p) => belongs(entry, p)) ?? null
+
+/**
+ * The whole set once an entry is given a choice: the entries' in the order offered, then what was
+ * granted beyond them, kept.
+ */
+export function withAccess(granted: readonly string[], entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): string[] {
+  const out: string[] = []
+  for (const e of entries) {
+    const value = e.key === entry.key ? profile : accessOf(granted, e)
+    if (value !== null) out.push(value)
+  }
+  return [...out, ...granted.filter((p) => !entries.some((e) => belongs(e, p)))]
+}
+
+/** The picker's button: "No access", the one granted and how, or how many. */
+export function accessLabel(granted: readonly string[], entries: readonly AccessEntry[]): string {
+  const given = entries.flatMap((e) => {
+    const profile = accessOf(granted, e)
+    return profile === null ? [] : [{ entry: e, choice: e.choices.find((c) => c.profile === profile)! }]
+  })
+  if (given.length === 0) return 'No access'
+  if (given.length === 1) {
+    const { entry, choice } = given[0]!
+    return entry.repository ? `${entry.name.split('/').at(-1)!} · ${choice.label}` : entry.name
+  }
+  return given.every((g) => g.entry.repository) ? `${String(given.length)} repos` : `${String(given.length)} grants`
+}
+
+/** The access shown and sent: what was picked here, else the last execution's own. */
+export const accessGranted = (picked: readonly string[] | null, view: WorkstreamView): readonly string[] => picked ?? view.profiles ?? []
+
+/** The Create a message starts: in a draft the pool alone, else as `createBody`; with the settings and the access picked. */
+export function startBody(view: WorkstreamView, pool: string, draft: boolean, settings: Readonly<Record<string, string>>, access: readonly string[]): Json {
+  const base = draft ? { pool } : createBody(view, pool)
+  return { ...base, ...(Object.keys(settings).length > 0 ? { settings: { ...settings } } : {}), ...(access.length > 0 ? { profiles: [...access] } : {}) }
 }
 
 /** The commands `/` lists: while the composer holds `/` and a name being typed, those it starts. */

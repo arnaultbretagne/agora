@@ -67,6 +67,23 @@ service, never a repository.
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
 
+### Offered profiles
+
+What an execution may be given beyond its pool's base profiles is declared on Agora, in
+`OFFERED_PROFILES`: profiles separated by commas, each at the widest access it may be given. The
+interface offers these (`assistant-ui.md`, "Access"); a Create or a Scope may name an offered
+profile, or a narrower one of the same repository.
+
+| Offered | May be named |
+| --- | --- |
+| `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:read` |
+| `github:owner/repo:read` | `github:owner/repo:read` |
+| `anthropic`, `zai`, `chatgpt` | Itself |
+
+Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
+catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
+the server at start.
+
 ## The token
 
 An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`.
@@ -102,6 +119,8 @@ credential.
 | `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
 | `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 
+The PAT must reach every repository offered, with the access offered: the grants only narrow it.
+
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
 reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. Its
@@ -122,14 +141,15 @@ the reason for a refusal.
 | Element | Rule |
 | --- | --- |
 | Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready and still owned by a pool declaring base profiles, it hands a warm token (`PUT /credentials`), and a new one when less than a third of its life remains. |
-| At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the Create's. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
-| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. |
-| The Create | `profiles`, optional: checked against the catalogue, refused otherwise (`unknown_profile`); recorded with the command. |
+| At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the execution's own. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
+| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute, or names other profiles than the execution's; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt. |
+| The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); recorded with the command. |
+| Scope | The execution's own profiles replaced, between turns (`log.md`, "Commands"): the whole set, checked as the Create's, recorded with the command. If the execution is connected, its new token is handed at once, its tunnels closed — a turn has nothing in flight then; if that fails, before the next prompt, as above. |
 | `POST /api/workstreams/{id}/credentials` | Test only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
-| `GET /api/config` | `credentials` field: the gateway and the known profiles, or nothing. |
-| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
+| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), or nothing. |
+| Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`, `OFFERED_PROFILES`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
 
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
 CLI in OAuth mode: it then sends a Bearer and `anthropic-beta: oauth-…`. The gateway replaces the
@@ -170,8 +190,12 @@ call. The test page does it itself when the agent offers the option.
 | C14 | A Create naming an unknown profile | Refused, `unknown_profile`; nothing written. |
 | C15 | The chain to z.ai | `zai` profile, the mock's `/fetch https://api.z.ai/api/paas/v4/models`: 200 from z.ai, with the key the gateway set. |
 | C16 | The chain to ChatGPT | `chatgpt` profile, the mock's `/fetch https://chatgpt.com/backend-api/codex/models`: 200 from ChatGPT with the session the gateway set; `/backend-api/conversations`: 403 from the gateway. |
+| C17 | A Scope between turns, the execution connected; another leaving it no profile at all | Accepted; at once, a token naming the base profiles and the Scope's, the previous tunnels closed; the next prompt leaves without another. The other: a token with no grant at once. |
+| C18 | A Scope during a turn, naming a profile not offered, naming one the catalogue does not know | `turn_active`, `profile_not_offered`, `unknown_profile`; no token. |
+| C19 | A Scope whose token cannot be handed at once | Accepted; before the next prompt, a token naming its profiles, or the prompt fails `credentials_refused`. |
+| C20 | `github:A:write` and `github:B:read` offered; Creates naming `github:A:read`, `github:A:write`, `github:B:write` | Accepted, accepted, `profile_not_offered`; `GET /api/config` lists the offered profiles. |
+| C21 | Agora restarted between two turns of an execution with a token | A new token before the next prompt, naming the execution's profiles. |
 
-**To be specified:** a harness initializing in the pool (claude-code's SDK); changing an execution's
-grants between turns; count the responses to `CONNECT` by status, not just the last one; TLS trust
-for git (libcurl does not read `NODE_EXTRA_CA_CERTS`); read access
-to GraphQL.
+**To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
+to `CONNECT` by status, not just the last one; TLS trust for git (libcurl does not read
+`NODE_EXTRA_CA_CERTS`); read access to GraphQL.
