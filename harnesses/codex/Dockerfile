@@ -4,6 +4,12 @@
 # codex-acp 2.1.1 and codex 0.159.3 (package.json), on the operator's ChatGPT subscription through the
 # gateway. No credential: the auth.json written at start is a placeholder (placeholder-auth.mjs).
 FROM node:24-bookworm-slim
+# git, for the agent's repositories: it reaches GitHub through the gateway, whose root it trusts by
+# GIT_SSL_CAINFO (the template); libcurl does not read NODE_EXTRA_CA_CERTS.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version
 WORKDIR /opt/codex
 COPY harnesses/codex/package.json ./
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force \

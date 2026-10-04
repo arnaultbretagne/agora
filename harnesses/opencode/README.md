@@ -15,4 +15,7 @@ Native directory saved: `$HOME/.local/share/opencode/agora/`, the SQLite databas
 opencode opens it when it starts, so the image declares `BRIDGE_RESTART_ON_ANCHOR`: placing an
 anchor restarts it (`docs/specs/executions.md`).
 
+git is in the image, for the agent's repositories: it reaches GitHub through the gateway, whose
+root it trusts by `GIT_SSL_CAINFO`, which the template sets.
+
 `docker build -f harnesses/opencode/Dockerfile .` from the root.

@@ -15,4 +15,7 @@ The template sets `SSL_CERT_FILE` to the gateway's root — codex is a Rust bina
 `NODE_EXTRA_CA_CERTS` — and `CODEX_ACCOUNT_ID`. Native directory saved:
 `$HOME/.codex/sessions/`, its rollouts, read at `session/resume`; `auth.json` stays outside it.
 
+git is in the image, for the agent's repositories: it reaches GitHub through the gateway, whose
+root it trusts by `GIT_SSL_CAINFO`, which the template sets.
+
 `docker build -f harnesses/codex/Dockerfile .` from the root.

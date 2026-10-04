@@ -4,6 +4,12 @@
 # marker the gateway replaces. Nothing is fetched at start: the model catalogue is in the image, and
 # the configuration directory is read-only — a writable one makes opencode install a plugin from npm.
 FROM node:24-bookworm-slim
+# git, for the agent's repositories: it reaches GitHub through the gateway, whose root it trusts by
+# GIT_SSL_CAINFO (the template); libcurl does not read NODE_EXTRA_CA_CERTS.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version
 WORKDIR /app
 RUN npm install --global --no-audit --no-fund opencode-linux-x64@1.18.34 \
     && npm cache clean --force \

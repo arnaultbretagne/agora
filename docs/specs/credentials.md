@@ -14,7 +14,7 @@ against the execution's grants and sets the credential on the way through.**
 | 1 | Adapter → bridge | `CONNECT api.github.com:443` on `127.0.0.1`. |
 | 2 | Bridge → gateway | The same `CONNECT` to `gateway.agora-gateway.svc.cluster.local:3000`, with `Proxy-Authorization: Bearer` and the JWT. The response goes back to the adapter as is. |
 | 3 | Gateway | Answers 200, then terminates TLS with a certificate signed by "Agora gateway CA". |
-| 4 | Adapter | Trusts that authority through `NODE_EXTRA_CA_CERTS` and sends its request. |
+| 4 | Adapter | Trusts that authority — through `NODE_EXTRA_CA_CERTS`, or `GIT_SSL_CAINFO` for git — and sends its request. |
 | 5 | Gateway | Checks the JWT and the grants. Sets the host's credential in place of the `Authorization` it received, keeps the other headers, forwards to the host. |
 
 | Response | Meaning |
@@ -160,6 +160,7 @@ Bearer and lets the rest through.
 | Element | Value |
 | --- | --- |
 | `NODE_EXTRA_CA_CERTS` | `/etc/agora/credential-proxy/ca.pem`, from the `credential-proxy-ca` ConfigMap: "Agora gateway CA", valid until 2028. |
+| `GIT_SSL_CAINFO` | The same file, for git, whose libcurl does not read `NODE_EXTRA_CA_CERTS`. The gateway's root alone: everything goes through it. |
 | Network egress | DNS, and `gateway.agora-gateway` on port 3000. Nothing else to the Internet. |
 
 On the other side, the gateway accepts only the sandboxes and goes out only on port 443.
@@ -195,7 +196,7 @@ call. The test page does it itself when the agent offers the option.
 | C19 | A Scope whose token cannot be handed at once | Accepted; before the next prompt, a token naming its profiles, or the prompt fails `credentials_refused`. |
 | C20 | `github:A:write` and `github:B:read` offered; Creates naming `github:A:read`, `github:A:write`, `github:B:write` | Accepted, accepted, `profile_not_offered`; `GET /api/config` lists the offered profiles. |
 | C21 | Agora restarted between two turns of an execution with a token | A new token before the next prompt, naming the execution's profiles. |
+| C22 | git in a harness's sandbox: `git ls-remote https://github.com/A` with `github:A:read`, then with no `github` profile | The refs, with no TLS error; then 403 from the gateway. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
-to `CONNECT` by status, not just the last one; TLS trust for git (libcurl does not read
-`NODE_EXTRA_CA_CERTS`); read access to GraphQL.
+to `CONNECT` by status, not just the last one; read access to GraphQL.
