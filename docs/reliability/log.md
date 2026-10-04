@@ -15,6 +15,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R7 | 2026-10-03 | `5e2b0f8` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a second server process on the same database, its output read. |
 | R8 | 2026-10-03 | `d82682f` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; real bridges and the mock agent, which offers a mode, a model (with `default` and a model it refuses) and an effort, answers a change after 400 ms, and gives its commands at the Session's opening; FakeKube pools annotated `agora.bretagne.dev/session-config`. |
 | R9 | 2026-10-03 | `d82682f` | cluster, live | g4 under Kata. The server `agora-server@sha256:2d0064e7…` built from that commit, the pools annotated by infra-k8s #193 (claude-code `mode=bypassPermissions,model=opus,effort=high`, codex `mode=agent-full-access,model=gpt-6.1-sol,reasoning_effort=high`, opencode `mode=build,model=zai-coding-plan/glm-5.3,effort=high`). Driven over the API: a Create in each pool, a task writing a file and running a command, a Configure to another model, a question. Billed on the three subscriptions. |
+| R10 | 2026-10-03 | `0c75f9b` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a real signer offering `github:owner/a:write` and `github:owner/b:read`; the core projector at version 4. |
+| R11 | 2026-10-04 | `af896c7` | cluster | g4. The server `agora-server@sha256:0f3edc12…` built from that commit, started on the `agora` database whose views were of core projector 3; the views read over the API through a port-forward. |
 
 ## Cases
 
@@ -50,6 +52,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L20 | real: the lab process killed by SIGKILL at its fault points `before_claim`, `after_claim`; simulated: fake-kube, the claim deleted, then replaced under another UID | local | R1 | proven | Every assertion held, in each of its four tests. |
 | L21 | real: the reply to the capture's COMMIT lost on the network (relay in front of PostgreSQL) | local | R1 | proven | One COMMIT reply dropped. |
 | L22 | — | local | R1 | proven | Every assertion held. |
+| L22 | — | local | R10 | proven | The hash recorded for core projector 4, `3e8f9051…`, incrementally and through a rebuild. |
 | L23 | — | local | R1 | proven | Every assertion held. |
 | L24 | real: the stream closed before `snapshot-end`, updates committing meanwhile | local | R1 | proven | Every assertion held. |
 | L25 | — | local | R1 | proven | Every assertion held. |
@@ -76,6 +79,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L44 | — | local | R3 | proven | Opened `new` with `mock`, then from the anchor; two `session.ended`, each with its reason, the first before the restore. |
 | L45 | — | local | R4 | proven | Owned by the identity's name-based UUID despite another `owner` in the body; the same identity again 200, another 409. |
 | L46 | simulated: the checkpoint's version and the view rewritten as an older projector left them | local | R5 | proven | Rebuilt at start: state `ended`, the title from the first Write, the checkpoint at version 2. Without the fix, never rebuilt (seen on the cluster after the move to core v2). |
+| L46 | — | cluster | R11 | partial: only the views are read, not the checkpoint | All 118 ended Workstreams' views carry `profiles`, the field version 4 adds; the 21 with no entry have no view. |
 | L47 | — | local | R8 | proven | The body's settings `mode`, `model` (the Create's), `effort`; three changes one at a time, answered before the next, all before the prompt; `ready` only after the third answer. |
 | L47 | — | live | R9 | proven | claude-code: `mode`, `model`, `effort` sent in that order, each answered, ready in 2.8 s, bypassPermissions, opus, high; codex: `mode` and `reasoning_effort` (its model already gpt-6.1-sol); opencode: `effort` only (build and glm-5.3 already current). No permission asked by any of them for a file written and a command run. |
 | L48 | — | local | R8 | proven | Of `mode=default, bogus=x, model=nope, effort=low` under the Create's `model=mock-broken`: `model=mock-broken` (answered in error) then `effort=low`; ready; the model still `default`. |
@@ -85,6 +89,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L51 | — | local | R8 | proven | `recall`, `review` with its hint; `effort` high after `/config`; `compact` added after `/commands`. |
 | L52 | — | local | R8 | proven | `mock-test` with its `sessionConfig`, its model `mock-small`, `recall` and `review`; `claude-test` null and empty. |
 | L53 | — | local | R8 | proven | `settings` `{model: 3}` and `['model']`: `invalid_create`. |
+| L54 | — | local | R10 | proven | `profiles` `[B]` from a Create naming it twice, then `[A, B]` after the Scope; the Scope's entry at its answer's position, with its execution; the fold's profiles alike. |
+| L55 | — | local | R10 | proven | `invalid_scope` for a string, for `[3]` and with no `profiles`; `stale_execution`; `stopped` after Stop. |
 
 ## Not covered
 
