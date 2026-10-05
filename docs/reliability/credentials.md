@@ -17,6 +17,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R7 | 2026-10-03 | `05fbbb8` | cluster, live | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:31c1d086…` built from that commit, in the namespace `agora` behind agora.bretagne.dev, on the `agora` database (CloudNativePG, PostgreSQL 17.4); the pools mock `1a1cc63c…`, claude-code `5f3bb480…`, opencode `5b7b6182…` and codex `0eae81a3…`, their warm Pods recreated for the server's anchor address. `apps/server/scripts/live-cases.ts` from that commit, all 34 cases in one run; C10 and C12–C16 refused `quota` there — the run's stopped executions count until their deadline — and were played again once no claim was left. C3 and C13 billed, on Anthropic. |
 | R8 | 2026-10-03 | `0c75f9b` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent, FakeKube, a real signer with a key of its own offering `github:owner/a:write` and `github:owner/b:read`; PostgreSQL 17.11 for the log's tests. The gateway is not run. |
 | R9 | 2026-10-04 | `a2d4230` | cluster | g4 under Kata. The server `agora-server@sha256:0f3edc12…` built from `af896c7` (its inputs unchanged since), offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write` (infra-k8s #200, #201); the claude-code pool `agora-harness-claude-code@sha256:6d3f437e…` built from that commit, with git 2.39.5, `GIT_SSL_CAINFO` and the git identity from the template (infra-k8s #204, #207); the gateway with the operator's fine-grained PAT on those two repositories (infra-k8s #202). An execution created over the API with `github:arnaultbretagne/agora:read`, git run in its sandbox by `kubectl exec` through its bridge, and a Scope sent over the API; no model call. |
+| R10 | 2026-10-05 | `dfd3df9` | cluster | g4 under Kata. The server `agora-server@sha256:f6d5898e…` built from `3ec2f96`, in the namespace `agora`, offering `internet` (infra-k8s #211, #210); the mock pool `agora-harness-mock@sha256:632991c4…`; agentgateway 1.5.0 with the route `internet` and its egress limited to public IPv4 on 443 (infra-k8s #210), restarted to load the route. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`; no model call. |
+| R11 | 2026-10-05 | `77ce4ee` | cluster | As R10; only C24's control changed in the runner. One case per run, each once the previous one's executions had ended (`quota`). |
 
 ## Cases
 
@@ -28,6 +30,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C2 | — | cluster | R1 | proven | 400 from Anthropic ("anthropic-version: header is required"): TLS accepted, Bearer set by the gateway; tunnel → 200. |
 | C2 | — | cluster | R2 | proven | 400 from Anthropic ("anthropic-version: header is required"); tunnel → 200. |
 | C2 | — | cluster | R7 | proven | The tunnel 200; Anthropic's 400 ("anthropic-version: header is required") behind it. |
+| C2 | — | cluster | R10 | proven | Under the gateway's egress limited to public addresses: Anthropic's 400 ("anthropic-version: header is required"); tunnel → 200. |
 | C3 | — | live | R1 | proven | "Paris." in 2.0 s, `end_turn`; seven tunnels to `api.anthropic.com:443`, last `CONNECT` response 200. |
 | C3 | — | live | R2 | proven | "Paris." in 2.2 s; three tunnels to `api.anthropic.com:443`, last 200. |
 | C3 | — | live | R7 | proven | "Paris." in 2.4 s; seven tunnels to `api.anthropic.com:443`, last 200. |
@@ -38,7 +41,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C5 | — | cluster | R0g | partial: probed by hand, no test | 401 for a missing, an expired and a foreign JWT. |
 | C6 | — | cluster | R0g | partial: probed by hand, no test | 403 for `..`, `.`, `%2e` and `%2f`. |
 | C7 | — | cluster | R0g | partial: probed by hand, no test; the case was then a host with no route, before the `internet` route | 404. |
-| C7 | — | — | — | not verified | — |
+| C7 | — | cluster | R10 | proven | The mock with `anthropic` only: example.com "403 Forbidden — authorization failed". |
 | C8 | — | local | R3 | partial: the gateway's answers (reach, 403) are not exercised; the 503 is inferred from no token attached | Every assertion held, in each of its two tests. |
 | C8 | — | cluster | R4 | proven | A warm claude-code Pod, before any claim: Anthropic answers (400, the probe sends no `anthropic-version`), `api.github.com` 403 from the gateway, which logs `jwt.sub` `agora warm <Pod>`. A warm mock Pod: 503 from the bridge, no hand-over in its log. |
 | C8 | — | cluster | R7 | proven | The claude-code warm Pod: Anthropic 400, GitHub 403 from the gateway, `jwt.sub` "agora warm …"; the mock's Pod: 503 from its bridge. |
@@ -59,8 +62,10 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C14 | — | cluster | R7 | proven | "unknown_profile", nothing written. |
 | C15 | — | cluster | R5 | proven | 200 from z.ai, four models listed; the gateway's route `zai` answered 200 under the execution's name. |
 | C15 | — | cluster | R7 | proven | 200, four models listed; route `default/zai`. |
+| C15 | — | cluster | R10 | proven | Under the egress limited to public addresses: 200, four models listed; route `default/zai`. |
 | C16 | — | cluster | R6 | proven | `codex/models`: 200 from ChatGPT with the session the gateway set, the sandbox's `chatgpt-account-id` removed; `/backend-api/conversations`: 403 from the gateway. |
 | C16 | — | cluster | R7 | proven | `codex/models` 200, one model; conversations 403 from the gateway; route `default/chatgpt`. |
+| C16 | — | cluster | R11 | proven | Under the egress limited to public addresses: `codex/models` 200, one model; conversations 403 from the gateway; route `default/chatgpt`. |
 | C17 | — | local | R8 | partial: the previous tunnels closing is shown by the bridge's test only | At once, a token naming `anthropic` and `github:owner/a:read`, the bridge holding its expiry; none more at the next prompt. With no profile left: a token naming none at once, none at the next prompt. |
 | C17 | — | cluster | R9 | partial: the token is inferred from the push accepted right after, not read | With `github:arnaultbretagne/agora:read`, `git push --dry-run`: 403 from the gateway. Scope to `:write` accepted, the view's `profiles` replaced; the same push two seconds later, no prompt in between: `* [new branch] HEAD -> test-agora-identity`, nothing created on GitHub. |
 | C18 | — | local | R8 | proven | `turn_active` during `/sleep 3`; `profile_not_offered` for `github:owner/b:write`; `unknown_profile` for `dropbox:everything`; one token only, no Scope recorded. |
@@ -68,10 +73,10 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C20 | — | local | R8 | partial: `GET /api/config` is asserted by U34 (`client.md`, R7) | `github:owner/a:read`, then `github:owner/a:write` with `github:owner/b:read`, accepted; `github:owner/b:write` refused `profile_not_offered`, nothing written. |
 | C21 | real: Agora stopped cleanly and started again | local | R8 | proven | A second token naming `anthropic` and `github:owner/b:read`, handed before the prompt after the restart was dispatched. |
 | C22 | — | cluster | R9 | proven | With `github:arnaultbretagne/agora:read`: `git ls-remote` listed `design/agora-foundations` and `main`, no TLS error; `infra-k8s`, not granted: 403. In a warm Pod whose token names `anthropic` only: 403 from the gateway ("authorization failed"). The control, without `GIT_SSL_CAINFO`: "Problem with the SSL CA cert". A commit there: author and committer `Agora <agent@agora.bretagne.dev>`. |
-| C23 | — | — | — | not verified | — |
-| C24 | — | — | — | not verified | — |
-| C25 | — | — | — | not verified | — |
-| C26 | — | — | — | not verified | — |
+| C23 | — | cluster | R10 | proven | `GET` "200 OK", `POST` "405 Method Not Allowed", both from example.com; the gateway logged route `default/internet` → 200. |
+| C24 | — | cluster | R11 | proven | `internet` alone: `api.anthropic.com`, `api.z.ai`, `chatgpt.com`, `api.github.com` and `github.com` 403 from the gateway; with `github:octocat/Hello-World:read` added, GitHub "200 OK". |
+| C25 | — | cluster | R11 | proven | `10.10.20.1.nip.io`: "503 — upstream call failed: Connect: deadline has elapsed", after 10 s; `10.10.20.1`: TLS "alert access denied"; example.com "200 OK". |
+| C26 | — | cluster | R11 | proven | "CONNECT example.com:8443 refused by the proxy: 404". |
 
 The partial verdicts are tracked in #107.
 
