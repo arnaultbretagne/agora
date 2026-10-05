@@ -819,8 +819,9 @@ await check('C24', 'Gateway, the Internet opens no host with a credential', asyn
     assert(/^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed'), `${host}: ${reply.slice(0, 160)}`)
     outcomes.push(`${host} 403`)
   }
-  // The control: the same request, the repository granted, reaches GitHub.
-  await credentials(w, ['internet', `github:${REPO_A}:read`], 600)
+  // The control: the same request, the repository granted, reaches GitHub. A day, or the token would be
+  // replaced by the execution's own before the prompt (it renews any that would end within the turn).
+  await credentials(w, ['internet', `github:${REPO_A}:read`], 86_400)
   const granted = await fetched(w, `https://api.github.com/repos/${REPO_A}`)
   await w.stop()
   assert(/^HTTP\/1\.1 \d{3}/.test(granted) && !granted.includes('authorization failed'), `granted: ${granted.slice(0, 160)}`)
