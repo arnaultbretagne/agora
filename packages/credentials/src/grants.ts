@@ -33,6 +33,10 @@ export function compileProfile(profile: string): Grant[] {
   // ChatGPT, for codex: only its backend's codex and account paths — the session reaches the whole
   // account, conversations included.
   if (profile === 'chatgpt') return [{ host: 'chatgpt.com', path: '^/backend-api/(codex|wham)(/[^?]*)?(\\?.*)?$' }]
+  // The Internet: `*` stands for any host the gateway has no route of its own for, reached with no
+  // credential. Its route alone reads `*`; the others compare the grant's host with the request's,
+  // so this grant never opens a host that has a credential.
+  if (profile === 'internet') return [{ host: '*' }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -48,7 +52,7 @@ export function compileProfile(profile: string): Grant[] {
   throw new ProfileRefused(`unknown profile: ${profile}`)
 }
 
-/** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository. */
+/** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
 export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt'])
 
 /** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
@@ -110,7 +114,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

@@ -25,22 +25,24 @@ agent can use the way out, not take the token with it, and the network lets it g
 
 ## Profiles and grants
 
-A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `github:owner/repo:read`,
-`github:owner/repo:write`. Agora compiles each profile into **grants**, which the gateway can
-check on a request: a host, a pattern on the path, and the allowed methods.
+A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `internet`,
+`github:owner/repo:read`, `github:owner/repo:write`. Agora compiles each profile into **grants**,
+which the gateway can check on a request: a host, a pattern on the path, and the allowed methods.
 
 | Profile | Grants |
 | --- | --- |
 | `anthropic` | `api.anthropic.com`, everything |
 | `zai` | `api.z.ai`, everything |
 | `chatgpt` | `chatgpt.com` on `/backend-api/codex…` and `/backend-api/wham…` |
+| `internet` | `*`, everything: any host without a credential of its own |
 | `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
 | `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
 
 Grants add up: any mix of profiles is just a longer list.
 
-Which repositories an execution may reach is declared by the operator — the **offered** profiles,
-each at its widest access — and picked by the user, before the execution or between its turns.
+Which repositories an execution may reach, and whether it may reach the Internet, is declared by
+the operator — the **offered** profiles, each at its widest access — and picked by the user,
+before the execution or between its turns.
 
 Grants are the only restriction, so they stop at what the gateway can check: a host, a path, a
 method. An ACP permission, an installed tool or an instruction given to the model restricts
@@ -115,3 +117,32 @@ sequenceDiagram
 The gateway applies a single rule to every request: some grant must cover its host, its path
 and its method. The harness trusts the gateway's certificate authority, so the TLS it sees ends
 at the gateway, which can read the request and set the credential.
+
+## The Internet
+
+Every host the gateway holds a credential for has a route of its own. Any other host falls to one
+more route, `internet`, which agentgateway picks last and which sets no credential. Its rule asks
+for a grant on host `*`, which only the `internet` profile gives; the routes with a credential
+compare the grant's host with the request's, which is never `*`. So the Internet adds the rest of
+the Web and nothing more: an execution given `internet` and no `github` profile still cannot read
+a repository, not even a public one — `github.com` is a route with a credential.
+
+```mermaid
+flowchart LR
+    Request --> Named{host named by a route?}
+    Named -- "yes: api.github.com, api.anthropic.com…" --> Grant{a grant on this host?}
+    Grant -- yes --> Credential[credential set, sent]
+    Grant -- no --> Refused[403]
+    Named -- no --> Star{a grant on *?}
+    Star -- yes --> Sent[sent as is]
+    Star -- no --> Refused
+```
+
+A route that takes any host could reach anything the gateway can, so the network bounds it: the
+gateway goes out to public addresses only, on port 443. The operator's networks and the cluster
+sit in private ranges it cannot reach, whatever name points there.
+
+The Internet stays off unless picked. Credentials never leave the gateway, but what the agent
+reads can steer it, and with the Internet it can send anything it holds anywhere — a repository
+it was given included. Off by default, offered by the operator and picked per execution, it is a
+choice made knowing that.

@@ -126,7 +126,7 @@ are the execution's (`log.md`, "The Workstream view": `profiles`).
 
 | Element | Rule |
 | --- | --- |
-| The picker | After the model, when anything is offered. Each offered repository by its `owner/repo`, with **None**, **Read** and, when offered, **Write**; an offered service by its name, with **Off** and **On**. The choices stay open in the menu, one after the other. The button: "No access", the one repository and its access ("agora · Write"), or how many ("3 repos"). |
+| The picker | After the model, when anything is offered. Each offered repository by its `owner/repo`, with **None**, **Read** and, when offered, **Write**; an offered service by its name — `internet` as "Internet" —, with **Off** and **On**. The choices stay open in the menu, one after the other. The button: "No access", the one repository and its access ("agora · Write"), the one service ("Internet"), or how many ("3 repos", "2 grants"). |
 | Before an execution | The choice goes into the Create's `profiles`. It starts empty in a draft; when sending continues an ended or failed execution, from that execution's `profiles`. |
 | During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
 
@@ -309,7 +309,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
 | U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen: `/{name} ` in the composer; sent: the agent receives it. |
 | U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool | The pool not offered; the ended Workstream's harness offered first is another. |
-| U31 | Offered `github:o/a:write`, `github:o/b:read` and `zai`; none granted, then `github:o/a:read` | `o/a` with None, Read, Write; `o/b` with None, Read; z.ai with Off, On; the button "No access", then "a · Read"; nothing offered: no picker. |
+| U31 | Offered `github:o/a:write`, `github:o/b:read`, `zai` and `internet`; none granted, then `github:o/a:read`, then `internet` alone | `o/a` with None, Read, Write; `o/b` with None, Read; z.ai and Internet with Off, On; the button "No access", then "a · Read", then "Internet"; nothing offered: no picker. |
 | U32 | An access choice: Write for `o/a`, then None for it, with `github:o/b:read` granted | The whole set each time: `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`. |
 | U33 | An ended Workstream whose execution had profiles, a message sent | The Create carries its `profiles`; another chosen before sending: those instead. |
 | U34 | In a browser, an access picked in the draft, then a first message | The Create carries its `profiles`; the picker shows them once the Session is ready. |

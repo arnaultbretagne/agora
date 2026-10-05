@@ -1,5 +1,5 @@
 // Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex), docs/specs/log.md (L…) and
-// docs/specs/credentials.md (C1–C4, C8–C16) against the DEPLOYED lab, with real Kata sandboxes destroyed by
+// docs/specs/credentials.md (C1–C4, C7–C16, C23–C26) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
@@ -763,6 +763,85 @@ await check('C16', 'Gateway, the chain to ChatGPT', async () => {
   const line = gatewayLines(since).find((l) => l.includes('http.host=chatgpt.com') && l.includes('/backend-api/codex/models') && l.includes(`jwt.sub=agora ${w.execution} `))
   assert(line !== undefined, 'no request seen by the gateway')
   return `codex/models "${models.slice(0, 15)}", ${String((models.match(/"slug"/g) ?? []).length)} model(s); conversations "${conversations.slice(0, 15)}" authorization failed; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
+})
+
+// ---------------------------------------------------------------- the Internet (docs/specs/credentials.md, C7, C23–C26)
+
+/** The gateway's route for this execution's request to a host, from its log. */
+const routeOf = (since: string, w: Workstream, host: string) => gatewayLines(since).find((l) => l.includes(`http.host=${host}`) && l.includes(`jwt.sub=agora ${w.execution} `))
+
+await check('C7', 'A host with no route of its own, without internet', async () => {
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['anthropic'], ...SHORT })
+  const closed = await fetched(w, 'https://example.com/')
+  await w.stop()
+  assert(/^HTTP\/1\.1 403/.test(closed) && closed.includes('authorization failed'), closed.slice(0, 200))
+  return `"${closed.slice(0, 40)}"`
+})
+
+await check('C23', 'Gateway, the Internet', async () => {
+  const since = new Date(Date.now() - 1000).toISOString()
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['internet'], ...SHORT })
+  const read = await fetched(w, 'https://example.com/')
+  const sent = await fetched(w, 'POST https://example.com/ {"agora":"C23"}')
+  await w.stop()
+  assert(/^HTTP\/1\.1 200/.test(read), `GET: ${read.slice(0, 200)}`)
+  // Any answer from example.com: neither the gateway's 403 nor its 5xx.
+  assert(/^HTTP\/1\.1 [1-4]\d\d/.test(sent) && !sent.includes('authorization failed'), `POST: ${sent.slice(0, 200)}`)
+  const line = await until('the gateway logs the request', () => routeOf(since, w, 'example.com'), 15_000)
+  assert(/route=\S*internet/.test(line), line)
+  return `GET "${read.slice(0, 15)}", POST "${sent.slice(0, 24)}"; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
+})
+
+await check('C24', 'Gateway, the Internet opens no host with a credential', async () => {
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['internet'], ...SHORT })
+  const hosts: [string, string][] = [
+    ['api.anthropic.com', 'https://api.anthropic.com/v1/models'],
+    ['api.z.ai', 'https://api.z.ai/api/paas/v4/models'],
+    ['chatgpt.com', 'https://chatgpt.com/backend-api/codex/models'],
+    ['api.github.com', `https://api.github.com/repos/${REPO_A}`],
+    ['github.com', `https://github.com/${REPO_A}.git/info/refs?service=git-upload-pack`],
+  ]
+  const outcomes: string[] = []
+  for (const [host, probe] of hosts) {
+    const reply = await fetched(w, probe)
+    assert(/^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed'), `${host}: ${reply.slice(0, 160)}`)
+    outcomes.push(`${host} 403`)
+  }
+  // The control: the same request, the repository granted, reaches GitHub.
+  await credentials(w, ['internet', `github:${REPO_A}:read`], 600)
+  const granted = await fetched(w, `https://api.github.com/repos/${REPO_A}`)
+  await w.stop()
+  assert(/^HTTP\/1\.1 \d{3}/.test(granted) && !granted.includes('authorization failed'), `granted: ${granted.slice(0, 160)}`)
+  return `${outcomes.join(', ')} from the gateway; with github:${REPO_A}:read, GitHub "${granted.slice(0, 15)}"`
+})
+
+// A private address of g4's network that refuses port 443 to whoever reaches it: its router. Reached,
+// it answers "Connection refused" at once; cut off by the network, the gateway's connect times out.
+const PRIVATE = process.env.PRIVATE_ADDRESS ?? '10.10.20.1'
+
+await check('C25', 'Gateway, the Internet stops at private addresses', async () => {
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['internet'], ...SHORT })
+  const name = await fetched(w, `https://${PRIVATE}.nip.io/`)
+  const address = await fetched(w, `https://${PRIVATE}/`)
+  const control = await fetched(w, 'https://example.com/')
+  await w.stop()
+  assert(/^HTTP\/1\.1 503/.test(name) && name.includes('deadline has elapsed') && !name.includes('refused'), `${PRIVATE}.nip.io: ${name.slice(0, 200)}`)
+  assert(address.startsWith('failed: ') && address.includes('access denied'), `${PRIVATE}: ${address.slice(0, 200)}`)
+  assert(/^HTTP\/1\.1 200/.test(control), `example.com: ${control.slice(0, 200)}`)
+  return `${PRIVATE}.nip.io "${name.slice(0, 90)}"; ${PRIVATE} "${address.slice(0, 90)}"; example.com "${control.slice(0, 15)}"`
+})
+
+await check('C26', 'Gateway, a port other than 443', async () => {
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['internet'], ...SHORT })
+  const reply = await fetched(w, 'https://example.com:8443/')
+  await w.stop()
+  assert(reply.includes('CONNECT example.com:8443 refused by the proxy: 404'), reply.slice(0, 200))
+  return `"${reply.slice(0, 90)}"`
 })
 
 // Last: a warm token lives 15 minutes, renewed with a third left.
