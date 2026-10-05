@@ -72,8 +72,12 @@ class Workstream {
     this.session = e.session!
     return { ms: Date.now() - started }
   }
-  write(text: string): Promise<Json> {
-    return this.command('Write', { execution: this.execution, session: this.session }, { prompt: [{ type: 'text', text }] })
+  /** A Write, once the pool's opening settings are applied: until then it is refused, `settings_pending`. */
+  async write(text: string): Promise<Json> {
+    for (const deadline = Date.now() + 30_000; ; await sleep(200)) {
+      const written = await this.command('Write', { execution: this.execution, session: this.session }, { prompt: [{ type: 'text', text }] })
+      if (written.reason !== 'settings_pending' || Date.now() > deadline) return written
+    }
   }
   async turn(status: string | string[], timeoutMs = 60_000): Promise<Turn> {
     const wanted = Array.isArray(status) ? status : [status]
@@ -501,7 +505,8 @@ async function credentials(w: Workstream, profiles: string[], ttlSeconds: number
 
 async function fetched(w: Workstream, probe: string): Promise<string> {
   const before = await w.said()
-  assert((await w.write(`/fetch ${probe}`)).status === 200, 'Write refused')
+  const written = await w.write(`/fetch ${probe}`)
+  assert(written.status === 200, `Write refused: ${JSON.stringify(written)}`)
   await w.turn('done', 60_000)
   return (await w.said()).slice(before.length)
 }
@@ -741,7 +746,9 @@ await check('C14', 'A Create naming an unknown profile', async () => {
 await check('C15', 'Gateway, the chain to z.ai', async () => {
   const w = new Workstream()
   const since = new Date(Date.now() - 1000).toISOString()
-  await w.open(mock, { profiles: ['zai'], ...SHORT })
+  // Through the test route: a Create may name only the offered profiles, and the operator offers none of the services.
+  await w.open(mock, SHORT)
+  await credentials(w, ['zai'], 300)
   const reply = await fetched(w, 'https://api.z.ai/api/paas/v4/models')
   await w.stop()
   // Without a key, z.ai answers 401 ("Authentication parameter not received"): a 200 is the gateway's key.
@@ -754,7 +761,8 @@ await check('C15', 'Gateway, the chain to z.ai', async () => {
 await check('C16', 'Gateway, the chain to ChatGPT', async () => {
   const w = new Workstream()
   const since = new Date(Date.now() - 1000).toISOString()
-  await w.open(mock, { profiles: ['chatgpt'], ...SHORT })
+  await w.open(mock, SHORT)
+  await credentials(w, ['chatgpt'], 300)
   const models = await fetched(w, 'https://chatgpt.com/backend-api/codex/models?client_version=0.159.3')
   const conversations = await fetched(w, 'https://chatgpt.com/backend-api/conversations?offset=0&limit=1')
   await w.stop()
@@ -772,7 +780,8 @@ const routeOf = (since: string, w: Workstream, host: string) => gatewayLines(sin
 
 await check('C7', 'A host with no route of its own, without internet', async () => {
   const w = new Workstream()
-  await w.open(mock, { profiles: ['anthropic'], ...SHORT })
+  await w.open(mock, SHORT)
+  await credentials(w, ['anthropic'], 300)
   const closed = await fetched(w, 'https://example.com/')
   await w.stop()
   assert(/^HTTP\/1\.1 403/.test(closed) && closed.includes('authorization failed'), closed.slice(0, 200))
