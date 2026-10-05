@@ -52,7 +52,8 @@ flowchart LR
   no call to Agora per request. Changing an execution's rights is issuing a new token.
 - **Secrets live in one place.** Agora never sees them; the sandbox holds a token that expires
   and only works through the gateway, for its grants.
-- **One rule, one log.** Each request leaves a line: execution, method, path, status, reason.
+- **Two rules, one log.** The routes with a credential share one rule, the Internet's route has its
+  own; each request leaves a line: execution, method, path, status, reason.
 - **Warming is the same for every harness.** What differs is declared with the pool — its base
   profiles — not built into Agora or the bridge. A single issuer keeps the order: a late warming
   cannot replace an execution's token, and closing old tunnels makes the new token the only one
@@ -150,6 +151,21 @@ in Agora, composition carried by the credential rather than the policy, GitHub o
 
 Dropped outright: vaults grow with the combinations.
 
+### The Internet, narrower (studied 2026-10-05)
+
+| Option | Why not |
+| --- | --- |
+| `GET` and `HEAD` only | A query string carries what a body would: it narrows little, and breaks `POST`-only APIs. A grant can still carry methods, should a narrower profile be wanted. |
+| A list of hosts (registries, documentation) | One more change for every site an agent needs; each such list can still be a profile of its own. |
+| Public repositories through the Internet | `github.com` has one route, and that route sets the PAT, which reads every public repository and the private ones it reaches. A public repository is given as a `github` profile instead. |
+
+Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s deploys
+(2026-10-05): with `internet`, example.com, the npm registry and a `POST` answered; without it,
+403; with `internet` alone, Anthropic, z.ai, `api.github.com` and `github.com` refused (403); an
+address instead of a name refused at TLS; a port other than 443 refused on `CONNECT` (404); a
+name resolving to a private address that refuses port 443 got that refusal back — what the
+network policy is there to prevent.
+
 ### Other gateways (surveyed 2026-09-28)
 
 | Candidate | Why not |
@@ -164,7 +180,16 @@ Dropped outright: vaults grow with the combinations.
 
 - The gateway is on the critical path: when it is down, external operations fail, with no
   automatic escalation.
-- A new host needs a gateway route and a profile in Agora's catalogue, reviewed as code.
+- A new host with a credential needs a gateway route and a profile in Agora's catalogue, reviewed
+  as code. Any other host is the Internet's: one more route, without hosts, which agentgateway
+  picks last (read in its v1.5.0 code: exact host, then wildcards, then no host) and which sets
+  no credential, open to a grant on `*` — the `internet` profile. Routes with a credential match
+  the grant's host against the request's, so the Internet never opens them.
+- The `internet` route can name any host: the gateway's egress is limited to public addresses on
+  port 443, so no name leads it into the operator's networks or the cluster.
+- With the Internet, an agent steered by what it reads can send what it holds anywhere — a
+  repository it was given included; credentials stay in the gateway. It is never a base profile,
+  and an execution gets it only when picked.
 - A JWT cannot be revoked before it expires: keep it short, and Agora reissues it — in the pool
   while the Pod waits, and between turns during an execution, where closing tunnels interrupts
   nothing.

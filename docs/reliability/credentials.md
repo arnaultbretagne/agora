@@ -37,7 +37,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C4 | — | cluster | R7 | partial: the gateway's decisions are asserted; with stand-ins, no write can succeed | Permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
 | C5 | — | cluster | R0g | partial: probed by hand, no test | 401 for a missing, an expired and a foreign JWT. |
 | C6 | — | cluster | R0g | partial: probed by hand, no test | 403 for `..`, `.`, `%2e` and `%2f`. |
-| C7 | — | cluster | R0g | partial: probed by hand, no test | 404. |
+| C7 | — | cluster | R0g | partial: probed by hand, no test; the case was then a host with no route, before the `internet` route | 404. |
+| C7 | — | — | — | not verified | — |
 | C8 | — | local | R3 | partial: the gateway's answers (reach, 403) are not exercised; the 503 is inferred from no token attached | Every assertion held, in each of its two tests. |
 | C8 | — | cluster | R4 | proven | A warm claude-code Pod, before any claim: Anthropic answers (400, the probe sends no `anthropic-version`), `api.github.com` 403 from the gateway, which logs `jwt.sub` `agora warm <Pod>`. A warm mock Pod: 503 from the bridge, no hand-over in its log. |
 | C8 | — | cluster | R7 | proven | The claude-code warm Pod: Anthropic 400, GitHub 403 from the gateway, `jwt.sub` "agora warm …"; the mock's Pod: 503 from its bridge. |
@@ -67,6 +68,10 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C20 | — | local | R8 | partial: `GET /api/config` is asserted by U34 (`client.md`, R7) | `github:owner/a:read`, then `github:owner/a:write` with `github:owner/b:read`, accepted; `github:owner/b:write` refused `profile_not_offered`, nothing written. |
 | C21 | real: Agora stopped cleanly and started again | local | R8 | proven | A second token naming `anthropic` and `github:owner/b:read`, handed before the prompt after the restart was dispatched. |
 | C22 | — | cluster | R9 | proven | With `github:arnaultbretagne/agora:read`: `git ls-remote` listed `design/agora-foundations` and `main`, no TLS error; `infra-k8s`, not granted: 403. In a warm Pod whose token names `anthropic` only: 403 from the gateway ("authorization failed"). The control, without `GIT_SSL_CAINFO`: "Problem with the SSL CA cert". A commit there: author and committer `Agora <agent@agora.bretagne.dev>`. |
+| C23 | — | — | — | not verified | — |
+| C24 | — | — | — | not verified | — |
+| C25 | — | — | — | not verified | — |
+| C26 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 
