@@ -336,17 +336,19 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
 })
 
 test('U31 the access picker: each offered repository with None, Read and, when offered, Write; a service Off and On; the button', () => {
-  const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai'])
+  const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
   assert.deepEqual(
     entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
     [
       ['o/a', ['None', 'Read', 'Write']],
       ['o/b', ['None', 'Read']],
       ['z.ai', ['Off', 'On']],
+      ['Internet', ['Off', 'On']],
     ],
   )
   assert.equal(accessLabel([], entries), 'No access')
   assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
+  assert.equal(accessLabel(['internet'], entries), 'Internet')
   assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
   assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), '2 repos')
   assert.equal(accessLabel(['github:o/a:write', 'zai'], entries), '2 grants')

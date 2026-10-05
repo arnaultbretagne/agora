@@ -410,7 +410,7 @@ export interface AccessEntry {
   readonly choices: readonly { readonly label: string; readonly profile: string | null }[]
 }
 
-const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT' }
+const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', internet: 'Internet' }
 
 /**
  * What the access picker offers (docs/specs/assistant-ui.md, "Access"): each offered repository with
