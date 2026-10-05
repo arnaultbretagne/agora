@@ -131,7 +131,7 @@ describe('outbound proxy', () => {
     assert.ok(!info.includes('secret'), 'the token never leaves the bridge')
   })
 
-  it('C23 writes the claims of each token for the agent before answering, never the token', async () => {
+  it('C27 writes the claims of each token for the agent before answering, never the token', async () => {
     const target = await lab()
     const file = join(target.home, '.agora', 'access.json')
     assert.ok(!existsSync(file))

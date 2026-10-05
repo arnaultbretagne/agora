@@ -22,8 +22,10 @@ against the execution's grants and sets the credential on the way through.**
 | 503 from the bridge, on `CONNECT` | No token attached: a warm Pod whose pool declares no base profile, or before Agora hands one. |
 | 502 from the bridge, on `CONNECT` | Gateway unreachable. |
 | 401 from the gateway | JWT missing, expired or signed by another key. |
-| 403 from the gateway | None of the execution's grants covers this host, path and method. |
-| 404 from the gateway | Host with no route. |
+| 403 from the gateway | None of the execution's grants covers this host, path and method. A host with no route of its own falls to the `internet` route: refused without `internet`. |
+| 404 from the gateway, on `CONNECT` | A port other than 443: the gateway serves HTTPS on 443 only. |
+| 503 from the gateway | The host cannot be reached: its name does not resolve, or the connection fails or times out — as it does for a private address, which the network keeps out of the gateway's reach. |
+| TLS refused by the gateway (`access denied`) | An IP address instead of a name: the gateway issues certificates for names only. |
 
 ## The bridge
 
@@ -33,7 +35,7 @@ against the execution's grants and sets the credential on the way through.**
 | `GET /info`, `outbound` field | Proxy, expiry, when the credential was attached, number of tunnels, number of refusals, and for each target the number of tunnels and the last response to the `CONNECT`. Never the token. |
 | Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`, `NODE_USE_ENV_PROXY` set to `1` so that Node's own `fetch` goes through it too. Everything the agent runs inherits it. |
 | The agent's access | At each `PUT /credentials`, before answering: the token's claims — its payload as JSON, never the token or its signature — written to `~/.agora/access.json`, replacing the previous ones as a whole, in the order the tokens came. A token whose claims cannot be read removes the file. |
-| What is relayed | `CONNECT` only. An `http://` request is refused (501): it has no credential to carry. |
+| What is relayed | `CONNECT` only. An `http://` request is refused (501): the gateway serves HTTPS only. |
 
 ## Profiles and grants
 
@@ -46,23 +48,29 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `anthropic` | `api.anthropic.com`, everything. |
 | `zai` | `api.z.ai`, everything: z.ai's OpenAI- and Anthropic-compatible APIs. |
 | `chatgpt` | `chatgpt.com`, only `/backend-api/codex…` and `/backend-api/wham…`: what codex uses. The session reaches the whole ChatGPT account, conversations included. |
+| `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
+
+`internet` never opens a host that has a route of its own: those routes compare the grant's host
+with the request's, and only the `internet` route reads `*`. So a public repository outside the
+execution's `github` profiles stays closed — `github.com` has its own route, and its credential.
 
 ### Base profiles
 
 What a harness needs before any execution — its SDK initializing, for instance — is declared on
 its pool, the `SandboxWarmPool`, in the annotation `agora.bretagne.dev/base-profiles`: profiles
 separated by commas. Only profiles the catalogue marks as base may be declared: those naming a
-service, never a repository.
+service — never a repository, nor `internet`.
 
 | Profile | Base |
 | --- | --- |
 | `anthropic` | Yes |
 | `zai` | Yes |
 | `chatgpt` | Yes |
+| `internet` | No |
 | `github:…` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
@@ -79,7 +87,7 @@ profile, or a narrower one of the same repository.
 | --- | --- |
 | `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:read` |
 | `github:owner/repo:read` | `github:owner/repo:read` |
-| `anthropic`, `zai`, `chatgpt` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet` | Itself |
 
 Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
 catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
@@ -107,10 +115,15 @@ ConfigMap.
 agentgateway in standalone mode, namespace `agora-gateway`, Service `gateway` port 3000
 (`CONNECT`). Every tunnel to port 443 is terminated with the "Agora gateway CA" CA.
 
-A single authorization rule, the same for every route: the path contains no `..`, `.`, `%2e` or
-`%2f`, and one of the JWT's grants covers the host, the path with the query, and the method. If
-the rule fails, the request stops at the gateway; otherwise the gateway sets the host's
-credential.
+The routes with a credential share one authorization rule: the path contains no `..`, `.`,
+`%2e` or `%2f`, and one of the JWT's grants covers the host, the path with the query, and the
+method. If the rule fails, the request stops at the gateway; otherwise the gateway sets the
+host's credential.
+
+The `internet` route names no host. agentgateway picks a route by the request's exact host, then
+by wildcard, and the route without hosts last: it takes every host the other routes do not name.
+Its rule: one of the JWT's grants is on host `*` and covers the path with the query, and the
+method. It sets no credential: the request leaves as the sandbox sent it.
 
 | Route | Host | Credential set |
 | --- | --- | --- |
@@ -119,8 +132,14 @@ credential.
 | `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
 | `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
 | `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
+| `internet` | Any other | None. |
 
 The PAT must reach every repository offered, with the access offered: the grants only narrow it.
+
+The `internet` route can name any host, so the network bounds it: the gateway goes out to public
+IPv4 addresses only, on port 443. The private ranges — `10.0.0.0/8`, `100.64.0.0/10`,
+`169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16` — hold the operator's networks and the
+cluster: a name resolving there times out (503); an address written as such is refused at TLS.
 
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
@@ -162,9 +181,10 @@ Bearer and lets the rest through.
 | --- | --- |
 | `NODE_EXTRA_CA_CERTS` | `/etc/agora/credential-proxy/ca.pem`, from the `credential-proxy-ca` ConfigMap: "Agora gateway CA", valid until 2028. |
 | `GIT_SSL_CAINFO` | The same file, for git, whose libcurl does not read `NODE_EXTRA_CA_CERTS`. The gateway's root alone: everything goes through it. |
-| Network egress | DNS, and `gateway.agora-gateway` on port 3000. Nothing else to the Internet. |
+| Network egress | DNS, and `gateway.agora-gateway` on port 3000. Nothing else: the Internet, when granted, is reached through the gateway. |
 
-On the other side, the gateway accepts only the sandboxes and goes out only on port 443.
+On the other side, the gateway accepts only the sandboxes and goes out only to public addresses,
+on port 443.
 
 ## The model
 
@@ -182,7 +202,7 @@ call. The test page does it itself when the agent offers the option.
 | C4 | Composition | Profiles `github:A:write` and `github:B:read`. A: read, write, push; B: read and fetch, no write or push; C, GraphQL: refused. |
 | C5 | A JWT missing, expired or signed by another key, sent straight to the gateway | 401 from the gateway. |
 | C6 | Crafted paths (`..`, `.`, `%2e`, `%2f`) under a granted repo | 403 from the gateway. |
-| C7 | A host with no route | 404 from the gateway. |
+| C7 | A host with no route of its own, the execution without `internet`: the mock's `/fetch https://example.com/` | 403 from the gateway. |
 | C8 | A pool declaring `anthropic`, a pool declaring none | A warm Pod of the first can reach `api.anthropic.com` before any claim, and nothing else (403); its token names the Pod. The second's Pod has no way out (503). |
 | C9 | A warm Pod waiting beyond two thirds of its token's life | A new token before the old one expires; no request refused in between. |
 | C10 | A claim on a warm Pod, the Create naming `github:A:read` | Before `initialize`, a token naming the execution, with `anthropic` and `github:A:read`; the tunnels of the warm token closed. |
@@ -198,8 +218,12 @@ call. The test page does it itself when the agent offers the option.
 | C20 | `github:A:write` and `github:B:read` offered; Creates naming `github:A:read`, `github:A:write`, `github:B:write` | Accepted, accepted, `profile_not_offered`; `GET /api/config` lists the offered profiles. |
 | C21 | Agora restarted between two turns of an execution with a token | A new token before the next prompt, naming the execution's profiles. |
 | C22 | git in a harness's sandbox: `git ls-remote https://github.com/A` with `github:A:read`, then with no `github` profile | The refs, with no TLS error; then 403 from the gateway. |
-| C23 | `PUT /credentials` with a token, then with one naming other profiles, then with one that is no JWT | `~/.agora/access.json` holds the first token's claims, then the second's, each before the answer; never a token or a signature; then no file. |
-| C24 | Node's own `fetch` in the adapter's environment, before any credential; the same without `NODE_USE_ENV_PROXY` | `NODE_USE_ENV_PROXY` is `1`; the request fails, refused by the outbound proxy: one refusal counted. Without it: no refusal counted. |
+| C23 | The Internet: `internet` profile, the mock's `/fetch` of `https://example.com/`, `GET` then `POST` | Both answered by example.com, the `GET` 200; the gateway logs the route `internet`. |
+| C24 | `internet` alone, the mock's `/fetch` to `api.anthropic.com`, `api.z.ai`, `chatgpt.com`, `api.github.com/repos/A`, git on `github.com/A`; then `github:A:read` added | 403 from the gateway for each; then GitHub answers for A. |
+| C25 | `internet`, the mock's `/fetch` to a name resolving to a private address that refuses port 443, to that address itself, and to `https://example.com/` | The name: 503 from the gateway, the connection timed out — never refused, which would mean it was reached. The address: TLS refused by the gateway. example.com: 200. |
+| C26 | `internet`, the mock's `/fetch https://example.com:8443/` | `CONNECT` refused, 404 from the gateway. |
+| C27 | `PUT /credentials` with a token, then with one naming other profiles, then with one that is no JWT | `~/.agora/access.json` holds the first token's claims, then the second's, each before the answer; never a token or a signature; then no file. |
+| C28 | Node's own `fetch` in the adapter's environment, before any credential; the same without `NODE_USE_ENV_PROXY` | `NODE_USE_ENV_PROXY` is `1`; the request fails, refused by the outbound proxy: one refusal counted. Without it: no refusal counted. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

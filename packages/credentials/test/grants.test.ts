@@ -8,9 +8,14 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { baseProfiles, compileProfile, compileProfiles, GrantSigner, offeredProfiles, offers, type Grant } from '../src/index.ts'
 
-/** What the gateway's single rule decides, replayed in JavaScript. */
+/** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
   return grants.some((g) => g.host === host && (g.path === undefined || new RegExp(g.path).test(pathAndQuery)) && (g.methods === undefined || g.methods.includes(method)))
+}
+
+/** The same for the `internet` route, which takes every host without a route of its own: a grant on `*`. */
+function allowedOnline(grants: readonly Grant[], method: string, pathAndQuery: string): boolean {
+  return grants.some((g) => g.host === '*' && (g.path === undefined || new RegExp(g.path).test(pathAndQuery)) && (g.methods === undefined || g.methods.includes(method)))
 }
 
 describe('profiles', () => {
@@ -41,6 +46,18 @@ describe('profiles', () => {
     assert.equal(allowed(grants, 'api.z.ai', 'POST', '/api/paas/v4/chat/completions'), true)
     assert.equal(allowed(grants, 'api.z.ai', 'POST', '/api/anthropic/v1/messages'), true)
     assert.equal(allowed(grants, 'api.anthropic.com', 'POST', '/v1/messages'), false)
+  })
+
+  it('internet opens every host without a route of its own, and none of those with a credential', () => {
+    const grants = compileProfile('internet')
+    assert.deepEqual(grants, [{ host: '*' }])
+    assert.equal(allowedOnline(grants, 'GET', '/'), true)
+    assert.equal(allowedOnline(grants, 'POST', '/v1/anything?x=1'), true)
+    for (const [host, path] of [['api.anthropic.com', '/v1/models'], ['api.z.ai', '/api/paas/v4/models'], ['chatgpt.com', '/backend-api/codex/models'], ['api.github.com', '/repos/octo/app'], ['github.com', '/octo/app.git/info/refs?service=git-upload-pack']] as const) {
+      assert.equal(allowed(grants, host, 'GET', path), false, host)
+    }
+    // Without it, the hosts with no route of their own stay closed, whatever else is granted.
+    assert.equal(allowedOnline(compileProfiles(['anthropic', 'zai', 'chatgpt', 'github:octo/app:write']), 'GET', '/'), false)
   })
 
   it('composes write on one repo and read on another of the same host, without mixing them', () => {
@@ -100,10 +117,10 @@ describe('GrantSigner', () => {
   })
 
   it('reads the offered profiles, and what they let a Create or a Scope name', () => {
-    assert.deepEqual(offeredProfiles(' github:o/a:write, github:o/b:read,zai,github:o/a:write '), ['github:o/a:write', 'github:o/b:read', 'zai'])
+    assert.deepEqual(offeredProfiles(' github:o/a:write, github:o/b:read,zai,github:o/a:write,internet '), ['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
     assert.deepEqual(offeredProfiles(undefined), [])
     assert.throws(() => offeredProfiles('github:o/a:admin'), /unknown profile/)
-    const offered = ['github:o/a:write', 'github:o/b:read', 'zai']
+    const offered = ['github:o/a:write', 'github:o/b:read', 'zai', 'internet']
     const cases: [string, boolean][] = [
       ['github:o/a:write', true],
       ['github:o/a:read', true],
@@ -111,6 +128,7 @@ describe('GrantSigner', () => {
       ['github:o/b:write', false],
       ['github:o/c:read', false],
       ['zai', true],
+      ['internet', true],
       ['anthropic', false],
     ]
     for (const [profile, expected] of cases) assert.equal(offers(offered, profile), expected, profile)
@@ -119,11 +137,12 @@ describe('GrantSigner', () => {
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
   })
 
-  it('reads a pool\'s base profiles: services only, never a repository', () => {
+  it('reads a pool\'s base profiles: services only, never a repository nor the Internet', () => {
     assert.deepEqual(baseProfiles('anthropic,zai,chatgpt'), { profiles: ['anthropic', 'zai', 'chatgpt'], refused: null })
     assert.deepEqual(baseProfiles('anthropic'), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(' anthropic , '), { profiles: ['anthropic'], refused: null })
     assert.deepEqual(baseProfiles(undefined), { profiles: [], refused: null })
     assert.deepEqual(baseProfiles('anthropic,github:o/r:read'), { profiles: [], refused: 'github:o/r:read' })
+    assert.deepEqual(baseProfiles('anthropic,internet'), { profiles: [], refused: 'internet' })
   })
 })

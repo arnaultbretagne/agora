@@ -20,7 +20,10 @@ and sets the credentials itself: you hold none and need none. There is no other 
 
 - `403` with `authorization failed`: outside your access. It is not an outage, and no other
   address will get around it.
-- `404` with `route not found`: a host the gateway does not serve.
+- `404` on `CONNECT`: a port other than 443. The gateway serves `https://` on port 443 only;
+  `http://` is refused.
+- `503`: the host cannot be reached — its name does not resolve, or it does not answer. Private
+  addresses never answer.
 
 ## Your access
 
@@ -33,6 +36,7 @@ a host, an anchored regular expression on the path and query, the methods.
 | --- | --- |
 | `github:OWNER/REPO:read` | `git clone` and `git fetch` `https://github.com/OWNER/REPO.git`; `GET` `https://api.github.com/repos/OWNER/REPO` and below. |
 | `github:OWNER/REPO:write` | The same, plus `git push`, and every method under `https://api.github.com/repos/OWNER/REPO` — a pull request is `POST /repos/OWNER/REPO/pulls`. |
+| `internet` | Any other `https://` host on port 443, with no credential: what anyone on the Internet may do there. Never the hosts above — with `internet` alone, GitHub stays closed, public repositories included. |
 | `anthropic`, `zai`, `chatgpt` | Nothing for you to do: the model you run on. |
 
 Nothing else on GitHub is open — not `/user`, not `/search`, not GraphQL — so the REST API is

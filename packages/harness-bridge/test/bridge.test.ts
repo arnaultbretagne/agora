@@ -114,7 +114,7 @@ describe('bridge', () => {
     assert.deepEqual(await written(join(target.home, 'seen')), expected, 'the adapter found them in its working directory as it started')
   })
 
-  it('C24 Node’s own fetch, from the adapter’s environment, goes through the outbound proxy', async () => {
+  it('C28 Node’s own fetch, from the adapter’s environment, goes through the outbound proxy', async () => {
     const target = await stdio('fetch')
     const [flag, outcome] = (await written(join(target.home, 'fetched'))).toString('utf8').split('\n')
     assert.equal(flag, '1')
@@ -124,7 +124,7 @@ describe('bridge', () => {
     assert.equal(info.outbound.refused, 1)
   })
 
-  it('C24 control: without NODE_USE_ENV_PROXY, the same fetch never reaches the outbound proxy', async () => {
+  it('C28 control: without NODE_USE_ENV_PROXY, the same fetch never reaches the outbound proxy', async () => {
     const target = await stdio('fetch', false, ['env', '-u', 'NODE_USE_ENV_PROXY'])
     const [flag, outcome] = (await written(join(target.home, 'fetched'))).toString('utf8').split('\n')
     assert.equal(flag, 'undefined')
