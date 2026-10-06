@@ -50,7 +50,7 @@ What the client reads of each view object. Every object also carries `id`, `firs
 
 | Kind | Fields read |
 | --- | --- |
-| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, and in the list `changedAt` |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation`, and in the list `changedAt` |
 | `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
 | `element` | `type`, `turn`, `session`, and per type below |
 | `notice` | `type`, `reason`, `origin`, `harness` |
@@ -63,7 +63,7 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 
 | Command | Target | Body | Offered |
 | --- | --- | --- | --- |
-| Create | — | `pool`, from the catalogue; `anchor`, to continue; `settings`, the model and effort picked; `profiles`, the access picked | With a message sent while no execution runs ("Sending"). |
+| Create | — | `pool`, from the catalogue; `settings`, the model and effort picked; `profiles`, the access picked. Never an anchor: the server finds the one it continues from (`log.md`, "Continuing"). | With a message sent while no execution runs ("Sending"). |
 | Configure | `execution`, `session` | `configId`, `value` | When sending is open, from the model picker ("Settings and commands"). |
 | Scope | `execution` | `profiles`: the whole access picked | When no turn runs, from the access picker ("Access"). |
 | Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
@@ -85,7 +85,7 @@ in the header, after the harness.
 | `stopped` | stopped | Closed: "Stopped. The sandbox ends at its deadline." |
 | `lost` | lost | Closed: "The sandbox was lost. It ends at its deadline; then a new one can start." |
 | `failed` | failed | Open: sending starts a new execution. |
-| `ended` | ended | Open: sending starts a new execution, from the view's `anchor` in the same pool. |
+| `ended` | ended | Open: sending starts a new execution, which continues the Workstream. |
 
 In `ready`, sending is open when the snapshot is complete, no turn is saved, in progress or
 uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
@@ -99,9 +99,10 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 
 | Step | What happens |
 | --- | --- |
-| The harness | Picked inside the composer, among the catalogue's pools but those kept for the tests (`testing`). Offered first: the one picked in this Workstream; else the Workstream's own pool, so that it continues; else, in a draft, the one picked last, remembered in the browser; else the first. |
+| The harness | Picked inside the composer, among the catalogue's pools but those kept for the tests (`testing`). Offered first: the one picked in this Workstream; else the Workstream's own pool, or one of its harness once that pool is gone with an older image; else, in a draft, the one picked last, remembered in the browser; else the first. A harness with an anchor in the Workstream (`continuation`) is noted "continues its saved session". |
 | The Workstream | A draft gets its id and `POST /api/workstreams`, then its address `/w/{id}`. |
-| Create | `pool`; with the view's `anchor` when the pool is the view's and the state is `ended`, so the agent remembers; from nothing in another pool. `settings`: the model and effort picked, if any. `profiles`: the access picked, if any ("Access"). |
+| What the agent will be given | Above the composer, when the Workstream has exchanges (`exchanges`) and the harness picked has no anchor holding them all: "{Harness} resumes its saved session; the {n} exchanges since then go to it as text.", from its `continuation`; with none, "No saved {Harness} session: the {n} exchanges above go to the agent as text." One exchange: "the 1 exchange … goes". Nothing when its anchor holds them all. |
+| Create | `pool`; `settings`: the model and effort picked, if any; `profiles`: the access picked, if any ("Access"). |
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
 
@@ -226,6 +227,8 @@ the screen.
 | `session.opened`, `origin` `new`, the Workstream's first | "Session started with {harness}." |
 | `session.opened`, `origin` `new`, after another | "New session with {harness}: the agent does not know the history above." |
 | `session.opened`, `origin` an anchor | "Session restored with {harness}: the agent remembers the history above." |
+| `session.opened`, `origin` an anchor, `catchUp` n | "Session restored with {harness}. The {n} exchanges since its last save go to the agent with your next message." |
+| `session.opened`, `origin` `new`, `catchUp` n | "New session with {harness}. The {n} exchanges above go to the agent with your next message." With `catchUp` 0, after another: "New session with {harness}." Either count of one: "the 1 exchange … goes". With `omitted` m, before the final stop: " (the {m} exchanges before them left out for length)". |
 | `session.ended`, reason `replaced` | "Another session replaced this one." Any other reason is not shown: the execution's own notice says it. |
 | `execution.break` | "The connection to the sandbox was interrupted." Not shown when the next notice of the same execution is its loss or its end, which explains it. |
 | `request.failed` | `response_timeout` "The agent did not answer in time.", `deadline_refused` "The sandbox's deadline could not be extended.", `transport_error` "A message could not reach the sandbox.", else "A request to the agent failed." |
@@ -287,7 +290,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U6 | A `reset` in the stream | The objects cleared, the complete state applied, no message twice. |
 | U7 | A command refused | Its reason shown; the objects unchanged. |
 | U8 | The stream cut, then back | Opened again from the last cursor; no change skipped or applied twice. |
-| U9 | An execution ended with an anchor, then a message | In the same pool, Create with the view's pool and anchor; in another, with the pool alone; the restored Session's notice follows. |
+| U9 | An execution ended with an anchor, then a message | Create with the pool alone; the view's `continuation` names the anchor; nothing said before sending in its harness, every exchange as text in another; the restored Session's notice follows. |
 | U10 | Each notice type | Its text, with its harness; a Session's end not shown unless replaced, nor a break its execution's loss follows; no reason code. |
 | U11 | Each Workstream state | Its label, whether sending is open and starts an execution, and why it is not. |
 | U12 | A real claude-code history: files written and edited, each after a permission | Each change's line labelled with its action and file, its diff taken from its permission, the lines added and removed; each permission answered. |
@@ -301,19 +304,20 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U20 | In a browser, a reload on a Workstream | The same messages, each once. |
 | U21 | In a browser, **Stop** | The state `stopped`, **Stop** gone, sending closed with its reason. |
 | U22 | In a browser, the theme toggled, the page reloaded, then another browser | Dark, still dark after the reload; light in the other. |
-| U23 | In a browser, a Workstream whose execution ended, then a message | The harness offered to continue the last session; the restored Session's notice; the agent recalls the earlier message. |
+| U23 | In a browser, a Workstream whose execution ended, then a message | Its harness noted "continues its saved session"; the restored Session's notice; the agent recalls the earlier message. |
 | U24 | In a browser, a tool with a diff | Its line labelled with its action and file, noted with the lines added and removed; opened, the diff. |
 | U25 | A Session's settings: claude-code's, codex's and opencode's | The model's options without `default`, by name, the current one marked; the effort's likewise; no mode offered. |
 | U26 | Commands, then `/re` typed | All listed, then those whose name starts with `re`; choosing one gives `/{name} `. |
 | U27 | In a browser, a model and an effort picked in the draft, then a first message | The Create carries them; the picker shows them once the Session is ready. |
 | U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
 | U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen: `/{name} ` in the composer; sent: the agent receives it. |
-| U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool | The pool not offered; the ended Workstream's harness offered first is another. |
+| U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool; one whose pool is gone with an older image | The pool not offered; the ended Workstream's harness offered first is another; the other's, a pool of its harness. |
 | U31 | Offered `github:o/a:write`, `github:o/b:read`, `zai` and `internet`; none granted, then `github:o/a:read`, then `internet` alone | `o/a` with None, Read, Write; `o/b` with None, Read; z.ai and Internet with Off, On; the button "No access", then "a · Read", then "Internet"; nothing offered: no picker. |
 | U32 | An access choice: Write for `o/a`, then None for it, with `github:o/b:read` granted | The whole set each time: `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`. |
 | U33 | An ended Workstream whose execution had profiles, a message sent | The Create carries its `profiles`; another chosen before sending: those instead. |
 | U34 | In a browser, an access picked in the draft, then a first message | The Create carries its `profiles`; the picker shows them once the Session is ready. |
 | U35 | In a browser, another access picked in an open Workstream | Scope sent with the whole set; the picker shows it at once, and still once the view has it. |
+| U36 | In a browser, a Workstream whose Pod ended without its anchor, then a message | Before sending, "No saved Mock agent session: the 1 exchange above goes to the agent as text."; sent, the new Session's notice says so; the prompt carries the exchange, then the message; the user's message shows the message alone. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

@@ -38,6 +38,8 @@ export class FakeKube implements KubeApi {
   readonly sessionConfig: Record<string, string> = {}
   /** Each pool's `agora.bretagne.dev/purpose`, when set. */
   readonly purpose: Record<string, string> = {}
+  /** Pools beyond the two built in, by name and harness: a newer image of a harness is another pool. */
+  readonly morePools: [name: string, harness: string][] = []
   private readonly watchers = new Set<(event: WatchEvent) => void>()
   private readonly tokens = mkdtempSync(join(tmpdir(), 'tokens-'))
   private version = 1
@@ -231,7 +233,7 @@ export class FakeKube implements KubeApi {
       spec: { replicas: 2, sandboxTemplateRef: { name } },
       status: { readyReplicas: 2 },
     })
-    return [pool('mock-test', 'mock'), pool('claude-test', 'claude-code')]
+    return [pool('mock-test', 'mock'), pool('claude-test', 'claude-code'), ...this.morePools.map(([name, harness]) => pool(name, harness))]
   }
 
   async getTemplate(name: string): Promise<Json | null> {

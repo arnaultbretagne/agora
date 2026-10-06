@@ -56,7 +56,7 @@ script pass. What each one proves is recorded in `reliability/executions.md`.
 | A persistent volume (PVC) in the sandbox | Against the principle, and a PVC on the claim forces a cold start. |
 | Renewing between two turns | The lease granted after the turn is enough; then the infrastructure takes the resource back. |
 | Agora pulls the anchor during the grace period | A race between its WATCH and the Pod's death; only the Pod knows when it dies. |
-| Saving at every turn | The anchor only matters at the end of the Pod; before that, the live sandbox is the reference. |
+| Saving at every turn | The anchor only matters at the end of the Pod; before that, the live sandbox is the reference. A Pod ending without its anchor is an incident — the node dying — and the log gives the next Session what it missed. |
 | The Pod writes to Agora's database | No database login in an untrusted sandbox. |
 | A secret or identity injected through the claim | Forces a cold start and puts a secret in the sandbox. |
 | Agora's state in annotations on the claim | Used while Agora had no database; beside the log, every annotation duplicated an entry: two sources for the same facts. |
@@ -68,7 +68,8 @@ script pass. What each one proves is recorded in `reliability/executions.md`.
 
 - A stop frees the resource at most one lease later.
 - A new image is a new pool: its name follows the image's digest.
-- If Agora is unreachable during the grace period, the sandbox leaves without an anchor.
+- If Agora is unreachable during the grace period, or the node dies, the sandbox leaves without an
+  anchor; the next execution gets the exchanges from the log, as text.
 - A turn lasts at most one hour.
 - Restoring from an anchor opens a new Session and pays for the whole context again.
 - Kata constraints: no FQDN network rules (plain DNS and address ranges), and clock sync

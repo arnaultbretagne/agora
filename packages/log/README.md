@@ -10,6 +10,7 @@ the views and the thread, in PostgreSQL. It mounts the execution mechanics of
 | `src/store.ts` | Entries, commands, Sessions, diagnostics and anchors, behind the three roles. |
 | `src/acp.ts` | Validation of a line against the pinned ACP schema. |
 | `src/state.ts` | The fold of the entries: executions, requests, turns; the core projector. |
+| `src/catch-up.ts` | Continuing a Workstream: the anchor a Create restores, and the exchanges given as text with the first prompt. |
 | `src/projection.ts` | Views, checkpoints, rebuilds and the thread. |
 | `src/http.ts` | The HTTP routes. |
 | `src/telemetry.ts` | The operational logger. |

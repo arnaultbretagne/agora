@@ -29,6 +29,7 @@ import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
+import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { compileProfile, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -245,6 +246,9 @@ export class Workstreams implements Handler {
           const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles)
           if (profiles === 'invalid') return 'invalid_create'
           if (typeof profiles === 'string') return profiles
+          // docs/specs/log.md, "Continuing": the anchor given, else the Workstream's last of this harness;
+          // then the exchanges it does not hold, chosen now and given with the execution's first prompt.
+          const anchors = anchorsOf(tx.entries, state)
           let anchor: string | undefined
           if (command.body.anchor !== undefined) {
             anchor = uuid(command.body.anchor)
@@ -252,7 +256,8 @@ export class Workstreams implements Handler {
             if (!found.rowCount) return 'unknown_anchor'
             const metadata = object(decode(found.rows[0].metadata))
             if (metadata?.harness !== pool.harness || typeof metadata.sessionId !== 'string') return 'anchor_incompatible'
-          }
+          } else anchor = lastAnchor(anchors, state, pool.harness) ?? undefined
+          const catchUp = catchUpText(exchangesOf(tx.entries, lacking(anchors, state, anchor ?? null)), anchor !== undefined)
           const execution = randomUUID()
           return {
             execution,
@@ -264,6 +269,7 @@ export class Workstreams implements Handler {
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
               ...(profiles.length > 0 ? { profiles } : {}),
               ...(anchor ? { anchor } : {}),
+              catchUp: { turns: catchUp.turns, omitted: catchUp.omitted },
               ...(settings.length > 0 ? { settings } : {}),
               execution,
             },
@@ -282,10 +288,12 @@ export class Workstreams implements Handler {
           if (this.opening(state, current)) return 'opening_session'
           if (state.permissions.size) return 'permission_pending'
           if (!settled(state, current)) return 'settings_pending'
+          const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
+          const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
           return {
             execution: current.id,
             session: current.session,
-            line: { method: 'session/prompt', params: { sessionId: current.acpId, prompt: command.body.prompt } },
+            line: { method: 'session/prompt', params: { sessionId: current.acpId, prompt } },
           }
         }
         if (command.kind === 'Configure') {
@@ -353,6 +361,26 @@ export class Workstreams implements Handler {
       await this.project(workstream)
       return answer
     })
+  }
+
+  /**
+   * The catch-up a Write carries (docs/specs/log.md, "Continuing"): the exchanges its Create chose, until
+   * a prompt of the execution carrying them has been dispatched. A command (`/…`) never carries it: the
+   * agent would no longer see it as a command.
+   */
+  private catchUpFor(entries: readonly Entry[], state: State, e: Execution, prompt: unknown): CatchUp | null {
+    const recorded = object(e.body.catchUp)
+    const turns = Array.isArray(recorded?.turns) ? recorded.turns.map(String) : []
+    if (turns.length === 0 || !Array.isArray(prompt)) return null
+    const first = prompt.map((b) => object(b)).find((b) => b?.type === 'text')
+    if (typeof first?.text === 'string' && first.text.trimStart().startsWith('/')) return null
+    const carried = (x: Entry) => {
+      const blocks = object(x.content.params)?.prompt
+      return Array.isArray(blocks) && blocks.some(isCatchUp)
+    }
+    if (entries.some((x) => x.execution === e.id && x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt' && state.attempts.has(x.position) && carried(x)))
+      return null
+    return catchUpText(exchangesOf(entries, turns), e.body.anchor !== undefined, Number(schemaValue(recorded!.omitted)) || 0)
   }
 
   /** A Create's or a Scope's profiles, checked (docs/specs/credentials.md, "Offered profiles"): each once, or the refusal. */

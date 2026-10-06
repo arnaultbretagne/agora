@@ -136,11 +136,11 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   useEffect(() => {
     void api.pools().then(setPools, () => setPools((p) => p ?? []))
   }, [api, id])
-  // The pool offered: the one picked here; else the Workstream's own, so that it continues from its
-  // anchor; else, in a draft, the one picked last; else the first.
+  // The pool offered: the one picked here; else the Workstream's own, or one of its harness, so that it
+  // continues; else, in a draft, the one picked last; else the first.
   const pool = useMemo(
-    () => poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool()),
-    [pools, picked, view.pool, id],
+    () => poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool(), id !== null ? view.harness : null),
+    [pools, picked, view.pool, view.harness, id],
   )
   const choosePool = useCallback(
     (next: string) => {
@@ -210,7 +210,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         const created = await api.create(workstream)
         if (!created.accepted) return setRefusal(refusalText(created.reason ?? 'unavailable'))
       }
-      const created = await send('Create', {}, startBody(view, pool, id === null, chosen, access), workstream)
+      const created = await send('Create', {}, startBody(pool, chosen, access), workstream)
       if (!created.accepted || created.execution === undefined) {
         setReturned(text)
         if (id === null) onOpen(workstream)
@@ -219,7 +219,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       setPending({ workstream, execution: created.execution, text, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, view, send, onOpen, harnessOf, chosen, access],
+    [api, id, pool, send, onOpen, harnessOf, chosen, access],
   )
 
   const chooseSetting = useCallback(

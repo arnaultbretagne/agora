@@ -28,7 +28,7 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `execution.obtained` | The claim of an accepted Create is created or found. | Its name and UID. |
 | `execution.connected` | A connection to the bridge is open and its instance checked. | The connection, the bridge instance. |
 | `execution.break` | A connection to the bridge closes, after every line received on it is committed. | The connection, the close code when known, clean or not. |
-| `session.opened` | `session/new`, `session/load` or `session/resume` is answered without error. | The ACP session id, the pool, the harness, and the origin: new, or the anchor restored. |
+| `session.opened` | `session/new`, `session/load` or `session/resume` is answered without error. | The ACP session id, the pool, the harness, the origin: new, or the anchor restored; and the exchanges its first prompt will give and those left out ("Continuing"). |
 | `session.ended` | The execution is lost, failed or ended, or another ACP session replaces this one. | The reason. |
 | `execution.lost` | The adapter died, the bridge instance changed, or the claim conflicts with the record. | The reason. |
 | `execution.failed` | Startup or restoration cannot complete. | The reason and the request position when there is one. |
@@ -152,6 +152,26 @@ exits with a non-zero status and recovery runs on its restart.
 | Opening requests | `initialize` and the opening requests belong to the execution only. |
 | Reconnecting | To the same bridge instance, the Session goes on; to another instance, the execution is lost. |
 
+## Continuing
+
+A Workstream outlives its executions. A new one continues it: the agent gets back what an anchor
+saved, and the rest of the conversation as text, from the log.
+
+| Rule | Detail |
+| --- | --- |
+| The anchor | The Create's `anchor` when it names one; otherwise the Workstream's last anchor of the pool's harness, whatever the pool's name: that of the execution created last among those that opened a Session and left one naming an ACP session. Never an anchor an execution failed to restore — `restore_failed`, `anchor_missing`, or an error answering its `session/resume` or `session/load`. None: a new ACP session. |
+| An exchange | A turn whose `session/prompt` was dispatched: the user's blocks, but an earlier catch-up; then the agent's `agent_message_chunk` text and the title of each tool it called, a failed one marked, in their order. No reasoning, tool content, plan or permission. |
+| What an anchor holds | Its execution's exchanges; those its execution was given, once a prompt carrying them was dispatched; and what the anchor it restored held. Nothing for an anchor of another Workstream. |
+| Which exchanges | Every exchange of the Workstream the anchor does not hold — all of them without an anchor —, oldest first. |
+| Chosen | At the Create, recorded in its body as `catchUp`: the positions of the prompts of the exchanges to give, and how many were left out. `session.opened` gives their two counts. |
+| Given | With the execution's first prompt that is not a command — a first text block starting with `/` runs one, and must stay first. One text block ahead of the user's, marked in its `_meta` with `agora.bretagne.dev/catch-up` and the two counts. Once dispatched, never again in that execution; never dispatched, the next execution gives those exchanges. |
+| Length | At most 200,000 characters of exchanges, the most recent kept whole; a message or a response beyond 20,000 characters is cut. |
+| What it says | Whether the Session was restored from a save that ends before these exchanges, or no save could be restored; that they are context, oldest first; how many were left out; that the user's new message follows. |
+
+What is given as text is what was said, not the agent's state: no tool result, no file. A Pod that
+ends without its anchor is an incident — the node dying, Agora unreachable during the grace period
+— not the normal path: anchors stay saved only when the Pod ends (`executions.md`).
+
 ## Commands
 
 The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Scope,
@@ -161,8 +181,8 @@ Stop (`assistant-ui.md`).
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
-| Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any. The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). |
+| Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any; without one, the log finds it ("Continuing"). The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). Its line carries the catch-up when it is due ("Continuing"). |
 | Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
@@ -232,7 +252,7 @@ the client shows them is `assistant-ui.md`.
 
 | `type` | Folded from | Fields |
 | --- | --- | --- |
-| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks |
+| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one |
 | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
@@ -244,8 +264,8 @@ ends.
 
 ### The Workstream view
 
-One object per Workstream, changed by its commands, its execution entries, its Sessions and the
-agent's title.
+One object per Workstream, changed by its commands, its execution entries, its Sessions, its
+anchors, the dispatch of its prompts and the agent's title.
 
 | Field | Value |
 | --- | --- |
@@ -259,6 +279,8 @@ agent's title.
 | `commands` | The last Session's last `available_commands_update`, kept once it has ended: each with `name`, `description` and its input's `hint`; or empty. |
 | `configuring` | A `session/set_config_option` of the open Session is unanswered. |
 | `profiles` | The last execution's own profiles: its Create's, then its last Scope's; or empty. |
+| `exchanges` | The Workstream's turns whose prompt was dispatched. |
+| `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
 
 | `state` | When, the first that applies |
@@ -276,7 +298,7 @@ agent's title.
 
 | `type` | From | Fields |
 | --- | --- | --- |
-| `session.opened` | `session.opened` | `origin`: `new` or the anchor restored; `harness` |
+| `session.opened` | `session.opened` | `origin`: `new` or the anchor restored; `harness`; `catchUp` and `omitted`, when counted |
 | `session.ended` | `session.ended` | `reason` |
 | `execution.break` | an unclean `execution.break` | `reason` `transport_error` |
 | `request.failed` | `request.failed` | `reason` |
@@ -320,7 +342,7 @@ failure is 503; no answer carries an exception message.
 | Needed after a restart | From |
 | --- | --- |
 | Which executions to take back | Accepted Creates without `execution.ended`, joined with the claims Agora manages (`app.kubernetes.io/managed-by=agora`, `agora.bretagne.dev/execution-id`). |
-| Claim name, pool, settings, initial deadline, anchor to restore | The Create, and `execution.obtained` for the UID. |
+| Claim name, pool, settings, initial deadline, anchor to restore, catch-up | The Create, and `execution.obtained` for the UID. |
 | Bridge instance | The last `execution.connected`. |
 | The agent's capabilities | The answer to Agora's `initialize`, or its pending request. |
 | Session | The last `session.opened` not ended. |
@@ -437,8 +459,15 @@ exception message.
 | L53 | A Create whose `settings` is not an object of strings | `invalid_create`. |
 | L54 | A Create with profiles, then a Scope with others | The view's `profiles`: the Create's, then the Scope's; the Scope recorded with the command. |
 | L55 | A Scope whose `profiles` is not a list of strings; one targeting a past execution; one after Stop | `invalid_scope`; `stale_execution`; `stopped`. |
+| L57 | An execution ends with its anchor; the next, created with no anchor named, has a turn, and its Pod ends without one; a third is created | The second restores the first's anchor and is given nothing; the third restores it too, counts one exchange, and its first prompt carries the second's exchange alone, ahead of the user's block, once; the thread's user message without it; the view's `exchanges` and `continuation`. |
+| L58 | An execution's Pod ends without its anchor after two turns; the next is created | A new ACP session; `session.opened` counts two exchanges; its first prompt carries both, oldest first, saying no save could be restored. |
+| L59 | An anchor left in one pool; a Create in another pool of the same harness | That anchor restored; the agent recalls the history. |
+| L60 | A Workstream to catch up; the new execution's first message is a command, then two messages | The command without the catch-up; the next message with it; the one after without. |
+| L61 | A history with a dispatched turn — text in chunks, a failed tool, reasoning —, one never dispatched, and one carrying an earlier catch-up | Two exchanges, the text joined and the tool marked failed in their order; no reasoning, no earlier catch-up. |
+| L62 | Exchanges beyond the catch-up's maximum; then the same given again | The most recent kept, the count of those left out given and said; the same text again. |
+| L63 | A restored execution ends before any message, its catch-up never given; the next is created | Its own anchor restored; the exchange it was never given, given now. |
+| L64 | The agent refuses to resume the last anchor; the next execution is created | That anchor not restored again, nor the one its execution pushed; a new ACP session given every exchange. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and
-write a Workstream; seeding a new context when no anchor can be restored; per-harness
-conformance; proof that an old execution is extinct before a replacement.
+write a Workstream; per-harness conformance; proof that an old execution is extinct before a replacement.

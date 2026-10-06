@@ -14,8 +14,7 @@ import {
   accessOf,
   commandsMatching,
   composerOf,
-  continueBody,
-  createBody,
+  continuationNote,
   firstMessageStep,
   messagesOf,
   modelChoice,
@@ -159,14 +158,23 @@ test('U6 a reset in the stream: the objects cleared, the complete state applied,
   assert.equal(new Set(messagesOf(state).map((m) => m.id)).size, messagesOf(state).length)
 })
 
-test('U9 an execution ended with an anchor: a message continues it in the same pool, from nothing in another; then the restored Session', () => {
+test('U9 an execution ended with an anchor, then a message: the Create carries the pool alone; what the agent will be given, said before sending; then the restored Session', () => {
   const ended = at(fixture.marks.ended!)
   const view = workstreamOf(ended, ws)
   assert.equal(view.state, 'ended')
   assert.equal(typeof view.anchor, 'string')
-  assert.deepEqual(continueBody(view), { pool: 'mock-test', anchor: view.anchor })
-  assert.deepEqual(createBody(view, 'mock-test'), { pool: 'mock-test', anchor: view.anchor })
-  assert.deepEqual(createBody(view, 'claude-code'), { pool: 'claude-code' })
+  assert.deepEqual(view.continuation, { mock: { anchor: view.anchor, exchanges: 0 } })
+  assert.ok(view.exchanges! > 0)
+  // Which save it continues from is the server's to find, whatever the pool's name.
+  assert.deepEqual(startBody('mock-test', {}, []), { pool: 'mock-test' })
+  // Its harness's save holds everything: nothing to say. Another harness has none: all of it, as text.
+  assert.equal(continuationNote(view, 'mock'), null)
+  assert.equal(continuationNote(view, 'claude-code'), `No saved Claude Code session: the ${String(view.exchanges)} exchanges above go to the agent as text.`)
+  assert.equal(
+    continuationNote({ ...view, continuation: { mock: { anchor: 'a', exchanges: 1 } } }, 'mock'),
+    'Mock agent resumes its saved session; the 1 exchange since then goes to it as text.',
+  )
+  assert.equal(continuationNote(workstreamOf(empty, ''), 'mock'), null, 'a draft: nothing above')
   const after = messagesOf(at(fixture.marks.restored!)).filter((m) => m.role === 'system').map((m) => (m.content as unknown as { text: string }[])[0]!.text)
   assert.equal(after.at(-1), 'Session restored with Mock agent: the agent remembers the history above.')
 })
@@ -184,6 +192,18 @@ test('U10 each notice type: its text', () => {
     ['session.opened', 'Session restored with Mock agent: the agent remembers the history above.'],
   ])
   assert.equal(noticeText({ type: 'session.opened', origin: 'new', harness: 'codex' }, false), 'New session with Codex: the agent does not know the history above.')
+  // With what its first prompt gives (docs/specs/log.md, "Continuing").
+  assert.equal(
+    noticeText({ type: 'session.opened', origin: 'a1', harness: 'mock', catchUp: 2, omitted: 0 }, false),
+    'Session restored with Mock agent. The 2 exchanges since its last save go to the agent with your next message.',
+  )
+  assert.equal(noticeText({ type: 'session.opened', origin: 'a1', harness: 'mock', catchUp: 0, omitted: 0 }, false), 'Session restored with Mock agent: the agent remembers the history above.')
+  assert.equal(
+    noticeText({ type: 'session.opened', origin: 'new', harness: 'codex', catchUp: 3, omitted: 1 }, false),
+    'New session with Codex. The 3 exchanges above go to the agent with your next message (the 1 exchange before them left out for length).',
+  )
+  assert.equal(noticeText({ type: 'session.opened', origin: 'new', harness: 'codex', catchUp: 0, omitted: 0 }, false), 'New session with Codex.')
+  assert.equal(noticeText({ type: 'session.opened', origin: 'new', harness: 'codex', catchUp: 0, omitted: 0 }, true), 'Session started with Codex.')
   assert.equal(noticeText({ type: 'session.ended', reason: 'replaced' }, false), 'Another session replaced this one.')
   assert.equal(noticeText({ type: 'request.failed', reason: 'deadline_refused' }, false), "The sandbox's deadline could not be extended.")
   assert.equal(noticeText({ type: 'request.failed', reason: 'something_new' }, false), 'A request to the agent failed.')
@@ -333,6 +353,13 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(pools, null, 'codex-1', 'claude-1'), 'codex-1', 'its own, so it continues')
   assert.equal(poolOffered(pools, 'mock-1', null, null), 'claude-1', 'never one kept for the tests')
   assert.equal(poolOffered([{ name: 'mock-1', testing: true }], null, null, null), null)
+  // Its own pool gone with an older image: one of its harness, so that it continues.
+  const harnessed = [
+    { name: 'claude-code-new', harness: 'claude-code' },
+    { name: 'codex-1', harness: 'codex' },
+  ]
+  assert.equal(poolOffered(harnessed, null, 'claude-code-old', 'codex-1', 'claude-code'), 'claude-code-new')
+  assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
 test('U31 the access picker: each offered repository with None, Read and, when offered, Write; a service Off and On; the button', () => {
@@ -366,8 +393,8 @@ test('U32 an access choice gives the whole set: the entries in the order offered
 
 test('U33 an ended Workstream whose execution had profiles: its Create carries them; another access picked, that one', () => {
   const view = { ...workstreamOf(at(fixture.marks.ended!), ws), profiles: ['github:o/a:read'] }
-  assert.deepEqual(startBody(view, 'mock-test', false, {}, accessGranted(null, view)), { pool: 'mock-test', anchor: view.anchor, profiles: ['github:o/a:read'] })
-  assert.deepEqual(startBody(view, 'mock-test', false, { model: 'mock-large' }, accessGranted([], view)), { pool: 'mock-test', anchor: view.anchor, settings: { model: 'mock-large' } })
+  assert.deepEqual(startBody('mock-test', {}, accessGranted(null, view)), { pool: 'mock-test', profiles: ['github:o/a:read'] })
+  assert.deepEqual(startBody('mock-test', { model: 'mock-large' }, accessGranted([], view)), { pool: 'mock-test', settings: { model: 'mock-large' } })
   const draft = workstreamOf(empty, '')
-  assert.deepEqual(startBody(draft, 'mock-test', true, {}, accessGranted(null, draft)), { pool: 'mock-test' })
+  assert.deepEqual(startBody('mock-test', {}, accessGranted(null, draft)), { pool: 'mock-test' })
 })
