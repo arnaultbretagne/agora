@@ -103,6 +103,7 @@ An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`
 | `sub` | The execution (`agora <execution>`), or the warm Pod (`agora warm <sandbox>`); written in every log line. |
 | `exp` | A warm token: 15 minutes. An execution's: the turn's maximum duration plus the lease, from when it is handed over. Between 60 s and 24 h. |
 | `jti` | One id per token. |
+| `ip` | The Pod's address, from its Sandbox (`status.podIPs`), never from the Pod. The gateway takes the token only from there. |
 | `grants` | The compiled grants. |
 | `profiles` | The requested profiles, for the record. |
 
@@ -110,20 +111,26 @@ The gateway reads it from the `Proxy-Authorization` of the `CONNECT`, which ever
 tunnel sees (`source.connectHeaders`), and checks it with the JWKS from the `grants-jwks`
 ConfigMap.
 
+The token is not a secret from the agent: the agent runs under the bridge's user and can read
+the bridge's memory. What keeps a token from serving anywhere else is `ip`: the gateway compares
+it with the address the request comes from (`source.address`), which the network vouches for —
+a Pod cannot send from another Pod's address. A secret kept in the Pod would not do: whatever
+the bridge holds, the agent can read. No token is signed without the Pod's address.
+
 ## The gateway
 
 agentgateway in standalone mode, namespace `agora-gateway`, Service `gateway` port 3000
 (`CONNECT`). Every tunnel to port 443 is terminated with the "Agora gateway CA" CA.
 
-The routes with a credential share one authorization rule: the path contains no `..`, `.`,
-`%2e` or `%2f`, and one of the JWT's grants covers the host, the path with the query, and the
-method. If the rule fails, the request stops at the gateway; otherwise the gateway sets the
+The routes with a credential share one authorization rule: the request comes from the JWT's
+`ip`, the path contains no `..`, `.`, `%2e` or `%2f`, and one of the JWT's grants covers the
+host, the path with the query, and the method. If the rule fails, the request stops at the gateway; otherwise the gateway sets the
 host's credential.
 
 The `internet` route names no host. agentgateway picks a route by the request's exact host, then
 by wildcard, and the route without hosts last: it takes every host the other routes do not name.
-Its rule: one of the JWT's grants is on host `*` and covers the path with the query, and the
-method. It sets no credential: the request leaves as the sandbox sent it.
+Its rule: the request comes from the JWT's `ip`, and one of the JWT's grants is on host `*` and
+covers the path with the query, and the method. It sets no credential: the request leaves as the sandbox sent it.
 
 | Route | Host | Credential set |
 | --- | --- | --- |
@@ -160,7 +167,7 @@ the reason for a refusal.
 
 | Element | Rule |
 | --- | --- |
-| Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready and still owned by a pool declaring base profiles, it hands a warm token (`PUT /credentials`), and a new one when less than a third of its life remains. |
+| Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready, has an address and is still owned by a pool declaring base profiles, it hands a warm token bound to that address (`PUT /credentials`), and a new one when less than a third of its life remains. |
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the execution's own. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
 | Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute, or names other profiles than the execution's; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt. |
 | The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); recorded with the command. |
@@ -224,6 +231,8 @@ call. The test page does it itself when the agent offers the option.
 | C26 | `internet`, the mock's `/fetch https://example.com:8443/` | `CONNECT` refused, 404 from the gateway. |
 | C27 | `PUT /credentials` with a token, then with one naming other profiles, then with one that is no JWT | `~/.agora/access.json` holds the first token's claims, then the second's, each before the answer; never a token or a signature; then no file. |
 | C28 | Node's own `fetch` in the adapter's environment, before any credential; the same without `NODE_USE_ENV_PROXY` | `NODE_USE_ENV_PROXY` is `1`; the request fails, refused by the outbound proxy: one refusal counted. Without it: no refusal counted. |
+| C29 | A warm token, and an execution's, for Pods whose Sandboxes record known addresses | Each token's `ip` is its Pod's address as the Sandbox records it; a signer asked for a token without a valid address refuses. |
+| C30 | A token whose `ip` is another address than the one the request comes from; one with no `ip` | 403 from the gateway, on a route with a credential and on `internet`. The same token from its own address: let through. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

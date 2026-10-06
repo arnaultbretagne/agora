@@ -98,7 +98,7 @@ describe('GrantSigner', () => {
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     writeFileSync(keyFile, privateKey.export({ format: 'pem', type: 'pkcs8' }))
     const signer = new GrantSigner({ proxy: 'gateway:3000', keyFile, keyId: 'k1', issuer: 'agora', audience: 'agora-gateway' })
-    const credentials = await signer.mint({ label: 'agora sbx-0123456789', ttlSeconds: 600, profiles: ['anthropic'] })
+    const credentials = await signer.mint({ label: 'agora sbx-0123456789', ttlSeconds: 600, profiles: ['anthropic'], address: '10.244.0.228' })
     assert.equal(credentials.proxy, 'gateway:3000')
     const [header, payload, signature] = credentials.token.split('.') as [string, string, string]
     assert.ok(verify(null, Buffer.from(`${header}.${payload}`), createPublicKey(publicKey.export({ format: 'pem', type: 'spki' })), Buffer.from(signature, 'base64url')))
@@ -108,12 +108,18 @@ describe('GrantSigner', () => {
     assert.equal(claims.aud, 'agora-gateway')
     assert.equal(claims.sub, 'agora sbx-0123456789')
     assert.deepEqual(claims.grants, [{ host: 'api.anthropic.com' }])
+    // Bound to the Pod's address: the gateway takes the token from there only.
+    assert.equal(claims.ip, '10.244.0.228')
     assert.equal((claims.exp as number) - (claims.iat as number), 600)
     assert.equal(credentials.expiresAt, new Date((claims.exp as number) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'))
     // No profile: a token with no grant, which withdraws the one before it.
-    const none = await signer.mint({ label: 'x', ttlSeconds: 600, profiles: [] })
+    const none = await signer.mint({ label: 'x', ttlSeconds: 600, profiles: [], address: '10.244.0.228' })
     assert.deepEqual(JSON.parse(Buffer.from(none.token.split('.')[1]!, 'base64url').toString()).grants, [])
-    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'] }), /out of bounds/)
+    await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 10, profiles: ['anthropic'], address: '10.244.0.228' }), /out of bounds/)
+    // No token without the address it is bound to.
+    for (const address of ['', 'claude-code-0345a542ca56-9frmh', '10.244.0']) {
+      await assert.rejects(signer.mint({ label: 'x', ttlSeconds: 600, profiles: ['anthropic'], address }), /invalid address/, address)
+    }
   })
 
   it('reads the offered profiles, and what they let a Create or a Scope name', () => {

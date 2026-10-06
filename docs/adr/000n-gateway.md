@@ -32,6 +32,8 @@
 5. **Agora alone hands tokens to bridges.** Every 5 seconds it looks at the pools' Sandboxes and
    warms the ready ones; it swaps the token at the claim; replacing a token closes the tunnels
    opened with the previous one.
+6. **A token works only from its Pod.** It names the Pod's address, which Agora takes from the
+   Sandbox; the gateway refuses it from any other address.
 
 ```mermaid
 flowchart LR
@@ -166,6 +168,18 @@ address instead of a name refused at TLS; a port other than 443 refused on `CONN
 name resolving to a private address that refuses port 443 got that refusal back — what the
 network policy is there to prevent.
 
+### Binding the token to a secret of the Pod (studied 2026-10-06)
+
+| Option | Why not |
+| --- | --- |
+| The Pod's projected ServiceAccount token | A file the agent's user can read, and the same ServiceAccount for every sandbox: a second bearer token, taken along with the first. |
+| A key held by the bridge (mTLS, proof of possession) | The agent can read the bridge's memory, the key with it. Viable once the bridge runs under a user of its own. |
+
+The address needs no secret: the network gives it, and a Pod cannot send from another's.
+Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s deploys
+(2026-10-06): a token naming another address than the one it came from, 403; with no address,
+403; from its own address, let through. On g4, the gateway sees each sandbox's own address.
+
 ### Other gateways (surveyed 2026-09-28)
 
 | Candidate | Why not |
@@ -177,6 +191,11 @@ network policy is there to prevent.
 | tokenizer (Fly.io) | Elegant model, but refuses `CONNECT`; no release since 2023. |
 
 ## Consequences
+
+- The agent can read its token: it runs under the bridge's user. The token is bound to the
+  Pod's address rather than kept secret (shown on g4, 2026-10-06: the token was readable from the
+  agent's user). An address reused by a new Pod within a token's life could use that token, if it
+  ever got it.
 
 - The gateway is on the critical path: when it is down, external operations fail, with no
   automatic escalation.

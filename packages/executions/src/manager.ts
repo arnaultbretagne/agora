@@ -76,7 +76,8 @@ export interface CredentialSource {
   describe(): Record<string, unknown>
   /** What an execution may be given beyond its pool's base profiles (docs/specs/credentials.md, "Offered profiles"); any profile when empty. */
   readonly offered?: readonly string[]
-  mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials>
+  /** `address`: the Pod's, from Kubernetes, never from the Pod; the gateway takes the token only from there. */
+  mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[]; address: string }): Promise<Credentials>
 }
 
 export interface ManagerOptions {
@@ -622,6 +623,17 @@ export class ExecutionManager {
   }
 
   /**
+   * The execution's Pod address, as its Sandbox records it: what its tokens are bound to
+   * (docs/specs/credentials.md, "The token"). Never asked of the Pod, which the agent controls.
+   */
+  async podAddress(execution: string): Promise<string> {
+    const sandbox = (await this.options.kube.getSandbox(this.runs.get(execution)?.claim?.status?.sandbox?.name ?? '')) as Sandbox | null
+    const address = sandbox?.status?.podIPs?.[0]
+    if (address === undefined) throw new Error('address_unknown')
+    return address
+  }
+
+  /**
    * Hands the bridge its way out; the token is kept nowhere here. The Pod is warmed no more, and a
    * warm hand-over still in flight settles first: the execution's token is the last one in place.
    */
@@ -658,7 +670,7 @@ export class ExecutionManager {
       const owner = sandbox.metadata.ownerReferences?.find((reference) => reference.kind === 'SandboxWarmPool')
       const pool = owner === undefined ? undefined : pools.get(owner.name)
       if (pool === undefined || pool.baseProfiles.length === 0 || this.bound.has(name)) continue
-      if (sandbox.status?.conditions?.find((c) => c.type === 'Ready')?.status !== 'True' || !sandbox.status.serviceFQDN) continue
+      if (sandbox.status?.conditions?.find((c) => c.type === 'Ready')?.status !== 'True' || !sandbox.status.serviceFQDN || !sandbox.status.podIPs?.[0]) continue
       const state = this.warm.get(name)
       if (state?.inflight || (state !== undefined && state.until - Date.now() > (ttl * 1000) / 3)) continue
       const inflight = this.handWarm(sandbox, pool.baseProfiles, ttl).finally(() => {
@@ -672,7 +684,7 @@ export class ExecutionManager {
   private async handWarm(sandbox: Sandbox, profiles: readonly string[], ttl: number): Promise<void> {
     const name = sandbox.metadata.name
     try {
-      const credentials = await this.options.credentials!.mint({ label: `agora warm ${name}`, ttlSeconds: ttl, profiles })
+      const credentials = await this.options.credentials!.mint({ label: `agora warm ${name}`, ttlSeconds: ttl, profiles, address: sandbox.status!.podIPs![0]! })
       if (this.bound.has(name)) return
       const response = await fetch(`http://${this.addressOf(sandbox.status?.serviceFQDN ?? '', name)}/credentials`, {
         method: 'PUT',

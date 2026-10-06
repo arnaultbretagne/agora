@@ -203,10 +203,16 @@ export class FakeKube implements KubeApi {
     return names
   }
 
+  /** Each Sandbox's Pod address, as Kubernetes would record it; a test may set one. */
+  readonly addresses = new Map<string, string>()
+  addressOf(name: string): string {
+    return this.addresses.get(name) ?? `10.244.${String(name.length % 250)}.${String([...name].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 250 + 1)}`
+  }
+
   async listSandboxes(): Promise<Sandbox[]> {
     return [...this.sandboxes].map(([name, s]) => ({
       metadata: { name, uid: name, ownerReferences: [s.owner] },
-      status: { conditions: [{ type: 'Ready', status: 'True' }], serviceFQDN: `${name}.${NAMESPACE}.svc.cluster.local` },
+      status: { conditions: [{ type: 'Ready', status: 'True' }], serviceFQDN: `${name}.${NAMESPACE}.svc.cluster.local`, podIPs: [this.addressOf(name)] },
     }))
   }
 
@@ -232,8 +238,8 @@ export class FakeKube implements KubeApi {
     return { spec: { podTemplate: { spec: { containers: [{ image: `ghcr.io/test/${name}@sha256:0` }] } } } }
   }
 
-  async getSandbox(): Promise<Json | null> {
-    return { metadata: { labels: { 'agents.x-k8s.io/launch-type': 'warm' } } }
+  async getSandbox(name = ''): Promise<Json | null> {
+    return { metadata: { labels: { 'agents.x-k8s.io/launch-type': 'warm' } }, status: { podIPs: [this.addressOf(name)] } }
   }
 
   /** A Pod recreated under the same name gets another UID than the one its old tokens carry. */

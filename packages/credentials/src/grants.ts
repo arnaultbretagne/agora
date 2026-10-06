@@ -4,6 +4,7 @@
 // broad credential it holds for the host. No entity per combination: the set lives in the JWT.
 import { createPrivateKey, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { isIP } from 'node:net'
 import type { Credentials } from '@agora/harness-bridge/outbound'
 
 export interface Grant {
@@ -120,16 +121,21 @@ export class GrantSigner {
     }
   }
 
-  /** A token for these profiles; for none, a token with no grant, which withdraws the one before it. */
-  async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }): Promise<Credentials> {
+  /**
+   * A token for these profiles; for none, a token with no grant, which withdraws the one before it.
+   * `address` is the Pod's, as Kubernetes records it: the gateway takes the token only from there, so a
+   * token read out of the Pod is worth nothing anywhere else.
+   */
+  async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[]; address: string }): Promise<Credentials> {
     if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 60 || input.ttlSeconds > 24 * 3600) throw new ProfileRefused('duration out of bounds: 60 to 86,400 s')
+    if (isIP(input.address) === 0) throw new ProfileRefused(`invalid address: ${input.address}`)
     const grants = (input.profiles ?? []).flatMap(compileProfile)
     this.key ??= createPrivateKey(await readFile(this.options.keyFile))
     const now = Math.floor(Date.now() / 1000)
     const exp = now + input.ttlSeconds
     const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
     const header = { alg: 'EdDSA', typ: 'JWT', kid: this.options.keyId }
-    const payload = { iss: this.options.issuer, aud: this.options.audience, sub: input.label, jti: randomUUID(), iat: now, exp, profiles: input.profiles, grants }
+    const payload = { iss: this.options.issuer, aud: this.options.audience, sub: input.label, jti: randomUUID(), iat: now, exp, ip: input.address, profiles: input.profiles, grants }
     const data = `${encode(header)}.${encode(payload)}`
     const token = `${data}.${sign(null, Buffer.from(data), this.key).toString('base64url')}`
     return { proxy: this.options.proxy, token, expiresAt: new Date(exp * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z') }

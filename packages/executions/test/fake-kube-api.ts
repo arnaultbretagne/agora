@@ -57,7 +57,7 @@ export async function serveFakeKube(kube: FakeKube): Promise<FakeKubeApi> {
             items: items.map((s) => ({ ...s, status: { ...s.status, serviceFQDN: kube.address(s.status?.serviceFQDN ?? '', s.metadata.name) } })),
           })
         }
-        if (url.pathname.includes('/sandboxes/')) return send(200, await kube.getSandbox())
+        if (url.pathname.includes('/sandboxes/')) return send(200, await kube.getSandbox(url.pathname.split('/').at(-1)))
         if (url.pathname.startsWith(`/api/v1/namespaces/${NAMESPACE}/pods/`)) return send(200, await kube.getPod(url.pathname.split('/').at(-1)!))
         if (url.pathname === '/apis/authentication.k8s.io/v1/tokenreviews') {
           const token = String((body?.spec as { token?: string } | undefined)?.token)

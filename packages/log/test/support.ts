@@ -630,6 +630,8 @@ export interface Minted {
   readonly label: string
   readonly profiles: readonly string[]
   readonly sub: string
+  /** The address the token is bound to (its `ip` claim). */
+  readonly ip: string
   readonly expiresAt: string | null
   readonly at: number
 }
@@ -647,11 +649,11 @@ export function grants(offered: readonly string[] = []): { source: CredentialSou
     source: {
       offered: real.offered,
       describe: () => real.describe(),
-      async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[] }) {
+      async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[]; address: string }) {
         if (state.fail) throw new Error('signer unavailable')
         const credentials = await real.mint(input)
-        const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string }
-        state.minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, expiresAt: credentials.expiresAt, at: Date.now() })
+        const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string; ip: string }
+        state.minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, ip: payload.ip, expiresAt: credentials.expiresAt, at: Date.now() })
         return credentials
       },
     },

@@ -26,11 +26,11 @@ async function until<T>(what: string, find: () => Promise<T | undefined | null |
 const quiet: Handler = { async claim() {}, async connected() { return true }, async line() {}, async closed() {} }
 
 /** A real signer, and what it minted: label, profiles, the token's own claims. */
-function signer(): { source: CredentialSource; minted: { label: string; profiles: readonly string[]; sub: string; exp: number; at: number }[]; delay: (label: string) => number } {
+function signer(): { source: CredentialSource; minted: { label: string; profiles: readonly string[]; sub: string; ip: string; exp: number; at: number }[]; delay: (label: string) => number } {
   const dir = mkdtempSync(join(tmpdir(), 'grants-'))
   writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const real = new GrantSigner({ proxy: '127.0.0.1:9', keyFile: join(dir, 'key.pem'), keyId: 'k', issuer: 'agora', audience: 'agora-gateway' })
-  const minted: { label: string; profiles: readonly string[]; sub: string; exp: number; at: number }[] = []
+  const minted: { label: string; profiles: readonly string[]; sub: string; ip: string; exp: number; at: number }[] = []
   const box = { delay: (_label: string) => 0 }
   return {
     minted,
@@ -45,8 +45,8 @@ function signer(): { source: CredentialSource; minted: { label: string; profiles
       async mint(input) {
         await new Promise((resolve) => setTimeout(resolve, box.delay(input.label)))
         const credentials = await real.mint(input)
-        const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string; exp: number }
-        minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, exp: payload.exp, at: Date.now() })
+        const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string; ip: string; exp: number }
+        minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, ip: payload.ip, exp: payload.exp, at: Date.now() })
         return credentials
       },
     },
@@ -102,6 +102,16 @@ test('C8 a warm Pod of a pool declaring anthropic gets a token naming it, with t
   ])
 })
 
+test('C29 a warm token is bound to the Pod’s address as its Sandbox records it', async (t) => {
+  const { kube, manager, grants, privateKey } = await lab(t)
+  kube.baseProfiles['claude-test'] = 'anthropic'
+  const [pod] = await kube.warmUp('claude-test')
+  kube.addresses.set(pod!, '10.244.0.77')
+  await manager.start(quiet)
+  await until('the warm token attached', async () => (await outbound(kube, privateKey, pod!)).proxy !== null)
+  assert.deepEqual(grants.minted.filter((m) => m.label === `agora warm ${pod!}`).map((m) => m.ip), ['10.244.0.77'])
+})
+
 test('C8 a pool declaring a repository among its base profiles gets no warm token, and shows the refused profile', async (t) => {
   const { kube, manager, grants } = await lab(t)
   kube.baseProfiles['claude-test'] = 'anthropic,github:o/r:read'
@@ -145,7 +155,7 @@ test('C11 a warm token being handed over when the claim binds the Pod: the execu
   await manager.run(target)
   await manager.createClaim(target, new Date(Date.now() + 120_000).toISOString())
   await until('the Pod adopted', () => manager.claimOf(execution)?.status?.sandbox?.name === pod)
-  const credentials: Credentials = await grants.source.mint({ label: `agora ${execution}`, ttlSeconds: 3000, profiles: ['anthropic'] })
+  const credentials: Credentials = await grants.source.mint({ label: `agora ${execution}`, ttlSeconds: 3000, profiles: ['anthropic'], address: await manager.podAddress(execution) })
   await manager.putCredentials(execution, credentials)
   await new Promise((resolve) => setTimeout(resolve, 2500))
   assert.equal((await outbound(kube, privateKey, pod!)).expiresAt, credentials.expiresAt)

@@ -37,6 +37,16 @@ test('C10 at the claim, before initialize: a token naming the execution, with th
   assert.ok(signer.minted.filter((m) => m.label === `agora warm ${pod!}`).every((m) => m.at < minted[0]!.at))
 })
 
+test('C29 an execution’s token is bound to its Pod’s address as its Sandbox records it, never one the Pod gives', async (t) => {
+  const { kube, lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
+  const [pod] = await kube.warmUp('claude-test')
+  kube.addresses.set(pod!, '10.244.0.78')
+  const e = await lab.open(ws, { pool: 'claude-test', profiles: ['github:owner/repo:read'] })
+  assert.equal(lab.executions.claimOf(e.id)?.status?.sandbox?.name, pod)
+  const minted = signer.minted.filter((m) => m.label === `agora ${e.id}`)
+  assert.deepEqual(minted.map((m) => m.ip), ['10.244.0.78'])
+})
+
 test('C10 a pool declaring no base profile and a Create naming none: no token, initialize all the same', async (t) => {
   const { lab, signer, ws } = await started(t)
   const e = await lab.open(ws, { pool: 'mock-test' })
