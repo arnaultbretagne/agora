@@ -267,6 +267,32 @@ theme follows the system until the user toggles it; the choice is remembered in 
 Registry components kept: `MarkdownText`, `DiffViewer`, and the `surfaces` helpers. Every string is
 in English.
 
+## On a phone
+
+The client installs on a phone's home screen: a manifest and a 180 px icon name it Agora and open it
+at `/` in a window of its own. It asks iOS for an opaque status bar (`default`), coloured like the
+page — the toggled theme's, even against the system's — so that nothing of the page passes under it;
+a translucent bar would have iOS 26 blur the page's top. iOS reads these tags once, when the icon is
+added: an icon added before them keeps its old frame until it is removed and added again.
+
+The screen covers the whole display and keeps clear of its edges: the composer stays above the home
+indicator. A phone's keyboard covers the page without resizing it, so the screen follows the visual
+viewport: it fills what the keyboard leaves, and the composer rests on the keyboard, the home
+indicator's margin dropped while it is up.
+
+Narrower than 32rem, the composer's pickers give their names up for marks. Each name stays in its
+menu and in the button's tooltip; the harness menu shows the marks too.
+
+| Picker | Wide | Narrow |
+| --- | --- | --- |
+| Harness | Its name | Its mark: Claude Code's, Codex's or OpenCode's; a robot for any other |
+| Model | The model · the effort | The model; the effort as one to four bars, by its rank among the efforts offered |
+| Access | The key and what is granted | The key, with a coral dot when anything is granted |
+
+Below 40rem the header keeps the title and the state, not the harness, and **Stop** is its icon. On a
+touch screen the composer's controls are 36 px high, and the search field's text is 16 px, under
+which iOS zooms the page in to type.
+
 ## Outside this contract, already available
 
 | Future need | Existing component |
@@ -318,6 +344,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U34 | In a browser, an access picked in the draft, then a first message | The Create carries its `profiles`; the picker shows them once the Session is ready. |
 | U35 | In a browser, another access picked in an open Workstream | Scope sent with the whole set; the picker shows it at once, and still once the view has it. |
 | U36 | In a browser, a Workstream whose Pod ended without its anchor, then a message | Before sending, "No saved Mock agent session: the 1 exchange above goes to the agent as text."; sent, the new Session's notice says so; the prompt carries the exchange, then the message; the user's message shows the message alone. |
+| U37 | In a browser on a phone's screen (390 × 844, touch, a 34 px home indicator), a draft whose pool offers models and efforts, a repository granted; then the same draft on a wide screen | Narrow: the harness as its mark, the model by name with its effort as bars, the key with its dot, no name; no picker's text cut; the composer 34 px above the bottom. Wide: the harness's name, the model · the effort, what is granted. |
+| U38 | In a browser, the page's home-screen tags and files; then the theme toggled against the system's | The manifest (Agora, standalone, from `/`) and the 180 px icon served; an opaque status bar asked; the page covering the display; the status bar's colour the page's, then the toggled theme's. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

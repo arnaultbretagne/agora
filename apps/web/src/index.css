@@ -117,12 +117,25 @@
   --warning: #d4a017;
 }
 
+/* The screen's frame on a phone (src/screen/viewport.ts): the visual viewport, and the home
+   indicator's margin, gone while the keyboard is up. */
+:root {
+  --viewport-height: 100dvh;
+  --viewport-top: 0px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+:root[data-keyboard] {
+  --safe-bottom: 0px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   html {
-    @apply font-sans antialiased;
+    /* iOS paints the status bar and the edges past the page with the page's own colour. */
+    @apply bg-background font-sans antialiased;
+    overscroll-behavior: none;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--foreground) 18%, transparent) transparent;
   }
