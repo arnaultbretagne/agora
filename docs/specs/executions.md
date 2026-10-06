@@ -77,7 +77,8 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
 
 ### Startup, in the pool
 
-1. Create the fixed workspace `/home/harness/work`, and the native directory the image declares.
+1. Create the fixed workspace `/home/harness/work`, with the agent's instructions in it
+   (`AGENTS.md`, below), and the native directory the image declares.
 2. Start the outbound proxy on loopback, closed until Agora attaches a token: a warm one, if the
    pool declares base profiles (`credentials.md`).
 3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
@@ -160,6 +161,14 @@ That is why the workspace is the same path in every image.
 | **Push** | `POST` to `AGORA_ANCHOR_URL`. The body lists each file: path relative to the native directory, sha256 checksum, content. 32 MiB at most. |
 | **Pod identity** | `Authorization: Bearer` + the ServiceAccount token projected by the kubelet (audience `agora-anchors`, 10 minutes, renewed all the way into the Kata VM), re-read on each push. |
 | **Restoring** | `PUT /anchor` with the same body. Each file is written alongside, read back, compared, then renamed. An adapter that reads its files at `session/resume` receives them while it runs. One that opens them at start is stopped first (SIGTERM, then SIGKILL after 5 seconds), the directory replaced as a whole, and the adapter started again; refused (409) once a line has gone to or come from the adapter. |
+
+### What the agent is told
+
+| Element | Rule |
+| --- | --- |
+| `AGENTS.md` | Written into the workspace by the bridge as it starts, before the adapter: the text of `packages/harness-bridge/src/agent-instructions.md`, the same for every harness. claude-code, opencode and codex load it as project instructions, with no setting. |
+| What it says | The workspace starts empty; the conversation outlives the Pod, files do not, so work is pushed before a task is called done and cloned again into an empty workspace. Everything goes out through the gateway; what its 403 and 404 mean. Where the agent's access is written and how each profile reads. Its tools: Node and git, git's identity. |
+| `~/.agora/access.json` | The claims of the token the agent goes out with (`credentials.md`). |
 
 ### What the template provides
 
@@ -341,6 +350,8 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E29 | Restore onto an adapter that opens its files at start | Declared by its image: the anchor placed before `initialize`, the adapter restarted onto it, the agent remembers. Refused (409) once a line has reached the adapter; without the declaration, the anchor goes unseen. |
 | E30 | Real harness (opencode) | Real `initialize` and `session/new` on a warm Pod; a turn on GLM through the gateway, its only way out `api.z.ai`; anchor pushed, then restored by a restart, the agent remembers. |
 | E31 | Real harness (codex) | Real `initialize` and `session/new` on a warm Pod; a turn on the ChatGPT subscription through the gateway, its only way out `chatgpt.com`; anchor pushed, then restored, the agent remembers. |
+| E32 | A Pod starting | `AGENTS.md` in the workspace, byte for byte the bridge's text, there when the adapter starts. |
+| E33 | claude-code, opencode and codex, each in a new Session, asked where their access is written | Each answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).

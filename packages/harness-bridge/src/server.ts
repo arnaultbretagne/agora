@@ -11,6 +11,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { bearerOf, verifyBridgeToken } from './token.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from './anchor.ts'
 import { parseCredentials, startOutbound } from './outbound.ts'
+import { writeAccess, writeInstructions } from './instructions.ts'
 
 export interface BridgeOptions {
   readonly port: number
@@ -30,6 +31,8 @@ export interface BridgeOptions {
   readonly adapterStopMs?: number
   /** Loopback port of the outbound proxy the adapter goes through (docs/specs/credentials.md); 0 picks one. */
   readonly outboundPort?: number
+  /** Where the claims of the token are written for the agent (docs/specs/credentials.md); nowhere when absent. */
+  readonly accessFile?: string
   readonly log?: (message: string) => void
 }
 
@@ -49,13 +52,15 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const startedAt = new Date().toISOString()
 
   mkdirSync(options.workspace, { recursive: true })
+  writeInstructions(options.workspace)
   mkdirSync(options.nativeDir, { recursive: true })
 
   // Started before the adapter, whose environment must point at it: no credential yet, only the
   // way out (docs/specs/credentials.md).
   const outbound = await startOutbound({ port: options.outboundPort ?? 0, log })
   const loopback = 'localhost,127.0.0.1'
-  const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback }
+  // NODE_USE_ENV_PROXY: Node's own fetch ignores HTTPS_PROXY without it, and the agent's scripts use it.
+  const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback, NODE_USE_ENV_PROXY: '1' }
 
   const [command, ...args] = options.adapterCommand
   if (command === undefined) throw new Error('the adapter command is empty')
@@ -74,6 +79,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   let offset = 0
   let parts: Buffer[] = []
   let lineBytes = 0
+  /** Writes of the access file, in the order the tokens were attached. */
+  let accessWritten: Promise<void> = Promise.resolve()
 
   function failAdapter(reason: string): void {
     if (!adapter.alive) return
@@ -228,6 +235,14 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
         return json(res, 400, { reason: error instanceof Error ? error.message : String(error) })
       }
       outbound.set(credentials)
+      const file = options.accessFile
+      if (file !== undefined) {
+        const token = credentials.token
+        accessWritten = accessWritten
+          .then(() => writeAccess(file, token))
+          .catch((error: unknown) => log(`access file not written: ${error instanceof Error ? error.message : String(error)}`))
+        await accessWritten
+      }
       return json(res, 200, outbound.describe())
     }
 

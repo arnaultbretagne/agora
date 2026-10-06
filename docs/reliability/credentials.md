@@ -19,6 +19,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R9 | 2026-10-04 | `a2d4230` | cluster | g4 under Kata. The server `agora-server@sha256:0f3edc12…` built from `af896c7` (its inputs unchanged since), offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write` (infra-k8s #200, #201); the claude-code pool `agora-harness-claude-code@sha256:6d3f437e…` built from that commit, with git 2.39.5, `GIT_SSL_CAINFO` and the git identity from the template (infra-k8s #204, #207); the gateway with the operator's fine-grained PAT on those two repositories (infra-k8s #202). An execution created over the API with `github:arnaultbretagne/agora:read`, git run in its sandbox by `kubectl exec` through its bridge, and a Scope sent over the API; no model call. |
 | R10 | 2026-10-05 | `dfd3df9` | cluster | g4 under Kata. The server `agora-server@sha256:f6d5898e…` built from `3ec2f96`, in the namespace `agora`, offering `internet` (infra-k8s #211, #210); the mock pool `agora-harness-mock@sha256:632991c4…`; agentgateway 1.5.0 with the route `internet` and its egress limited to public IPv4 on 443 (infra-k8s #210), restarted to load the route. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`; no model call. |
 | R11 | 2026-10-05 | `77ce4ee` | cluster | As R10; only C24's control changed in the runner. One case per run, each once the previous one's executions had ended (`quota`). |
+| R12 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent and the stdio test adapter; tokens shaped like Agora's JWTs, with stand-in signatures, which the bridge never verifies. The gateway is not run. |
 
 ## Cases
 
@@ -77,6 +78,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C24 | — | cluster | R11 | proven | `internet` alone: `api.anthropic.com`, `api.z.ai`, `chatgpt.com`, `api.github.com` and `github.com` 403 from the gateway; with `github:octocat/Hello-World:read` added, GitHub "200 OK". |
 | C25 | — | cluster | R11 | proven | `10.10.20.1.nip.io`: "503 — upstream call failed: Connect: deadline has elapsed", after 10 s; `10.10.20.1`: TLS "alert access denied"; example.com "200 OK". |
 | C26 | — | cluster | R11 | proven | "CONNECT example.com:8443 refused by the proxy: 404". |
+| C27 | — | local | R12 | proven | Every assertion held. |
+| C28 | — | local | R12 | proven | Every assertion held, the control's too. |
 
 The partial verdicts are tracked in #107.
 

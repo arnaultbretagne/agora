@@ -14,6 +14,7 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R6 | 2026-10-02 | `31456b0` | cluster, live | g4 under Kata, Agent Sandbox v1.0.3. The lab `agora-lab@sha256:88c0d767…` built from that commit; the mock and claude-code pools as in R4, and `agora-harness-opencode@sha256:5b7b6182…` (opencode 1.18.34 on z.ai's Coding Plan, base profile `zai`). `apps/lab/scripts/live-cases.ts` from `926af62`, the same as that commit's; the bridges' logs read with `kubectl`. E22 and E30 billed: claude-code on its default model, opencode on glm-5.3. |
 | R7 | 2026-10-03 | `ddac202` | cluster, live | g4 under Kata. The lab as in R6 of `credentials.md` (`4b26f3c`); the pool `agora-harness-codex@sha256:0eae81a3…` (codex 0.159.3, codex-acp 2.1.1, base profile `chatgpt`), the gateway holding the cluster's own ChatGPT session (Plus). `apps/lab/scripts/live-cases.ts` from this branch. E31 billed on the subscription. |
 | R8 | 2026-10-03 | `05fbbb8` | cluster, live | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:31c1d086…` built from that commit, in the namespace `agora` behind agora.bretagne.dev, on the `agora` database (CloudNativePG, PostgreSQL 17.4); the pools mock `1a1cc63c…`, claude-code `5f3bb480…`, opencode `5b7b6182…` and codex `0eae81a3…`, their warm Pods recreated for the server's anchor address. `apps/server/scripts/live-cases.ts` from that commit, all 34 cases in one run; C10 and C12–C16 refused `quota` there — the run's stopped executions count until their deadline — and were played again once no claim was left. E22, E30 and E31 billed. |
+| R9 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the stdio test adapter. |
 
 ## Cases
 
@@ -95,6 +96,8 @@ own cases (`log.md`). Their rows are evidence for `7afc4d7`.
 | E30 | — | live | R8 | proven | Ready in 529 ms on a warm Pod, OpenCode 1.18.34; "Paris" in 2.9 s; tunnels only to `api.z.ai:443` (2), none refused; restored by a restart in 3,542 ms, recalls "mirabelle". |
 | E31 | — | live | R7 | proven | Ready in 543 ms on a warm Pod, codex-acp 2.1.1; "Paris" in 5.2 s; tunnels only to `chatgpt.com:443` (4), none refused once the execution's token was in place; the anchor restored in 1,120 ms with no restart, the agent recalls "mirabelle". A first run counted 7 refusals in the pool, before the Pod's warm token: codex calls ChatGPT as soon as it starts. |
 | E31 | — | live | R8 | proven | Ready in 533 ms on a warm Pod, codex-acp 2.1.1; "Paris" in 3.4 s; tunnels only to `chatgpt.com:443` (10), none refused after the warm token; restored in 800 ms, recalls "mirabelle". |
+| E32 | — | local | R9 | proven | Every assertion held. |
+| E33 | — | — | — | not verified | — |
 
 The partial verdicts are tracked in #107.
 

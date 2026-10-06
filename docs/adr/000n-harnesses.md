@@ -33,6 +33,10 @@
 6. **The image declares the rest of what differs**: its adapter, the native directory an anchor
    saves, and whether the adapter opens that directory when it starts. Agora places an anchor
    before `initialize`, so such an adapter is restarted onto it and then initialized.
+7. **The agent is told where it is, the same way whatever the harness.** The bridge writes one
+   `AGENTS.md` into the workspace as it starts: what the agent cannot see from inside — what
+   lasts, the gateway and its answers, how to read its access, its tools. It writes the claims of
+   each token it is handed, never the token, to `~/.agora/access.json`, which that file names.
 
 ```mermaid
 flowchart LR
@@ -61,6 +65,17 @@ flowchart LR
   resumed by a new process from its database. So did codex 0.159.3 with codex-acp 2.1.1
   (2026-10-03): a turn on the ChatGPT subscription through the gateway, its rollouts read when a
   session is resumed, so no restart.
+- **`AGENTS.md` in the workspace is the one file every harness loads unasked.** claude-code
+  2.1.286 (the binary claude-agent-acp 0.85.1 runs) loads a project's `AGENTS.md` when it has no
+  `CLAUDE.md`, and has no global `AGENTS.md`; codex 0.159.3 reads `$CODEX_HOME` and, outside a git
+  repository, the working directory only; opencode 1.18.34 reads the working directory and its
+  configuration directory (read in their binaries, 2026-10-04). Without it, the agent of
+  Workstream `75b2cf20` (2026-10-04), given read access to two repositories, spent its turn
+  listing the Pod, decoding the anchor token and calling `/user/repos`, `/rate_limit` and `/`:
+  five refusals from the gateway, then "no GitHub credential is bound to this session".
+- **The claims, not the token.** The gateway admits every sandbox, so a token one agent leaks —
+  into a commit, to its model — would carry its access into another execution until it expires.
+  The claims say the same thing to a reader and open nothing.
 - **A restart costs only the restores.** opencode takes 2.6 s to start; warm, it answers
   `initialize` in 8 ms and `session/new` in 155 ms (same measurement). Restarting it onto an anchor
   keeps the warm pool for every new Session.
@@ -86,6 +101,9 @@ flowchart LR
 | Placing files under a running adapter, for every harness | opencode opens its database when it starts: files placed later are never read (measured, 2026-10-02). |
 | A capture and a restore command declared by the image (opencode's `export` and `import`) | Works — an import into the live database is seen by the running adapter (same measurement) — but the bridge would run commands the image supplies, and each harness would capture its own way. |
 | Starting the adapter only at the claim | Every Session would pay the adapter's start, 2.6 s for opencode; a restart charges only restores. |
+| Each harness's own global instructions (`/etc/claude-code/CLAUDE.md`, `AGENTS.md` under opencode's `XDG_CONFIG_HOME`, `$CODEX_HOME/AGENTS.md`) | Three places and two names for one text, each declared by its image. |
+| Letting the agent find its access on GitHub (`gh repo list`, `/user/repos`) | Both show what the gateway's PAT reaches, not the execution's grants — GraphQL cannot be granted per repository — and both stay closed. |
+| The token itself where the agent can read it | See "The claims, not the token". |
 
 ## Consequences
 
@@ -101,5 +119,7 @@ flowchart LR
   records the break.
 - Restoring onto opencode pays its start again, about 2.6 s, and its native directory is replaced
   as a whole.
+- What the agent is told ships with the bridge: changing it rebuilds every image. The file sits
+  in a writable workspace; nothing relies on it for security.
 - An image must close its harness's own egress at start: opencode fetches its model catalogue and
   installs a plugin from npm unless its image ships the catalogue and a read-only configuration.
