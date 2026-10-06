@@ -1,4 +1,4 @@
-// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex), docs/specs/log.md (L…) and
+// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex, E33 on all three), docs/specs/log.md (L…) and
 // docs/specs/credentials.md (C1–C4, C7–C16, C23–C26) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
@@ -493,6 +493,40 @@ await check('E31', 'Real harness (codex)', async () => {
   await back.stop()
   assert(/mirabelle/i.test(recalled), `amnesiac: ${recalled.slice(0, 120)}`)
   return `ready in ${String(ms)} ms (${String(launch)}), ${String(agent.name)}@${String(agent.version)}; "${answer.trim().slice(0, 30)}" in ${seconds} s; tunnels ${targets.join(', ')} ×${String(out.tunnels)}, ${String(pooled)} refused in the pool before its warm token and none after; anchor ${String(end.content.anchor)} restored in ${String(restored.ms)} ms, recalls "${recalled.trim().slice(0, 30)}"`
+})
+
+// ---------------------------------------------------------------- what the agent is told (docs/specs/executions.md, E33)
+
+/** The tool calls the agent reported so far in this Workstream. */
+const toolCalls = async (w: Workstream) =>
+  (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' && (x.content.params as Json)?.update?.sessionUpdate === 'tool_call').length
+
+await check('E33', 'Each real harness knows where its access is written, from the workspace’s AGENTS.md', async () => {
+  const harnesses = [['claude-code', claude], ['opencode', opencode], ['codex', codex]] as const
+  const outcomes: string[] = []
+  for (const [harness, pool] of harnesses) {
+    if (pool === undefined) throw new Error(`no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, SHORT)
+    const asked = await w.write('Answer from what you already know, without running anything: in which file is your access written? Give the path only.')
+    assert(asked.status === 200, `${harness}: Write refused: ${JSON.stringify(asked)}`)
+    const turn = await w.turn(['done', 'failed'], 240_000)
+    const answer = await w.said()
+    const silent = await toolCalls(w)
+    // The control: asked to read it, the same agent calls a tool, and the capture sees it.
+    const before = answer.length
+    const read = await w.write('Now read that file and give me its `sub` claim only.')
+    assert(read.status === 200, `${harness}: Write refused: ${JSON.stringify(read)}`)
+    await w.turn(['done', 'failed'], 240_000)
+    const sub = (await w.said()).slice(before)
+    const used = (await toolCalls(w)) - silent
+    await w.stop()
+    assert(turn.status === 'done' && /(~|\/home\/harness)\/\.agora\/access\.json/.test(answer), `${harness}: turn ${turn.status}: ${answer.slice(0, 160)}`)
+    assert(silent === 0, `${harness}: ${String(silent)} tool call(s) before answering`)
+    assert(used > 0 && sub.includes(w.execution), `${harness} control: ${String(used)} tool call(s), "${sub.slice(0, 120)}"`)
+    outcomes.push(`${harness} "${answer.trim().slice(0, 40)}", no tool call; control: ${String(used)} tool call(s), sub "${sub.trim().slice(0, 50)}"`)
+  }
+  return outcomes.join('; ')
 })
 
 // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
