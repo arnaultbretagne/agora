@@ -15,6 +15,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R7 | 2026-10-03 | `0c75f9b` | local | `npm run check`, with `npm run test:browser`, as R6; the server with a signer of its own and `OFFERED_PROFILES` `github:owner/a:write,github:owner/b:read`, the gateway never reached. |
 | R8 | 2026-10-04 | `af896c7` | cluster | The client built into `agora-server@sha256:0f3edc12…`, in the namespace `agora`, offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write`; read in Chromium's headless shell through `kubectl port-forward`, the access picker opened in the draft, a screenshot taken. |
 | R9 | 2026-10-05 | `f0a7c05` | local | `npm run check`, with `npm run test:browser`, as R7; the catalogue knowing `internet`. |
+| R10 | 2026-10-06 | `ab899d3` | local | `npm run check`, with `npm run test:browser`, as R9; a Pod's push left without an address for U36. Screenshots taken in Chromium against the same server, of the composer's note, the harness picker and the restored Session's notice. |
 
 ## Cases
 
@@ -40,9 +41,11 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U8 | simulated: stub, a server cutting the stream after a live row | local | R3 | proven | Unchanged from R1. |
 | U9 | — | local | R1 | proven | Create with `mock-test` and the anchor; "Session restored: the agent remembers the history above." |
 | U9 | — | local | R3 | proven | Ended with an anchor: in `mock-test`, Create with the pool and the anchor; in `claude-code`, the pool alone; then "Session restored with Mock agent: the agent remembers the history above." |
+| U9 | — | local | R10 | proven | Ended with an anchor: `continuation` `{mock: {anchor, exchanges: 0}}`; Create `{pool: 'mock-test'}`; no note in `mock`, "No saved Claude Code session: the 7 exchanges above go to the agent as text." in `claude-code`; then "Session restored with Mock agent: the agent remembers the history above." |
 | U10 | — | local | R1 | proven | The seven notices of the history, each with its text; the three others from their objects. |
 | U10 | — | cluster | R2 | partial: one notice | "Session started with mock." |
 | U10 | — | local | R3 | proven | Six notices of the history in plain words, the Session's end and the break the loss follows left out; no reason code; four more from their objects. |
+| U10 | — | local | R10 | proven | As R3, and the Session notices with a catch-up: restored with 2, restored with 0, new with 3 and 1 left out, new with 0 after another and first. |
 | U11 | — | local | R1 | proven | starting, ready, interrupted, lost, ended, stopped from the history, failed and none built: each badge, open or not, and its reason. |
 | U11 | — | cluster | R2 | partial: starting, ready, stopped | `starting` in the list; `ready` in the header with Stop, the composer open; then `stopped` and "Stopped. The sandbox ends at its deadline." |
 | U11 | — | local | R3 | proven | starting, ready, interrupted, lost, stopped closed with their reasons; ended and failed open, sending starting an execution; none built. |
@@ -59,6 +62,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U21 | — | local | R5 | proven | `stopped` in the header, no Stop, "Stopped. The sandbox ends at its deadline.", Send disabled. |
 | U22 | — | local | R5 | proven | `dark` on the root after the toggle and after the reload; not in a new context. |
 | U23 | — | local | R5 | proven | After Stop and the deadline: `ended`, the picker's "continues the last session"; "Session restored with Mock agent…"; "Before, you told me \"remember mirabelle\"". |
+| U23 | — | local | R10 | proven | After Stop and the deadline: `ended`, the picker's "continues its saved session"; "Session restored with Mock agent…"; "Before, you told me \"remember mirabelle\"". |
 | U24 | — | local | R5 | proven | "Edit demo.txt" noted "+1 −1"; opened, the diff viewer's "after". |
 | U25 | — | local | R6 | proven | claude-code: sonnet, opus, haiku and five efforts, nothing current (its values are `default`); codex: eight models, gpt-6.1-sol and low current, six efforts; opencode: three efforts, glm-5.3 current; both pickers read `model` and `thought_level` only; the pool's declared values stand for the current ones, a pick wins. |
 | U26 | — | local | R6 | proven | All of codex's commands at `/`; review, review-branch, review-commit, rename at `/re` and `/RE`; none after a space or without `/`. |
@@ -66,6 +70,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U28 | — | local | R6 | proven | One Configure `model=mock-small`; the picker shows it; the next message answered. |
 | U29 | — | local | R6 | proven | `/recall`, `/review` at `/`; `/re`, ArrowDown, Enter: `/review `, the list gone; sent: "Echo #2: /review the code." |
 | U30 | — | local | R7 | proven | Every assertion held: the pool kept for the tests not offered; the ended Workstream of that pool continues in another; never one kept for the tests. |
+| U30 | — | local | R10 | proven | As R7, and its own pool gone: `claude-code-new`, of its harness; the one picked here still first. |
 | U31 | — | local | R7 | proven | `o/a` None, Read, Write; `o/b` None, Read; z.ai Off, On; the button "No access", "a · Read", "2 repos", "2 grants"; nothing offered: no entry. |
 | U31 | — | cluster | R8 | partial: seen on a screenshot, not asserted | "No access" in the draft; `arnaultbretagne/agora` and `arnaultbretagne/infra-k8s`, each None, Read, Write. |
 | U31 | — | local | R9 | proven | `o/a` None, Read, Write; `o/b` None, Read; z.ai and Internet Off, On; the button "No access", "a · Read", "Internet", "2 repos", "2 grants"; nothing offered: no entry. |
@@ -73,6 +78,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U33 | — | local | R7 | proven | From an ended Workstream: `pool`, `anchor` and `profiles` `github:o/a:read`; None picked instead: no `profiles`, the settings kept; a draft: the pool alone. |
 | U34 | — | local | R7 | proven | `GET /api/config` offering both; "No access"; `owner/a` None, Read, Write and `owner/b` None, Read; Write picked: "a · Write"; the Create's `profiles` `github:owner/a:write`; still "a · Write" once ready. |
 | U35 | — | local | R7 | proven | `owner/b` Read, then `owner/a` Read with the menu still open: "2 repos"; two Scopes, `github:owner/b:read`, then `github:owner/a:read` and `github:owner/b:read`; the next message answered; still "2 repos". |
+| U36 | real: the Pod's push never reaches the server | local | R10 | proven | "No saved Mock agent session: the 1 exchange above goes to the agent as text." before sending; then "New session with Mock agent. The 1 exchange above goes to the agent with your next message."; the prompt's first block holding `<user>\nremember quetsche\n</user>`, its second `what did I say`; the user's bubble that text alone. |
 
 ## Not covered
 

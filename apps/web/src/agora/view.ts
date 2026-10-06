@@ -26,6 +26,9 @@ export interface WorkstreamView {
   readonly configuring?: boolean
   /** The last execution's own profiles (docs/specs/credentials.md). */
   readonly profiles?: readonly string[]
+  /** The exchanges sent to an agent, and per harness its last anchor and the exchanges since (docs/specs/log.md, "Continuing"). */
+  readonly exchanges?: number
+  readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
 }
 
 export interface Setting {
@@ -72,6 +75,13 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     commands: Array.isArray(o.commands) ? (o.commands as AgentCommand[]) : [],
     configuring: o.configuring === true,
     profiles: Array.isArray(o.profiles) ? o.profiles.filter((p): p is string => typeof p === 'string') : [],
+    exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
+    continuation: Object.fromEntries(
+      Object.entries(json(o.continuation) ?? {}).flatMap(([harness, c]) => {
+        const v = json(c)
+        return v && typeof v.anchor === 'string' && typeof v.exchanges === 'number' ? [[harness, { anchor: v.anchor, exchanges: v.exchanges }]] : []
+      }),
+    ),
   }
 }
 
@@ -165,14 +175,25 @@ const REQUEST: Record<string, string> = {
 /** A Session's end says nothing the execution's own notice does not, unless another replaced it. */
 export const shownNotice = (notice: Json): boolean => notice.type !== 'session.ended' || notice.reason === 'replaced'
 
+const exchanges = (n: number): string => `${String(n)} exchange${n === 1 ? '' : 's'}`
+const go = (n: number): string => (n === 1 ? 'goes' : 'go')
+
 export function noticeText(notice: Json, first: boolean): string {
   const reason = text(notice.reason)
   switch (notice.type) {
-    case 'session.opened':
-      if (notice.origin !== 'new') return `Session restored with ${harnessName(text(notice.harness))}: the agent remembers the history above.`
-      return first
-        ? `Session started with ${harnessName(text(notice.harness))}.`
-        : `New session with ${harnessName(text(notice.harness))}: the agent does not know the history above.`
+    case 'session.opened': {
+      const harness = harnessName(text(notice.harness))
+      // A Session opened before catch-ups existed has no count: it was given nothing.
+      const given = typeof notice.catchUp === 'number' ? notice.catchUp : null
+      const omitted = typeof notice.omitted === 'number' && notice.omitted > 0 ? ` (the ${exchanges(notice.omitted)} before them left out for length)` : ''
+      if (notice.origin !== 'new')
+        return given
+          ? `Session restored with ${harness}. The ${exchanges(given)} since its last save ${go(given)} to the agent with your next message${omitted}.`
+          : `Session restored with ${harness}: the agent remembers the history above.`
+      if (given) return `New session with ${harness}. The ${exchanges(given)} above ${go(given)} to the agent with your next message${omitted}.`
+      if (first) return `Session started with ${harness}.`
+      return given === 0 ? `New session with ${harness}.` : `New session with ${harness}: the agent does not know the history above.`
+    }
     case 'session.ended':
       return reason === 'replaced' ? 'Another session replaced this one.' : 'The session ended.'
     case 'execution.break':
@@ -313,17 +334,19 @@ export function planItems(entries: unknown): PlanItem[] {
   return list(entries).map((e, i) => ({ id: String(i), text: text(json(e)?.content), status: PLAN_STATUS[text(json(e)?.status)] ?? 'pending' }))
 }
 
-/** What **Continue** sends: Create with the ended execution's pool and anchor. */
-export function continueBody(view: WorkstreamView): Json | null {
-  return view.state === 'ended' && view.pool && view.anchor ? { pool: view.pool, anchor: view.anchor } : null
-}
-
 /**
- * The Create that a message sent with no execution running starts: in the same pool as the last one,
- * from its anchor when there is one, so the agent remembers; in another pool, from nothing.
+ * What sending will give the agent of the conversation above, when not all of it is in a save of its
+ * harness (docs/specs/log.md, "Continuing"): Agora restores that harness's last save and gives the
+ * exchanges after it as text — all of them when there is none. Null when there is nothing to say.
  */
-export function createBody(view: WorkstreamView, pool: string): Json {
-  return view.pool === pool && continueBody(view) !== null ? continueBody(view)! : { pool }
+export function continuationNote(view: WorkstreamView, harness: string | null | undefined): string | null {
+  const total = view.exchanges ?? 0
+  if (total === 0 || !harness) return null
+  const saved = view.continuation?.[harness]
+  if (saved && saved.exchanges === 0) return null
+  return saved
+    ? `${harnessName(harness)} resumes its saved session; the ${exchanges(saved.exchanges)} since then ${go(saved.exchanges)} to it as text.`
+    : `No saved ${harnessName(harness)} session: the ${exchanges(total)} above ${go(total)} to the agent as text.`
 }
 
 /**
@@ -383,18 +406,22 @@ export const offeredPools = <P extends { readonly testing?: boolean }>(pools: re
 
 /**
  * The pool a new execution starts in (docs/specs/assistant-ui.md, "Sending"): the one picked here;
- * else the Workstream's own, so it continues; else the one picked last; else the first offered.
+ * else the Workstream's own; else, its own gone with an older image, one of its harness — so it
+ * continues; else the one picked last; else the first offered.
  */
 export function poolOffered(
-  pools: readonly { readonly name: string; readonly testing?: boolean }[],
+  pools: readonly { readonly name: string; readonly harness?: string; readonly testing?: boolean }[],
   picked: string | null,
   own: string | null,
   last: string | null,
+  ownHarness: string | null = null,
 ): string | null {
   const offered = offeredPools(pools)
   const valid = (name: string | null): name is string => name !== null && offered.some((p) => p.name === name)
   if (valid(picked)) return picked
   if (valid(own)) return own
+  const same = ownHarness === null ? undefined : offered.find((p) => p.harness === ownHarness)
+  if (same) return same.name
   if (valid(last)) return last
   return offered[0]?.name ?? null
 }
@@ -465,10 +492,12 @@ export function accessLabel(granted: readonly string[], entries: readonly Access
 /** The access shown and sent: what was picked here, else the last execution's own. */
 export const accessGranted = (picked: readonly string[] | null, view: WorkstreamView): readonly string[] => picked ?? view.profiles ?? []
 
-/** The Create a message starts: in a draft the pool alone, else as `createBody`; with the settings and the access picked. */
-export function startBody(view: WorkstreamView, pool: string, draft: boolean, settings: Readonly<Record<string, string>>, access: readonly string[]): Json {
-  const base = draft ? { pool } : createBody(view, pool)
-  return { ...base, ...(Object.keys(settings).length > 0 ? { settings: { ...settings } } : {}), ...(access.length > 0 ? { profiles: [...access] } : {}) }
+/**
+ * The Create a message starts: the pool, with the settings and the access picked. Which save it
+ * continues from is the server's to find (docs/specs/log.md, "Continuing").
+ */
+export function startBody(pool: string, settings: Readonly<Record<string, string>>, access: readonly string[]): Json {
+  return { pool, ...(Object.keys(settings).length > 0 ? { settings: { ...settings } } : {}), ...(access.length > 0 ? { profiles: [...access] } : {}) }
 }
 
 /** The commands `/` lists: while the composer holds `/` and a name being typed, those it starts. */

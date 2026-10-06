@@ -70,8 +70,10 @@ sequenceDiagram
 
 Nothing exists on the server before the first message: a new Workstream is a draft in the
 browser. When no execution runs — none yet, or the last one failed or ended — sending starts one
-first; in the same harness as an ended one, from its anchor, so the agent remembers. If the
-execution fails before its Session opens, the message goes back to the composer.
+first, and it continues the Workstream: the server restores the harness's last anchor and gives the
+agent the exchanges it lacks as text. Before sending, the composer says when the agent will get
+some of the conversation as text only. If the execution fails before its Session opens, the message
+goes back to the composer.
 
 ## From objects to the screen
 

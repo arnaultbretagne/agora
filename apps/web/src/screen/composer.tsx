@@ -1,14 +1,14 @@
 // The composer (docs/specs/assistant-ui.md, "Sending"), in assistant-ui's base skin: one bordered
 // field, the harness, model and access pickers inside it where their model picker sits, Send on the
 // right, or Cancel while the agent works. Above it, what the user must know before sending: a
-// refusal, an uncertain turn, why sending waits.
+// refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits.
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessEntries, accessLabel, accessOf, commandsMatching, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
+import { accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
 
 const menuContentClass =
   'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
@@ -24,7 +24,8 @@ const HarnessPicker: FC = () => {
   if (pools === null) return <span className="text-muted-foreground px-2 text-[13px]">…</span>
   const offered = offeredPools(pools)
   if (offered.length === 0) return <span className="text-destructive px-2 text-[13px]">No harness available</span>
-  const continues = (name: string) => view.state === 'ended' && view.anchor !== null && view.pool === name
+  // Its harness has a save in this Workstream: sending restores it (docs/specs/log.md, "Continuing").
+  const continues = (harness: string) => view.continuation?.[harness] !== undefined
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -40,8 +41,8 @@ const HarnessPicker: FC = () => {
               <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', p.name === pool ? 'opacity-100' : 'opacity-0')} />
               <span className="flex flex-col">
                 <span>{harnessName(p.harness)}</span>
-                {/* Only what changes what sending does: an ended session's own harness continues it. */}
-                {continues(p.name) && <span className="text-muted-foreground text-[12px]">continues the last session</span>}
+                {/* Only what changes what sending does: a harness with a save continues from it. */}
+                {continues(p.harness) && <span className="text-muted-foreground text-[12px]">continues its saved session</span>}
               </span>
             </DropdownMenu.Item>
           ))}
@@ -142,7 +143,8 @@ const AccessPicker: FC = () => {
 
 /** What stands between the user and sending, said above the field. */
 const Notes: FC = () => {
-  const { refusal, composer, view, send, pending } = useAgora()
+  const { refusal, composer, view, send, pending, pools, pool } = useAgora()
+  const continuation = composer.create && pending === null ? continuationNote(view, pools?.find((p) => p.name === pool)?.harness) : null
   return (
     <div className="flex flex-col gap-2 empty:hidden">
       {refusal && (
@@ -150,6 +152,7 @@ const Notes: FC = () => {
           {refusal}
         </p>
       )}
+      {continuation !== null && <p className="text-muted-foreground border-foreground/15 border-l-2 pl-3 text-[13px]">{continuation}</p>}
       {composer.uncertain ? (
         <div className="border-warning flex flex-wrap items-center gap-2 border-l-2 pl-3 text-[13px]">
           <span className="flex-1">The end of the last turn could not be confirmed. It is never sent again.</span>

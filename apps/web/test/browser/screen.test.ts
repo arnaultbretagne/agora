@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -183,11 +183,38 @@ test('U23 an ended Workstream: a message continues it from its anchor, the agent
   await expire(c.kube, claimName(view.execution))
   await stateLabel(page, 'ended').waitFor()
   await page.getByRole('button', { name: 'Harness' }).click()
-  await page.getByRole('menuitem', { name: /continues the last session/ }).waitFor()
+  await page.getByRole('menuitem', { name: /continues its saved session/ }).waitFor()
   await page.keyboard.press('Escape')
   await send(page, 'what did I say')
   await thread(page).getByText('Session restored with Mock agent: the agent remembers the history above.').waitFor()
   await thread(page).getByText(/Before, you told me "remember mirabelle"/).waitFor()
+})
+
+test('U36 an ended Workstream whose Pod left no anchor: said before sending; sent, the agent is given the exchanges above', async () => {
+  const page = await fresh()
+  const id = await started(page, 'remember quetsche')
+  const view = (await workstreams()).find((w) => w.id === id) as unknown as { execution: string }
+  await page.locator('header').getByRole('button', { name: /Stop/ }).click()
+  // The Pod's push never reaches the server, as when the node dies.
+  const url = c.kube.anchorUrl
+  c.kube.anchorUrl = ''
+  await expire(c.kube, claimName(view.execution))
+  await stateLabel(page, 'ended').waitFor()
+  c.kube.anchorUrl = url
+  await page.getByText('No saved Mock agent session: the 1 exchange above goes to the agent as text.').waitFor()
+  await send(page, 'what did I say')
+  await thread(page).getByText('New session with Mock agent. The 1 exchange above goes to the agent with your next message.').waitFor()
+  // The prompt sent: the exchange above, then the message; the user's bubble shows the message only.
+  const prompt = await until('the prompt with the catch-up', async () => {
+    const prompts = (await entriesOf(id)).flatMap((e) => {
+      const blocks = (e.content.params as { prompt?: { text?: string }[] } | undefined)?.prompt
+      return blocks === undefined ? [] : [blocks]
+    })
+    return prompts.at(-1)?.length === 2 ? prompts.at(-1)! : null
+  })
+  assert.match(String(prompt[0]!.text), /<user>\nremember quetsche\n<\/user>/)
+  assert.equal(prompt[1]!.text, 'what did I say')
+  await thread(page).getByText('what did I say', { exact: true }).waitFor()
 })
 
 test('U24 a tool with a diff: its line labelled and noted; opened, the diff', async () => {

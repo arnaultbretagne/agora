@@ -30,6 +30,9 @@
 5. **One turn at a time per Workstream.** A second prompt is refused while a turn is saved, in
    progress or uncertain. A local failure does not prove that the harness finished.
 6. **PostgreSQL** holds the log, the projections and the anchors.
+7. **A new execution continues its Workstream.** It restores the last anchor of its harness, and
+   its first prompt gives the agent, as text, the exchanges that anchor does not hold — all of them
+   when there is none.
 
 ```mermaid
 flowchart LR
@@ -59,6 +62,10 @@ flowchart LR
   reports `end_turn`; OpenCode 1.18.16 and Pi 0.0.33 queue it. No response is a portable signal.
 - **PostgreSQL makes positions, uniqueness and "written before sent" transactions**, for the
   log, the views and the anchors alike.
+- **The log already holds the conversation.** When the Pod of 2026-10-05 died with its node, its
+  anchor was lost and the next Session knew nothing of the Workstream; the log had every exchange.
+  Pool names follow image digests, so an anchor tied to its pool's name was dropped by every new
+  image. The harness is what reads an anchor.
 
 ## What we tried
 
@@ -72,6 +79,9 @@ flowchart LR
 | A new Session on every configuration change | The change is already an ACP exchange in the log. |
 | Building the views when read | Every reader would reimplement ACP assembly. |
 | Validating against ACP's root schema | Measured by the previous implementation (SDK 1.3.0): an unknown `session/update` type passes it. Lines are validated per method and direction. |
+| An anchor pushed at every turn, against the node dying | A Pod ending without its anchor is an incident, not the normal path; the log already holds what to give the next Session. |
+| Writing the harness's native files from the log | Agora never interprets a harness's files. |
+| A prompt of its own to give the exchanges, before the user's | One more turn, billed and answered for nothing. |
 
 ## Consequences
 
@@ -89,3 +99,6 @@ flowchart LR
   the incident visible and reconstructible without retaining that content.
 - Writing the journal, projecting it and storing opaque anchor bytes use separate database roles.
 - Agora never interprets the harness's files inside an anchor.
+- Exchanges given as text carry what was said, not the agent's state: no tool result, no file.
+  They are bounded (200,000 characters, the most recent kept) and paid once, with the first
+  prompt.

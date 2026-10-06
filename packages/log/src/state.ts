@@ -2,6 +2,7 @@ import { idKey } from './acp.ts'
 import { identity, object, schemaValue, encode } from './json.ts'
 import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
+import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, noteAnchor } from './catch-up.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 
@@ -289,6 +290,8 @@ export class CoreProjection {
   /** The anchor each ended execution names, and the Sessions that have ended. */
   private readonly anchors = new Map<string, string>()
   private readonly endedSessions = new Set<string>()
+  /** The Workstream's anchors, for what a Create would restore (docs/specs/log.md, "Continuing"). */
+  private readonly known = noAnchors()
   /** What the view last showed of the settings, to put it only when that changes. */
   private settingsCode = ''
   apply(entries: readonly Entry[]): Set<string> {
@@ -337,6 +340,7 @@ export class CoreProjection {
         }
       }
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
+      noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
       // Settings and commands change with ACP lines too: the view is put when what it shows of them changed.
       const execution0 = state.current
@@ -345,9 +349,23 @@ export class CoreProjection {
         : ''
       const settingsChanged = settingsCode !== this.settingsCode
       this.settingsCode = settingsCode
-      if (titled || settingsChanged || entry.kind === 'command' || entry.kind.startsWith('execution.') || entry.kind.startsWith('session.')) {
+      if (
+        titled ||
+        settingsChanged ||
+        entry.kind === 'command' ||
+        entry.kind === 'anchor.received' ||
+        (entry.kind === 'acp.dispatching' && state.requestPositions.get(String(entry.content.requestPosition))?.method === 'session/prompt') ||
+        entry.kind.startsWith('execution.') ||
+        entry.kind.startsWith('session.')
+      ) {
         const execution = state.current
         const session = execution?.session && !this.endedSessions.has(execution.session) ? execution.session : null
+        // What a Create would give the agent: per harness, the anchor it restores and the exchanges it lacks.
+        const continuation: Record<string, { anchor: string; exchanges: number }> = {}
+        for (const harness of [...new Set([...this.known.of.values()].map((a) => a.harness))].sort()) {
+          const anchor = lastAnchor(this.known, state, harness)
+          if (anchor !== null) continuation[harness] = { anchor, exchanges: lacking(this.known, state, anchor).length }
+        }
         put(
           'workstream',
           entry.workstream,
@@ -369,6 +387,8 @@ export class CoreProjection {
             pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
+            exchanges: dispatched(state).length,
+            continuation,
             changedAt: entry.time,
           },
           entry.position,
@@ -376,7 +396,11 @@ export class CoreProjection {
       }
       const notice =
         entry.kind === 'session.opened'
-          ? { origin: entry.content.origin ?? 'new', harness: entry.content.harness ?? null }
+          ? {
+              origin: entry.content.origin ?? 'new',
+              harness: entry.content.harness ?? null,
+              ...(entry.content.catchUp !== undefined ? { catchUp: entry.content.catchUp, omitted: entry.content.omitted ?? 0 } : {}),
+            }
           : entry.kind === 'session.ended' ||
               entry.kind === 'request.failed' ||
               (entry.kind === 'execution.break' && entry.content.clean !== true) ||
@@ -418,10 +442,19 @@ export class CoreProjection {
         update = object(params?.update)
       const type = update?.sessionUpdate
       if (entry.method === 'session/prompt' && entry.direction === 'out') {
+        // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
+        const blocks = Array.isArray(params?.prompt) ? (params.prompt as unknown[]) : null
+        const catchUp = blocks?.map((b) => object(object(b)?._meta)?.[CATCH_UP_META]).find((m) => m !== undefined)
         put(
           'element',
           identity(entry.session ?? entry.execution!, entry.position, 'prompt'),
-          { type: 'user', turn: turn?.id, session: entry.session, content: params?.prompt },
+          {
+            type: 'user',
+            turn: turn?.id,
+            session: entry.session,
+            content: blocks ? blocks.filter((b) => !isCatchUp(b)) : params?.prompt,
+            ...(catchUp !== undefined ? { catchUp } : {}),
+          },
           entry.position,
         )
       } else if (

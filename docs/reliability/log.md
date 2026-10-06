@@ -19,6 +19,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R11 | 2026-10-04 | `af896c7` | cluster | g4. The server `agora-server@sha256:0f3edc12…` built from that commit, started on the `agora` database whose views were of core projector 3; the views read over the API through a port-forward. |
 | R12 | 2026-10-04 | `c89faf2` | local | `npm run check`'s log tests with the files four at a time (`--test-concurrency=4`), each test on a database of its own: Node 24.20.0, PostgreSQL 17.11; three runs, 87–88 s each, all green. |
 | R13 | 2026-10-06 | `6c34d4f` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; requests sent to the server with and without `X-Forwarded-Email`, as the proxy would pass it. |
+| R14 | 2026-10-06 | `ab899d3` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube. A Pod ending without its anchor is FakeKube's push left without an address, as when the node dies or Agora cannot be reached; a newer image of a harness is a second pool, `mock-next`, of harness `mock`; a refused resume is the mock reading its files only at start without its image saying so. Before it, the log tests alone twice, 90/90 each; one `views.test.ts` failure seen once, right after the fixture's hash was recorded again, did not come back. |
 
 ## Cases
 
@@ -55,6 +56,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L21 | real: the reply to the capture's COMMIT lost on the network (relay in front of PostgreSQL) | local | R1 | proven | One COMMIT reply dropped. |
 | L22 | — | local | R1 | proven | Every assertion held. |
 | L22 | — | local | R10 | proven | The hash recorded for core projector 4, `3e8f9051…`, incrementally and through a rebuild. |
+| L22 | — | local | R14 | proven | The hash recorded again for core projector 5, `5738029b…`, incrementally and through a rebuild. |
 | L23 | — | local | R1 | proven | Every assertion held. |
 | L24 | real: the stream closed before `snapshot-end`, updates committing meanwhile | local | R1 | proven | Every assertion held. |
 | L25 | — | local | R1 | proven | Every assertion held. |
@@ -95,6 +97,14 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L54 | — | local | R10 | proven | `profiles` `[B]` from a Create naming it twice, then `[A, B]` after the Scope; the Scope's entry at its answer's position, with its execution; the fold's profiles alike. |
 | L55 | — | local | R10 | proven | `invalid_scope` for a string, for `[3]` and with no `profiles`; `stale_execution`; `stopped` after Stop. |
 | L56 | — | local | R13 | proven | Two Workstreams created under one identity (one with another `owner` in the body), one under a second identity, one with a body's `owner` and no identity: each identity listed exactly its own, an unknown identity none, and the request without an identity all four. |
+| L57 | real: the second Pod's push never reaches Agora | local | R14 | proven | The second Create, with no anchor named, restored the first's anchor, counted 0; the third restored it too, counted 1, and its first prompt carried a block marked `agora.bretagne.dev/catch-up` (1, 0) holding `quetsche` and not `mirabelle`, then the user's block; the next prompt none; `/recall` gave both words; the thread's user message the user's block alone, with `catchUp`; the view's `exchanges` 4 and `continuation` `{mock: {anchor, exchanges: 3}}`. |
+| L58 | real: the Pod's push never reaches Agora | local | R14 | proven | `origin` `new`, `catchUp` 2; the block saying no save could be restored, `mirabelle` before `quetsche`; the view before it: `exchanges` 2, `continuation` empty. |
+| L59 | — | local | R14 | proven | Created in `mock-next`: the anchor left in `mock-test` restored; `/recall` gave `"mirabelle"`. |
+| L60 | real: the Pod's push never reaches Agora | local | R14 | proven | `/recall`, then two messages: carried `[false, true, false]`. |
+| L61 | — | unit | R14 | proven | Every assertion held. |
+| L62 | — | unit | R14 | proven | Twelve exchanges of 19,000 characters: the last ten kept, two left out and said; given again with that count, the same text. |
+| L63 | real: the second Pod's push never reaches Agora; the third ends before any message | local | R14 | proven | The fourth restored the third's anchor, counted 1, and its first prompt carried `quetsche`. |
+| L64 | real: the agent answers `session/resume` with an error (mock reading its files at start only) | local | R14 | proven | The execution left waiting for its deadline (#109); then the view's `continuation` empty, and the next Create a new ACP session counting 1. |
 
 ## Not covered
 

@@ -549,6 +549,10 @@ export class LogStore {
             pool: body.pool ?? null,
             harness: body.harness ?? null,
             origin: request!.method === 'session/new' ? 'new' : (body.anchor ?? 'new'),
+            // The exchanges its first prompt will give (docs/specs/log.md, "Continuing").
+            ...(Array.isArray(object(body.catchUp)?.turns)
+              ? { catchUp: (object(body.catchUp)!.turns as unknown[]).length, omitted: object(body.catchUp)!.omitted ?? 0 }
+              : {}),
           },
         })
         await tx.client.query(

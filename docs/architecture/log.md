@@ -149,9 +149,12 @@ Three kinds of data have different guarantees:
 | Files and artefacts | Not kept by Agora: the sandbox has no persistent storage, and the agent pushes what must last (code, a note). |
 
 The anchor keeps the harness's native files when a Pod ends (`executions.md`); restoring it
-opens a new Session. If reliable native resume is not available, Agora keeps the history and
-explicitly offers a new context with the chosen elements. It does not present this operation as
-an exact restore.
+opens a new Session. A new execution continues its Workstream: it restores the last anchor of its
+harness, whatever the pool's name, and the log gives the agent, as text with its first prompt, the
+exchanges that anchor does not hold — all of them when there is none, after a Pod that ended
+without its anchor or in another harness. The screen says so before sending and when the Session
+opens; it does not present this as an exact restore, since the agent gets what was said, not its
+tools' state.
 
 Internal compaction belongs to the harness. Agora does not try to prove after each
 message that the model still has the whole history.

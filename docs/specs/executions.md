@@ -288,7 +288,7 @@ after a restart, is the log's (`log.md`, "An execution's memory").
 
 ### Restoring
 
-Create with an anchor. Once connected, Agora hands the execution's token, places the anchor
+Create with an anchor, named or found by the log (`log.md`, "Continuing"). Once connected, Agora hands the execution's token, places the anchor
 (`PUT /anchor`), sends `initialize`, then `session/resume`, or `session/load` if the agent
 advertises only `loadSession`. The anchor goes before the adapter speaks, so an adapter restarted
 onto it is the one Agora initializes. A missing anchor, a refused placement or an agent that can
