@@ -18,6 +18,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R10 | 2026-10-03 | `0c75f9b` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11; a real signer offering `github:owner/a:write` and `github:owner/b:read`; the core projector at version 4. |
 | R11 | 2026-10-04 | `af896c7` | cluster | g4. The server `agora-server@sha256:0f3edc12…` built from that commit, started on the `agora` database whose views were of core projector 3; the views read over the API through a port-forward. |
 | R12 | 2026-10-04 | `c89faf2` | local | `npm run check`'s log tests with the files four at a time (`--test-concurrency=4`), each test on a database of its own: Node 24.20.0, PostgreSQL 17.11; three runs, 87–88 s each, all green. |
+| R13 | 2026-10-06 | `6c34d4f` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; requests sent to the server with and without `X-Forwarded-Email`, as the proxy would pass it. |
 
 ## Cases
 
@@ -93,6 +94,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L53 | — | local | R8 | proven | `settings` `{model: 3}` and `['model']`: `invalid_create`. |
 | L54 | — | local | R10 | proven | `profiles` `[B]` from a Create naming it twice, then `[A, B]` after the Scope; the Scope's entry at its answer's position, with its execution; the fold's profiles alike. |
 | L55 | — | local | R10 | proven | `invalid_scope` for a string, for `[3]` and with no `profiles`; `stale_execution`; `stopped` after Stop. |
+| L56 | — | local | R13 | proven | Two Workstreams created under one identity (one with another `owner` in the body), one under a second identity, one with a body's `owner` and no identity: each identity listed exactly its own, an unknown identity none, and the request without an identity all four. |
 
 ## Not covered
 
