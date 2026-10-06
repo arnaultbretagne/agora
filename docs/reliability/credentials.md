@@ -20,6 +20,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R10 | 2026-10-05 | `dfd3df9` | cluster | g4 under Kata. The server `agora-server@sha256:f6d5898e…` built from `3ec2f96`, in the namespace `agora`, offering `internet` (infra-k8s #211, #210); the mock pool `agora-harness-mock@sha256:632991c4…`; agentgateway 1.5.0 with the route `internet` and its egress limited to public IPv4 on 443 (infra-k8s #210), restarted to load the route. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`; no model call. |
 | R11 | 2026-10-05 | `77ce4ee` | cluster | As R10; only C24's control changed in the runner. One case per run, each once the previous one's executions had ended (`quota`). |
 | R12 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent and the stdio test adapter; tokens shaped like Agora's JWTs, with stand-in signatures, which the bridge never verifies. The gateway is not run. |
+| R13 | 2026-10-06 | — | local | agentgateway 1.5.0 (release binary, checksum verified) on the configuration of infra-k8s `295a38c` (`gateway.yaml`, paths and ports rewritten), a throwaway CA and signing key, stand-in credentials; requests sent by hand through `CONNECT`, from `127.0.0.1` and from the host's own address. |
+| R14 | 2026-10-06 | `112e214` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent, FakeKube recording an address per Sandbox, a real signer with a key of its own; PostgreSQL 17.11 for the log's tests. The gateway is not run. |
 
 ## Cases
 
@@ -80,6 +82,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C26 | — | cluster | R11 | proven | "CONNECT example.com:8443 refused by the proxy: 404". |
 | C27 | — | local | R12 | proven | Every assertion held. |
 | C28 | — | local | R12 | proven | Every assertion held, the control's too. |
+| C29 | — | local | R14 | proven | The warm token's `ip` and the execution's are the addresses their Sandboxes record (`10.244.0.77`, `10.244.0.78`); the signer refused an empty address, a Pod's name and `10.244.0`. |
+| C30 | — | local | R13 | partial: probed by hand, no test; the sandboxes' addresses not exercised | `internet`: a token naming `127.0.0.1`, from there, 200; the same from `10.10.20.10`, 403; one naming `10.10.20.10`, from there, 200; with no `ip`, 403. Anthropic's route: a token naming `127.0.0.1`, from there, reaches Anthropic (401 with the stand-in credential); one naming `10.244.0.91`, 403; with no `ip`, 403. |
 
 The partial verdicts are tracked in #107.
 

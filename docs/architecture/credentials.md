@@ -20,8 +20,10 @@ cannot carry a token, and passing one through the claim would force a cold start
 starts the adapter with `HTTPS_PROXY` pointing at a local proxy of its own, which refuses
 everything until Agora attaches a token. Any harness that honours `HTTPS_PROXY` benefits.
 
-The token stays in the bridge's memory, neither in the adapter's environment nor on disk: the
-agent can use the way out, not take the token with it, and the network lets it go nowhere else.
+The token stays in the bridge's memory, neither in the adapter's environment nor on disk. That
+does not hide it from the agent, which runs under the bridge's user and can read that memory.
+What makes the token worthless elsewhere is its address: it names the Pod's, and the gateway
+takes it from there only (below, "The token").
 
 ## Profiles and grants
 
@@ -95,6 +97,11 @@ The content is not encrypted: the sandbox can read its own rights. It cannot cha
 editing a grant or pushing back the expiry breaks the signature. The gateway checks the signature
 with Agora's public key, then the expiry, the issuer and the audience; it needs nothing else to
 decide.
+
+The content also names the Pod's address, which Agora takes from Kubernetes, never from the Pod.
+The gateway lets a request through only if it comes from that address. A Pod cannot send from
+another's address, so a token carried out of its Pod opens nothing anywhere else. No secret could
+play that part: anything the bridge keeps, the agent can read.
 
 ## A request
 
