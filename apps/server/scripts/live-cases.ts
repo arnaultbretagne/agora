@@ -497,6 +497,30 @@ await check('E31', 'Real harness (codex)', async () => {
 
 // ---------------------------------------------------------------- what the agent is told (docs/specs/executions.md, E33)
 
+/**
+ * A turn played to its end, each permission the agent asks for answered with its first "allow" option,
+ * as the operator would. Resolves with how many were asked.
+ */
+async function turnAllowing(w: Workstream, before: number, timeoutMs: number): Promise<number> {
+  const answered = new Set<string>()
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; await sleep(500)) {
+    const entries = await w.entries()
+    // Every permission of the Workstream so far is this turn's: the turns before ask for none.
+    for (const asked of entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/request_permission')) {
+      if (answered.has(asked.position)) continue
+      const options = ((asked.content.params as Json)?.options ?? []) as Json[]
+      const allow = options.find((o) => o.kind === 'allow_once') ?? options.find((o) => String(o.kind).startsWith('allow'))
+      assert(allow !== undefined, `no allow option: ${JSON.stringify(options)}`)
+      const reply = await w.command('RespondPermission', { execution: w.execution, session: w.session, requestPosition: asked.position }, { requestId: asked.rpc_id, outcome: { outcome: 'selected', optionId: allow.optionId } })
+      assert(reply.status === 200, `permission refused: ${JSON.stringify(reply)}`)
+      answered.add(asked.position)
+    }
+    const turns = fold(entries).turns
+    if (turns.size > before && ['done', 'failed'].includes([...turns.values()].at(-1)!.status)) return answered.size
+  }
+  throw new Error('timed out: turn done|failed, answering permissions')
+}
+
 /** The tool calls the agent reported so far in this Workstream. */
 const toolCalls = async (w: Workstream) =>
   (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' && (x.content.params as Json)?.update?.sessionUpdate === 'tool_call').length
@@ -515,16 +539,17 @@ await check('E33', 'Each real harness knows where its access is written, from th
     const silent = await toolCalls(w)
     // The control: asked to read it, the same agent calls a tool, and the capture sees it.
     const before = answer.length
+    const turns = (await w.state()).turns.size
     const read = await w.write('Now read that file and give me its `sub` claim only.')
     assert(read.status === 200, `${harness}: Write refused: ${JSON.stringify(read)}`)
-    await w.turn(['done', 'failed'], 240_000)
+    const permissions = await turnAllowing(w, turns, 240_000)
     const sub = (await w.said()).slice(before)
     const used = (await toolCalls(w)) - silent
     await w.stop()
     assert(turn.status === 'done' && /(~|\/home\/harness)\/\.agora\/access\.json/.test(answer), `${harness}: turn ${turn.status}: ${answer.slice(0, 160)}`)
     assert(silent === 0, `${harness}: ${String(silent)} tool call(s) before answering`)
     assert(used > 0 && sub.includes(w.execution), `${harness} control: ${String(used)} tool call(s), "${sub.slice(0, 120)}"`)
-    outcomes.push(`${harness} "${answer.trim().slice(0, 40)}", no tool call; control: ${String(used)} tool call(s), sub "${sub.trim().slice(0, 50)}"`)
+    outcomes.push(`${harness} "${answer.trim().slice(0, 40)}", no tool call; control: ${String(used)} tool call(s), ${String(permissions)} permission(s) asked, sub "${sub.trim().slice(0, 50)}"`)
   }
   return outcomes.join('; ')
 })
