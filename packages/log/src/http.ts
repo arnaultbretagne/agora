@@ -79,15 +79,17 @@ export async function logHttp(
       res.end(bundle.files.map((file) => `===== ${file.path}\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n'))
       return true
     }
-    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views() }), true
+    // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
+    // name-based UUID; none when Agora is reached without the proxy.
+    const identityHeader = req.headers['x-forwarded-email']
+    const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
+    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
-      // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
-      // name-based UUID; the body's owner without one.
-      const identityHeader = req.headers['x-forwarded-email']
+      // The caller's identity; the body's owner without one.
       const id = uuid(input.id),
-        owner = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : uuid(input.owner)
+        owner = caller ?? uuid(input.owner)
       try {
         await store.create(id, owner)
       } catch (error) {
