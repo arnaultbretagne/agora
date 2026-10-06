@@ -34,7 +34,10 @@ export const Thread: FC = () => {
             {({ message }) => (message.role === 'user' ? <UserMessage /> : message.role === 'assistant' ? <AssistantMessage /> : <Notice />)}
           </ThreadPrimitive.Messages>
         </div>
-        <ThreadPrimitive.ViewportFooter className={cn('bg-background mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-3 overflow-visible pb-5', !draft && 'sticky bottom-0 mt-auto')}>
+        {/* Clear of a phone's home indicator, unless the keyboard is up. */}
+        <ThreadPrimitive.ViewportFooter
+          className={cn('bg-background mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-3 overflow-visible pb-[max(1.25rem,var(--safe-bottom))]', !draft && 'sticky bottom-0 mt-auto')}
+        >
           <ThreadPrimitive.ScrollToBottom asChild>
             <button
               type="button"

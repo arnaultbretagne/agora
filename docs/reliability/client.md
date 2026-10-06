@@ -16,6 +16,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R8 | 2026-10-04 | `af896c7` | cluster | The client built into `agora-server@sha256:0f3edc12…`, in the namespace `agora`, offering `github:arnaultbretagne/agora:write` and `github:arnaultbretagne/infra-k8s:write`; read in Chromium's headless shell through `kubectl port-forward`, the access picker opened in the draft, a screenshot taken. |
 | R9 | 2026-10-05 | `f0a7c05` | local | `npm run check`, with `npm run test:browser`, as R7; the catalogue knowing `internet`. |
 | R10 | 2026-10-06 | `ab899d3` | local | `npm run check`, with `npm run test:browser`, as R9; a Pod's push left without an address for U36. Screenshots taken in Chromium against the same server, of the composer's note, the harness picker and the restored Session's notice. |
+| R11 | 2026-10-06 | `ead52f6` | local | `npm run check`, with `npm run test:browser`, as R10; U37 on a phone's screen in Playwright's Chromium (390 × 844, touch), its safe areas emulated through `Emulation.setSafeAreaInsetsOverride`, then resized to 1400 × 900. Screenshots taken in Chromium on the same screen, light and dark, the draft offering the cluster's catalogue (`GET /api/pools` of the deployed server): Claude Code, Opus 5.5 at High. |
 
 ## Cases
 
@@ -79,8 +80,11 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U34 | — | local | R7 | proven | `GET /api/config` offering both; "No access"; `owner/a` None, Read, Write and `owner/b` None, Read; Write picked: "a · Write"; the Create's `profiles` `github:owner/a:write`; still "a · Write" once ready. |
 | U35 | — | local | R7 | proven | `owner/b` Read, then `owner/a` Read with the menu still open: "2 repos"; two Scopes, `github:owner/b:read`, then `github:owner/a:read` and `github:owner/b:read`; the next message answered; still "2 repos". |
 | U36 | real: the Pod's push never reaches the server | local | R10 | proven | "No saved Mock agent session: the 1 exchange above goes to the agent as text." before sending; then "New session with Mock agent. The 1 exchange above goes to the agent with your next message."; the prompt's first block holding `<user>\nremember quetsche\n</user>`, its second `what did I say`; the user's bubble that text alone. |
+| U37 | — | local | R11 | proven | Narrow: the harness button without text, its mark shown, its tooltip "Mock agent"; the model "mock-large" alone, the effort's bars labelled "high"; the key without text, its tooltip "a · Read", no dot before the grant and one after; no picker's text cut or wrapped, while the check finds the header's long title cut; the composer 34 px above the bottom. Wide: "Mock agent", "mock-large · high", "a · Read", no dot; without a home indicator, 20 px. |
+| U38 | — | local | R11 | proven | `application/manifest+json`, Agora, standalone, from `/`; a 180 × 180 PNG; the manifest and icon linked; `apple-mobile-web-app-status-bar-style` `default`; `viewport-fit=cover`; both theme colours `#faf9f5` and the page cream, then `#181715` and the page dark once toggled against the light system. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
+| On an iPhone: the status bar opaque in the page's colour, the page's top not blurred; the screen on what the keyboard leaves; the home-screen icon (U37 and U38 emulate the screen in Chromium, not iOS) | #137 |

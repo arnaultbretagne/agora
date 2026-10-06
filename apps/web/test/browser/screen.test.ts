@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U38: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -48,6 +48,33 @@ async function fresh(): Promise<Page> {
   page.setDefaultTimeout(30_000)
   return page
 }
+
+/** A phone's screen: an iPhone's, touch, its home indicator's 34 px emulated; `insets` changes them. */
+async function phone(): Promise<{ page: Page; insets: (bottom: number) => Promise<void> }> {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light' })
+  const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  const cdp = await context.newCDPSession(page)
+  const insets = async (bottom: number) => {
+    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, bottom, left: 0, right: 0 } })
+  }
+  await insets(34)
+  return { page, insets }
+}
+
+/** The pickers' texts that do not fit: cut short, or wrapped onto another line. */
+const cut = (page: Page, selector: string) =>
+  page.locator(selector).evaluateAll((elements) =>
+    elements.flatMap((element) =>
+      [element, ...element.querySelectorAll('span')]
+        .filter((e) => e.getClientRects().length > 0 && e.textContent!.trim() !== '')
+        .filter((e) => e.scrollWidth > e.clientWidth || e.getClientRects().length > 1 || (e === element && e.getBoundingClientRect().height > 40))
+        .map((e) => e.textContent!.trim()),
+    ),
+  )
+
+/** How far the composer ends above the bottom of the screen. */
+const composerMargin = (page: Page) => page.locator('main form').evaluate((form) => window.innerHeight - form.getBoundingClientRect().bottom)
 
 /** The state the header shows, after the harness. */
 const stateLabel = (page: Page, state: string) => page.locator(`header [data-state="${state}"]`)
@@ -318,4 +345,68 @@ test('U35 another access picked in an open Workstream: Scope sent with the whole
   await send(page, 'after the access')
   await thread(page).getByText('Echo #2: after the access.').waitFor()
   assert.equal(await accessPicker(page).innerText(), '2 repos')
+})
+
+test('U37 a phone: the pickers as marks, nothing cut, the composer above the home indicator; wide: their names', async () => {
+  const { page, insets } = await phone()
+  // A Session in the pool first, so the draft offers its models and efforts.
+  const id = await started(page, 'a session for the phone, its title long enough to be cut short in the header')
+  assert.equal(await composerMargin(page), 34, 'above the home indicator')
+  // The check sees a text cut short: the header's title is.
+  assert.equal((await cut(page, 'header span.truncate')).length, 1, 'the title cut')
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'mock-large' }).click()
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'high' }).click()
+  const harness = page.getByRole('button', { name: 'Harness' })
+  assert.equal(await accessPicker(page).locator('[data-granted]').count(), 0, 'no dot while nothing is granted')
+  await accessPicker(page).click()
+  await accessChoice(page, 'owner/a', 'Read').click()
+  await page.keyboard.press('Escape')
+  assert.equal((await harness.innerText()).trim(), '', 'the harness without its name')
+  assert.equal(await harness.locator('svg').first().isVisible(), true, 'its mark')
+  assert.equal(await harness.getAttribute('title'), 'Mock agent')
+  assert.equal((await modelPicker(page).innerText()).trim(), 'mock-large', 'the model alone')
+  assert.equal(await modelPicker(page).getByLabel('high').isVisible(), true, 'the effort as bars')
+  assert.equal((await accessPicker(page).innerText()).trim(), '', 'the key without what is granted')
+  assert.equal(await accessPicker(page).getAttribute('title'), 'a · Read')
+  assert.equal(await accessPicker(page).locator('[data-granted]').isVisible(), true, 'its dot')
+  assert.deepEqual(await cut(page, 'main form button'), [], 'no picker cut')
+  await page.setViewportSize({ width: 1400, height: 900 })
+  assert.equal((await harness.innerText()).trim(), 'Mock agent')
+  assert.match(await modelPicker(page).innerText(), /mock-large\s*·\s*high/)
+  assert.equal((await accessPicker(page).innerText()).trim(), 'a · Read')
+  assert.equal(await accessPicker(page).locator('[data-granted]').isVisible(), false, 'no dot beside the name')
+  await insets(0)
+  await page.goto(`${server.url}/w/${id}`)
+  await thread(page).getByText('Echo #1: a session for the phone').waitFor()
+  assert.equal(await composerMargin(page), 20, 'without a home indicator, the usual margin')
+})
+
+test('U38 the home-screen frame: the manifest and icon, an opaque status bar, the page covering the display, the status bar in the theme colour', async () => {
+  const manifest = await fetch(`${server.url}/manifest.webmanifest`)
+  assert.equal(manifest.headers.get('content-type'), 'application/manifest+json')
+  const declared = (await manifest.json()) as Record<string, unknown>
+  assert.deepEqual([declared.name, declared.display, declared.start_url], ['Agora', 'standalone', '/'])
+  const icon = await fetch(`${server.url}/apple-touch-icon.png`)
+  assert.equal(icon.headers.get('content-type'), 'image/png')
+  const png = Buffer.from(await icon.arrayBuffer())
+  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [180, 180], 'a 180 px icon')
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await page.getByText('What shall we work on?').waitFor()
+  const content = (selector: string, attribute = 'content') => page.locator(selector).getAttribute(attribute)
+  assert.equal(await content('link[rel="manifest"]', 'href'), '/manifest.webmanifest')
+  assert.equal(await content('link[rel="apple-touch-icon"]', 'href'), '/apple-touch-icon.png')
+  assert.equal(await content('meta[name="apple-mobile-web-app-status-bar-style"]'), 'default', 'an opaque status bar')
+  assert.match((await content('meta[name="viewport"]'))!, /viewport-fit=cover/)
+  const colours = () => page.locator('meta[name="theme-color"]').evaluateAll((metas) => metas.map((m) => m.getAttribute('content')))
+  const background = () => page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)
+  assert.deepEqual(await colours(), ['#faf9f5', '#faf9f5'], 'the light page, as the system')
+  assert.equal(await background(), 'rgb(250, 249, 245)')
+  await page.getByRole('button', { name: 'Dark theme' }).click()
+  assert.deepEqual(await colours(), ['#181715', '#181715'], 'the dark theme, against the light system')
+  assert.equal(await background(), 'rgb(24, 23, 21)')
 })

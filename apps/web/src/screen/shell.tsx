@@ -1,5 +1,7 @@
 // The frame (docs/specs/assistant-ui.md, "The screen"), as assistant-ui's base skin builds it: a 3rem
 // bar across, the Workstreams on the left under the brand, the open one on the right under its title.
+// On a phone (docs/specs/assistant-ui.md, "On a phone") it fills what the keyboard leaves and keeps
+// clear of the screen's edges.
 import { MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
@@ -8,6 +10,7 @@ import { useAgora } from '../agora/runtime.tsx'
 import { harnessName, sections, type WorkstreamState, type WorkstreamView } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
 import { Thread } from './thread.tsx'
+import { useVisualViewport } from './viewport.ts'
 
 const iconButton = 'text-muted-foreground hover:text-foreground rounded-control grid size-7 shrink-0 place-items-center transition-colors'
 
@@ -30,6 +33,9 @@ function useTheme(): [Theme, () => void] {
   const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? systemTheme())
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
+    // A phone's status bar takes this colour: the theme's, which may not be the system's.
+    const background = getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
+    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', background)
   }, [theme])
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
@@ -101,7 +107,8 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search"
             aria-label="Search the workstreams"
-            className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+            // 16 px on a touch screen: under that, iOS zooms the page in to type.
+            className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-[13px] outline-none pointer-coarse:text-base"
           />
         </label>
       </div>
@@ -152,8 +159,9 @@ const Title: FC = () => {
       <span className="min-w-0 truncate text-[13px] font-medium">{pending ? pending.text.split('\n')[0] : view.title}</span>
       {STATE_LABEL[state] && (
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
-          <span aria-hidden>·</span>
-          {harnessName(pending?.harness ?? view.harness)}
+          {/* On a phone the title needs the room; the composer shows the harness. */}
+          <span aria-hidden className="max-sm:hidden">·</span>
+          <span className="max-sm:hidden">{harnessName(pending?.harness ?? view.harness)}</span>
           <span aria-hidden>·</span>
           {state === 'starting' || state === 'interrupted' ? (
             <ShimmerLabel data-state={state}>{STATE_LABEL[state]}</ShimmerLabel>
@@ -167,11 +175,13 @@ const Title: FC = () => {
       {stoppable && (
         <button
           type="button"
+          aria-label="Stop"
           title="Stop the sandbox: it ends at its deadline, its files saved"
           onClick={() => void send('Stop', { execution: view.execution }, {})}
-          className="text-muted-foreground hover:text-foreground rounded-control flex h-7 shrink-0 items-center gap-1.5 px-2 text-[13px] transition-colors"
+          className="text-muted-foreground hover:text-foreground rounded-control flex h-7 shrink-0 items-center gap-1.5 px-2 text-[13px] transition-colors max-sm:-me-1"
         >
-          <PowerIcon className="size-3.5" /> Stop
+          <PowerIcon className="size-3.5" />
+          <span className="max-sm:hidden">Stop</span>
         </button>
       )}
     </>
@@ -183,8 +193,14 @@ export const Shell: FC = () => {
   const [collapsed, setCollapsed] = useState(false)
   const [drawer, setDrawer] = useState(false)
   const [theme, toggleTheme] = useTheme()
+  useVisualViewport()
   return (
-    <div className={cn('bg-background grid h-dvh grid-rows-[3rem_minmax(0,1fr)]', collapsed ? 'md:grid-cols-[minmax(0,1fr)]' : 'md:grid-cols-[16rem_minmax(0,1fr)]')}>
+    <div
+      className={cn(
+        'bg-background fixed inset-x-0 top-(--viewport-top) grid h-(--viewport-height) grid-rows-[3rem_minmax(0,1fr)] pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]',
+        collapsed ? 'md:grid-cols-[minmax(0,1fr)]' : 'md:grid-cols-[16rem_minmax(0,1fr)]',
+      )}
+    >
       <div className={cn('bg-sidebar border-foreground/10 hidden h-12 items-center gap-2.5 border-r border-b px-4', !collapsed && 'md:flex')}>
         <BrandMark className="size-5" />
         <Wordmark />
@@ -206,7 +222,7 @@ export const Shell: FC = () => {
           {theme === 'dark' ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
         </button>
       </header>
-      <aside className={cn('bg-sidebar border-foreground/10 hidden min-h-0 flex-col overflow-hidden border-r p-3', !collapsed && 'md:flex')}>
+      <aside className={cn('bg-sidebar border-foreground/10 hidden min-h-0 flex-col overflow-hidden border-r p-3 pb-[max(0.75rem,var(--safe-bottom))]', !collapsed && 'md:flex')}>
         <Sidebar onNavigate={() => undefined} />
       </aside>
       <main className="min-h-0 min-w-0">
@@ -215,7 +231,7 @@ export const Shell: FC = () => {
       {drawer && (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="Close" className="bg-foreground/20 absolute inset-0" onClick={() => setDrawer(false)} />
-          <div className="bg-sidebar border-foreground/10 absolute inset-y-0 left-0 flex w-72 flex-col gap-3 border-r p-3">
+          <div className="bg-sidebar border-foreground/10 absolute inset-y-0 left-0 flex w-[calc(18rem+env(safe-area-inset-left))] flex-col gap-3 border-r p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,var(--safe-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))]">
             <div className="flex h-9 items-center gap-2.5 px-1">
               <BrandMark className="size-5" />
               <Wordmark />
