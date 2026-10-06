@@ -22,6 +22,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R12 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent and the stdio test adapter; tokens shaped like Agora's JWTs, with stand-in signatures, which the bridge never verifies. The gateway is not run. |
 | R13 | 2026-10-06 | — | local | agentgateway 1.5.0 (release binary, checksum verified) on the configuration of infra-k8s `295a38c` (`gateway.yaml`, paths and ports rewritten), a throwaway CA and signing key, stand-in credentials; requests sent by hand through `CONNECT`, from `127.0.0.1` and from the host's own address. |
 | R14 | 2026-10-06 | `112e214` | local | `npm run check`: Node 24.20.0, real bridges with the mock agent, FakeKube recording an address per Sandbox, a real signer with a key of its own; PostgreSQL 17.11 for the log's tests. The gateway is not run. |
+| R15 | 2026-10-06 | `b4efc8e` | cluster, live | g4 under Kata. The server `agora-server@sha256:a1fd2998…` built from that commit (infra-k8s #214), signing every token with its Pod's address; the pools claude-code `0345a542…`, codex `e88bc2bb…`, opencode `44f3d8c2…` and mock `1b2bd57b…`, unchanged; agentgateway 1.5.0 with `jwt.ip == source.address` on all six routes (infra-k8s #213, `f512960`), restarted to load it. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`; for C29 and C30, the claims read in the warm Pods and requests sent from a mock Pod straight to the gateway, by `kubectl exec`, with tokens signed by the operator with Agora's key. |
 
 ## Cases
 
@@ -34,6 +35,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C2 | — | cluster | R2 | proven | 400 from Anthropic ("anthropic-version: header is required"); tunnel → 200. |
 | C2 | — | cluster | R7 | proven | The tunnel 200; Anthropic's 400 ("anthropic-version: header is required") behind it. |
 | C2 | — | cluster | R10 | proven | Under the gateway's egress limited to public addresses: Anthropic's 400 ("anthropic-version: header is required"); tunnel → 200. |
+| C2 | — | cluster | R15 | proven | Under the address binding: Anthropic's 400 ("anthropic-version: header is required"); tunnel → 200. |
 | C3 | — | live | R1 | proven | "Paris." in 2.0 s, `end_turn`; seven tunnels to `api.anthropic.com:443`, last `CONNECT` response 200. |
 | C3 | — | live | R2 | proven | "Paris." in 2.2 s; three tunnels to `api.anthropic.com:443`, last 200. |
 | C3 | — | live | R7 | proven | "Paris." in 2.4 s; seven tunnels to `api.anthropic.com:443`, last 200. |
@@ -48,6 +50,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C8 | — | local | R3 | partial: the gateway's answers (reach, 403) are not exercised; the 503 is inferred from no token attached | Every assertion held, in each of its two tests. |
 | C8 | — | cluster | R4 | proven | A warm claude-code Pod, before any claim: Anthropic answers (400, the probe sends no `anthropic-version`), `api.github.com` 403 from the gateway, which logs `jwt.sub` `agora warm <Pod>`. A warm mock Pod: 503 from the bridge, no hand-over in its log. |
 | C8 | — | cluster | R7 | proven | The claude-code warm Pod: Anthropic 400, GitHub 403 from the gateway, `jwt.sub` "agora warm …"; the mock's Pod: 503 from its bridge. |
+| C8 | — | cluster | R15 | proven | Under the address binding: the claude-code warm Pod reaches Anthropic (400), GitHub 403 from the gateway, `jwt.sub` "agora warm …" → 400; the mock's Pod: 503 from its bridge. |
 | C9 | — | local | R3 | partial: requests between the tokens are not exercised | Every assertion held (39.3 s). |
 | C9 | — | cluster | R4 | proven | Renewed 604 s after the first token, 296 s before it ran out; 20 requests from the Pod meanwhile, one every 30 s, none refused. |
 | C9 | — | cluster | R7 | proven | Renewed 600 s after the first token, 299 s before it ran out; 20 requests, none refused. |
@@ -77,13 +80,17 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C21 | real: Agora stopped cleanly and started again | local | R8 | proven | A second token naming `anthropic` and `github:owner/b:read`, handed before the prompt after the restart was dispatched. |
 | C22 | — | cluster | R9 | proven | With `github:arnaultbretagne/agora:read`: `git ls-remote` listed `design/agora-foundations` and `main`, no TLS error; `infra-k8s`, not granted: 403. In a warm Pod whose token names `anthropic` only: 403 from the gateway ("authorization failed"). The control, without `GIT_SSL_CAINFO`: "Problem with the SSL CA cert". A commit there: author and committer `Agora <agent@agora.bretagne.dev>`. |
 | C23 | — | cluster | R10 | proven | `GET` "200 OK", `POST` "405 Method Not Allowed", both from example.com; the gateway logged route `default/internet` → 200. |
+| C23 | — | cluster | R15 | proven | Under the address binding: `GET` "200 OK", `POST` "405 Method Not Allowed" from example.com; route `default/internet` → 200. |
 | C24 | — | cluster | R11 | proven | `internet` alone: `api.anthropic.com`, `api.z.ai`, `chatgpt.com`, `api.github.com` and `github.com` 403 from the gateway; with `github:octocat/Hello-World:read` added, GitHub "200 OK". |
+| C24 | — | cluster | R15 | proven | Under the address binding: the five hosts with a credential 403 from the gateway with `internet` alone; with `github:octocat/Hello-World:read` added, GitHub "200 OK". |
 | C25 | — | cluster | R11 | proven | `10.10.20.1.nip.io`: "503 — upstream call failed: Connect: deadline has elapsed", after 10 s; `10.10.20.1`: TLS "alert access denied"; example.com "200 OK". |
 | C26 | — | cluster | R11 | proven | "CONNECT example.com:8443 refused by the proxy: 404". |
 | C27 | — | local | R12 | proven | Every assertion held. |
 | C28 | — | local | R12 | proven | Every assertion held, the control's too. |
 | C29 | — | local | R14 | proven | The warm token's `ip` and the execution's are the addresses their Sandboxes record (`10.244.0.77`, `10.244.0.78`); the signer refused an empty address, a Pod's name and `10.244.0`. |
+| C29 | — | cluster | R15 | proven | Within seconds of the new server's start, the warm tokens of claude-code, codex and opencode named their Pods' addresses (`10.244.0.228`, `10.244.0.91`, `10.244.0.49`), as their Sandboxes record them; the mock Pods, with no base profile, got none. |
 | C30 | — | local | R13 | partial: probed by hand, no test; the sandboxes' addresses not exercised | `internet`: a token naming `127.0.0.1`, from there, 200; the same from `10.10.20.10`, 403; one naming `10.10.20.10`, from there, 200; with no `ip`, 403. Anthropic's route: a token naming `127.0.0.1`, from there, reaches Anthropic (401 with the stand-in credential); one naming `10.244.0.91`, 403; with no `ip`, 403. |
+| C30 | — | cluster | R15 | proven | From a mock Pod (`10.244.0.246`), straight to the gateway: a token naming another sandbox's address (`10.244.0.209`), 403 on `internet` (example.com) and on GitHub's route; with no `ip`, 403 on both; naming its own address, example.com 200 and `api.github.com` 200. |
 
 The partial verdicts are tracked in #107.
 
