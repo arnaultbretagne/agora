@@ -402,6 +402,11 @@ export class Workstreams implements Handler {
     })
   }
 
+  /** The execution's Pod address, which its tokens are bound to. */
+  podAddress(execution: string): Promise<string> {
+    return this.executions.podAddress(execution)
+  }
+
   async attachCredentials(workstream: string, execution: string, credentials: Credentials): Promise<OutboundView> {
     return this.serial(workstream, async () => {
       const e = (await this.store.state(workstream)).current
@@ -589,7 +594,8 @@ export class Workstreams implements Handler {
     if (source === undefined || (profiles.length === 0 && (held === undefined || held.profiles === ''))) return true
     const { leaseSeconds, turnCapSeconds } = limitsOf(e)
     try {
-      const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: turnCapSeconds + leaseSeconds, profiles })
+      const address = await this.executions.podAddress(e.id)
+      const credentials = await source.mint({ label: `agora ${e.id}`, ttlSeconds: turnCapSeconds + leaseSeconds, profiles, address })
       await this.executions.putCredentials(e.id, credentials)
       this.tokens.set(e.id, { until: Date.parse(credentials.expiresAt ?? '') || 0, profiles: key(profiles) })
       return true

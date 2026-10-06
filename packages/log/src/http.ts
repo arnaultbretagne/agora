@@ -127,7 +127,8 @@ export async function logHttp(
         execution = uuid(input.execution)
       const ttlSeconds = input.ttlSeconds === undefined ? 3600 : Number(input.ttlSeconds)
       const profiles = Array.isArray(input.profiles) ? input.profiles.filter((p): p is string => typeof p === 'string') : undefined
-      const credentials = await options.credentials.mint({ label: `agora ${execution}`, ttlSeconds, ...(profiles ? { profiles } : {}) })
+      const address = await workstreams.podAddress(execution)
+      const credentials = await options.credentials.mint({ label: `agora ${execution}`, ttlSeconds, ...(profiles ? { profiles } : {}), address })
       const outbound = await workstreams.attachCredentials(workstream, execution, credentials)
       reply(200, { accepted: true, expiresAt: credentials.expiresAt, outbound })
       return true

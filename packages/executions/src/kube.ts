@@ -45,7 +45,8 @@ export interface Pool {
 /** A Sandbox: owned by its warm pool while it waits, by its claim once bound. */
 export interface Sandbox {
   readonly metadata: ObjectMeta
-  readonly status?: { readonly conditions?: readonly Condition[]; readonly serviceFQDN?: string }
+  /** `podIPs`: the Pod's addresses, as Kubernetes assigned them. */
+  readonly status?: { readonly conditions?: readonly Condition[]; readonly serviceFQDN?: string; readonly podIPs?: readonly string[] }
 }
 
 export type Json = Record<string, unknown>
