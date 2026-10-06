@@ -29,7 +29,7 @@ Workstream.
 
 | Exchange | Route | Content |
 | --- | --- | --- |
-| Workstreams | `GET /api/workstreams` | Every Workstream's view, the most recently active first. Read again whenever the thread on screen changes, and every 10 seconds. |
+| Workstreams | `GET /api/workstreams` | The view of every Workstream the signed-in identity owns, the most recently active first. Read again whenever the thread on screen changes, and every 10 seconds. |
 | Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
 | A new Workstream | `POST /api/workstreams` | On its first message, never before. Its id, chosen by the client; the owner is the identity the proxy passes. |
 | A Workstream's thread | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows (`log.md`, "The thread"). |

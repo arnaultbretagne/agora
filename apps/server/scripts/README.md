@@ -20,5 +20,14 @@ on g4, `KUBECTL="sudo -n k0s kubectl"`): a warm Pod has no execution to speak fo
 bridges' and the gateway's logs, and send requests from a Pod through its bridge. C9 waits for a
 warm token's renewal: about ten minutes, last.
 
+Every Workstream the cases create has one owner, `c45e0000-0000-4000-8000-000000000000`: no
+identity lists it, so they stay out of the interface. `purge-live-cases.sql` removes them all, once
+no claim is left; then restart the server. On g4:
+
+```sh
+sudo k0s kubectl -n agora-system exec -i agora-pg-1 -c postgres -- psql -U postgres -d agora -v ON_ERROR_STOP=1 < apps/server/scripts/purge-live-cases.sql
+sudo k0s kubectl -n agora rollout restart deploy/server
+```
+
 Its output is the evidence recorded in `docs/reliability/`: keep it whole, with the commit and
 images it ran against, in the pull request that records it.

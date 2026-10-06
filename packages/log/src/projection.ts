@@ -208,11 +208,12 @@ export class Projections {
     )
     return rows.rows.map((r) => ({ ...r, object: decode(r.object) })) as ProjectedObject[]
   }
-  /** docs/specs/log.md, "HTTP": every Workstream's view, the most recently changed first. */
-  async views(): Promise<Record<string, unknown>[]> {
+  /** docs/specs/log.md, "HTTP": the Workstreams' views, an owner's or every one, the most recently changed first. */
+  async views(owner?: string): Promise<Record<string, unknown>[]> {
     const rows = await this.store.projector.query(
-      "SELECT w.id, o.object::text AS object FROM workstreams w LEFT JOIN objects o ON o.workstream=w.id AND o.kind='workstream' AND o.projector=$1",
-      [core.name],
+      "SELECT w.id, o.object::text AS object FROM workstreams w LEFT JOIN objects o ON o.workstream=w.id AND o.kind='workstream' AND o.projector=$1" +
+        (owner === undefined ? '' : ' WHERE w.owner=$2'),
+      owner === undefined ? [core.name] : [core.name, owner],
     )
     // A Workstream with no entry yet has no view: listed as new, first.
     const views = rows.rows.map((r) =>

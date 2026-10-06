@@ -251,6 +251,36 @@ test('L45 a Workstream created through the proxy: owned by the identity it passe
   assert.equal(await create(ws, 'someone@example.org'), 409)
 })
 
+test('L56 Workstreams listed by identity: each sees its own; without one, every Workstream', async (t) => {
+  const db = await database()
+  const lab = await Lab.start({ db })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const create = (id: string, headers: Record<string, string>, body: Record<string, string> = {}) =>
+    fetch(`${lab.url}/api/workstreams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ id, ...body }),
+    }).then((r) => r.status)
+  const list = (headers: Record<string, string>) =>
+    fetch(`${lab.url}/api/workstreams`, { headers })
+      .then((r) => r.json() as Promise<{ workstreams: { id: string }[] }>)
+      .then((r) => r.workstreams.map((v) => v.id).sort())
+  const a = 'operator@example.org',
+    b = 'someone@example.org'
+  const [a1, a2, b1, other] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()]
+  assert.equal(await create(a1, { 'x-forwarded-email': a }), 200)
+  assert.equal(await create(a2, { 'x-forwarded-email': a }, { owner: randomUUID() }), 200)
+  assert.equal(await create(b1, { 'x-forwarded-email': b }), 200)
+  assert.equal(await create(other, {}, { owner: randomUUID() }), 200)
+  assert.deepEqual(await list({ 'x-forwarded-email': a }), [a1, a2].sort())
+  assert.deepEqual(await list({ 'x-forwarded-email': b }), [b1])
+  assert.deepEqual(await list({ 'x-forwarded-email': 'nobody@example.org' }), [])
+  assert.deepEqual(await list({}), [a1, a2, b1, other].sort())
+})
+
 test('L46 Agora started after its core projector changed version: a Workstream no longer followed is rebuilt too', async (t) => {
   const context = await opened(t)
   const { db, ws, e } = context
