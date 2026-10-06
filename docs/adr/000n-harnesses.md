@@ -36,7 +36,8 @@
 7. **The agent is told where it is, the same way whatever the harness.** The bridge writes one
    `AGENTS.md` into the workspace as it starts: what the agent cannot see from inside — what
    lasts, the gateway and its answers, how to read its access, its tools. It writes the claims of
-   each token it is handed, never the token, to `~/.agora/access.json`, which that file names.
+   each token it is handed to `~/.agora/access.json`, which that file names; only the bridge
+   uses the token itself.
 
 ```mermaid
 flowchart LR
@@ -73,9 +74,10 @@ flowchart LR
   Workstream `75b2cf20` (2026-10-04), given read access to two repositories, spent its turn
   listing the Pod, decoding the anchor token and calling `/user/repos`, `/rate_limit` and `/`:
   five refusals from the gateway, then "no GitHub credential is bound to this session".
-- **The claims, not the token.** The gateway admits every sandbox, so a token one agent leaks —
-  into a commit, to its model — would carry its access into another execution until it expires.
-  The claims say the same thing to a reader and open nothing.
+- **The claims, not the token.** The agent needs to know its rights, not to hold them: the bridge
+  joins the token to every `CONNECT`. The claims are JSON any harness reads without decoding.
+  Nothing is hidden: the agent can read the bridge's memory, and the token, bound to its Pod's
+  address, opens nothing anywhere else.
 - **A restart costs only the restores.** opencode takes 2.6 s to start; warm, it answers
   `initialize` in 8 ms and `session/new` in 155 ms (same measurement). Restarting it onto an anchor
   keeps the warm pool for every new Session.
@@ -103,7 +105,7 @@ flowchart LR
 | Starting the adapter only at the claim | Every Session would pay the adapter's start, 2.6 s for opencode; a restart charges only restores. |
 | Each harness's own global instructions (`/etc/claude-code/CLAUDE.md`, `AGENTS.md` under opencode's `XDG_CONFIG_HOME`, `$CODEX_HOME/AGENTS.md`) | Three places and two names for one text, each declared by its image. |
 | Letting the agent find its access on GitHub (`gh repo list`, `/user/repos`) | Both show what the gateway's PAT reaches, not the execution's grants — GraphQL cannot be granted per repository — and both stay closed. |
-| The token itself where the agent can read it | See "The claims, not the token". |
+| The token in `~/.agora/access.json` | Of no use to the agent, which goes out through the bridge; a JWT to decode where the claims are plain JSON. |
 
 ## Consequences
 
