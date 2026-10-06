@@ -321,7 +321,7 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/workstreams` | The Workstream views, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
+| `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings` and `commands` the last Session opened in it gave, or null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
@@ -459,6 +459,7 @@ exception message.
 | L53 | A Create whose `settings` is not an object of strings | `invalid_create`. |
 | L54 | A Create with profiles, then a Scope with others | The view's `profiles`: the Create's, then the Scope's; the Scope recorded with the command. |
 | L55 | A Scope whose `profiles` is not a list of strings; one targeting a past execution; one after Stop | `invalid_scope`; `stale_execution`; `stopped`. |
+| L56 | Workstreams created under two identities and with a body's `owner`, then listed with each identity and with none | Each identity lists its own Workstreams only; without an identity, every one. |
 | L57 | An execution ends with its anchor; the next, created with no anchor named, has a turn, and its Pod ends without one; a third is created | The second restores the first's anchor and is given nothing; the third restores it too, counts one exchange, and its first prompt carries the second's exchange alone, ahead of the user's block, once; the thread's user message without it; the view's `exchanges` and `continuation`. |
 | L58 | An execution's Pod ends without its anchor after two turns; the next is created | A new ACP session; `session.opened` counts two exchanges; its first prompt carries both, oldest first, saying no save could be restored. |
 | L59 | An anchor left in one pool; a Create in another pool of the same harness | That anchor restored; the agent recalls the history. |

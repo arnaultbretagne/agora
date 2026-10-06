@@ -1,4 +1,4 @@
-// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex), docs/specs/log.md (L…) and
+// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex, E33 on all three), docs/specs/log.md (L…) and
 // docs/specs/credentials.md (C1–C4, C7–C16, C23–C26) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
@@ -10,6 +10,8 @@ import { randomUUID } from 'node:crypto'
 import { canonical, fold, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
+// Every Workstream the cases create belongs to this owner: no identity lists it, and purge-live-cases.sql removes them.
+const OWNER = 'c45e0000-0000-4000-8000-000000000000'
 const receiver = base.replace(/:8080$/, ':8081')
 const only = new Set(process.argv.slice(3).map((id) => id.toUpperCase()))
 type Json = Record<string, any>
@@ -61,7 +63,7 @@ class Workstream {
   /** Creates the Workstream and its execution; resolves once its Session is open. */
   async open(pool: string, body: Json = {}): Promise<{ ms: number }> {
     const started = Date.now()
-    if (this.execution === '') await api('POST', '/api/workstreams', { id: this.id, owner: randomUUID() })
+    if (this.execution === '') await api('POST', '/api/workstreams', { id: this.id, owner: OWNER })
     const created = await this.command('Create', {}, { pool, ...body })
     if (created.status !== 200) throw new Error(`Create refused: ${JSON.stringify(created)}`)
     this.execution = String(created.execution)
@@ -163,7 +165,7 @@ await check('E2', 'Create beyond the warm pool', async () => {
 
 await check('E3', 'Create replayed with the same command id', async () => {
   const w = new Workstream()
-  await api('POST', '/api/workstreams', { id: w.id, owner: randomUUID() })
+  await api('POST', '/api/workstreams', { id: w.id, owner: OWNER })
   const id = randomUUID()
   const [first, second] = await Promise.all([w.command('Create', {}, { pool: mock, ...SHORT }, id), w.command('Create', {}, { pool: mock, ...SHORT }, id)])
   // The replay is read back from the database: the same members, maybe in another order.
@@ -178,14 +180,14 @@ await check('E3', 'Create replayed with the same command id', async () => {
 
 await check('E4', 'Pool not in the catalogue, quota', async () => {
   const w = new Workstream()
-  await api('POST', '/api/workstreams', { id: w.id, owner: randomUUID() })
+  await api('POST', '/api/workstreams', { id: w.id, owner: OWNER })
   const outside = await w.command('Create', {}, { pool: 'no-such-pool' })
   assert(outside.status === 409 && outside.reason === 'unknown_pool', JSON.stringify(outside))
   let refused: Json | null = null
   const opened: Workstream[] = []
   for (let i = 0; i < 8 && refused === null; i++) {
     const x = new Workstream()
-    await api('POST', '/api/workstreams', { id: x.id, owner: randomUUID() })
+    await api('POST', '/api/workstreams', { id: x.id, owner: OWNER })
     const answer = await x.command('Create', {}, { pool: mock, ...SHORT })
     if (answer.reason === 'quota') refused = answer
     else {
@@ -495,6 +497,65 @@ await check('E31', 'Real harness (codex)', async () => {
   return `ready in ${String(ms)} ms (${String(launch)}), ${String(agent.name)}@${String(agent.version)}; "${answer.trim().slice(0, 30)}" in ${seconds} s; tunnels ${targets.join(', ')} ×${String(out.tunnels)}, ${String(pooled)} refused in the pool before its warm token and none after; anchor ${String(end.content.anchor)} restored in ${String(restored.ms)} ms, recalls "${recalled.trim().slice(0, 30)}"`
 })
 
+// ---------------------------------------------------------------- what the agent is told (docs/specs/executions.md, E33)
+
+/**
+ * A turn played to its end, each permission the agent asks for answered with its first "allow" option,
+ * as the operator would. Resolves with how many were asked.
+ */
+async function turnAllowing(w: Workstream, before: number, timeoutMs: number): Promise<number> {
+  const answered = new Set<string>()
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; await sleep(500)) {
+    const entries = await w.entries()
+    // Every permission of the Workstream so far is this turn's: the turns before ask for none.
+    for (const asked of entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/request_permission')) {
+      if (answered.has(asked.position)) continue
+      const options = ((asked.content.params as Json)?.options ?? []) as Json[]
+      const allow = options.find((o) => o.kind === 'allow_once') ?? options.find((o) => String(o.kind).startsWith('allow'))
+      assert(allow !== undefined, `no allow option: ${JSON.stringify(options)}`)
+      const reply = await w.command('RespondPermission', { execution: w.execution, session: w.session, requestPosition: asked.position }, { requestId: asked.rpc_id, outcome: { outcome: 'selected', optionId: allow.optionId } })
+      assert(reply.status === 200, `permission refused: ${JSON.stringify(reply)}`)
+      answered.add(asked.position)
+    }
+    const turns = fold(entries).turns
+    if (turns.size > before && ['done', 'failed'].includes([...turns.values()].at(-1)!.status)) return answered.size
+  }
+  throw new Error('timed out: turn done|failed, answering permissions')
+}
+
+/** The tool calls the agent reported so far in this Workstream. */
+const toolCalls = async (w: Workstream) =>
+  (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' && (x.content.params as Json)?.update?.sessionUpdate === 'tool_call').length
+
+await check('E33', 'Each real harness knows where its access is written, from the workspace’s AGENTS.md', async () => {
+  const harnesses = [['claude-code', claude], ['opencode', opencode], ['codex', codex]] as const
+  const outcomes: string[] = []
+  for (const [harness, pool] of harnesses) {
+    if (pool === undefined) throw new Error(`no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, SHORT)
+    const asked = await w.write('Answer from what you already know, without running anything: in which file is your access written? Give the path only.')
+    assert(asked.status === 200, `${harness}: Write refused: ${JSON.stringify(asked)}`)
+    const turn = await w.turn(['done', 'failed'], 240_000)
+    const answer = await w.said()
+    const silent = await toolCalls(w)
+    // The control: asked to read it, the same agent calls a tool, and the capture sees it.
+    const before = answer.length
+    const turns = (await w.state()).turns.size
+    const read = await w.write('Now read that file and give me its `sub` claim only.')
+    assert(read.status === 200, `${harness}: Write refused: ${JSON.stringify(read)}`)
+    const permissions = await turnAllowing(w, turns, 240_000)
+    const sub = (await w.said()).slice(before)
+    const used = (await toolCalls(w)) - silent
+    await w.stop()
+    assert(turn.status === 'done' && /(~|\/home\/harness)\/\.agora\/access\.json/.test(answer), `${harness}: turn ${turn.status}: ${answer.slice(0, 160)}`)
+    assert(silent === 0, `${harness}: ${String(silent)} tool call(s) before answering`)
+    assert(used > 0 && sub.includes(w.execution), `${harness} control: ${String(used)} tool call(s), "${sub.slice(0, 120)}"`)
+    outcomes.push(`${harness} "${answer.trim().slice(0, 40)}", no tool call; control: ${String(used)} tool call(s), ${String(permissions)} permission(s) asked, sub "${sub.trim().slice(0, 50)}"`)
+  }
+  return outcomes.join('; ')
+})
+
 // ---------------------------------------------------------------- credentials (docs/specs/credentials.md)
 
 async function credentials(w: Workstream, profiles: string[], ttlSeconds: number): Promise<Json> {
@@ -736,7 +797,7 @@ await check('C12', 'A token that would run out during the next turn', async () =
 
 await check('C14', 'A Create naming an unknown profile', async () => {
   const w = new Workstream()
-  await api('POST', '/api/workstreams', { id: w.id, owner: randomUUID() })
+  await api('POST', '/api/workstreams', { id: w.id, owner: OWNER })
   const refused = await w.command('Create', {}, { pool: mock, profiles: ['dropbox:everything'], ...SHORT })
   assert(refused.status === 409 && refused.reason === 'unknown_profile', JSON.stringify(refused))
   assert((await w.entries()).length === 0, 'something written')
