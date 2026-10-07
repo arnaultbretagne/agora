@@ -132,6 +132,20 @@ are the execution's (`log.md`, "The Workstream view": `profiles`).
 | Before an execution | The choice goes into the Create's `profiles`. It starts empty in a draft; when sending continues an ended or failed execution, from that execution's `profiles`. |
 | During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
 
+## Context and limits
+
+What bounds the agent besides its access: the context its Session has used (`log.md`, "The
+Workstream view": `usage`), and the limits of the account its pool draws from (`GET /api/limits`;
+`credentials.md`, "Limits") — the account of the first of the pool's base profiles that has some.
+
+| Element | Rule |
+| --- | --- |
+| The ring | Beside **Send**, once the open Session has said how much of its context it uses: `ContextDisplay`'s ring and the percentage. Without a context — a draft, a Session that has said nothing, an ended one — a gauge in its place, when the account has limits; nothing when it has none. |
+| Opened | By a click or a touch: a popover, not a tooltip, which a touch does not open. The context's percentage, its tokens in use and its size ("150k / 200k"), and a bar; under them, **Subscription**, the plan when the provider names it, and each window — "5-hour", "Weekly" — with its percentage, the time until it starts again ("resets in 2h 10m") and a bar. |
+| Colours | Below 65 % the text's; from 65 % amber; above 85 % the destructive colour: the ring, the bars, the percentages, and the gauge from 65 %. |
+| Freshness | The limits are read when the page opens and each time the popover opens; the server answers from a read of the last 5 minutes. A read that failed dims the windows and says since when they stand, or that none could be read. |
+| The cost | Not shown: an agent's `usage_update` may carry one, priced as the API would, which a subscription does not pay. |
+
 ## The connection point: `useExternalStoreRuntime`
 
 The only point of contact between Agora's objects and assistant-ui.
@@ -262,13 +276,14 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
 | Composer | The access picker, after the model | **ours** (Radix menu) |
+| Composer | The context's ring, or the limits' gauge, beside Send; opened, the context and the account's limits | `ContextDisplay` (registry), adapted: a popover |
 | Composer | The commands, over the composer while it starts with `/` | **ours** |
 | Composer | Above it: a refusal; the uncertain turn's banner (**Cancel the turn**, **Stop the sandbox**); why sending is closed | **ours** |
 
 A Workstream opens on its last message, as **Scroll to the bottom** leaves it, whether from the list,
 from another Workstream or by its address. It stays there while it catches up, unless the user scrolls.
 
-Registry components kept: `MarkdownText`, `DiffViewer`, and the `surfaces` helpers. Every string is
+Registry components kept: `MarkdownText`, `DiffViewer`, `ContextDisplay`, and the `surfaces` helpers. Every string is
 in English.
 
 ## On a phone
@@ -314,7 +329,6 @@ starts. With a mouse or a trackpad, it does.
 | --- | --- |
 | Switch model or mode | `ModelSelector` (registry) |
 | Slash commands (ACP `available_commands_update`) | `ComposerTriggerPopover` (registry) |
-| Context consumption (ACP `usage_update`) | `ContextDisplay` (registry) |
 | Attachments | `Attachment` (registry) |
 
 What each registry element can receive from ACP is in `assistant-ui-elements.md`.
@@ -364,6 +378,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U39 | In a browser on a phone's screen, a draft, then a Workstream opened from the list, the theme toggled in each; then the page loaded without its client | At the top and the bottom, the edge element as WebKit finds it is not one covering the screen and has the page's colour, the toggled theme's each time; the list open, the one covering it; the page without its client already in the theme picked. |
 | U40 | In a browser on a phone's screen, two Workstreams taller than it: one opened from the list, the other from it, the first by its address; scrolled up, then **Scroll to the bottom**; on another phone, nothing kept and the network slow, the first from the list; then on a wide screen with a mouse | Each opened on its last message, the composer not focused; nor after the button. Wide: the composer focused on opening. |
 | U41 | In a browser, a Workstream answered, then reloaded | Kept in the browser once read whole; reloaded, read with `EventSource` from that cursor, not from zero. |
+| U42 | A view with the agent's context, malformed ones; accounts read, failed, empty; windows starting again in minutes, hours, days, or past | The context, or none; a pool's account by its first base profile with limits or a reason, none otherwise; "45m", "2h", "2h 10m", "3d", "3d 4h", nothing. |
+| U43 | In a browser, a draft whose pool draws from an account with limits; then a Workstream whose agent reports 150k of a 200k context; then on a phone's screen | The gauge, opened: **Subscription**, the plan, each window's percentage, the time until it starts again; no context. Then the ring at 75 % instead of the gauge, opened: "75% of the context", "150k / 200k", then the same windows. On the phone: the ring beside Send, nothing cut, opened by a touch. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

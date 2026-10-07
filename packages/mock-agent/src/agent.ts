@@ -170,6 +170,13 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, 'Commands changed.')
       return 'end_turn'
     }
+    // The context in use, as a real agent reports it after a turn (docs/specs/log.md, L66): `/usage used/size`.
+    case '/usage': {
+      const [used, size] = (argument ?? '').split('/').map(Number)
+      update(session.id, { sessionUpdate: 'usage_update', used, size, cost: { amount: 0.42, currency: 'USD' } })
+      say(session.id, `Context: ${String(used)} of ${String(size)}.`)
+      return 'end_turn'
+    }
     case '/sleep': {
       for (let i = 1; i <= n; i++) {
         if (await pause(turn, 1000)) return 'cancelled'

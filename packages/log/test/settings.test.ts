@@ -5,7 +5,8 @@ import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { test } from 'node:test'
 import { CoreProjection, object, type Entry } from '../src/index.ts'
-import { call, database, FakeKube, Lab, lines, until } from './support.ts'
+import { schemaValue } from '../src/json.ts'
+import { call, database, expire, FakeKube, Lab, lines, until } from './support.ts'
 
 /** A Lab whose pool `mock-test` declares these opening settings; `more` pools beside it, by name and harness. */
 async function labWith(t: { after(fn: () => Promise<void>): void }, sessionConfig?: string, purpose: Record<string, string> = {}, more: [string, string][] = []) {
@@ -131,6 +132,28 @@ test('L51 the agent changes a setting and its commands itself: the view replaced
   assert.ok((await lab.write(ws, '/commands')).accepted)
   await lab.turn(ws, 'done')
   await until('commands replaced', async () => ((await view(lab, ws)).commands as { name: string }[]).map((c) => c.name).includes('compact'), 5_000)
+})
+
+test('L66 the agent reports its context: the view\'s usage, replaced by the next, ignored when malformed, cleared with the Session', async (t) => {
+  const lab = await labWith(t)
+  const ws = await lab.workstream()
+  const e = await lab.open(ws)
+  await until('ready', async () => (await view(lab, ws)).state === 'ready', 10_000)
+  assert.equal((await view(lab, ws)).usage, null, 'nothing before the agent says')
+  assert.ok((await lab.write(ws, '/usage 1200/200000')).accepted)
+  await lab.turn(ws, 'done')
+  const usage = async () => schemaValue((await view(lab, ws)).usage)
+  await until('usage', async () => (await usage()) !== null, 5_000)
+  assert.deepEqual(await usage(), { used: 1200, size: 200000 }, 'used and size; the cost is not kept')
+  assert.ok((await lab.write(ws, '/usage 5000/200000')).accepted)
+  await lab.turn(ws, 'done')
+  await until('replaced', async () => ((await usage()) as { used: number } | null)?.used === 5000, 5_000)
+  assert.ok((await lab.write(ws, '/usage 7/0')).accepted)
+  await lab.turn(ws, 'done')
+  assert.deepEqual(await usage(), { used: 5000, size: 200000 }, 'a size of zero is not a context')
+  assert.ok((await lab.command(ws, 'Stop', { execution: e.id })).accepted)
+  await expire(lab.kube, e.claimName)
+  await until('cleared', async () => (await view(lab, ws)).usage === null, 15_000)
 })
 
 test('L52 GET /api/pools after a Session in a pool: its settings and commands; a pool kept for the tests marked', async (t) => {

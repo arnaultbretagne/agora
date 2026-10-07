@@ -12,6 +12,7 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/tool` | A tool call with a diff. |
 | `/big N` | N KiB of text. |
 | `/recall` | Recalls everything said in the session. |
+| `/usage USED/SIZE` | Reports its context, a `usage_update` with these tokens in use and this size, a cost beside them. |
 | `/crash` | Exits with code 3. |
 | `/raw BASE64` | Writes the decoded lines byte for byte, invalid UTF-8 included, then answers: what the log must keep or refuse (`docs/specs/log.md`). |
 | `/invalid-then-valid` | Answers the prompt with an invalid body, then with a valid one a second later. |

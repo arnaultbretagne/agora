@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U41: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U41 and U43: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -464,6 +464,97 @@ test('U39 a phone: each bar coloured by an edge of its own, in the theme, as it 
   await page.reload()
   assert.equal(await page.evaluate(() => document.querySelector('#root')!.childElementCount), 0, 'no client')
   assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor), DARK)
+})
+
+/** With SHOTS set to a directory, a picture of the page there: what a person checks by eye. */
+async function shot(page: Page, name: string): Promise<void> {
+  if (!process.env.SHOTS) return
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)))
+  await page.screenshot({ path: join(process.env.SHOTS, `${name}.png`) })
+}
+
+/**
+ * The account's limits as the server would read them through the gateway, which the tests never
+ * reach: the mock's pool draws from Claude's account, 5-hour window 72 % used, the week 19 %.
+ */
+async function limitsOf(page: Page): Promise<void> {
+  await page.route('**/api/pools', async (route) => {
+    const response = await route.fetch()
+    const body = (await response.json()) as { pools: { name: string; baseProfiles?: string[] }[] }
+    for (const pool of body.pools) if (pool.name === 'mock-test') pool.baseProfiles = ['anthropic']
+    await route.fulfill({ response, json: body })
+  })
+  const now = Date.now()
+  const at = (ms: number) => new Date(now + ms).toISOString()
+  await page.route('**/api/limits', (route) =>
+    route.fulfill({
+      json: {
+        limits: {
+          anthropic: {
+            windows: [
+              { kind: 'five_hour', usedPercent: 72, resetsAt: at(2 * 3_600_000 + 10 * 60_000 - 1000) },
+              { kind: 'weekly', usedPercent: 19, resetsAt: at(3 * 86_400_000 + 4 * 3_600_000 - 1000) },
+            ],
+            plan: 'max',
+            checkedAt: at(0),
+            stale: false,
+            error: null,
+          },
+        },
+      },
+    }),
+  )
+}
+
+test('U43 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
+  const page = await fresh()
+  await limitsOf(page)
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  const gauge = page.getByRole('button', { name: 'Limits' })
+  await gauge.click()
+  const popover = page.locator('[data-slot=context-display-popover]')
+  await popover.getByText('Subscription').waitFor()
+  assert.equal(await popover.getByText('of the context').count(), 0, 'a draft has no context')
+  const draft = await popover.getByRole('region', { name: 'Subscription' }).innerText()
+  assert.match(draft, /Subscription\s+max/i)
+  assert.match(draft, /5-hour\s+72% · resets in 2h 10m/)
+  assert.match(draft, /Weekly\s+19% · resets in 3d 4h/)
+  await shot(page, 'u43-draft')
+  await page.keyboard.press('Escape')
+  await send(page, 'measure the context')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText('Echo #1: measure the context.').waitFor()
+  await gauge.waitFor()
+  await send(page, '/usage 150000/200000')
+  await thread(page).getByText('Context: 150000 of 200000.').waitFor()
+  const ring = page.getByRole('button', { name: 'Context usage' })
+  await ring.getByText('75%').waitFor()
+  assert.equal(await gauge.count(), 0, 'the ring stands for both')
+  await ring.click()
+  await popover.getByText('75% of the context').waitFor()
+  await popover.getByText('150k / 200k').waitFor()
+  const windows = await popover.getByRole('region', { name: 'Subscription' }).innerText()
+  assert.match(windows, /Subscription\s+max/i)
+  assert.match(windows, /5-hour\s+72% · resets in 2h 10m/)
+  assert.match(windows, /Weekly\s+19% · resets in 3d 4h/)
+  await shot(page, 'u43-desktop')
+  await page.keyboard.press('Escape')
+  await toggle(page, 'dark')
+  await ring.click()
+  await popover.getByText('75% of the context').waitFor()
+  await shot(page, 'u43-dark')
+  await page.keyboard.press('Escape')
+  // On a phone: the ring beside Send, nothing cut, opened by a touch.
+  const { page: small } = await phone()
+  await limitsOf(small)
+  await small.goto(page.url())
+  const touched = small.getByRole('button', { name: 'Context usage' })
+  await touched.getByText('75%').waitFor()
+  assert.deepEqual(await cut(small, 'main form button'), [])
+  await touched.tap()
+  await small.locator('[data-slot=context-display-popover]').getByText('75% of the context').waitFor()
+  await shot(small, 'u43-phone')
 })
 
 /** How far the thread is scrolled from its last message, and how much taller than the screen it is; `top` scrolls it up first. */

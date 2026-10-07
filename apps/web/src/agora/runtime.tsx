@@ -17,11 +17,13 @@ import {
   firstMessageStep,
   messagesOf,
   poolOffered,
+  poolLimits,
   poolSettings,
   startBody,
   withAccess,
   workstreamOf,
   type AccessEntry,
+  type AccountLimits,
   type AgentCommand,
   type Composer,
   type Setting,
@@ -66,6 +68,10 @@ export interface Agora {
   readonly refusal: string | null
   /** A message given back to the composer after its execution failed to start. */
   readonly returned: string | null
+  /** The limits of the account the pool shown draws from; null before they are read or when it has none. */
+  readonly limits: AccountLimits | null
+  /** Reads the limits again; the server answers from what it read in the last minutes. */
+  refreshLimits(): void
   choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
   answer(permission: string, optionId: string): Promise<void>
@@ -153,6 +159,13 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     },
     [id],
   )
+  // The accounts' limits: read once the page opens, again when they are looked at.
+  const [accounts, setAccounts] = useState<Record<string, AccountLimits> | null>(null)
+  const refreshLimits = useCallback(() => {
+    void api.limits().then(setAccounts, () => setAccounts((a) => a ?? {}))
+  }, [api])
+  useEffect(refreshLimits, [refreshLimits])
+  const limits = useMemo(() => poolLimits(pools?.find((p) => p.name === pool)?.baseProfiles, accounts), [pools, pool, accounts])
   const harnessOf = useCallback((name: string) => pools?.find((p) => p.name === name)?.harness ?? name, [pools])
   const chosen = useMemo(() => (chosenFor.for === id && chosenFor.pool === pool ? chosenFor.values : {}), [chosenFor, id, pool])
   const settings = useMemo(
@@ -320,6 +333,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     chooseAccess,
     refusal,
     returned,
+    limits,
+    refreshLimits,
     choosePool,
     send: (kind, target, body) => send(kind, target, body),
     answer,

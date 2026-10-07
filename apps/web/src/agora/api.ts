@@ -2,7 +2,7 @@
 // is given, for the tests.
 import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
-import type { AgentCommand, Setting, WorkstreamView } from './view.ts'
+import type { AccountLimits, AgentCommand, Setting, WorkstreamView } from './view.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop'
 
@@ -22,6 +22,8 @@ export interface Pool {
   /** What its last Session offered, or null: what a draft shows before it has a Session. */
   readonly settings?: readonly Setting[] | null
   readonly commands?: readonly AgentCommand[]
+  /** The profiles its Pods are warmed with: the accounts its executions draw from (docs/specs/credentials.md). */
+  readonly baseProfiles?: readonly string[]
   /** Kept for the tests: not offered by the screen. */
   readonly testing?: boolean
 }
@@ -57,6 +59,11 @@ export class Api {
 
   async pools(): Promise<Pool[]> {
     return ((await this.read('/api/pools')).body.pools ?? []) as Pool[]
+  }
+
+  /** The accounts' limits, by base profile (docs/specs/credentials.md, "Limits"). */
+  async limits(): Promise<Record<string, AccountLimits>> {
+    return ((await this.read('/api/limits')).body.limits ?? {}) as unknown as Record<string, AccountLimits>
   }
 
   async create(id: string): Promise<Answer> {
