@@ -2,25 +2,37 @@
 // field, the harness, model and access pickers inside it where their model picker sits, Send on the
 // right, or Cancel while the agent works. Above it, what the user must know before sending: a
 // refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits.
+// Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
+// "On a phone"): the harness's, the effort's bars, the key.
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, SquareIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
 import { accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
+import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
   'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
 const menuItemClass =
   'hover:bg-muted focus:bg-muted flex cursor-pointer items-start gap-2 rounded-sm px-2 py-1.5 text-[13px] outline-none select-none'
-const quietButton = 'text-muted-foreground hover:text-foreground rounded-control h-7 px-2 text-[13px] transition-colors'
+const quietButton = 'text-muted-foreground hover:text-foreground rounded-control h-7 px-2 text-[13px] transition-colors pointer-coarse:h-9'
+// Inside the composer: what only shows when it is wide enough, and what replaces it when it is not.
+const wide = '@max-lg:hidden'
+const narrow = '@lg:hidden'
 
 /** The harness a new execution starts with; the running one, as a plain label, once started. */
 const HarnessPicker: FC = () => {
   const { pools, pool, choosePool, composer, view } = useAgora()
   const current = pools?.find((p) => p.name === pool)
-  if (!composer.create) return view.harness ? <span className="text-muted-foreground px-2 text-[13px]">{harnessName(view.harness)}</span> : null
+  if (!composer.create)
+    return view.harness ? (
+      <span title={harnessName(view.harness)} className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-2 text-[13px]">
+        <HarnessMark harness={view.harness} className={cn('size-4 shrink-0', narrow)} />
+        <span className={wide}>{harnessName(view.harness)}</span>
+      </span>
+    ) : null
   if (pools === null) return <span className="text-muted-foreground px-2 text-[13px]">…</span>
   const offered = offeredPools(pools)
   if (offered.length === 0) return <span className="text-destructive px-2 text-[13px]">No harness available</span>
@@ -29,9 +41,10 @@ const HarnessPicker: FC = () => {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" aria-label="Harness" className={cn(quietButton, 'flex items-center gap-1')}>
-          {harnessName(current?.harness)}
-          <ChevronDownIcon className="size-3.5" />
+        <button type="button" aria-label="Harness" title={harnessName(current?.harness)} className={cn(quietButton, 'flex shrink-0 items-center gap-1 @max-lg:px-2.5')}>
+          <HarnessMark harness={current?.harness} className={cn('size-4 shrink-0', narrow)} />
+          <span className={wide}>{harnessName(current?.harness)}</span>
+          <ChevronDownIcon className={cn('size-3.5', wide)} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -39,6 +52,7 @@ const HarnessPicker: FC = () => {
           {offered.map((p) => (
             <DropdownMenu.Item key={p.name} className={menuItemClass} onSelect={() => choosePool(p.name)}>
               <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', p.name === pool ? 'opacity-100' : 'opacity-0')} />
+              <HarnessMark harness={p.harness} className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
               <span className="flex flex-col">
                 <span>{harnessName(p.harness)}</span>
                 {/* Only what changes what sending does: a harness with a save continues from it. */}
@@ -52,6 +66,8 @@ const HarnessPicker: FC = () => {
   )
 }
 
+const EFFORT_BARS = [SignalLowIcon, SignalMediumIcon, SignalHighIcon, SignalIcon]
+
 /**
  * The model and its effort (docs/specs/assistant-ui.md, "Settings and commands"): the real values
  * only. Before a Session, kept for its Create; in one, sent at once, between turns.
@@ -63,6 +79,9 @@ const ModelPicker: FC = () => {
   const name = (options: typeof choice.models, value: string | null) => options.find((o) => o.value === value)?.name ?? null
   const model = name(choice.models, choice.current.model) ?? 'Model'
   const effort = name(choice.efforts, choice.current.effort)
+  // The effort's rank among its options, as one to four bars.
+  const rank = choice.efforts.findIndex((o) => o.value === choice.current.effort)
+  const Bars = EFFORT_BARS[choice.efforts.length < 2 ? 3 : Math.round((3 * rank) / (choice.efforts.length - 1))]
   const changing = !composer.create && view.configuring === true
   const closed = !composer.create && (!composer.open || changing)
   const item = (setting: string, value: string, label: string, current: string | null) => (
@@ -74,11 +93,17 @@ const ModelPicker: FC = () => {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild disabled={closed}>
-        <button type="button" aria-label="Model" className={cn(quietButton, 'flex min-w-0 items-center gap-1 disabled:opacity-50')}>
+        <button
+          type="button"
+          aria-label="Model"
+          title={effort ? `${model} · ${effort}` : model}
+          className={cn(quietButton, 'flex min-w-0 items-center gap-1 disabled:opacity-50')}
+        >
           {changing && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" />}
           <span className="truncate">{model}</span>
-          {effort && <span className="text-muted-foreground/70 shrink-0">· {effort}</span>}
-          <ChevronDownIcon className="size-3.5 shrink-0" />
+          {effort && <span className={cn('text-muted-foreground/70 shrink-0', wide)}>· {effort}</span>}
+          {effort && Bars && <Bars aria-label={effort} className={cn('size-3.5 shrink-0', narrow)} />}
+          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -107,13 +132,22 @@ const AccessPicker: FC = () => {
   const entries = accessEntries(offered)
   if (entries.length === 0) return null
   const closed = !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
+  const label = accessLabel(access, entries)
+  const granted = entries.some((entry) => accessOf(access, entry) !== null)
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild disabled={closed}>
-        <button type="button" aria-label="Access" className={cn(quietButton, 'flex min-w-0 items-center gap-1 disabled:opacity-50')}>
+        <button
+          type="button"
+          aria-label="Access"
+          title={label}
+          className={cn(quietButton, 'relative flex min-w-0 items-center gap-1 disabled:opacity-50 @max-lg:shrink-0 @max-lg:px-2.5')}
+        >
           <KeyRoundIcon className="size-3.5 shrink-0" />
-          <span className="truncate">{accessLabel(access, entries)}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0" />
+          <span className={cn('truncate', wide)}>{label}</span>
+          {/* Narrow, the key alone: a dot says something is granted. */}
+          {granted && <span aria-hidden data-granted className={cn('bg-primary absolute top-1 right-1 size-1.5 rounded-full pointer-coarse:top-1.5', narrow)} />}
+          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -225,7 +259,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           ))}
         </div>
       )}
-      <ComposerPrimitive.Root className="border-foreground/10 bg-muted/30 focus-within:border-foreground/25 rounded-thread flex w-full flex-col border transition-colors">
+      <ComposerPrimitive.Root className="border-foreground/10 bg-muted/30 focus-within:border-foreground/25 rounded-thread @container flex w-full flex-col border transition-colors">
         <ComposerPrimitive.Input
           rows={1}
           autoFocus
@@ -241,7 +275,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {pending ? (
-              <span className="bg-primary/60 text-primary-foreground rounded-control grid size-7 place-items-center" aria-label="Starting">
+              <span className="bg-primary/60 text-primary-foreground rounded-control grid size-7 place-items-center pointer-coarse:size-9" aria-label="Starting">
                 <LoaderCircleIcon className="size-4 animate-spin" />
               </span>
             ) : (
@@ -249,13 +283,13 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
                 <AuiIf condition={(s) => !s.thread.isRunning}>
                   <ComposerPrimitive.Send
                     aria-label="Send"
-                    className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center transition-opacity disabled:opacity-40"
+                    className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center transition-opacity disabled:opacity-40 pointer-coarse:size-9"
                   >
                     <ArrowUpIcon className="size-4" />
                   </ComposerPrimitive.Send>
                 </AuiIf>
                 <AuiIf condition={(s) => s.thread.isRunning}>
-                  <ComposerPrimitive.Cancel aria-label="Cancel the turn" className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center">
+                  <ComposerPrimitive.Cancel aria-label="Cancel the turn" className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center pointer-coarse:size-9">
                     <SquareIcon className="size-3 fill-current" />
                   </ComposerPrimitive.Cancel>
                 </AuiIf>

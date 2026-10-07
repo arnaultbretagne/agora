@@ -21,6 +21,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R13 | 2026-10-06 | `6c34d4f` | local | `npm run check`: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; requests sent to the server with and without `X-Forwarded-Email`, as the proxy would pass it. |
 | R14 | 2026-10-06 | `ab899d3` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube. A Pod ending without its anchor is FakeKube's push left without an address, as when the node dies or Agora cannot be reached; a newer image of a harness is a second pool, `mock-next`, of harness `mock`; a refused resume is the mock reading its files only at start without its image saying so. Before it, the log tests alone twice, 90/90 each; one `views.test.ts` failure seen once, right after the fixture's hash was recorded again, did not come back. |
 | R15 | 2026-10-06 | `5bd0f42` | cluster, live | g4 under Kata. The server `agora-server@sha256:8c80d714…` built from that commit (infra-k8s #216), the views of the 8 Workstreams rebuilt at start for core projector 5; the pools `claude-code-0345a542ca56` and `codex-e88bc2bb71b2`. Driven over the API on the Pod's address, in a Workstream of the live cases' owner: a Create in claude-code, a message, Stop; a Create in codex, a message, Stop; a Create in claude-code, a message, Stop; each with a 60 s lease. Billed on the two subscriptions. The views read back from PostgreSQL. |
+| R16 | 2026-10-07 | `7620261` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, with a second pool of the mock's harness for L65. |
 
 ## Cases
 
@@ -108,6 +109,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L62 | — | unit | R14 | proven | Twelve exchanges of 19,000 characters: the last ten kept, two left out and said; given again with that count, the same text. |
 | L63 | real: the second Pod's push never reaches Agora; the third ends before any message | local | R14 | proven | The fourth restored the third's anchor, counted 1, and its first prompt carried `quetsche`. |
 | L64 | real: the agent answers `session/resume` with an error (mock reading its files at start only) | local | R14 | proven | The execution left waiting for its deadline (#109); then the view's `continuation` empty, and the next Create a new ACP session counting 1. |
+| L65 | — | local | R16 | proven | `mock-newer`, never opened: the same `settings` and `commands` as `mock-test` after its Session, model `mock-small`; `claude-test` null and empty. |
 
 ## Not covered
 
