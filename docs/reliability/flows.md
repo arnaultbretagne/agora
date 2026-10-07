@@ -8,6 +8,7 @@ The evidence behind the acceptance cases of `specs/flows.md`.
 | --- | --- | --- | --- | --- |
 | R1 | 2026-10-07 | `26a7d0c` | unit | `npm test -w @agora/flows`: Python 3.13, the step against a stand-in Agora that keeps command deduplication and moves an execution and a turn as it is polled. |
 | R2 | 2026-10-07 | `26a7d0c` | cluster | g4. Prefect 3.8.8 from infra-k8s `apps/prefect` (charts 2026.10.6163015, image `prefecthq/prefect:3.8.8-python3.12`), worker of type `process` on the pool `agora`; deployments `rehearsal/feat-flows` and `archi-dev-review/feat-flows` cloning the agora repository at `feat/flows`. Agora's server `agora-server@sha256:17ee38bf…` built from `3e79179`; the mock pool `mock-0d7ee53674f6`. Agora's log read through its test route `entries` from the worker's Pod; the Workstreams owned by the operator. No model call. |
+| R3 | 2026-10-07 | `7c19aaa` | unit | Attempted `npm test -w @agora/flows` on an Agora execution with Node 24.21.0; exited 127 before test discovery because `python3` was unavailable. `npm run check` also exited 127 during typecheck because `tsc` was unavailable. No project dependencies installed; gateway access limited to the agora repository. |
 
 ## Cases
 
@@ -26,9 +27,9 @@ The evidence behind the acceptance cases of `specs/flows.md`.
 | F6 | — | cluster | R2 | proven | Run `c1716787…` suspended under `approve-architecture`; its description named the goal, the branch `flow/c1716787` and the summary; resumed with notes over Prefect's API. The architecture step answered from its persisted result (`Cached`); only the first development's prompt carried the notes, not the architecture's nor the review's. |
 | F7 | — | cluster | R2 | proven | Same run, verdicts forced on the mock: `changes` in round 1, then a second development and review in new Workstreams (`d29c7f44…`, `5e10532a…`), the second development's prompt alone carrying the review's comment; `approve` in round 2 ended the run `Completed`. Each of the five Workstreams holds `Create` 1, `Write` 1, `Stop` 1 and one `session/prompt`. |
 | F8 | — | — | — | not verified | |
-| F9 | — | — | — | not verified | |
-| F10 | — | — | — | not verified | |
-| F11 | — | — | — | not verified | |
+| F9 | — | unit | R3 | not verified | Test discovery did not start: `python3` unavailable. No poll interval assertion ran. |
+| F10 | — | unit | R3 | not verified | Test discovery did not start: `python3` unavailable. No timeout or Write assertion ran. |
+| F11 | — | unit | R3 | not verified | Test discovery did not start: `python3` unavailable. No cadence validation assertion ran. |
 
 ## Not covered
 
