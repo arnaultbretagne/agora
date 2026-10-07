@@ -42,7 +42,7 @@ two fields of its `StepSpec`, set by the flow per step.
 | Field | Default | Rule |
 | --- | --- | --- |
 | `poll_seconds` | 5 | The pause between two reads of the thread, both while the step waits to write its prompt and while it waits for its turn to end. |
-| `ready_timeout_seconds` | 900 | How long the step waits for its Workstream to have a turn, from its Create accepted or its Workstream found. Counted afresh by each run of the step, on the step's own clock. |
+| `ready_timeout_seconds` | 900 | How long the step waits for its Workstream to have a turn, from its Create accepted or its Workstream found. Counted afresh by each run of the step, on a monotonic clock. |
 
 | Rule | Detail |
 | --- | --- |
@@ -52,6 +52,9 @@ two fields of its `StepSpec`, set by the flow per step.
 | Create's retry | Not a read of the thread: after `quota` or `unavailable`, every 15 s whatever `poll_seconds`. |
 
 Both flows leave every step's cadence at its defaults.
+
+The step's clock and sleep can be supplied together; by default they are the monotonic clock
+and real sleep. A supplied clock measures the same seconds as the cadence fields.
 
 ## Escalation
 

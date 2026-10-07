@@ -9,7 +9,7 @@ server's API (`docs/specs/flows.md`). Prefect's worker runs them in-cluster (inf
 | `agora.py` | A step on Agora, standard library only: ids derived from the step, Create, Write, the turn, Stop. |
 | `flows.py` | The flows: `rehearsal` and `archi-dev-review`. |
 | `deploy.py` | Registers a branch's flows on the work pool `agora`. |
-| `test_agora.py` | Unit cases F1–F5, against a stand-in Agora. |
+| `test_agora.py` | Unit cases F1–F5, F9–F11, against a stand-in Agora and a clock advanced by its sleep. |
 
 ## Check
 

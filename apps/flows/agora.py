@@ -52,6 +52,14 @@ class StepSpec:
     settings: dict[str, str] = field(default_factory=dict)
     lease_seconds: int = 300
     turn_cap_seconds: int = 3600
+    poll_seconds: float = 5.0
+    ready_timeout_seconds: float = 900.0
+
+    def __post_init__(self) -> None:
+        for name in ("poll_seconds", "ready_timeout_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+                raise ValueError(f"{name} must be a number greater than 0")
 
 
 @dataclass
@@ -176,8 +184,7 @@ def run_step(
     spec: StepSpec,
     log: Callable[[str], None] = print,
     sleep: Callable[[float], None] = time.sleep,
-    poll: float = 5.0,
-    ready_timeout: float = 900.0,
+    clock: Callable[[], float] = time.monotonic,
 ) -> StepResult:
     """Runs the step, or finds it again where it is: created, written, answered, stopped."""
     workstream = step_id(spec.run, spec.step, spec.round)
@@ -211,13 +218,17 @@ def run_step(
         log(f"{spec.step}: found Workstream {workstream} in state {view.get('state')}")
 
     # Write: once, once the Session is open and its settings applied.
-    deadline = time.monotonic() + ready_timeout
+    deadline = clock() + spec.ready_timeout_seconds
     while not thread.turns():
         thread.refresh()
+        if thread.turns():
+            break
         view = thread.view() or {}
         state = view.get("state")
         if state in GONE:
             raise Escalation(f"execution {state} before the prompt was written")
+        if clock() > deadline:
+            raise Escalation(f"execution not ready after {spec.ready_timeout_seconds:g} s (state {state})")
         if state == "ready" and not view.get("configuring") and view.get("session"):
             target = {"execution": view["execution"], "session": view["session"]}
             answer = agora.command(workstream, command_id(workstream, "write-1"), "Write", target, {"prompt": [{"type": "text", "text": spec.prompt}]})
@@ -228,9 +239,7 @@ def run_step(
                     break
             elif answer.get("reason") not in TRANSIENT_WRITE:
                 raise Escalation(f"Write refused: {answer.get('reason')}")
-        if time.monotonic() > deadline:
-            raise Escalation(f"execution not ready after {int(ready_timeout)} s (state {state})")
-        sleep(poll)
+        sleep(spec.poll_seconds)
 
     # The turn: waited for, never resent.
     warned = False
@@ -244,7 +253,7 @@ def run_step(
         if thread.pending_permission() and not warned:
             log(f"{spec.step}: the agent asks a permission — answer it in Agora, Workstream {workstream}")
             warned = True
-        sleep(poll)
+        sleep(spec.poll_seconds)
         thread.refresh()
 
     view = thread.view() or {}
