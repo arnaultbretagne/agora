@@ -403,7 +403,7 @@ test('U33 an ended Workstream whose execution had profiles: its Create carries t
   assert.deepEqual(startBody('mock-test', {}, accessGranted(null, draft)), { pool: 'mock-test' })
 })
 
-test('U41 the context and the limits: the view\'s usage; a pool\'s account; how long until a window starts again', () => {
+test('U42 the context and the limits: the view\'s usage; a pool\'s account; how long until a window starts again', () => {
   const withUsage = (usage: unknown): ThreadState =>
     apply(empty, { type: 'snapshot', position: '1', operation: 'upsert', kind: 'workstream', id: ws, object: { state: 'ready', usage } })
   assert.deepEqual(workstreamOf(withUsage({ used: 1200, size: 200000 }), ws).usage, { used: 1200, size: 200000 })

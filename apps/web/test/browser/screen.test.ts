@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U40 and U42: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U41 and U43: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -28,7 +28,7 @@ before(async () => {
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '30', ...credentials } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -506,7 +506,7 @@ async function limitsOf(page: Page): Promise<void> {
   )
 }
 
-test('U42 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
+test('U43 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
   const page = await fresh()
   await limitsOf(page)
   await page.goto(`${server.url}/`)
@@ -520,7 +520,7 @@ test('U42 the context and the limits: a gauge for the limits alone; once the age
   assert.match(draft, /Subscription\s+max/i)
   assert.match(draft, /5-hour\s+72% · resets in 2h 10m/)
   assert.match(draft, /Weekly\s+19% · resets in 3d 4h/)
-  await shot(page, 'u42-draft')
+  await shot(page, 'u43-draft')
   await page.keyboard.press('Escape')
   await send(page, 'measure the context')
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
@@ -538,12 +538,12 @@ test('U42 the context and the limits: a gauge for the limits alone; once the age
   assert.match(windows, /Subscription\s+max/i)
   assert.match(windows, /5-hour\s+72% · resets in 2h 10m/)
   assert.match(windows, /Weekly\s+19% · resets in 3d 4h/)
-  await shot(page, 'u42-desktop')
+  await shot(page, 'u43-desktop')
   await page.keyboard.press('Escape')
   await toggle(page, 'dark')
   await ring.click()
   await popover.getByText('75% of the context').waitFor()
-  await shot(page, 'u42-dark')
+  await shot(page, 'u43-dark')
   await page.keyboard.press('Escape')
   // On a phone: the ring beside Send, nothing cut, opened by a touch.
   const { page: small } = await phone()
@@ -554,7 +554,7 @@ test('U42 the context and the limits: a gauge for the limits alone; once the age
   assert.deepEqual(await cut(small, 'main form button'), [])
   await touched.tap()
   await small.locator('[data-slot=context-display-popover]').getByText('75% of the context').waitFor()
-  await shot(small, 'u42-phone')
+  await shot(small, 'u43-phone')
 })
 
 /** How far the thread is scrolled from its last message, and how much taller than the screen it is; `top` scrolls it up first. */
@@ -616,4 +616,24 @@ test('U40 a phone: a Workstream opens on its last message, from the list, from a
   await wide.goto(`${server.url}/w/${alpha}`)
   await thread(wide).getByText(lastOf.alpha).waitFor()
   await until('wide: the composer focused', () => composerFocused(wide))
+})
+
+test('U41 a Workstream answered, then reloaded: kept once read whole; read with EventSource from that cursor, not from zero', async () => {
+  const page = await fresh()
+  const id = await started(page, 'a thread read as an event source')
+  // Kept only once its snapshot has ended: an iPhone that never saw the end read every Workstream from zero.
+  const kept = await until('kept in the browser', () =>
+    page.evaluate((id) => (JSON.parse(localStorage.getItem(`agora:thread:${id}`) ?? 'null') as { cursor: string } | null)?.cursor, id),
+  )
+  const reads: { type: string; after: string }[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === `/api/workstreams/${id}/thread`) reads.push({ type: request.resourceType(), after: url.searchParams.get('after')! })
+  })
+  await page.reload()
+  await thread(page).getByText('Echo #1: a thread read as an event source.').waitFor()
+  await until('the thread read again', () => reads.length > 0)
+  assert.deepEqual(reads[0], { type: 'eventsource', after: kept })
+  assert.notEqual(kept, '0')
+  await page.locator('main').getByText('Loading…').waitFor({ state: 'detached' })
 })

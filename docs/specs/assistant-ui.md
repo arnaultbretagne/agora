@@ -37,6 +37,7 @@ Workstream.
 
 | Thread rule | Detail |
 | --- | --- |
+| Reading | With `EventSource`, closed at its first error: the client opens it again itself, since left alone it would reopen from the address it began with. Not with `fetch`: WebKit holds a streamed `fetch` body's small events back, and on an iPhone `snapshot-end` never arrived. |
 | Parsing | Each event's data is parsed losslessly; a position is a decimal string, compared as an integer. |
 | Cursor | Advances at `snapshot-end`, then with each `live` row applied; stored in the browser with the objects it belongs to, and reused only with them. An empty browser starts at zero. |
 | Snapshot | Rows replace or remove whole objects. A `reset` clears the objects before the complete state is applied. A snapshot cut before its end is read again from the same cursor. |
@@ -376,8 +377,9 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U38 | In a browser, the page's home-screen tags and files; then the theme toggled against the system's | The manifest (Agora, standalone, from `/`) and the 180 px icon served; an opaque status bar asked; the page covering the display; the status bar's colour the page's, then the toggled theme's. |
 | U39 | In a browser on a phone's screen, a draft, then a Workstream opened from the list, the theme toggled in each; then the page loaded without its client | At the top and the bottom, the edge element as WebKit finds it is not one covering the screen and has the page's colour, the toggled theme's each time; the list open, the one covering it; the page without its client already in the theme picked. |
 | U40 | In a browser on a phone's screen, two Workstreams taller than it: one opened from the list, the other from it, the first by its address; scrolled up, then **Scroll to the bottom**; on another phone, nothing kept and the network slow, the first from the list; then on a wide screen with a mouse | Each opened on its last message, the composer not focused; nor after the button. Wide: the composer focused on opening. |
-| U41 | A view with the agent's context, malformed ones; accounts read, failed, empty; windows starting again in minutes, hours, days, or past | The context, or none; a pool's account by its first base profile with limits or a reason, none otherwise; "45m", "2h", "2h 10m", "3d", "3d 4h", nothing. |
-| U42 | In a browser, a draft whose pool draws from an account with limits; then a Workstream whose agent reports 150k of a 200k context; then on a phone's screen | The gauge, opened: **Subscription**, the plan, each window's percentage, the time until it starts again; no context. Then the ring at 75 % instead of the gauge, opened: "75% of the context", "150k / 200k", then the same windows. On the phone: the ring beside Send, nothing cut, opened by a touch. |
+| U41 | In a browser, a Workstream answered, then reloaded | Kept in the browser once read whole; reloaded, read with `EventSource` from that cursor, not from zero. |
+| U42 | A view with the agent's context, malformed ones; accounts read, failed, empty; windows starting again in minutes, hours, days, or past | The context, or none; a pool's account by its first base profile with limits or a reason, none otherwise; "45m", "2h", "2h 10m", "3d", "3d 4h", nothing. |
+| U43 | In a browser, a draft whose pool draws from an account with limits; then a Workstream whose agent reports 150k of a 200k context; then on a phone's screen | The gauge, opened: **Subscription**, the plan, each window's percentage, the time until it starts again; no context. Then the ring at 75 % instead of the gauge, opened: "75% of the context", "150k / 200k", then the same windows. On the phone: the ring beside Send, nothing cut, opened by a touch. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
