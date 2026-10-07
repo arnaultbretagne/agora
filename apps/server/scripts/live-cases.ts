@@ -916,6 +916,7 @@ await check('C26', 'Gateway, a port other than 443', async () => {
 })
 
 // Last: a warm token lives 15 minutes, renewed with a third left.
+// C31 needs a read of its own: played at least 5 minutes after the server last read the limits.
 await check('C31', 'The accounts\' limits, read through the gateway', async () => {
   const since = new Date(Date.now() - 1000).toISOString()
   const declared = [...new Set(((await api('GET', '/api/pools')).pools as Json[]).flatMap((p) => (p.baseProfiles as string[] | undefined) ?? []))].sort()
@@ -932,11 +933,11 @@ await check('C31', 'The accounts\' limits, read through the gateway', async () =
   }, 15_000)
   const routes = lines.map((l) => `${String(/route=\S*\/(\S+)/.exec(l)?.[1])} ${String(/http\.status=(\d+)/.exec(l)?.[1])}`).sort()
   assert(routes.every((r) => r.endsWith(' 200')), routes.join(', '))
-  const again = new Date().toISOString()
+  // kubectl's --since-time keeps whole seconds: the lines already seen are counted, not looked for after.
   await api('GET', '/api/limits')
   await sleep(3000)
-  const more = gatewayLines(again).filter((l) => l.includes('jwt.sub=agora limits '))
-  assert(more.length === 0, `read again within 5 minutes: ${String(more.length)}`)
+  const after = gatewayLines(since).filter((l) => l.includes('jwt.sub=agora limits '))
+  assert(after.length === lines.length, `read again within 5 minutes: ${String(after.length - lines.length)}`)
   return `${read.map((p) => `${p} ${first[p]!.windows.map((w) => `${w.kind} ${String(w.usedPercent)} %`).join(', ')}`).join('; ')}; gateway ${routes.join(', ')}; none read again`
 })
 
