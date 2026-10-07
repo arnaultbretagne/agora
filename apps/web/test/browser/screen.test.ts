@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U39: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U40: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -464,4 +464,65 @@ test('U39 a phone: each bar coloured by an edge of its own, in the theme, as it 
   await page.reload()
   assert.equal(await page.evaluate(() => document.querySelector('#root')!.childElementCount), 0, 'no client')
   assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor), DARK)
+})
+
+/** How far the thread is scrolled from its last message, and how much taller than the screen it is; `top` scrolls it up first. */
+const fromBottom = (page: Page, top = false) =>
+  page.locator('main textarea').evaluate((input, top) => {
+    let e = input.parentElement!
+    while (getComputedStyle(e).overflowY !== 'auto') e = e.parentElement!
+    if (top) e.scrollTop = 0
+    return { gap: e.scrollHeight - e.scrollTop - e.clientHeight, taller: e.scrollHeight - e.clientHeight }
+  }, top)
+/** The thread on its last message, `last` shown, and still there once the Workstream has caught up. */
+async function onLastMessage(page: Page, what: string, last: string): Promise<void> {
+  await thread(page).getByText(last).waitFor()
+  await until(`${what}: on the last message`, async () => (await fromBottom(page)).gap <= 1, 3000)
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  const { gap, taller } = await fromBottom(page)
+  assert.ok(taller > 400, `${what}: taller than the screen`)
+  assert.ok(gap <= 1, `${what}: still on the last message (${String(gap)} px from it)`)
+}
+const composerFocused = (page: Page) => composerInput(page).evaluate((input) => document.activeElement === input)
+
+test('U40 a phone: a Workstream opens on its last message, from the list, from another, by its address, nothing kept on a slow network; the composer not focused, nor after Scroll to the bottom; wide: focused', async () => {
+  const { page } = await phone()
+  const taller = (name: string) => `long ${name} task, taller than the screen: ${'and so on, '.repeat(150)}the end`
+  const alpha = await started(page, taller('alpha'))
+  for (const n of [2, 3]) {
+    await send(page, taller(`alpha ${String(n)}`))
+    await thread(page).getByText(`Echo #${String(n)}: long alpha ${String(n)} task`).waitFor()
+  }
+  const beta = await started(page, taller('beta'))
+  const lastOf = { alpha: 'Echo #3: long alpha 3 task', beta: 'Echo #1: long beta task' }
+  const fromList = async (on: Page, name: 'alpha' | 'beta', id: string) => {
+    await on.getByRole('button', { name: 'Show the workstreams' }).first().click()
+    await on.getByRole('navigation', { name: 'Workstreams' }).getByRole('button', { name: new RegExp(`^long ${name} task`) }).click()
+    await on.waitForURL(`${server.url}/w/${id}`)
+    await onLastMessage(on, `${name} from the list`, lastOf[name])
+    assert.equal(await composerFocused(on), false, `${name} from the list: the composer not focused`)
+  }
+  await fromList(page, 'alpha', alpha)
+  await fromList(page, 'beta', beta)
+  await page.goto(`${server.url}/w/${alpha}`)
+  await onLastMessage(page, 'alpha by its address', lastOf.alpha)
+  assert.equal(await composerFocused(page), false, 'by its address: the composer not focused')
+  assert.ok((await fromBottom(page, true)).gap > 400, 'scrolled up')
+  const button = page.getByRole('button', { name: 'Scroll to the bottom' })
+  await until('Scroll to the bottom offered', () => button.isEnabled())
+  await button.tap()
+  await onLastMessage(page, 'Scroll to the bottom', lastOf.alpha)
+  assert.equal(await composerFocused(page), false, 'after the button: the composer not focused')
+  // Another phone, nothing kept, the network slow: the thread arrives in pieces.
+  const { page: other } = await phone()
+  await other.goto(`${server.url}/`)
+  await other.getByText('What shall we work on?').waitFor()
+  const cdp = await other.context().newCDPSession(other)
+  await cdp.send('Network.enable')
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 100, downloadThroughput: 4096, uploadThroughput: 4096 })
+  await fromList(other, 'alpha', alpha)
+  const wide = await fresh()
+  await wide.goto(`${server.url}/w/${alpha}`)
+  await thread(wide).getByText(lastOf.alpha).waitFor()
+  await until('wide: the composer focused', () => composerFocused(wide))
 })
