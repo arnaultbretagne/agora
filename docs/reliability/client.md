@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R9 | 2026-10-05 | `f0a7c05` | local | `npm run check`, with `npm run test:browser`, as R7; the catalogue knowing `internet`. |
 | R10 | 2026-10-06 | `ab899d3` | local | `npm run check`, with `npm run test:browser`, as R9; a Pod's push left without an address for U36. Screenshots taken in Chromium against the same server, of the composer's note, the harness picker and the restored Session's notice. |
 | R11 | 2026-10-06 | `ead52f6` | local | `npm run check`, with `npm run test:browser`, as R10; U37 on a phone's screen in Playwright's Chromium (390 × 844, touch), its safe areas emulated through `Emulation.setSafeAreaInsetsOverride`, then resized to 1400 × 900. Screenshots taken in Chromium on the same screen, light and dark, the draft offering the cluster's catalogue (`GET /api/pools` of the deployed server): Claude Code, Opus 5.5 at High. |
+| R12 | 2026-10-07 | `7620261` | local | `npm run check`, with `npm run test:browser`, as R11; U39 on the same phone screen, the edge each bar takes its colour from found as WebKit's `LocalFrameView::fixedContainerEdges` finds it (the element 4 px inside the edge's middle, up to its first fixed or sticky ancestor), not by iOS itself. |
 
 ## Cases
 
@@ -82,9 +83,10 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U36 | real: the Pod's push never reaches the server | local | R10 | proven | "No saved Mock agent session: the 1 exchange above goes to the agent as text." before sending; then "New session with Mock agent. The 1 exchange above goes to the agent with your next message."; the prompt's first block holding `<user>\nremember quetsche\n</user>`, its second `what did I say`; the user's bubble that text alone. |
 | U37 | — | local | R11 | proven | Narrow: the harness button without text, its mark shown, its tooltip "Mock agent"; the model "mock-large" alone, the effort's bars labelled "high"; the key without text, its tooltip "a · Read", no dot before the grant and one after; no picker's text cut or wrapped, while the check finds the header's long title cut; the composer 34 px above the bottom. Wide: "Mock agent", "mock-large · high", "a · Read", no dot; without a home indicator, 20 px. |
 | U38 | — | local | R11 | proven | `application/manifest+json`, Agora, standalone, from `/`; a 180 × 180 PNG; the manifest and icon linked; `apple-mobile-web-app-status-bar-style` `default`; `viewport-fit=cover`; both theme colours `#faf9f5` and the page cream, then `#181715` and the page dark once toggled against the light system. |
+| U39 | — | local | R12 | proven | Top and bottom, in the draft and in the Workstream: not covering the screen, `rgb(250, 249, 245)` light, `rgb(24, 23, 21)` once toggled dark, light again once toggled back; at the left edge, the frame covering the screen (the check sees one); the list open: covering the screen; the page without its client: no child under `#root`, the page dark. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
-| On an iPhone: the status bar opaque in the page's colour, the page's top not blurred; the screen on what the keyboard leaves; the home-screen icon (U37 and U38 emulate the screen in Chromium, not iOS) | #137 |
+| On an iPhone: the status bar opaque in the page's colour, the page's top not blurred; the bars following the theme; the screen on what the keyboard leaves; the home-screen icon (U37–U39 emulate the screen and WebKit's rule in Chromium, not iOS) | #137 |

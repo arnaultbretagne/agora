@@ -1,7 +1,10 @@
 // The frame (docs/specs/assistant-ui.md, "The screen"), as assistant-ui's base skin builds it: a 3rem
 // bar across, the Workstreams on the left under the brand, the open one on the right under its title.
 // On a phone (docs/specs/assistant-ui.md, "On a phone") it fills what the keyboard leaves and keeps
-// clear of the screen's edges.
+// clear of the screen's edges. The browser colours its bars after the fixed or sticky element it finds
+// at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
+// frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
+// each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
 import { MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
@@ -197,18 +200,18 @@ export const Shell: FC = () => {
   return (
     <div
       className={cn(
-        'bg-background fixed inset-x-0 top-(--viewport-top) grid h-(--viewport-height) grid-rows-[3rem_minmax(0,1fr)] pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]',
+        'bg-background fixed inset-x-0 top-(--viewport-top) grid h-(--viewport-height) grid-rows-[calc(3rem+env(safe-area-inset-top))_minmax(0,1fr)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]',
         collapsed ? 'md:grid-cols-[minmax(0,1fr)]' : 'md:grid-cols-[16rem_minmax(0,1fr)]',
       )}
     >
-      <div className={cn('bg-sidebar border-foreground/10 hidden h-12 items-center gap-2.5 border-r border-b px-4', !collapsed && 'md:flex')}>
+      <div className={cn('bg-sidebar border-foreground/10 hidden items-center gap-2.5 border-r border-b px-4 pt-[env(safe-area-inset-top)]', !collapsed && 'md:flex')}>
         <BrandMark className="size-5" />
         <Wordmark />
         <button type="button" onClick={() => setCollapsed(true)} aria-label="Hide the workstreams" className={cn(iconButton, 'ms-auto -me-1.5')}>
           <PanelLeftIcon className="size-4" />
         </button>
       </div>
-      <header className="border-foreground/10 flex h-12 min-w-0 items-center gap-2 border-b px-4 md:px-5">
+      <header className="border-foreground/10 bg-background sticky top-0 flex min-w-0 items-center gap-2 border-b px-4 pt-[env(safe-area-inset-top)] md:px-5">
         <button type="button" onClick={() => setDrawer(true)} aria-label="Show the workstreams" className={cn(iconButton, '-ms-1.5 md:hidden')}>
           <MenuIcon className="size-4" />
         </button>
@@ -228,6 +231,7 @@ export const Shell: FC = () => {
       <main className="min-h-0 min-w-0">
         <Thread key={id ?? 'draft'} />
       </main>
+      <div aria-hidden className="bg-background fixed inset-x-0 bottom-0 z-30 h-[max(11px,var(--safe-bottom))] md:hidden" />
       {drawer && (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="Close" className="bg-foreground/20 absolute inset-0" onClick={() => setDrawer(false)} />

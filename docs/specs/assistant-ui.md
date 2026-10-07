@@ -275,6 +275,13 @@ page — the toggled theme's, even against the system's — so that nothing of t
 a translucent bar would have iOS 26 blur the page's top. iOS reads these tags once, when the icon is
 added: an icon added before them keeps its old frame until it is removed and added again.
 
+iOS 26 colours its status bar and Safari's bars after the page, not the `theme-color`: the fixed or
+sticky element it finds at each edge, whose background it reads again as it changes, except one that
+covers the whole screen, whose first colour it keeps for good. The screen's frame covers it, and so
+does the open list of Workstreams; each edge therefore has an element of its own, in the page's colour:
+the header at the top, and on a phone a strip at the bottom, under the home indicator. The theme is set
+before the first paint, so the first colour is already the theme's.
+
 The screen covers the whole display and keeps clear of its edges: the composer stays above the home
 indicator. A phone's keyboard covers the page without resizing it, so the screen follows the visual
 viewport: it fills what the keyboard leaves, and the composer rests on the keyboard, the home
@@ -346,6 +353,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U36 | In a browser, a Workstream whose Pod ended without its anchor, then a message | Before sending, "No saved Mock agent session: the 1 exchange above goes to the agent as text."; sent, the new Session's notice says so; the prompt carries the exchange, then the message; the user's message shows the message alone. |
 | U37 | In a browser on a phone's screen (390 × 844, touch, a 34 px home indicator), a draft whose pool offers models and efforts, a repository granted; then the same draft on a wide screen | Narrow: the harness as its mark, the model by name with its effort as bars, the key with its dot, no name; no picker's text cut; the composer 34 px above the bottom. Wide: the harness's name, the model · the effort, what is granted. |
 | U38 | In a browser, the page's home-screen tags and files; then the theme toggled against the system's | The manifest (Agora, standalone, from `/`) and the 180 px icon served; an opaque status bar asked; the page covering the display; the status bar's colour the page's, then the toggled theme's. |
+| U39 | In a browser on a phone's screen, a draft, then a Workstream opened from the list, the theme toggled in each; then the page loaded without its client | At the top and the bottom, the edge element as WebKit finds it is not one covering the screen and has the page's colour, the toggled theme's each time; the list open, the one covering it; the page without its client already in the theme picked. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

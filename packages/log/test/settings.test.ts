@@ -7,13 +7,14 @@ import { test } from 'node:test'
 import { CoreProjection, object, type Entry } from '../src/index.ts'
 import { call, database, FakeKube, Lab, lines, until } from './support.ts'
 
-/** A Lab whose pool `mock-test` declares these opening settings. */
-async function labWith(t: { after(fn: () => Promise<void>): void }, sessionConfig?: string, purpose: Record<string, string> = {}) {
+/** A Lab whose pool `mock-test` declares these opening settings; `more` pools beside it, by name and harness. */
+async function labWith(t: { after(fn: () => Promise<void>): void }, sessionConfig?: string, purpose: Record<string, string> = {}, more: [string, string][] = []) {
   const db = await database()
   const keys = generateKeyPairSync('ed25519')
   const kube = new FakeKube(keys.publicKey)
   if (sessionConfig !== undefined) kube.sessionConfig['mock-test'] = sessionConfig
   Object.assign(kube.purpose, purpose)
+  kube.morePools.push(...more)
   const lab = await Lab.start({ db, kube, keys })
   t.after(async () => {
     await lab.close()
@@ -145,6 +146,18 @@ test('L52 GET /api/pools after a Session in a pool: its settings and commands; a
   const claude = pools.find((p) => p.name === 'claude-test')!
   assert.deepEqual([claude.settings, claude.commands], [null, []])
   assert.deepEqual([mock.testing, claude.testing], [false, true])
+})
+
+test('L65 GET /api/pools: a newer pool of a harness, never opened, offers its harness\'s last Session\'s settings and commands', async (t) => {
+  const lab = await labWith(t, 'model=mock-small', {}, [['mock-newer', 'mock']])
+  const ws = await lab.workstream()
+  await lab.open(ws)
+  await until('ready', async () => (await view(lab, ws)).state === 'ready', 10_000)
+  const pools = (await call(lab.url, 'GET', '/api/pools')).body.pools as Record<string, unknown>[]
+  const [opened, newer, other] = ['mock-test', 'mock-newer', 'claude-test'].map((name) => pools.find((p) => p.name === name)!)
+  assert.equal(current(opened!.settings, 'model'), 'mock-small', 'the pool opened: its own Session')
+  assert.deepEqual([newer!.settings, newer!.commands], [opened!.settings, opened!.commands], 'the newer pool: its harness\'s last Session')
+  assert.deepEqual([other!.settings, other!.commands], [null, []], 'another harness: nothing')
 })
 
 test('L53 a Create whose settings is not an object of strings: invalid_create', async (t) => {

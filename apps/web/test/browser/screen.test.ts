@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U38: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U39: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -72,6 +72,34 @@ const cut = (page: Page, selector: string) =>
         .map((e) => e.textContent!.trim()),
     ),
   )
+
+/**
+ * What a phone's browser colours a bar with, as WebKit's LocalFrameView::fixedContainerEdges finds it:
+ * the element 4 px inside the edge's middle, then its ancestors up to the first fixed or sticky one, the
+ * first background on the way of one as wide as the screen along that edge; and whether that container
+ * covers the whole screen, whose first colour WebKit keeps for good.
+ */
+const edge = (page: Page, side: 'top' | 'bottom' | 'left') =>
+  page.evaluate((side) => {
+    const [w, h] = [innerWidth, innerHeight]
+    const [x, y] = side === 'top' ? [w / 2, 4] : side === 'bottom' ? [w / 2, h - 4] : [4, h / 2]
+    const along = (r: DOMRect) => (side === 'left' ? r.height >= 0.9 * h : r.width >= 0.9 * w)
+    let colour: string | null = null
+    for (let e = document.elementFromPoint(x, y); e; e = e.parentElement) {
+      const style = getComputedStyle(e)
+      const box = e.getBoundingClientRect()
+      if (colour === null && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && box.width > 10 && box.height > 10 && along(box)) colour = style.backgroundColor
+      if (style.position === 'fixed' || style.position === 'sticky') return { whole: box.width >= 0.9 * w && box.height >= 0.9 * h, colour }
+    }
+    return null
+  }, side)
+/** The theme toggled, once the page has it. */
+async function toggle(page: Page, to: 'light' | 'dark'): Promise<void> {
+  await page.getByRole('button', { name: to === 'dark' ? 'Dark theme' : 'Light theme' }).click()
+  await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, to === 'dark')
+}
+const CREAM = 'rgb(250, 249, 245)'
+const DARK = 'rgb(24, 23, 21)'
 
 /** How far the composer ends above the bottom of the screen. */
 const composerMargin = (page: Page) => page.locator('main form').evaluate((form) => window.innerHeight - form.getBoundingClientRect().bottom)
@@ -409,4 +437,31 @@ test('U38 the home-screen frame: the manifest and icon, an opaque status bar, th
   await page.getByRole('button', { name: 'Dark theme' }).click()
   assert.deepEqual(await colours(), ['#181715', '#181715'], 'the dark theme, against the light system')
   assert.equal(await background(), 'rgb(24, 23, 21)')
+})
+
+test('U39 a phone: each bar coloured by an edge of its own, in the theme, as it changes; the theme set before the client runs', async () => {
+  const { page } = await phone()
+  const id = await started(page, 'a workstream for the bars')
+  await page.goto(`${server.url}/`)
+  await page.getByText('What shall we work on?').waitFor()
+  const both = async () => [await edge(page, 'top'), await edge(page, 'bottom')]
+  assert.deepEqual(await both(), [{ whole: false, colour: CREAM }, { whole: false, colour: CREAM }], 'the draft: its own edges, the light page')
+  // The check sees a container covering the whole screen: at the left edge, the frame is the one found.
+  assert.deepEqual(await edge(page, 'left'), { whole: true, colour: CREAM })
+  await toggle(page, 'dark')
+  assert.deepEqual(await both(), [{ whole: false, colour: DARK }, { whole: false, colour: DARK }], 'toggled: the dark page')
+  await page.getByRole('button', { name: 'Show the workstreams' }).first().click()
+  assert.equal((await edge(page, 'top'))!.whole, true, 'the drawer open: it covers the screen')
+  await page.getByRole('navigation', { name: 'Workstreams' }).getByRole('button', { name: /a workstream for the bars/ }).click()
+  await page.waitForURL(`${server.url}/w/${id}`)
+  await thread(page).getByText('Echo #1: a workstream for the bars.').waitFor()
+  assert.deepEqual(await both(), [{ whole: false, colour: DARK }, { whole: false, colour: DARK }], 'the Workstream, the drawer closed: its own edges again')
+  await toggle(page, 'light')
+  assert.deepEqual(await both(), [{ whole: false, colour: CREAM }, { whole: false, colour: CREAM }], 'toggled back: the light page')
+  // Dark again, then the page loaded without its client: the theme is already there.
+  await toggle(page, 'dark')
+  await page.route('**/assets/*.js', (route) => route.abort())
+  await page.reload()
+  assert.equal(await page.evaluate(() => document.querySelector('#root')!.childElementCount), 0, 'no client')
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor), DARK)
 })

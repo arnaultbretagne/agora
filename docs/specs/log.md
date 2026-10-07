@@ -323,7 +323,7 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 | --- | --- |
 | `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
-| `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings` and `commands` the last Session opened in it gave, or null and empty. |
+| `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings` and `commands` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
@@ -468,6 +468,7 @@ exception message.
 | L62 | Exchanges beyond the catch-up's maximum; then the same given again | The most recent kept, the count of those left out given and said; the same text again. |
 | L63 | A restored execution ends before any message, its catch-up never given; the next is created | Its own anchor restored; the exchange it was never given, given now. |
 | L64 | The agent refuses to resume the last anchor; the next execution is created | That anchor not restored again, nor the one its execution pushed; a new ACP session given every exchange. |
+| L65 | `GET /api/pools` after a Session in a pool, with a newer pool of its harness and a pool of another harness, neither opened | The newer pool: that Session's `settings` and `commands`; the other harness's: null and empty. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

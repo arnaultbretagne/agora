@@ -399,16 +399,17 @@ export class Workstreams implements Handler {
 
   /**
    * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings and commands its last
-   * Session gave: what a draft offers before it has a Session of its own.
+   * Session gave, else its harness's last: what a draft offers before it has a Session of its own.
    */
   async catalogue(): Promise<Record<string, unknown>[]> {
     const [pools, views] = await Promise.all([this.executions.pools(), this.projections.views()])
-    const latest = (pool: string) =>
+    const latest = (of: (v: (typeof views)[number]) => boolean) =>
       views
-        .filter((v) => v.pool === pool && v.settings !== null && v.settings !== undefined)
+        .filter((v) => of(v) && v.settings !== null && v.settings !== undefined)
         .sort((a, b) => String(b.changedAt ?? '').localeCompare(String(a.changedAt ?? '')))[0]
     return pools.map((p) => {
-      const last = latest(p.name)
+      // A pool no Session has opened in yet, as a harness's newer image is: its harness's last one.
+      const last = latest((v) => v.pool === p.name) ?? latest((v) => v.harness === p.harness)
       return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [] }
     })
   }
