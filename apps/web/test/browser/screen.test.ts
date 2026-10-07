@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U39 and U41: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U40 and U42: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -506,7 +506,7 @@ async function limitsOf(page: Page): Promise<void> {
   )
 }
 
-test('U41 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
+test('U42 the context and the limits: a gauge for the limits alone; once the agent has said, its ring; opened, the context, then the account\'s windows', async () => {
   const page = await fresh()
   await limitsOf(page)
   await page.goto(`${server.url}/`)
@@ -520,7 +520,7 @@ test('U41 the context and the limits: a gauge for the limits alone; once the age
   assert.match(draft, /Subscription\s+max/i)
   assert.match(draft, /5-hour\s+72% · resets in 2h 10m/)
   assert.match(draft, /Weekly\s+19% · resets in 3d 4h/)
-  await shot(page, 'u41-draft')
+  await shot(page, 'u42-draft')
   await page.keyboard.press('Escape')
   await send(page, 'measure the context')
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
@@ -538,12 +538,12 @@ test('U41 the context and the limits: a gauge for the limits alone; once the age
   assert.match(windows, /Subscription\s+max/i)
   assert.match(windows, /5-hour\s+72% · resets in 2h 10m/)
   assert.match(windows, /Weekly\s+19% · resets in 3d 4h/)
-  await shot(page, 'u41-desktop')
+  await shot(page, 'u42-desktop')
   await page.keyboard.press('Escape')
   await toggle(page, 'dark')
   await ring.click()
   await popover.getByText('75% of the context').waitFor()
-  await shot(page, 'u41-dark')
+  await shot(page, 'u42-dark')
   await page.keyboard.press('Escape')
   // On a phone: the ring beside Send, nothing cut, opened by a touch.
   const { page: small } = await phone()
@@ -554,5 +554,66 @@ test('U41 the context and the limits: a gauge for the limits alone; once the age
   assert.deepEqual(await cut(small, 'main form button'), [])
   await touched.tap()
   await small.locator('[data-slot=context-display-popover]').getByText('75% of the context').waitFor()
-  await shot(small, 'u41-phone')
+  await shot(small, 'u42-phone')
+})
+
+/** How far the thread is scrolled from its last message, and how much taller than the screen it is; `top` scrolls it up first. */
+const fromBottom = (page: Page, top = false) =>
+  page.locator('main textarea').evaluate((input, top) => {
+    let e = input.parentElement!
+    while (getComputedStyle(e).overflowY !== 'auto') e = e.parentElement!
+    if (top) e.scrollTop = 0
+    return { gap: e.scrollHeight - e.scrollTop - e.clientHeight, taller: e.scrollHeight - e.clientHeight }
+  }, top)
+/** The thread on its last message, `last` shown, and still there once the Workstream has caught up. */
+async function onLastMessage(page: Page, what: string, last: string): Promise<void> {
+  await thread(page).getByText(last).waitFor()
+  await until(`${what}: on the last message`, async () => (await fromBottom(page)).gap <= 1, 3000)
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  const { gap, taller } = await fromBottom(page)
+  assert.ok(taller > 400, `${what}: taller than the screen`)
+  assert.ok(gap <= 1, `${what}: still on the last message (${String(gap)} px from it)`)
+}
+const composerFocused = (page: Page) => composerInput(page).evaluate((input) => document.activeElement === input)
+
+test('U40 a phone: a Workstream opens on its last message, from the list, from another, by its address, nothing kept on a slow network; the composer not focused, nor after Scroll to the bottom; wide: focused', async () => {
+  const { page } = await phone()
+  const taller = (name: string) => `long ${name} task, taller than the screen: ${'and so on, '.repeat(150)}the end`
+  const alpha = await started(page, taller('alpha'))
+  for (const n of [2, 3]) {
+    await send(page, taller(`alpha ${String(n)}`))
+    await thread(page).getByText(`Echo #${String(n)}: long alpha ${String(n)} task`).waitFor()
+  }
+  const beta = await started(page, taller('beta'))
+  const lastOf = { alpha: 'Echo #3: long alpha 3 task', beta: 'Echo #1: long beta task' }
+  const fromList = async (on: Page, name: 'alpha' | 'beta', id: string) => {
+    await on.getByRole('button', { name: 'Show the workstreams' }).first().click()
+    await on.getByRole('navigation', { name: 'Workstreams' }).getByRole('button', { name: new RegExp(`^long ${name} task`) }).click()
+    await on.waitForURL(`${server.url}/w/${id}`)
+    await onLastMessage(on, `${name} from the list`, lastOf[name])
+    assert.equal(await composerFocused(on), false, `${name} from the list: the composer not focused`)
+  }
+  await fromList(page, 'alpha', alpha)
+  await fromList(page, 'beta', beta)
+  await page.goto(`${server.url}/w/${alpha}`)
+  await onLastMessage(page, 'alpha by its address', lastOf.alpha)
+  assert.equal(await composerFocused(page), false, 'by its address: the composer not focused')
+  assert.ok((await fromBottom(page, true)).gap > 400, 'scrolled up')
+  const button = page.getByRole('button', { name: 'Scroll to the bottom' })
+  await until('Scroll to the bottom offered', () => button.isEnabled())
+  await button.tap()
+  await onLastMessage(page, 'Scroll to the bottom', lastOf.alpha)
+  assert.equal(await composerFocused(page), false, 'after the button: the composer not focused')
+  // Another phone, nothing kept, the network slow: the thread arrives in pieces.
+  const { page: other } = await phone()
+  await other.goto(`${server.url}/`)
+  await other.getByText('What shall we work on?').waitFor()
+  const cdp = await other.context().newCDPSession(other)
+  await cdp.send('Network.enable')
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 100, downloadThroughput: 4096, uploadThroughput: 4096 })
+  await fromList(other, 'alpha', alpha)
+  const wide = await fresh()
+  await wide.goto(`${server.url}/w/${alpha}`)
+  await thread(wide).getByText(lastOf.alpha).waitFor()
+  await until('wide: the composer focused', () => composerFocused(wide))
 })

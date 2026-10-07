@@ -22,6 +22,10 @@ const quietButton = 'text-muted-foreground hover:text-foreground rounded-control
 // Inside the composer: what only shows when it is wide enough, and what replaces it when it is not.
 const wide = '@max-lg:hidden'
 const narrow = '@lg:hidden'
+// A touch screen's keyboard comes up with the focus, over half the thread: there the field waits to be
+// touched. With a mouse or a trackpad it takes the focus itself — on opening, on Scroll to the bottom, as
+// a turn starts.
+const focusesItself = () => matchMedia('(any-pointer: fine)').matches
 
 /** The harness a new execution starts with; the running one, as a plain label, once started. */
 const HarnessPicker: FC = () => {
@@ -318,7 +322,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
       <ComposerPrimitive.Root className="border-foreground/10 bg-muted/30 focus-within:border-foreground/25 rounded-thread @container flex w-full flex-col border transition-colors">
         <ComposerPrimitive.Input
           rows={1}
-          autoFocus
+          autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
           placeholder={placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…')}
           className="placeholder:text-muted-foreground field-sizing-content max-h-48 min-h-11 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-base leading-6 focus:outline-none"
