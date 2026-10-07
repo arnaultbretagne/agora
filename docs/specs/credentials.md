@@ -134,6 +134,7 @@ covers the path with the query, and the method. It sets no credential: the reque
 
 | Route | Host | Credential set |
 | --- | --- | --- |
+| `anthropic-usage` | `api.anthropic.com`, `GET /api/oauth/usage` only | `Authorization: Bearer` + the access token of the cluster's own Claude login. Its exact path outranks `anthropic`. |
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
 | `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
 | `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
@@ -160,6 +161,15 @@ It sits in a Secret infra-k8s keeps out of git (`chatgpt-session`), which a dail
 days before expiry; nothing in the sandbox can refresh it — its `auth.json` is a placeholder and
 `auth.openai.com` has no route.
 
+The cluster's Claude login rotates too, from its own `claude auth login`, never the operator's
+session: the setup-token lacks the `user:profile` scope that the usage endpoint asks for ("Limits").
+It sits in a Secret infra-k8s keeps out of git (`claude-session`), which a job renews every two
+hours once its access token has less than four hours left. Measured on 2026-10-07: the access
+token lives 8 hours; a refresh gives a new refresh token and revokes the previous access token at
+once, so inference stays on the setup-token — the gateway sees a new token only when the kubelet
+syncs the Secret, about a minute later. The login ends on a fixed date, about 28 days after it,
+which refreshes do not move; from five days before, the job fails, for a new login in time.
+
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.
 
@@ -181,6 +191,32 @@ the reason for a refusal.
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
 CLI in OAuth mode: it then sends a Bearer and `anthropic-beta: oauth-…`. The gateway replaces the
 Bearer and lets the rest through.
+
+## Limits
+
+Each account's limits — a subscription's 5-hour and weekly windows — as its provider's own usage
+endpoint gives them. The server reads them through the gateway, as an execution goes out, with a
+grant it signs for itself: the `limits` profile, bound to its own Pod's address. It never holds a
+provider's credential.
+
+| Base profile | Request | Windows |
+| --- | --- | --- |
+| `anthropic` | `GET api.anthropic.com/api/oauth/usage`, with `anthropic-beta: oauth-2025-04-20` | `five_hour` and `seven_day`, every model's week: `utilization` in percent, `resets_at`. The route `anthropic-usage` sets the cluster's Claude login; the setup-token is answered 403. |
+| `chatgpt` | `GET chatgpt.com/backend-api/wham/usage` | `rate_limit.primary_window` and `secondary_window`, told apart by `limit_window_seconds` (5 hours, 7 days): `used_percent`, `reset_at`; the plan, `plan_type`. |
+| `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` | `data.limits` of type `TOKENS_LIMIT` or `CREDIT_LIMIT`: unit 3 the 5-hour window, unit 6 the week; `percentage`, `nextResetTime`, absent until the window has started; the plan, `level`. The MCP calls' limit is left out. |
+
+| Element | Rule |
+| --- | --- |
+| The `limits` profile | Agora's own: a `GET` on the exact path of each endpoint above, nothing else. The catalogue does not know it: a Create or a Scope naming it is refused, `unknown_profile`. |
+| Which accounts | The base profiles of the catalogue's pools that have an endpoint. |
+| When | When the interface asks, at most once every 5 minutes, one read at a time; each account on its own, 10 seconds at most. |
+| A failed read | The windows before it, kept, `stale`, with why. An account never read: no window, `stale`, why. |
+| A window whose reset has passed | 0 % and no reset, until the next read. |
+| `GET /api/limits` | `limits`: by base profile, its `windows` (`kind` `five_hour` or `weekly`, `usedPercent`, `resetsAt`), `plan`, `checkedAt`, `stale`, `error`. Empty when the server cannot read them. `GET` only. |
+| Configuration | `POD_IP`, the server's own address, and `GATEWAY_CA_FILE`, the gateway's root. Without `POD_IP` or the gateway, no limits. |
+
+The server reaches the gateway on port 3000, and the gateway accepts it beside the sandboxes. The
+windows are the whole account's: they count what the operator spends elsewhere too.
 
 ## What the template adds
 
@@ -233,6 +269,13 @@ call. The test page does it itself when the agent offers the option.
 | C28 | Node's own `fetch` in the adapter's environment, before any credential; the same without `NODE_USE_ENV_PROXY` | `NODE_USE_ENV_PROXY` is `1`; the request fails, refused by the outbound proxy: one refusal counted. Without it: no refusal counted. |
 | C29 | A warm token, and an execution's, for Pods whose Sandboxes record known addresses | Each token's `ip` is its Pod's address as the Sandbox records it; a signer asked for a token without a valid address refuses. |
 | C30 | A token whose `ip` is another address than the one the request comes from; one with no `ip` | 403 from the gateway, on a route with a credential and on `internet`. The same token from its own address: let through. |
+| C31 | `GET /api/limits` on the server in the cluster, its pools declaring `anthropic`, `chatgpt` and `zai` | For each, its 5-hour and weekly windows from the provider, `stale` false; the gateway logs a request per account from the server, under the `limits` grant; a second request within 5 minutes reaches no provider. |
+| C32 | The grant the server signs for the limits | Bound to the server's address; a `GET` on the exact path of each usage endpoint; another path, a query, or another method of the same host: not covered. |
+| C33 | A Create naming `limits` | Refused, `unknown_profile`; nothing written. |
+| C34 | `GET /api/limits` twice at once, again within 5 minutes, then after; pools with base profiles with and without an endpoint; a `POST`; the server without an address | One read per account with an endpoint, through the gateway with the `limits` grant; nothing more within 5 minutes; read again after; 405; `limits` empty. |
+| C35 | A read failing after one that succeeded; an account never read; a window whose reset has passed | The earlier windows, `stale`, the reason; no window, `stale`, the reason; that window at 0 % with no reset. |
+| C36 | Each provider's answer, as given on 2026-10-07; an answer of another shape | Their 5-hour and weekly windows in percent with their resets, and the plan; z.ai's 5-hour without a reset, its MCP limit left out; no window. |
+| C37 | A read through a gateway, the tunnel accepted, then refused | `CONNECT` with the grant as `Proxy-Authorization`, TLS to the host, the placeholder `Authorization` and the endpoint's headers; the answer read. Refused: an error naming the status. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

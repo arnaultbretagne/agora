@@ -24,11 +24,18 @@ export interface WorkstreamView {
   readonly settings?: readonly Setting[] | null
   readonly commands?: readonly AgentCommand[]
   readonly configuring?: boolean
+  /** The open Session's context: its tokens in use and its size, as the agent last said (docs/specs/log.md). */
+  readonly usage?: Usage | null
   /** The last execution's own profiles (docs/specs/credentials.md). */
   readonly profiles?: readonly string[]
   /** The exchanges sent to an agent, and per harness its last anchor and the exchanges since (docs/specs/log.md, "Continuing"). */
   readonly exchanges?: number
   readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
+}
+
+export interface Usage {
+  readonly used: number
+  readonly size: number
 }
 
 export interface Setting {
@@ -54,6 +61,10 @@ export const harnessName = (harness: string | null | undefined): string => (harn
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const json = (value: unknown): Json | undefined => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Json) : undefined)
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+const usageOf = (value: unknown): Usage | null => {
+  const v = json(value)
+  return v && typeof v.used === 'number' && typeof v.size === 'number' && v.size > 0 && v.used >= 0 ? { used: v.used, size: v.size } : null
+}
 const byPosition = (a: ViewObject, b: ViewObject): number => {
   const pa = text(a.object.firstPosition) || '0',
     pb = text(b.object.firstPosition) || '0'
@@ -74,6 +85,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     settings: Array.isArray(o.settings) ? (o.settings as Setting[]) : null,
     commands: Array.isArray(o.commands) ? (o.commands as AgentCommand[]) : [],
     configuring: o.configuring === true,
+    usage: usageOf(o.usage),
     profiles: Array.isArray(o.profiles) ? o.profiles.filter((p): p is string => typeof p === 'string') : [],
     exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
     continuation: Object.fromEntries(
@@ -506,6 +518,55 @@ export function commandsMatching(commands: readonly AgentCommand[], text: string
   if (typed === null) return []
   const prefix = typed[1]!.toLowerCase()
   return commands.filter((c) => c.name.toLowerCase().startsWith(prefix))
+}
+
+// ---------------------------------------------------------------- context and limits
+
+export type WindowKind = 'five_hour' | 'weekly'
+
+/** One window of an account's limits, as `GET /api/limits` gives it (docs/specs/credentials.md, "Limits"). */
+export interface LimitWindow {
+  readonly kind: WindowKind
+  readonly usedPercent: number
+  readonly resetsAt: string | null
+}
+
+export interface AccountLimits {
+  readonly windows: readonly LimitWindow[]
+  readonly plan: string | null
+  readonly checkedAt: string | null
+  readonly stale: boolean
+  readonly error: string | null
+}
+
+const WINDOW_NAMES: Record<WindowKind, string> = { five_hour: '5-hour', weekly: 'Weekly' }
+
+/** A window as people name it. */
+export const windowName = (kind: WindowKind): string => WINDOW_NAMES[kind]
+
+/**
+ * The account a pool's executions draw from (docs/specs/assistant-ui.md, "Context and limits"): the
+ * limits of the first of its base profiles that has some; none when no profile has.
+ */
+export function poolLimits(baseProfiles: readonly string[] | undefined, limits: Readonly<Record<string, AccountLimits>> | null): AccountLimits | null {
+  for (const profile of baseProfiles ?? []) {
+    const account = limits?.[profile]
+    if (account !== undefined && (account.windows.length > 0 || account.error !== null)) return account
+  }
+  return null
+}
+
+/** How long until a window resets, short: "45m", "2h 10m", "3d 4h"; null when not known or passed. */
+export function resetIn(resetsAt: string | null, now: number): string | null {
+  if (resetsAt === null) return null
+  const ms = Date.parse(resetsAt) - now
+  if (!(ms > 0)) return null
+  const minutes = Math.ceil(ms / 60_000)
+  if (minutes < 60) return `${String(minutes)}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${String(hours)}h` : `${String(hours)}h ${String(minutes % 60)}m`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${String(days)}d` : `${String(days)}d ${String(hours % 24)}h`
 }
 
 // ---------------------------------------------------------------- the list

@@ -6,6 +6,7 @@ import { createPrivateKey, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import type { Credentials } from '@agora/harness-bridge/outbound'
+import { LIMIT_ENDPOINTS } from './limits.ts'
 
 export interface Grant {
   readonly host: string
@@ -51,6 +52,14 @@ export function compileProfile(profile: string): Grant[] {
       : [{ host: 'api.github.com', path: rest, methods: [...READ] }, { host: 'github.com', path: git }]
   }
   throw new ProfileRefused(`unknown profile: ${profile}`)
+}
+
+/**
+ * The profiles Agora gives itself, never an execution: unknown to `compileProfile`, so a Create or a
+ * Scope naming one is refused. `limits` reads each account's usage endpoint (limits.ts), GET only.
+ */
+const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
+  limits: () => Object.values(LIMIT_ENDPOINTS).map((e) => ({ host: e.host, path: `^${escape(e.path)}$`, methods: ['GET'] })),
 }
 
 /** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
@@ -129,7 +138,7 @@ export class GrantSigner {
   async mint(input: { label: string; ttlSeconds: number; profiles?: readonly string[]; address: string }): Promise<Credentials> {
     if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds < 60 || input.ttlSeconds > 24 * 3600) throw new ProfileRefused('duration out of bounds: 60 to 86,400 s')
     if (isIP(input.address) === 0) throw new ProfileRefused(`invalid address: ${input.address}`)
-    const grants = (input.profiles ?? []).flatMap(compileProfile)
+    const grants = (input.profiles ?? []).flatMap((profile) => OWN_PROFILES[profile]?.() ?? compileProfile(profile))
     this.key ??= createPrivateKey(await readFile(this.options.keyFile))
     const now = Math.floor(Date.now() / 1000)
     const exp = now + input.ttlSeconds

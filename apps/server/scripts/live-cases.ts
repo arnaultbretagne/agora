@@ -916,6 +916,30 @@ await check('C26', 'Gateway, a port other than 443', async () => {
 })
 
 // Last: a warm token lives 15 minutes, renewed with a third left.
+await check('C31', 'The accounts\' limits, read through the gateway', async () => {
+  const since = new Date(Date.now() - 1000).toISOString()
+  const declared = [...new Set(((await api('GET', '/api/pools')).pools as Json[]).flatMap((p) => (p.baseProfiles as string[] | undefined) ?? []))].sort()
+  const first = (await api('GET', '/api/limits')).limits as Record<string, { windows: { kind: string; usedPercent: number }[]; stale: boolean; error: string | null }>
+  const read = Object.keys(first).sort()
+  assert(canonical(read) === canonical(declared.filter((p) => ['anthropic', 'chatgpt', 'zai'].includes(p))), `declared ${canonical(declared)}, read ${canonical(read)}`)
+  for (const [profile, account] of Object.entries(first)) {
+    assert(!account.stale && account.error === null, `${profile}: ${String(account.error)}`)
+    assert(canonical(account.windows.map((w) => w.kind)) === '["five_hour","weekly"]', `${profile}: ${canonical(account.windows)}`)
+  }
+  const lines = await until('the gateway logs a read per account', () => {
+    const own = gatewayLines(since).filter((l) => l.includes('jwt.sub=agora limits '))
+    return own.length >= read.length ? own : undefined
+  }, 15_000)
+  const routes = lines.map((l) => `${String(/route=\S*\/(\S+)/.exec(l)?.[1])} ${String(/http\.status=(\d+)/.exec(l)?.[1])}`).sort()
+  assert(routes.every((r) => r.endsWith(' 200')), routes.join(', '))
+  const again = new Date().toISOString()
+  await api('GET', '/api/limits')
+  await sleep(3000)
+  const more = gatewayLines(again).filter((l) => l.includes('jwt.sub=agora limits '))
+  assert(more.length === 0, `read again within 5 minutes: ${String(more.length)}`)
+  return `${read.map((p) => `${p} ${first[p]!.windows.map((w) => `${w.kind} ${String(w.usedPercent)} %`).join(', ')}`).join('; ')}; gateway ${routes.join(', ')}; none read again`
+})
+
 await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const pod = await warmed()

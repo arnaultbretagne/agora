@@ -98,6 +98,15 @@ test('C14 a Create naming an unknown profile is refused, unknown_profile, and no
   assert.equal(lab.kube.created.length, 0)
 })
 
+test('C33 a Create naming limits, the profile Agora gives itself, is refused, unknown_profile, and nothing is written', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['limits'] }), { accepted: false, reason: 'unknown_profile' })
+  assert.equal((await lab.entries(ws)).length, 0)
+  assert.equal(lab.kube.created.length, 0)
+  // Control: the same Create without it is accepted.
+  assert.equal((await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: [] })).accepted, true)
+})
+
 test('C20 github:A:write and github:B:read offered: a Create may name A read or write, not B write', async (t) => {
   const { lab, ws } = await started(t, {}, ['github:owner/a:write', 'github:owner/b:read'])
   const create = async (profiles: string[]) => lab.command(await lab.workstream(), 'Create', {}, { pool: 'mock-test', profiles })

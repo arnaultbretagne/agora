@@ -22,11 +22,15 @@ import {
   offeredPools,
   poolOffered,
   planItems,
+  poolLimits,
   poolSettings,
+  resetIn,
   sections,
   startBody,
+  windowName,
   withAccess,
   workstreamOf,
+  type AccountLimits,
   type WorkstreamView,
 } from '../src/agora/view.ts'
 
@@ -397,4 +401,26 @@ test('U33 an ended Workstream whose execution had profiles: its Create carries t
   assert.deepEqual(startBody('mock-test', { model: 'mock-large' }, accessGranted([], view)), { pool: 'mock-test', settings: { model: 'mock-large' } })
   const draft = workstreamOf(empty, '')
   assert.deepEqual(startBody('mock-test', {}, accessGranted(null, draft)), { pool: 'mock-test' })
+})
+
+test('U40 the context and the limits: the view\'s usage; a pool\'s account; how long until a window starts again', () => {
+  const withUsage = (usage: unknown): ThreadState =>
+    apply(empty, { type: 'snapshot', position: '1', operation: 'upsert', kind: 'workstream', id: ws, object: { state: 'ready', usage } })
+  assert.deepEqual(workstreamOf(withUsage({ used: 1200, size: 200000 }), ws).usage, { used: 1200, size: 200000 })
+  for (const malformed of [null, { used: 5 }, { used: 5, size: 0 }, { used: -1, size: 10 }, 'full']) assert.equal(workstreamOf(withUsage(malformed), ws).usage, null)
+  const claude: AccountLimits = { windows: [{ kind: 'five_hour', usedPercent: 7, resetsAt: '2026-10-07T12:00:00Z' }], plan: null, checkedAt: '2026-10-07T10:00:00Z', stale: false, error: null }
+  const unread: AccountLimits = { windows: [], plan: null, checkedAt: null, stale: true, error: 'the gateway refused the tunnel: 403' }
+  const limits = { anthropic: claude, zai: unread, chatgpt: { ...unread, error: null } }
+  assert.equal(poolLimits(['anthropic'], limits), claude)
+  assert.equal(poolLimits(['zai'], limits), unread, 'never read: shown, with why')
+  assert.equal(poolLimits(['chatgpt'], limits), null, 'nothing and no reason: nothing')
+  assert.equal(poolLimits(undefined, limits), null, 'a pool without base profiles: none')
+  assert.equal(poolLimits(['anthropic'], null), null, 'not read yet')
+  const now = Date.parse('2026-10-07T10:00:00Z')
+  assert.deepEqual(
+    ['2026-10-07T10:44:10Z', '2026-10-07T12:00:00Z', '2026-10-07T12:10:00Z', '2026-10-10T10:00:00Z', '2026-10-10T14:30:00Z', '2026-10-07T09:00:00Z'].map((at) => resetIn(at, now)),
+    ['45m', '2h', '2h 10m', '3d', '3d 4h', null],
+  )
+  assert.equal(resetIn(null, now), null)
+  assert.deepEqual([windowName('five_hour'), windowName('weekly')], ['5-hour', 'Weekly'])
 })

@@ -42,6 +42,8 @@ export interface Execution {
   configSent: string[]
   /** The open Session's last `availableCommands`. */
   commands: unknown[]
+  /** The open Session's last `usage_update`: the context's tokens in use and its size. */
+  usage: { used: number; size: number } | null
   /** Its own profiles (docs/specs/credentials.md): its Create's, then its last Scope's. */
   profiles: string[]
 }
@@ -113,6 +115,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         settings: null,
         configSent: [],
         commands: [],
+        usage: null,
         profiles: profilesIn(content.body),
       }
       state.executions.set(execution.id, execution)
@@ -213,6 +216,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
               execution.settings = Array.isArray(given) ? given : null
               execution.configSent = []
               execution.commands = []
+              execution.usage = null
             } else if (request.method === 'session/set_config_option' && Array.isArray(given) && request.session === execution.session)
               execution.settings = given
           }
@@ -233,6 +237,12 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       const update = object(object(content.params)?.update)
       if (update?.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) execution.settings = update.configOptions
       if (update?.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) execution.commands = update.availableCommands
+      if (update?.sessionUpdate === 'usage_update') {
+        const used = schemaValue(update.used),
+          size = schemaValue(update.size)
+        if (typeof used === 'number' && typeof size === 'number' && Number.isFinite(used) && used >= 0 && Number.isFinite(size) && size > 0)
+          execution.usage = { used, size }
+      }
     }
     if (entry.kind === 'acp.dispatching') {
       const position = String(content.requestPosition)
@@ -342,10 +352,10 @@ export class CoreProjection {
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
       noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
-      // Settings and commands change with ACP lines too: the view is put when what it shows of them changed.
+      // Settings, commands and usage change with ACP lines too: the view is put when what it shows of them changed.
       const execution0 = state.current
       const settingsCode = execution0
-        ? encode({ s: execution0.settings, c: execution0.commands, k: configuring(state, execution0), o: settled(state, execution0) })
+        ? encode({ s: execution0.settings, c: execution0.commands, u: execution0.usage, k: configuring(state, execution0), o: settled(state, execution0) })
         : ''
       const settingsChanged = settingsCode !== this.settingsCode
       this.settingsCode = settingsCode
@@ -383,6 +393,7 @@ export class CoreProjection {
             settings: execution && execution.settings !== null ? settingsOf(execution.settings) : null,
             commands: execution ? commandsOf(execution.commands) : [],
             configuring: execution !== null && session !== null && configuring(state, execution),
+            usage: execution !== null && session !== null ? execution.usage : null,
             profiles: execution?.profiles ?? [],
             pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,

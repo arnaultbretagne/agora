@@ -153,3 +153,28 @@ The Internet stays off unless picked. Credentials never leave the gateway, but w
 reads can steer it, and with the Internet it can send anything it holds anywhere — a repository
 it was given included. Off by default, offered by the operator and picked per execution, it is a
 choice made knowing that.
+
+## The accounts' limits
+
+The subscriptions behind the profiles — Claude's, ChatGPT's, z.ai's — each have limits: a 5-hour
+window and a weekly one. Each provider says where an account stands at a usage endpoint of its own,
+and Agora reads them the way an execution goes out: through the gateway, with a grant it signs for
+itself, bound to the server's own Pod. The gateway sets the account's credential, so the server
+holds none, and the grant opens those reads alone.
+
+```mermaid
+flowchart LR
+  Screen[the screen] -- GET /api/limits --> Server
+  Server -- CONNECT, the limits grant --> Gateway
+  Gateway -- the account's credential --> Anthropic[api.anthropic.com]
+  Gateway --> ChatGPT[chatgpt.com]
+  Gateway --> ZAI[api.z.ai]
+```
+
+Claude's endpoint asks more of a credential than inference does: the operator's setup-token cannot
+read it. The cluster keeps a Claude login of its own for that one path, renewed like the ChatGPT
+session, while inference stays on the setup-token: renewing a login revokes its previous token at
+once, and the gateway sees the new one a minute later. That login ends after about four weeks,
+whatever its renewals; the operator logs in again before then.
+
+The reads are few: when someone looks, and at most once every five minutes.

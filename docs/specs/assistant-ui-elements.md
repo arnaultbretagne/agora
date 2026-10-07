@@ -38,7 +38,7 @@ the data; the interface hides the rest.
 | guardrail-notice | **ACP** | stop reason `refusal` | No alternatives offered. |
 | error-state | **ACP** | prompt error, stop reasons `max_tokens`, `max_turn_requests` | "Retry" is a new prompt. |
 | model-picker, model-selector | **ACP** | configuration options, `model` category | No price or capabilities per model. |
-| context-display | **ACP** | `usage_update`: context used and size | — |
+| context-display | **ACP** | `usage_update`: context used and size | Totals only. The account's limits, beside it, are Agora's. |
 | message-attachment | **ACP** | prompt `image`, `audio`, `resource`, `resource_link` blocks | Depends on the types the agent accepts. |
 | agent-card | **ACP** | `initialize`: the agent's identity and capabilities; available commands | — |
 | reasoning-effort | **Partial** | configuration options, `thought_level` category | The budget consumed is not known. |
@@ -64,6 +64,7 @@ the data; the interface hides the rest.
 | directive-text | **Agora** | rendering of commands and mentions in the message | — |
 | prompt-library | **Agora** | prompts saved by Agora | — |
 | activity-graph | **Agora** | log statistics | — |
+| quota-banner | **Agora** | the accounts' limits, read by the server from each provider (`credentials.md`, "Limits") | Not ACP: a harness's own report of them is not standard. |
 | math-block, diagram, mermaid-diagram, shiki-highlighter | **Agora** | Markdown text rendering | — |
 | read-aloud | **Agora** | browser speech synthesis | — |
 | chat-panel, empty-state, scroll-anchor, conversation-map, day-separator, command-palette, launcher-bubble, mobile-composer, onboarding | **Agora** | interface only | — |
@@ -76,7 +77,7 @@ the data; the interface hides the rest.
 | artifact-card, canvas-split | **No** | — | No artifacts: files go through diffs. |
 | trace-waterfall, flow-graph | **No** | — | No spans or execution graph. |
 | computer-use, code-runner, web-preview | **No** | — | Outside ACP; a web preview would go through Agent Sandbox. |
-| memory-chips, checkpoint-history, background-inbox, schedule-card, quota-banner | **No** | — | — |
+| memory-chips, checkpoint-history, background-inbox, schedule-card | **No** | — | — |
 
 ## Unstable, to watch
 

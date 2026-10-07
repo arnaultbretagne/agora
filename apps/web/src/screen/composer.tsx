@@ -5,12 +5,13 @@
 // Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
 // "On a phone"): the harness's, the effort's bars, the key.
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
+import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools } from '../agora/view.ts'
+import { accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
@@ -175,6 +176,61 @@ const AccessPicker: FC = () => {
   )
 }
 
+/** An account's windows: how much of each is used, and when it starts again. */
+const Limits: FC<{ limits: AccountLimits }> = ({ limits }) => {
+  const now = Date.now()
+  return (
+    <section aria-label="Subscription" className="grid gap-2.5">
+      <div className="flex items-baseline justify-between gap-4">
+        <span className="text-foreground font-medium">Subscription</span>
+        {limits.plan !== null && <span className="text-muted-foreground capitalize">{limits.plan}</span>}
+      </div>
+      {limits.windows.map((w) => {
+        const reset = resetIn(w.resetsAt, now)
+        return (
+          <div key={w.kind} className={cn('grid gap-1.5', limits.stale && 'opacity-60')}>
+            <div className="flex items-baseline justify-between gap-4 whitespace-nowrap">
+              <span className="text-muted-foreground">{windowName(w.kind)}</span>
+              <span className="tabular-nums">
+                <span className={severityText[severityOf(w.usedPercent)]}>{Math.round(w.usedPercent)}%</span>
+                {reset !== null && <span className="text-muted-foreground"> · resets in {reset}</span>}
+              </span>
+            </div>
+            <Meter percent={w.usedPercent} />
+          </div>
+        )
+      })}
+      {limits.stale && (
+        <p className="text-muted-foreground">
+          {limits.checkedAt === null ? "The limits couldn't be read." : `Not updated since ${new Date(limits.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`}
+        </p>
+      )}
+    </section>
+  )
+}
+
+/**
+ * The context the agent has used, as a ring beside Send, and the account's limits when it is opened
+ * (docs/specs/assistant-ui.md, "Context and limits"). Without a context yet, a gauge opens the limits alone.
+ */
+const Usage: FC = () => {
+  const { view, composer, limits, refreshLimits } = useAgora()
+  const usage = composer.create ? null : (view.usage ?? null)
+  if (usage === null && limits === null) return null
+  const fullest = Math.max(0, ...(limits?.windows.map((w) => w.usedPercent) ?? []))
+  return (
+    <ContextDisplay
+      usage={usage}
+      idle={<GaugeIcon className={cn('size-4', fullest >= 65 && severityText[severityOf(fullest)])} />}
+      onOpenChange={(open) => {
+        if (open) refreshLimits()
+      }}
+    >
+      {limits !== null && <Limits limits={limits} />}
+    </ContextDisplay>
+  )
+}
+
 /** What stands between the user and sending, said above the field. */
 const Notes: FC = () => {
   const { refusal, composer, view, send, pending, pools, pool } = useAgora()
@@ -274,6 +330,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
             <AccessPicker />
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <Usage />
             {pending ? (
               <span className="bg-primary/60 text-primary-foreground rounded-control grid size-7 place-items-center pointer-coarse:size-9" aria-label="Starting">
                 <LoaderCircleIcon className="size-4 animate-spin" />

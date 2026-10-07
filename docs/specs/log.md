@@ -278,6 +278,7 @@ anchors, the dispatch of its prompts and the agent's title.
 | `settings` | The last Session's settings as it last gave them, kept once it has ended: each with `id`, `name`, `category`, `type`, `currentValue` and `options` (`value`, `name`, `description`; groups flattened); or null. |
 | `commands` | The last Session's last `available_commands_update`, kept once it has ended: each with `name`, `description` and its input's `hint`; or empty. |
 | `configuring` | A `session/set_config_option` of the open Session is unanswered. |
+| `usage` | The open Session's last `usage_update`: `used`, the context's tokens in use, and `size`, the context's size; a `size` of zero or less, or a number missing, is ignored. Null before the agent has said, and once the Session has ended. |
 | `profiles` | The last execution's own profiles: its Create's, then its last Scope's; or empty. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
@@ -469,6 +470,7 @@ exception message.
 | L63 | A restored execution ends before any message, its catch-up never given; the next is created | Its own anchor restored; the exchange it was never given, given now. |
 | L64 | The agent refuses to resume the last anchor; the next execution is created | That anchor not restored again, nor the one its execution pushed; a new ACP session given every exchange. |
 | L65 | `GET /api/pools` after a Session in a pool, with a newer pool of its harness and a pool of another harness, neither opened | The newer pool: that Session's `settings` and `commands`; the other harness's: null and empty. |
+| L66 | The agent reports its context twice, then with a size of zero; then its Session ends | The view's `usage`: the first, then the second; unchanged by the third; null once the Session has ended. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

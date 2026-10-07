@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
 import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
-import { GrantSigner, offeredProfiles } from '@agora/credentials'
+import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 
 function number(name: string, fallback: number): number {
@@ -43,6 +43,18 @@ const credentials =
         audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
         // What the interface offers beyond the pools' base profiles; an unknown profile stops the server here.
         offered: offeredProfiles(process.env.OFFERED_PROFILES),
+      })
+// docs/specs/credentials.md, "Limits": the accounts' limits, read through the gateway from the server's
+// own address (POD_IP), checked against the gateway's root (GATEWAY_CA_FILE). Without them, none.
+const podAddress = process.env.POD_IP ?? ''
+const limits =
+  credentials === undefined || podAddress === ''
+    ? undefined
+    : new SubscriptionLimits({
+        signer: credentials,
+        address: podAddress,
+        profiles: async () => (await executions.pools()).flatMap((pool) => pool.baseProfiles),
+        ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
       })
 const store = new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') })
 const executions = new ExecutionManager({
@@ -88,7 +100,9 @@ const server = createApi({
   testRoutes,
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
   handle: async (req, res) =>
-    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) || client(req, res),
+    (await limitsHttp(limits, req, res)) ||
+    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) ||
+    client(req, res),
   ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process
   // on the spot, nothing drained or written. In a container the server is PID 1, which cannot SIGKILL
