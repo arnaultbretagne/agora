@@ -44,6 +44,11 @@ an approval, a worker restarted in the middle of a turn — the step finds its W
 is: it creates nothing, writes nothing again, and waits for the turn already running or reads the
 answer already given. Only a new round gets new ids, and so a new agent.
 
+The step polls the thread rather than holding it open, at a pace its flow sets per step, like its
+lease: how often it reads (every 5 s by default) and how long it waits for its execution to take
+the prompt (15 minutes by default) before a human is asked. Neither enters the ids: a step run
+again at another pace finds the same Workstream.
+
 ## When a human decides
 
 | Moment | How |

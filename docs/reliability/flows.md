@@ -26,6 +26,9 @@ The evidence behind the acceptance cases of `specs/flows.md`.
 | F6 | — | cluster | R2 | proven | Run `c1716787…` suspended under `approve-architecture`; its description named the goal, the branch `flow/c1716787` and the summary; resumed with notes over Prefect's API. The architecture step answered from its persisted result (`Cached`); only the first development's prompt carried the notes, not the architecture's nor the review's. |
 | F7 | — | cluster | R2 | proven | Same run, verdicts forced on the mock: `changes` in round 1, then a second development and review in new Workstreams (`d29c7f44…`, `5e10532a…`), the second development's prompt alone carrying the review's comment; `approve` in round 2 ended the run `Completed`. Each of the five Workstreams holds `Create` 1, `Write` 1, `Stop` 1 and one `session/prompt`. |
 | F8 | — | — | — | not verified | |
+| F9 | — | — | — | not verified | |
+| F10 | — | — | — | not verified | |
+| F11 | — | — | — | not verified | |
 
 ## Not covered
 

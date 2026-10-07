@@ -18,13 +18,14 @@ step again finds it where it is and never starts a second agent.**
 
 ## A step's course
 
-The step reads its Workstream's thread from its last cursor, through the snapshot's end, every 5 s.
+The step reads its Workstream's thread from its last cursor, through the snapshot's end, every
+`poll_seconds` ("A step's cadence").
 
 | Stage | Rule |
 | --- | --- |
 | Workstream | `POST /api/workstreams` with its id and owner. 409, another owner's: escalation. |
 | Create | Sent only while the Workstream's view is absent or `none`. Body: the first pool of the catalogue with the step's harness; `limits` with the lease (300 s, a rehearsal's 120 s) and the turn cap (3600 s); `settings` and `profiles` when the step has any. Refused `quota` or `unavailable`: sent again under the same id every 15 s. Any other refusal: escalation. |
-| Write | Sent only while the Workstream has no turn, once its view is `ready`, not `configuring`, with a Session. Target: the view's execution and Session; body: the step's prompt as one text block. Refused `settings_pending`, `opening_session`, `disconnected` or `unavailable`: sent again under the same id. Any other refusal; the view `ended`, `failed`, `lost` or `stopped` first; or not `ready` within 15 minutes: escalation. |
+| Write | Sent only while the Workstream has no turn, once its view is `ready`, not `configuring`, with a Session. Target: the view's execution and Session; body: the step's prompt as one text block. Refused `settings_pending`, `opening_session`, `disconnected` or `unavailable`: sent again under the same id. Any other refusal; the view `ended`, `failed`, `lost` or `stopped` first; or no turn within `ready_timeout_seconds`: escalation, its reason naming that timeout in seconds and the view's last state. |
 | Turn | The Workstream's first turn by request position. Waited for until `done`, `cancelled` or `failed`. `uncertain`: escalation, and nothing is sent again. A pending permission is logged once and left to be answered in Agora. |
 | Answer | The text of the turn's `agent_message_chunk` elements, in the order of their first positions. |
 | Stop | Sent once the turn has ended, unless the view is `ended`, `failed`, `lost` or `stopped`. Refused `stopped` or `execution_unavailable`: nothing more. |
@@ -32,6 +33,25 @@ The step reads its Workstream's thread from its last cursor, through the snapsho
 A step's task is retried by Prefect 3 times, 20 s apart, on any error but an escalation. Its
 result is persisted; Prefect's default cache (inputs, task source, run) answers a step already
 completed in the same run without running it.
+
+## A step's cadence
+
+How often a step reads its thread and how long it waits for its execution are the step's own:
+two fields of its `StepSpec`, set by the flow per step.
+
+| Field | Default | Rule |
+| --- | --- | --- |
+| `poll_seconds` | 5 | The pause between two reads of the thread, both while the step waits to write its prompt and while it waits for its turn to end. |
+| `ready_timeout_seconds` | 900 | How long the step waits for its Workstream to have a turn, from its Create accepted or its Workstream found. Counted afresh by each run of the step, on the step's own clock. |
+
+| Rule | Detail |
+| --- | --- |
+| Values | A number — an integer or a float, not a boolean — greater than 0. Anything else is refused when the `StepSpec` is built, `ValueError` naming the field, before any request to Agora: no Workstream, no command, no escalation. |
+| Identity | Neither field is part of the step's identity: the Workstream and command ids are the same whatever the cadence, and a step run again with another cadence finds its Workstream where it is. |
+| Cache | Both are in the spec the step's task receives, among the inputs of Prefect's cache key: a step run again in the same run with another cadence is not answered from the cache, and finds its Workstream instead. |
+| Create's retry | Not a read of the thread: after `quota` or `unavailable`, every 15 s whatever `poll_seconds`. |
+
+Both flows leave every step's cadence at its defaults.
 
 ## Escalation
 
@@ -114,3 +134,6 @@ answer's last 4,000 characters in the description: approved counts as `approve`,
 | F6 | The architecture's approval | The run suspends under `approve-architecture` with the goal, the branch and the summary; resumed with notes, the first development's prompt carries them and no other step's does; the architecture step is not run again. |
 | F7 | The review's verdicts | `changes` in round 1 starts round 2 in new Workstreams, the development's prompt carrying the review's comments and no other step's; `approve` in round 2 ends the flow `approved`. |
 | F8 | A review that ends without its verdict | The run suspends under `verdict-review-<round>`; the answer approved ends the flow `approved`. |
+| F9 | A step's poll interval | With `poll_seconds` set, every pause the step makes, waiting for its execution and for its turn, lasts `poll_seconds`, and it makes at least one of each; without it, every pause lasts 5 s. Create, Write and Stop each sent once in both. |
+| F10 | A step's ready timeout | The same execution, `ready` only after a given time on the step's clock. With `ready_timeout_seconds` shorter than that time: escalation at the first read past the timeout and not before, its reason naming the timeout; Create sent once, no Write. With it longer: the step writes and returns the answer; Create, Write and Stop each sent once. Without it, an execution never `ready` escalates at the first read past 900 s. |
+| F11 | A cadence not greater than 0 | `poll_seconds` or `ready_timeout_seconds` at 0, below 0 or a boolean: the `StepSpec` is refused, `ValueError` naming the field; Agora receives no request. |
