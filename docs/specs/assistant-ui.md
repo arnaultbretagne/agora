@@ -264,6 +264,9 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | The commands, over the composer while it starts with `/` | **ours** |
 | Composer | Above it: a refusal; the uncertain turn's banner (**Cancel the turn**, **Stop the sandbox**); why sending is closed | **ours** |
 
+A Workstream opens on its last message, as **Scroll to the bottom** leaves it, whether from the list,
+from another Workstream or by its address. It stays there while it catches up, unless the user scrolls.
+
 Registry components kept: `MarkdownText`, `DiffViewer`, and the `surfaces` helpers. Every string is
 in English.
 
@@ -299,6 +302,10 @@ menu and in the button's tooltip; the harness menu shows the marks too.
 Below 40rem the header keeps the title and the state, not the harness, and **Stop** is its icon. On a
 touch screen the composer's controls are 36 px high, and the search field's text is 16 px, under
 which iOS zooms the page in to type.
+
+A touch screen's keyboard comes up with the focus, over half the thread. There the composer waits to be
+touched: it never takes the focus itself, whether on opening, on **Scroll to the bottom** or as a turn
+starts. With a mouse or a trackpad, it does.
 
 ## Outside this contract, already available
 
@@ -354,6 +361,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U37 | In a browser on a phone's screen (390 × 844, touch, a 34 px home indicator), a draft whose pool offers models and efforts, a repository granted; then the same draft on a wide screen | Narrow: the harness as its mark, the model by name with its effort as bars, the key with its dot, no name; no picker's text cut; the composer 34 px above the bottom. Wide: the harness's name, the model · the effort, what is granted. |
 | U38 | In a browser, the page's home-screen tags and files; then the theme toggled against the system's | The manifest (Agora, standalone, from `/`) and the 180 px icon served; an opaque status bar asked; the page covering the display; the status bar's colour the page's, then the toggled theme's. |
 | U39 | In a browser on a phone's screen, a draft, then a Workstream opened from the list, the theme toggled in each; then the page loaded without its client | At the top and the bottom, the edge element as WebKit finds it is not one covering the screen and has the page's colour, the toggled theme's each time; the list open, the one covering it; the page without its client already in the theme picked. |
+| U40 | In a browser on a phone's screen, two Workstreams taller than it: one opened from the list, the other from it, the first by its address; scrolled up, then **Scroll to the bottom**; on another phone, nothing kept and the network slow, the first from the list; then on a wide screen with a mouse | Each opened on its last message, the composer not focused; nor after the button. Wide: the composer focused on opening. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
