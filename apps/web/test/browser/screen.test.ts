@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U40: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24 and U36–U41: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -28,7 +28,7 @@ before(async () => {
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '20', ...credentials } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -525,4 +525,24 @@ test('U40 a phone: a Workstream opens on its last message, from the list, from a
   await wide.goto(`${server.url}/w/${alpha}`)
   await thread(wide).getByText(lastOf.alpha).waitFor()
   await until('wide: the composer focused', () => composerFocused(wide))
+})
+
+test('U41 a Workstream answered, then reloaded: kept once read whole; read with EventSource from that cursor, not from zero', async () => {
+  const page = await fresh()
+  const id = await started(page, 'a thread read as an event source')
+  // Kept only once its snapshot has ended: an iPhone that never saw the end read every Workstream from zero.
+  const kept = await until('kept in the browser', () =>
+    page.evaluate((id) => (JSON.parse(localStorage.getItem(`agora:thread:${id}`) ?? 'null') as { cursor: string } | null)?.cursor, id),
+  )
+  const reads: { type: string; after: string }[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === `/api/workstreams/${id}/thread`) reads.push({ type: request.resourceType(), after: url.searchParams.get('after')! })
+  })
+  await page.reload()
+  await thread(page).getByText('Echo #1: a thread read as an event source.').waitFor()
+  await until('the thread read again', () => reads.length > 0)
+  assert.deepEqual(reads[0], { type: 'eventsource', after: kept })
+  assert.notEqual(kept, '0')
+  await page.locator('main').getByText('Loading…').waitFor({ state: 'detached' })
 })
