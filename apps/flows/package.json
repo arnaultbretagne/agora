@@ -1,0 +1,9 @@
+{
+  "name": "@agora/flows",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agora's workflows on Prefect: Python, run by Prefect's worker; npm only runs their tests.",
+  "scripts": {
+    "test": "python3 -I -m unittest discover -s . -p 'test_*.py'"
+  }
+}

@@ -6,3 +6,4 @@ What gets deployed or built. Each folder with a Dockerfile produces its own imag
 | --- | --- | --- |
 | `server/` | `agora-server` | The server: mounts the executions and the log, serves the client and the API; with `TEST_ROUTES`, the test page. |
 | `web/` | — (in `agora-server`) | The client: assistant-ui on the log's thread. |
+| `flows/` | — (Prefect's own) | The workflows: steps that each run an agent in a Workstream, on Prefect's worker. |
