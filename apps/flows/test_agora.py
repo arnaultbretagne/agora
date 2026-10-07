@@ -211,20 +211,20 @@ class Steps(unittest.TestCase):
         self.assertLess(clock.now - 900, spec.poll_seconds)
         self.assertLessEqual(clock.now - spec.poll_seconds, 900)
 
-    def test_F10_readiness_first_seen_past_the_timeout_does_not_write(self) -> None:
+    def test_F10_readiness_first_seen_past_the_timeout_still_writes(self) -> None:
         clock = FakeClock()
-        agora = FakeAgora(ready_at=0.7, clock=clock)
+        agora = FakeAgora(ready_at=0.7, clock=clock, answer_after=0)
         spec = replace(SPEC, ready_timeout_seconds=0.6)
-        with self.assertRaises(Escalation) as raised:
-            run_step(agora, spec, log=quiet, sleep=clock.sleep, clock=clock)  # type: ignore[arg-type]
-        self.assertEqual(str(raised.exception), "execution not ready after 0.6 s (state ready)")
-        self.assertEqual(agora.sent, ["Create"])
+        result = run_step(agora, spec, log=quiet, sleep=clock.sleep, clock=clock)  # type: ignore[arg-type]
+        self.assertEqual(agora.sent, ["Create", "Write", "Stop"])
+        self.assertEqual((result.execution, result.status, result.text), ("e-1", "done", "Hello, world."))
         self.assertGreater(clock.now, spec.ready_timeout_seconds)
         self.assertLess(clock.now - spec.ready_timeout_seconds, spec.poll_seconds)
+        self.assertLessEqual(clock.now - spec.poll_seconds, spec.ready_timeout_seconds)
 
     def test_F11_invalid_cadence_is_refused_before_any_request(self) -> None:
         for name in ("poll_seconds", "ready_timeout_seconds"):
-            for value in (0, -1, True, False, "5", None, float("nan")):
+            for value in (0, -1, True, False, "5", None, float("nan"), float("inf"), float("-inf")):
                 with self.subTest(field=name, value=value):
                     agora = FakeAgora()
                     with self.assertRaisesRegex(ValueError, name):

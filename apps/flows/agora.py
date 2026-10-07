@@ -10,6 +10,7 @@ Prefect retries, resumes or re-runs never starts a second agent on the same work
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -58,8 +59,8 @@ class StepSpec:
     def __post_init__(self) -> None:
         for name in ("poll_seconds", "ready_timeout_seconds"):
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
-                raise ValueError(f"{name} must be a number greater than 0")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not value > 0:
+                raise ValueError(f"{name} must be a finite number greater than 0")
 
 
 @dataclass
@@ -227,8 +228,6 @@ def run_step(
         state = view.get("state")
         if state in GONE:
             raise Escalation(f"execution {state} before the prompt was written")
-        if clock() > deadline:
-            raise Escalation(f"execution not ready after {spec.ready_timeout_seconds:g} s (state {state})")
         if state == "ready" and not view.get("configuring") and view.get("session"):
             target = {"execution": view["execution"], "session": view["session"]}
             answer = agora.command(workstream, command_id(workstream, "write-1"), "Write", target, {"prompt": [{"type": "text", "text": spec.prompt}]})
@@ -239,6 +238,8 @@ def run_step(
                     break
             elif answer.get("reason") not in TRANSIENT_WRITE:
                 raise Escalation(f"Write refused: {answer.get('reason')}")
+        if clock() > deadline:
+            raise Escalation(f"execution not ready after {spec.ready_timeout_seconds:g} s (state {state})")
         sleep(spec.poll_seconds)
 
     # The turn: waited for, never resent.

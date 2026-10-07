@@ -34,6 +34,9 @@ A step's task is retried by Prefect 3 times, 20 s apart, on any error but an esc
 result is persisted; Prefect's default cache (inputs, task source, run) answers a step already
 completed in the same run without running it.
 
+At each read, a ready execution is offered the Write before the ready timeout is checked. If
+the step finds a turn after the Write, it continues even when that read was past the deadline.
+
 ## A step's cadence
 
 How often a step reads its thread and how long it waits for its execution are the step's own:
@@ -46,7 +49,7 @@ two fields of its `StepSpec`, set by the flow per step.
 
 | Rule | Detail |
 | --- | --- |
-| Values | A number — an integer or a float, not a boolean — greater than 0. Anything else is refused when the `StepSpec` is built, `ValueError` naming the field, before any request to Agora: no Workstream, no command, no escalation. |
+| Values | A finite number — an integer or a float, not a boolean — greater than 0. Anything else, including NaN and infinity, is refused when the `StepSpec` is built, `ValueError` naming the field, before any request to Agora: no Workstream, no command, no escalation. |
 | Identity | Neither field is part of the step's identity: the Workstream and command ids are the same whatever the cadence, and a step run again with another cadence finds its Workstream where it is. |
 | Cache | Both are in the spec the step's task receives, among the inputs of Prefect's cache key: a step run again in the same run with another cadence is not answered from the cache, and finds its Workstream instead. |
 | Create's retry | Not a read of the thread: after `quota` or `unavailable`, every 15 s whatever `poll_seconds`. |
@@ -138,5 +141,5 @@ answer's last 4,000 characters in the description: approved counts as `approve`,
 | F7 | The review's verdicts | `changes` in round 1 starts round 2 in new Workstreams, the development's prompt carrying the review's comments and no other step's; `approve` in round 2 ends the flow `approved`. |
 | F8 | A review that ends without its verdict | The run suspends under `verdict-review-<round>`; the answer approved ends the flow `approved`. |
 | F9 | A step's poll interval | With `poll_seconds` set, every pause the step makes, waiting for its execution and for its turn, lasts `poll_seconds`, and it makes at least one of each; without it, every pause lasts 5 s. Create, Write and Stop each sent once in both. |
-| F10 | A step's ready timeout | The same execution, `ready` only after a given time on the step's clock. With `ready_timeout_seconds` shorter than that time: escalation at the first read past the timeout and not before, its reason naming the timeout; Create sent once, no Write. With it longer: the step writes and returns the answer; Create, Write and Stop each sent once. Without it, an execution never `ready` escalates at the first read past 900 s. |
-| F11 | A cadence not greater than 0 | `poll_seconds` or `ready_timeout_seconds` at 0, below 0 or a boolean: the `StepSpec` is refused, `ValueError` naming the field; Agora receives no request. |
+| F10 | A step's ready timeout | The same execution, `ready` only after a given time on the step's clock. With `ready_timeout_seconds` shorter than that time and the execution still not ready at the first read past the timeout: escalation at that read and not before, its reason naming the timeout; Create sent once, no Write. With it longer: the step writes and returns the answer; Create, Write and Stop each sent once. An execution first seen `ready` on the read past the timeout is still written and returns the answer; Create, Write and Stop each sent once. Without it, an execution never `ready` escalates at the first read past 900 s. |
+| F11 | An invalid cadence | `poll_seconds` or `ready_timeout_seconds` at 0, below 0, a boolean, a non-number, NaN or infinity: the `StepSpec` is refused, `ValueError` naming the field; Agora receives no request. Finite positive integers and floats are accepted. |
