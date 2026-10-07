@@ -21,16 +21,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agora import Agora, Escalation, StepSpec, last_json, run_step  # noqa: E402
 
 
-def agora() -> Agora:
-    return Agora(os.environ["AGORA_URL"], os.environ["AGORA_OWNER"])
+# The owner of the live cases (apps/server/scripts): a rehearsal's Workstreams stay out of the
+# operator's list, and purge-live-cases.sql removes them.
+REHEARSAL_OWNER = "c45e0000-0000-4000-8000-000000000000"
+
+
+def agora(owner: str | None) -> Agora:
+    """The worker's Agora; the steps' Workstreams belong to the operator unless a run names another owner."""
+    return Agora(os.environ["AGORA_URL"], owner or os.environ["AGORA_OWNER"])
 
 
 @task(retries=3, retry_delay_seconds=20, persist_result=True)
-def agora_step(spec: dict[str, Any], attempt: int = 0) -> dict[str, Any]:
+def agora_step(spec: dict[str, Any], attempt: int = 0, owner: str | None = None) -> dict[str, Any]:
     """One agent, one prompt, its answer. `attempt` only tells a human-asked retry from a cached result."""
     logger = get_run_logger()
     try:
-        return {"ok": True, **asdict(run_step(agora(), StepSpec(**spec), log=logger.info))}
+        return {"ok": True, **asdict(run_step(agora(owner), StepSpec(**spec), log=logger.info))}
     except Escalation as escalation:
         return {"ok": False, "escalation": str(escalation)}
 
@@ -39,11 +45,11 @@ class Decision(RunInput):
     action: Literal["retry", "abort"] = "retry"
 
 
-def step(spec: StepSpec) -> dict[str, Any]:
+def step(spec: StepSpec, owner: str | None = None) -> dict[str, Any]:
     """A step, with what it cannot settle brought to a human until they abort or it succeeds."""
     attempt = 0
     while True:
-        result = agora_step(asdict(spec), attempt)
+        result = agora_step(asdict(spec), attempt, owner)
         if result["ok"]:
             return result
         get_run_logger().warning(f"{spec.step} round {spec.round}: {result['escalation']}")
@@ -60,11 +66,11 @@ def step(spec: StepSpec) -> dict[str, Any]:
 
 
 @flow(name="rehearsal", persist_result=True)
-def rehearsal(prompt: str = "/sleep 20", harness: str = "mock", replays: int = 1) -> dict[str, Any]:
+def rehearsal(prompt: str = "/sleep 20", harness: str = "mock", replays: int = 1, owner: str = REHEARSAL_OWNER) -> dict[str, Any]:
     """One step, then the same step again: the replays find the first one's Workstream and answer."""
     spec = StepSpec(run=str(flow_run.id), step="rehearsal", round=1, harness=harness, prompt=prompt, lease_seconds=120)
-    first = step(spec)
-    again = [agora_step(asdict(spec), attempt) for attempt in range(1, replays + 1)]
+    first = step(spec, owner)
+    again = [agora_step(asdict(spec), attempt, owner) for attempt in range(1, replays + 1)]
     same = all(r["ok"] and (r["workstream"], r["execution"], r["text"]) == (first["workstream"], first["execution"], first["text"]) for r in again)
     get_run_logger().info(f"rehearsal: {replays} replay(s), same Workstream, execution and answer: {same}")
     return {"first": first, "replays": again, "same": same}
@@ -103,11 +109,13 @@ def archi_dev_review(
     reviewer: str = "claude-code",
     max_rounds: int = 3,
     rehearsal_verdicts: list[str] | None = None,
+    owner: str | None = None,
 ) -> dict[str, Any]:
     """Architecture, a human's approval, then development and review until the review approves.
 
     `rehearsal_verdicts` only serves a rehearsal on the mock, which echoes its prompt: the review's
-    prompt then ends with the given verdict for each round.
+    prompt then ends with the given verdict for each round; such a rehearsal names the live cases'
+    owner (`REHEARSAL_OWNER`) to keep its Workstreams out of the operator's list.
     """
     logger = get_run_logger()
     run = str(flow_run.id)
@@ -123,7 +131,7 @@ def archi_dev_review(
         "where the repository's own rules put such documents (read its AGENTS.md). Do not write the implementation. "
         f"Commit and push `{branch}` before you answer.\n\n"
         + ENDING.format(schema='{"summary": "<the design in a few lines>", "files": ["<paths you wrote>"]}'),
-    ))
+    ), owner)
     plan = last_json(design["text"]) or {"summary": design["text"][-2000:]}
     approval = suspend_flow_run(
         wait_for_input=Approval.with_initial_data(
@@ -147,7 +155,7 @@ def archi_dev_review(
             f"`{branch}` before you answer."
             + (f"\n\nAddress these review comments:\n{notes}" if notes else "")
             + "\n\n" + ENDING.format(schema='{"summary": "<what you did>", "checks": "passed | failed | not run"}'),
-        ))
+        ), owner)
         forced = rehearsal_verdicts[round - 1] if rehearsal_verdicts and round <= len(rehearsal_verdicts) else None
         review_spec = StepSpec(
             run=run, step="review", round=round, harness=reviewer, profiles=read,
@@ -157,7 +165,7 @@ def archi_dev_review(
             + ENDING.format(schema='{"verdict": "approve | changes", "comments": ["<one per change asked>"]}')
             + (f'\n\n{{"verdict": "{forced}", "comments": ["rehearsal round {round}"]}}' if forced else ""),
         )
-        review = step(review_spec)
+        review = step(review_spec, owner)
         found = verdict(review_spec, review["text"], ("verdict",))
         logger.info(f"review round {round}: {found.get('verdict')}")
         if found.get("verdict") == "approve":

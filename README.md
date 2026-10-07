@@ -8,7 +8,7 @@ unless it is written in `docs/`.
 | Folder | Content |
 | --- | --- |
 | `docs/` | Architecture (how it works), specs (what to implement) and ADRs (why). |
-| `apps/` | What gets deployed: the server, with the client. |
+| `apps/` | What gets deployed: the server, with the client; the workflows, run by Prefect. |
 | `harnesses/` | The harness images Agent Sandbox starts in its pools. |
 | `packages/` | Shared code: executions, credentials, the bridge, the mock agent, test tools. |
 | `.github/workflows/` | CI: checks and image publishing. |
