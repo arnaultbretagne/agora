@@ -11,7 +11,7 @@ import json
 import unittest
 from typing import Any
 
-from agora import Escalation, StepSpec, Thread, command_id, last_json, run_step, step_id
+from agora import Escalation, StepSpec, Thread, command_id, last_json, run_step, split_last_json, step_id
 
 
 class FakeAgora:
@@ -149,6 +149,11 @@ class Answers(unittest.TestCase):
         text = 'Example: {"verdict": "approve | changes"}\nDone.\n{"verdict": "changes", "comments": ["a {b}"]}\n'
         self.assertEqual(last_json(text), {"verdict": "changes", "comments": ["a {b}"]})
         self.assertIsNone(last_json("no json {here"))
+
+    def test_an_answer_cut_before_its_last_json_object(self) -> None:
+        body, report = split_last_json('# Design\n\nUse `{x}` here.\n\n{"status": "done", "summary": "s"}\n')
+        self.assertEqual((body, report), ("# Design\n\nUse `{x}` here.", {"status": "done", "summary": "s"}))
+        self.assertEqual(split_last_json("no report"), ("no report", None))
 
     def test_the_thread_folds_upserts_removes_and_resets(self) -> None:
         thread = Thread(None, "w")  # type: ignore[arg-type]

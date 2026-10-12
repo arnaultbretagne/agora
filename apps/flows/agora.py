@@ -264,10 +264,11 @@ def run_step(
     return result
 
 
-def last_json(text: str) -> dict[str, Any] | None:
-    """The last JSON object of an answer: what a step's prompt asks the agent to end with."""
+def split_last_json(text: str) -> tuple[str, dict[str, Any] | None]:
+    """An answer cut before its last JSON object, and that object: the deliverable and the report."""
     decoder = json.JSONDecoder()
     found: dict[str, Any] | None = None
+    start = len(text)
     index = text.find("{")
     while index != -1:
         try:
@@ -276,6 +277,11 @@ def last_json(text: str) -> dict[str, Any] | None:
             index = text.find("{", index + 1)
             continue
         if isinstance(value, dict):
-            found = value
+            found, start = value, index
         index = text.find("{", end)
-    return found
+    return text[:start].rstrip(), found
+
+
+def last_json(text: str) -> dict[str, Any] | None:
+    """The last JSON object of an answer: what a step's prompt asks the agent to end with."""
+    return split_last_json(text)[1]
