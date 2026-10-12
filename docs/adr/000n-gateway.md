@@ -208,7 +208,8 @@ Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s depl
   port 443, so no name leads it into the operator's networks or the cluster.
 - With the Internet, an agent steered by what it reads can send what it holds anywhere — a
   repository it was given included; credentials stay in the gateway. It is never a base profile,
-  and an execution gets it only when picked.
+  and an execution gets it only when its Create or a Scope names it: the interface names it for a
+  new Workstream, and the user can turn it off.
 - A JWT cannot be revoked before it expires: keep it short, and Agora reissues it — in the pool
   while the Pod waits, and between turns during an execution, where closing tunnels interrupts
   nothing.
