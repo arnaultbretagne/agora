@@ -1,6 +1,6 @@
 # An execution's credentials
 
-Contract to implement — agentgateway **1.5.0**, on top of the executions contract
+Contract to implement — agentgateway **1.6.0**, on top of the executions contract
 (`executions.md`). How it fits together is explained in `architecture/credentials.md`; why, in
 the gateway ADR.
 
@@ -22,7 +22,7 @@ against the execution's grants and sets the credential on the way through.**
 | 503 from the bridge, on `CONNECT` | No token attached: a warm Pod whose pool declares no base profile, or before Agora hands one. |
 | 502 from the bridge, on `CONNECT` | Gateway unreachable. |
 | 401 from the gateway | JWT missing, expired or signed by another key. |
-| 403 from the gateway | None of the execution's grants covers this host, path and method. A host with no route of its own falls to the `internet` route: refused without `internet`. |
+| 403 from the gateway | None of the execution's grants covers this host, path and method. A host with no route of its own falls to the `internet` route: refused without `internet`. On GitHub, what no grant covers falls to its public routes: refused without `internet`, and refused for anything but a read. |
 | 404 from the gateway, on `CONNECT` | A port other than 443: the gateway serves HTTPS on 443 only. |
 | 503 from the gateway | The host cannot be reached: its name does not resolve, or the connection fails or times out — as it does for a private address, which the network keeps out of the gateway's reach. |
 | TLS refused by the gateway (`access denied`) | An IP address instead of a name: the gateway issues certificates for names only. |
@@ -48,15 +48,17 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `anthropic` | `api.anthropic.com`, everything. |
 | `zai` | `api.z.ai`, everything: z.ai's OpenAI- and Anthropic-compatible APIs. |
 | `chatgpt` | `chatgpt.com`, only `/backend-api/codex…` and `/backend-api/wham…`: what codex uses. The session reaches the whole ChatGPT account, conversations included. |
-| `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. |
+| `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
-`internet` never opens a host that has a route of its own: those routes compare the grant's host
-with the request's, and only the `internet` route reads `*`. So a public repository outside the
-execution's `github` profiles stays closed — `github.com` has its own route, and its credential.
+`internet` never opens a route with a credential: those routes compare the grant's host with the
+request's, and only the `internet` route and GitHub's public routes read `*`. On GitHub it adds what
+anyone may read: a public repository outside the execution's `github` profiles can be cloned,
+fetched and read through the REST API. Never a write, a push or GraphQL: those take a `github`
+profile.
 
 ### Base profiles
 
@@ -122,10 +124,26 @@ the bridge holds, the agent can read. No token is signed without the Pod's addre
 agentgateway in standalone mode, namespace `agora-gateway`, Service `gateway` port 3000
 (`CONNECT`). Every tunnel to port 443 is terminated with the "Agora gateway CA" CA.
 
-The routes with a credential share one authorization rule: the request comes from the JWT's
-`ip`, the path contains no `..`, `.`, `%2e` or `%2f`, and one of the JWT's grants covers the
-host, the path with the query, and the method. If the rule fails, the request stops at the gateway; otherwise the gateway sets the
-host's credential.
+The listener verifies the JWT before any route is picked. The routes with a credential share one
+authorization rule: the request comes from the JWT's `ip`, the path contains no `..`, `.`, `%2e` or
+`%2f`, and one of the JWT's grants covers the host, the path with the query, and the method. If the
+rule fails, the request stops at the gateway; otherwise the gateway sets the host's credential.
+
+GitHub has two routes per host: one for what a grant covers, one for the rest. On `api.github.com`
+and `github.com`, the listener sets `x-gateway-grant` before a route is picked — `covered` when the
+rule above would let the request through, `none` otherwise — overwriting whatever the sandbox sent.
+`github-api` and `github-git` take `covered`: a route with a header match outranks the one without.
+`github-api-public` and `github-git-public` take the rest. The header only steers: each route checks
+the request again, so a header the sandbox sets itself gains nothing, and each removes it before
+GitHub.
+
+The public routes' rule: the request comes from the JWT's `ip`, its path has none of the tricks
+above, one of the JWT's grants is on host `*`, and the request reads. On `api.github.com`, `GET` and
+`HEAD`. On `github.com`, `GET` and `HEAD` except `git-receive-pack`'s first request, and the `POST`
+of `git-upload-pack` that a clone or a fetch sends. They set the same PAT as the routes with a
+grant: a fine-grained PAT reads every public repository, so a repository given no grant reads as the
+public sees it, with the PAT's rate limit. GraphQL stays closed: it is always a `POST`, read or
+write.
 
 The `internet` route names no host. agentgateway picks a route by the request's exact host, then
 by wildcard, and the route without hosts last: it takes every host the other routes do not name.
@@ -138,11 +156,16 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
 | `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
 | `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
-| `github-api` | `api.github.com` | `Authorization: Bearer` + the GitHub PAT. |
-| `github-git` | `github.com` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
+| `github-api` | `api.github.com`, `x-gateway-grant: covered` | `Authorization: Bearer` + the GitHub PAT. |
+| `github-git` | `github.com`, `x-gateway-grant: covered` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
+| `github-api-public` | `api.github.com`, the rest; reads, with `internet` | As `github-api`. |
+| `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`. |
 | `internet` | Any other | None. |
 
-The PAT must reach every repository offered, with the access offered: the grants only narrow it.
+The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
+must reach no private repository: through the public routes, an execution with `internet` reads
+whatever the PAT reads. A private repository to offer calls for a second credential on the public
+routes, one that reads public repositories only.
 
 The `internet` route can name any host, so the network bounds it: the gateway goes out to public
 IPv4 addresses only, on port 443. The private ranges — `10.0.0.0/8`, `100.64.0.0/10`,
@@ -262,7 +285,7 @@ call. The test page does it itself when the agent offers the option.
 | C21 | Agora restarted between two turns of an execution with a token | A new token before the next prompt, naming the execution's profiles. |
 | C22 | git in a harness's sandbox: `git ls-remote https://github.com/A` with `github:A:read`, then with no `github` profile | The refs, with no TLS error; then 403 from the gateway. |
 | C23 | The Internet: `internet` profile, the mock's `/fetch` of `https://example.com/`, `GET` then `POST` | Both answered by example.com, the `GET` 200; the gateway logs the route `internet`. |
-| C24 | `internet` alone, the mock's `/fetch` to `api.anthropic.com`, `api.z.ai`, `chatgpt.com`, `api.github.com/repos/A`, git on `github.com/A`; then `github:A:read` added | 403 from the gateway for each; then GitHub answers for A. |
+| C24 | `internet` alone, the mock's `/fetch` to `api.anthropic.com`, `api.z.ai`, `chatgpt.com`; on A, a `DELETE` of a branch that does not exist, the first request of a push, and a GraphQL query; then `github:A:read` added, a read of A | 403 from the gateway for each; then GitHub answers the read, through `github-api`. |
 | C25 | `internet`, the mock's `/fetch` to a name resolving to a private address that refuses port 443, to that address itself, and to `https://example.com/` | The name: 503 from the gateway, the connection timed out — never refused, which would mean it was reached. The address: TLS refused by the gateway. example.com: 200. |
 | C26 | `internet`, the mock's `/fetch https://example.com:8443/` | `CONNECT` refused, 404 from the gateway. |
 | C27 | `PUT /credentials` with a token, then with one naming other profiles, then with one that is no JWT | `~/.agora/access.json` holds the first token's claims, then the second's, each before the answer; never a token or a signature; then no file. |
@@ -276,6 +299,9 @@ call. The test page does it itself when the agent offers the option.
 | C35 | A read failing after one that succeeded; an account never read; a window whose reset has passed | The earlier windows, `stale`, the reason; no window, `stale`, the reason; that window at 0 % with no reset. |
 | C36 | Each provider's answer, as given on 2026-10-07; an answer of another shape | Their 5-hour and weekly windows in percent with their resets, and the plan; z.ai's 5-hour without a reset, its MCP limit left out; no window. |
 | C37 | A read through a gateway, the tunnel accepted, then refused | `CONNECT` with the grant as `Proxy-Authorization`, TLS to the host, the placeholder `Authorization` and the endpoint's headers; the answer read. Refused: an error naming the status. |
+| C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit the PAT's; the write and the push: 403 from the gateway; without `internet`: 403. |
+| C39 | `x-gateway-grant: covered` sent by the sandbox with `internet` alone: a read of a public repository, a write on an offered one | The read through `github-api-public`; the write: 403 from the gateway. |
+| C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

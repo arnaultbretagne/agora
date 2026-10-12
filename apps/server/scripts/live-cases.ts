@@ -1,5 +1,5 @@
 // Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex, E33 on all three), docs/specs/log.md (L…) and
-// docs/specs/credentials.md (C1–C4, C7–C16, C23–C26) against the DEPLOYED lab, with real Kata sandboxes destroyed by
+// docs/specs/credentials.md (C1–C4, C7–C16, C23–C26, C38) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
@@ -834,7 +834,7 @@ await check('C16', 'Gateway, the chain to ChatGPT', async () => {
   return `codex/models "${models.slice(0, 15)}", ${String((models.match(/"slug"/g) ?? []).length)} model(s); conversations "${conversations.slice(0, 15)}" authorization failed; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
 })
 
-// ---------------------------------------------------------------- the Internet (docs/specs/credentials.md, C7, C23–C26)
+// ---------------------------------------------------------------- the Internet (docs/specs/credentials.md, C7, C23–C26, C38)
 
 /** The gateway's route for this execution's request to a host, from its log. */
 const routeOf = (since: string, w: Workstream, host: string) => gatewayLines(since).find((l) => l.includes(`http.host=${host}`) && l.includes(`jwt.sub=agora ${w.execution} `))
@@ -864,29 +864,77 @@ await check('C23', 'Gateway, the Internet', async () => {
   return `GET "${read.slice(0, 15)}", POST "${sent.slice(0, 24)}"; gateway route ${String(/route=(\S+)/.exec(line)?.[1])} → ${String(/http\.status=(\d+)/.exec(line)?.[1])}`
 })
 
-await check('C24', 'Gateway, the Internet opens no host with a credential', async () => {
+await check('C24', 'Gateway, the Internet opens no credential of its own', async () => {
+  const since = new Date(Date.now() - 1000).toISOString()
   const w = new Workstream()
   await w.open(mock, { profiles: ['internet'], ...SHORT })
-  const hosts: [string, string][] = [
+  // On GitHub the Internet reads (C38): these write, and stay closed. Each harmless had it passed: a
+  // branch that does not exist, a push's first request, a query.
+  const probes: [string, string][] = [
     ['api.anthropic.com', 'https://api.anthropic.com/v1/models'],
     ['api.z.ai', 'https://api.z.ai/api/paas/v4/models'],
     ['chatgpt.com', 'https://chatgpt.com/backend-api/codex/models'],
-    ['api.github.com', `https://api.github.com/repos/${REPO_A}`],
-    ['github.com', `https://github.com/${REPO_A}.git/info/refs?service=git-upload-pack`],
+    ['A delete', `DELETE https://api.github.com/repos/${REPO_A}/git/refs/heads/agora-c24-never-exists`],
+    ['A push', `GET https://github.com/${REPO_A}.git/info/refs?service=git-receive-pack`],
+    ['GraphQL', 'POST https://api.github.com/graphql {"query":"{viewer{login}}"}'],
   ]
   const outcomes: string[] = []
-  for (const [host, probe] of hosts) {
+  for (const [label, probe] of probes) {
     const reply = await fetched(w, probe)
-    assert(/^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed'), `${host}: ${reply.slice(0, 160)}`)
-    outcomes.push(`${host} 403`)
+    assert(/^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed'), `${label}: ${reply.slice(0, 160)}`)
+    outcomes.push(`${label} 403`)
   }
-  // The control: the same request, the repository granted, reaches GitHub. A day, or the token would be
-  // replaced by the execution's own before the prompt (it renews any that would end within the turn).
+  // The control: the repository granted, a read reaches GitHub through the route with a grant. A day,
+  // or the token would be replaced by the execution's own before the prompt (it renews any that would
+  // end within the turn).
   await credentials(w, ['internet', `github:${REPO_A}:read`], 86_400)
   const granted = await fetched(w, `https://api.github.com/repos/${REPO_A}`)
   await w.stop()
   assert(/^HTTP\/1\.1 \d{3}/.test(granted) && !granted.includes('authorization failed'), `granted: ${granted.slice(0, 160)}`)
-  return `${outcomes.join(', ')} from the gateway; with github:${REPO_A}:read, GitHub "${granted.slice(0, 15)}"`
+  const line = await until('the gateway logs the granted read', () => gatewayLines(since).find((l) => l.includes('http.host=api.github.com') && l.includes(`jwt.sub=agora ${w.execution} `) && !/http\.status=403/.test(l)), 15_000)
+  assert(/route=\S*github-api(\s|$)/.test(line), line)
+  return `${outcomes.join(', ')} from the gateway; with github:${REPO_A}:read, GitHub "${granted.slice(0, 15)}" through ${String(/route=(\S+)/.exec(line)?.[1])}`
+})
+
+await check('C38', 'Gateway, public GitHub through the Internet', async () => {
+  const since = new Date(Date.now() - 1000).toISOString()
+  const w = new Workstream()
+  await w.open(mock, { profiles: ['internet'], ...SHORT })
+  const reads: [string, string][] = [
+    ['A read', `https://api.github.com/repos/${REPO_A}`],
+    ['rate limit', 'https://api.github.com/rate_limit'],
+    // HEAD: the refs' advertisement holds NUL bytes, and a reply holding one leaves no text in the log.
+    // GitHub answers it 405: past the gateway all the same; the fetch below is the read git makes.
+    ['A refs', `HEAD https://github.com/${REPO_A}.git/info/refs?service=git-upload-pack`],
+    ['A fetch', `POST https://github.com/${REPO_A}.git/git-upload-pack`],
+  ]
+  const outcomes: string[] = []
+  let limit = '?'
+  for (const [label, probe] of reads) {
+    const reply = await fetched(w, probe)
+    assert(/^HTTP\/1\.1 \d{3}/.test(reply) && !reply.includes('authorization failed'), `${label}: ${reply.slice(0, 160)}`)
+    if (label === 'rate limit') limit = /"limit":\s*(\d+)/.exec(reply)?.[1] ?? '?'
+    outcomes.push(`${label} → GitHub ${/^HTTP\/1\.1 (\d{3})/.exec(reply)?.[1] ?? '?'}`)
+  }
+  // The PAT is set: GitHub counts an authenticated client's 5,000 an hour, not an address's 60.
+  assert(limit === '5000', `rate limit ${limit}`)
+  // Writes stay closed: an empty PATCH and a push's first request, each harmless had it passed.
+  for (const [label, probe] of [['A patch', `PATCH https://api.github.com/repos/${REPO_A} {}`], ['A push', `GET https://github.com/${REPO_A}.git/info/refs?service=git-receive-pack`]] as const) {
+    const reply = await fetched(w, probe)
+    assert(/^HTTP\/1\.1 403/.test(reply) && reply.includes('authorization failed'), `${label}: ${reply.slice(0, 160)}`)
+    outcomes.push(`${label} 403`)
+  }
+  const routes = await until('the gateway logs the public routes', () => {
+    const lines = gatewayLines(since).filter((l) => l.includes(`jwt.sub=agora ${w.execution} `))
+    const named = new Set(lines.map((l) => /route=\S*?(github-[a-z-]+)/.exec(l)?.[1]).filter((r) => r !== undefined))
+    return named.has('github-api-public') && named.has('github-git-public') ? [...named].sort() : undefined
+  }, 15_000)
+  // Without the Internet, the same read is refused.
+  await credentials(w, ['anthropic'], 86_400)
+  const closed = await fetched(w, `https://api.github.com/repos/${REPO_A}`)
+  await w.stop()
+  assert(/^HTTP\/1\.1 403/.test(closed) && closed.includes('authorization failed'), `without internet: ${closed.slice(0, 160)}`)
+  return `${outcomes.join('; ')}; limit ${limit}; routes ${routes.join(', ')}; without internet 403`
 })
 
 // A private address of g4's network that refuses port 443 to whoever reaches it: its router. Reached,

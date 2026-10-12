@@ -36,8 +36,8 @@ export function compileProfile(profile: string): Grant[] {
   // account, conversations included.
   if (profile === 'chatgpt') return [{ host: 'chatgpt.com', path: '^/backend-api/(codex|wham)(/[^?]*)?(\\?.*)?$' }]
   // The Internet: `*` stands for any host the gateway has no route of its own for, reached with no
-  // credential. Its route alone reads `*`; the others compare the grant's host with the request's,
-  // so this grant never opens a host that has a credential.
+  // credential. The routes with a credential compare the grant's host with the request's, so this
+  // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
   if (profile === 'internet') return [{ host: '*' }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
