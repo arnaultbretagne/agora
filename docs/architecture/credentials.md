@@ -166,10 +166,11 @@ A route that takes any host could reach anything the gateway can, so the network
 gateway goes out to public addresses only, on port 443. The operator's networks and the cluster
 sit in private ranges it cannot reach, whatever name points there.
 
-The Internet stays off unless picked. Credentials never leave the gateway, but what the agent
-reads can steer it, and with the Internet it can send anything it holds anywhere — a repository
-it was given included. Off by default, offered by the operator and picked per execution, it is a
-choice made knowing that.
+The Internet is the operator's to offer and the user's to keep. Credentials never leave the
+gateway, but what the agent reads can steer it, and with the Internet it can send anything it holds
+anywhere — a repository it was given included. Offered, the interface turns it on for a new
+Workstream, since most tasks need the Web; the user turns it off per execution when the risk is not
+worth it. A pool never gets it as a base profile, and an execution sent without it has none.
 
 ## The accounts' limits
 

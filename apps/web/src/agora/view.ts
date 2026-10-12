@@ -449,11 +449,14 @@ export interface AccessEntry {
   readonly choices: readonly { readonly label: string; readonly profile: string | null }[]
 }
 
-const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', internet: 'Internet' }
+/** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
+export const INTERNET = 'internet'
+
+const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', [INTERNET]: 'Internet' }
 
 /**
- * What the access picker offers (docs/specs/assistant-ui.md, "Access"): each offered repository with
- * None, Read and, when offered, Write; each offered service with Off and On.
+ * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), in the order offered:
+ * each offered repository with None, Read and, when offered, Write; each offered service off or on.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
   return offered.map((profile) => {
@@ -487,22 +490,48 @@ export function withAccess(granted: readonly string[], entries: readonly AccessE
   return [...out, ...granted.filter((p) => !entries.some((e) => belongs(e, p)))]
 }
 
-/** The picker's button: "No access", the one granted and how, or how many. */
-export function accessLabel(granted: readonly string[], entries: readonly AccessEntry[]): string {
-  const given = entries.flatMap((e) => {
-    const profile = accessOf(granted, e)
-    return profile === null ? [] : [{ entry: e, choice: e.choices.find((c) => c.profile === profile)! }]
-  })
-  if (given.length === 0) return 'No access'
-  if (given.length === 1) {
-    const { entry, choice } = given[0]!
-    return entry.repository ? `${entry.name.split('/').at(-1)!} · ${choice.label}` : entry.name
-  }
-  return given.every((g) => g.entry.repository) ? `${String(given.length)} repos` : `${String(given.length)} grants`
+/**
+ * The rights as the menu lists them: the services first, the Internet first among them, each a switch;
+ * then the repositories. Other kinds of rights take their place in this list as they come.
+ */
+export function accessDisplay(entries: readonly AccessEntry[]): AccessEntry[] {
+  const rank = (e: AccessEntry) => (e.repository ? 2 : e.key === INTERNET ? 0 : 1)
+  return [...entries].sort((a, b) => rank(a) - rank(b))
 }
 
-/** The access shown and sent: what was picked here, else the last execution's own. */
-export const accessGranted = (picked: readonly string[] | null, view: WorkstreamView): readonly string[] => picked ?? view.profiles ?? []
+/** Each right granted, in the menu's order, with its short name and its access. */
+function given(granted: readonly string[], entries: readonly AccessEntry[]): { name: string; full: string }[] {
+  return accessDisplay(entries).flatMap((e) => {
+    const profile = accessOf(granted, e)
+    if (profile === null) return []
+    if (!e.repository) return [{ name: e.name, full: e.name }]
+    const name = e.name.split('/').at(-1)!
+    return [{ name, full: `${name} · ${e.choices.find((c) => c.profile === profile)!.label}` }]
+  })
+}
+
+/** The picker's button: "No access", the one right granted and how ("agora · Write"), or their names ("Internet, agora"). */
+export function accessLabel(granted: readonly string[], entries: readonly AccessEntry[]): string {
+  const rights = given(granted, entries)
+  if (rights.length === 0) return 'No access'
+  return rights.length === 1 ? rights[0]!.full : rights.map((r) => r.name).join(', ')
+}
+
+/** Its title: each right granted with its access. */
+export function accessTitle(granted: readonly string[], entries: readonly AccessEntry[]): string {
+  const rights = given(granted, entries)
+  return rights.length === 0 ? 'No access' : rights.map((r) => r.full).join(', ')
+}
+
+/** The access a Workstream starts with, before any execution: the Internet, when it is offered. */
+export const accessDefault = (offered: readonly string[]): readonly string[] => (offered.includes(INTERNET) ? [INTERNET] : [])
+
+/**
+ * The access shown and sent: what was picked here; else the last execution's own; else, before any
+ * execution, the default.
+ */
+export const accessGranted = (picked: readonly string[] | null, view: WorkstreamView, initial: readonly string[] = []): readonly string[] =>
+  picked ?? (view.execution !== null ? (view.profiles ?? []) : initial)
 
 /**
  * The Create a message starts: the pool, with the settings and the access picked. Which save it

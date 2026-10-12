@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U36–U41 and U43: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43 and U44: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -22,11 +22,11 @@ before(async () => {
   c = await cluster()
   // As the pools in the cluster: every Session starts with full access.
   c.kube.sessionConfig['mock-test'] = 'mode=full-access'
-  // A signer of its own and two repositories offered (docs/specs/credentials.md, "Offered profiles"); the
-  // gateway is never reached.
+  // A signer of its own, two repositories and the Internet offered, as in the cluster
+  // (docs/specs/credentials.md, "Offered profiles"); the gateway is never reached.
   const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
-  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read' }
+  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
@@ -135,6 +135,8 @@ const modelPicker = (page: Page) => page.getByRole('button', { name: 'Model', ex
 const accessPicker = (page: Page) => page.getByRole('button', { name: 'Access', exact: true })
 /** One choice in the access menu, the menu open: it stays open. */
 const accessChoice = (page: Page, repository: string, choice: string) => page.getByRole('group', { name: repository }).getByRole('menuitemradio', { name: choice })
+/** The Internet's switch in the access menu, the menu open. */
+const internetSwitch = (page: Page) => page.getByRole('menuitemcheckbox', { name: 'Internet' })
 
 const workstreams = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string }[] }).workstreams
 
@@ -338,24 +340,26 @@ test('U29 / in the composer: the commands listed; one chosen with the keyboard; 
 
 test('U34 an access picked in the draft: carried by the Create, shown once the Session is ready', async () => {
   const config = (await (await fetch(`${server.url}/api/config`)).json()) as { credentials: { offered: string[] } }
-  assert.deepEqual(config.credentials.offered, ['github:owner/a:write', 'github:owner/b:read'])
+  assert.deepEqual(config.credentials.offered, ['github:owner/a:write', 'github:owner/b:read', 'internet'])
   const page = await fresh()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
-  assert.equal(await accessPicker(page).innerText(), 'No access')
+  assert.equal(await accessPicker(page).innerText(), 'Internet', 'on by default')
   await accessPicker(page).click()
+  assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'true', 'a right among the others, on')
   assert.deepEqual(await page.getByRole('group', { name: 'owner/a' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read', 'Write'])
   assert.deepEqual(await page.getByRole('group', { name: 'owner/b' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read'])
   await accessChoice(page, 'owner/a', 'Write').click()
   // The menu, still open, hides the rest of the page from the accessibility tree.
   await page.keyboard.press('Escape')
-  assert.equal(await accessPicker(page).innerText(), 'a · Write')
+  assert.equal(await accessPicker(page).innerText(), 'Internet, a')
+  assert.equal(await accessPicker(page).getAttribute('title'), 'Internet, a · Write')
   await send(page, 'with an access')
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
   await thread(page).getByText('Echo #1: with an access.').waitFor()
   const create = (await entriesOf(idOf(page))).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
-  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write'])
-  assert.equal(await accessPicker(page).innerText(), 'a · Write')
+  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write', 'internet'])
+  assert.equal(await accessPicker(page).innerText(), 'Internet, a')
 })
 
 test('U35 another access picked in an open Workstream: Scope sent with the whole set, shown at once and once the view has it', async () => {
@@ -366,13 +370,45 @@ test('U35 another access picked in an open Workstream: Scope sent with the whole
   // The menu stays open: a second choice, from what the first gave.
   await accessChoice(page, 'owner/a', 'Read').click()
   await page.keyboard.press('Escape')
-  assert.equal(await accessPicker(page).innerText(), '2 repos')
+  assert.equal(await accessPicker(page).innerText(), 'Internet, a, b')
   await until('both Scopes', async () => (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').length === 2)
   const scopes = (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').map((e) => e.content.body)
-  assert.deepEqual(scopes, [{ profiles: ['github:owner/b:read'] }, { profiles: ['github:owner/a:read', 'github:owner/b:read'] }])
+  assert.deepEqual(scopes, [{ profiles: ['github:owner/b:read', 'internet'] }, { profiles: ['github:owner/a:read', 'github:owner/b:read', 'internet'] }])
   await send(page, 'after the access')
   await thread(page).getByText('Echo #2: after the access.').waitFor()
-  assert.equal(await accessPicker(page).innerText(), '2 repos')
+  assert.equal(await accessPicker(page).innerText(), 'Internet, a, b')
+})
+
+test('U44 the Internet: a right among the others, on in a draft; off, the Create without it; on again in the open Workstream, Scope with the whole set', async () => {
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await accessPicker(page).click()
+  const rights = await page.getByRole('menu').getByRole('menuitemcheckbox').or(page.getByRole('menu').getByRole('group')).all()
+  assert.deepEqual(await Promise.all(rights.map(async (r) => (await r.getAttribute('aria-label')) ?? (await r.innerText()).trim())), ['Internet', 'owner/a', 'owner/b'], 'the Internet first, then the repositories')
+  assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'true', 'on by default')
+  await internetSwitch(page).click()
+  assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'false', 'the menu stays open')
+  await accessChoice(page, 'owner/b', 'Read').click()
+  await page.keyboard.press('Escape')
+  assert.equal(await accessPicker(page).innerText(), 'b · Read')
+  await send(page, 'without the internet')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText('Echo #1: without the internet.').waitFor()
+  const id = idOf(page)
+  const create = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
+  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/b:read'])
+  await accessPicker(page).click()
+  assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'false', 'the execution\'s own')
+  await internetSwitch(page).click()
+  assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'true', 'shown at once')
+  await page.keyboard.press('Escape')
+  await until('the Scope', async () => (await entriesOf(id)).some((e) => e.kind === 'command' && e.content.kind === 'Scope'))
+  const scope = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Scope')!
+  assert.deepEqual(scope.content.body, { profiles: ['github:owner/b:read', 'internet'] })
+  await send(page, 'with the internet')
+  await thread(page).getByText('Echo #2: with the internet.').waitFor()
+  assert.equal(await accessPicker(page).innerText(), 'Internet, b', 'once the view has it')
 })
 
 test('U37 a phone: the pickers as marks, nothing cut, the composer above the home indicator; wide: their names', async () => {
@@ -389,6 +425,10 @@ test('U37 a phone: the pickers as marks, nothing cut, the composer above the hom
   await modelPicker(page).click()
   await page.getByRole('menuitem', { name: 'high' }).click()
   const harness = page.getByRole('button', { name: 'Harness' })
+  assert.equal(await accessPicker(page).locator('[data-granted]').isVisible(), true, 'a dot: the Internet, on by default')
+  await accessPicker(page).click()
+  await internetSwitch(page).click()
+  await page.keyboard.press('Escape')
   assert.equal(await accessPicker(page).locator('[data-granted]').count(), 0, 'no dot while nothing is granted')
   await accessPicker(page).click()
   await accessChoice(page, 'owner/a', 'Read').click()
