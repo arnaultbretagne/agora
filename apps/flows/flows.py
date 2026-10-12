@@ -12,6 +12,7 @@ named after what they do.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -65,7 +66,7 @@ def step_page(label: str, spec: StepSpec, result: dict[str, Any]) -> str:
     ]
     table = "\n".join(["| | |", "| --- | --- |", *(f"| {k} | {v} |" for k, v in rows)])
     return (
-        f"# {label}\n\n{table}\n\n## Report\n\n{fenced(str(report)) if report else '_No JSON report at the end of the answer._'}"
+        f"# {label}\n\n{table}\n\n## Report\n\n{fenced(json.dumps(report, indent=2, ensure_ascii=False)) if report else '_No JSON report at the end of the answer._'}"
         f"\n\n## Answer\n\n{body or '_Empty._'}\n\n## Prompt sent\n\n{fenced(spec.prompt)}\n"
     )
 
@@ -124,7 +125,8 @@ def publish_summary(rows: list[dict[str, str]], outcome: str) -> None:
 
 @flow(name="rehearsal", persist_result=True, description="One step on the mock, then the same step again: the replays find the first one's Workstream and answer.")
 def rehearsal(prompt: str = "/sleep 20", harness: str = "mock", replays: int = 1, owner: str = REHEARSAL_OWNER) -> dict[str, Any]:
-    """
+    """One step on the mock, then the same step again.
+
     Args:
         prompt: What the step's agent is told. The mock echoes it; `/sleep N` makes a turn of N seconds.
         harness: The step's harness.
@@ -277,7 +279,8 @@ def archi_dev_review(
     reviewer: str = "claude-code",
     max_rounds: int = 3,
 ) -> dict[str, Any]:
-    """
+    """Architecture, your approval, then development and review until the review approves.
+
     Args:
         goal: What the work is, in a sentence or two; every prompt starts with it.
         repo: The GitHub repository, `owner/name`.
@@ -298,7 +301,8 @@ def archi_dev_review_rehearsal(
     verdicts: list[str] = ["changes", "approve"],  # noqa: B006 — Prefect copies parameters per run
     max_rounds: int = 3,
 ) -> dict[str, Any]:
-    """
+    """The archi-dev-review workflow on the mock.
+
     Args:
         goal: Shown in the plan and the prompts, as a real run's.
         verdicts: The review's verdict, round by round (`approve` or `changes`).
