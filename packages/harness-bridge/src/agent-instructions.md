@@ -36,12 +36,13 @@ a host, an anchored regular expression on the path and query, the methods.
 | --- | --- |
 | `github:OWNER/REPO:read` | `git clone` and `git fetch` `https://github.com/OWNER/REPO.git`; `GET` `https://api.github.com/repos/OWNER/REPO` and below. |
 | `github:OWNER/REPO:write` | The same, plus `git push`, and every method under `https://api.github.com/repos/OWNER/REPO` — a pull request is `POST /repos/OWNER/REPO/pulls`. |
-| `internet` | Any other `https://` host on port 443, with no credential: what anyone on the Internet may do there. Never the hosts above — with `internet` alone, GitHub stays closed, public repositories included. |
+| `internet` | Any other `https://` host on port 443, with no credential: what anyone on the Internet may do there. On GitHub, what anyone may read: `git clone` and `git fetch` a public repository, `GET` on the REST API. Never a write or a push without the repository's profile. |
 | `anthropic`, `zai`, `chatgpt` | Nothing for you to do: the model you run on. |
 
-Nothing else on GitHub is open — not `/user`, not `/search`, not GraphQL — so the REST API is
-the way, and `gh` would fail. A repository missing from your profiles is out of your reach: say
-so instead of looking for a way around.
+Without `internet`, nothing else on GitHub is open — not `/user`, not `/search`. GraphQL never
+is, so the REST API is the way, and `gh` would fail. Writing to a repository missing from your
+profiles — a push, a pull request, an issue — is out of your reach: say so instead of looking for
+a way around.
 
 ## Your tools
 
