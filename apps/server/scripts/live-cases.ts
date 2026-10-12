@@ -903,7 +903,9 @@ await check('C38', 'Gateway, public GitHub through the Internet', async () => {
   const reads: [string, string][] = [
     ['A read', `https://api.github.com/repos/${REPO_A}`],
     ['rate limit', 'https://api.github.com/rate_limit'],
-    ['A refs', `https://github.com/${REPO_A}.git/info/refs?service=git-upload-pack`],
+    // HEAD: the refs' advertisement holds NUL bytes, and a reply holding one leaves no text in the log.
+    // GitHub answers it 405: past the gateway all the same; the fetch below is the read git makes.
+    ['A refs', `HEAD https://github.com/${REPO_A}.git/info/refs?service=git-upload-pack`],
     ['A fetch', `POST https://github.com/${REPO_A}.git/git-upload-pack`],
   ]
   const outcomes: string[] = []
