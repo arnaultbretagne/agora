@@ -9,9 +9,11 @@ import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/obj
 import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
 import {
   accessDefault,
+  accessDisplay,
   accessEntries,
   accessGranted,
   accessLabel,
+  accessTitle,
   accessOf,
   commandsMatching,
   composerOf,
@@ -20,7 +22,6 @@ import {
   messagesOf,
   modelChoice,
   noticeText,
-  menuEntries,
   offeredPools,
   poolOffered,
   planItems,
@@ -368,7 +369,7 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the access picker: each offered repository with None, Read and, when offered, Write; a service off or on; the Internet apart; the button', () => {
+test('U31 the rights: each offered repository with None, Read and, when offered, Write; a service off or on; the services first, the Internet first; the button', () => {
   const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
   assert.deepEqual(
     entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
@@ -379,16 +380,16 @@ test('U31 the access picker: each offered repository with None, Read and, when o
       ['Internet', ['Off', 'On']],
     ],
   )
-  const menu = menuEntries(entries)
-  assert.deepEqual(menu.map((e) => e.name), ['o/a', 'o/b', 'z.ai'], 'the Internet is a toggle of its own')
-  assert.equal(accessLabel([], menu), 'No access')
-  assert.equal(accessLabel(['internet'], menu), 'No access', 'the Internet is not the key\'s')
-  assert.equal(accessLabel(['internet'], menuEntries(accessEntries(['github:o/a:write', 'internet']))), 'No repos')
-  assert.equal(accessLabel(['github:o/a:read', 'internet'], menu), 'a · Read')
-  assert.equal(accessLabel(['zai'], menu), 'z.ai')
+  assert.deepEqual(accessDisplay(entries).map((e) => e.name), ['Internet', 'z.ai', 'o/a', 'o/b'], 'the services first, the Internet first')
+  assert.equal(accessLabel([], entries), 'No access')
+  assert.equal(accessLabel(['internet'], entries), 'Internet')
+  assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
+  assert.equal(accessLabel(['github:o/a:read', 'internet'], entries), 'Internet, a', 'their names, in the menu\'s order')
+  assert.equal(accessTitle(['github:o/a:read', 'internet'], entries), 'Internet, a · Read', 'each with its access')
+  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), 'a, b')
+  assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'zai'], entries), 'z.ai, a · Write, b · Read')
+  assert.equal(accessTitle([], entries), 'No access')
   assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
-  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], menu), '2 repos')
-  assert.equal(accessLabel(['github:o/a:write', 'zai'], menu), '2 grants')
   assert.deepEqual(accessEntries([]), [])
 })
 

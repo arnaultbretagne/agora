@@ -1,18 +1,17 @@
 // The composer (docs/specs/assistant-ui.md, "Sending"), in assistant-ui's base skin: one bordered
-// field, the harness, model and access pickers and the Internet's toggle inside it where their model
-// picker sits, Send on the right, or Cancel while the agent works. Above it, what the user must know
-// before sending: a refusal, what the agent will be given of the conversation, an uncertain turn, why
-// sending waits.
+// field, the harness, model and access pickers inside it where their model picker sits, Send on the
+// right, or Cancel while the agent works. Above it, what the user must know before sending: a
+// refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits.
 // Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
-// "On a phone"): the harness's, the effort's bars, the key, the globe.
+// "On a phone"): the harness's, the effort's bars, the key.
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, GaugeIcon, GlobeIcon, GlobeOffIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { INTERNET, accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, menuEntries, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
+import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
@@ -129,32 +128,26 @@ const ModelPicker: FC = () => {
   )
 }
 
-/** The access may change before an execution, and between its turns while it runs (docs/specs/assistant-ui.md, "Access"). */
-const useAccessClosed = (): boolean => {
-  const { composer, view } = useAgora()
-  return !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
-}
-
 /**
- * What the agent may reach beyond its harness's service and the Internet (docs/specs/assistant-ui.md,
- * "Access"): the offered repositories, each with None, Read and Write; a service, on or off. The menu
- * stays open from one choice to the next.
+ * The rights the agent is given beyond its harness's own service (docs/specs/assistant-ui.md, "Access"):
+ * the services first, the Internet first among them, each one line with a switch; then the offered
+ * repositories, each with None, Read and Write. The menu stays open from one choice to the next.
  */
 const AccessPicker: FC = () => {
-  const { offered, access, chooseAccess } = useAgora()
-  const closed = useAccessClosed()
+  const { offered, access, chooseAccess, composer, view } = useAgora()
   const all = accessEntries(offered)
-  const entries = menuEntries(all)
-  if (entries.length === 0) return null
-  const label = accessLabel(access, entries)
-  const granted = entries.some((entry) => accessOf(access, entry) !== null)
+  if (all.length === 0) return null
+  const entries = accessDisplay(all)
+  const closed = !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
+  const label = accessLabel(access, all)
+  const granted = all.some((entry) => accessOf(access, entry) !== null)
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild disabled={closed}>
         <button
           type="button"
           aria-label="Access"
-          title={label}
+          title={accessTitle(access, all)}
           className={cn(quietButton, 'relative flex min-w-0 items-center gap-1 disabled:opacity-50 @max-lg:shrink-0 @max-lg:px-2.5')}
         >
           <KeyRoundIcon className="size-3.5 shrink-0" />
@@ -168,8 +161,8 @@ const AccessPicker: FC = () => {
         <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
           {entries.map((entry, i) => {
             const current = accessOf(access, entry) ?? ''
-            const separator = i > 0 && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />
-            // A service: one line, a switch.
+            // The switches sit together; each repository is set apart, under its name.
+            const separator = i > 0 && (entry.repository || entries[i - 1]!.repository) && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />
             if (!entry.repository) {
               const on = current !== ''
               return (
@@ -179,7 +172,7 @@ const AccessPicker: FC = () => {
                     checked={on}
                     onCheckedChange={(checked) => chooseAccess(all, entry, checked ? entry.choices.at(-1)!.profile : null)}
                     onSelect={(e) => e.preventDefault()}
-                    className={cn(menuItemClass, 'items-center justify-between gap-4')}
+                    className={cn(menuItemClass, 'items-center justify-between gap-6')}
                   >
                     <span>{entry.name}</span>
                     <Switch on={on} />
@@ -208,43 +201,12 @@ const AccessPicker: FC = () => {
   )
 }
 
-/** A switch's look, for a line that is itself the control. */
+/** A switch's look, for a menu line that is itself the control. */
 const Switch: FC<{ on: boolean }> = ({ on }) => (
   <span aria-hidden className={cn('relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors', on ? 'bg-primary' : 'bg-foreground/20')}>
-    <span className={cn('bg-background absolute top-0.5 size-3 rounded-full shadow-sm transition-transform', on ? 'translate-x-3.5' : 'translate-x-0.5')} />
+    <span className={cn('bg-primary-foreground absolute top-0.5 size-3 rounded-full shadow-sm transition-transform', on ? 'translate-x-3.5' : 'translate-x-0.5')} />
   </span>
 )
-
-/**
- * The Internet, when it is offered (docs/specs/assistant-ui.md, "Access"): a toggle beside the key, on by
- * default in a draft. On, the globe in the brand's colour on a tinted ground; off, crossed out.
- */
-const InternetToggle: FC = () => {
-  const { offered, access, chooseAccess } = useAgora()
-  const closed = useAccessClosed()
-  const all = accessEntries(offered)
-  const internet = all.find((e) => e.key === INTERNET)
-  if (internet === undefined) return null
-  const on = accessOf(access, internet) !== null
-  return (
-    <button
-      type="button"
-      aria-label="Internet"
-      aria-pressed={on}
-      disabled={closed}
-      title={on ? 'Internet on' : 'Internet off'}
-      onClick={() => chooseAccess(all, internet, on ? null : INTERNET)}
-      className={cn(
-        quietButton,
-        'flex shrink-0 items-center gap-1.5 disabled:opacity-50 @max-lg:px-2.5',
-        on && 'bg-accent text-accent-foreground hover:text-accent-foreground',
-      )}
-    >
-      {on ? <GlobeIcon className="text-primary size-3.5 shrink-0" /> : <GlobeOffIcon className="size-3.5 shrink-0" />}
-      <span className={wide}>Internet</span>
-    </button>
-  )
-}
 
 /** An account's windows: how much of each is used, and when it starts again. */
 const Limits: FC<{ limits: AccountLimits }> = ({ limits }) => {
@@ -398,7 +360,6 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
             <HarnessPicker />
             <ModelPicker />
             <AccessPicker />
-            <InternetToggle />
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Usage />
