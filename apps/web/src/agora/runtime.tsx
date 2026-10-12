@@ -12,6 +12,7 @@ import { useThread, useWorkstreams } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
 import {
+  accessDefault,
   accessGranted,
   composerOf,
   firstMessageStep,
@@ -177,9 +178,10 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [composer.create, pools, pool, view.commands],
   )
   const accessKey = composer.create ? null : view.execution
+  // Before any execution, the Internet when it is offered.
   const access = useMemo(
-    () => accessGranted(pickedAccess !== null && pickedAccess.for === id && pickedAccess.execution === accessKey ? pickedAccess.profiles : null, view),
-    [pickedAccess, id, accessKey, view],
+    () => accessGranted(pickedAccess !== null && pickedAccess.for === id && pickedAccess.execution === accessKey ? pickedAccess.profiles : null, view, accessDefault(offered)),
+    [pickedAccess, id, accessKey, view, offered],
   )
   // A Scope shown until the view has it: then the view's own again.
   useEffect(() => {
