@@ -18,6 +18,18 @@ function allowedOnline(grants: readonly Grant[], method: string, pathAndQuery: s
   return grants.some((g) => g.host === '*' && (g.path === undefined || new RegExp(g.path).test(pathAndQuery)) && (g.methods === undefined || g.methods.includes(method)))
 }
 
+/** A read, as GitHub's public routes take it: GET and HEAD, and on github.com git-upload-pack's POST, never git-receive-pack. */
+function readsGitHub(host: string, method: string, pathAndQuery: string): boolean {
+  if (host === 'api.github.com') return ['GET', 'HEAD'].includes(method)
+  if (host !== 'github.com') return false
+  return (['GET', 'HEAD'].includes(method) && !/git-receive-pack/.test(pathAndQuery)) || (method === 'POST' && /^\/[^/?]+\/[^/?]+\/git-upload-pack$/.test(pathAndQuery))
+}
+
+/** What the gateway decides on GitHub: a request a grant covers takes the routes with a grant, the rest the public ones. */
+function allowedOnGitHub(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
+  return allowed(grants, host, method, pathAndQuery) || (allowedOnline(grants, method, pathAndQuery) && readsGitHub(host, method, pathAndQuery))
+}
+
 describe('profiles', () => {
   it('anthropic opens the whole API host', () => {
     assert.deepEqual(compileProfile('anthropic'), [{ host: 'api.anthropic.com' }])
@@ -58,6 +70,32 @@ describe('profiles', () => {
     }
     // Without it, the hosts with no route of their own stay closed, whatever else is granted.
     assert.equal(allowedOnline(compileProfiles(['anthropic', 'zai', 'chatgpt', 'github:octo/app:write']), 'GET', '/'), false)
+  })
+
+  it('internet reads GitHub as the public does, through its public routes: never a write, a push or GraphQL', () => {
+    const cases: [string[], string, string, string, boolean][] = [
+      [['internet'], 'api.github.com', 'GET', '/repos/octo/other', true],
+      [['internet'], 'api.github.com', 'HEAD', '/repos/octo/other/contents/README.md?ref=main', true],
+      [['internet'], 'api.github.com', 'GET', '/search/code?q=repo:octo/other+x', true],
+      [['internet'], 'github.com', 'GET', '/octo/other.git/info/refs?service=git-upload-pack', true],
+      [['internet'], 'github.com', 'POST', '/octo/other.git/git-upload-pack', true],
+      [['internet'], 'github.com', 'GET', '/octo/other.git/info/refs?service=git-receive-pack', false],
+      [['internet'], 'github.com', 'POST', '/octo/other.git/git-receive-pack', false],
+      [['internet'], 'api.github.com', 'POST', '/repos/octo/other/issues', false],
+      [['internet'], 'api.github.com', 'PATCH', '/repos/octo/other', false],
+      [['internet'], 'api.github.com', 'DELETE', '/repos/octo/other/git/refs/heads/main', false],
+      [['internet'], 'api.github.com', 'POST', '/graphql', false],
+      // A repository granted read: its writes stay closed, the Internet adds none.
+      [['internet', 'github:octo/app:read'], 'api.github.com', 'PUT', '/repos/octo/app/contents/a.txt', false],
+      [['internet', 'github:octo/app:read'], 'github.com', 'GET', '/octo/app.git/info/refs?service=git-receive-pack', false],
+      [['internet', 'github:octo/app:write'], 'github.com', 'POST', '/octo/app.git/git-receive-pack', true],
+      // Without the Internet, only what is granted.
+      [['github:octo/app:read'], 'api.github.com', 'GET', '/repos/octo/other', false],
+      [['anthropic'], 'github.com', 'GET', '/octo/other.git/info/refs?service=git-upload-pack', false],
+    ]
+    for (const [profiles, host, method, path, expected] of cases) {
+      assert.equal(allowedOnGitHub(compileProfiles(profiles), host, method, path), expected, `${profiles.join(',')}: ${method} ${host}${path}`)
+    }
   })
 
   it('composes write on one repo and read on another of the same host, without mixing them', () => {

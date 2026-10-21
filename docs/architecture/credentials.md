@@ -131,28 +131,46 @@ Every host the gateway holds a credential for has a route of its own. Any other 
 more route, `internet`, which agentgateway picks last and which sets no credential. Its rule asks
 for a grant on host `*`, which only the `internet` profile gives; the routes with a credential
 compare the grant's host with the request's, which is never `*`. So the Internet adds the rest of
-the Web and nothing more: an execution given `internet` and no `github` profile still cannot read
-a repository, not even a public one — `github.com` is a route with a credential.
+the Web, and GitHub as the public sees it.
+
+GitHub is where a repository nobody granted still matters: an agent with the Internet reads public
+code there all day. So `api.github.com` and `github.com` have a second route each, for what no grant
+covers. It takes a grant on `*` too, and lets only reads through: a public repository can be cloned
+and read, never written to or pushed to. It sets the same PAT as the routes with a grant — a
+fine-grained PAT reads every public repository — so the gateway, not the credential, keeps it to
+reads. Which of the two routes a GitHub request takes is decided before any route is picked: the
+gateway marks the request covered or not by the execution's grants, and each route checks the request
+again, so the mark cannot be forged into anything.
 
 ```mermaid
 flowchart LR
     Request --> Named{host named by a route?}
-    Named -- "yes: api.github.com, api.anthropic.com…" --> Grant{a grant on this host?}
+    Named -- "yes: api.anthropic.com…" --> Grant{a grant on this host?}
     Grant -- yes --> Credential[credential set, sent]
     Grant -- no --> Refused[403]
+    Named -- "GitHub" --> Covered{a grant covers it?}
+    Covered -- yes --> Credential
+    Covered -- no --> Read{a grant on *, and a read?}
+    Read -- yes --> Credential
+    Read -- no --> Refused
     Named -- no --> Star{a grant on *?}
     Star -- yes --> Sent[sent as is]
     Star -- no --> Refused
 ```
 
+That holds while the PAT reaches no private repository: through the second route, an execution
+with the Internet reads whatever the PAT reads. A private repository to offer would call for a
+second credential there, one that reads public repositories only.
+
 A route that takes any host could reach anything the gateway can, so the network bounds it: the
 gateway goes out to public addresses only, on port 443. The operator's networks and the cluster
 sit in private ranges it cannot reach, whatever name points there.
 
-The Internet stays off unless picked. Credentials never leave the gateway, but what the agent
-reads can steer it, and with the Internet it can send anything it holds anywhere — a repository
-it was given included. Off by default, offered by the operator and picked per execution, it is a
-choice made knowing that.
+The Internet is the operator's to offer and the user's to keep. Credentials never leave the
+gateway, but what the agent reads can steer it, and with the Internet it can send anything it holds
+anywhere — a repository it was given included. Offered, the interface turns it on for a new
+Workstream, since most tasks need the Web; the user turns it off per execution when the risk is not
+worth it. A pool never gets it as a base profile, and an execution sent without it has none.
 
 ## The accounts' limits
 

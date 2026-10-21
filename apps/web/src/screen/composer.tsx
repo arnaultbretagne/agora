@@ -11,7 +11,7 @@ import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'reac
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessEntries, accessLabel, accessOf, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
+import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
@@ -129,23 +129,25 @@ const ModelPicker: FC = () => {
 }
 
 /**
- * What the agent may reach beyond its harness's service (docs/specs/assistant-ui.md, "Access"): the
- * offered repositories, each with None, Read and Write. The menu stays open from one choice to the next.
+ * The rights the agent is given beyond its harness's own service (docs/specs/assistant-ui.md, "Access"):
+ * the services first, the Internet first among them, each one line with a switch; then the offered
+ * repositories, each with None, Read and Write. The menu stays open from one choice to the next.
  */
 const AccessPicker: FC = () => {
   const { offered, access, chooseAccess, composer, view } = useAgora()
-  const entries = accessEntries(offered)
-  if (entries.length === 0) return null
+  const all = accessEntries(offered)
+  if (all.length === 0) return null
+  const entries = accessDisplay(all)
   const closed = !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
-  const label = accessLabel(access, entries)
-  const granted = entries.some((entry) => accessOf(access, entry) !== null)
+  const label = accessLabel(access, all)
+  const granted = all.some((entry) => accessOf(access, entry) !== null)
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild disabled={closed}>
         <button
           type="button"
           aria-label="Access"
-          title={label}
+          title={accessTitle(access, all)}
           className={cn(quietButton, 'relative flex min-w-0 items-center gap-1 disabled:opacity-50 @max-lg:shrink-0 @max-lg:px-2.5')}
         >
           <KeyRoundIcon className="size-3.5 shrink-0" />
@@ -159,11 +161,30 @@ const AccessPicker: FC = () => {
         <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
           {entries.map((entry, i) => {
             const current = accessOf(access, entry) ?? ''
+            // The switches sit together; each repository is set apart, under its name.
+            const separator = i > 0 && (entry.repository || entries[i - 1]!.repository) && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />
+            if (!entry.repository) {
+              const on = current !== ''
+              return (
+                <Fragment key={entry.key}>
+                  {separator}
+                  <DropdownMenu.CheckboxItem
+                    checked={on}
+                    onCheckedChange={(checked) => chooseAccess(all, entry, checked ? entry.choices.at(-1)!.profile : null)}
+                    onSelect={(e) => e.preventDefault()}
+                    className={cn(menuItemClass, 'items-center justify-between gap-6')}
+                  >
+                    <span>{entry.name}</span>
+                    <Switch on={on} />
+                  </DropdownMenu.CheckboxItem>
+                </Fragment>
+              )
+            }
             return (
               <Fragment key={entry.key}>
-                {i > 0 && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />}
+                {separator}
                 <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">{entry.name}</DropdownMenu.Label>
-                <DropdownMenu.RadioGroup aria-label={entry.name} value={current} onValueChange={(value) => chooseAccess(entries, entry, value === '' ? null : value)}>
+                <DropdownMenu.RadioGroup aria-label={entry.name} value={current} onValueChange={(value) => chooseAccess(all, entry, value === '' ? null : value)}>
                   {entry.choices.map((c) => (
                     <DropdownMenu.RadioItem key={c.label} value={c.profile ?? ''} className={menuItemClass} onSelect={(e) => e.preventDefault()}>
                       <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', (c.profile ?? '') === current ? 'opacity-100' : 'opacity-0')} />
@@ -179,6 +200,13 @@ const AccessPicker: FC = () => {
     </DropdownMenu.Root>
   )
 }
+
+/** A switch's look, for a menu line that is itself the control. */
+const Switch: FC<{ on: boolean }> = ({ on }) => (
+  <span aria-hidden className={cn('relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors', on ? 'bg-primary' : 'bg-foreground/20')}>
+    <span className={cn('bg-primary-foreground absolute top-0.5 size-3 rounded-full shadow-sm transition-transform', on ? 'translate-x-3.5' : 'translate-x-0.5')} />
+  </span>
+)
 
 /** An account's windows: how much of each is used, and when it starts again. */
 const Limits: FC<{ limits: AccountLimits }> = ({ limits }) => {

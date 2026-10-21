@@ -8,9 +8,12 @@ import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
 import {
+  accessDefault,
+  accessDisplay,
   accessEntries,
   accessGranted,
   accessLabel,
+  accessTitle,
   accessOf,
   commandsMatching,
   composerOf,
@@ -366,7 +369,7 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the access picker: each offered repository with None, Read and, when offered, Write; a service Off and On; the button', () => {
+test('U31 the rights: each offered repository with None, Read and, when offered, Write; a service off or on; the services first, the Internet first; the button', () => {
   const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
   assert.deepEqual(
     entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
@@ -377,12 +380,16 @@ test('U31 the access picker: each offered repository with None, Read and, when o
       ['Internet', ['Off', 'On']],
     ],
   )
+  assert.deepEqual(accessDisplay(entries).map((e) => e.name), ['Internet', 'z.ai', 'o/a', 'o/b'], 'the services first, the Internet first')
   assert.equal(accessLabel([], entries), 'No access')
-  assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
   assert.equal(accessLabel(['internet'], entries), 'Internet')
+  assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
+  assert.equal(accessLabel(['github:o/a:read', 'internet'], entries), 'Internet, a', 'their names, in the menu\'s order')
+  assert.equal(accessTitle(['github:o/a:read', 'internet'], entries), 'Internet, a · Read', 'each with its access')
+  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), 'a, b')
+  assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'zai'], entries), 'z.ai, a · Write, b · Read')
+  assert.equal(accessTitle([], entries), 'No access')
   assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
-  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), '2 repos')
-  assert.equal(accessLabel(['github:o/a:write', 'zai'], entries), '2 grants')
   assert.deepEqual(accessEntries([]), [])
 })
 
@@ -395,12 +402,17 @@ test('U32 an access choice gives the whole set: the entries in the order offered
   assert.deepEqual(withAccess(['github:x/y:read'], entries, a!, 'github:o/a:read'), ['github:o/a:read', 'github:x/y:read'])
 })
 
-test('U33 an ended Workstream whose execution had profiles: its Create carries them; another access picked, that one', () => {
+test('U33 an ended Workstream whose execution had profiles: its Create carries them; another access picked, that one; a draft: the Internet when offered', () => {
   const view = { ...workstreamOf(at(fixture.marks.ended!), ws), profiles: ['github:o/a:read'] }
   assert.deepEqual(startBody('mock-test', {}, accessGranted(null, view)), { pool: 'mock-test', profiles: ['github:o/a:read'] })
   assert.deepEqual(startBody('mock-test', { model: 'mock-large' }, accessGranted([], view)), { pool: 'mock-test', settings: { model: 'mock-large' } })
   const draft = workstreamOf(empty, '')
   assert.deepEqual(startBody('mock-test', {}, accessGranted(null, draft)), { pool: 'mock-test' })
+  assert.deepEqual(startBody('mock-test', {}, accessGranted(null, draft, accessDefault(['github:o/a:write', 'internet']))), { pool: 'mock-test', profiles: ['internet'] })
+  assert.deepEqual(accessDefault(['github:o/a:write']), [], 'not offered: nothing')
+  assert.deepEqual(startBody('mock-test', {}, accessGranted([], draft, ['internet'])), { pool: 'mock-test' }, 'turned off')
+  const none = { ...workstreamOf(at(fixture.marks.ended!), ws), profiles: [] }
+  assert.deepEqual(accessGranted(null, none, ['internet']), [], 'an execution without it continues without it')
 })
 
 test('U42 the context and the limits: the view\'s usage; a pool\'s account; how long until a window starts again', () => {

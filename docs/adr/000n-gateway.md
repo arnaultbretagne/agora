@@ -34,6 +34,9 @@
    opened with the previous one.
 6. **A token works only from its Pod.** It names the Pod's address, which Agora takes from the
    Sandbox; the gateway refuses it from any other address.
+7. **GitHub reads as the public sees it, with the Internet.** What no grant covers on GitHub takes
+   routes of its own, open to the Internet's grant, for reads only, with the same PAT: a public
+   repository can be cloned and read, never written to or pushed to without its profile.
 
 ```mermaid
 flowchart LR
@@ -66,6 +69,11 @@ flowchart LR
   listener with TLS interception by its own CA, the JWT read from the `CONNECT` headers, one CEL
   rule over the claims and the request's host, path and method, and credentials read from files
   it watches. Apache-2.0, under the Linux Foundation.
+- **A public repository belongs to the Internet.** Anyone may read it; an agent with the Internet
+  reads public code all day, and failing on it served nothing. A fine-grained PAT always reads every
+  public repository, so the credential is already there; the gateway keeps it to reads, as it keeps
+  "read B" from writing to B. agentgateway 1.6 runs a listener's policies before it picks a route
+  (read in its code), so a request can be marked covered by a grant or not, and routed on that.
 
 Measured on g4 under Kata, 2026-09-29: with a PAT able to write to two repos, an execution
 granted "write A, read B" created a file on A (201) and was refused the same write on B (403);
@@ -159,7 +167,6 @@ Dropped outright: vaults grow with the combinations.
 | --- | --- |
 | `GET` and `HEAD` only | A query string carries what a body would: it narrows little, and breaks `POST`-only APIs. A grant can still carry methods, should a narrower profile be wanted. |
 | A list of hosts (registries, documentation) | One more change for every site an agent needs; each such list can still be a profile of its own. |
-| Public repositories through the Internet | `github.com` has one route, and that route sets the PAT, which reads every public repository and the private ones it reaches. A public repository is given as a `github` profile instead. |
 
 Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s deploys
 (2026-10-05): with `internet`, example.com, the npm registry and a `POST` answered; without it,
@@ -179,6 +186,26 @@ The address needs no secret: the network gives it, and a Pod cannot send from an
 Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s deploys
 (2026-10-06): a token naming another address than the one it came from, 403; with no address,
 403; from its own address, let through. On g4, the gateway sees each sandbox's own address.
+
+### Public GitHub through the Internet (2026-10-12)
+
+Until then `github.com` and `api.github.com` had one route each, setting the PAT, so the Internet
+left GitHub closed, public repositories included.
+
+| Option | Why not, or why |
+| --- | --- |
+| No credential on the public routes | Kept out: 60 REST requests an hour, shared by every sandbox behind the operator's address, and GraphQL refused. |
+| A second PAT that reads public repositories only | GitHub would keep it to reads, GraphQL could open, and a private repository on the main PAT would stay hidden. Kept in reserve: one more secret, for limits that do not bind today. |
+| The same PAT, reads only (kept) | No new secret. The gateway refuses every write, as for a repository granted read; GraphQL stays closed, a `POST` whether it reads or writes. Holds while the PAT reaches no private repository. |
+| A list of the paths of the repositories not granted, refused | GitHub reads a repository through too many paths — search, `/repositories/{id}`, codeload — for a list to close it. |
+
+Measured with agentgateway 1.6.0 run locally on the configuration infra-k8s deploys, with the
+real PAT (2026-10-12): with `internet` alone, a public repository and an offered one not granted
+read (200, the PAT's limit of 5,000 an hour), cloned by git, fetched; a push, a `POST`, a `PATCH`,
+a `DELETE`, GraphQL, a forged `x-gateway-grant: covered` with a write, a token from another
+address: 403 from the gateway, and no branch on GitHub; what a grant covers through `github-api`
+and `github-git` as before; without `internet`, 403. The header, sent by the sandbox, reached
+an echo service overwritten, and not at all through a route that removes it.
 
 ### Other gateways (surveyed 2026-09-28)
 
@@ -203,12 +230,14 @@ Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s depl
   as code. Any other host is the Internet's: one more route, without hosts, which agentgateway
   picks last (read in its v1.5.0 code: exact host, then wildcards, then no host) and which sets
   no credential, open to a grant on `*` — the `internet` profile. Routes with a credential match
-  the grant's host against the request's, so the Internet never opens them.
+  the grant's host against the request's, so the Internet never opens them; GitHub's public routes
+  read `*` too, for reads only.
 - The `internet` route can name any host: the gateway's egress is limited to public addresses on
   port 443, so no name leads it into the operator's networks or the cluster.
 - With the Internet, an agent steered by what it reads can send what it holds anywhere — a
   repository it was given included; credentials stay in the gateway. It is never a base profile,
-  and an execution gets it only when picked.
+  and an execution gets it only when its Create or a Scope names it: the interface names it for a
+  new Workstream, and the user can turn it off.
 - A JWT cannot be revoked before it expires: keep it short, and Agora reissues it — in the pool
   while the Pod waits, and between turns during an execution, where closing tunnels interrupts
   nothing.
@@ -221,6 +250,9 @@ Measured with agentgateway 1.5.0 run locally on the configuration infra-k8s depl
 - The token grows with the grants: a few hundred bytes for a few repos. Tens of repos would call
   for profiles expanded by the gateway instead.
 - GitHub GraphQL stays closed: the targeted repo cannot be checked there.
+- The PAT must reach no private repository: through the public routes, an execution with the
+  Internet reads whatever it reads. Offering a private repository means a second credential on
+  those routes, reading public repositories only.
 - A credential that rotates — the ChatGPT session codex uses — needs a refresher beside the gateway,
   and a login of its own: its refresh token may be spent once, so nothing else may hold it.
 - What is not Node trusts the gateway's CA by other means than `NODE_EXTRA_CA_CERTS`: codex, a Rust
