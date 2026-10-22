@@ -182,7 +182,7 @@ Stop (`assistant-ui.md`).
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
 | Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any; without one, the log finds it ("Continuing"). The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). Its line carries the catch-up when it is due ("Continuing"). |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). |
 | Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
@@ -207,6 +207,7 @@ Stop (`assistant-ui.md`).
 | `stopped` | Stop already given; or a Write, Configure, Scope, Cancel or answer after it. |
 | `disconnected`, `execution_ending` | Write: no connection to the bridge; the claim being deleted or its deadline passed. |
 | `stale_session`, `opening_session`, `permission_pending` | Write: another Session; the Session still opening; a permission pending. |
+| `prompt_unsupported` | Write: a block of a type the agent's `promptCapabilities` does not accept. |
 | `turn_active`, `turn_uncertain` | Write, Configure or Scope: a turn saved or in progress; a turn uncertain. |
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
@@ -280,6 +281,7 @@ anchors, the dispatch of its prompts and the agent's title.
 | `configuring` | A `session/set_config_option` of the open Session is unanswered. |
 | `usage` | The open Session's last `usage_update`: `used`, the context's tokens in use, and `size`, the context's size; a `size` of zero or less, or a number missing, is ignored. Null before the agent has said, and once the Session has ended. |
 | `profiles` | The last execution's own profiles: its Create's, then its last Scope's; or empty. |
+| `promptCapabilities` | What the last execution's agent accepts in a prompt beyond text and resource links, from its `initialize` answer: `image`, `audio` and `embeddedContext`, each true only when it says so; kept once it has ended; null before it has answered. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
@@ -324,7 +326,7 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 | --- | --- |
 | `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
-| `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings` and `commands` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
+| `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
@@ -471,6 +473,8 @@ exception message.
 | L64 | The agent refuses to resume the last anchor; the next execution is created | That anchor not restored again, nor the one its execution pushed; a new ACP session given every exchange. |
 | L65 | `GET /api/pools` after a Session in a pool, with a newer pool of its harness and a pool of another harness, neither opened | The newer pool: that Session's `settings` and `commands`; the other harness's: null and empty. |
 | L66 | The agent reports its context twice, then with a size of zero; then its Session ends | The view's `usage`: the first, then the second; unchanged by the third; null once the Session has ended. |
+| L67 | An agent accepting images and embedded resources, not audio: before it answers `initialize`, once it has, once its execution has ended; then `GET /api/pools` | The view's `promptCapabilities`: null; then `image` and `embeddedContext` true, `audio` false; the same once ended; the pool's the same. |
+| L68 | That agent: a Write with text and an audio block; then one with text, an image and an embedded resource | The first refused `prompt_unsupported`, nothing written, nothing sent; the second accepted, the agent given the three blocks as sent. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

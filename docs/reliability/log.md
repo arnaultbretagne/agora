@@ -23,6 +23,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R15 | 2026-10-06 | `5bd0f42` | cluster, live | g4 under Kata. The server `agora-server@sha256:8c80d714…` built from that commit (infra-k8s #216), the views of the 8 Workstreams rebuilt at start for core projector 5; the pools `claude-code-0345a542ca56` and `codex-e88bc2bb71b2`. Driven over the API on the Pod's address, in a Workstream of the live cases' owner: a Create in claude-code, a message, Stop; a Create in codex, a message, Stop; a Create in claude-code, a message, Stop; each with a 60 s lease. Billed on the two subscriptions. The views read back from PostgreSQL. |
 | R16 | 2026-10-07 | `7620261` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, with a second pool of the mock's harness for L65. |
 | R17 | 2026-10-07 | `1d15818` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, its `/usage` reporting a context. |
+| R18 | 2026-10-22 | `f65d77a` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, the mock accepting images and embedded resources, not audio. |
 
 ## Cases
 
@@ -113,10 +114,14 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L65 | — | local | R16 | proven | `mock-newer`, never opened: the same `settings` and `commands` as `mock-test` after its Session, model `mock-small`; `claude-test` null and empty. |
 | L22 | — | local | R17 | proven | The hash recorded again for core projector 6, `3dc4d521…`, incrementally and through a rebuild; the history's `usage` `{ used: 20556, size: 200000 }`. |
 | L66 | — | local | R17 | proven | Null before the agent said; `{ used: 1200, size: 200000 }`, then `{ used: 5000, size: 200000 }`, unchanged by a size of 0; null once the Session ended. |
+| L22 | — | local | R18 | proven | The hash recorded again for core projector 7, `f807b048…`, incrementally and through a rebuild. |
+| L67 | — | local | R18 | proven | 6 views before the `initialize` answer at position 7, each with `promptCapabilities` null; from it `{"audio":false,"image":true,"embeddedContext":true}`; the same once ended, and for `mock-test` in `GET /api/pools`. |
+| L68 | — | local | R18 | proven | Text and audio: `{"accepted":false,"reason":"prompt_unsupported"}`, the entries unchanged, no `session/prompt`; text, a 1 × 1 PNG and `notes.md`: one `session/prompt` carrying the three blocks as sent; the agent: "Received an image, image/png, 1 × 1, 70 bytes; notes.md, text/markdown, 8 characters." |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
+| What the real harnesses accept, in the cluster's catalogue, and the blocks they are given (L67 and L68 run with the mock agent) | #147 |
 | A long streamed message: each chunk rewrites its whole element and a thread row, quadratic in its length | #113 |
 | A failed restore — `anchor_missing`, `restore_failed` — and a Session opening left unanswered | #109 |
