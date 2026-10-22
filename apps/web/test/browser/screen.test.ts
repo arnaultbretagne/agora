@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43 and U44: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44 and U46: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -676,4 +676,78 @@ test('U41 a Workstream answered, then reloaded: kept once read whole; read with 
   assert.deepEqual(reads[0], { type: 'eventsource', after: kept })
   assert.notEqual(kept, '0')
   await page.locator('main').getByText('Loading…').waitFor({ state: 'detached' })
+})
+
+test('U46 attachments: a photo and a Markdown file attached in a draft, a binary refused; sent, the agent given a JPEG 2048 px wide and the file; reloaded, both above the message', async (t) => {
+  const page = await fresh()
+  // A Session in the mock's pool first: the draft offers what its agent accepted.
+  await started(page, 'before the attachments')
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  const paperclip = page.getByRole('button', { name: 'Attach files' })
+  await paperclip.waitFor()
+  // A 3000 × 2000 photo, drawn by the browser itself.
+  const png = Buffer.from(
+    await page.evaluate(async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 3000
+      canvas.height = 2000
+      const c = canvas.getContext('2d')!
+      const g = c.createLinearGradient(0, 0, 3000, 2000)
+      g.addColorStop(0, '#cc785c')
+      g.addColorStop(1, '#141413')
+      c.fillStyle = g
+      c.fillRect(0, 0, 3000, 2000)
+      const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'))
+      return Array.from(new Uint8Array(await blob.arrayBuffer()))
+    }),
+  )
+  const plan = '# Plan\n\n- one\n'
+  const choose = async (files: { name: string; mimeType: string; buffer: Buffer }[]) => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), paperclip.click()])
+    assert.equal(chooser.isMultiple(), true, 'several files at once')
+    await chooser.setFiles(files)
+  }
+  // One after the other: the prompt follows the order the tiles show.
+  const composer = page.locator('main form')
+  await choose([{ name: 'photo.png', mimeType: 'image/png', buffer: png }])
+  await composer.locator('[title="photo.png"] img').waitFor()
+  await choose([{ name: 'plan.md', mimeType: 'text/markdown', buffer: Buffer.from(plan) }])
+  await composer.locator('[title="plan.md"]').getByText('plan.md').waitFor()
+  await choose([{ name: 'blob.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([0x25, 0x00, 0xff, 0x01]) }])
+  const alert = page.getByRole('alert').getByText("blob.bin can't be attached: only images and text files can be attached.")
+  await alert.waitFor()
+  t.diagnostic(`refused: ${await alert.innerText()}`)
+  assert.equal(await composer.locator('[title="blob.bin"]').count(), 0, 'not attached')
+  assert.equal(await composer.locator('[title="photo.png"], [title="plan.md"]').count(), 2, 'two tiles')
+  await shot(page, 'U46-composer')
+  await send(page, 'what is in these?')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const id = idOf(page)
+  const received = thread(page).getByText(/Received an image, image\/jpeg, 2048 × 1365, \d+ bytes; plan\.md, text\/markdown, 14 characters\./)
+  await received.waitFor()
+  await thread(page).getByText('Echo #1: what is in these?.').waitFor()
+  t.diagnostic(`the agent: ${(await received.innerText()).split('\n')[0]}`)
+  const prompt = (await entriesOf(id))
+    .filter((e) => e.kind === 'command' && e.content.kind === 'Write')
+    .map((e) => (e.content.body as { prompt: Record<string, unknown>[] }).prompt)[0]!
+  t.diagnostic(`the Write's prompt: ${JSON.stringify(prompt.map((b) => (b.data === undefined ? b : { ...b, data: `${String(b.data).length} base64 characters` })))}`)
+  assert.deepEqual(prompt.map((b) => b.type), ['text', 'image', 'resource'])
+  assert.deepEqual(prompt[0], { type: 'text', text: 'what is in these?' })
+  assert.equal(prompt[1]!.mimeType, 'image/jpeg')
+  assert.equal(prompt[1]!.uri, 'photo.png')
+  assert.deepEqual(prompt[2], { type: 'resource', resource: { uri: 'plan.md', mimeType: 'text/markdown', text: plan } })
+  await shot(page, 'U46-sent')
+  // Reloaded: from the log, both above the message, the image opening whole.
+  await page.reload()
+  const user = thread(page).locator('[data-role="user"]').filter({ hasText: 'what is in these?' })
+  await user.locator('[title="photo.png"] img').waitFor()
+  await user.locator('[title="plan.md"]').getByText('plan.md').waitFor()
+  await user.getByRole('button', { name: 'Preview photo.png' }).click()
+  const whole = page.getByRole('dialog').locator('img[alt="photo.png"]')
+  await whole.waitFor()
+  const size = await whole.evaluate((img) => [(img as HTMLImageElement).naturalWidth, (img as HTMLImageElement).naturalHeight])
+  t.diagnostic(`the image opened: ${size.join(' × ')}`)
+  assert.deepEqual(size, [2048, 1365])
+  await shot(page, 'U46-opened')
 })

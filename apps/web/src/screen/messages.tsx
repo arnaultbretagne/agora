@@ -4,6 +4,7 @@
 import { ActionBarPrimitive, AuiIf, MessagePrimitive, groupPartByType, useAuiState } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, CopyIcon, LoaderCircleIcon } from 'lucide-react'
 import type { FC } from 'react'
+import { UserMessageAttachments } from '@/components/assistant-ui/elements/attachment'
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text'
 import { cn } from '@/lib/utils'
 import { harnessName, planItems } from '../agora/view.ts'
@@ -22,15 +23,20 @@ const TURN_NOTE: Record<string, string> = {
 
 export const UserMessage: FC = () => {
   const status = useAuiState((s) => String(custom(s).turnStatus ?? ''))
+  // A message of attachments alone has no bubble (docs/specs/assistant-ui.md, "Attachments").
+  const said = useAuiState((s) => s.message.content.some((p) => p.type === 'text' && p.text.trim() !== ''))
   const note = TURN_NOTE[status]
   return (
     <MessagePrimitive.Root
       data-role="user"
       className="animate-in fade-in slide-in-from-bottom-1 mx-auto flex w-full max-w-(--thread-max-width) flex-col items-end duration-150"
     >
-      <div className="bg-muted rounded-thread max-w-[80%] px-4 py-2 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap">
-        <MessagePrimitive.Parts />
-      </div>
+      <UserMessageAttachments />
+      {said && (
+        <div className="bg-muted rounded-thread max-w-[80%] px-4 py-2 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap">
+          <MessagePrimitive.Parts />
+        </div>
+      )}
       {note && (
         <span className={cn('mt-1 px-1 font-mono text-[11px]', status === 'uncertain' ? 'text-warning' : 'text-muted-foreground/70')}>{note}</span>
       )}

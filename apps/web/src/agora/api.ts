@@ -3,6 +3,7 @@
 import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
 import type { AccountLimits, AgentCommand, Setting, WorkstreamView } from './view.ts'
+import type { PromptCapabilities } from './attachments.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop'
 
@@ -22,6 +23,8 @@ export interface Pool {
   /** What its last Session offered, or null: what a draft shows before it has a Session. */
   readonly settings?: readonly Setting[] | null
   readonly commands?: readonly AgentCommand[]
+  /** What its last Session's agent accepted in a prompt beyond text, or null. */
+  readonly promptCapabilities?: PromptCapabilities | null
   /** The profiles its Pods are warmed with: the accounts its executions draw from (docs/specs/credentials.md). */
   readonly baseProfiles?: readonly string[]
   /** Kept for the tests: not offered by the screen. */

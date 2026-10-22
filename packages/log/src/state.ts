@@ -46,6 +46,29 @@ export interface Execution {
   usage: { used: number; size: number } | null
   /** Its own profiles (docs/specs/credentials.md): its Create's, then its last Scope's. */
   profiles: string[]
+  /** What its agent accepts in a prompt beyond text and resource links, once it has answered `initialize`. */
+  promptCapabilities: PromptCapabilities | null
+}
+export interface PromptCapabilities {
+  image: boolean
+  audio: boolean
+  embeddedContext: boolean
+}
+/** Whether an agent accepts each block of a prompt (docs/specs/log.md, "Commands"): text and links always. */
+export function acceptsPrompt(caps: PromptCapabilities | null, prompt: unknown): boolean {
+  if (!Array.isArray(prompt)) return true
+  return prompt.every((b) => {
+    const type = object(b)?.type
+    if (type === 'image') return caps?.image === true
+    if (type === 'audio') return caps?.audio === true
+    if (type === 'resource') return caps?.embeddedContext === true
+    return true
+  })
+}
+/** An `initialize` answer's prompt capabilities: each true only when the agent says so. */
+export function promptCapabilitiesOf(result: unknown): PromptCapabilities {
+  const caps = object(object(object(result)?.agentCapabilities)?.promptCapabilities)
+  return { image: caps?.image === true, audio: caps?.audio === true, embeddedContext: caps?.embeddedContext === true }
 }
 export interface State {
   workstream: string
@@ -117,6 +140,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         commands: [],
         usage: null,
         profiles: profilesIn(content.body),
+        promptCapabilities: null,
       }
       state.executions.set(execution.id, execution)
       state.current = execution
@@ -207,8 +231,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           state.answeredBy.set(request.position, entry.position)
           state.unanswered.delete(request.position)
           if (state.permissions.get(requestKey)?.position === request.position) state.permissions.delete(requestKey)
-          if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution)
+          if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution) {
             execution.initialized = true
+            execution.promptCapabilities = promptCapabilitiesOf(content.result)
+          }
           // A Session's settings: those its opening answer gives, then each answer to a change.
           if (entry.rpc_kind === 'response' && execution && entry.session) {
             const given = object(content.result)?.configOptions
@@ -352,10 +378,10 @@ export class CoreProjection {
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
       noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
-      // Settings, commands and usage change with ACP lines too: the view is put when what it shows of them changed.
+      // Settings, commands, usage and prompt capabilities change with ACP lines too: the view is put when what it shows of them changed.
       const execution0 = state.current
       const settingsCode = execution0
-        ? encode({ s: execution0.settings, c: execution0.commands, u: execution0.usage, k: configuring(state, execution0), o: settled(state, execution0) })
+        ? encode({ s: execution0.settings, c: execution0.commands, u: execution0.usage, k: configuring(state, execution0), o: settled(state, execution0), p: execution0.promptCapabilities })
         : ''
       const settingsChanged = settingsCode !== this.settingsCode
       this.settingsCode = settingsCode
@@ -395,6 +421,7 @@ export class CoreProjection {
             configuring: execution !== null && session !== null && configuring(state, execution),
             usage: execution !== null && session !== null ? execution.usage : null,
             profiles: execution?.profiles ?? [],
+            promptCapabilities: execution?.promptCapabilities ?? null,
             pool: typeof execution?.body.pool === 'string' ? execution.body.pool : null,
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
             anchor: (execution && this.anchors.get(execution.id)) ?? null,

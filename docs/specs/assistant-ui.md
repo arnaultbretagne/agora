@@ -146,6 +146,24 @@ Workstream view": `usage`), and the limits of the account its pool draws from (`
 | Freshness | The limits are read when the page opens and each time the popover opens; the server answers from a read of the last 5 minutes. A read that failed dims the windows and says since when they stand, or that none could be read. |
 | The cost | Not shown: an agent's `usage_update` may carry one, priced as the API would, which a subscription does not pay. |
 
+## Attachments
+
+What the user gives the agent besides the text — photos and other images, and text files — as ACP
+prompt blocks the agent reads itself. Only what the agent accepts is offered (`log.md`, "The
+Workstream view": `promptCapabilities`): the open or last execution's; in a draft, or when sending
+starts an execution, the pool's last Session's (`GET /api/pools`). PDFs and other binary files are
+not offered: the harnesses do not read them from a prompt alike.
+
+| Element | Rule |
+| --- | --- |
+| The button | A paperclip at the composer's start, before the pickers, when the agent accepts images or embedded resources; none when it accepts neither or nothing is known. It opens the device's file picker, several files at once; on a phone that picker offers the camera and the photo library. |
+| An image | A file of type `image/…`, when the agent accepts images. Sent as an `image` block, `uri` the file's name: a JPEG, PNG, GIF or WebP whose longer side is at most 2048 px and whose size is at most 1 MiB as it is; any other re-encoded as JPEG, quality 0.85, its longer side at most 2048 px. |
+| A text file | Any other file whose content is UTF-8 without a NUL character, at most 256 KiB, when the agent accepts embedded resources. Sent as a `resource` block: `uri` the file's name, `mimeType` its type or `text/plain`, `text` its content. |
+| Refused | Any other file, an image the browser cannot read, a text file over 256 KiB, a kind the agent does not accept, or attachments beyond 12 MiB in all: not attached; above the composer, "{name} can't be attached: {why}." until the next command. |
+| In the composer | Above the text, a tile for each attachment: an image's thumbnail, its name as its title; a file's icon and name; a cross to remove it. Sending is open with attachments and no text. |
+| Sent | **Write**'s prompt: a text block when there is text, then the attachments in the order they were added. A first message carries them through its execution's start, and gives them back to the composer with its text. |
+| In the thread | Above the user's bubble, a tile for each block of its prompt that is not text: an image's thumbnail, titled by its `uri`, which opens whole; an embedded resource or a link by its `uri`; another block by its type. A message of attachments alone has no bubble. |
+
 ## The connection point: `useExternalStoreRuntime`
 
 The only point of contact between Agora's objects and assistant-ui.
@@ -155,21 +173,21 @@ The only point of contact between Agora's objects and assistant-ui.
 | `messages` + `convertMessage` | The turns and notices, in position order (below), and a first message while it waits. |
 | `isRunning` | The last turn is saved or in progress, or a first message waits. |
 | `isSendDisabled` | Sending is not open, or a first message waits. |
-| `onNew` | **Write**, with the composer's text; with no execution running, the steps of "Sending". |
+| `onNew` | **Write**, with the composer's text and attachments ("Attachments"); with no execution running, the steps of "Sending". |
+| `adapters.attachments` | Agora's: what the agent accepts, prepared in the browser ("Attachments"). |
 | `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
 
 The Workstream list and the permission card are the client's own: they call the server without
 the runtime (**RespondPermission** with the option chosen).
 
 Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `setMessages`,
-`queue`, `suggestions`, the thread list adapter, and the `attachments`, `feedback`, `speech`,
-`dictation` adapters.
+`queue`, `suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
 
 ## Messages
 
 | From | Message | Placed at |
 | --- | --- | --- |
-| A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
+| A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
 
 Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown.
@@ -270,9 +288,11 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
 | Thread | User message, on the right in a bubble, with its turn's note | `MessagePrimitive` (**ours**) |
+| Thread | A user message's attachments, above its bubble; an image opened whole | `Attachment` (registry), adapted: a Radix dialog, no avatar |
 | Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts`, the turn's failure under it, Copy on hover | `MessagePrimitive` (**ours**) |
 | Thread | Notice, for `system` messages | **ours** |
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
+| Composer | The paperclip, and the attachments' tiles above the text | `Attachment` (registry), adapted |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
 | Composer | The access picker, after the model | **ours** (Radix menu) |
@@ -283,7 +303,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 A Workstream opens on its last message, as **Scroll to the bottom** leaves it, whether from the list,
 from another Workstream or by its address. It stays there while it catches up, unless the user scrolls.
 
-Registry components kept: `MarkdownText`, `DiffViewer`, `ContextDisplay`, and the `surfaces` helpers. Every string is
+Registry components kept: `MarkdownText`, `DiffViewer`, `ContextDisplay`, `Attachment`, and the `surfaces` helpers. Every string is
 in English.
 
 ## On a phone
@@ -329,7 +349,6 @@ starts. With a mouse or a trackpad, it does.
 | --- | --- |
 | Switch model or mode | `ModelSelector` (registry) |
 | Slash commands (ACP `available_commands_update`) | `ComposerTriggerPopover` (registry) |
-| Attachments | `Attachment` (registry) |
 
 What each registry element can receive from ACP is in `assistant-ui-elements.md`.
 
@@ -381,6 +400,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U42 | A view with the agent's context, malformed ones; accounts read, failed, empty; windows starting again in minutes, hours, days, or past | The context, or none; a pool's account by its first base profile with limits or a reason, none otherwise; "45m", "2h", "2h 10m", "3d", "3d 4h", nothing. |
 | U43 | In a browser, a draft whose pool draws from an account with limits; then a Workstream whose agent reports 150k of a 200k context; then on a phone's screen | The gauge, opened: **Subscription**, the plan, each window's percentage, the time until it starts again; no context. Then the ring at 75 % instead of the gauge, opened: "75% of the context", "150k / 200k", then the same windows. On the phone: the ring beside Send, nothing cut, opened by a touch. |
 | U44 | In a browser, `internet` offered: a draft; the Internet switched off, a repository picked, a first message; then switched on in the open Workstream, and a message | The menu lists the Internet, then the repositories; the switch on, then off, the menu still open; the Create without `internet`; switched on: shown at once, **Scope** with the repository and `internet`; "Internet, b" once the view has it. |
+| U45 | Files for an agent accepting images and embedded resources: an image, a UTF-8 text file, one with a NUL, one over 256 KiB, one not UTF-8; then images alone, nothing, or not known; a prompt of text and two attachments; a `user` element of text, an image, an embedded resource, a resource link and an audio block | The image an image; the text file a resource with its name, type and text; the others refused with why; images alone: the text file refused; nothing or not known: no paperclip. The prompt: the text block, then the attachments in order. The message: its text, and four attachments — the image's, the resource and the link by their `uri`, the audio by its type. |
+| U46 | In a browser, a draft whose agent accepts images and embedded resources: a 3000 × 2000 PNG and a Markdown file attached, then a binary file; a first message sent; the page reloaded | The paperclip; two tiles; the binary refused, "{name} can't be attached: …"; the Write's prompt: the text, a JPEG 2048 px wide, the Markdown as a resource with its name and text; the agent saying it received them; reloaded, their two tiles above the bubble, the image opening whole. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

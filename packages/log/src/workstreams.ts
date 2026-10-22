@@ -23,7 +23,7 @@ import {
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Command, type Entry } from './store.ts'
-import type { Execution, State } from './state.ts'
+import { acceptsPrompt, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
@@ -288,6 +288,7 @@ export class Workstreams implements Handler {
           if (this.opening(state, current)) return 'opening_session'
           if (state.permissions.size) return 'permission_pending'
           if (!settled(state, current)) return 'settings_pending'
+          if (!acceptsPrompt(current.promptCapabilities, command.body.prompt)) return 'prompt_unsupported'
           const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
           const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
           return {
@@ -398,7 +399,7 @@ export class Workstreams implements Handler {
   }
 
   /**
-   * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings and commands its last
+   * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings, commands and prompt capabilities its last
    * Session gave, else its harness's last: what a draft offers before it has a Session of its own.
    */
   async catalogue(): Promise<Record<string, unknown>[]> {
@@ -410,7 +411,7 @@ export class Workstreams implements Handler {
     return pools.map((p) => {
       // A pool no Session has opened in yet, as a harness's newer image is: its harness's last one.
       const last = latest((v) => v.pool === p.name) ?? latest((v) => v.harness === p.harness)
-      return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [] }
+      return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [], promptCapabilities: last?.promptCapabilities ?? null }
     })
   }
 

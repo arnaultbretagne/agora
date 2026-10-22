@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
+import { acceptOf, blockOf, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
 import {
   accessDefault,
   accessDisplay,
@@ -435,4 +436,73 @@ test('U42 the context and the limits: the view\'s usage; a pool\'s account; how 
   )
   assert.equal(resetIn(null, now), null)
   assert.deepEqual([windowName('five_hour'), windowName('weekly')], ['5-hour', 'Weekly'])
+})
+
+test('U45 attachments: what each file becomes for what the agent accepts; the prompt in order; a message\'s blocks shown back', async () => {
+  const both = { image: true, audio: false, embeddedContext: true }
+  const images = { image: true, audio: false, embeddedContext: false }
+  const file = (bytes: BlobPart, name: string, type: string) => new File([bytes], name, { type })
+  // An image becomes an image: decided on its type; drawn and re-encoded in a browser (U46).
+  assert.equal(refusalOf({ type: 'image/png' }, both), null)
+  const notes = await prepare(file('# Notes\n', 'notes.md', 'text/markdown'), both)
+  assert.ok(!('refused' in notes))
+  assert.equal(notes.type, 'document')
+  assert.deepEqual(blockOf({ name: 'notes.md', content: notes.content }), { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } })
+  // A file the browser gives no type: text/plain.
+  const plain = await prepare(file('x = 1\n', 'main.rs', ''), both)
+  assert.ok(!('refused' in plain))
+  assert.deepEqual(blockOf({ name: 'main.rs', content: plain.content }), { type: 'resource', resource: { uri: 'main.rs', mimeType: 'text/plain', text: 'x = 1\n' } })
+  const refused = async (f: File, caps: typeof both) => {
+    const r = await prepare(f, caps)
+    return 'refused' in r ? r.refused : null
+  }
+  assert.equal(await refused(file(new Uint8Array([0x25, 0x50, 0x00, 0x46]), 'a.bin', 'application/octet-stream'), both), 'only images and text files can be attached')
+  assert.equal(await refused(file('a'.repeat(TEXT_MAX + 1), 'big.log', 'text/plain'), both), 'text files are limited to 256 KiB')
+  assert.equal(await refused(file('a'.repeat(TEXT_MAX), 'full.log', 'text/plain'), both), null, 'at the limit: attached')
+  assert.equal(await refused(file(new Uint8Array([0xff, 0xfe, 0x41]), 'latin.txt', 'text/plain'), both), 'only images and text files can be attached')
+  assert.equal(await refused(file('# Notes\n', 'notes.md', 'text/markdown'), images), 'the agent takes images only')
+  assert.equal(await refused(file('png', 'a.png', 'image/png'), { image: false, audio: false, embeddedContext: true }), 'the agent does not take images')
+  // The paperclip: what the picker offers, or none.
+  assert.equal(acceptOf(both), '*')
+  assert.equal(acceptOf(images), 'image/*')
+  assert.equal(acceptOf({ image: false, audio: true, embeddedContext: false }), null)
+  assert.equal(acceptOf(null), null)
+  // The prompt: the text, then the attachments in the order added; no text block without text.
+  const photo = { name: 'photo.jpg', content: [{ type: 'image' as const, image: 'data:image/jpeg;base64,/9j/AA==' }] }
+  const doc = { name: 'notes.md', content: notes.content }
+  assert.deepEqual(promptOf('look', [photo, doc]), [
+    { type: 'text', text: 'look' },
+    { type: 'image', mimeType: 'image/jpeg', data: '/9j/AA==', uri: 'photo.jpg' },
+    { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } },
+  ])
+  assert.deepEqual(promptOf('', [doc]).map((b) => b.type), ['resource'])
+  // A user element of text, an image, a resource, a link and an audio block, as the log projects it.
+  const blocks = [
+    { type: 'text', text: 'look' },
+    { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=', uri: 'screen.png' },
+    { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } },
+    { type: 'resource_link', uri: 'file:///work/plan.md', name: 'plan.md' },
+    { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' },
+  ]
+  const entries = fixture.entries.map((e) =>
+    e.position === firstPrompt.position ? { ...e, content: { ...e.content, params: { ...(e.content.params as Record<string, unknown>), prompt: blocks } } } : e,
+  )
+  let state = empty
+  for (const o of project(entries)) state = apply(state, { type: 'snapshot', position: last, operation: 'upsert', kind: o.kind, id: o.id, object: o.object as Record<string, unknown> })
+  state = apply(state, { type: 'snapshot-end', position: last })
+  const user = messagesOf(state).find((m) => m.role === 'user')!
+  assert.deepEqual(user.content, [{ type: 'text', text: 'look' }])
+  assert.deepEqual(
+    user.attachments!.map((a) => [a.type, a.name]),
+    [
+      ['image', 'screen.png'],
+      ['document', 'notes.md'],
+      ['document', 'file:///work/plan.md'],
+      ['file', 'audio'],
+    ],
+  )
+  assert.deepEqual(user.attachments![0]!.content, [{ type: 'image', image: 'data:image/png;base64,iVBORw0KGgo=' }], 'the image shown from its data')
+  // What the agent accepts comes with the view: the agent of that history accepted nothing beyond text.
+  assert.deepEqual(workstreamOf(state, ws).promptCapabilities, { image: false, audio: false, embeddedContext: false })
+  assert.equal(acceptOf(workstreamOf(state, ws).promptCapabilities!), null, 'so no paperclip')
 })

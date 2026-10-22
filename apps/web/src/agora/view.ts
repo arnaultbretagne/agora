@@ -1,6 +1,7 @@
 // From the objects to what the screen shows (docs/specs/assistant-ui.md, "Messages", "The Workstream's
 // state"): assistant-ui messages, the composer's state, the notices' texts. Pure, like objects.ts.
 import type { ThreadMessageLike } from '@assistant-ui/react'
+import { attachmentsOf, promptCapabilitiesOf, type PromptCapabilities } from './attachments.ts'
 import { after, ofKind, type Json, type ThreadState, type ViewObject } from './objects.ts'
 
 type Part = Exclude<ThreadMessageLike['content'], string>[number]
@@ -28,6 +29,8 @@ export interface WorkstreamView {
   readonly usage?: Usage | null
   /** The last execution's own profiles (docs/specs/credentials.md). */
   readonly profiles?: readonly string[]
+  /** What the last execution's agent accepts in a prompt beyond text, or null before it has said (docs/specs/log.md). */
+  readonly promptCapabilities?: PromptCapabilities | null
   /** The exchanges sent to an agent, and per harness its last anchor and the exchanges since (docs/specs/log.md, "Continuing"). */
   readonly exchanges?: number
   readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
@@ -87,6 +90,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     configuring: o.configuring === true,
     usage: usageOf(o.usage),
     profiles: Array.isArray(o.profiles) ? o.profiles.filter((p): p is string => typeof p === 'string') : [],
+    promptCapabilities: promptCapabilitiesOf(o.promptCapabilities),
     exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
     continuation: Object.fromEntries(
       Object.entries(json(o.continuation) ?? {}).flatMap(([harness, c]) => {
@@ -647,6 +651,7 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
           id: `${turn.id}:user`,
           role: 'user',
           content: [{ type: 'text', text: list(prompt?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n') }],
+          attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
           metadata: { custom },
         },
         {
