@@ -208,12 +208,20 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             chosen = decisions[number - 1] if number <= len(decisions) else {"decision": "stop", "reason": "end of the rehearsal's script"}
         elif kind == "judge":
             verdicts = script.get("verdicts", [])
-            said = verdicts[number - 1] if number <= len(verdicts) else "pass"
-            chosen = {"verdict": said, "summary": f"rehearsal verdict {number}",
-                      "checks": [{"id": r, "check": "rehearsal", "result": said, "evidence": "scripted"} for r in (required or ["X1"])]}
+            given = verdicts[number - 1] if number <= len(verdicts) else "pass"
+            chosen = {"verdict": given, "summary": f"rehearsal verdict {number}",
+                      "checks": [{"id": r, "check": "rehearsal", "result": given, "evidence": "scripted"} for r in (required or ["X1"])]}
         else:
             chosen = {"status": "done", "summary": "rehearsal step", "pull_request": None}
         return "\n\n" + json.dumps(chosen)
+
+    def said(result: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+        """An answer and its report. In a rehearsal, the mock's echo only: from its second message on,
+        the mock quotes the one before after its echo, the earlier scripted answer with it."""
+        text = result["text"]
+        if script is not None:
+            text = text.split('. Before, you told me "', 1)[0]
+        return split_last_json(text)
 
     publish("The run", f"# {goal}\n\n{LEAD}\n\n| Parameter | Value |\n| --- | --- |\n"
             + "\n".join(f"| `{k}` | `{json.dumps(v)}` |" for k, v in [("overrides", overrides), ("max_verifications", max_verifications),
@@ -228,7 +236,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         prompt = lead_brief(team, cards, first, lead) if number == 1 else lead_update(team, outcome)
         answer = turn(TurnSpec(run=run, member="lead", turn=lead.turns, harness=lead.harness, prompt=prompt + tail("lead", number),
                                profiles=lead.access, settings=lead_settings), f"{next(labels)} · lead · decision {number}", owner)
-        body, report = split_last_json(answer["text"])
+        body, report = said(answer)
         try:
             if answer["status"] != "done":
                 raise Refused(f"your turn ended {answer['status']} ({answer['stop_reason']}) before you decided")
@@ -277,10 +285,10 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
                 if feature and (member.role == "dev" or f"github:{feature.repo}:write" in member.access):
                     team.changed[feature.id] = number
                     team.harnesses.setdefault(feature.id, set()).add(member.harness)
-                said, report = split_last_json(result["text"])
-                cut = f"\n\n(cut: the whole answer is in {member.name}'s Workstream)" if len(said) > ANSWER_TO_LEAD else ""
+                text, report = said(result)
+                cut = f"\n\n(cut: the whole answer is in {member.name}'s Workstream)" if len(text) > ANSWER_TO_LEAD else ""
                 parts.append(f"### Step {i}: {member.name}{f' on {feature.id}' if feature else ''}, turn {result['status']} ({result['stop_reason']})\n\n"
-                             f"Report: {json.dumps(report, ensure_ascii=False) if report else 'none'}\n\nAnswer:\n\n{said[:ANSWER_TO_LEAD]}{cut}")
+                             f"Report: {json.dumps(report, ensure_ascii=False) if report else 'none'}\n\nAnswer:\n\n{text[:ANSWER_TO_LEAD]}{cut}")
                 rows.append({"Decision": str(number), "Kind": "steps",
                              "Outcome": f"{member.name}: {(report or {}).get('status', 'no report')} ({result['status']})"})
             outcome = f"Your steps of decision {number} ran.\n\n" + "\n\n".join(parts)
@@ -295,14 +303,14 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
                             prompt=judge_prompt(team, cards["judge"], team.verifications, decision, access) + tail("judge", team.verifications, required),
                             profiles=access, settings=catalogue(number).settings(harness, model, effort))
             result = turn(spec, f"{next(labels)} · judge · verification {team.verifications}{f' of {feature_id}' if feature_id else ''}", owner)
-            said, report = split_last_json(result["text"])
+            text, report = said(result)
             passed, why = verdict(report, required)
             if passed and decision.data["shippable"]:
                 team.passed[feature_id] = number
             what = "shippable" if decision.data["shippable"] else "verified"
             outcome = (f"Verification {team.verifications}{f' of {feature_id}' if feature_id else ''}: "
                        f"{'PASS' if passed else 'FAIL'}{f', {feature_id} is {what}' if passed and feature_id else ''} ({why}).\n\n"
-                       f"The judge's report:\n\n{json.dumps(report, indent=2, ensure_ascii=False) if report else said[-ANSWER_TO_LEAD:]}")
+                       f"The judge's report:\n\n{json.dumps(report, indent=2, ensure_ascii=False) if report else text[-ANSWER_TO_LEAD:]}")
             rows.append({"Decision": str(number), "Kind": "verify", "Outcome": f"{'pass' if passed else 'fail'} ({why})"})
 
         elif decision.kind == "ask":
@@ -326,11 +334,11 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             ended = ("stopped by the lead", decision.data["reason"])
             rows.append({"Decision": str(number), "Kind": "stop", "Outcome": decision.data["reason"][:300]})
 
-    result, said = ended or ("decision limit reached", f"{team.max_decisions} decisions")
+    result, why = ended or ("decision limit reached", f"{team.max_decisions} decisions")
     branches = {f.id: f.branch for f in team.features.values()}
-    publish_summary(rows, f"{result}: {said[:200]}")
+    publish_summary(rows, f"{result}: {why[:200]}")
     logger.info(f"run {result}: shippable {team.shippable()}, branches {branches}")
-    return {"outcome": result, "said": said, "branches": branches, "shippable": team.shippable(),
+    return {"outcome": result, "why": why, "branches": branches, "shippable": team.shippable(),
             "decisions": team.decisions, "verifications": team.verifications}
 
 

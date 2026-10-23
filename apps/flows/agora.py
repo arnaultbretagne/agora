@@ -4,8 +4,8 @@ Every id a turn sends is derived from the turn's identity (run, member, turn), n
 running the same turn again finds the same Workstream and the same turn, and Agora answers a command
 it already accepted with its first answer and writes nothing (docs/specs/log.md, "Commands"). So a
 turn that Prefect retries, resumes or re-runs never starts a second agent on the same work
-(docs/specs/flows.md). Between two turns the member's execution is stopped; the next turn's Create
-continues its harness's Session, and Agora gives it what it missed (docs/specs/log.md, "Continuing").
+(docs/specs/flows.md). A turn goes to the member's execution while it lives; once it has ended, a new
+one continues the member's Session, and Agora gives it what it missed (docs/specs/log.md, "Continuing").
 Standard library only: the flows' image is Prefect's, unchanged.
 """
 
@@ -192,9 +192,13 @@ def run_turn(
     poll: float = 5.0,
     ready_timeout: float = 900.0,
 ) -> TurnResult:
-    """Runs the member's turn, or finds it again where it is: created, written, answered, stopped.
+    """Runs the member's turn, or finds it again where it is: written, answered.
 
     The member's n-th Write is its n-th turn: a turn already in the thread is never written again.
+    The turn goes to the member's execution while it lives; once gone, to a new one, which continues
+    the member's Session. Nothing stops it: Agora renews an execution only during its turns, so an
+    idle one ends at its deadline, a lease after its last turn — a Stop would free nothing sooner
+    (docs/specs/executions.md).
     """
     workstream = workstream_id(spec.run, spec.member)
     name = f"{spec.member}, turn {spec.turn}"
@@ -204,8 +208,15 @@ def run_turn(
     thread.refresh()
 
     if len(thread.turns()) < spec.turn:
-        execution = _create(agora, spec, thread, workstream, name, suffix, log, sleep, poll, ready_timeout)
-        _write(agora, spec, thread, workstream, execution, name, suffix, log, sleep, poll, ready_timeout)
+        view = thread.view() or {}
+        try:
+            if not view.get("execution") or view.get("state") in GONE | {None, "none"}:
+                raise _Gone
+            log(f"{name}: to its execution {view['execution']}, still there")
+            _write(agora, spec, thread, workstream, str(view["execution"]), name, suffix, log, sleep, poll, ready_timeout, reused=True)
+        except _Gone:
+            execution = _create(agora, spec, thread, workstream, name, suffix, log, sleep, poll, ready_timeout)
+            _write(agora, spec, thread, workstream, execution, name, suffix, log, sleep, poll, ready_timeout)
     else:
         log(f"{name}: found in Workstream {workstream}")
 
@@ -232,9 +243,12 @@ def run_turn(
         stop_reason=turn.get("stopReason"),
         text=thread.text(turn["id"]),
     )
-    _stop(agora, thread, workstream, name, log)
     log(f"{name}: {status} ({result.stop_reason}), {len(result.text)} characters")
     return result
+
+
+class _Gone(Exception):
+    """The member's execution is gone, or going: the turn needs a new one."""
 
 
 def _create(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, name: str, suffix: str,
@@ -264,8 +278,8 @@ def _create(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, name:
                 return str(view["execution"])
             raise Escalation(f"{name}: its Create was accepted with another body and its execution is {view.get('state')}")
         if reason == "execution_active":
-            # The member's previous execution: its turn is over; stopped, its claim goes.
-            _stop(agora, thread, workstream, name, log)
+            # The member's previous execution, gone or going: its claim disappears at its deadline.
+            log(f"{name}: Create refused (execution_active) while the last execution's claim goes, retrying")
         elif reason in ("quota", "unavailable"):
             log(f"{name}: Create refused ({reason}), retrying")
         else:
@@ -276,8 +290,9 @@ def _create(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, name:
 
 
 def _write(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, execution: str, name: str, suffix: str,
-           log: Callable[[str], None], sleep: Callable[[float], None], poll: float, ready_timeout: float) -> None:
-    """The prompt, once the turn's execution has its Session open and its settings applied."""
+           log: Callable[[str], None], sleep: Callable[[float], None], poll: float, ready_timeout: float, reused: bool = False) -> None:
+    """The prompt, once the turn's execution has its Session open and its settings applied. An
+    execution `reused` from the member's last turn that is gone, or going, asks for a new one."""
     deadline = time.monotonic() + ready_timeout
     state = None
     while len(thread.turns()) < spec.turn:
@@ -285,33 +300,27 @@ def _write(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, execut
         state = view.get("state")
         if view.get("execution") == execution:
             if state in GONE:
+                if reused:
+                    raise _Gone
                 raise Escalation(f"{name}: execution {state} before the prompt was written")
             if state == "ready" and not view.get("configuring") and view.get("session"):
                 target = {"execution": execution, "session": view["session"]}
                 answer = agora.command(workstream, command_id(workstream, f"write-{suffix}"), "Write", target, {"prompt": [{"type": "text", "text": spec.prompt}]})
+                reason = answer.get("reason")
                 if answer.get("accepted"):
                     log(f"{name}: prompt written ({answer.get('requestId')})")
                     thread.refresh()
                     continue
-                if answer.get("reason") not in TRANSIENT_WRITE:
-                    raise Escalation(f"{name}: Write refused: {answer.get('reason')}")
+                if reused and reason == "execution_ending":
+                    raise _Gone
+                if reason not in TRANSIENT_WRITE:
+                    raise Escalation(f"{name}: Write refused: {reason}")
+        elif reused:
+            raise _Gone  # another execution took the Workstream's place
         if time.monotonic() > deadline:
             raise Escalation(f"{name}: execution not ready after {int(ready_timeout)} s (state {state})")
         sleep(poll)
         thread.refresh()
-
-
-def _stop(agora: Agora, thread: Thread, workstream: str, name: str, log: Callable[[str], None]) -> None:
-    """Stops the Workstream's execution between turns: its claim goes, freeing a slot of the quota.
-    The command is named after the execution, so a replay never stops another."""
-    thread.refresh()
-    view = thread.view() or {}
-    execution = view.get("execution")
-    if not execution or view.get("state") in GONE:
-        return
-    answer = agora.command(workstream, command_id(workstream, f"stop-{execution}"), "Stop", {"execution": execution}, {})
-    if not answer.get("accepted") and answer.get("reason") not in ("stopped", "execution_unavailable"):
-        log(f"{name}: Stop refused ({answer.get('reason')})")
 
 
 def split_last_json(text: str) -> tuple[str, dict[str, Any] | None]:
