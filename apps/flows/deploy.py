@@ -14,8 +14,8 @@ REPOSITORY = "https://github.com/arnaultbretagne/agora.git"
 branch = sys.argv[1] if len(sys.argv) > 1 else "design/agora-foundations"
 source = GitRepository(url=REPOSITORY, branch=branch)
 for entrypoint in (
-    "apps/flows/flows.py:archi_dev_review",
-    "apps/flows/flows.py:archi_dev_review_rehearsal",
+    "apps/flows/flows.py:lead",
+    "apps/flows/flows.py:lead_rehearsal",
     "apps/flows/flows.py:rehearsal",
 ):
     deployment = flow.from_source(source=source, entrypoint=entrypoint).deploy(
