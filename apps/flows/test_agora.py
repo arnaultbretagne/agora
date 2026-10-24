@@ -167,7 +167,7 @@ class Turns(unittest.TestCase):
         self.assertEqual(agora.sent, ["Create", "Create", "Write"])
         self.assertEqual((result.execution, result.text), ("e-2", "Answer 1."))
 
-    def test_F9_the_next_turn_goes_to_the_members_execution_while_it_lives(self) -> None:
+    def test_F6_the_next_turn_goes_to_the_members_execution_while_it_lives(self) -> None:
         agora = FakeAgora()
         first = run(agora)
         second = run(agora, turn=2)
@@ -178,7 +178,7 @@ class Turns(unittest.TestCase):
         self.assertEqual((again.execution, again.text), ("e-1", "Answer 1."))
         self.assertEqual(agora.sent, ["Create", "Write", "Write"])
 
-    def test_F9_once_the_execution_has_ended_the_next_turn_continues_in_a_new_one(self) -> None:
+    def test_F7_once_the_execution_has_ended_the_next_turn_continues_in_a_new_one(self) -> None:
         agora = FakeAgora(claim_lag=3)
         run(agora)
         agora.expire()  # its deadline passed while the member was idle; its claim goes a little later
@@ -186,7 +186,7 @@ class Turns(unittest.TestCase):
         self.assertEqual(agora.sent, ["Create", "Write", "Create", "Write"])
         self.assertEqual((second.execution, second.text), ("e-2", "Answer 2."))
 
-    def test_F9_an_execution_ending_as_the_turn_comes_is_replaced(self) -> None:
+    def test_F8_an_execution_ending_as_the_turn_comes_is_replaced(self) -> None:
         agora = FakeAgora()
         run(agora)
         agora.refusals = ["execution_ending"]

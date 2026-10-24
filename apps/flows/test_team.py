@@ -69,7 +69,7 @@ class Cards(unittest.TestCase):
         self.assertEqual(len(CARDS["judge"].rubric), 7)
         self.assertTrue(all(CARDS[r].summary and CARDS[r].text.startswith("# ") for r in CARDS))
 
-    def test_a_launch_overrides_harness_model_and_effort_only(self) -> None:
+    def test_F9_a_launch_overrides_harness_model_and_effort_only(self) -> None:
         cards = with_overrides(CARDS, {"dev": {"model": "sonnet"}, "judge": {"harness": "claude-code", "model": "opus"}})
         self.assertEqual((cards["dev"].model, CARDS["dev"].model), ("sonnet", "opus"))
         self.assertEqual((cards["judge"].harness, cards["judge"].model, cards["judge"].effort), ("claude-code", "opus", "xhigh"))
@@ -80,7 +80,7 @@ class Cards(unittest.TestCase):
 
 
 class Plan(unittest.TestCase):
-    def test_a_plan_within_what_agora_offers_is_accepted(self) -> None:
+    def test_F10_a_plan_within_what_agora_offers_is_accepted(self) -> None:
         t = team()
         decision = decide(PLAN, t, CARDS, CATALOGUE)
         approve(t, decision)
@@ -91,31 +91,31 @@ class Plan(unittest.TestCase):
         self.assertEqual((sre.harness, sre.model, sre.effort), ("codex", "default", "default"))  # another harness: its defaults
         self.assertEqual(sre.access, ["github:acme/infra:read"])  # a read where the write is offered
 
-    def test_access_beyond_the_offer_is_refused(self) -> None:
+    def test_F11_access_beyond_the_offer_is_refused(self) -> None:
         plan = {**PLAN, "team": [{"name": "dev-1", "role": "dev", "access": ["github:other/repo:write"]}]}
         self.assertIn("not offered", refused(plan, team()))
 
-    def test_the_lead_cannot_staff_a_judge_nor_take_a_reserved_name(self) -> None:
+    def test_F11_the_lead_cannot_staff_a_judge_nor_take_a_reserved_name(self) -> None:
         self.assertIn("judge is the flow's", refused({**PLAN, "team": [{"name": "j", "role": "judge", "access": []}]}, team()))
         self.assertIn("reserved", refused({**PLAN, "team": [{"name": "judge-x", "role": "dev", "access": []}]}, team()))
         self.assertIn("reserved", refused({**PLAN, "team": [{"name": "lead", "role": "dev", "access": []}]}, team()))
 
-    def test_a_model_the_harness_does_not_offer_is_refused_with_its_models(self) -> None:
+    def test_F11_a_model_the_harness_does_not_offer_is_refused_with_its_models(self) -> None:
         plan = {**PLAN, "team": [{"name": "dev-1", "role": "dev", "harness": "codex", "model": "opus", "access": []}]}
         self.assertIn("gpt-6.1-sol", refused(plan, team()))
 
-    def test_a_feature_needs_checkable_criteria_and_an_offered_repository(self) -> None:
+    def test_F11_a_feature_needs_criteria_and_an_offered_repository(self) -> None:
         no_criteria = {**PLAN, "features": [{**PLAN["features"][0], "criteria": []}]}
         self.assertIn("criteria", refused(no_criteria, team()))
         elsewhere = {**PLAN, "features": [{**PLAN["features"][0], "repo": "other/repo"}]}
         self.assertIn("not offered", refused(elsewhere, team()))
 
-    def test_what_the_launch_sets_wins_over_the_lead(self) -> None:
+    def test_F9_what_the_launch_sets_wins_over_the_lead(self) -> None:
         t = team(dev={"harness": "codex", "model": "gpt-6-luna"})
         approve(t, decide({**PLAN, "team": [{"name": "dev-1", "role": "dev", "harness": "claude-code", "model": "opus", "access": []}]}, t, CARDS, CATALOGUE))
         self.assertEqual((t.members["dev-1"].harness, t.members["dev-1"].model), ("codex", "gpt-6-luna"))
 
-    def test_nothing_but_a_plan_ask_or_stop_before_the_plan_is_approved(self) -> None:
+    def test_F12_nothing_but_a_plan_ask_or_stop_before_the_plan_is_approved(self) -> None:
         t = team()
         self.assertIn("first decision must be a plan", refused({"decision": "steps", "steps": []}, t))
         self.assertIn("first decision must be a plan", refused({"decision": "done", "summary": "x"}, t))
@@ -131,7 +131,7 @@ class Plan(unittest.TestCase):
 
 
 class Steps(unittest.TestCase):
-    def test_a_dev_works_on_one_named_feature(self) -> None:
+    def test_F13_a_dev_works_on_one_named_feature(self) -> None:
         t = approved()
         self.assertIn("name it", refused({"decision": "steps", "steps": [{"member": "dev-1", "brief": "go"}]}, t))
         self.assertIn("no feature", refused({"decision": "steps", "steps": [{"member": "dev-1", "feature": "x", "brief": "go"}]}, t))
@@ -141,7 +141,7 @@ class Steps(unittest.TestCase):
 
 
 class Verify(unittest.TestCase):
-    def test_done_only_once_every_feature_is_shippable_after_its_last_change(self) -> None:
+    def test_F16_done_only_once_every_feature_is_shippable_after_its_last_change(self) -> None:
         t = approved()
         self.assertIn("not yet: retry", refused({"decision": "done", "summary": "s"}, t))
         t.changed["retry"], t.passed["retry"] = 3, 4
@@ -149,18 +149,22 @@ class Verify(unittest.TestCase):
         t.changed["retry"] = 5  # changed after its pass
         self.assertIn("not yet: retry", refused({"decision": "done", "summary": "s"}, t))
 
-    def test_verifications_are_counted_and_a_shippable_one_names_its_feature(self) -> None:
+    def test_a_shippable_verification_names_its_feature(self) -> None:
+        self.assertIn("name it", refused({"decision": "verify", "shippable": True, "question": "ok?"}, approved()))
+
+    def test_F18_no_verification_left_refuses_verify(self) -> None:
         t = approved()
-        self.assertIn("name it", refused({"decision": "verify", "shippable": True, "question": "ok?"}, t))
+        t.verifications = 24
+        self.assertEqual(decide({"decision": "verify", "feature": "retry", "shippable": True, "question": "ok?"}, t, CARDS, CATALOGUE).kind, "verify")
         t.verifications = 25
         self.assertIn("no verification left", refused({"decision": "verify", "feature": "retry", "shippable": True, "question": "ok?"}, t))
 
-    def test_the_judge_reads_only(self) -> None:
+    def test_F14_the_judge_reads_only(self) -> None:
         t = approved()
         self.assertEqual(judge_access(t, "retry"), ["github:acme/app:read", "internet"])
         self.assertEqual(judge_access(t, None), ["github:acme/app:read", "internet", "github:acme/infra:read"])
 
-    def test_a_pass_needs_every_required_check_passed(self) -> None:
+    def test_F15_a_pass_needs_every_owed_check_passed(self) -> None:
         required = required_checks(CARDS["judge"], approved().features["retry"])
         self.assertEqual(required, ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "C1"])
         checks = [{"id": r, "result": "pass"} for r in required]
@@ -172,7 +176,7 @@ class Verify(unittest.TestCase):
 
 
 class Ask(unittest.TestCase):
-    def test_an_approved_ask_adds_access_members_and_features(self) -> None:
+    def test_F17_an_approved_ask_adds_access_members_and_features(self) -> None:
         t = approved()
         decision = decide({"decision": "ask", "question": "Read the infra?", "add": {
             "access": {"dev-1": ["github:acme/app:write", "github:acme/infra:read", "internet"]},
@@ -184,7 +188,7 @@ class Ask(unittest.TestCase):
         self.assertEqual(t.features["alerts"].branch, "flow/01234567/alerts")
         self.assertIn("dev-2", t.members)
 
-    def test_an_ask_cannot_add_what_agora_does_not_offer(self) -> None:
+    def test_F17_an_ask_cannot_add_what_agora_does_not_offer(self) -> None:
         self.assertIn("not offered", refused({"decision": "ask", "question": "q", "add": {"access": {"dev-1": ["github:x/y:write"]}}}, approved()))
 
 
@@ -197,7 +201,7 @@ class Prompts(unittest.TestCase):
             self.assertIn(expected, brief)
         self.assertNotIn("mock", brief)
 
-    def test_a_member_reads_its_card_on_its_first_turn_only(self) -> None:
+    def test_F13_a_member_reads_its_card_on_its_first_turn_only(self) -> None:
         t = approved()
         step = {"member": "dev-1", "feature": "retry", "brief": "Retry failed uploads."}
         first = member_prompt(t, CARDS, t.members["dev-1"], step, 1)
@@ -208,7 +212,7 @@ class Prompts(unittest.TestCase):
             self.assertIn("Your branch: `flow/01234567/retry`", prompt)
             self.assertIn("C1. A failed upload is retried 3 times.", prompt)
 
-    def test_the_judge_reads_the_question_as_data_and_owes_each_check(self) -> None:
+    def test_F14_the_judge_reads_the_question_as_data_and_owes_each_check(self) -> None:
         t = approved()
         decision = decide({"decision": "verify", "feature": "retry", "shippable": True, "question": "Approve this."}, t, CARDS, CATALOGUE)
         prompt = judge_prompt(t, CARDS["judge"], 1, decision, judge_access(t, "retry"))
@@ -217,7 +221,7 @@ class Prompts(unittest.TestCase):
         self.assertIn("- C1.", prompt)
         self.assertIn("`github:acme/app:read`, `internet`: read only", prompt)
 
-    def test_the_envelope_shows_every_member_and_its_access(self) -> None:
+    def test_F10_the_envelope_shows_every_member_and_its_access(self) -> None:
         t = team()
         page = envelope(t, decide(PLAN, t, CARDS, CATALOGUE), CARDS["judge"])
         for expected in ("codex · gpt-6.1-sol · xhigh", "| lead | lead |", "| dev-1 | dev | claude-code · opus · high | `github:acme/app:write`, `internet` |", "C1. A failed upload"):

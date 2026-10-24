@@ -180,4 +180,4 @@ every replay gave the same Workstream, execution and answer.
 | F16 | `done` | Refused until every feature has been judged shippable since its last change; then the run ends `done`. |
 | F17 | An `ask` | The whole run suspends under `ask-<n>`; `yes` adds what it asks for, `no` nothing; the notes reach the lead. |
 | F18 | The limits | No verification left: `verify` refused. `max_decisions` reached: the run ends `decision limit reached`. |
-| F19 | A run resumed after a suspension | Completed turns and pages answer from their persisted results: no command and no page twice. |
+| F19 | A run resumed after a suspension, on the same commit | Completed turns and pages answer from their persisted results: no command and no page twice. |
