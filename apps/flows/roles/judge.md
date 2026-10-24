@@ -4,9 +4,6 @@ summary: Verifies anything the lead asks, as a demanding human reviewer would, a
 harness: codex
 model: gpt-6.1-sol
 effort: xhigh
-alternate_harness: claude-code
-alternate_model: opus
-alternate_effort: high
 ---
 
 # Judge

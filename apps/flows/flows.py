@@ -30,8 +30,8 @@ from prefect.runtime import flow_run
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agora import Agora, Escalation, TurnSpec, run_turn, split_last_json  # noqa: E402
 from team import (  # noqa: E402
-    STAFFED, Catalogue, Decision, Member, Refused, Team, approve, asked, decide, decision_json, envelope, grant,
-    judge_access, judge_for, judge_prompt, lead_brief, lead_update, load_cards, member_prompt, read_only,
+    STAFFED, Catalogue, Member, Refused, Team, approve, asked, decide, decision_json, envelope, grant,
+    judge_access, judge_prompt, lead_brief, lead_update, load_cards, member_prompt, read_only,
     required_checks, verdict, with_overrides,
 )
 
@@ -162,7 +162,7 @@ LEAD = """\
 | **lead** | Cuts the goal into features, staffs them, briefs, sends work to the judge, decides when it is done. Never designs or codes. | Read only, every offered repository; the Internet |
 | **dev** | Designs, codes and proves one feature on its own branch `flow/<run>/<feature>`, up to a draft pull request. | What the plan gives it, approved by you |
 | **sre** | Checks that a change will run: CI, rollout, rollback, resources, failure modes. Reports. | What the plan gives it, approved by you |
-| **judge** | Verifies what the lead asks, on another model than the work, fresh each time; a feature ships only once judged shippable. | Read only |
+| **judge** | Verifies what the lead asks, fresh each time, on its card's harness and model unless the launch sets them; a feature ships only once judged shippable. | Read only |
 
 Each answer of the lead is one decision: `plan` (the envelope you approve: features, criteria, team, \
 access), `steps` (members work, one after the other), `verify` (the judge), `ask` (you; the whole run \
@@ -255,7 +255,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         if decision.kind == "plan":
             reply = suspend_flow_run(
                 wait_for_input=Envelope.with_initial_data(
-                    description=f"# Approve the envelope of: {goal}\n\n{envelope(team, decision)}\n\n---\n\n"
+                    description=f"# Approve the envelope of: {goal}\n\n{envelope(team, decision, cards['judge'])}\n\n---\n\n"
                     "**approve** starts the run within this envelope; **revise** sends your notes to the lead, who plans again; "
                     "**stop** ends the run.",
                 ),
@@ -264,7 +264,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             notes = f" Their notes: {reply.notes}" if reply.notes else ""
             if reply.answer == "approve":
                 approve(team, decision)
-                publish("The envelope", f"# The envelope, approved\n\n{envelope(team, decision)}\n\n_Notes:_ {reply.notes or 'none'}")
+                publish("The envelope", f"# The envelope, approved\n\n{envelope(team, decision, cards['judge'])}\n\n_Notes:_ {reply.notes or 'none'}")
                 outcome = f"The human approved your plan.{notes} Carry it out."
             elif reply.answer == "revise":
                 outcome = f"The human asks you to revise your plan.{notes}"
@@ -284,7 +284,6 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
                 result = turn(spec, f"{next(labels)} · {member.name}{f' · {feature.id}' if feature else ''}", owner)
                 if feature and (member.role == "dev" or f"github:{feature.repo}:write" in member.access):
                     team.changed[feature.id] = number
-                    team.harnesses.setdefault(feature.id, set()).add(member.harness)
                 text, report = said(result)
                 cut = f"\n\n(cut: the whole answer is in {member.name}'s Workstream)" if len(text) > ANSWER_TO_LEAD else ""
                 parts.append(f"### Step {i}: {member.name}{f' on {feature.id}' if feature else ''}, turn {result['status']} ({result['stop_reason']})\n\n"
@@ -296,12 +295,12 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         elif decision.kind == "verify":
             team.verifications += 1
             feature_id = decision.data["feature"]
-            harness, model, effort = judge_for(team, cards["judge"], feature_id)
+            judge = cards["judge"]
             access = judge_access(team, feature_id)
             required = required_checks(cards["judge"], team.features[feature_id]) if decision.data["shippable"] else []
-            spec = TurnSpec(run=run, member=f"judge-{team.verifications}", turn=1, harness=harness,
+            spec = TurnSpec(run=run, member=f"judge-{team.verifications}", turn=1, harness=judge.harness,
                             prompt=judge_prompt(team, cards["judge"], team.verifications, decision, access) + tail("judge", team.verifications, required),
-                            profiles=access, settings=catalogue(number).settings(harness, model, effort))
+                            profiles=access, settings=catalogue(number).settings(judge.harness, judge.model, judge.effort))
             result = turn(spec, f"{next(labels)} · judge · verification {team.verifications}{f' of {feature_id}' if feature_id else ''}", owner)
             text, report = said(result)
             passed, why = verdict(report, required)

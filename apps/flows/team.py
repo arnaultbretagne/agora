@@ -41,9 +41,6 @@ class Card:
     model: str
     effort: str
     text: str
-    alternate_harness: str = ""
-    alternate_model: str = ""
-    alternate_effort: str = ""
     rubric: list[str] = field(default_factory=list)
 
 
@@ -63,9 +60,7 @@ def parse_card(source: str) -> Card:
         rubric = [" ".join(item.split()) for item in items]
     return Card(
         role=meta["role"], summary=meta.get("summary", ""), harness=meta["harness"], model=meta.get("model", "default"),
-        effort=meta.get("effort", "default"), text=text, alternate_harness=meta.get("alternate_harness", ""),
-        alternate_model=meta.get("alternate_model", "default"), alternate_effort=meta.get("alternate_effort", "default"),
-        rubric=rubric,
+        effort=meta.get("effort", "default"), text=text, rubric=rubric,
     )
 
 
@@ -81,8 +76,7 @@ def load_cards(directory: Path = ROLES) -> dict[str, Card]:
 
 
 def with_overrides(cards: dict[str, Card], overrides: dict[str, dict[str, str]]) -> dict[str, Card]:
-    """The cards with the launch's overrides: a role's harness, model or effort, never its text.
-    Overriding the judge's harness drops its alternate."""
+    """The cards with the launch's overrides: a role's harness, model or effort, never its text."""
     result = {role: Card(**asdict(card)) for role, card in cards.items()}
     for role, values in (overrides or {}).items():
         if role not in result:
@@ -92,8 +86,6 @@ def with_overrides(cards: dict[str, Card], overrides: dict[str, dict[str, str]])
             raise ValueError(f"{role}: only {', '.join(OVERRIDABLE)} can be overridden, not {sorted(unknown)}")
         for key, value in values.items():
             setattr(result[role], key, str(value))
-        if role == "judge" and "harness" in values:
-            result[role].alternate_harness = ""
     return result
 
 
@@ -194,10 +186,9 @@ class Team:
     members: dict[str, Member] = field(default_factory=dict)
     decisions: int = 0
     verifications: int = 0
-    # A feature's last shippable pass and last change, by decision number; who worked on it.
+    # A feature's last shippable pass and last change, by decision number.
     passed: dict[str, int] = field(default_factory=dict)
     changed: dict[str, int] = field(default_factory=dict)
-    harnesses: dict[str, set[str]] = field(default_factory=dict)
 
     @property
     def tag(self) -> str:
@@ -384,15 +375,6 @@ def grant(team: Team, decision: Decision) -> list[str]:
     return lines
 
 
-def judge_for(team: Team, card: Card, feature: str | None) -> tuple[str, str, str]:
-    """Another model than the work's: the card's harness, or its alternate when a member who worked
-    on the feature used the card's."""
-    used = team.harnesses.get(feature or "", set())
-    if card.alternate_harness and card.harness in used:
-        return card.alternate_harness, card.alternate_model, card.alternate_effort
-    return card.harness, card.model, card.effort
-
-
 def judge_access(team: Team, feature: str | None) -> list[str]:
     """Read only: the feature's repository, or every repository the team can reach; the Internet."""
     if feature:
@@ -433,7 +415,7 @@ DECISIONS = """\
 | --- | --- | --- |
 | `plan` | Shows the human the envelope: features (each on its own branch, with its acceptance criteria) and team (each member's role, harness, model, effort and access). Their one approval covers the whole run; or they ask you to revise. | `{"decision": "plan", "why": "…", "features": [{"id": "short-name", "title": "…", "repo": "owner/name", "base": "<branch it starts from>", "criteria": ["…"]}], "team": [{"name": "dev-1", "role": "dev", "harness": "…", "model": "…", "effort": "…", "access": ["…"]}]}` |
 | `steps` | Runs the steps one after the other, each by a member of the team; each member keeps its context from one step to the next. Comes back with each one's report and answer. | `{"decision": "steps", "why": "…", "steps": [{"member": "dev-1", "feature": "short-name", "brief": "<everything they need: what, why, done when, out of scope>"}]}` |
-| `verify` | Has the judge verify what you ask: another model, a fresh context, read-only. `shippable: true` asks whether a feature can ship: its acceptance criteria and the judge's base rubric are checked on top of your question. Comes back with each check and its evidence. | `{"decision": "verify", "why": "…", "feature": "short-name or null", "shippable": true, "question": "<what to verify>"}` |
+| `verify` | Has the judge verify what you ask: a fresh context, read-only. `shippable: true` asks whether a feature can ship: its acceptance criteria and the judge's base rubric are checked on top of your question. Comes back with each check and its evidence. | `{"decision": "verify", "why": "…", "feature": "short-name or null", "shippable": true, "question": "<what to verify>"}` |
 | `ask` | Asks the human and waits for the answer, the whole run with it: a right, a new member, a new feature, an action only they can take. What `add` holds is added if they say yes. | `{"decision": "ask", "why": "…", "question": "…", "add": {"features": [], "team": [], "access": {"dev-1": ["<the member's whole access after the change>"]}}}` |
 | `done` | Ends the run. Accepted only once every feature has been judged shippable after its last change. | `{"decision": "done", "why": "…", "summary": "<what ships, for the human>"}` |
 | `stop` | Ends the run without finishing, keeping what was done. | `{"decision": "stop", "why": "…", "reason": "…"}` |
@@ -456,6 +438,7 @@ def lead_brief(team: Team, cards: dict[str, Card], catalogue: Catalogue, lead: M
     access = _table([(f"`{p}`", "pushes branches and opens pull requests on that repository; its `:read` only reads it" if p.endswith(":write")
                       else "reads that repository" if p.endswith(":read") else "the open web: packages, documentation" if p == "internet" else "—")
                      for p in catalogue.offered], ("Access", "Gives"))
+    judge = f"{cards['judge'].harness} · {cards['judge'].model}"
     return f"""{team.tag} lead: {team.goal}
 
 {cards['lead'].text}
@@ -471,8 +454,8 @@ def lead_brief(team: Team, cards: dict[str, Card], catalogue: Catalogue, lead: M
 {staff}
 
 What is set at launch is not yours to change; the rest is a default you may change per member. The
-judge is not yours to staff: the flow runs it when you decide `verify`, on another model than the
-work it judges, read-only, in a fresh context each time.
+judge is not yours to staff: the flow runs it when you decide `verify`, read-only, in a fresh context
+each time, on {judge}. Staff the work on another model, so that a different one judges it.
 
 ## Harnesses
 
@@ -551,7 +534,7 @@ def judge_prompt(team: Team, card: Card, number: int, decision: Decision, access
             f"## Your verdict\n\n{REPORT.format(schema=JUDGE_REPORT)}")
 
 
-def envelope(team: Team, decision: Decision) -> str:
+def envelope(team: Team, decision: Decision, judge: Card) -> str:
     """The plan as the human approves it: features, criteria, team, access, limits."""
     features = "\n\n".join(
         f"**`{f.id}`: {f.title}**, in `{f.repo}` from `{f.base}`, on `{f.branch}`\n\n" + "\n".join(f"- C{i}. {c}" for i, c in enumerate(f.criteria, 1))
@@ -559,8 +542,8 @@ def envelope(team: Team, decision: Decision) -> str:
     members = _table([(m.name, m.role, f"{m.harness} · {m.model} · {m.effort}", ", ".join(f"`{p}`" for p in m.access) or "none")
                       for m in [team.members["lead"], *decision.data["team"]]], ("Member", "Role", "Harness · model · effort", "Access"))
     return (f"## The plan\n\n{decision.why or '_No reason given._'}\n\n### Features\n\n{features}\n\n### Team\n\n{members}\n\n"
-            "The judge is the flow's: another model than the work, a fresh context each time, read-only access to the repository it "
-            "verifies and the Internet.\n\n"
+            f"The judge is the flow's: {judge.harness} · {judge.model} · {judge.effort}, a fresh context each time, read-only access to "
+            "the repository it verifies and the Internet.\n\n"
             f"### Limits\n\n{team.max_decisions} decisions of the lead, {team.max_verifications} verifications. Nobody merges or deploys. "
             "Anything beyond this envelope comes back to you as a question, and the whole run waits for your answer.")
 

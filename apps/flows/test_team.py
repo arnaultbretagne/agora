@@ -8,7 +8,7 @@ import unittest
 from typing import Any
 
 from team import (
-    Catalogue, Member, Refused, Team, approve, decide, envelope, grant, judge_access, judge_for, judge_prompt, lead_brief,
+    Catalogue, Member, Refused, Team, approve, decide, envelope, grant, judge_access, judge_prompt, lead_brief,
     load_cards, member_prompt, required_checks, verdict, with_overrides,
 )
 
@@ -72,7 +72,7 @@ class Cards(unittest.TestCase):
     def test_a_launch_overrides_harness_model_and_effort_only(self) -> None:
         cards = with_overrides(CARDS, {"dev": {"model": "sonnet"}, "judge": {"harness": "claude-code", "model": "opus"}})
         self.assertEqual((cards["dev"].model, CARDS["dev"].model), ("sonnet", "opus"))
-        self.assertEqual(cards["judge"].alternate_harness, "")  # its harness set at launch, the judge has no alternate
+        self.assertEqual((cards["judge"].harness, cards["judge"].model, cards["judge"].effort), ("claude-code", "opus", "xhigh"))
         with self.assertRaises(ValueError):
             with_overrides(CARDS, {"dev": {"text": "be nice"}})
         with self.assertRaises(ValueError):
@@ -155,12 +155,8 @@ class Verify(unittest.TestCase):
         t.verifications = 25
         self.assertIn("no verification left", refused({"decision": "verify", "feature": "retry", "shippable": True, "question": "ok?"}, t))
 
-    def test_the_judge_is_another_model_than_the_work_and_reads_only(self) -> None:
+    def test_the_judge_reads_only(self) -> None:
         t = approved()
-        judge = CARDS["judge"]
-        self.assertEqual(judge_for(t, judge, "retry")[0], "codex")
-        t.harnesses["retry"] = {"codex"}
-        self.assertEqual(judge_for(t, judge, "retry"), ("claude-code", "opus", "high"))
         self.assertEqual(judge_access(t, "retry"), ["github:acme/app:read", "internet"])
         self.assertEqual(judge_access(t, None), ["github:acme/app:read", "internet", "github:acme/infra:read"])
 
@@ -196,7 +192,8 @@ class Prompts(unittest.TestCase):
     def test_the_lead_reads_its_card_the_goal_the_offer_and_the_decisions(self) -> None:
         t = team()
         brief = lead_brief(t, CARDS, CATALOGUE, t.members["lead"])
-        for expected in ("[flow 01234567] lead: Make uploads reliable", "# Lead", "`github:acme/infra:write`", "| `verify` |", "100 decisions"):
+        for expected in ("[flow 01234567] lead: Make uploads reliable", "# Lead", "`github:acme/infra:write`", "| `verify` |", "100 decisions",
+                         "on codex · gpt-6.1-sol. Staff the work on another model"):
             self.assertIn(expected, brief)
         self.assertNotIn("mock", brief)
 
@@ -222,8 +219,8 @@ class Prompts(unittest.TestCase):
 
     def test_the_envelope_shows_every_member_and_its_access(self) -> None:
         t = team()
-        page = envelope(t, decide(PLAN, t, CARDS, CATALOGUE))
-        for expected in ("| lead | lead |", "| dev-1 | dev | claude-code · opus · high | `github:acme/app:write`, `internet` |", "C1. A failed upload"):
+        page = envelope(t, decide(PLAN, t, CARDS, CATALOGUE), CARDS["judge"])
+        for expected in ("codex · gpt-6.1-sol · xhigh", "| lead | lead |", "| dev-1 | dev | claude-code · opus · high | `github:acme/app:write`, `internet` |", "C1. A failed upload"):
             self.assertIn(expected, page)
 
 
