@@ -303,13 +303,17 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
                             profiles=access, settings=catalogue(number).settings(judge.harness, judge.model, judge.effort))
             result = turn(spec, f"{next(labels)} · judge · verification {team.verifications}{f' of {feature_id}' if feature_id else ''}", owner)
             text, report = said(result)
-            passed, why = verdict(report, required)
+            passed, why = verdict(report, required) if result["status"] == "done" else (False, f"cut, turn {result['status']}")
             if passed and decision.data["shippable"]:
                 team.passed[feature_id] = number
             what = "shippable" if decision.data["shippable"] else "verified"
-            outcome = (f"Verification {team.verifications}{f' of {feature_id}' if feature_id else ''}: "
-                       f"{'PASS' if passed else 'FAIL'}{f', {feature_id} is {what}' if passed and feature_id else ''} ({why}).\n\n"
-                       f"The judge's report:\n\n{json.dumps(report, indent=2, ensure_ascii=False) if report else text[-ANSWER_TO_LEAD:]}")
+            name = f"Verification {team.verifications}{f' of {feature_id}' if feature_id else ''}"
+            if result["status"] != "done":
+                outcome = (f"{name}: CUT before its verdict (turn {result['status']}): nothing was judged, and it counts. "
+                           f"What the judge had said by then:\n\n{text[-ANSWER_TO_LEAD:]}")
+            else:
+                outcome = (f"{name}: {'PASS' if passed else 'FAIL'}{f', {feature_id} is {what}' if passed and feature_id else ''} ({why}).\n\n"
+                           f"The judge's report:\n\n{json.dumps(report, indent=2, ensure_ascii=False) if report else text[-ANSWER_TO_LEAD:]}")
             rows.append({"Decision": str(number), "Kind": "verify", "Outcome": f"{'pass' if passed else 'fail'} ({why})"})
 
         elif decision.kind == "ask":
