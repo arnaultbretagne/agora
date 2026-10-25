@@ -175,18 +175,21 @@ ends without its anchor is an incident — the node dying, Agora unreachable dur
 ## Commands
 
 The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Scope,
-Stop (`assistant-ui.md`).
+Stop (`assistant-ui.md`); and a question's, Ask and Answer: whoever drives the Workstream — a flow —
+asks the person, and the interface answers.
 
 | Rule | Detail |
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
 | Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any; without one, the log finds it ("Continuing"). The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), no question is pending (`question_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). |
 | Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
+| Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. |
+| Answer | Carries the pending question's position (`question`). Its body: the `optionId` chosen and, when the question allows one, a `note` of at most 10,000 characters. Accepted while that question is pending. No line goes to any agent. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
 
 | Refusal | When |
@@ -211,6 +214,9 @@ Stop (`assistant-ui.md`).
 | `turn_active`, `turn_uncertain` | Write, Configure or Scope: a turn saved or in progress; a turn uncertain. |
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
+| `invalid_question` | Ask: a body outside its bounds. |
+| `question_pending` | Ask, Write or Configure while a question is pending. |
+| `stale_question`, `invalid_question_option`, `invalid_answer` | Answer: not the pending question; an option it did not offer; a note it does not allow, or one that is not a string within bounds. |
 
 ### A turn's states
 
@@ -236,6 +242,7 @@ the client shows them is `assistant-ui.md`.
 | Turn | The Session and the `session/prompt` request id. |
 | Tool | The Session and the tool call id. |
 | Permission | The Session and the request's position. |
+| Question | The Workstream and the Ask's position. |
 | Text, reasoning | The turn and the rank of the run of consecutive chunks. |
 | Plan | The turn. |
 | Workstream | The Workstream's id. |
@@ -258,6 +265,7 @@ the client shows them is `assistant-ui.md`.
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
+| `question` | An Ask, then its Answer | `position`: the Ask's; `title`, `text`, `options`, `note`: the Ask's; `status` (`pending`, `answered`); `answer`: the Answer's `optionId`, and its `note` when it gave one |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel` | `turn`, `session`, `line`: the line whole |
 
 A pending permission becomes `cancelled` when its Session ends, or its execution is lost, fails or
@@ -283,6 +291,7 @@ anchors, the dispatch of its prompts and the agent's title.
 | `profiles` | The last execution's own profiles: its Create's, then its last Scope's; or empty. |
 | `promptCapabilities` | What the last execution's agent accepts in a prompt beyond text and resource links, from its `initialize` answer: `image`, `audio` and `embeddedContext`, each true only when it says so; kept once it has ended; null before it has answered. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
+| `question` | The pending question's position, or null. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
 
@@ -475,6 +484,12 @@ exception message.
 | L66 | The agent reports its context twice, then with a size of zero; then its Session ends | The view's `usage`: the first, then the second; unchanged by the third; null once the Session has ended. |
 | L67 | An agent accepting images and embedded resources, not audio: before it answers `initialize`, once it has, once its execution has ended; then `GET /api/pools` | The view's `promptCapabilities`: null; then `image` and `embeddedContext` true, `audio` false; the same once ended; the pool's the same. |
 | L68 | That agent: a Write with text and an audio block; then one with text, an image and an embedded resource | The first refused `prompt_unsupported`, nothing written, nothing sent; the second accepted, the agent given the three blocks as sent. |
+| L69 | An Ask on a Workstream that has no execution | Accepted; the element `question` pending, with its position, title, text, options and note; the view's `question` its position; no line to any agent. |
+| L70 | An Ask while one is pending; Asks outside their bounds — one option, five, an `optionId` twice, an unknown `kind`, a title of two lines | `question_pending`; `invalid_question` for each; nothing written. |
+| L71 | A Write and a Configure while a question is pending; then the question answered and the Write again | `question_pending` both, nothing written, nothing sent; once answered, the Write accepted. |
+| L72 | An Answer with an option and a note | Accepted; the element `answered`, its `answer` the option and the note; the view's `question` null; another Ask accepted next. |
+| L73 | Answers to another position, to an answered question, with an option not offered, with a note the question does not allow | `stale_question` for the first two, `invalid_question_option`, `invalid_answer`; nothing written. |
+| L74 | The same Ask again under its id, once answered | Its first answer; no second question. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

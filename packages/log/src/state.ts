@@ -93,6 +93,8 @@ export interface State {
   active: Turn | null
   current: Execution | null
   permissions: Map<string, Entry>
+  /** The pending question: its Ask (docs/specs/log.md, "Commands"). */
+  question: Entry | null
 }
 /** The profiles a Create or a Scope recorded. */
 function profilesIn(body: unknown): string[] {
@@ -119,6 +121,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     active: null,
     current: null,
     permissions: new Map(),
+    question: null,
   }
   const turnsByRequest = new Map<string, Turn>([...state.turns.values()].map((turn) => [turn.requestPosition, turn]))
   for (const entry of entries) {
@@ -146,6 +149,8 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       state.current = execution
     }
     const execution = entry.execution ? state.executions.get(entry.execution) : undefined
+    if (entry.kind === 'command' && content.kind === 'Ask') state.question = entry
+    if (entry.kind === 'command' && content.kind === 'Answer') state.question = null
     if (entry.kind === 'command' && content.kind === 'Stop' && execution) execution.stopped = true
     if (entry.kind === 'command' && content.kind === 'Scope' && execution) execution.profiles = profilesIn(content.body)
     if (entry.kind === 'execution.obtained' && execution) execution.uid = String(content.uid)
@@ -368,6 +373,26 @@ export class CoreProjection {
         const line = text?.split('\n').map((l) => l.trim()).find((l) => l !== '')
         if (line) this.firstWrite = line.slice(0, 80)
       }
+      // A question to the person (docs/specs/log.md, "Elements"): its Ask, then its Answer.
+      if (entry.kind === 'command' && entry.content.kind === 'Ask') {
+        const body = object(entry.content.body) ?? {}
+        put(
+          'element',
+          identity(entry.workstream, entry.position, 'question'),
+          { type: 'question', position: entry.position, title: body.title, text: body.text, options: body.options, note: body.note === true, status: 'pending' },
+          entry.position,
+        )
+      }
+      if (entry.kind === 'command' && entry.content.kind === 'Answer') {
+        const id = identity(entry.workstream, String(object(entry.content.target)?.question), 'question')
+        const body = object(entry.content.body) ?? {}
+        put(
+          'element',
+          id,
+          { ...objects.get(id)?.object, status: 'answered', answer: { optionId: body.optionId, ...(typeof body.note === 'string' ? { note: body.note } : {}) } },
+          entry.position,
+        )
+      }
       if (entry.kind === 'acp' && entry.method === 'session/update') {
         const update = object(object(entry.content.params)?.update)
         if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title')) {
@@ -426,6 +451,7 @@ export class CoreProjection {
             harness: typeof execution?.body.harness === 'string' ? execution.body.harness : null,
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
+            question: state.question?.position ?? null,
             continuation,
             changedAt: entry.time,
           },

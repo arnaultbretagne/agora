@@ -30,6 +30,7 @@ import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
+import { answerRefusal, validQuestion } from './questions.ts'
 import { compileProfile, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -275,12 +276,22 @@ export class Workstreams implements Handler {
             },
           }
         }
+        // docs/specs/log.md, "Commands": a question, whatever the execution; no line to any agent.
+        if (command.kind === 'Ask') {
+          if (state.question) return 'question_pending'
+          return validQuestion(command.body) ? {} : 'invalid_question'
+        }
+        if (command.kind === 'Answer') {
+          if (!state.question || command.target.question !== state.question.position) return 'stale_question'
+          return answerRefusal(object(state.question.content.body) ?? {}, command.body) ?? {}
+        }
         if (!current || current.ended) return 'execution_unavailable'
         if (command.target.execution !== current.id) return 'stale_execution'
         if (command.kind === 'Stop') return current.stopped ? 'stopped' : { execution: current.id, session: current.session ?? undefined }
         if (current.lost || current.failed) return 'execution_unavailable'
         if (current.stopped) return 'stopped'
         if (command.kind === 'Write') {
+          if (state.question) return 'question_pending'
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
@@ -298,6 +309,7 @@ export class Workstreams implements Handler {
           }
         }
         if (command.kind === 'Configure') {
+          if (state.question) return 'question_pending'
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
