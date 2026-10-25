@@ -42,15 +42,16 @@ const TodoList: FC<{ todos: readonly Todo[] }> = ({ todos }) => (
 )
 
 /**
- * The options of a pending permission, or of a question to the person (`question`), whose text is the
- * message above; a question may take a note with its answer.
+ * The options of a pending permission; or those of a question to the person (`question`), at the foot
+ * of the question's own box, which holds its text: they answer the whole box. A question may take a
+ * note with its answer.
  */
 export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNote?: boolean }> = ({ approval, question = false, withNote = false }) => {
   const { answer, view } = useAgora()
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState('')
   return (
-    <div className="border-foreground/10 bg-background rounded-surface my-2 flex flex-col gap-2.5 border p-3">
+    <div className={cn('flex flex-col gap-2.5', !question && 'border-foreground/10 bg-background rounded-surface my-2 border p-3')}>
       {!question && <p className="text-[13px]">{harnessName(view.harness)} asks before it goes on.</p>}
       {withNote && (
         <textarea
@@ -110,6 +111,23 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
       : (answerNote(ask) ?? (isError ? 'failed' : stats ? `+${String(stats.added)} −${String(stats.removed)}` : undefined))
   const label = labelOf(a, toolName)
   const hasMore = diffs.length > 0 || output !== '' || todos.length > 0 || argsText.trim() !== ''
+  // A question is its message's box (docs/specs/assistant-ui.md, "Parts of a response"): this is its foot.
+  if (question)
+    return (
+      <div className="border-foreground/10 mt-4 flex flex-col gap-2.5 border-t pt-3">
+        {waiting ? (
+          <>
+            <p className="text-primary text-[12px] font-medium">waiting for you</p>
+            <PermissionCard approval={ask} question withNote={a.note === true} />
+          </>
+        ) : (
+          <p className="text-muted-foreground flex items-center gap-1.5 text-[13px]">
+            <CheckIcon className="size-3.5 shrink-0" />
+            {meta}
+          </p>
+        )}
+      </div>
+    )
   return (
     <div>
       {hasMore ? (

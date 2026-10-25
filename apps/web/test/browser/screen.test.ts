@@ -752,7 +752,7 @@ test('U46 attachments: a photo and a Markdown file attached in a draft, a binary
   await shot(page, 'U46-opened')
 })
 
-test('U50 a question: its text, line and card, waiting in the list; a note and an option chosen: Answer sent, the card gone, sending open', async () => {
+test('U50 a question: one box, its text and options; waiting in the list; a note and an option chosen: Answer sent, the options gone, sending open', async () => {
   const page = await fresh()
   const id = randomUUID()
   assert.equal((await server.post('/api/workstreams', { id, owner: randomUUID() })).status, 200)
@@ -766,14 +766,19 @@ test('U50 a question: its text, line and card, waiting in the list; a note and a
   await thread(page).getByText('Approve the envelope').first().waitFor()
   await thread(page).getByText('One feature,').waitFor()
   assert.equal(await thread(page).locator('strong', { hasText: 'one' }).count(), 1, 'the text as Markdown')
-  await thread(page).getByText('waiting for you').waitFor()
+  // One box: the question's text and the options that answer it.
+  const box = thread(page).locator('[data-question="pending"]')
+  await box.getByText('waiting for you').waitFor()
+  await box.getByText('One feature,').waitFor()
+  await box.getByLabel('Note').waitFor()
+  assert.deepEqual(await box.locator('button').filter({ hasText: /^(Approve|Revise)$/ }).allInnerTexts(), ['Approve', 'Revise'])
   await page.getByRole('button', { name: 'New workstream waiting for you' }).waitFor()
   await page.getByText('Answer the question above.').waitFor()
   assert.equal(await page.getByText('asks before it goes on').count(), 0)
   assert.deepEqual(await thread(page).locator('button').filter({ hasText: /^(Approve|Revise)$/ }).allInnerTexts(), ['Approve', 'Revise'])
   await page.getByLabel('Note').fill('One criterion per behaviour.')
   await page.getByRole('button', { name: 'Revise', exact: true }).click()
-  await thread(page).getByText('Revise — One criterion per behaviour.').waitFor()
+  await thread(page).locator('[data-question="answered"]').getByText('Revise — One criterion per behaviour.').waitFor()
   assert.equal(await page.getByLabel('Note').count(), 0)
   const answer = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Answer')!
   assert.deepEqual([answer.content.target, answer.content.body], [{ question: String(asked.body.position) }, { optionId: 'revise', note: 'One criterion per behaviour.' }])

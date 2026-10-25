@@ -246,7 +246,7 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | Tone | Running (`pending`, `in_progress`): shimmer, coral marker. A permission pending: attention. `failed`: red. |
 | Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"); else "failed"; else, for a change, the lines added and removed. |
 | Open | At first only while a permission is pending. |
-| A question's | Its title; "waiting for you" while pending, then the option answered and its note. Its card: no line about an agent; a field for the note when the question allows one; the options, in its order, by their names; answered with Answer. |
+| A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 
 | Plan entry `status` | Shown |
 | --- | --- |
@@ -409,7 +409,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U47 | A question pending, then answered with an option and a note | An `assistant` message at its position, `requires-action`: the title in bold and the text; the `question` part, its approval the options, none chosen. Answered: `complete`, the approval its option, the line's note the option and the note. |
 | U48 | A question pending on a Workstream with no execution, then answered | Sending closed, no execution offered, "Answer the question above."; once answered, sending open and starting an execution. |
 | U49 | The list with a Workstream in `none` whose question is pending | Listed, though not open; once answered, left out again. |
-| U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | The title and the text; "waiting for you" on its line and in the list; the card with the note's field and the options; "Answer the question above."; chosen: Answer sent with the option and the note, the card gone, the line noting them, sending open. |
+| U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | One box holding the title, the text, "waiting for you", the note's field and the options; "waiting for you" in the list; "Answer the question above."; chosen: Answer sent with the option and the note, the field and options gone, the box's foot noting them, sending open. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

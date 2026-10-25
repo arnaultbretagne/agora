@@ -83,12 +83,22 @@ export const AssistantMessage: FC = () => {
   const harness = useAuiState((s) => String(custom(s).harness ?? ''))
   const running = useAuiState((s) => s.message.status?.type === 'running')
   const empty = useAuiState((s) => s.message.parts.length === 0)
+  // A question to the person is one box: its title and text, then its answer at its foot.
+  const question = useAuiState((s) => custom(s).question !== undefined)
+  const waiting = useAuiState((s) => s.message.status?.type === 'requires-action')
   return (
     <MessagePrimitive.Root
       data-role="assistant"
       className="group/message animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-(--thread-max-width) duration-150"
     >
-      <div className="text-[15px] leading-relaxed wrap-break-word">
+      <div
+        data-question={question ? (waiting ? 'pending' : 'answered') : undefined}
+        className={cn(
+          'text-[15px] leading-relaxed wrap-break-word',
+          question && 'bg-background rounded-surface border p-4',
+          question && (waiting ? 'border-primary/40' : 'border-foreground/10'),
+        )}
+      >
         <MessagePrimitive.GroupedParts groupBy={groupParts}>
           {({ part, children }) => {
             switch (part.type) {
