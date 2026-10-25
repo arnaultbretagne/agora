@@ -24,6 +24,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R16 | 2026-10-12 | `f6dbee2` | unit, local | `npm run check` for `@agora/web`, with `npm run test:browser`, as R15; the server offering `github:owner/a:write,github:owner/b:read,internet`, as the cluster offers its two repositories and `internet`. Screenshots taken in Chromium against the same server, offering `arnaultbretagne/agora`, `arnaultbretagne/infra-k8s` and `internet`: the draft's composer and the access menu, wide and on a phone's screen, light and dark, the Internet on and off. |
 | R17 | 2026-10-22 | `f65d77a` | unit, local | `npm run check`, with `npm run test:browser`, as R16; the mock agent accepting images and embedded resources and saying what it received; for U46 a 3000 × 2000 PNG drawn by the page's own canvas, given through Playwright's file chooser. Screenshots taken in Chromium against the same server — the composer's tiles and a refusal, the message sent, the image opened, the phone's composer — and looked at. |
 | R18 | 2026-10-25 | `6a94b80` | unit, local | `npm run check`, with `npm run test:browser`, as R17; for U50 a question asked over the server's API on a Workstream opened by its address. Screenshots taken in Chromium against the same server — a pending question with its note written, then answered, wide and on a phone — and looked at. |
+| R19 | 2026-10-25 | `2a7fe89` | unit, local | The client's unit tests, and `test:browser` for U19 and U50 alone, as R18; the question rendered as one box. Screenshots taken in Chromium — pending with its note written, then answered, wide and on a phone — and looked at. |
 
 ## Cases
 
@@ -108,6 +109,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U48 | — | unit | R18 | proven | The view `none`, its `question` `1`; sending closed, no execution offered, "Answer the question above."; answered, sending open and starting an execution. |
 | U49 | — | unit | R18 | proven | The Workstream in `none` listed while its question waits, not open; once answered, not listed. |
 | U50 | — | local | R18 | proven | The title, the text with its bold word; "waiting for you" on the line and on the list's row; "Answer the question above."; no line about an agent; the buttons Approve and Revise. The note written and Revise chosen: the Answer command `{"question":"1"}`, `{"optionId":"revise","note":"One criterion per behaviour."}`; the line "Revise — One criterion per behaviour.", the note's field gone, the reason gone, Send enabled. |
+| U50 | — | local | R19 | proven | One box, `data-question` `pending`, holding the title, the text, "waiting for you", the note's field and the buttons Approve and Revise; "waiting for you" on the list's row; "Answer the question above.". The note written and Revise chosen: the Answer command `{"question":"1"}`, `{"optionId":"revise","note":"One criterion per behaviour."}`; the box `answered`, its foot "Revise — One criterion per behaviour.", the note's field gone, Send enabled. |
 
 ## Not covered
 
