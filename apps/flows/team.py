@@ -312,9 +312,12 @@ def decide(report: dict[str, Any] | None, team: Team, cards: dict[str, Card], ca
     if kind == "plan":
         if team.approved:
             raise Refused("your plan is approved already; new features, members or access go through `ask`")
+        title = _text(report.get("title"), "title", 120)
+        if "\n" in title:
+            raise Refused("title must be one line")
         features = _features(team, catalogue, report.get("features"))
         members = _members(team, cards, catalogue, report.get("team"))
-        return Decision(kind, why, {"features": features, "team": members})
+        return Decision(kind, why, {"title": title, "features": features, "team": members})
     if not team.approved:
         raise Refused("your first decision must be a plan the human approves")
     if kind == "steps":
@@ -413,7 +416,7 @@ JUDGE_REPORT = ('{"verdict": "pass | fail", "checks": [{"id": "<R1, C1… or you
 DECISIONS = """\
 | Decision | What the flow does | Its JSON |
 | --- | --- | --- |
-| `plan` | Shows the human the envelope: features (each on its own branch, with its acceptance criteria) and team (each member's role, harness, model, effort and access). Their one approval covers the whole run; or they ask you to revise. | `{"decision": "plan", "why": "…", "features": [{"id": "short-name", "title": "…", "repo": "owner/name", "base": "<branch it starts from>", "criteria": ["…"]}], "team": [{"name": "dev-1", "role": "dev", "harness": "…", "model": "…", "effort": "…", "access": ["…"]}]}` |
+| `plan` | Shows the human the envelope, under your title: features (each on its own branch, with its acceptance criteria) and team (each member's role, harness, model, effort and access). Their one approval covers the whole run; or they ask you to revise. | `{"decision": "plan", "title": "<your plan's name, one line>", "why": "…", "features": [{"id": "short-name", "title": "…", "repo": "owner/name", "base": "<branch it starts from>", "criteria": ["…"]}], "team": [{"name": "dev-1", "role": "dev", "harness": "…", "model": "…", "effort": "…", "access": ["…"]}]}` |
 | `steps` | Runs the steps one after the other, each by a member of the team; each member keeps its context from one step to the next. Comes back with each one's report and answer. | `{"decision": "steps", "why": "…", "steps": [{"member": "dev-1", "feature": "short-name", "brief": "<everything they need: what, why, done when, out of scope>"}]}` |
 | `verify` | Has the judge verify what you ask: a fresh context, read-only. `shippable: true` asks whether a feature can ship: its acceptance criteria and the judge's base rubric are checked on top of your question. Comes back with each check and its evidence. | `{"decision": "verify", "why": "…", "feature": "short-name or null", "shippable": true, "question": "<what to verify>"}` |
 | `ask` | Asks the human and waits for the answer, the whole run with it: a right, a new member, a new feature, an action only they can take. What `add` holds is added if they say yes. | `{"decision": "ask", "why": "…", "question": "…", "add": {"features": [], "team": [], "access": {"dev-1": ["<the member's whole access after the change>"]}}}` |
@@ -535,13 +538,13 @@ def judge_prompt(team: Team, card: Card, number: int, decision: Decision, access
 
 
 def envelope(team: Team, decision: Decision, judge: Card) -> str:
-    """The plan as the human approves it: features, criteria, team, access, limits."""
+    """The plan as the person approves it, under the lead's title: its reason, features, criteria, team, access, limits."""
     features = "\n\n".join(
         f"**`{f.id}`: {f.title}**, in `{f.repo}` from `{f.base}`, on `{f.branch}`\n\n" + "\n".join(f"- C{i}. {c}" for i, c in enumerate(f.criteria, 1))
         for f in decision.data["features"])
     members = _table([(m.name, m.role, f"{m.harness} · {m.model} · {m.effort}", ", ".join(f"`{p}`" for p in m.access) or "none")
                       for m in [team.members["lead"], *decision.data["team"]]], ("Member", "Role", "Harness · model · effort", "Access"))
-    return (f"## The plan\n\n{decision.why or '_No reason given._'}\n\n### Features\n\n{features}\n\n### Team\n\n{members}\n\n"
+    return (f"{decision.why or '_No reason given._'}\n\n### Features\n\n{features}\n\n### Team\n\n{members}\n\n"
             f"The judge is the flow's: {judge.harness} · {judge.model} · {judge.effort}, a fresh context each time, read-only access to "
             "the repository it verifies and the Internet.\n\n"
             f"### Limits\n\n{team.max_decisions} decisions of the lead, {team.max_verifications} verifications. Nobody merges or deploys. "

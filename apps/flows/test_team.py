@@ -25,7 +25,7 @@ OFFERED = ["github:acme/app:write", "github:acme/infra:write", "internet"]
 CATALOGUE = Catalogue.from_agora(POOLS, OFFERED, exclude={"mock"})
 CARDS = load_cards()
 PLAN: dict[str, Any] = {
-    "decision": "plan", "why": "one feature",
+    "decision": "plan", "title": "Reliable uploads", "why": "one feature",
     "features": [{"id": "retry", "title": "Retry the upload", "repo": "acme/app", "base": "main", "criteria": ["A failed upload is retried 3 times."]}],
     "team": [{"name": "dev-1", "role": "dev", "access": ["github:acme/app:write", "internet"]},
              {"name": "sre-1", "role": "sre", "harness": "codex", "access": ["github:acme/infra:read"]}],
@@ -103,6 +103,10 @@ class Plan(unittest.TestCase):
     def test_F11_a_model_the_harness_does_not_offer_is_refused_with_its_models(self) -> None:
         plan = {**PLAN, "team": [{"name": "dev-1", "role": "dev", "harness": "codex", "model": "opus", "access": []}]}
         self.assertIn("gpt-6.1-sol", refused(plan, team()))
+
+    def test_F11_a_plan_needs_a_title_of_one_line(self) -> None:
+        self.assertIn("title", refused({k: v for k, v in PLAN.items() if k != "title"}, team()))
+        self.assertIn("one line", refused({**PLAN, "title": "Two\nlines"}, team()))
 
     def test_F11_a_feature_needs_criteria_and_an_offered_repository(self) -> None:
         no_criteria = {**PLAN, "features": [{**PLAN["features"][0], "criteria": []}]}
@@ -224,6 +228,8 @@ class Prompts(unittest.TestCase):
     def test_F10_the_envelope_shows_every_member_and_its_access(self) -> None:
         t = team()
         page = envelope(t, decide(PLAN, t, CARDS, CATALOGUE), CARDS["judge"])
+        self.assertNotIn("The plan", page)
+        self.assertTrue(page.startswith("one feature"))
         for expected in ("codex · gpt-6.1-sol · xhigh", "| lead | lead |", "| dev-1 | dev | claude-code · opus · high | `github:acme/app:write`, `internet` |", "C1. A failed upload"):
             self.assertIn(expected, page)
 

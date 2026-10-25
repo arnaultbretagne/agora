@@ -292,12 +292,12 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         if decision.kind == "plan":
             text = (f"{envelope(team, decision, cards['judge'])}\n\n---\n\n**Approve** starts the run within this envelope; "
                     "**Revise** sends your note to the lead, who plans again; **Stop** ends the run.")
-            [reply] = carry_out(label, [question(f"envelope-{number}", f"Approve the envelope: {goal}", text, ENVELOPE_OPTIONS, "envelope")], owner)
+            [reply] = carry_out(label, [question(f"envelope-{number}", decision.data["title"], text, ENVELOPE_OPTIONS, "envelope")], owner)
             choice, note = reply.get("optionId"), str(reply.get("note") or "")
             notes = f" Their note: {note}" if note else ""
             if choice == "approve":
                 approve(team, decision)
-                page("envelope", "The envelope", f"# The envelope, approved\n\n{envelope(team, decision, cards['judge'])}\n\n_Note:_ {note or 'none'}")
+                page("envelope", "The envelope", f"# {decision.data['title']}\n\n_Approved._\n\n{envelope(team, decision, cards['judge'])}\n\n_Note:_ {note or 'none'}")
                 outcome = f"The person approved your plan.{notes} Carry it out."
             elif choice == "revise":
                 outcome = f"The person asks you to revise your plan.{notes}"
@@ -399,7 +399,7 @@ def lead(
 REHEARSAL_SCRIPT: dict[str, Any] = {
     "decisions": [
         {"decision": "steps", "why": "refused: no plan yet", "steps": [{"member": "dev-1", "feature": "echo", "brief": "too early"}]},
-        {"decision": "plan", "why": "One feature, one dev, one sre.",
+        {"decision": "plan", "title": "Make the mock echo", "why": "One feature, one dev, one sre.",
          "features": [{"id": "echo", "title": "The mock echoes", "repo": "arnaultbretagne/agora", "base": "design/agora-foundations",
                        "criteria": ["The mock answers with its prompt."]}],
          "team": [{"name": "dev-1", "role": "dev", "access": ["github:arnaultbretagne/agora:read", "internet"]},
