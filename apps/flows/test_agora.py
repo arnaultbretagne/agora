@@ -67,8 +67,9 @@ class FakeAgora:
             if self.view["state"] != "ready" or target.get("session") != self.view["session"] or target.get("execution") != self.view["execution"]:
                 return {"accepted": False, "reason": "stale_session"}
             self.position += 1
+            text = "".join(b.get("text", "") for b in body.get("prompt", []) if isinstance(b, dict))
             self.turns.append({"id": f"t-{len(self.turns) + 1}", "status": "in_progress", "requestPosition": str(self.position),
-                               "stopReason": None, "execution": self.view["execution"]})
+                               "stopReason": None, "execution": self.view["execution"], "prompt": text})
             self.polls = 0
             answer["requestId"] = f"agora-{self.view['execution']}-{self.position}"
         elif kind == "Stop":
@@ -90,6 +91,8 @@ class FakeAgora:
             if turn["status"] == "in_progress" and self.polls > self.answer_after:
                 turn.update(status=self.turn_end, stopReason="end_turn" if self.turn_end == "done" else None)
             rows.append({"type": "snapshot", "operation": "upsert", "kind": "turn", "id": turn["id"], "object": dict(turn)})
+            rows.append({"type": "snapshot", "operation": "upsert", "kind": "element", "id": f"u-{n}",
+                         "object": {"type": "user", "turn": turn["id"], "content": [{"type": "text", "text": turn["prompt"]}]}})
             if turn["status"] == "done":
                 for rank, text in enumerate([f"Answer {n}", "."]):
                     rows.append({"type": "snapshot", "operation": "upsert", "kind": "element", "id": f"c-{n}-{rank}",
@@ -185,6 +188,27 @@ class Turns(unittest.TestCase):
         second = run(agora, turn=2)
         self.assertEqual(agora.sent, ["Create", "Write", "Create", "Write"])
         self.assertEqual((second.execution, second.text), ("e-2", "Answer 2."))
+
+    def test_F21_a_person_writing_between_two_turns_shifts_nothing(self) -> None:
+        agora = FakeAgora()
+        run(agora)
+        ws = workstream_id("run-1", "dev-1")
+        # The person writes in the member's Workstream, in its execution, and the agent answers them.
+        target = {"execution": agora.view["execution"], "session": agora.view["session"]}
+        agora.command(ws, "person-1", "Write", target, {"prompt": [{"type": "text", "text": "How is it going?"}]})
+        second = run(agora, turn=2)
+        self.assertEqual(agora.sent, ["Create", "Write", "Write", "Write"])
+        self.assertEqual((second.turn, second.text), (2, "Answer 3."))  # the third turn of the Workstream, the member's second
+        self.assertEqual(run(agora, turn=1).text, "Answer 1.")  # the first, found again by its prompt
+        self.assertEqual(agora.sent, ["Create", "Write", "Write", "Write"])
+
+    def test_F21_a_given_workstream_is_the_members(self) -> None:
+        agora = FakeAgora()
+        given = "0c9e5a3e-0000-4000-8000-00000000beef"
+        result = run_turn(agora, TurnSpec(run="run-1", member="lead", turn=1, harness="mock", prompt="plan it", workstream=given),  # type: ignore[arg-type]
+                          log=quiet, sleep=lambda _: None, poll=0, ready_timeout=5)
+        self.assertEqual(result.workstream, given)
+        self.assertEqual(agora.workstreams, {given})
 
     def test_F8_an_execution_ending_as_the_turn_comes_is_replaced(self) -> None:
         agora = FakeAgora()

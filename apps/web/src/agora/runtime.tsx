@@ -7,7 +7,7 @@
 // Session is open, then is written.
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Answer, Api, CommandKind, Pool } from './api.ts'
+import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useThread, useWorkstreams } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
@@ -22,6 +22,7 @@ import {
   poolLimits,
   poolSettings,
   startBody,
+  TEAM,
   withAccess,
   workstreamOf,
   type AccessEntry,
@@ -88,6 +89,12 @@ export interface Agora {
   answer(permission: string, optionId: string, note?: string): Promise<void>
   open(id: string | null): void
   takeReturned(): void
+  /** Whether a team can be launched: the harness picker offers it. */
+  readonly teams: boolean
+  /** Who the proxy says the person is. */
+  readonly account: Account
+  /** The Workstreams of the person's agents' folder: their runs' members. */
+  readonly agents: WorkstreamView[]
 }
 
 const AgoraContext = createContext<Agora | null>(null)
@@ -110,6 +117,11 @@ const REFUSALS: Record<string, string> = {
   unknown_pool: 'This harness is no longer available.',
   profile_not_offered: 'This access is no longer offered.',
   unknown_profile: 'This access is not known.',
+  teams_unavailable: 'Teams are not available here.',
+  teams_unreachable: 'The team could not be started: its orchestrator cannot be reached.',
+  team_deployment_missing: 'The team could not be started: its flow is not deployed.',
+  team_refused: 'The team could not be started.',
+  invalid_goal: 'Describe the goal in a message of at most 4,000 characters.',
   prompt_unsupported: 'The agent does not take these attachments.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
@@ -126,7 +138,20 @@ const storedPool = (): string | null => {
 }
 
 export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string | null) => void; children: ReactNode }) {
+  // Who the proxy says the person is; their agents' folder, read only behind it (docs/specs/assistant-ui.md, "Accounts").
+  const [account, setAccount] = useState<Account>({ email: null })
   const { workstreams, reload } = useWorkstreams(api)
+  const { workstreams: agents } = useWorkstreams(api, 'agents', account.email !== null)
+  useEffect(() => {
+    void api.account().then(setAccount, () => undefined)
+  }, [api])
+  // A team can be launched when the server says so (docs/specs/flows.md, "Launching from Agora").
+  const [teams, setTeams] = useState(false)
+  useEffect(() => {
+    void api.teams().then(setTeams, () => setTeams(false))
+  }, [api])
+  // The teams launched from this page whose lead has not written yet: their Workstream waits for it.
+  const [launched, setLaunched] = useState<ReadonlySet<string>>(new Set())
   const { state, connection } = useThread(api, id)
   const [refusal, setRefusal] = useState<string | null>(null)
   const [pools, setPools] = useState<Pool[] | null>(null)
@@ -141,11 +166,14 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const [pickedAccess, setPickedAccess] = useState<{ for: string | null; execution: string | null; profiles: readonly string[] } | null>(null)
   const [offered, setOffered] = useState<string[]>([])
   const view = useMemo(() => workstreamOf(state, id ?? ''), [state, id])
-  // A draft has no thread to wait for: sending is offered at once, and starts everything.
-  const composer = useMemo<Composer>(
-    () => (id === null ? { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null } : composerOf(state, view)),
-    [state, view, id],
-  )
+  // A draft has no thread to wait for: sending is offered at once, and starts everything. A team just
+  // launched waits for its lead's first turn.
+  const composer = useMemo<Composer>(() => {
+    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null }
+    const own = composerOf(state, view)
+    const starting = launched.has(id) && state.complete && ![...state.objects.values()].some((o) => o.kind === 'turn')
+    return starting ? { ...own, open: false, create: false, reason: 'The team is starting…' } : own
+  }, [state, view, id, launched])
 
   useEffect(() => {
     void api.offered().then(setOffered, () => setOffered([]))
@@ -156,10 +184,11 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [api, id])
   // The pool offered: the one picked here; else the Workstream's own, or one of its harness, so that it
   // continues; else, in a draft, the one picked last; else the first.
-  const pool = useMemo(
-    () => poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool(), id !== null ? view.harness : null),
-    [pools, picked, view.pool, view.harness, id],
-  )
+  const pool = useMemo(() => {
+    // A draft may launch a team, picked here or last.
+    if (id === null && teams && (picked?.for === null ? picked.pool : storedPool()) === TEAM) return TEAM
+    return poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool(), id !== null ? view.harness : null)
+  }, [pools, picked, view.pool, view.harness, id, teams])
   const choosePool = useCallback(
     (next: string) => {
       setPicked({ for: id, pool: next })
@@ -248,6 +277,21 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const start = useCallback(
     async (draft: Draft, prompt: readonly Block[]) => {
       if (pool === null) return setRefusal('No harness is available.')
+      // A team: its goal to the server, which creates the lead's Workstream and starts the run.
+      if (pool === TEAM) {
+        const workstream = crypto.randomUUID()
+        setRefusal(null)
+        const launchedTeam = await api.team(workstream, draft.text)
+        if (!launchedTeam.accepted) {
+          setRefusal(refusalText(launchedTeam.reason ?? 'unavailable'))
+          setReturned(draft)
+          return
+        }
+        setLaunched((l) => new Set(l).add(workstream))
+        reload()
+        onOpen(workstream)
+        return
+      }
       let workstream = id
       if (workstream === null) {
         workstream = crypto.randomUUID()
@@ -263,7 +307,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       setPending({ workstream, execution: created.execution, ...draft, prompt, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, send, onOpen, harnessOf, chosen, access],
+    [api, id, pool, send, onOpen, harnessOf, chosen, access, reload],
   )
 
   const chooseSetting = useCallback(
@@ -376,6 +420,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     answer,
     open,
     takeReturned,
+    teams,
+    account,
+    agents,
   }
   return (
     <AgoraContext.Provider value={agora}>

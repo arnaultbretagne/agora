@@ -28,6 +28,14 @@ export interface LogHttpOptions {
   readonly credentials?: CredentialSource
 }
 
+/**
+ * The folders of an identity (docs/specs/log.md, "HTTP"): `agents` holds the Workstreams of the agents
+ * a person's runs staff, owned by the name-based UUID of `agents` and the person's identity — theirs
+ * alone, out of their own list.
+ */
+export const FOLDERS = ['agents'] as const
+export const folderOwner = (folder: (typeof FOLDERS)[number], person: string): string => identity(folder, person)
+
 export async function logHttp(
   workstreams: Workstreams,
   req: IncomingMessage,
@@ -41,7 +49,7 @@ export async function logHttp(
     return true
   }
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools') return false
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools' && url.pathname !== '/api/account') return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -83,7 +91,15 @@ export async function logHttp(
     // name-based UUID; none when Agora is reached without the proxy.
     const identityHeader = req.headers['x-forwarded-email']
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
-    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
+    const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
+    if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
+    if (req.method === 'GET' && url.pathname === '/api/workstreams') {
+      const folder = url.searchParams.get('folder')
+      if (folder === null) return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
+      if (!(FOLDERS as readonly string[]).includes(folder)) return reply(400, { reason: 'unknown_folder' }), true
+      // The caller's own folder; without the proxy, every Workstream, as every list is.
+      return reply(200, { workstreams: await workstreams.projections.views(email === null ? undefined : folderOwner('agents', email)) }), true
+    }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()

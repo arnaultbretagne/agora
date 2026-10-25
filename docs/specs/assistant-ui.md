@@ -29,7 +29,9 @@ Workstream.
 
 | Exchange | Route | Content |
 | --- | --- | --- |
-| Workstreams | `GET /api/workstreams` | The view of every Workstream the signed-in identity owns, the most recently active first. Read again whenever the thread on screen changes, and every 10 seconds. |
+| Workstreams | `GET /api/workstreams` | The view of every Workstream the signed-in identity owns, the most recently active first; and, with `folder=agents`, those of its agents' folder ("Accounts"). Read again whenever the thread on screen changes, and every 10 seconds. |
+| The account | `GET /api/account` | Once the page opens: the identity the proxy passes (`log.md`, "HTTP"). |
+| Teams | `GET /api/teams`, `POST /api/teams` | Whether a team can be launched, once the page opens; a team's goal, on its first message ("Teams"; `flows.md`, "Launching from Agora"). |
 | Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
 | A new Workstream | `POST /api/workstreams` | On its first message, never before. Its id, chosen by the client; the owner is the identity the proxy passes. |
 | A Workstream's thread | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows (`log.md`, "The thread"). |
@@ -133,6 +135,28 @@ are the execution's (`log.md`, "The Workstream view": `profiles`).
 | The picker | After the model, when anything is offered: a key, and the rights the agent is given in its menu, one list for every kind of right. The services first, the Internet first among them — `internet` as "Internet" —, each one line with a switch; then each offered repository by its `owner/repo`, with **None**, **Read** and, when offered, **Write**. Rights of other kinds, MCP servers among them, take their place in the same list. The choices stay open in the menu, one after the other. The button: "No access", the one right granted ("Internet", "agora · Write"), or their names in the menu's order ("Internet, agora"); its title, each with its access ("Internet, agora · Write"). |
 | Before an execution | The choice goes into the Create's `profiles`. In a draft, and in a Workstream that has had no execution, it starts with `internet` when offered, nothing else; when sending continues an ended or failed execution, from that execution's `profiles`. |
 | During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
+
+## Teams
+
+A lead and its team on a goal (`flows.md`), launched from the client when the server can.
+
+| Element | Rule |
+| --- | --- |
+| The harness picker | **Team** after the pools, with its mark and "a lead and its team, on your goal", when `GET /api/teams` says available; remembered as a pool is. |
+| A draft with Team | No model picker, no access picker, no paperclip; "Describe the goal for the team…". Its first message is the goal. |
+| Sending | `POST /api/teams` with a new id and the goal; refused, the message back in the composer with the reason. Accepted, the Workstream opens: the lead's, the person's own. |
+| Starting | Until the Workstream's first turn, sending is closed: "The team is starting…". Then it is the lead's Workstream like any other: its questions answered there, a message written to the lead there. |
+
+## Accounts
+
+Who the person is, and the folder that keeps their agents' Workstreams out of their list: those of
+their teams' members, theirs alone (`log.md`, "HTTP"; `flows.md`, "Launching from Agora").
+
+| Element | Rule |
+| --- | --- |
+| The account | At the foot of the sidebar, as assistant-ui's own demo has it: the person's e-mail, its initial on a plate. None without the proxy's identity. |
+| Opened | Upwards: **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
+| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's, the search applying. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
 
 ## Context and limits
 
@@ -287,6 +311,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
 | Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles | **ours** |
+| Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
 | Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
 | Header | Title, or a waiting first message; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
@@ -410,6 +435,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U48 | A question pending on a Workstream with no execution, then answered | Sending closed, no execution offered, "Answer the question above."; once answered, sending open and starting an execution. |
 | U49 | The list with a Workstream in `none` whose question is pending | Listed, though not open; once answered, left out again. |
 | U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | One box holding the title, the text, "waiting for you", the note's field and the options; "waiting for you" in the list; "Answer the question above."; chosen: Answer sent with the option and the note, the field and options gone, the box's foot noting them, sending open. |
+| U51 | In a browser, teams available: Team picked in a draft, a goal sent | No model or access picker, "Describe the goal for the team…"; `POST /api/teams` with the goal: the run asked with it, the new Workstream as the lead's, the person's identity, their agents' folder for the members; the Workstream open, sending closed, "The team is starting…". |
+| U52 | In a browser, the proxy's identity: a Workstream of the person's, one of their agents' folder, one of someone else's folder; the account opened; the folder opened, its Workstream opened; the page reloaded | The person's e-mail at the sidebar's foot; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the folder closed, counting 1, the list the person's one Workstream; opened, the folder's Workstream, which opens; reloaded, the folder still open. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

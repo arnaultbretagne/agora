@@ -14,7 +14,7 @@ import { ContextDisplay, Meter, severityOf, severityText } from '@/components/as
 import { cn } from '@/lib/utils'
 import { acceptOf } from '../agora/attachments.ts'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
+import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, TEAM, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
@@ -32,8 +32,9 @@ const focusesItself = () => matchMedia('(any-pointer: fine)').matches
 
 /** The harness a new execution starts with; the running one, as a plain label, once started. */
 const HarnessPicker: FC = () => {
-  const { pools, pool, choosePool, composer, view } = useAgora()
-  const current = pools?.find((p) => p.name === pool)
+  const { pools, pool, choosePool, composer, view, teams } = useAgora()
+  // A team stands beside the pools (docs/specs/assistant-ui.md, "Teams").
+  const current = pool === TEAM ? { name: TEAM, harness: TEAM } : pools?.find((p) => p.name === pool)
   if (!composer.create)
     return view.harness ? (
       <span title={harnessName(view.harness)} className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-2 text-[13px]">
@@ -68,6 +69,16 @@ const HarnessPicker: FC = () => {
               </span>
             </DropdownMenu.Item>
           ))}
+          {teams && (
+            <DropdownMenu.Item className={menuItemClass} onSelect={() => choosePool(TEAM)}>
+              <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', pool === TEAM ? 'opacity-100' : 'opacity-0')} />
+              <HarnessMark harness={TEAM} className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+              <span className="flex flex-col">
+                <span>{harnessName(TEAM)}</span>
+                <span className="text-muted-foreground text-[12px]">a lead and its team, on your goal</span>
+              </span>
+            </DropdownMenu.Item>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -297,7 +308,8 @@ const Notes: FC = () => {
 
 export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { returned, takeReturned, pending, composer, commands, promptCapabilities } = useAgora()
+  const { returned, takeReturned, pending, composer, commands, promptCapabilities, pool } = useAgora()
+  const team = composer.create && pool === TEAM
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
   const text = useAuiState((s) => s.composer.text)
@@ -358,7 +370,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           rows={1}
           autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
-          placeholder={placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…')}
+          placeholder={team ? 'Describe the goal for the team…' : (placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…'))}
           className="placeholder:text-muted-foreground field-sizing-content max-h-48 min-h-11 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-base leading-6 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
@@ -367,8 +379,8 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
               <ComposerAddAttachment className={cn(quietButton, 'grid shrink-0 place-items-center px-0 disabled:opacity-50', 'w-7 pointer-coarse:w-9')} />
             )}
             <HarnessPicker />
-            <ModelPicker />
-            <AccessPicker />
+            {!team && <ModelPicker />}
+            {!team && <AccessPicker />}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Usage />

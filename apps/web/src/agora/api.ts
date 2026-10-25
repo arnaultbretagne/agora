@@ -7,6 +7,14 @@ import type { PromptCapabilities } from './attachments.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
 
+/** The identity the proxy passes, or none (docs/specs/log.md, "HTTP"). */
+export interface Account {
+  readonly email: string | null
+}
+
+/** A folder of the person's (docs/specs/log.md, "HTTP"): `agents`, the Workstreams of their runs' agents. */
+export type Folder = 'agents'
+
 export interface Answer {
   readonly accepted: boolean
   readonly reason?: string
@@ -50,8 +58,36 @@ export class Api {
     return `${this.base}/api/workstreams/${encodeURIComponent(workstream)}/thread?after=${encodeURIComponent(cursor)}`
   }
 
-  async workstreams(): Promise<WorkstreamView[]> {
-    return ((await this.read('/api/workstreams')).body.workstreams ?? []) as WorkstreamView[]
+  /** The caller's Workstreams, or those of one of its folders. */
+  async workstreams(folder: Folder | null = null): Promise<WorkstreamView[]> {
+    const query = folder === null ? '' : `?folder=${folder}`
+    return ((await this.read(`/api/workstreams${query}`)).body.workstreams ?? []) as WorkstreamView[]
+  }
+
+  /** Who the proxy says the caller is (docs/specs/log.md, "HTTP"). */
+  async account(): Promise<Account> {
+    const { body } = await this.read('/api/account')
+    return { email: typeof body.email === 'string' ? body.email : null }
+  }
+
+  /** Whether a team can be launched from here (docs/specs/flows.md, "Launching from Agora"). */
+  async teams(): Promise<boolean> {
+    const { status, body } = await this.read('/api/teams')
+    return status === 200 && body.available === true
+  }
+
+  /** A team on a goal, its lead's Workstream the id given: created by the server, which starts the run. */
+  async team(id: string, goal: string): Promise<Answer> {
+    try {
+      const { status, body } = await this.read('/api/teams', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, goal, owner: '00000000-0000-4000-8000-000000000000' }),
+      })
+      return status === 200 ? { accepted: true } : { accepted: false, reason: String(body.reason ?? 'unavailable') }
+    } catch {
+      return { accepted: false, reason: 'unreachable' }
+    }
   }
 
   /** The profiles the access picker offers (docs/specs/credentials.md, "Offered profiles"). */

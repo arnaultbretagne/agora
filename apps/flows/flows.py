@@ -128,11 +128,11 @@ def member_turn(spec: dict[str, Any], label: str, owner: str | None = None) -> d
 
 @task(retries=3, retry_delay_seconds=20, persist_result=True, task_run_name="Waiting for you: {title}")
 def human(run: str, key: str, title: str, text: str, options: list[dict[str, str]], note: bool, owner: str | None = None,
-          scripted: dict[str, Any] | None = None) -> dict[str, Any]:
+          scripted: dict[str, Any] | None = None, workstream: str = "") -> dict[str, Any]:
     """A question to the person in the lead's Workstream, and their answer — its option and note —
     once given, read on the thread's stream. `scripted`, in a rehearsal only: the answer the script gives."""
     client = agora(owner)
-    workstream = workstream_id(run, "lead")
+    workstream = workstream or workstream_id(run, "lead")
     client.ensure_workstream(workstream)
     position = ask(client, workstream, key, {"title": title, "text": text, "options": options, "note": note})
     get_run_logger().info(f"asked in the lead's Workstream {workstream}: {title}")
@@ -141,9 +141,11 @@ def human(run: str, key: str, title: str, text: str, options: list[dict[str, str
     return wait_answer(client, workstream, position)
 
 
-def turn(spec: TurnSpec, label: str, owner: str | None, after: Any = None) -> tuple[dict[str, Any], Any]:
+def turn(spec: TurnSpec, label: str, owner: str | None, after: Any = None,
+         lead: tuple[str, str | None] = ("", None)) -> tuple[dict[str, Any], Any]:
     """A turn, with what it cannot settle asked of the person until they abort or it succeeds; its
-    result, and its state for the next task's edge in the graph."""
+    result, and its state for the next task's edge in the graph. `owner` owns the member's Workstream;
+    `lead`, the lead's Workstream and its owner, where the person is asked."""
     while True:
         state = member_turn(asdict(spec), label, owner, wait_for=[after] if after is not None else None, return_state=True)
         result = state.result()
@@ -153,7 +155,7 @@ def turn(spec: TurnSpec, label: str, owner: str | None, after: Any = None) -> tu
         answer = human(
             spec.run, f"escalation-{spec.member}-{spec.turn}-{spec.attempt}", one_line(f"{label} needs you"),
             f"> {result['escalation']}\n\nSettle it in Agora if it can be, then retry; or abort the run.",
-            SETTLE_OPTIONS, False, owner, wait_for=[state],
+            SETTLE_OPTIONS, False, lead[1], None, lead[0], wait_for=[state],
         )
         if answer.get("optionId") != "retry":
             raise RuntimeError(f"aborted at {label}")
@@ -161,7 +163,8 @@ def turn(spec: TurnSpec, label: str, owner: str | None, after: Any = None) -> tu
 
 
 @flow(name="decision", flow_run_name="{label}", persist_result=True, validate_parameters=False)
-def carry_out(label: str, items: list[dict[str, Any]], owner: str | None = None) -> list[dict[str, Any]]:
+def carry_out(label: str, items: list[dict[str, Any]], owner: str | None = None,
+              lead: tuple[str, str | None] = ("", None)) -> list[dict[str, Any]]:
     """One decision of the lead, carried out: its members' turns, or its question to the person, one
     after the other."""
     results: list[dict[str, Any]] = []
@@ -169,12 +172,12 @@ def carry_out(label: str, items: list[dict[str, Any]], owner: str | None = None)
     for item in items:
         if "question" in item:
             q = item["question"]
-            state = human(q["run"], q["key"], q["title"], q["text"], q["options"], q["note"], owner, q.get("scripted"),
+            state = human(q["run"], q["key"], q["title"], q["text"], q["options"], q["note"], lead[1], q.get("scripted"), lead[0],
                           wait_for=[after] if after is not None else None, return_state=True)
             results.append(state.result())
             after = state
         else:
-            result, after = turn(TurnSpec(**item["turn"]), item["label"], owner, after)
+            result, after = turn(TurnSpec(**item["turn"]), item["label"], item.get("owner", owner), after, lead)
             results.append(result)
     return results
 
@@ -209,9 +212,14 @@ def run_name() -> str:
 
 
 def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: int, max_decisions: int, owner: str | None,
-          harnesses: set[str] | None = None, exclude: set[str] | None = None, script: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The lead's run. `script`, in a rehearsal only: what the mock, which echoes its prompts, answers,
-    and what the person answers."""
+          harnesses: set[str] | None = None, exclude: set[str] | None = None, script: dict[str, Any] | None = None,
+          lead_workstream: str | None = None, members_owner: str | None = None) -> dict[str, Any]:
+    """The lead's run. `owner` owns the lead's Workstream — `lead_workstream` when Agora created it —
+    and is the person asked; `members_owner`, the members' Workstreams, the owner's without it.
+    `script`, in a rehearsal only: what the mock, which echoes its prompts, answers, and what the
+    person answers."""
+    lead_at = (lead_workstream or "", owner)
+    members_at = members_owner or owner
     logger = get_run_logger()
     run = str(flow_run.id)
     cards = with_overrides(load_cards(), overrides)
@@ -271,7 +279,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         lead.turns += 1
         prompt = lead_brief(team, cards, first, lead) if number == 1 else lead_update(team, outcome)
         answer, lead_state = turn(TurnSpec(run=run, member="lead", turn=lead.turns, harness=lead.harness, prompt=prompt + tail("lead", number),
-                                           profiles=lead.access, settings=lead_settings), f"{number} · lead", owner, lead_state)
+                                           profiles=lead.access, settings=lead_settings, workstream=lead_at[0]), f"{number} · lead", owner, lead_state, lead_at)
         body, report = said(answer)
         try:
             if answer["status"] != "done":
@@ -292,7 +300,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
         if decision.kind == "plan":
             text = (f"{envelope(team, decision, cards['judge'])}\n\n---\n\n**Approve** starts the run within this envelope; "
                     "**Revise** sends your note to the lead, who plans again; **Stop** ends the run.")
-            [reply] = carry_out(label, [question(f"envelope-{number}", decision.data["title"], text, ENVELOPE_OPTIONS, "envelope")], owner)
+            [reply] = carry_out(label, [question(f"envelope-{number}", decision.data["title"], text, ENVELOPE_OPTIONS, "envelope")], owner, lead_at)
             choice, note = reply.get("optionId"), str(reply.get("note") or "")
             notes = f" Their note: {note}" if note else ""
             if choice == "approve":
@@ -314,9 +322,9 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
                 spec = TurnSpec(run=run, member=member.name, turn=member.turns, harness=member.harness,
                                 prompt=member_prompt(team, cards, member, step, member.turns) + tail("member"),
                                 profiles=member.access, settings=first.settings(member.harness, member.model, member.effort))
-                items.append({"turn": asdict(spec), "label": f"{member.name}{f' · {feature.id}' if feature else ''}"})
+                items.append({"turn": asdict(spec), "label": f"{member.name}{f' · {feature.id}' if feature else ''}", "owner": members_at})
                 members.append((member, feature))
-            results = carry_out(label, items, owner)
+            results = carry_out(label, items, owner, lead_at)
             parts = []
             for i, ((member, feature), result) in enumerate(zip(members, results), 1):
                 if feature and (member.role == "dev" or f"github:{feature.repo}:write" in member.access):
@@ -338,7 +346,8 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             spec = TurnSpec(run=run, member=f"judge-{team.verifications}", turn=1, harness=judge.harness,
                             prompt=judge_prompt(team, judge, team.verifications, decision, access) + tail("judge", team.verifications, required),
                             profiles=access, settings=catalogue().settings(judge.harness, judge.model, judge.effort))
-            [result] = carry_out(label, [{"turn": asdict(spec), "label": f"judge-{team.verifications}{f' · {feature_id}' if feature_id else ''}"}], owner)
+            [result] = carry_out(label, [{"turn": asdict(spec), "label": f"judge-{team.verifications}{f' · {feature_id}' if feature_id else ''}",
+                                          "owner": members_at}], owner, lead_at)
             text, report = said(result)
             passed, why = verdict(report, required) if result["status"] == "done" else (False, f"cut, turn {result['status']}")
             if passed and decision.data["shippable"]:
@@ -355,7 +364,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
 
         elif decision.kind == "ask":
             text = f"{asked(team, decision)}\n\n---\n\n**Yes** adds what it asks for, if anything; your note goes to the lead either way."
-            [reply] = carry_out(label, [question(f"ask-{number}", f"The lead asks: {decision.data['question']}", text, ASK_OPTIONS, "ask")], owner)
+            [reply] = carry_out(label, [question(f"ask-{number}", f"The lead asks: {decision.data['question']}", text, ASK_OPTIONS, "ask")], owner, lead_at)
             choice, note = reply.get("optionId"), str(reply.get("note") or "")
             granted = grant(team, decision) if choice == "yes" else []
             outcome = (f"The person answered {choice}." + (f" Their note: {note}" if note else "")
@@ -384,6 +393,9 @@ def lead(
     overrides: dict[str, dict[str, str]] = {},  # noqa: B006 — Prefect copies parameters per run
     max_verifications: int = 25,
     max_decisions: int = 100,
+    lead_workstream: str | None = None,
+    owner: str | None = None,
+    members_owner: str | None = None,
 ) -> dict[str, Any]:
     """A lead manages a small team towards the goal; you approve its plan once, in Agora.
 
@@ -392,8 +404,12 @@ def lead(
         overrides: A role's harness, model or effort, set for this run, e.g. `{"dev": {"model": "sonnet"}}`. Roles: lead, dev, sre, judge.
         max_verifications: Verifications by the judge, at most.
         max_decisions: Decisions of the lead, at most, refused ones included.
+        lead_workstream: The lead's Workstream, when Agora created it for a team launched from its client.
+        owner: Who owns the lead's Workstream and is asked: an identity UUID; the worker's operator without it.
+        members_owner: Who owns the members' Workstreams: the person's agents' folder; the owner's without it.
     """
-    return drive(goal, overrides, max_verifications, max_decisions, owner=None, exclude={"mock"})
+    return drive(goal, overrides, max_verifications, max_decisions, owner=owner, exclude={"mock"},
+                 lead_workstream=lead_workstream, members_owner=members_owner)
 
 
 REHEARSAL_SCRIPT: dict[str, Any] = {

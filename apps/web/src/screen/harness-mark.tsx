@@ -1,7 +1,7 @@
 // A harness's mark, monochrome, for the composer when it is too narrow for names. The marks are
 // @lobehub/icons-static-svg 1.95.1's (MIT): claudecode.svg, codex.svg and opencode.svg. Any other
 // harness, the mock included, gets a robot.
-import { BotIcon } from 'lucide-react'
+import { BotIcon, UsersIcon } from 'lucide-react'
 import type { FC } from 'react'
 
 const MARKS: Record<string, string> = {
@@ -14,6 +14,7 @@ const MARKS: Record<string, string> = {
 
 export const HarnessMark: FC<{ harness: string | null | undefined; className?: string }> = ({ harness, className }) => {
   const mark = harness ? MARKS[harness] : undefined
+  if (harness === 'team') return <UsersIcon aria-hidden className={className} />
   if (mark === undefined) return <BotIcon aria-hidden className={className} />
   return (
     <svg aria-hidden viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className={className}>

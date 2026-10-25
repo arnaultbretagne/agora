@@ -2,20 +2,21 @@
 // read again every 10 seconds and whenever asked; a Workstream's thread, kept in the browser with its
 // cursor — reused only together — and read again from that cursor.
 import { useCallback, useEffect, useState } from 'react'
-import type { Api } from './api.ts'
+import type { Api, Folder } from './api.ts'
 import { empty, type ThreadState, type ViewObject } from './objects.ts'
 import { ThreadStream, type Connection } from './stream.ts'
 import type { WorkstreamView } from './view.ts'
 
-export function useWorkstreams(api: Api): { workstreams: WorkstreamView[]; loading: boolean; reload: () => void } {
+export function useWorkstreams(api: Api, folder: Folder | null = null, enabled = true): { workstreams: WorkstreamView[]; loading: boolean; reload: () => void } {
   const [workstreams, setWorkstreams] = useState<WorkstreamView[]>([])
   const [loading, setLoading] = useState(true)
   const [tick, setTick] = useState(0)
   const reload = useCallback(() => setTick((t) => t + 1), [])
   useEffect(() => {
+    if (!enabled) return
     let live = true
     void api
-      .workstreams()
+      .workstreams(folder)
       .then((list) => live && setWorkstreams(list))
       .catch(() => undefined)
       .finally(() => live && setLoading(false))
@@ -24,7 +25,7 @@ export function useWorkstreams(api: Api): { workstreams: WorkstreamView[]; loadi
       live = false
       clearTimeout(timer)
     }
-  }, [api, tick, reload])
+  }, [api, folder, enabled, tick, reload])
   return { workstreams, loading, reload }
 }
 

@@ -7,6 +7,7 @@ import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKey
 import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
+import { teamFrom, teamHttp } from './team.ts'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -95,12 +96,15 @@ try {
 }
 
 const client = serveClient(process.env.CLIENT_DIR ?? join(import.meta.dirname, '..', '..', 'web', 'dist'))
+// docs/specs/flows.md, "Launching from Agora": a team, when Prefect is configured.
+const teams = teamHttp(teamFrom(process.env), store)
 const server = createApi({
   manager: executions,
   testRoutes,
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
   handle: async (req, res) =>
     (await limitsHttp(limits, req, res)) ||
+    (await teams(req, res)) ||
     (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) ||
     client(req, res),
   ...(credentials === undefined ? {} : { credentials }),

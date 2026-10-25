@@ -5,7 +5,8 @@
 // at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
 // frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
-import { MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
+import { ChevronRightIcon, ChevronUpIcon, FolderIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
+import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
@@ -89,6 +90,109 @@ const Item: FC<{ w: WorkstreamView; active: boolean; onOpen: () => void }> = ({ 
   </button>
 )
 
+// ---------------------------------------------------------------- the account
+
+const rowClass =
+  'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] rounded-control flex h-8 w-full items-center gap-2 px-2 text-[13px] transition-colors'
+const accountMenuClass =
+  'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
+const accountItemClass =
+  'hover:bg-muted focus:bg-muted flex cursor-pointer items-start gap-2 rounded-sm px-2 py-1.5 text-[13px] outline-none select-none'
+
+/**
+ * The account (docs/specs/assistant-ui.md, "Accounts"), at the foot of the sidebar as assistant-ui's own
+ * demo has it (its `SidebarAccount`, MIT): the person's e-mail, its initial on a plate; opened, Sign
+ * out. None without the proxy's identity.
+ */
+const AccountMenu: FC = () => {
+  const { account } = useAgora()
+  if (account.email === null) return null
+  const own = account.email
+  return (
+    <div className="border-foreground/10 -mx-3 mt-3 -mb-3 shrink-0 border-t p-3">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button type="button" aria-label="Account" className={rowClass}>
+            <span aria-hidden className="bg-foreground/[0.06] text-foreground rounded-control grid size-5 shrink-0 place-items-center text-[11px] font-medium">
+              {own.charAt(0).toUpperCase()}
+            </span>
+            <span className="text-foreground min-w-0 flex-1 truncate text-left">{own}</span>
+            <ChevronUpIcon className="size-3 shrink-0" />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content side="top" align="start" sideOffset={6} className={accountMenuClass}>
+            <DropdownMenu.Item asChild className={accountItemClass}>
+              <a href="/oauth2/sign_out?rd=%2F">
+                <LogOutIcon className="mt-0.5 size-3.5 shrink-0" />
+                Sign out
+              </a>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  )
+}
+
+const FOLDER_KEY = 'agora:agents-open'
+const storedFolder = (): boolean => {
+  try {
+    return localStorage.getItem(FOLDER_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The person's agents' folder (docs/specs/assistant-ui.md, "Accounts"), at the foot of the list: the
+ * Workstreams of their runs' members, closed at first, its state remembered. None while it is empty.
+ */
+const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, onNavigate }) => {
+  const { agents, id, open } = useAgora()
+  const [opened, setOpened] = useState(storedFolder)
+  const shown = useMemo(() => sections(agents, new Date(), search, id).flatMap((s) => s.workstreams), [agents, search, id])
+  if (shown.length === 0) return null
+  const toggle = () => {
+    setOpened(!opened)
+    try {
+      localStorage.setItem(FOLDER_KEY, String(!opened))
+    } catch {
+      // Remembered for this page only.
+    }
+  }
+  return (
+    <section aria-label="Agents">
+      <button
+        type="button"
+        aria-expanded={opened}
+        onClick={toggle}
+        className="text-muted-foreground hover:text-foreground mt-5 mb-1 flex w-full items-center gap-1.5 px-2 text-xs font-medium transition-colors"
+      >
+        <ChevronRightIcon className={cn('size-3 transition-transform', opened && 'rotate-90')} />
+        <FolderIcon className="size-3.5" />
+        Agents
+        <span className="text-muted-foreground/70 ml-auto tabular-nums">{shown.length}</span>
+      </button>
+      {opened && (
+        <div className="flex flex-col gap-0.5 pl-3">
+          {shown.map((w) => (
+            <Item
+              key={w.id}
+              w={w}
+              active={w.id === id}
+              onOpen={() => {
+                open(w.id)
+                onNavigate()
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
   const { workstreams, id, open } = useAgora()
   const [search, setSearch] = useState('')
@@ -139,7 +243,9 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
             </div>
           </section>
         ))}
+        <AgentsFolder search={search} onNavigate={onNavigate} />
       </nav>
+      <AccountMenu />
     </div>
   )
 }
