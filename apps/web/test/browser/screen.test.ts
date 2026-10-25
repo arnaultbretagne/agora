@@ -1,8 +1,8 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44 and U46: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46 and U50: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
-import { generateKeyPairSync } from 'node:crypto'
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -750,4 +750,39 @@ test('U46 attachments: a photo and a Markdown file attached in a draft, a binary
   t.diagnostic(`the image opened: ${size.join(' × ')}`)
   assert.deepEqual(size, [2048, 1365])
   await shot(page, 'U46-opened')
+})
+
+test('U50 a question: one box, its text and options; waiting in the list; a note and an option chosen: Answer sent, the options gone, sending open', async () => {
+  const page = await fresh()
+  const id = randomUUID()
+  assert.equal((await server.post('/api/workstreams', { id, owner: randomUUID() })).status, 200)
+  const options = [
+    { optionId: 'approve', name: 'Approve', kind: 'allow_once' },
+    { optionId: 'revise', name: 'Revise', kind: 'reject_once' },
+  ]
+  const asked = await server.command(id, 'Ask', {}, { title: 'Approve the envelope', text: 'One feature, **one** dev.', options, note: true })
+  assert.equal(asked.status, 200)
+  await page.goto(`${server.url}/w/${id}`)
+  await thread(page).getByText('Approve the envelope').first().waitFor()
+  await thread(page).getByText('One feature,').waitFor()
+  assert.equal(await thread(page).locator('strong', { hasText: 'one' }).count(), 1, 'the text as Markdown')
+  // One box: the question's text and the options that answer it.
+  const box = thread(page).locator('[data-question="pending"]')
+  await box.getByText('waiting for you').waitFor()
+  await box.getByText('One feature,').waitFor()
+  await box.getByLabel('Note').waitFor()
+  assert.deepEqual(await box.locator('button').filter({ hasText: /^(Approve|Revise)$/ }).allInnerTexts(), ['Approve', 'Revise'])
+  await page.getByRole('button', { name: 'New workstream waiting for you' }).waitFor()
+  await page.getByText('Answer the question above.').waitFor()
+  assert.equal(await page.getByText('asks before it goes on').count(), 0)
+  assert.deepEqual(await thread(page).locator('button').filter({ hasText: /^(Approve|Revise)$/ }).allInnerTexts(), ['Approve', 'Revise'])
+  await page.getByLabel('Note').fill('One criterion per behaviour.')
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  await thread(page).locator('[data-question="answered"]').getByText('Revise — One criterion per behaviour.').waitFor()
+  assert.equal(await page.getByLabel('Note').count(), 0)
+  const answer = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Answer')!
+  assert.deepEqual([answer.content.target, answer.content.body], [{ question: String(asked.body.position) }, { optionId: 'revise', note: 'One criterion per behaviour.' }])
+  assert.equal(await page.getByText('Answer the question above.').count(), 0)
+  await composerInput(page).fill('after the answer')
+  assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true)
 })

@@ -70,6 +70,7 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 | Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
 | RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
+| Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question, from its card. |
 | Stop | `execution` | — | For an execution neither stopped nor ended. |
 
 ## The Workstream's state
@@ -91,7 +92,8 @@ in the header, after the harness.
 In `ready`, sending is open when the snapshot is complete, no turn is saved, in progress or
 uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
 above the composer: the state's, then "Answer the permission request above.", then "Applying the
-settings…", then the uncertain turn's banner.
+settings…", then the uncertain turn's banner. A pending question closes sending in every state,
+starting an execution included, before any other reason: "Answer the question above."
 
 ## Sending
 
@@ -189,6 +191,7 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
+| A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
 Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown.
 
@@ -243,6 +246,7 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | Tone | Running (`pending`, `in_progress`): shimmer, coral marker. A permission pending: attention. `failed`: red. |
 | Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"); else "failed"; else, for a change, the lines added and removed. |
 | Open | At first only while a permission is pending. |
+| A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 
 | Plan entry `status` | Shown |
 | --- | --- |
@@ -283,7 +287,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
 | Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles | **ours** |
-| Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; a Workstream in `none` left out unless open; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red) | **ours** |
+| Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
 | Header | Title, or a waiting first message; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
@@ -402,6 +406,10 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U44 | In a browser, `internet` offered: a draft; the Internet switched off, a repository picked, a first message; then switched on in the open Workstream, and a message | The menu lists the Internet, then the repositories; the switch on, then off, the menu still open; the Create without `internet`; switched on: shown at once, **Scope** with the repository and `internet`; "Internet, b" once the view has it. |
 | U45 | Files for an agent accepting images and embedded resources: an image, a UTF-8 text file, one with a NUL, one over 256 KiB, one not UTF-8; then images alone, nothing, or not known; a prompt of text and two attachments; a `user` element of text, an image, an embedded resource, a resource link and an audio block | The image an image; the text file a resource with its name, type and text; the others refused with why; images alone: the text file refused; nothing or not known: no paperclip. The prompt: the text block, then the attachments in order. The message: its text, and four attachments — the image's, the resource and the link by their `uri`, the audio by its type. |
 | U46 | In a browser, a draft whose agent accepts images and embedded resources: a 3000 × 2000 PNG and a Markdown file attached, then a binary file; a first message sent; the page reloaded | The paperclip; two tiles; the binary refused, "{name} can't be attached: …"; the Write's prompt: the text, a JPEG 2048 px wide, the Markdown as a resource with its name and text; the agent saying it received them; reloaded, their two tiles above the bubble, the image opening whole. |
+| U47 | A question pending, then answered with an option and a note | An `assistant` message at its position, `requires-action`: the title in bold and the text; the `question` part, its approval the options, none chosen. Answered: `complete`, the approval its option, the line's note the option and the note. |
+| U48 | A question pending on a Workstream with no execution, then answered | Sending closed, no execution offered, "Answer the question above."; once answered, sending open and starting an execution. |
+| U49 | The list with a Workstream in `none` whose question is pending | Listed, though not open; once answered, left out again. |
+| U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | One box holding the title, the text, "waiting for you", the note's field and the options; "waiting for you" in the list; "Answer the question above."; chosen: Answer sent with the option and the note, the field and options gone, the box's foot noting them, sending open. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

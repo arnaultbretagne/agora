@@ -506,3 +506,78 @@ test('U45 attachments: what each file becomes for what the agent accepts; the pr
   assert.deepEqual(workstreamOf(state, ws).promptCapabilities, { image: false, audio: false, embeddedContext: false })
   assert.equal(acceptOf(workstreamOf(state, ws).promptCapabilities!), null, 'so no paperclip')
 })
+
+// ---------------------------------------------------------------- a question to the person
+
+// A question's history is the log's commands alone: synthetic entries, as the log writes them.
+const QUESTION_WS = '0c9e5a3e-0000-4000-8000-00000000c0de'
+const asked = {
+  title: 'Approve the envelope',
+  text: '## The plan\n\nOne feature, **one** dev.',
+  options: [
+    { optionId: 'approve', name: 'Approve', kind: 'allow_once' },
+    { optionId: 'revise', name: 'Revise', kind: 'reject_once' },
+  ],
+  note: true,
+}
+const commandEntry = (position: number, kind: string, target: Record<string, unknown>, body: Record<string, unknown>): Entry =>
+  ({
+    workstream: QUESTION_WS,
+    position: String(position),
+    time: `2026-10-25T10:00:0${String(position)}.000Z`,
+    kind: 'command',
+    content: { id: `c${String(position)}`, kind, target, body },
+    command: `c${String(position)}`,
+  }) as unknown as Entry
+const pendingQuestion = [commandEntry(1, 'Ask', {}, asked)]
+const answeredQuestion = [...pendingQuestion, commandEntry(2, 'Answer', { question: '1' }, { optionId: 'revise', note: 'One criterion per behaviour.' })]
+
+function stateOf(entries: readonly Entry[]): ThreadState {
+  const position = entries.at(-1)!.position
+  let state = empty
+  for (const o of project(entries)) state = apply(state, { type: 'snapshot', position, operation: 'upsert', kind: o.kind, id: o.id, object: o.object as Record<string, unknown> })
+  return apply(state, { type: 'snapshot-end', position })
+}
+
+type QuestionPart = { type: string; text?: string; toolName?: string; artifact?: Artifact; approval?: Record<string, unknown> }
+
+test('U47 a question pending, then answered with an option and a note', () => {
+  const before = messagesOf(stateOf(pendingQuestion))
+  assert.equal(before.length, 1)
+  const message = before[0]!
+  assert.deepEqual([message.role, message.status], ['assistant', { type: 'requires-action', reason: 'tool-calls' }])
+  const [part, call] = message.content as unknown as QuestionPart[]
+  assert.deepEqual([part!.type, part!.text], ['text', `**Approve the envelope**\n\n${asked.text}`])
+  assert.deepEqual([call!.type, call!.toolName, call!.artifact!.title, call!.artifact!.note], ['tool-call', 'question', 'Approve the envelope', true])
+  assert.deepEqual(call!.approval!.options, [
+    { id: 'approve', kind: 'allow-once', label: 'Approve' },
+    { id: 'revise', kind: 'reject-once', label: 'Revise' },
+  ])
+  assert.ok(!('optionId' in call!.approval!))
+  const after = messagesOf(stateOf(answeredQuestion))[0]!
+  assert.deepEqual(after.status, { type: 'complete', reason: 'stop' })
+  const done = (after.content as unknown as QuestionPart[])[1]!
+  assert.deepEqual([done.approval!.optionId, done.approval!.approved], ['revise', false])
+  assert.deepEqual([done.artifact!.answer, done.artifact!.answerNote], ['Revise', 'One criterion per behaviour.'])
+})
+
+test('U48 a question pending on a Workstream with no execution closes sending, a first message included', () => {
+  const state = stateOf(pendingQuestion)
+  const view = workstreamOf(state, QUESTION_WS)
+  assert.deepEqual([view.state, view.question], ['none', '1'])
+  const closed = composerOf(state, view)
+  assert.deepEqual([closed.open, closed.create, closed.reason], [false, false, 'Answer the question above.'])
+  const after = stateOf(answeredQuestion)
+  const open = composerOf(after, workstreamOf(after, QUESTION_WS))
+  assert.deepEqual([open.open, open.create, open.reason], [true, true, null])
+})
+
+test('U49 a Workstream in none whose question waits is listed though not open; once answered, left out again', () => {
+  const now = new Date('2026-10-25T12:00:00Z')
+  const listed = (entries: readonly Entry[]) => {
+    const view = { ...workstreamOf(stateOf(entries), QUESTION_WS), changedAt: '2026-10-25T10:00:00Z' }
+    return sections([view], now, '', null).flatMap((s) => s.workstreams.map((w) => w.id))
+  }
+  assert.deepEqual(listed(pendingQuestion), [QUESTION_WS])
+  assert.deepEqual(listed(answeredQuestion), [])
+})
