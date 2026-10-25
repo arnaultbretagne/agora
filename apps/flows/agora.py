@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 # The namespace of every id a flow derives; fixed, so that the same turn gives the same ids anywhere.
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://agora.bretagne.dev/flows")
@@ -140,6 +140,15 @@ class Agora:
                 rows.append(row)
         raise RuntimeError("thread closed before snapshot-end")
 
+    def stream(self, workstream: str, after: str, idle: float) -> Iterator[dict[str, Any]]:
+        """The thread from a cursor, snapshot then live rows, as long as the connection lasts: a read
+        that waits more than `idle` seconds ends it (docs/specs/log.md, "The thread")."""
+        request = urllib.request.Request(f"{self.base}/api/workstreams/{workstream}/thread?after={after}")
+        with urllib.request.urlopen(request, timeout=idle) as response:
+            for line in response:
+                if line.startswith(b"data: "):
+                    yield json.loads(line[6:])
+
 
 class Thread:
     """The member's view of its Workstream, folded from the thread's rows."""
@@ -179,6 +188,28 @@ class Thread:
             if kind == "element" and o.get("type") == "agent_message_chunk" and o.get("turn") == turn
         ]
         return "".join(c.get("text", "") for c in sorted(chunks, key=lambda c: int(c.get("firstPosition") or 0)))
+
+    def wait(self, done: Callable[["Thread"], bool], idle: float = 600.0, sleep: Callable[[float], None] = time.sleep) -> None:
+        """Follows the thread live until `done` holds. Nothing is polled: a connection idle `idle`
+        seconds, or one that drops, is opened again from the cursor."""
+        while not done(self):
+            try:
+                for row in self.agora.stream(self.workstream, self.cursor, idle):
+                    if row.get("type") == "snapshot-end":
+                        self.cursor = str(row["position"])
+                    else:
+                        self.apply([row])
+                        if row.get("type") != "snapshot" and row.get("position") is not None:
+                            self.cursor = str(row["position"])
+                    if done(self):
+                        return
+            except (OSError, ValueError):
+                # Idle past `idle`, or dropped: opened again from the cursor, a little later on an error.
+                sleep(5)
+
+    def question(self, position: str) -> dict[str, Any] | None:
+        """The question asked at that position (docs/specs/log.md, "Elements")."""
+        return next((o for (kind, _), o in self.objects.items() if kind == "element" and o.get("type") == "question" and str(o.get("position")) == position), None)
 
     def pending_permission(self) -> bool:
         return any(kind == "element" and o.get("type") == "permission" and o.get("status") == "pending" for (kind, _), o in self.objects.items())
@@ -321,6 +352,22 @@ def _write(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, execut
             raise Escalation(f"{name}: execution not ready after {int(ready_timeout)} s (state {state})")
         sleep(poll)
         thread.refresh()
+
+
+def ask(agora: Agora, workstream: str, key: str, question: dict[str, Any]) -> str:
+    """Asks the person in the Workstream (docs/specs/log.md, "Commands"), once: the same key finds the
+    question already asked. Its position."""
+    answer = agora.command(workstream, command_id(workstream, f"ask-{key}"), "Ask", {}, question)
+    if not answer.get("accepted"):
+        raise Escalation(f"question {key!r} refused: {answer.get('reason')}")
+    return str(answer["position"])
+
+
+def wait_answer(agora: Agora, workstream: str, position: str, idle: float = 600.0) -> dict[str, Any]:
+    """The person's answer to the question at that position — its option and note — once given."""
+    thread = Thread(agora, workstream)
+    thread.wait(lambda t: (t.question(position) or {}).get("status") == "answered", idle=idle)
+    return dict((thread.question(position) or {}).get("answer") or {})
 
 
 def split_last_json(text: str) -> tuple[str, dict[str, Any] | None]:

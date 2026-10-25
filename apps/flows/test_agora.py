@@ -12,7 +12,7 @@ import json
 import unittest
 from typing import Any
 
-from agora import Escalation, Thread, TurnSpec, command_id, last_json, run_turn, split_last_json, workstream_id
+from agora import Escalation, Thread, TurnSpec, ask, command_id, last_json, run_turn, split_last_json, wait_answer, workstream_id
 
 
 class FakeAgora:
@@ -228,6 +228,64 @@ class Answers(unittest.TestCase):
         self.assertFalse(thread.pending_permission())
         thread.apply([{"operation": "reset", "kind": None, "id": None}])
         self.assertEqual(thread.turns(), [])
+
+
+class QuestionAgora:
+    """A stand-in Agora for a question: Ask deduplicated by id, the answer given after the stream has
+    been read a number of times, connections that idle out or drop."""
+
+    def __init__(self, answer_after: int = 2, drops: int = 0) -> None:
+        self.answer_after = answer_after
+        self.drops = drops
+        self.asks: dict[str, dict[str, Any]] = {}
+        self.cursors: list[str] = []
+        self.position = 40
+        self.question: dict[str, Any] | None = None
+
+    def ensure_workstream(self, workstream: str) -> None:
+        pass
+
+    def command(self, workstream: str, id: str, kind: str, target: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+        assert kind == "Ask"
+        if id not in self.asks:
+            self.position += 1
+            self.question = {"type": "question", "position": str(self.position), "title": body["title"], "status": "pending"}
+            self.asks[id] = {"accepted": True, "command": id, "position": str(self.position)}
+        return self.asks[id]
+
+    def stream(self, workstream: str, after: str, idle: float):
+        self.cursors.append(after)
+        if after == "0":
+            yield {"type": "snapshot", "position": "41", "operation": "upsert", "kind": "element", "id": "q", "object": dict(self.question or {})}
+            yield {"type": "snapshot-end", "position": "41"}
+        if self.drops > 0:
+            self.drops -= 1
+            raise TimeoutError("idle past the read timeout")  # the connection idles out: opened again from the cursor
+        self.answer_after -= 1
+        if self.answer_after <= 0:
+            answered = {**(self.question or {}), "status": "answered", "answer": {"optionId": "revise", "note": "One criterion each."}}
+            yield {"type": "live", "position": "42", "operation": "upsert", "kind": "element", "id": "q", "object": answered}
+            yield {"type": "live", "position": "43", "operation": "upsert", "kind": "workstream", "id": "w", "object": {"question": None}}
+
+
+class Questions(unittest.TestCase):
+    def test_F20_a_question_is_asked_once_and_its_answer_read_on_the_stream(self) -> None:
+        agora = QuestionAgora(answer_after=1)
+        ws = workstream_id("run-1", "lead")
+        position = ask(agora, ws, "envelope-2", {"title": "Approve the envelope"})  # type: ignore[arg-type]
+        self.assertEqual(ask(agora, ws, "envelope-2", {"title": "Approve the envelope"}), position)  # type: ignore[arg-type]
+        self.assertEqual(len(agora.asks), 1)
+        self.assertEqual(wait_answer(agora, ws, position), {"optionId": "revise", "note": "One criterion each."})  # type: ignore[arg-type]
+        self.assertEqual(agora.cursors, ["0"])  # one connection: nothing polled
+
+    def test_F20_a_connection_that_idles_out_is_opened_again_from_its_cursor(self) -> None:
+        agora = QuestionAgora(answer_after=1, drops=2)
+        ws = workstream_id("run-1", "lead")
+        position = ask(agora, ws, "ask-8", {"title": "The lead asks"})  # type: ignore[arg-type]
+        thread = Thread(agora, ws)  # type: ignore[arg-type]
+        thread.wait(lambda t: (t.question(position) or {}).get("status") == "answered", sleep=lambda _: None)
+        self.assertEqual(agora.cursors, ["0", "41", "41"])
+        self.assertEqual(thread.cursor, "42")
 
 
 def _dies_after(n: int):

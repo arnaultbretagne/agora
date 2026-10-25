@@ -34,7 +34,8 @@
    setting (harness, model, effort), which a launch may override. Rights are not a role's: the lead
    proposes each member's access in its plan.
 5. **One approval: the envelope.** The plan — features with acceptance criteria, team, access — is
-   approved once; anything beyond it goes through `ask`, and the whole run waits.
+   approved once; anything beyond it goes through `ask`, and the whole run waits. The person answers
+   in Agora: each is a question in the lead's Workstream, which the run waits for on its stream.
 6. **The judge is the flow's**: read only, a fresh Workstream for each verification, the lead's
    question taken as data, a base rubric locked in its card plus the approved criteria when it
    decides whether a feature ships. `done` needs each feature judged shippable since its last
@@ -50,8 +51,10 @@
   credentials stay in Agora's sandboxes and gateway.
 - Flows are ordinary Python: a loop over decisions read at run time, with no graph compiled in
   advance — which a lead choosing the steps needs.
-- Suspension with typed input is in the open-source server: its routes `/flow_runs/{id}/input`, and
-  events with triggers, are in its code (3.8.8, read 2026-10-07); a suspended run holds no process.
+- The person answers in Agora, where the run's story is: a question in the lead's Workstream, shown
+  with the same card as an agent's permission. The run waits on the thread's stream, one connection,
+  so nothing is polled; a waiting run's process holds 94 MiB (measured in the worker on 2026-10-25).
+  Prefect's own suspension was tried and dropped (below).
 - The cluster runs it in about 435 MiB — server 185, its PostgreSQL 130, worker 99, gate 21
   (`kubectl top`, 2026-10-07).
 - A lead that only decides keeps the plan with someone who sees the whole run, and the work with
@@ -89,6 +92,8 @@ documentation — and Kestra and Airflow were run on g4 on 2026-10-21 with the s
 | A lead that drives Prefect or Agora itself | A tool in the lead's sandbox to start steps. | — | A sandbox treated as hostile could start sandboxes, and the rules would have to move into an API it reaches. |
 | A lead that writes the orchestration as code | Its program run by the worker. | — | Code written by an agent would run outside any sandbox. |
 | A judge on a second default harness | The judge switching to another harness when the work used its own. | — | Two defaults for one setting; the launch overrides the judge's settings instead, and the lead is told which model judges. |
+| Prefect's forms, the run suspended | The person answers in Prefect's UI; the run, suspended, holds no process. | Run on g4 on 2026-10-24: each resume ran the flow again from its start; of its 48 tasks, 12 were turns and 19 replays from the cache. | The graph unreadable, the run's story split between Prefect and Agora, and the person answering outside the client they use. |
+| The process polling Agora, or Agora resuming Prefect | The run asks in Agora and reads the answer every few seconds; or Agora calls Prefect back when the person answers. | — | Polling rejected by the person; a call back ties Agora to Prefect and runs the flow again on every answer. |
 | Stopping a member's execution after each turn | So that an idle lead holds no sandbox. | Measured on g4 on 2026-10-23: the next turn's Create was refused `execution_active` for 5 minutes. A stopped execution's claim lasts until its deadline, like an idle one's. | It frees nothing sooner and makes every next turn wait for the lease. |
 | An agent orchestrating Workstreams through the gateway | An agent in a sandbox opening other Workstreams. | — | A hostile sandbox able to open sandboxes. |
 | A runner of our own | A script driving the API. | — | Durability, retries, forms and a UI to rebuild. |

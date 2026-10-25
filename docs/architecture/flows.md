@@ -10,7 +10,7 @@ other.
 
 | Actor | Role | Holds |
 | --- | --- | --- |
-| Prefect's server | Keeps the flows, their runs and states, the inputs a suspended run waits for; serves its UI at prefect.bretagne.dev, behind the identity proxy. | Its own database. |
+| Prefect's server | Keeps the flows, their runs and states; serves its UI at prefect.bretagne.dev, behind the identity proxy. | Its own database. |
 | Prefect's worker | Polls the work pool `agora`, clones the agora repository at the deployment's branch, runs the flow as a process of its own Pod. | The runs' results, on local storage. |
 | The flow (`apps/flows`) | Reads the lead's decisions, refuses what the rules or the envelope do not allow, carries out the rest, and writes every prompt. Names every branch and Workstream. | Nothing between runs. |
 | The role cards (`apps/flows/roles`) | Each role's persona and default settings: lead, dev, sre, judge. | The run's version, cloned with the flow. |
@@ -20,7 +20,7 @@ other.
 | The judge | Verifies what the lead asks, read-only, in a fresh Workstream each time. A feature ships only once judged shippable after its last change. | One Workstream per verification. |
 | Agora | Runs each member's agent in a sandbox and keeps its Workstream: commands, ACP lines, answers. | The record of every turn. |
 | The repository | Carries the work: each feature on its own branch, `flow/<run>/<feature>`. | The work itself. |
-| The human | Approves the envelope once, answers what the lead asks, merges. | The only merge. |
+| The person | Approves the envelope once, answers what the lead asks, merges — in Agora, in the lead's Workstream. | The only merge. |
 
 An agent never receives a credential from the flow: it goes out through Agora's gateway with the
 profiles its member's Create names — those the human approved in the envelope, the judge's always
@@ -84,25 +84,32 @@ on its own, a lease after its last turn; the member's next turn then creates ano
 continues its Session and is given what it missed. Each verification has a Workstream of its own,
 and so a judge with no memory of the others.
 
-## When a human decides
+## When the person decides
+
+The person answers in Agora, not in Prefect: the flow asks a question in the lead's Workstream, which
+the list shows "waiting for you", and the client shows it as a card like an agent's permission. The
+whole story of the run is then in the lead's thread — its plan, the person's answer, its questions,
+their answers.
 
 | Moment | How |
 | --- | --- |
-| The envelope | The run suspends with a form showing the features, their branches and criteria, the team, its settings and access, the judge and the limits: approve, ask the lead to revise, or stop. |
-| What the lead asks | The run suspends with the question and what it would add: yes or no, with notes for the lead. |
-| What a turn cannot settle | An uncertain turn, an execution gone, a refusal it does not know: the run suspends; retry once settled in Agora, or abort. |
+| The envelope | A question showing the features, their branches and criteria, the team, its settings and access, the judge and the limits: approve, revise — with a note for the lead — or stop. |
+| What the lead asks | A question with what it would add: yes or no, with a note for the lead. |
+| What a turn cannot settle | An uncertain turn, an execution gone, a refusal it does not know: a question; retry once settled in Agora, or abort the run. |
 | A permission an agent asks | Answered in Agora's client, in the member's Workstream; the turn waits meanwhile. |
-| The merge | The work ends on branches with draft pull requests; the human merges. |
+| The merge | The work ends on branches with draft pull requests; the person merges. |
 
-A suspended run holds no process: Prefect runs it again when it is resumed, and its completed turns
-and pages answer from their persisted results, or find their Workstreams again.
+While a question waits, the run's process waits for its answer on the lead's thread: one connection,
+opened again from its cursor if it idles or drops; nothing is polled and nothing runs again. Its
+graph shows the wait as a task, `Waiting for you: …`.
 
 ## What survives what
 
 | Lost | What happens |
 | --- | --- |
 | The worker's Pod, during a turn | The turn goes on in its sandbox. The run, retried, finds the member's Workstream and waits for the same turn. |
+| The worker's Pod, while a question waits | The question stays in the lead's Workstream. The run, retried, finds it, or its answer if the person gave one meanwhile. |
 | The worker's local storage | Completed turns run again and find their Workstreams: nothing is sent twice. |
-| Prefect's database | The runs' history and their pending forms. Every member's Workstream stays in Agora. |
+| Prefect's database | The runs' history. Every member's Workstream, and every question and answer, stays in Agora. |
 | A member's execution, between turns | Its next turn continues its Session in a new one. |
 | A member's execution, during a turn | Agora's log says so; the turn escalates to a human. |

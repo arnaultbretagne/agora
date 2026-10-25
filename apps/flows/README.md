@@ -45,8 +45,9 @@ prefect deployment run lead/<branch> --param goal="…"
 prefect deployment run lead/<branch> --param goal="…" --param 'overrides={"dev": {"model": "sonnet"}}'
 ```
 
-A run that waits for a human shows `Suspended`: resume it from its page in the UI, with the form —
-the envelope first, then whatever the lead asks.
+A run that waits for you asks in Agora: the lead's Workstream, `[flow <run>] lead: …`, shows
+"waiting for you" in the list, and its card takes your answer — the envelope first, then whatever the
+lead asks. In Prefect, the run stays `Running`, its task `Waiting for you: …` on the graph.
 
 A run whose worker Pod died stays `Running`: mark it `Crashed` (Prefect's API, `set_flow_run_state`
 with `force`), then `prefect flow-run retry <id>`; its turns find their Workstreams again.

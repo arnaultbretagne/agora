@@ -6,13 +6,14 @@ why, in the workflows ADR.
 
 **A lead decides and the flow carries out. Each member of the team is one Workstream, kept across
 its turns; every id a turn sends is derived from the turn's identity, so running it again finds it
-where it is and never starts a second agent.**
+where it is and never starts a second agent. What needs the person is a question in the lead's
+Workstream, and the run waits for its answer on the thread's stream.**
 
 ## A turn's identity
 
 | Name | Value |
 | --- | --- |
-| Identity | The flow run's id, the member's name, the member's turn number from 1, the attempt — 0, or the number of retries a human asked for. |
+| Identity | The flow run's id, the member's name, the member's turn number from 1, the attempt — 0, or the number of retries the person asked for. |
 | Workstream | The name-based UUID (version 5) of `<run>/<member>` in the flows' namespace, itself the name-based UUID of the URL `https://agora.bretagne.dev/flows`. One per member, for all its turns. |
 | Commands | The name-based UUID, in the Workstream's id as namespace, of `create-<turn>` and `write-<turn>`, each followed by `.<attempt>` once the attempt is not 0. |
 | Owner | The worker's `AGORA_OWNER`, unless the run names another. A rehearsal names the live cases' owner, `c45e0000-0000-4000-8000-000000000000`. |
@@ -37,11 +38,24 @@ A turn's task is retried by Prefect 3 times, 20 s apart, on any error but an esc
 result is persisted; Prefect's default cache (inputs, task source, run) answers a turn already
 completed in the same run without running it.
 
-## Escalation
+## The person's questions
 
-A turn that escalates suspends its flow run with the input `Settle` — `action`, `retry` or `abort` —
-under the key `escalation-<member>-<turn>-<attempt>`, the reason in the form's description. `retry`
-runs the turn again with the next attempt; `abort` fails the flow run.
+The envelope, what the lead asks, and a turn the flow cannot settle are questions to the person
+(`log.md`, "Commands": Ask), in the lead's Workstream, answered in Agora's client.
+
+| Stage | Rule |
+| --- | --- |
+| Ask | In the lead's Workstream, created if it does not exist yet, under the command id of `ask-<key>`: the same key finds the question already asked. Its title, one line of at most 150 characters; its text, Markdown; its options; a note offered, but for an escalation. |
+| Keys | `envelope-<decision>`, `ask-<decision>`, `escalation-<member>-<turn>-<attempt>`. |
+| Wait | The thread read from its start, then followed live on one connection, until the question at the Ask's position is `answered`. A connection with nothing to read for 600 s, or one that drops, is opened again from the cursor, 5 s later on an error. Nothing is polled. |
+| Answer | The question's `answer`: its `optionId`, and its `note` when the person wrote one. |
+| Task | `Waiting for you: <title>`, retried by Prefect 3 times, 20 s apart; its result persisted. |
+
+| Question | Options | Then |
+| --- | --- | --- |
+| An escalation | Retry (`allow_once`), Abort the run (`reject_always`); no note | `retry` runs the turn again with the next attempt; anything else fails the flow run. |
+| The envelope | Approve (`allow_once`), Revise (`reject_once`), Stop (`reject_always`) | Below, "The decisions". |
+| An `ask` | Yes (`allow_once`), No (`reject_once`) | Below, "The decisions". |
 
 ## Role cards
 
@@ -89,10 +103,10 @@ The run's harnesses are the catalogue's but `mock`. Its offer — the pools and 
 
 | Decision | Accepted | The flow |
 | --- | --- | --- |
-| `plan` | Before the plan is approved. `features`, 1 to 8: `id` (lowercase letters, digits and dashes, at most 40), `title`, `repo` among the offered repositories, `base`, `criteria` 1 to 15. `team`, 1 to 8: `name` as an id, neither `lead` nor beginning with `judge`; `role` `dev` or `sre`; `harness`, `model`, `effort` the pool offers; `access`, each profile offered, or a repository's `:read` where its `:write` is. | Suspends under `envelope-<n>` with the input `Envelope` — `answer` `approve`, `revise` or `stop`, and `notes` — the description showing each feature with its branch and criteria, each member with its settings and access, the judge, the limits. `approve`: the envelope holds them; `revise`: the notes go to the lead; `stop`: the run ends, outcome `stopped by the human at the plan`. |
+| `plan` | Before the plan is approved. `features`, 1 to 8: `id` (lowercase letters, digits and dashes, at most 40), `title`, `repo` among the offered repositories, `base`, `criteria` 1 to 15. `team`, 1 to 8: `name` as an id, neither `lead` nor beginning with `judge`; `role` `dev` or `sre`; `harness`, `model`, `effort` the pool offers; `access`, each profile offered, or a repository's `:read` where its `:write` is. | Asks the person, key `envelope-<n>`, title `Approve the envelope: <goal>`, its text showing each feature with its branch and criteria, each member with its settings and access, the judge, the limits. `approve`: the envelope holds them; `revise`: the note goes to the lead; `stop`: the run ends, outcome `stopped by the person at the plan`. |
 | `steps` | Once approved. 1 to 10 steps, each a member of the team but the lead, a `brief`, and a `feature` of the envelope — required of a dev. | Each step, in order, is the member's next turn. A dev's step, or one by a member with `:write` on the feature's repository, changes the feature. The outcome gives each step's turn status, report, and answer cut to 6,000 characters. |
 | `verify` | Once approved, with a verification left. `question`; `feature` of the envelope or none; `shippable`, true only with a feature. | A turn of a new member `judge-<k>`, k the verification's number, on the judge's card. Its access: the feature's repository `:read` and `internet`; without a feature, `:read` of every repository in the team's access, and `internet`. A pass needs the verdict `pass`, no check but `pass`, and, when shippable, each base rubric item and each criterion among the checks by its id. A shippable pass makes the feature shippable at this decision. A judge's turn not `done` is a verification cut: nothing judged, the lead told so with what the judge had said, and it counts. |
-| `ask` | At any time. `question`; `add`, once approved: `features` and `team` as in a plan, `access` mapping a member to its whole access after the change. | Suspends under `ask-<n>` with the input `Reply` — `answer` `yes` or `no`, and `notes`. `yes` adds what `add` holds; the answer and the notes go to the lead either way. |
+| `ask` | At any time. `question`; `add`, once approved: `features` and `team` as in a plan, `access` mapping a member to its whole access after the change. | Asks the person, key `ask-<n>`, title `The lead asks: <question>`, its text the question and what `add` holds, each access shown before and after. `yes` adds what `add` holds; the answer and the note go to the lead either way. |
 | `done` | Once approved, every feature shippable since its last change. | Ends the run, outcome `done`, with its `summary`. |
 | `stop` | At any time, with a `reason`. | Ends the run, outcome `stopped by the lead`. |
 
@@ -103,14 +117,22 @@ The run's harnesses are the catalogue's but `mock`. Its offer — the pools and 
 | A step | `[flow <8>] <member>: <the feature's title, or the brief's first line>`; on the member's first turn, its card, the run's goal and its access; then the brief; where the work is — the feature's repository and base, its branch `flow/<8>/<feature>` and its criteria C1, C2…, a dev told to start the branch from the base if it does not exist, push there and keep a draft pull request open to the base — or the repositories the member can reach; and the report it ends with: `status` `done` or `blocked`, `summary`, `pull_request`. |
 | A verification | `[flow <8>] judge: verification <k>`, its card, the run's goal for context, the lead's question in a text block as what to look at and never what to conclude, the feature's repository, base and branch, the ids it owes when shippable, its access, and the verdict it ends with: `verdict`, `checks` each with `id`, `check`, `result`, `evidence`, and `summary`. |
 
+### The graph
+
+| Node | Name | Holds |
+| --- | --- | --- |
+| The lead's turn | Task `<n> · lead`, the decision's number | One turn of the lead; the next waits for it. |
+| A decision carried out | Subflow `decision`, run `<n> · <kind>` | Its members' turns, task `<member>[ · <feature>]` each, or its question, task `Waiting for you: <title>`; each waits for the one before. |
+
+A refused decision, `done` and `stop` carry nothing out: no subflow.
+
 ### Pages
 
 Each run publishes, as Prefect artifacts: the run, with its parameters and links to the flow and the
 role cards at the commit it cloned; each decision, accepted with its JSON or refused with its reason;
 the envelope once approved; each turn, with its settings, access, Workstream, execution, status,
-report, answer and exact prompt; and a summary table of the decisions and their outcomes. Each is
-published by a persisted task, so a resumed run publishes none twice. The tasks are named
-`<n> · <member>[ · <feature>]` for turns.
+report, answer and exact prompt; and a summary table of the decisions and their outcomes. Each has a
+key, `flow-<8>-<name>`: published again — a run retried — it is a new version, not a second page.
 
 ## The flow `lead-rehearsal`
 
@@ -121,7 +143,7 @@ message before after its echo; the rehearsal reads the answer before that quote.
 | Parameter | Default | Role |
 | --- | --- | --- |
 | `goal` | `Rehearsal on the mock: the lead's mechanics` | Shown in the pages and the prompts. |
-| `script` | ten decisions, verdicts `fail` then `pass` | `decisions`, the lead's in order, then `stop`; `verdicts`, the judge's in order, then `pass`. A member reports `done`. |
+| `script` | ten decisions, verdicts `fail` then `pass`, the envelope approved and the `ask` granted | `decisions`, the lead's in order, then `stop`; `verdicts`, the judge's in order, then `pass`; `answers`, the person's to `envelope` and `ask`, given with Answer under the command id of `answer-<key>` as soon as asked — without one, the run waits for an answer in Agora. A member reports `done`. |
 | `max_verifications`, `max_decisions` | 25, 100 | As for `lead`. |
 
 Every role runs on the mock with its default settings; the Workstreams belong to the live cases'
@@ -166,18 +188,19 @@ every replay gave the same Workstream, execution and answer.
 | F2 | The same turn again, after it ended | The same Workstream, execution and answer; nothing more in its log. |
 | F3 | The same turn again, its process killed during the turn | The run retried finds the turn begun before and waits for it; no other `Create` or `Write`. |
 | F4 | A Write refused while the Session opens | Sent again under the same id until accepted; one `Write` and one `session/prompt` in the log. |
-| F5 | An uncertain turn, or a refusal the turn cannot clear | Escalation; no command sent after it, a replay included. Retried by the human: new command ids, the same turn. |
+| F5 | An uncertain turn, or a refusal the turn cannot clear | Escalation, asked of the person; no command sent after it, a replay included. Retried by the person: new command ids, the same turn. |
 | F6 | The member's next turn, its execution still there | One more `Write` in the same execution; no `Create`. |
 | F7 | The member's next turn, its execution ended | A `Create`, sent again while the last claim goes; the new execution continues the member's Session. |
 | F8 | The member's next turn, its execution ending | Refused `execution_ending`, the turn goes to a new execution. |
 | F9 | A launch's overrides | A role's harness, model or effort replaced, its text never; another key fails the run; a member takes the launch's value over the lead's. |
-| F10 | A plan within the offer | The run suspends under `envelope-<n>` with the features, criteria, branches, team, settings, access and limits; `approve` makes them the envelope, `revise` sends the notes to the lead, `stop` ends the run. |
+| F10 | A plan within the offer | The person asked, key `envelope-<n>`, with the features, criteria, branches, team, settings, access and limits; `approve` makes them the envelope, `revise` sends the note to the lead, `stop` ends the run. |
 | F11 | A plan beyond the offer | Access or a repository not offered, a judge staffed, a reserved name, a model the harness does not offer, no criterion: refused, the reason in the lead's next prompt, counted. |
 | F12 | A decision other than `plan`, `ask` or `stop` before the plan is approved | Refused. |
 | F13 | Steps | Each a turn of its member, in order; the card only in the member's first turn; the feature's branch and criteria in each; every step's outcome in the lead's next prompt. |
 | F14 | A verification | A new Workstream `judge-<k>`, read-only access, the question as data, the base rubric and the criteria owed when shippable. |
 | F15 | A verdict | Pass only with `pass`, no check failed, and each owed id passed; a judge's turn cut before its verdict judges nothing. |
 | F16 | `done` | Refused until every feature has been judged shippable since its last change; then the run ends `done`. |
-| F17 | An `ask` | The whole run suspends under `ask-<n>`; `yes` adds what it asks for, `no` nothing; the notes reach the lead. |
+| F17 | An `ask` | The whole run waits for the person, key `ask-<n>`; `yes` adds what it asks for, `no` nothing; the note reaches the lead. |
 | F18 | The limits | No verification left: `verify` refused. `max_decisions` reached: the run ends `decision limit reached`. |
-| F19 | A run resumed after a suspension, on the same commit | Completed turns and pages answer from their persisted results: no command and no page twice. |
+| F19 | A run retried after its process died | Completed turns answer from their persisted results or find their Workstreams; no command twice; each page one, in its last version. |
+| F20 | A question to the person | Asked once, the same key finding it again; its answer read on the thread's stream, on one connection while nothing drops; a connection idle or dropped opened again from its cursor. |

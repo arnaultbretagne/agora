@@ -2,33 +2,34 @@
 Workstream (agora.py), turn after turn.
 
 The lead never touches Prefect or Agora: it answers each turn with one decision (team.py), and the
-flow carries it out within the envelope the human approved, then comes back to the lead with the
-outcome. The flow names everything — branches, Workstreams, who reads what — and each agent only does
-its work and ends with a short JSON report. Prefect may run any of it again — a retry, a resumed run,
-a worker that restarted — and every turn then finds its Workstream where it is (docs/specs/flows.md).
+flow carries it out within the envelope the person approved, then comes back to the lead with the
+outcome. Whatever needs the person — the envelope, what the lead asks, a turn the flow cannot settle —
+is a question in the lead's Workstream, answered in Agora's client; the run waits for the answer on
+the thread's stream. The flow names everything — branches, Workstreams, who reads what — and each
+agent only does its work and ends with a short JSON report (docs/specs/flows.md).
 
-What a person reads in Prefect: each flow's description and documented parameters; each run's pages
-under Artifacts — the run, the envelope, each decision, each turn with its exact prompt and answer, a
-summary; its tasks named after who does what; a form wherever the run waits for the human.
+What a person reads in Prefect: each flow's description and documented parameters; each run's graph —
+the lead's turns, and between them each decision as a subflow holding its turns and its waits; and its
+pages under Artifacts — the run, the envelope, each decision, each turn with its exact prompt and
+answer, a summary.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, replace
-from typing import Any, Literal
+from typing import Any
 
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact, create_table_artifact
-from prefect.flow_runs import suspend_flow_run
-from prefect.input import RunInput
 from prefect.runtime import flow_run
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agora import Agora, Escalation, TurnSpec, run_turn, split_last_json  # noqa: E402
+from agora import Agora, Escalation, TurnSpec, ask, command_id, run_turn, split_last_json, wait_answer, workstream_id  # noqa: E402
 from team import (  # noqa: E402
     STAFFED, Catalogue, Member, Refused, Team, approve, asked, decide, decision_json, envelope, grant,
     judge_access, judge_prompt, lead_brief, lead_update, load_cards, member_prompt, read_only,
@@ -41,6 +42,21 @@ REHEARSAL_OWNER = "c45e0000-0000-4000-8000-000000000000"
 SOURCE = "https://github.com/arnaultbretagne/agora"
 # What the lead reads of a member's answer; the whole answer stays in the member's Workstream.
 ANSWER_TO_LEAD = 6000
+
+# The options of the person's three questions (docs/specs/log.md, "Commands": Ask).
+ENVELOPE_OPTIONS = [
+    {"optionId": "approve", "name": "Approve", "kind": "allow_once"},
+    {"optionId": "revise", "name": "Revise", "kind": "reject_once"},
+    {"optionId": "stop", "name": "Stop", "kind": "reject_always"},
+]
+ASK_OPTIONS = [
+    {"optionId": "yes", "name": "Yes", "kind": "allow_once"},
+    {"optionId": "no", "name": "No", "kind": "reject_once"},
+]
+SETTLE_OPTIONS = [
+    {"optionId": "retry", "name": "Retry", "kind": "allow_once"},
+    {"optionId": "abort", "name": "Abort the run", "kind": "reject_always"},
+]
 
 
 def agora(owner: str | None) -> Agora:
@@ -63,7 +79,17 @@ def fenced(text: str, lang: str = "text") -> str:
     return f"````{lang}\n{text}\n````"
 
 
-# ---------------------------------------------------------------- turns
+def page_key(run: str, name: str) -> str:
+    """A page's key: the same page published again — a run retried — is a new version, not a second page."""
+    return re.sub(r"[^a-z0-9]+", "-", f"flow-{run[:8]}-{name}".lower()).strip("-")[:100]
+
+
+def one_line(text: str, limit: int = 150) -> str:
+    line = " ".join(text.split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+# ---------------------------------------------------------------- turns and the person
 
 def turn_page(label: str, spec: TurnSpec, result: dict[str, Any]) -> str:
     body, report = split_last_json(result.get("text", ""))
@@ -84,75 +110,76 @@ def turn_page(label: str, spec: TurnSpec, result: dict[str, Any]) -> str:
 @task(retries=3, retry_delay_seconds=20, persist_result=True, task_run_name="{label}")
 def member_turn(spec: dict[str, Any], label: str, owner: str | None = None) -> dict[str, Any]:
     """One turn of one member, its answer, and its page among the run's artifacts. The spec's
-    `attempt` tells a human-asked retry from a cached result."""
+    `attempt` tells a retry the person asked for from a cached result."""
     turn = TurnSpec(**spec)
+    key = page_key(turn.run, f"{turn.member}-turn-{turn.turn}")
     try:
         result = {"ok": True, **asdict(run_turn(agora(owner), turn, log=get_run_logger().info))}
     except Escalation as escalation:
         create_markdown_artifact(
-            markdown=f"# {label}\n\n**Needs a human:** {escalation}\n\n## Prompt\n\n{fenced(turn.prompt)}\n",
-            description=f"{label} — needs a human",
+            markdown=f"# {label}\n\n**Needs you:** {escalation}\n\n## Prompt\n\n{fenced(turn.prompt)}\n",
+            key=key,
+            description=f"{label} — needs you",
         )
         return {"ok": False, "escalation": str(escalation)}
-    create_markdown_artifact(markdown=turn_page(label, turn, result), description=label)
+    create_markdown_artifact(markdown=turn_page(label, turn, result), key=key, description=label)
     return result
 
 
-class Settle(RunInput):
-    action: Literal["retry", "abort"] = "retry"
-
-
-def turn(spec: TurnSpec, label: str, owner: str | None) -> dict[str, Any]:
-    """A turn, with what it cannot settle brought to the human until they abort or it succeeds."""
-    while True:
-        result = member_turn(asdict(spec), label, owner)
-        if result["ok"]:
-            return result
-        get_run_logger().warning(f"{label}: {result['escalation']}")
-        settle = suspend_flow_run(
-            wait_for_input=Settle.with_initial_data(
-                description=f"**{label}** needs you:\n\n> {result['escalation']}\n\n"
-                "Settle it in Agora if it can be, then retry; or abort the run.",
-            ),
-            key=f"escalation-{spec.member}-{spec.turn}-{spec.attempt}",
-        )
-        if settle.action == "abort":
-            raise RuntimeError(f"aborted at {label}")
-        spec = replace(spec, attempt=spec.attempt + 1)
-
-
-# ---------------------------------------------------------------- pages and Agora's offer
-
-@task(persist_result=True, task_run_name="{title}")
-def publish(title: str, markdown: str) -> None:
-    """A page, once: a resumed run answers from the cache instead of publishing it again."""
-    create_markdown_artifact(markdown=markdown, description=title)
-
-
-@task(persist_result=True, task_run_name="Summary")
-def publish_summary(rows: list[dict[str, str]], outcome: str) -> None:
-    create_table_artifact(table=rows, description=f"Outcome: {outcome}")
-
-
-@task(persist_result=True, retries=3, retry_delay_seconds=10, task_run_name="Agora's offer, decision {number}")
-def offer(number: int, owner: str | None) -> dict[str, Any]:
-    """The pools and the offered profiles, as they are when the decision is read; kept, so a resumed
-    run reads the same."""
+@task(retries=3, retry_delay_seconds=20, persist_result=True, task_run_name="Waiting for you: {title}")
+def human(run: str, key: str, title: str, text: str, options: list[dict[str, str]], note: bool, owner: str | None = None,
+          scripted: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A question to the person in the lead's Workstream, and their answer — its option and note —
+    once given, read on the thread's stream. `scripted`, in a rehearsal only: the answer the script gives."""
     client = agora(owner)
-    return {"pools": client.pools(), "offered": client.offered()}
+    workstream = workstream_id(run, "lead")
+    client.ensure_workstream(workstream)
+    position = ask(client, workstream, key, {"title": title, "text": text, "options": options, "note": note})
+    get_run_logger().info(f"asked in the lead's Workstream {workstream}: {title}")
+    if scripted is not None:
+        client.command(workstream, command_id(workstream, f"answer-{key}"), "Answer", {"question": position}, scripted)
+    return wait_answer(client, workstream, position)
+
+
+def turn(spec: TurnSpec, label: str, owner: str | None, after: Any = None) -> tuple[dict[str, Any], Any]:
+    """A turn, with what it cannot settle asked of the person until they abort or it succeeds; its
+    result, and its state for the next task's edge in the graph."""
+    while True:
+        state = member_turn(asdict(spec), label, owner, wait_for=[after] if after is not None else None, return_state=True)
+        result = state.result()
+        if result["ok"]:
+            return result, state
+        get_run_logger().warning(f"{label}: {result['escalation']}")
+        answer = human(
+            spec.run, f"escalation-{spec.member}-{spec.turn}-{spec.attempt}", one_line(f"{label} needs you"),
+            f"> {result['escalation']}\n\nSettle it in Agora if it can be, then retry; or abort the run.",
+            SETTLE_OPTIONS, False, owner, wait_for=[state],
+        )
+        if answer.get("optionId") != "retry":
+            raise RuntimeError(f"aborted at {label}")
+        spec, after = replace(spec, attempt=spec.attempt + 1), None
+
+
+@flow(name="decision", flow_run_name="{label}", persist_result=True, validate_parameters=False)
+def carry_out(label: str, items: list[dict[str, Any]], owner: str | None = None) -> list[dict[str, Any]]:
+    """One decision of the lead, carried out: its members' turns, or its question to the person, one
+    after the other."""
+    results: list[dict[str, Any]] = []
+    after = None
+    for item in items:
+        if "question" in item:
+            q = item["question"]
+            state = human(q["run"], q["key"], q["title"], q["text"], q["options"], q["note"], owner, q.get("scripted"),
+                          wait_for=[after] if after is not None else None, return_state=True)
+            results.append(state.result())
+            after = state
+        else:
+            result, after = turn(TurnSpec(**item["turn"]), item["label"], owner, after)
+            results.append(result)
+    return results
 
 
 # ---------------------------------------------------------------- the lead's run
-
-class Envelope(RunInput):
-    answer: Literal["approve", "revise", "stop"] = "approve"
-    notes: str = ""
-
-
-class Reply(RunInput):
-    answer: Literal["yes", "no"] = "yes"
-    notes: str = ""
-
 
 LEAD = """\
 **A lead manages a small team towards your goal; you approve its plan once, then answer only what it asks.**
@@ -161,16 +188,18 @@ LEAD = """\
 | --- | --- | --- |
 | **lead** | Cuts the goal into features, staffs them, briefs, sends work to the judge, decides when it is done. Never designs or codes. | Read only, every offered repository; the Internet |
 | **dev** | Designs, codes and proves one feature on its own branch `flow/<run>/<feature>`, up to a draft pull request. | What the plan gives it, approved by you |
-| **sre** | Checks that a change will run: CI, rollout, rollback, resources, failure modes. Reports. | What the plan gives it, approved by you |
-| **judge** | Verifies what the lead asks, fresh each time, on its card's harness and model unless the launch sets them; a feature ships only once judged shippable. | Read only |
+| **sre** | Owns how things run on the cluster, production only: changes it through its GitOps repository, with a rollout, a way back and proof. | What the plan gives it, approved by you |
+| **judge** | Verifies what the lead asks, fresh each time: reads CI, probes where it is blind; a feature ships only once judged shippable. | Read only |
 
 Each answer of the lead is one decision: `plan` (the envelope you approve: features, criteria, team, \
 access), `steps` (members work, one after the other), `verify` (the judge), `ask` (you; the whole run \
 waits), `done`, `stop`. The flow refuses what leaves the envelope and tells the lead why. Nobody merges \
 or deploys. Role cards: `apps/flows/roles`.
 
-Each member is a Workstream in Agora, titled `[flow <run>] <member>: …`. Each run shows the envelope, \
-each decision, each turn with its exact prompt and answer, and a summary, under *Artifacts*.
+You answer in Agora, in the lead's Workstream `[flow <run>] lead: …`, listed "waiting for you" while a \
+question waits. The graph shows the lead's turns and, between them, each decision with its turns and \
+waits; each run shows the envelope, each decision, each turn with its exact prompt and answer, and a \
+summary, under *Artifacts*.
 """
 
 
@@ -181,23 +210,26 @@ def run_name() -> str:
 
 def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: int, max_decisions: int, owner: str | None,
           harnesses: set[str] | None = None, exclude: set[str] | None = None, script: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The lead's run. `script`, in a rehearsal only: what the mock, which echoes its prompts, answers."""
+    """The lead's run. `script`, in a rehearsal only: what the mock, which echoes its prompts, answers,
+    and what the person answers."""
     logger = get_run_logger()
     run = str(flow_run.id)
     cards = with_overrides(load_cards(), overrides)
     team = Team(run=run, goal=goal, max_verifications=max_verifications, max_decisions=max_decisions, overrides=overrides)
+    client = agora(owner)
 
-    def catalogue(number: int) -> Catalogue:
-        found = offer(number, owner)
-        return Catalogue.from_agora(found["pools"], found["offered"], harnesses, exclude)
+    def catalogue() -> Catalogue:
+        return Catalogue.from_agora(client.pools(), client.offered(), harnesses, exclude)
 
-    first = catalogue(0)
+    first = catalogue()
     card = cards["lead"]
     lead_settings = first.settings(card.harness, card.model, card.effort)  # a bad launch fails here, before any turn
     lead = Member("lead", "lead", card.harness, card.model, card.effort, read_only([*first.offered, "internet"]))
     team.members["lead"] = lead
-    labels = iter(range(1, 10**6))
     rows: list[dict[str, str]] = []
+
+    def page(name: str, title: str, markdown: str) -> None:
+        create_markdown_artifact(markdown=markdown, key=page_key(run, name), description=title)
 
     def tail(kind: str, number: int = 0, required: list[str] | None = None) -> str:
         """What the mock must echo last, in a rehearsal: the scripted decision, report or verdict."""
@@ -223,65 +255,70 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             text = text.split('. Before, you told me "', 1)[0]
         return split_last_json(text)
 
-    publish("The run", f"# {goal}\n\n{LEAD}\n\n| Parameter | Value |\n| --- | --- |\n"
-            + "\n".join(f"| `{k}` | `{json.dumps(v)}` |" for k, v in [("overrides", overrides), ("max_verifications", max_verifications),
-                                                                       ("max_decisions", max_decisions)])
-            + f"\n\nThe flow's code and role cards at the commit this run used: {source_link('flows.py')}, {source_link('roles')}\n")
+    def question(key: str, title: str, text: str, options: list[dict[str, str]], scripted: str) -> dict[str, Any]:
+        return {"question": {"run": run, "key": key, "title": one_line(title), "text": text, "options": options, "note": True,
+                             "scripted": (script or {}).get("answers", {}).get(scripted) if script is not None else None}}
 
-    outcome, ended = "", None
+    page("run", "The run", f"# {goal}\n\n{LEAD}\n\n| Parameter | Value |\n| --- | --- |\n"
+         + "\n".join(f"| `{k}` | `{json.dumps(v)}` |" for k, v in [("overrides", overrides), ("max_verifications", max_verifications),
+                                                                    ("max_decisions", max_decisions)])
+         + f"\n\nThe flow's code and role cards at the commit this run used: {source_link('flows.py')}, {source_link('roles')}\n")
+
+    outcome, ended, lead_state = "", None, None
     while team.decisions < team.max_decisions and ended is None:
         team.decisions += 1
         number = team.decisions
         lead.turns += 1
         prompt = lead_brief(team, cards, first, lead) if number == 1 else lead_update(team, outcome)
-        answer = turn(TurnSpec(run=run, member="lead", turn=lead.turns, harness=lead.harness, prompt=prompt + tail("lead", number),
-                               profiles=lead.access, settings=lead_settings), f"{next(labels)} · lead · decision {number}", owner)
+        answer, lead_state = turn(TurnSpec(run=run, member="lead", turn=lead.turns, harness=lead.harness, prompt=prompt + tail("lead", number),
+                                           profiles=lead.access, settings=lead_settings), f"{number} · lead", owner, lead_state)
         body, report = said(answer)
         try:
             if answer["status"] != "done":
                 raise Refused(f"your turn ended {answer['status']} ({answer['stop_reason']}) before you decided")
-            decision = decide(report, team, cards, catalogue(number))
+            decision = decide(report, team, cards, catalogue())
         except Refused as refusal:
-            publish(f"Decision {number} · refused", f"# Decision {number}: refused\n\n**{refusal}**\n\n## What the lead answered\n\n"
-                    + (fenced(json.dumps(report, indent=2, ensure_ascii=False), "json") if report else "_No decision._"))
+            page(f"decision-{number}", f"Decision {number} · refused", f"# Decision {number}: refused\n\n**{refusal}**\n\n## What the lead answered\n\n"
+                 + (fenced(json.dumps(report, indent=2, ensure_ascii=False), "json") if report else "_No decision._"))
             rows.append({"Decision": str(number), "Kind": str((report or {}).get("decision", "—")), "Outcome": f"refused: {refusal}"})
             outcome = f"Decision {number} refused: {refusal}. Nothing was carried out."
             logger.warning(outcome)
             continue
-        publish(f"Decision {number} · {decision.kind}", f"# Decision {number}: {decision.kind}\n\n{decision.why or '_No reason given._'}\n\n"
-                + fenced(decision_json(decision), "json") + (f"\n\n## The lead's answer\n\n{body}" if body else ""))
+        page(f"decision-{number}", f"Decision {number} · {decision.kind}", f"# Decision {number}: {decision.kind}\n\n{decision.why or '_No reason given._'}\n\n"
+             + fenced(decision_json(decision), "json") + (f"\n\n## The lead's answer\n\n{body}" if body else ""))
         logger.info(f"decision {number}: {decision.kind}")
+        label = f"{number} · {decision.kind}"
 
         if decision.kind == "plan":
-            reply = suspend_flow_run(
-                wait_for_input=Envelope.with_initial_data(
-                    description=f"# Approve the envelope of: {goal}\n\n{envelope(team, decision, cards['judge'])}\n\n---\n\n"
-                    "**approve** starts the run within this envelope; **revise** sends your notes to the lead, who plans again; "
-                    "**stop** ends the run.",
-                ),
-                key=f"envelope-{number}",
-            )
-            notes = f" Their notes: {reply.notes}" if reply.notes else ""
-            if reply.answer == "approve":
+            text = (f"{envelope(team, decision, cards['judge'])}\n\n---\n\n**Approve** starts the run within this envelope; "
+                    "**Revise** sends your note to the lead, who plans again; **Stop** ends the run.")
+            [reply] = carry_out(label, [question(f"envelope-{number}", f"Approve the envelope: {goal}", text, ENVELOPE_OPTIONS, "envelope")], owner)
+            choice, note = reply.get("optionId"), str(reply.get("note") or "")
+            notes = f" Their note: {note}" if note else ""
+            if choice == "approve":
                 approve(team, decision)
-                publish("The envelope", f"# The envelope, approved\n\n{envelope(team, decision, cards['judge'])}\n\n_Notes:_ {reply.notes or 'none'}")
-                outcome = f"The human approved your plan.{notes} Carry it out."
-            elif reply.answer == "revise":
-                outcome = f"The human asks you to revise your plan.{notes}"
+                page("envelope", "The envelope", f"# The envelope, approved\n\n{envelope(team, decision, cards['judge'])}\n\n_Note:_ {note or 'none'}")
+                outcome = f"The person approved your plan.{notes} Carry it out."
+            elif choice == "revise":
+                outcome = f"The person asks you to revise your plan.{notes}"
             else:
-                ended = ("stopped by the human at the plan", reply.notes)
-            rows.append({"Decision": str(number), "Kind": "plan", "Outcome": f"{reply.answer}{notes}"})
+                ended = ("stopped by the person at the plan", note)
+            rows.append({"Decision": str(number), "Kind": "plan", "Outcome": f"{choice}{notes}"})
 
         elif decision.kind == "steps":
-            parts = []
-            for i, step in enumerate(decision.data["steps"], 1):
+            items, members = [], []
+            for step in decision.data["steps"]:
                 member = team.members[step["member"]]
                 member.turns += 1
                 feature = team.features.get(step["feature"]) if step["feature"] else None
                 spec = TurnSpec(run=run, member=member.name, turn=member.turns, harness=member.harness,
                                 prompt=member_prompt(team, cards, member, step, member.turns) + tail("member"),
                                 profiles=member.access, settings=first.settings(member.harness, member.model, member.effort))
-                result = turn(spec, f"{next(labels)} · {member.name}{f' · {feature.id}' if feature else ''}", owner)
+                items.append({"turn": asdict(spec), "label": f"{member.name}{f' · {feature.id}' if feature else ''}"})
+                members.append((member, feature))
+            results = carry_out(label, items, owner)
+            parts = []
+            for i, ((member, feature), result) in enumerate(zip(members, results), 1):
                 if feature and (member.role == "dev" or f"github:{feature.repo}:write" in member.access):
                     team.changed[feature.id] = number
                 text, report = said(result)
@@ -297,11 +334,11 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             feature_id = decision.data["feature"]
             judge = cards["judge"]
             access = judge_access(team, feature_id)
-            required = required_checks(cards["judge"], team.features[feature_id]) if decision.data["shippable"] else []
+            required = required_checks(judge, team.features[feature_id]) if decision.data["shippable"] else []
             spec = TurnSpec(run=run, member=f"judge-{team.verifications}", turn=1, harness=judge.harness,
-                            prompt=judge_prompt(team, cards["judge"], team.verifications, decision, access) + tail("judge", team.verifications, required),
-                            profiles=access, settings=catalogue(number).settings(judge.harness, judge.model, judge.effort))
-            result = turn(spec, f"{next(labels)} · judge · verification {team.verifications}{f' of {feature_id}' if feature_id else ''}", owner)
+                            prompt=judge_prompt(team, judge, team.verifications, decision, access) + tail("judge", team.verifications, required),
+                            profiles=access, settings=catalogue().settings(judge.harness, judge.model, judge.effort))
+            [result] = carry_out(label, [{"turn": asdict(spec), "label": f"judge-{team.verifications}{f' · {feature_id}' if feature_id else ''}"}], owner)
             text, report = said(result)
             passed, why = verdict(report, required) if result["status"] == "done" else (False, f"cut, turn {result['status']}")
             if passed and decision.data["shippable"]:
@@ -317,17 +354,13 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             rows.append({"Decision": str(number), "Kind": "verify", "Outcome": f"{'pass' if passed else 'fail'} ({why})"})
 
         elif decision.kind == "ask":
-            reply = suspend_flow_run(
-                wait_for_input=Reply.with_initial_data(
-                    description=f"# The lead asks\n\n{asked(team, decision)}\n\n---\n\n"
-                    "**yes** adds what it asks for, if anything; your notes go to the lead either way.",
-                ),
-                key=f"ask-{number}",
-            )
-            granted = grant(team, decision) if reply.answer == "yes" else []
-            outcome = (f"The human answered {reply.answer}." + (f" Their notes: {reply.notes}" if reply.notes else "")
+            text = f"{asked(team, decision)}\n\n---\n\n**Yes** adds what it asks for, if anything; your note goes to the lead either way."
+            [reply] = carry_out(label, [question(f"ask-{number}", f"The lead asks: {decision.data['question']}", text, ASK_OPTIONS, "ask")], owner)
+            choice, note = reply.get("optionId"), str(reply.get("note") or "")
+            granted = grant(team, decision) if choice == "yes" else []
+            outcome = (f"The person answered {choice}." + (f" Their note: {note}" if note else "")
                        + ("\n\n" + "\n".join(f"- {line}" for line in granted) if granted else ""))
-            rows.append({"Decision": str(number), "Kind": "ask", "Outcome": reply.answer + (f": {', '.join(granted)}" if granted else "")})
+            rows.append({"Decision": str(number), "Kind": "ask", "Outcome": str(choice) + (f": {', '.join(granted)}" if granted else "")})
 
         elif decision.kind == "done":
             ended = ("done", decision.data["summary"])
@@ -339,7 +372,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
 
     result, why = ended or ("decision limit reached", f"{team.max_decisions} decisions")
     branches = {f.id: f.branch for f in team.features.values()}
-    publish_summary(rows, f"{result}: {why[:200]}")
+    create_table_artifact(table=rows, key=page_key(run, "summary"), description=f"Outcome: {result}: {why[:200]}")
     logger.info(f"run {result}: shippable {team.shippable()}, branches {branches}")
     return {"outcome": result, "why": why, "branches": branches, "shippable": team.shippable(),
             "decisions": team.decisions, "verifications": team.verifications}
@@ -352,7 +385,7 @@ def lead(
     max_verifications: int = 25,
     max_decisions: int = 100,
 ) -> dict[str, Any]:
-    """A lead manages a small team towards the goal; you approve its plan once.
+    """A lead manages a small team towards the goal; you approve its plan once, in Agora.
 
     Args:
         goal: What the run must achieve, in a few sentences: the lead's only brief.
@@ -382,12 +415,14 @@ REHEARSAL_SCRIPT: dict[str, Any] = {
         {"decision": "done", "why": "Shippable.", "summary": "The mock echoes; branch flow/<run>/echo."},
     ],
     "verdicts": ["fail", "pass"],
+    "answers": {"envelope": {"optionId": "approve", "note": "Rehearsal: approved."}, "ask": {"optionId": "yes", "note": "Rehearsal: granted."}},
 }
 
 
 @flow(name="lead-rehearsal", persist_result=True, flow_run_name=run_name,
       description="The `lead` flow on the mock, which echoes its prompts: each prompt ends with what the script makes the lead, "
-      "the members and the judge answer. Its Workstreams belong to the live cases' owner, out of the operator's list.")
+      "the members and the judge answer, and the script answers the person's questions. Its Workstreams belong to the live "
+      "cases' owner, out of the operator's list.")
 def lead_rehearsal(
     goal: str = "Rehearsal on the mock: the lead's mechanics",
     script: dict[str, Any] = REHEARSAL_SCRIPT,  # noqa: B006 — Prefect copies parameters per run
@@ -398,7 +433,7 @@ def lead_rehearsal(
 
     Args:
         goal: Shown in the pages and the prompts, as a real run's.
-        script: `decisions`, the lead's decisions in order; `verdicts`, the judge's (`pass` or `fail`) in order.
+        script: `decisions`, the lead's decisions in order; `verdicts`, the judge's (`pass` or `fail`) in order; `answers`, the person's to `envelope` and `ask` (without one, the run waits for an answer in Agora).
         max_verifications: Verifications by the judge, at most.
         max_decisions: Decisions of the lead, at most, refused ones included.
     """
@@ -418,7 +453,7 @@ def rehearsal(prompt: str = "/sleep 20", harness: str = "mock", replays: int = 1
         owner: Who owns the Workstream; by default the live cases' owner, out of the operator's list.
     """
     spec = TurnSpec(run=str(flow_run.id), member="rehearsal", turn=1, harness=harness, prompt=prompt, lease_seconds=120)
-    first = turn(spec, "1 · Rehearsal", owner)
+    first, _ = turn(spec, "1 · Rehearsal", owner)
     again = [member_turn(asdict(spec), f"Replay {n}", owner) for n in range(1, replays + 1)]
     same = all(r["ok"] and (r["workstream"], r["execution"], r["text"]) == (first["workstream"], first["execution"], first["text"]) for r in again)
     get_run_logger().info(f"rehearsal: {replays} replay(s), same Workstream, execution and answer: {same}")
