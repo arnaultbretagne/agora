@@ -12,7 +12,7 @@ import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, Server, until, type Db } from '../../../../packages/log/test/support.ts'
-import { identity } from '../../../../packages/log/src/index.ts'
+import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
@@ -22,7 +22,6 @@ let browser: Browser
 const prefectAsked: { parameters: Record<string, unknown>; idempotency_key: string }[] = []
 let prefect: HttpServer
 const PERSON = 'person@example.org'
-const AGENTS = 'agents@example.org'
 
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
@@ -46,9 +45,9 @@ before(async () => {
     })
   })
   await new Promise<void>((resolve) => prefect.listen(0, '127.0.0.1', resolve))
-  const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main', TEAM_AGENTS: AGENTS }
+  const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials, ...team, ACCOUNTS: `${PERSON}=${AGENTS}` } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials, ...team } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -65,6 +64,14 @@ after(async () => {
 /** A browser of its own: nothing kept from another case. */
 async function fresh(): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light' })
+  const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  return page
+}
+
+/** A wide screen behind the proxy: the person's identity passed with every request, as oauth2-proxy does. */
+async function proxied(): Promise<Page> {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: { 'x-forwarded-email': PERSON } })
   const page = await context.newPage()
   page.setDefaultTimeout(30_000)
   return page
@@ -809,7 +816,7 @@ test('U50 a question: one box, its text and options; waiting in the list; a note
 })
 
 test('U51 a team: Team in the harness picker, no model or access; the goal sent, the run asked of Prefect, its lead\'s Workstream open, waiting for it', async () => {
-  const page = await fresh()
+  const page = await proxied()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Team')
   await page.getByPlaceholder('Describe the goal for the team…').waitFor()
@@ -822,49 +829,50 @@ test('U51 a team: Team in the harness picker, no model or access; the goal sent,
   const id = idOf(page)
   await until('the run asked', () => prefectAsked.length > asked)
   const run = prefectAsked.at(-1)!
-  assert.deepEqual([run.parameters.goal, run.parameters.lead_workstream, run.parameters.members_owner, run.idempotency_key], [
+  assert.deepEqual([run.parameters.goal, run.parameters.lead_workstream, run.parameters.owner, run.parameters.members_owner, run.idempotency_key], [
     'Make uploads reliable',
     id,
-    identity('owner', AGENTS),
+    identity('owner', PERSON),
+    folderOwner('agents', PERSON),
     `agora-team-${id}`,
   ])
   await page.getByText('The team is starting…').waitFor()
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), false)
 })
 
-test('U52 the account: who the proxy says, at the sidebar\'s foot; the agents\' list switched to and back; Sign out', async () => {
-  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: { 'x-forwarded-email': PERSON } })
-  const page = await context.newPage()
-  page.setDefaultTimeout(30_000)
-  // One Workstream of each account, listed for the question it waits on.
+test('U52 the account at the sidebar\'s foot, Sign out; the agents\' folder below the list, closed, opened, remembered', async () => {
+  const page = await proxied()
+  // The person's Workstream, one of their folder's, one of someone else's folder's; listed for the question each waits on.
   const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
+  const owners = { own: identity('owner', PERSON), folder: folderOwner('agents', PERSON), other: folderOwner('agents', 'someone@example.org') }
   const made: Record<string, string> = {}
-  for (const email of [PERSON, AGENTS]) {
+  for (const [name, owner] of Object.entries(owners)) {
     const id = crypto.randomUUID()
-    assert.equal((await server.post('/api/workstreams', { id, owner: identity('owner', email) })).status, 200)
+    assert.equal((await server.post('/api/workstreams', { id, owner })).status, 200)
     assert.equal((await server.command(id, 'Ask', {}, ask)).status, 200)
-    made[email] = id
+    made[name] = id
   }
   await page.goto(`${server.url}/`)
   const account = page.getByRole('button', { name: 'Account' })
   await account.getByText(PERSON).waitFor()
-  const listed = async () => {
-    const rows = page.locator('nav[aria-label="Workstreams"] button')
-    await rows.first().waitFor()
-    return rows.count()
-  }
-  await listed()
   await account.click()
-  await page.getByRole('menuitem', { name: /You/ }).waitFor()
   assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).getAttribute('href'), '/oauth2/sign_out?rd=%2F')
-  await page.getByRole('menuitem', { name: /Agents/ }).click()
-  await account.getByText('Agents').waitFor()
-  await page.locator('nav[aria-label="Workstreams"] button').first().click()
-  await page.waitForURL(new RegExp(`/w/${made[AGENTS]!}$`))
-  await account.click()
-  await page.getByRole('menuitem', { name: /You/ }).click()
-  await account.getByText(PERSON).waitFor()
-  await page.locator('nav[aria-label="Workstreams"] button').first().click()
-  await page.waitForURL(new RegExp(`/w/${made[PERSON]!}$`))
-  await context.close()
+  assert.equal(await page.getByRole('menuitem').count(), 1)
+  await page.keyboard.press('Escape')
+  // The folder: closed at first, the person's own only; its Workstream out of the list.
+  const folder = page.getByRole('region', { name: 'Agents' })
+  const toggle = folder.getByRole('button', { name: /Agents/ })
+  await toggle.waitFor()
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false')
+  assert.equal(await toggle.getByText('1', { exact: true }).count(), 1)
+  assert.equal(await page.locator('nav[aria-label="Workstreams"] button[title]').count(), 1)
+  await toggle.click()
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
+  await folder.locator('button[title]').click()
+  await page.waitForURL(new RegExp(`/w/${made.folder!}$`))
+  // Opened it stays, across a reload.
+  await page.reload()
+  await page.getByRole('region', { name: 'Agents' }).locator('button[title]').waitFor()
+  assert.equal(await page.getByRole('region', { name: 'Agents' }).getByRole('button', { name: /Agents/ }).getAttribute('aria-expanded'), 'true')
+  await page.context().close()
 })

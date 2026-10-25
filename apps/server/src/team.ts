@@ -1,22 +1,20 @@
 // A team launched from the client (docs/specs/flows.md, "Launching from Agora"): the lead's Workstream,
 // the person's, created here; then the flow `lead` asked of Prefect to run on it, the members'
-// Workstreams going to the agents' account. Prefect is reached in-cluster; nothing here waits for the
-// run, which answers in the lead's Workstream.
+// Workstreams going to the person's agents' folder. Prefect is reached in-cluster; nothing here waits
+// for the run, which answers in the lead's Workstream.
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { decode, encode, identity, object, uuid, type LogStore } from '@agora/log'
+import { decode, encode, folderOwner, identity, object, uuid, type LogStore } from '@agora/log'
 
 export interface TeamOptions {
   /** Prefect's API, e.g. `http://prefect-server.prefect.svc.cluster.local:4200/api`. */
   readonly prefect: string
   /** The deployment the run comes from: `<flow>/<deployment>`. */
   readonly deployment: string
-  /** The agents' account: the e-mail whose identity owns the members' Workstreams. */
-  readonly agents: string
   /** Prefect's UI, for the run's address; none without it. */
   readonly ui?: string
 }
 
-/** TEAM_PREFECT_API, TEAM_DEPLOYMENT, TEAM_AGENTS and TEAM_PREFECT_UI; no team without the first. */
+/** TEAM_PREFECT_API, TEAM_DEPLOYMENT and TEAM_PREFECT_UI; no team without the first. */
 export function teamFrom(env: NodeJS.ProcessEnv): TeamOptions | undefined {
   const prefect = env.TEAM_PREFECT_API
   if (prefect === undefined || prefect === '') return undefined
@@ -25,7 +23,6 @@ export function teamFrom(env: NodeJS.ProcessEnv): TeamOptions | undefined {
   return {
     prefect: prefect.replace(/\/$/, ''),
     deployment,
-    agents: (env.TEAM_AGENTS ?? 'agents@agora.bretagne.dev').toLowerCase(),
     ...(env.TEAM_PREFECT_UI ? { ui: env.TEAM_PREFECT_UI.replace(/\/$/, '') } : {}),
   }
 }
@@ -65,7 +62,8 @@ export function teamHttp(options: TeamOptions | undefined, store: LogStore): (re
     } catch {
       return reply(400, { reason: 'invalid_identifier' })
     }
-    // The person the proxy passes; the body's owner without one, as for a Workstream.
+    // The person the proxy passes; the body's owner without one, as for a Workstream. The members go
+    // to the person's agents' folder; without the proxy, to the owner.
     const header = req.headers['x-forwarded-email']
     let owner: string
     try {
@@ -73,6 +71,7 @@ export function teamHttp(options: TeamOptions | undefined, store: LogStore): (re
     } catch {
       return reply(400, { reason: 'invalid_owner' })
     }
+    const members = typeof header === 'string' && header !== '' ? folderOwner('agents', header) : owner
     try {
       await store.create(id, owner)
     } catch (error) {
@@ -89,7 +88,7 @@ export function teamHttp(options: TeamOptions | undefined, store: LogStore): (re
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          parameters: { goal, lead_workstream: id, owner, members_owner: identity('owner', options.agents) },
+          parameters: { goal, lead_workstream: id, owner, members_owner: members },
           idempotency_key: `agora-team-${id}`,
         }),
       })

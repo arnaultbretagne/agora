@@ -7,11 +7,13 @@ import type { PromptCapabilities } from './attachments.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
 
-/** The account the proxy names, and the accounts it may switch to, its own first (docs/specs/log.md, "HTTP"). */
+/** The identity the proxy passes, or none (docs/specs/log.md, "HTTP"). */
 export interface Account {
   readonly email: string | null
-  readonly accounts: readonly string[]
 }
+
+/** A folder of the person's (docs/specs/log.md, "HTTP"): `agents`, the Workstreams of their runs' agents. */
+export type Folder = 'agents'
 
 export interface Answer {
   readonly accepted: boolean
@@ -56,17 +58,16 @@ export class Api {
     return `${this.base}/api/workstreams/${encodeURIComponent(workstream)}/thread?after=${encodeURIComponent(cursor)}`
   }
 
-  /** The Workstreams of the caller's account, or of an account it may switch to (`as`). */
-  async workstreams(as: string | null = null): Promise<WorkstreamView[]> {
-    const query = as === null ? '' : `?as=${encodeURIComponent(as)}`
+  /** The caller's Workstreams, or those of one of its folders. */
+  async workstreams(folder: Folder | null = null): Promise<WorkstreamView[]> {
+    const query = folder === null ? '' : `?folder=${folder}`
     return ((await this.read(`/api/workstreams${query}`)).body.workstreams ?? []) as WorkstreamView[]
   }
 
-  /** Who the proxy says the caller is, and the accounts it may switch to (docs/specs/log.md, "HTTP"). */
+  /** Who the proxy says the caller is (docs/specs/log.md, "HTTP"). */
   async account(): Promise<Account> {
     const { body } = await this.read('/api/account')
-    const accounts = Array.isArray(body.accounts) ? body.accounts.filter((a): a is string => typeof a === 'string') : []
-    return { email: typeof body.email === 'string' ? body.email : null, accounts }
+    return { email: typeof body.email === 'string' ? body.email : null }
   }
 
   /** Whether a team can be launched from here (docs/specs/flows.md, "Launching from Agora"). */

@@ -87,7 +87,7 @@ A member staffed on another harness than its card's takes `default` for what the
 | `max_decisions` | 100 | Decisions of the lead, at most, refused ones included. |
 | `lead_workstream` | none | The lead's Workstream, when Agora created it ("Launching from Agora"); else derived from the run. |
 | `owner` | the worker's | Who owns the lead's Workstream and is asked: an identity UUID. |
-| `members_owner` | `owner` | Who owns the members' Workstreams — the judge's included: the agents' identity UUID. |
+| `members_owner` | `owner` | Who owns the members' Workstreams — the judge's included: the person's agents' folder (`log.md`, "HTTP"). |
 
 The run's harnesses are the catalogue's but `mock`. Its offer — the pools and the profiles of
 `GET /api/config`'s `credentials.offered` — is read again for each decision and kept with it.
@@ -145,11 +145,11 @@ lead's Workstream and asks Prefect for the run; the person never opens Prefect.
 
 | Name | Rule |
 | --- | --- |
-| Configured | `TEAM_PREFECT_API`, Prefect's API in-cluster; `TEAM_DEPLOYMENT`, `<flow>/<deployment>`, `lead/design-agora-foundations` by default; `TEAM_AGENTS`, the agents' account's e-mail. Without the first, `/api/teams` answers 404 `teams_unavailable`. |
+| Configured | `TEAM_PREFECT_API`, Prefect's API in-cluster; `TEAM_DEPLOYMENT`, `<flow>/<deployment>`, `lead/design-agora-foundations` by default. Without the first, `/api/teams` answers 404 `teams_unavailable`. |
 | `GET /api/teams` | `available` true. |
-| `POST /api/teams` | `id` and `goal`, 1 to 4,000 characters once trimmed. The Workstream `id` is created, the person's — the identity the proxy passes, the body's `owner` without one — then the deployment's run created with the parameters `goal`, `lead_workstream` the id, `owner` the person's identity, `members_owner` the agents' account's, and the idempotency key `agora-team-<id>`: the same launch sent again finds the same run. 200 with `workstream`, `flowRun`, and its address in Prefect when `TEAM_PREFECT_UI` is set. |
+| `POST /api/teams` | `id` and `goal`, 1 to 4,000 characters once trimmed. The Workstream `id` is created, the person's — the identity the proxy passes, the body's `owner` without one — then the deployment's run created with the parameters `goal`, `lead_workstream` the id, `owner` the person's identity, `members_owner` the person's agents' folder (`log.md`, "HTTP") — the person's identity without the proxy —, and the idempotency key `agora-team-<id>`: the same launch sent again finds the same run. 200 with `workstream`, `flowRun`, and its address in Prefect when `TEAM_PREFECT_UI` is set. |
 | Refused | 400 `invalid_goal`, `invalid_identifier`, `invalid_body`; 409 `workstream_conflict` for another's Workstream; 502 `team_deployment_missing`, `team_refused`, `teams_unreachable` when Prefect does not answer as it should. |
-| Owners | The lead's Workstream, its questions and the person's answers are the person's; every member's Workstream, the judge's included, the agents' account's, out of the person's list and in the agents' ("Accounts"). |
+| Owners | The lead's Workstream, its questions and the person's answers are the person's; every member's Workstream, the judge's included, in the person's agents' folder: out of their list, in reach (`assistant-ui.md`, "Accounts"), and in no one else's. |
 
 ## The flow `lead-rehearsal`
 

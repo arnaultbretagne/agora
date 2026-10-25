@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
-import { identity } from '../../../packages/log/src/index.ts'
+import { folderOwner, identity } from '../../../packages/log/src/index.ts'
 import { cluster, database, Server, type Db } from '../../../packages/log/test/support.ts'
 
 interface Asked {
@@ -51,7 +51,6 @@ class FakePrefect {
 }
 
 const PERSON = 'person@example.org'
-const AGENTS = 'agents@example.org'
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
 let prefect: FakePrefect
@@ -65,7 +64,7 @@ before(async () => {
     db,
     api: c.api,
     keys: c.keys,
-    env: { TEAM_PREFECT_API: prefect.url, TEAM_DEPLOYMENT: 'lead/main', TEAM_AGENTS: AGENTS, TEAM_PREFECT_UI: 'https://prefect.example.org' },
+    env: { TEAM_PREFECT_API: prefect.url, TEAM_DEPLOYMENT: 'lead/main', TEAM_PREFECT_UI: 'https://prefect.example.org' },
   })
 })
 
@@ -92,7 +91,7 @@ test('F22 a team launched from Agora: the lead\'s Workstream the person\'s, the 
   assert.equal(first.body.url, `https://prefect.example.org/runs/flow-run/${String(first.body.flowRun)}`)
   assert.equal(prefect.asked.length, 1)
   assert.deepEqual(prefect.asked[0], {
-    parameters: { goal: 'Make uploads reliable', lead_workstream: id, owner: identity('owner', PERSON), members_owner: identity('owner', AGENTS) },
+    parameters: { goal: 'Make uploads reliable', lead_workstream: id, owner: identity('owner', PERSON), members_owner: folderOwner('agents', PERSON) },
     idempotency_key: `agora-team-${id}`,
   })
   // The person's Workstream, in their list.

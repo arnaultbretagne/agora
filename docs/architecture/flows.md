@@ -21,7 +21,7 @@ other.
 | Agora | Runs each member's agent in a sandbox and keeps its Workstream: commands, ACP lines, answers. | The record of every turn. |
 | The repository | Carries the work: each feature on its own branch, `flow/<run>/<feature>`. | The work itself. |
 | The person | Launches the team from Agora's client — Team, then the goal —, approves the envelope once, answers what the lead asks, merges: in Agora, in the lead's Workstream. | The lead's Workstream, the only merge. |
-| The agents' account | An identity of Agora's own that owns every member's Workstream, so that the person's list holds the leads only; the person switches the list to it to open a member's. | The members' Workstreams. |
+| The agents' folder | The person's own folder in Agora, which owns every member's Workstream of their teams: their list holds the leads only, the folder below it opens on the members', and two people's members never mix. | The members' Workstreams. |
 
 An agent never receives a credential from the flow: it goes out through Agora's gateway with the
 profiles its member's Create names — those the human approved in the envelope, the judge's always
@@ -89,7 +89,7 @@ and so a judge with no memory of the others.
 
 The person picks **Team** in a new Workstream of Agora's client and writes the goal. Agora's server
 creates that Workstream as the lead's, the person's, and asks Prefect's API for a run of the flow
-`lead` on it, with the goal, the person's identity and the agents' account's; an idempotency key
+`lead` on it, with the goal, the person's identity and their agents' folder's; an idempotency key
 derived from the Workstream makes a launch sent twice one run. The client opens the lead's
 Workstream at once, and the lead's first turn arrives there; Prefect stays behind it, for whoever
 wants the graph. Agora's server is the only one, beside Prefect's own gate and worker, that the

@@ -91,10 +91,10 @@ export interface Agora {
   takeReturned(): void
   /** Whether a team can be launched: the harness picker offers it. */
   readonly teams: boolean
-  /** The caller's account and those it may switch to; the one the list shows. */
+  /** Who the proxy says the person is. */
   readonly account: Account
-  readonly shownAccount: string | null
-  showAccount(account: string): void
+  /** The Workstreams of the person's agents' folder: their runs' members. */
+  readonly agents: WorkstreamView[]
 }
 
 const AgoraContext = createContext<Agora | null>(null)
@@ -129,14 +129,6 @@ const REFUSALS: Record<string, string> = {
 export const refusalText = (reason: string): string => REFUSALS[reason] ?? `Refused (${reason}).`
 
 const POOL_KEY = 'agora:pool'
-const ACCOUNT_KEY = 'agora:account'
-const storedAccount = (): string | null => {
-  try {
-    return localStorage.getItem(ACCOUNT_KEY)
-  } catch {
-    return null
-  }
-}
 const storedPool = (): string | null => {
   try {
     return localStorage.getItem(POOL_KEY)
@@ -146,22 +138,13 @@ const storedPool = (): string | null => {
 }
 
 export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string | null) => void; children: ReactNode }) {
-  // The account the list shows: the caller's, or one it may switch to (docs/specs/assistant-ui.md, "Accounts").
-  const [account, setAccount] = useState<Account>({ email: null, accounts: [] })
-  const [shown, setShown] = useState<string | null>(storedAccount)
-  const as = shown !== null && account.accounts.includes(shown) && shown !== account.email ? shown : null
-  const { workstreams, reload } = useWorkstreams(api, as)
+  // Who the proxy says the person is; their agents' folder, read only behind it (docs/specs/assistant-ui.md, "Accounts").
+  const [account, setAccount] = useState<Account>({ email: null })
+  const { workstreams, reload } = useWorkstreams(api)
+  const { workstreams: agents } = useWorkstreams(api, 'agents', account.email !== null)
   useEffect(() => {
     void api.account().then(setAccount, () => undefined)
   }, [api])
-  const showAccount = useCallback((next: string) => {
-    setShown(next)
-    try {
-      localStorage.setItem(ACCOUNT_KEY, next)
-    } catch {
-      // Remembered for this page only.
-    }
-  }, [])
   // A team can be launched when the server says so (docs/specs/flows.md, "Launching from Agora").
   const [teams, setTeams] = useState(false)
   useEffect(() => {
@@ -439,8 +422,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     takeReturned,
     teams,
     account,
-    shownAccount: as ?? account.email,
-    showAccount,
+    agents,
   }
   return (
     <AgoraContext.Provider value={agora}>

@@ -406,7 +406,7 @@ def lead(
         max_decisions: Decisions of the lead, at most, refused ones included.
         lead_workstream: The lead's Workstream, when Agora created it for a team launched from its client.
         owner: Who owns the lead's Workstream and is asked: an identity UUID; the worker's operator without it.
-        members_owner: Who owns the members' Workstreams: the agents' identity UUID; the owner's without it.
+        members_owner: Who owns the members' Workstreams: the person's agents' folder; the owner's without it.
     """
     return drive(goal, overrides, max_verifications, max_decisions, owner=owner, exclude={"mock"},
                  lead_workstream=lead_workstream, members_owner=members_owner)

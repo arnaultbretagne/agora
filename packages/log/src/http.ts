@@ -26,23 +26,15 @@ export interface LogHttpOptions {
   /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
   readonly testRoutes: boolean
   readonly credentials?: CredentialSource
-  /**
-   * The accounts each identity may switch to (docs/specs/log.md, "HTTP"): an e-mail to the e-mails of
-   * the accounts whose Workstreams it may list, a technical account's for one.
-   */
-  readonly accounts?: Readonly<Record<string, readonly string[]>>
 }
 
-/** `ACCOUNTS`: `person=account,account;person=account`, e-mails, compared lowercased. */
-export function accountsFrom(raw: string | undefined): Record<string, string[]> {
-  const accounts: Record<string, string[]> = {}
-  for (const entry of (raw ?? '').split(';').map((e) => e.trim()).filter((e) => e !== '')) {
-    const [person, others] = entry.split('=')
-    if (!person || !others) throw new Error(`ACCOUNTS: ${entry} is not person=account,…`)
-    accounts[person.trim().toLowerCase()] = others.split(',').map((o) => o.trim().toLowerCase()).filter((o) => o !== '')
-  }
-  return accounts
-}
+/**
+ * The folders of an identity (docs/specs/log.md, "HTTP"): `agents` holds the Workstreams of the agents
+ * a person's runs staff, owned by the name-based UUID of `agents` and the person's identity — theirs
+ * alone, out of their own list.
+ */
+export const FOLDERS = ['agents'] as const
+export const folderOwner = (folder: (typeof FOLDERS)[number], person: string): string => identity(folder, person)
 
 export async function logHttp(
   workstreams: Workstreams,
@@ -99,16 +91,14 @@ export async function logHttp(
     // name-based UUID; none when Agora is reached without the proxy.
     const identityHeader = req.headers['x-forwarded-email']
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
-    const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader.toLowerCase() : null
-    const switches = email === null ? [] : (options.accounts?.[email] ?? [])
-    // The caller's account first, then those it may switch to (docs/specs/log.md, "HTTP").
-    if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email, accounts: email === null ? [] : [email, ...switches] }), true
+    const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
+    if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
     if (req.method === 'GET' && url.pathname === '/api/workstreams') {
-      const as = url.searchParams.get('as')?.toLowerCase()
-      if (as === undefined || as === email) return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
-      // Another account's list: one the caller may switch to; anyone's without the proxy.
-      if (email !== null && !switches.includes(as)) return reply(403, { reason: 'account_not_allowed' }), true
-      return reply(200, { workstreams: await workstreams.projections.views(identity('owner', as)) }), true
+      const folder = url.searchParams.get('folder')
+      if (folder === null) return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
+      if (!(FOLDERS as readonly string[]).includes(folder)) return reply(400, { reason: 'unknown_folder' }), true
+      // The caller's own folder; without the proxy, every Workstream, as every list is.
+      return reply(200, { workstreams: await workstreams.projections.views(email === null ? undefined : folderOwner('agents', email)) }), true
     }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
