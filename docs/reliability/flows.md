@@ -15,6 +15,8 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | R6 | 2026-10-24 | `a28c038`, then `77e60bf` | live | As R5, the deployment `lead/feat-flows-readable`; run `2fb231fc…`, goal: a check that every case ID cited in `docs/reliability` is defined in `docs/specs`, from `design/agora-foundations`. Lead and dev on the claude-code pool `claude-code-bf449368d514` (`opus`, `high`), the judge on the codex pool `codex-03d017c57f51` (`gpt-6.1-sol`, `xhigh`); the dev's access `github:arnaultbretagne/agora:write`, the judge's `:read` and `internet`, through the gateway. The envelope approved by the operator's delegate over Prefect's API. The first verification stopped by the operator after 43 minutes, the run cancelled and retried on `77e60bf`, whose judge card reads CI instead of running it. Billed. |
 | R7 | 2026-10-25 | `626fb52`, Agora `6a94b80` | local | The flow `lead-rehearsal` of `626fb52` on an ephemeral Prefect 3.8.8 (the worker image's packages), against Agora's server built from `6a94b80` (questions): the log on PostgreSQL 17.11, the mechanics on FakeKube, real bridges and the mock agent; offered `github:arnaultbretagne/agora:write`, `github:arnaultbretagne/infra-k8s:write`, `internet`; the default script, its answers given with Answer. Driven by a node test outside the repository, its output with the pull request. No model call. |
 | R8 | 2026-10-25 | `626fb52` | unit | `npm test -w @agora/flows`: Python 3.13, 39 tests, as R4 with the person's questions against a stand-in stream. |
+| R9 | 2026-10-25 | `bdb8db5` | unit | `npm test -w @agora/flows`: Python 3.13, 42 tests, as R8, the stand-in Agora showing each turn's prompt as its `user` element. |
+| R10 | 2026-10-25 | `bdb8db5` | local | `npm test -w @agora/server`: the real server on PostgreSQL 17.11 with a stand-in for Prefect's API that keeps what it is asked and honours idempotency keys; the proxy's identity sent as its header. |
 
 ## Cases
 
@@ -75,6 +77,8 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | F17 | — | local | R7 | proven | Decision 8, `ask`: the question `The lead asks: Give sre-1 read access to infra-k8s?` asked, answered `yes`; decision 9 carried out. |
 | F20 | — | local | R7 | proven | Each question asked once — the lead's Workstream holds `Ask` 2 and `Answer` 2 beside `Create` 1 and `Write` 10 — its answer read on the stream 20 ms after the Ask; no question left waiting; the run `done` after 10 decisions and 2 verifications, in 118 s. |
 | F20 | simulated: stub (a stream that idles out twice) | unit | R8 | proven | Asked once under the same key; the answer read on one connection; idled out, opened again from cursor `41`, twice. |
+| F21 | simulated: stub (a Write of the person's in the member's execution) | unit | R9 | proven | The member's second turn found by its prompt, the third turn of the Workstream, "Answer 3."; its first found again, "Answer 1."; no command sent twice; a given Workstream the member's, the only one created. |
+| F22 | — | local | R10 | proven | `GET /api/teams` `{"available":true}`; launched: 200, the Workstream in the person's list, Prefect asked once with the goal, the Workstream, both identities and `agora-team-<id>`, the run's address in Prefect's UI; sent again, the same run. A blank goal 400 `invalid_goal`; another's Workstream 409 `workstream_conflict`; Prefect down 502 `teams_unreachable`, nothing asked. |
 
 ## Not covered
 

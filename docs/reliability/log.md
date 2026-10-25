@@ -25,6 +25,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R17 | 2026-10-07 | `1d15818` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, its `/usage` reporting a context. |
 | R18 | 2026-10-22 | `f65d77a` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, the mock accepting images and embedded resources, not audio. |
 | R19 | 2026-10-25 | `6a94b80` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube; questions asked on Workstreams with and without an execution. |
+| R20 | 2026-10-25 | `bdb8db5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; the real server (`apps/server/src/main.ts`) with `ACCOUNTS` set to `person@example.org=agents@example.org`, the proxy's identity sent as its header. |
 
 ## Cases
 
@@ -124,6 +125,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L72 | — | local | R19 | proven | The element `answered`, its `answer` `{"optionId":"revise","note":"One criterion per behaviour."}`; the view's `question` null; a new Ask accepted, the view's `question` its position. |
 | L73 | — | local | R19 | proven | `stale_question` for position 999, `invalid_question_option` for `merge`, `invalid_answer` for a note the question does not allow, nothing written; once answered, another Answer `stale_question`. |
 | L74 | — | local | R19 | proven | The same Ask under its id after its Answer returned its first answer, canonical encoding equal; one question; the view's `question` null. |
+| L75 | — | local | R20 | proven | `Person@Example.org`: `{"email":"person@example.org","accounts":["person@example.org","agents@example.org"]}`; `someone@example.org`: itself alone; without the header: `null` and none. |
+| L76 | — | local | R20 | proven | One Workstream each for the person, the agents and someone else: the person's list its own; `as` the agents', the agents'; `as` its own, its own; someone else `as` the agents', and the person `as` someone else, 403 `account_not_allowed`; without the proxy `as` the agents', the agents'. |
 
 ## Not covered
 
