@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46 and U50: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U52: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -6,15 +6,23 @@ import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer, type Server as HttpServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, Server, until, type Db } from '../../../../packages/log/test/support.ts'
+import { identity } from '../../../../packages/log/src/index.ts'
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
 let server: Server
 let browser: Browser
+// A stand-in for Prefect's API (docs/specs/flows.md, "Launching from Agora"): what it was asked.
+const prefectAsked: { parameters: Record<string, unknown>; idempotency_key: string }[] = []
+let prefect: HttpServer
+const PERSON = 'person@example.org'
+const AGENTS = 'agents@example.org'
 
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
@@ -27,14 +35,27 @@ before(async () => {
   const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet' }
+  prefect = createServer((req, res) => {
+    const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    if (req.url === '/api/deployments/name/lead/main') return reply(200, { id: 'deployment-1' })
+    let text = ''
+    req.on('data', (chunk: Buffer) => (text += chunk.toString()))
+    req.on('end', () => {
+      prefectAsked.push(JSON.parse(text) as (typeof prefectAsked)[number])
+      reply(201, { id: `run-${String(prefectAsked.length)}`, name: 'a-run' })
+    })
+  })
+  await new Promise<void>((resolve) => prefect.listen(0, '127.0.0.1', resolve))
+  const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main', TEAM_AGENTS: AGENTS }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials, ...team, ACCOUNTS: `${PERSON}=${AGENTS}` } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
 })
 
 after(async () => {
+  prefect?.close()
   await browser?.close()
   await server?.stop()
   await c?.close()
@@ -785,4 +806,65 @@ test('U50 a question: one box, its text and options; waiting in the list; a note
   assert.equal(await page.getByText('Answer the question above.').count(), 0)
   await composerInput(page).fill('after the answer')
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true)
+})
+
+test('U51 a team: Team in the harness picker, no model or access; the goal sent, the run asked of Prefect, its lead\'s Workstream open, waiting for it', async () => {
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Team')
+  await page.getByPlaceholder('Describe the goal for the team…').waitFor()
+  assert.equal(await modelPicker(page).count(), 0)
+  assert.equal(await accessPicker(page).count(), 0)
+  const asked = prefectAsked.length
+  await page.getByPlaceholder('Describe the goal for the team…').fill('Make uploads reliable')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const id = idOf(page)
+  await until('the run asked', () => prefectAsked.length > asked)
+  const run = prefectAsked.at(-1)!
+  assert.deepEqual([run.parameters.goal, run.parameters.lead_workstream, run.parameters.members_owner, run.idempotency_key], [
+    'Make uploads reliable',
+    id,
+    identity('owner', AGENTS),
+    `agora-team-${id}`,
+  ])
+  await page.getByText('The team is starting…').waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), false)
+})
+
+test('U52 the account: who the proxy says, at the sidebar\'s foot; the agents\' list switched to and back; Sign out', async () => {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: { 'x-forwarded-email': PERSON } })
+  const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  // One Workstream of each account, listed for the question it waits on.
+  const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
+  const made: Record<string, string> = {}
+  for (const email of [PERSON, AGENTS]) {
+    const id = crypto.randomUUID()
+    assert.equal((await server.post('/api/workstreams', { id, owner: identity('owner', email) })).status, 200)
+    assert.equal((await server.command(id, 'Ask', {}, ask)).status, 200)
+    made[email] = id
+  }
+  await page.goto(`${server.url}/`)
+  const account = page.getByRole('button', { name: 'Account' })
+  await account.getByText(PERSON).waitFor()
+  const listed = async () => {
+    const rows = page.locator('nav[aria-label="Workstreams"] button')
+    await rows.first().waitFor()
+    return rows.count()
+  }
+  await listed()
+  await account.click()
+  await page.getByRole('menuitem', { name: /You/ }).waitFor()
+  assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).getAttribute('href'), '/oauth2/sign_out?rd=%2F')
+  await page.getByRole('menuitem', { name: /Agents/ }).click()
+  await account.getByText('Agents').waitFor()
+  await page.locator('nav[aria-label="Workstreams"] button').first().click()
+  await page.waitForURL(new RegExp(`/w/${made[AGENTS]!}$`))
+  await account.click()
+  await page.getByRole('menuitem', { name: /You/ }).click()
+  await account.getByText(PERSON).waitFor()
+  await page.locator('nav[aria-label="Workstreams"] button').first().click()
+  await page.waitForURL(new RegExp(`/w/${made[PERSON]!}$`))
+  await context.close()
 })

@@ -510,7 +510,8 @@ def _where(team: Team, feature: Feature | None, member: Member) -> str:
 def member_prompt(team: Team, cards: dict[str, Card], member: Member, step: dict[str, Any], turn: int) -> str:
     """A step's prompt: the card on the member's first turn, then the lead's brief and where the work goes."""
     feature = team.features.get(step["feature"]) if step.get("feature") else None
-    head = f"{team.tag} {member.name}: {feature.title if feature else step['brief'].splitlines()[0][:80]}"
+    # The turn's number makes each prompt the member's own: its turn is found again by it.
+    head = f"{team.tag} {member.name} · turn {turn}: {feature.title if feature else step['brief'].splitlines()[0][:80]}"
     card = (f"{cards[member.role].text}\n\n---\n\n# This run\n\n**Goal of the whole run:** {team.goal}\n\n"
             f"Your access: {', '.join(f'`{p}`' for p in member.access) or 'none'}. Install whatever tools you need yourself.\n\n"
             if turn == 1 else "")

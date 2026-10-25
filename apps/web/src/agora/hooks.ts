@@ -7,7 +7,7 @@ import { empty, type ThreadState, type ViewObject } from './objects.ts'
 import { ThreadStream, type Connection } from './stream.ts'
 import type { WorkstreamView } from './view.ts'
 
-export function useWorkstreams(api: Api): { workstreams: WorkstreamView[]; loading: boolean; reload: () => void } {
+export function useWorkstreams(api: Api, as: string | null = null): { workstreams: WorkstreamView[]; loading: boolean; reload: () => void } {
   const [workstreams, setWorkstreams] = useState<WorkstreamView[]>([])
   const [loading, setLoading] = useState(true)
   const [tick, setTick] = useState(0)
@@ -15,7 +15,7 @@ export function useWorkstreams(api: Api): { workstreams: WorkstreamView[]; loadi
   useEffect(() => {
     let live = true
     void api
-      .workstreams()
+      .workstreams(as)
       .then((list) => live && setWorkstreams(list))
       .catch(() => undefined)
       .finally(() => live && setLoading(false))
@@ -24,7 +24,7 @@ export function useWorkstreams(api: Api): { workstreams: WorkstreamView[]; loadi
       live = false
       clearTimeout(timer)
     }
-  }, [api, tick, reload])
+  }, [api, as, tick, reload])
   return { workstreams, loading, reload }
 }
 

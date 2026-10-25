@@ -58,7 +58,13 @@ export interface AgentCommand {
   readonly hint: string | null
 }
 
-const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent' }
+const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent', team: 'Team' }
+
+/**
+ * A team, in the harness picker beside the pools (docs/specs/assistant-ui.md, "Teams"): its first
+ * message is the goal, and the server starts the lead on it.
+ */
+export const TEAM = 'team'
 
 /** A harness as people name it. */
 export const harnessName = (harness: string | null | undefined): string => (harness ? (HARNESS_NAMES[harness] ?? harness) : 'the agent')

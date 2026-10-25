@@ -4,9 +4,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
+import { LogStore, Workstreams, accountsFrom, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
+import { teamFrom, teamHttp } from './team.ts'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -95,13 +96,18 @@ try {
 }
 
 const client = serveClient(process.env.CLIENT_DIR ?? join(import.meta.dirname, '..', '..', 'web', 'dist'))
+// docs/specs/flows.md, "Launching from Agora": a team, when Prefect is configured; the accounts a person
+// may switch to (docs/specs/log.md, "HTTP").
+const teams = teamHttp(teamFrom(process.env), store)
+const accounts = accountsFrom(process.env.ACCOUNTS)
 const server = createApi({
   manager: executions,
   testRoutes,
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
   handle: async (req, res) =>
     (await limitsHttp(limits, req, res)) ||
-    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) ||
+    (await teams(req, res)) ||
+    (await logHttp(workstreams, req, res, { testRoutes, accounts, ...(credentials === undefined ? {} : { credentials }) })) ||
     client(req, res),
   ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process

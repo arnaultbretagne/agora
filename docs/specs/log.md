@@ -333,7 +333,8 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. |
+| `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. With `as`, an e-mail: that account's, the owner its identity gives, when it is the caller's or one `ACCOUNTS` lets the caller switch to — 403 `account_not_allowed` otherwise; any account's without the proxy. |
+| `GET /api/account` | `email`: the identity the proxy passes, lowercased, or null without one; `accounts`: that one, then those `ACCOUNTS` lets it switch to (`person=account,…;…`, e-mails compared lowercased); empty without the proxy. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
@@ -490,6 +491,8 @@ exception message.
 | L72 | An Answer with an option and a note | Accepted; the element `answered`, its `answer` the option and the note; the view's `question` null; another Ask accepted next. |
 | L73 | Answers to another position, to an answered question, with an option not offered, with a note the question does not allow | `stale_question` for the first two, `invalid_question_option`, `invalid_answer`; nothing written. |
 | L74 | The same Ask again under its id, once answered | Its first answer; no second question. |
+| L75 | The account, for an identity `ACCOUNTS` lets switch, for another, and without the proxy | The first's e-mail lowercased and its accounts, its own first; the second's alone; null and none. |
+| L76 | Lists `as` the account the caller may switch to, `as` its own, `as` an account it may not; without the proxy | That account's Workstreams; its own; 403 `account_not_allowed`; that account's. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

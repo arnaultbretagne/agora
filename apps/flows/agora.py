@@ -26,7 +26,8 @@ TERMINAL = {"done", "cancelled", "failed"}
 # The Workstream view's states after which the execution will not answer (docs/specs/log.md, "The Workstream view").
 GONE = {"ended", "failed", "lost", "stopped"}
 # Write refusals that clear on their own while the execution opens (docs/specs/log.md, "Commands").
-TRANSIENT_WRITE = {"settings_pending", "opening_session", "disconnected", "unavailable"}
+# A person's own turn in the Workstream (`turn_active`) clears too: their message is answered first.
+TRANSIENT_WRITE = {"settings_pending", "opening_session", "disconnected", "unavailable", "turn_active"}
 
 
 def workstream_id(run: str, member: str) -> str:
@@ -54,6 +55,9 @@ class TurnSpec:
     settings: dict[str, str] = field(default_factory=dict)
     # A human-asked retry after an escalation: new Create and Write ids, the same turn.
     attempt: int = 0
+    # The member's Workstream when it is given — the lead's, created by Agora for a team launched from
+    # its client; otherwise derived from the run and the member.
+    workstream: str = ""
     lease_seconds: int = 300
     turn_cap_seconds: int = 3600
 
@@ -211,6 +215,17 @@ class Thread:
         """The question asked at that position (docs/specs/log.md, "Elements")."""
         return next((o for (kind, _), o in self.objects.items() if kind == "element" and o.get("type") == "question" and str(o.get("position")) == position), None)
 
+    def turn_written(self, prompt: str) -> dict[str, Any] | None:
+        """The turn whose prompt is this text: the member's own, whatever else the Workstream holds —
+        a person may write in it between two of the member's turns."""
+        for (kind, _), o in self.objects.items():
+            if kind != "element" or o.get("type") != "user":
+                continue
+            text = "".join(b.get("text", "") for b in o.get("content") or [] if isinstance(b, dict) and b.get("type") == "text")
+            if text == prompt:
+                return self.objects.get(("turn", str(o.get("turn"))))
+        return None
+
     def pending_permission(self) -> bool:
         return any(kind == "element" and o.get("type") == "permission" and o.get("status") == "pending" for (kind, _), o in self.objects.items())
 
@@ -225,20 +240,21 @@ def run_turn(
 ) -> TurnResult:
     """Runs the member's turn, or finds it again where it is: written, answered.
 
-    The member's n-th Write is its n-th turn: a turn already in the thread is never written again.
+    The turn is the one whose prompt is the spec's: a turn already in the thread is never written
+    again, whatever else was written in between.
     The turn goes to the member's execution while it lives; once gone, to a new one, which continues
     the member's Session. Nothing stops it: Agora renews an execution only during its turns, so an
     idle one ends at its deadline, a lease after its last turn — a Stop would free nothing sooner
     (docs/specs/executions.md).
     """
-    workstream = workstream_id(spec.run, spec.member)
+    workstream = spec.workstream or workstream_id(spec.run, spec.member)
     name = f"{spec.member}, turn {spec.turn}"
     suffix = str(spec.turn) if spec.attempt == 0 else f"{spec.turn}.{spec.attempt}"
     agora.ensure_workstream(workstream)
     thread = Thread(agora, workstream)
     thread.refresh()
 
-    if len(thread.turns()) < spec.turn:
+    if thread.turn_written(spec.prompt) is None:
         view = thread.view() or {}
         try:
             if not view.get("execution") or view.get("state") in GONE | {None, "none"}:
@@ -254,7 +270,7 @@ def run_turn(
     # The turn: waited for, never resent.
     warned = False
     while True:
-        turn = thread.turns()[spec.turn - 1]
+        turn = thread.turn_written(spec.prompt) or {}
         status = turn.get("status")
         if status in TERMINAL:
             break
@@ -326,7 +342,7 @@ def _write(agora: Agora, spec: TurnSpec, thread: Thread, workstream: str, execut
     execution `reused` from the member's last turn that is gone, or going, asks for a new one."""
     deadline = time.monotonic() + ready_timeout
     state = None
-    while len(thread.turns()) < spec.turn:
+    while thread.turn_written(spec.prompt) is None:
         view = thread.view() or {}
         state = view.get("state")
         if view.get("execution") == execution:

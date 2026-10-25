@@ -21,15 +21,16 @@ Workstream, and the run waits for its answer on the thread's stream.**
 ## A turn's course
 
 The turn reads its Workstream's thread from its last cursor, through the snapshot's end, every 5 s.
-The member's n-th turn is the Workstream's n-th turn by request position: a turn already in the
-thread is never written again.
+The member's turn is the Workstream's turn whose prompt — its `user` element's text — is the turn's: a
+turn already in the thread is never written again, whatever a person wrote in between. A member's
+prompts differ from one turn to the next: the lead's by its decision's number, a step's by its turn's.
 
 | Stage | Rule |
 | --- | --- |
 | Workstream | `POST /api/workstreams` with its id and owner. 409, another owner's: escalation. |
 | Execution | The Workstream's execution, while its view is neither absent, `none`, `ended`, `failed`, `lost` nor `stopped`. Otherwise a Create. |
 | Create | Body: the first pool of the catalogue with the member's harness; `limits` with the lease (300 s, a rehearsal's 120 s) and the turn cap (3600 s); `settings` and `profiles` when the member has any. Refused `execution_active`: sent again under the same id every 5 s while the last execution's claim goes at its deadline; `quota` every 15 s; `unavailable` every 5 s. Refused `command_conflict`: the view's execution, unless it is gone — then escalation. Any other refusal, or 15 minutes of refusals: escalation. |
-| Write | Sent once the execution's view is `ready`, not `configuring`, with a Session. Target: that execution and Session; body: the turn's prompt as one text block. Refused `settings_pending`, `opening_session`, `disconnected` or `unavailable`: sent again under the same id. An execution taken from the member's last turn that is gone, refuses `execution_ending`, or is no longer the view's: a Create, as above. Any other refusal; a created execution gone first; or not `ready` within 15 minutes: escalation. |
+| Write | Sent once the execution's view is `ready`, not `configuring`, with a Session. Target: that execution and Session; body: the turn's prompt as one text block. Refused `settings_pending`, `opening_session`, `disconnected`, `unavailable` or `turn_active` — a person's own turn in the Workstream —: sent again under the same id. An execution taken from the member's last turn that is gone, refuses `execution_ending`, or is no longer the view's: a Create, as above. Any other refusal; a created execution gone first; or not `ready` within 15 minutes: escalation. |
 | Turn | Waited for until `done`, `cancelled` or `failed`. `uncertain`: escalation, and nothing is sent again. A pending permission is logged once and left to be answered in Agora. |
 | Answer | The text of the turn's `agent_message_chunk` elements, in the order of their first positions. Its report is its last JSON object. |
 | After the turn | Nothing is sent. Agora renews an execution only during its turns: idle, it ends at its deadline, a lease after its last turn. A Stop would free its claim no sooner. |
@@ -84,6 +85,9 @@ A member staffed on another harness than its card's takes `default` for what the
 | `overrides` | none | A role's harness, model or effort. |
 | `max_verifications` | 25 | Verifications by the judge, at most. |
 | `max_decisions` | 100 | Decisions of the lead, at most, refused ones included. |
+| `lead_workstream` | none | The lead's Workstream, when Agora created it ("Launching from Agora"); else derived from the run. |
+| `owner` | the worker's | Who owns the lead's Workstream and is asked: an identity UUID. |
+| `members_owner` | `owner` | Who owns the members' Workstreams — the judge's included: the agents' identity UUID. |
 
 The run's harnesses are the catalogue's but `mock`. Its offer — the pools and the profiles of
 `GET /api/config`'s `credentials.offered` — is read again for each decision and kept with it.
@@ -133,6 +137,19 @@ role cards at the commit it cloned; each decision, accepted with its JSON or ref
 the envelope once approved; each turn, with its settings, access, Workstream, execution, status,
 report, answer and exact prompt; and a summary table of the decisions and their outcomes. Each has a
 key, `flow-<8>-<name>`: published again — a run retried — it is a new version, not a second page.
+
+## Launching from Agora
+
+A team is launched from Agora's client (`assistant-ui.md`, "Teams"): Agora's server creates the
+lead's Workstream and asks Prefect for the run; the person never opens Prefect.
+
+| Name | Rule |
+| --- | --- |
+| Configured | `TEAM_PREFECT_API`, Prefect's API in-cluster; `TEAM_DEPLOYMENT`, `<flow>/<deployment>`, `lead/design-agora-foundations` by default; `TEAM_AGENTS`, the agents' account's e-mail. Without the first, `/api/teams` answers 404 `teams_unavailable`. |
+| `GET /api/teams` | `available` true. |
+| `POST /api/teams` | `id` and `goal`, 1 to 4,000 characters once trimmed. The Workstream `id` is created, the person's — the identity the proxy passes, the body's `owner` without one — then the deployment's run created with the parameters `goal`, `lead_workstream` the id, `owner` the person's identity, `members_owner` the agents' account's, and the idempotency key `agora-team-<id>`: the same launch sent again finds the same run. 200 with `workstream`, `flowRun`, and its address in Prefect when `TEAM_PREFECT_UI` is set. |
+| Refused | 400 `invalid_goal`, `invalid_identifier`, `invalid_body`; 409 `workstream_conflict` for another's Workstream; 502 `team_deployment_missing`, `team_refused`, `teams_unreachable` when Prefect does not answer as it should. |
+| Owners | The lead's Workstream, its questions and the person's answers are the person's; every member's Workstream, the judge's included, the agents' account's, out of the person's list and in the agents' ("Accounts"). |
 
 ## The flow `lead-rehearsal`
 
@@ -203,4 +220,6 @@ every replay gave the same Workstream, execution and answer.
 | F17 | An `ask` | The whole run waits for the person, key `ask-<n>`; `yes` adds what it asks for, `no` nothing; the note reaches the lead. |
 | F18 | The limits | No verification left: `verify` refused. `max_decisions` reached: the run ends `decision limit reached`. |
 | F19 | A run retried after its process died | Completed turns answer from their persisted results or find their Workstreams; no command twice; each page one, in its last version. |
+| F21 | A person writes in a member's Workstream between two of its turns; a Workstream given | The member's next turn found by its prompt, the person's left aside; the turn before found again by its own; the given Workstream the member's. |
+| F22 | A team launched from Agora; again; refused | The lead's Workstream the person's; the run asked once with the goal, the Workstream, both owners and the key `agora-team-<id>`; the same run when sent again; no goal, another's Workstream, Prefect unreachable refused with their reasons, no run asked. |
 | F20 | A question to the person | Asked once, the same key finding it again; its answer read on the thread's stream, on one connection while nothing drops; a connection idle or dropped opened again from its cursor. |

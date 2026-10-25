@@ -26,6 +26,22 @@ export interface LogHttpOptions {
   /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
   readonly testRoutes: boolean
   readonly credentials?: CredentialSource
+  /**
+   * The accounts each identity may switch to (docs/specs/log.md, "HTTP"): an e-mail to the e-mails of
+   * the accounts whose Workstreams it may list, a technical account's for one.
+   */
+  readonly accounts?: Readonly<Record<string, readonly string[]>>
+}
+
+/** `ACCOUNTS`: `person=account,account;person=account`, e-mails, compared lowercased. */
+export function accountsFrom(raw: string | undefined): Record<string, string[]> {
+  const accounts: Record<string, string[]> = {}
+  for (const entry of (raw ?? '').split(';').map((e) => e.trim()).filter((e) => e !== '')) {
+    const [person, others] = entry.split('=')
+    if (!person || !others) throw new Error(`ACCOUNTS: ${entry} is not person=account,…`)
+    accounts[person.trim().toLowerCase()] = others.split(',').map((o) => o.trim().toLowerCase()).filter((o) => o !== '')
+  }
+  return accounts
 }
 
 export async function logHttp(
@@ -41,7 +57,7 @@ export async function logHttp(
     return true
   }
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools') return false
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools' && url.pathname !== '/api/account') return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -83,7 +99,17 @@ export async function logHttp(
     // name-based UUID; none when Agora is reached without the proxy.
     const identityHeader = req.headers['x-forwarded-email']
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
-    if (req.method === 'GET' && url.pathname === '/api/workstreams') return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
+    const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader.toLowerCase() : null
+    const switches = email === null ? [] : (options.accounts?.[email] ?? [])
+    // The caller's account first, then those it may switch to (docs/specs/log.md, "HTTP").
+    if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email, accounts: email === null ? [] : [email, ...switches] }), true
+    if (req.method === 'GET' && url.pathname === '/api/workstreams') {
+      const as = url.searchParams.get('as')?.toLowerCase()
+      if (as === undefined || as === email) return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
+      // Another account's list: one the caller may switch to; anyone's without the proxy.
+      if (email !== null && !switches.includes(as)) return reply(403, { reason: 'account_not_allowed' }), true
+      return reply(200, { workstreams: await workstreams.projections.views(identity('owner', as)) }), true
+    }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
