@@ -3,13 +3,16 @@
 // right, or Cancel while the agent works. Above it, what the user must know before sending: a
 // refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits.
 // Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
-// "On a phone"): the harness's, the effort's bars, the key.
+// "On a phone"): the harness's, the effort's bars, the key. Before them, the paperclip, when the agent
+// takes images or files; what is attached shows above the text ("Attachments").
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
+import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
+import { acceptOf } from '../agora/attachments.ts'
 import { useAgora } from '../agora/runtime.tsx'
 import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
@@ -294,7 +297,8 @@ const Notes: FC = () => {
 
 export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { returned, takeReturned, pending, composer, commands } = useAgora()
+  const { returned, takeReturned, pending, composer, commands, promptCapabilities } = useAgora()
+  const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
   const text = useAuiState((s) => s.composer.text)
   const [highlighted, setHighlighted] = useState(0)
@@ -318,10 +322,11 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
       setDismissed(text)
     }
   }
-  // A message whose execution failed to start comes back here, to be sent again.
+  // A message whose execution failed to start comes back here, its attachments with it, to be sent again.
   useEffect(() => {
     if (returned === null) return
-    aui.composer().setText(returned)
+    aui.composer().setText(returned.text)
+    for (const a of returned.attachments) void aui.composer().addAttachment({ id: a.id, type: a.type, name: a.name, contentType: a.contentType, content: a.content }).catch(() => {})
     takeReturned()
   }, [returned, aui, takeReturned])
   return (
@@ -348,6 +353,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
         </div>
       )}
       <ComposerPrimitive.Root className="border-foreground/10 bg-muted/30 focus-within:border-foreground/25 rounded-thread @container flex w-full flex-col border transition-colors">
+        <ComposerAttachments />
         <ComposerPrimitive.Input
           rows={1}
           autoFocus={focusesItself()}
@@ -357,6 +363,9 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
           <div className="flex min-w-0 items-center gap-1">
+            {attachable && (
+              <ComposerAddAttachment className={cn(quietButton, 'grid shrink-0 place-items-center px-0 disabled:opacity-50', 'w-7 pointer-coarse:w-9')} />
+            )}
             <HarnessPicker />
             <ModelPicker />
             <AccessPicker />

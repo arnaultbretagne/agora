@@ -3,7 +3,18 @@
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
 export type Todo = { content: string; status: string }
-export type Artifact = { title?: string; kind?: string; status?: string; locations?: { path?: string }[]; diffs?: Diff[]; todos?: Todo[] }
+export type Artifact = {
+  title?: string
+  kind?: string
+  status?: string
+  locations?: { path?: string }[]
+  diffs?: Diff[]
+  todos?: Todo[]
+  /** A question's: whether its answer may carry a note; the option answered and its note. */
+  note?: boolean
+  answer?: string
+  answerNote?: string | null
+}
 
 const basename = (path: string | undefined): string => (path ? (path.split('/').at(-1) ?? path) : '')
 

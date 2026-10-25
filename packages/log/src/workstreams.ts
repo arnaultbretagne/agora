@@ -23,13 +23,14 @@ import {
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Command, type Entry } from './store.ts'
-import type { Execution, State } from './state.ts'
+import { acceptsPrompt, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
+import { answerRefusal, validQuestion } from './questions.ts'
 import { compileProfile, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -275,12 +276,22 @@ export class Workstreams implements Handler {
             },
           }
         }
+        // docs/specs/log.md, "Commands": a question, whatever the execution; no line to any agent.
+        if (command.kind === 'Ask') {
+          if (state.question) return 'question_pending'
+          return validQuestion(command.body) ? {} : 'invalid_question'
+        }
+        if (command.kind === 'Answer') {
+          if (!state.question || command.target.question !== state.question.position) return 'stale_question'
+          return answerRefusal(object(state.question.content.body) ?? {}, command.body) ?? {}
+        }
         if (!current || current.ended) return 'execution_unavailable'
         if (command.target.execution !== current.id) return 'stale_execution'
         if (command.kind === 'Stop') return current.stopped ? 'stopped' : { execution: current.id, session: current.session ?? undefined }
         if (current.lost || current.failed) return 'execution_unavailable'
         if (current.stopped) return 'stopped'
         if (command.kind === 'Write') {
+          if (state.question) return 'question_pending'
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
@@ -288,6 +299,7 @@ export class Workstreams implements Handler {
           if (this.opening(state, current)) return 'opening_session'
           if (state.permissions.size) return 'permission_pending'
           if (!settled(state, current)) return 'settings_pending'
+          if (!acceptsPrompt(current.promptCapabilities, command.body.prompt)) return 'prompt_unsupported'
           const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
           const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
           return {
@@ -297,6 +309,7 @@ export class Workstreams implements Handler {
           }
         }
         if (command.kind === 'Configure') {
+          if (state.question) return 'question_pending'
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
@@ -398,7 +411,7 @@ export class Workstreams implements Handler {
   }
 
   /**
-   * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings and commands its last
+   * The catalogue (docs/specs/log.md, "HTTP"), each pool with the settings, commands and prompt capabilities its last
    * Session gave, else its harness's last: what a draft offers before it has a Session of its own.
    */
   async catalogue(): Promise<Record<string, unknown>[]> {
@@ -410,7 +423,7 @@ export class Workstreams implements Handler {
     return pools.map((p) => {
       // A pool no Session has opened in yet, as a harness's newer image is: its harness's last one.
       const last = latest((v) => v.pool === p.name) ?? latest((v) => v.harness === p.harness)
-      return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [] }
+      return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [], promptCapabilities: last?.promptCapabilities ?? null }
     })
   }
 

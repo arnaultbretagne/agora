@@ -81,7 +81,11 @@ const Item: FC<{ w: WorkstreamView; active: boolean; onOpen: () => void }> = ({ 
     )}
   >
     <span className="min-w-0 flex-1 truncate">{w.title}</span>
-    {DOT[w.state] && <span aria-label={w.state} className={cn('size-1.5 shrink-0 rounded-full', DOT[w.state])} />}
+    {w.question ? (
+      <span className="text-primary shrink-0 text-[11px] font-medium">waiting for you</span>
+    ) : (
+      DOT[w.state] && <span aria-label={w.state} className={cn('size-1.5 shrink-0 rounded-full', DOT[w.state])} />
+    )}
   </button>
 )
 

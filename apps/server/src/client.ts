@@ -17,8 +17,9 @@ const TYPES: Record<string, string> = {
   '.webmanifest': 'application/manifest+json',
 }
 
-// Nothing inline but styles (the components set some), nothing from elsewhere.
-const POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+// Nothing inline but styles (the components set some), nothing from elsewhere; images also from the
+// browser's own memory (`blob:`), where an attachment is read before it is sent.
+const POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
 
 export function serveClient(root: string): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {

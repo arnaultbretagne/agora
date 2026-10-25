@@ -19,5 +19,9 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/answer-twice` | Answers the prompt twice. |
 | `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/specs/credentials.md`); answers with what came back. GET by default. |
 
+It accepts images and embedded resources in a prompt, not audio. Before its behaviour, it says what
+it received of them: an image's type, its width × height for a PNG or a JPEG, and its bytes; a
+resource's `uri`, type and characters.
+
 For tests, `AGORA_MOCK_INITIALIZE_DELAY_MS` delays the answer to `initialize`, and
 `AGORA_MOCK_INITIALIZE_INVALID=1` makes it invalid.

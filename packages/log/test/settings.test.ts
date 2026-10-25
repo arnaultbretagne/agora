@@ -156,6 +156,76 @@ test('L66 the agent reports its context: the view\'s usage, replaced by the next
   await until('cleared', async () => (await view(lab, ws)).usage === null, 15_000)
 })
 
+const ACCEPTS = { image: true, audio: false, embeddedContext: true }
+
+test('L67 the agent\'s prompt capabilities: none before its initialize answer, then its own, kept once it has ended; the pool\'s the same', async (t) => {
+  const lab = await labWith(t)
+  const ws = await lab.workstream()
+  const e = await lab.open(ws)
+  await until('ready', async () => (await view(lab, ws)).state === 'ready', 10_000)
+  const entries = await lab.entries(ws)
+  const answer = lines(entries, 'in', 'initialize').find((x) => x.rpc_kind === 'response')!
+  // The view after each entry, folded one at a time.
+  const projection = new CoreProjection()
+  const seen: { position: bigint; caps: unknown }[] = []
+  for (const entry of entries) {
+    projection.apply([entry])
+    const v = projection.objects.get(ws)?.object
+    if (v !== undefined) seen.push({ position: BigInt(entry.position), caps: schemaValue(v.promptCapabilities) })
+  }
+  const before = seen.filter((s) => s.position < BigInt(answer.position))
+  t.diagnostic(`views before the initialize answer at ${answer.position}: ${String(before.length)}, their capabilities ${JSON.stringify([...new Set(before.map((s) => s.caps))])}`)
+  assert.ok(before.length > 0, 'the view exists before the answer')
+  assert.ok(before.every((s) => s.caps === null), 'none before the answer')
+  assert.deepEqual(seen.find((s) => s.position >= BigInt(answer.position))?.caps, ACCEPTS, 'the agent\'s own from its answer')
+  assert.deepEqual(schemaValue((await view(lab, ws)).promptCapabilities), ACCEPTS)
+  assert.ok((await lab.command(ws, 'Stop', { execution: e.id })).accepted)
+  await expire(lab.kube, e.claimName)
+  await until('ended', async () => (await view(lab, ws)).state === 'ended', 15_000)
+  const ended = schemaValue((await view(lab, ws)).promptCapabilities)
+  t.diagnostic(`once ended: ${JSON.stringify(ended)}`)
+  assert.deepEqual(ended, ACCEPTS, 'kept once it has ended')
+  const pools = (await call(lab.url, 'GET', '/api/pools')).body.pools as Record<string, unknown>[]
+  const pool = schemaValue(pools.find((p) => p.name === 'mock-test')!.promptCapabilities)
+  t.diagnostic(`GET /api/pools mock-test: ${JSON.stringify(pool)}`)
+  assert.deepEqual(pool, ACCEPTS)
+})
+
+test('L68 a Write with a block the agent does not accept: refused, nothing written or sent; then text, an image and a resource: given as sent', async (t) => {
+  const lab = await labWith(t)
+  const ws = await lab.workstream()
+  const e = await lab.open(ws)
+  await until('ready', async () => (await view(lab, ws)).state === 'ready', 10_000)
+  const target = { execution: e.id, session: e.session }
+  const before = (await lab.entries(ws)).length
+  const refused = await lab.command(ws, 'Write', target, { prompt: [{ type: 'text', text: 'listen' }, { type: 'audio', mimeType: 'audio/wav', data: 'UklGRg==' }] })
+  t.diagnostic(`text and audio: ${JSON.stringify(refused)}`)
+  assert.deepEqual(refused, { accepted: false, reason: 'prompt_unsupported' })
+  assert.equal((await lab.entries(ws)).length, before, 'nothing written')
+  assert.equal(lines(await lab.entries(ws), 'out', 'session/prompt').length, 0, 'nothing sent')
+  // A 1 × 1 PNG, and a Markdown file of 8 characters.
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+  const prompt = [
+    { type: 'text', text: 'look' },
+    { type: 'image', mimeType: 'image/png', data: png },
+    { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } },
+  ]
+  const accepted = await lab.command(ws, 'Write', target, { prompt })
+  assert.equal(accepted.accepted, true, 'accepted')
+  await lab.turn(ws, 'done')
+  const entries = await lab.entries(ws)
+  const sent = lines(entries, 'out', 'session/prompt')
+  assert.equal(sent.length, 1)
+  assert.deepEqual(schemaValue(object(sent[0]!.content.params)!.prompt), prompt, 'the three blocks as sent')
+  const said = lines(entries, 'in', 'session/update')
+    .map((x) => object(object(x.content.params)?.update))
+    .filter((u) => u?.sessionUpdate === 'agent_message_chunk')
+    .map((u) => String(object(u!.content)?.text ?? ''))
+    .join('')
+  t.diagnostic(`the agent: ${said}`)
+  assert.match(said, /Received an image, image\/png, 1 × 1, 70 bytes; notes\.md, text\/markdown, 8 characters\./)
+})
+
 test('L52 GET /api/pools after a Session in a pool: its settings and commands; a pool kept for the tests marked', async (t) => {
   const lab = await labWith(t, 'model=mock-small', { 'claude-test': 'testing' })
   const ws = await lab.workstream()

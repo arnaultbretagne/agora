@@ -4,6 +4,7 @@
 import { ActionBarPrimitive, AuiIf, MessagePrimitive, groupPartByType, useAuiState } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, CopyIcon, LoaderCircleIcon } from 'lucide-react'
 import type { FC } from 'react'
+import { UserMessageAttachments } from '@/components/assistant-ui/elements/attachment'
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text'
 import { cn } from '@/lib/utils'
 import { harnessName, planItems } from '../agora/view.ts'
@@ -22,15 +23,20 @@ const TURN_NOTE: Record<string, string> = {
 
 export const UserMessage: FC = () => {
   const status = useAuiState((s) => String(custom(s).turnStatus ?? ''))
+  // A message of attachments alone has no bubble (docs/specs/assistant-ui.md, "Attachments").
+  const said = useAuiState((s) => s.message.content.some((p) => p.type === 'text' && p.text.trim() !== ''))
   const note = TURN_NOTE[status]
   return (
     <MessagePrimitive.Root
       data-role="user"
       className="animate-in fade-in slide-in-from-bottom-1 mx-auto flex w-full max-w-(--thread-max-width) flex-col items-end duration-150"
     >
-      <div className="bg-muted rounded-thread max-w-[80%] px-4 py-2 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap">
-        <MessagePrimitive.Parts />
-      </div>
+      <UserMessageAttachments />
+      {said && (
+        <div className="bg-muted rounded-thread max-w-[80%] px-4 py-2 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap">
+          <MessagePrimitive.Parts />
+        </div>
+      )}
       {note && (
         <span className={cn('mt-1 px-1 font-mono text-[11px]', status === 'uncertain' ? 'text-warning' : 'text-muted-foreground/70')}>{note}</span>
       )}
@@ -77,12 +83,22 @@ export const AssistantMessage: FC = () => {
   const harness = useAuiState((s) => String(custom(s).harness ?? ''))
   const running = useAuiState((s) => s.message.status?.type === 'running')
   const empty = useAuiState((s) => s.message.parts.length === 0)
+  // A question to the person is one box: its title and text, then its answer at its foot.
+  const question = useAuiState((s) => custom(s).question !== undefined)
+  const waiting = useAuiState((s) => s.message.status?.type === 'requires-action')
   return (
     <MessagePrimitive.Root
       data-role="assistant"
       className="group/message animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-(--thread-max-width) duration-150"
     >
-      <div className="text-[15px] leading-relaxed wrap-break-word">
+      <div
+        data-question={question ? (waiting ? 'pending' : 'answered') : undefined}
+        className={cn(
+          'text-[15px] leading-relaxed wrap-break-word',
+          question && 'bg-background rounded-surface border p-4',
+          question && (waiting ? 'border-primary/40' : 'border-foreground/10'),
+        )}
+      >
         <MessagePrimitive.GroupedParts groupBy={groupParts}>
           {({ part, children }) => {
             switch (part.type) {

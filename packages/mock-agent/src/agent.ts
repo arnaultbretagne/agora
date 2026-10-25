@@ -152,6 +152,39 @@ function pause(turn: Turn, ms: number): Promise<boolean> {
   })
 }
 
+interface Block {
+  type?: string
+  text?: string
+  mimeType?: string
+  data?: string
+  resource?: { uri?: string; mimeType?: string; text?: string }
+}
+
+/** What a block other than text holds, as the agent would read it: an image's size, a file's length. */
+function describe(block: Block): string | null {
+  if (block.type === 'image') {
+    const bytes = Buffer.from(block.data ?? '', 'base64')
+    const size = dimensions(bytes)
+    return `an image, ${String(block.mimeType)}${size ? `, ${size}` : ''}, ${String(bytes.length)} bytes`
+  }
+  if (block.type === 'resource') return `${String(block.resource?.uri)}, ${String(block.resource?.mimeType)}, ${String(block.resource?.text?.length ?? 0)} characters`
+  return block.type === 'text' ? null : `a ${String(block.type)} block`
+}
+
+/** A PNG's or a JPEG's width × height, from its header. */
+function dimensions(b: Buffer): string | null {
+  if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return `${String(b.readUInt32BE(16))} × ${String(b.readUInt32BE(20))}`
+  if (b[0] !== 0xff || b[1] !== 0xd8) return null
+  for (let i = 2; i + 9 < b.length; ) {
+    if (b[i] !== 0xff) return null
+    const marker = b[i + 1]!
+    // A start of frame, but the Huffman, arithmetic and JPEG-LS tables that share its range.
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return `${String(b.readUInt16BE(i + 7))} × ${String(b.readUInt16BE(i + 5))}`
+    i += 2 + b.readUInt16BE(i + 2)
+  }
+  return null
+}
+
 async function prompt(session: Session, text: string, turn: Turn): Promise<string> {
   const [command, argument] = text.trim().split(/\s+/, 2)
   const n = Math.max(1, Math.min(3600, Number(argument ?? '5') || 5))
@@ -371,7 +404,7 @@ async function handle(message: Message): Promise<void> {
           protocolVersion: 1,
           agentCapabilities: {
             loadSession: true,
-            promptCapabilities: { image: false, audio: false, embeddedContext: false },
+            promptCapabilities: { image: true, audio: false, embeddedContext: true },
             sessionCapabilities: { resume: {} },
           },
           agentInfo: { name: 'agora-mock-agent', title: 'The lab\'s mock agent', version: '1.0.0' },
@@ -417,7 +450,9 @@ async function handle(message: Message): Promise<void> {
       const session = sessions.get(String(params.sessionId))
       if (session === undefined) return fail(message.id, -32002, `session inconnue : ${String(params.sessionId)}`)
       if (turns.has(session.id)) return fail(message.id, -32603, 'a turn is already in progress')
-      const blocks = Array.isArray(params.prompt) ? (params.prompt as { type?: string; text?: string }[]) : []
+      const blocks = Array.isArray(params.prompt) ? (params.prompt as Block[]) : []
+      const received = blocks.map(describe).filter((d) => d !== null)
+      if (received.length > 0) say(session.id, `Received ${received.join('; ')}.\n\n`)
       const text = blocks
         .filter((block) => block.type === 'text')
         .map((block) => block.text ?? '')
