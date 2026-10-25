@@ -34,6 +34,8 @@ export interface WorkstreamView {
   /** The exchanges sent to an agent, and per harness its last anchor and the exchanges since (docs/specs/log.md, "Continuing"). */
   readonly exchanges?: number
   readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
+  /** The pending question's position, or null (docs/specs/log.md, "The Workstream view"). */
+  readonly question?: string | null
 }
 
 export interface Usage {
@@ -92,6 +94,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     profiles: Array.isArray(o.profiles) ? o.profiles.filter((p): p is string => typeof p === 'string') : [],
     promptCapabilities: promptCapabilitiesOf(o.promptCapabilities),
     exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
+    question: text(o.question) || null,
     continuation: Object.fromEntries(
       Object.entries(json(o.continuation) ?? {}).flatMap(([harness, c]) => {
         const v = json(c)
@@ -148,12 +151,15 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const uncertain = active && status(active) === 'uncertain' ? active : null
   const pendingPermission =
     ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending' && e.object.session === view.session) ?? null
+  const pendingQuestion = ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending')
   const running = last !== undefined && ['saved', 'in_progress'].includes(status(last))
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
   const settling = view.state === 'ready' && view.configuring === true
   const reason = !state.complete
     ? 'Loading…'
-    : STATE_REASON[view.state] ??
+    : pendingQuestion
+      ? 'Answer the question above.'
+      : STATE_REASON[view.state] ??
       (pendingPermission
         ? 'Answer the permission request above.'
         : settling
@@ -161,8 +167,9 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
           : uncertain
             ? 'The end of the last turn could not be confirmed.'
             : null)
-  const create = state.complete && IDLE.includes(view.state)
-  const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null && !settling)
+  // A question holds sending back in every state, a first message included (docs/specs/assistant-ui.md).
+  const create = state.complete && IDLE.includes(view.state) && !pendingQuestion
+  const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null && !pendingQuestion && !settling)
   return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission }
 }
 
@@ -309,6 +316,43 @@ function partsOf(elements: ViewObject[]): Part[] {
     }
   }
   return parts
+}
+
+/**
+ * A question to the person (docs/specs/assistant-ui.md, "Messages"): its title and text as Markdown,
+ * then its line and card, as a tool call whose approval holds its options.
+ */
+function questionMessage(question: ViewObject): ThreadMessageLike {
+  const q = question.object
+  const options = list(q.options).map((o) => json(o) ?? {})
+  const answer = json(q.answer)
+  const chosen = q.status === 'answered' ? options.find((o) => o.optionId === answer?.optionId) : undefined
+  const title = text(q.title)
+  const note = typeof answer?.note === 'string' && answer.note !== '' ? answer.note : null
+  return {
+    id: `${question.id}:question`,
+    role: 'assistant',
+    content: [
+      { type: 'text', text: `**${title}**\n\n${text(q.text)}` },
+      {
+        type: 'tool-call',
+        toolCallId: question.id,
+        toolName: 'question',
+        args: {} as never,
+        argsText: '',
+        ...(chosen ? { result: note ? `${text(chosen.name)}: ${note}` : text(chosen.name) } : {}),
+        artifact: { title, kind: 'question', status: chosen ? 'completed' : 'pending', note: q.note === true, ...(chosen ? { answer: text(chosen.name), answerNote: note } : {}) },
+        approval: {
+          id: question.id,
+          prompt: title,
+          options: options.map((o) => ({ id: text(o.optionId), kind: optionKind(o.kind), label: text(o.name) })),
+          ...(chosen ? { approved: optionKind(chosen.kind).startsWith('allow'), optionId: text(chosen.optionId) } : {}),
+        },
+      },
+    ],
+    status: chosen ? { type: 'complete', reason: 'stop' } : { type: 'requires-action', reason: 'tool-calls' },
+    metadata: { custom: { question: question.id } },
+  }
 }
 
 function failureOf(turn: Json): string {
@@ -626,7 +670,7 @@ export function sections(workstreams: readonly WorkstreamView[], now: Date, sear
   ]
   const out = groups.map((g) => ({ label: g.label, workstreams: [] as WorkstreamView[] }))
   for (const w of workstreams) {
-    if (w.state === 'none' && w.id !== current) continue
+    if (w.state === 'none' && w.id !== current && !w.question) continue
     if (wanted !== '' && !w.title.toLowerCase().includes(wanted)) continue
     const at = w.changedAt ? Date.parse(w.changedAt) : now.getTime()
     out[groups.findIndex((g) => at >= g.from)]!.workstreams.push(w)
@@ -664,6 +708,8 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
       ],
     })
   }
+  for (const question of elements.filter((e) => e.object.type === 'question'))
+    placed.push({ position: text(question.object.position), messages: [questionMessage(question)] })
   let sessions = 0
   const notices = ofKind(state, 'notice').sort(byPosition)
   // A break the execution's loss or end follows is explained by it: only the end is shown.

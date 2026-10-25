@@ -84,7 +84,8 @@ export interface Agora {
   refreshLimits(): void
   choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
-  answer(permission: string, optionId: string): Promise<void>
+  /** A permission answered to its agent, or a question answered to the log, with its note. */
+  answer(permission: string, optionId: string, note?: string): Promise<void>
   open(id: string | null): void
   takeReturned(): void
 }
@@ -226,9 +227,14 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   )
 
   const answer = useCallback(
-    async (permissionId: string, optionId: string) => {
+    async (permissionId: string, optionId: string, note?: string) => {
       const permission = state.objects.get(permissionId)?.object
       if (!permission) return
+      // A question to the person is answered to the log, not to an agent (docs/specs/log.md, "Commands").
+      if (permission.type === 'question') {
+        await send('Answer', { question: permission.position }, { optionId, ...(note ? { note } : {}) })
+        return
+      }
       await send(
         'RespondPermission',
         { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },

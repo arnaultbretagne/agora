@@ -5,7 +5,7 @@ import type { Json } from './objects.ts'
 import type { AccountLimits, AgentCommand, Setting, WorkstreamView } from './view.ts'
 import type { PromptCapabilities } from './attachments.ts'
 
-export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop'
+export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
 
 export interface Answer {
   readonly accepted: boolean
