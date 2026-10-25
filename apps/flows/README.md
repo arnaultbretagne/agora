@@ -1,15 +1,17 @@
 # flows
 
-Agora's workflows on Prefect: each step runs one agent in its own Workstream, through the
-server's API (`docs/specs/flows.md`). Prefect's worker runs them in-cluster (infra-k8s
-`apps/prefect`); nothing here is built into an image.
+Agora's workflows on Prefect: a lead decides, the flow carries out, and each member of the team
+works in its own Workstream, through the server's API (`docs/specs/flows.md`). Prefect's worker runs
+them in-cluster (infra-k8s `apps/prefect`); nothing here is built into an image.
 
 | File | Content |
 | --- | --- |
-| `agora.py` | A step on Agora, standard library only: ids derived from the step, Create, Write, the turn, Stop. |
-| `flows.py` | The flows: `rehearsal` and `archi-dev-review`. |
+| `roles/` | The role cards — `lead`, `dev`, `sre`, `judge`: each one's persona and default harness, model and effort. |
+| `team.py` | The team, standard library only: the cards, Agora's offer, the lead's decisions and what the flow accepts of them, every prompt. |
+| `agora.py` | A member's turns on Agora, standard library only: ids derived from the turn, its execution, the Write, the answer. |
+| `flows.py` | The flows: `lead`, `lead-rehearsal` and `rehearsal`. |
 | `deploy.py` | Registers a branch's flows on the work pool `agora`. |
-| `test_agora.py` | Unit cases F1–F5, against a stand-in Agora. |
+| `test_agora.py`, `test_team.py` | Unit cases, against a stand-in Agora. |
 
 ## Check
 
@@ -19,32 +21,33 @@ npm test -w @agora/flows
 
 ## Deploy a branch
 
-`deploy.py` registers both flows of a branch, named after it (`/` written `-`), from the worker's
-Pod, which has git and Prefect's API:
+`deploy.py` registers the branch's flows, named after it (`/` written `-`), from the worker's Pod,
+which has git and Prefect's API:
 
 ```sh
 kubectl -n prefect cp apps/flows/deploy.py <worker-pod>:/tmp/deploy.py
-kubectl -n prefect exec <worker-pod> -- python /tmp/deploy.py feat/flows
+kubectl -n prefect exec <worker-pod> -- python /tmp/deploy.py <branch>
 ```
 
-Each run clones the branch again: pushing to it changes the next run, without redeploying.
+Each run clones the branch again: pushing to it changes the next run, and a resumed one, without
+redeploying.
 
 ## Run
 
 In Prefect's UI (prefect.bretagne.dev), or from the worker's Pod:
 
 ```sh
-# The mock, one step and a replay; its Workstreams belong to the live cases' owner.
-prefect deployment run rehearsal/feat-flows --param prompt="/sleep 20" --watch
-# The whole workflow on the mock, the review asking for changes once.
-prefect deployment run archi-dev-review/feat-flows --param goal="…" \
-  --param architect=mock --param developer=mock --param reviewer=mock \
-  --param 'rehearsal_verdicts=["changes","approve"]' --param owner=c45e0000-0000-4000-8000-000000000000
-# For real.
-prefect deployment run archi-dev-review/feat-flows --param goal="…"
+# The lead's mechanics on the mock, its answers scripted; its Workstreams belong to the live cases' owner.
+prefect deployment run lead-rehearsal/<branch>
+# For real: the goal is the lead's only brief.
+prefect deployment run lead/<branch> --param goal="…"
+# A role's settings for one run.
+prefect deployment run lead/<branch> --param goal="…" --param 'overrides={"dev": {"model": "sonnet"}}'
 ```
 
-A run that waits for a human shows `Suspended`: resume it from its page in the UI, with the form.
+A run that waits for you asks in Agora: the lead's Workstream, `[flow <run>] lead: …`, shows
+"waiting for you" in the list, and its card takes your answer — the envelope first, then whatever the
+lead asks. In Prefect, the run stays `Running`, its task `Waiting for you: …` on the graph.
 
 A run whose worker Pod died stays `Running`: mark it `Crashed` (Prefect's API, `set_flow_run_state`
-with `force`), then `prefect flow-run retry <id>`; its steps find their Workstreams again.
+with `force`), then `prefect flow-run retry <id>`; its turns find their Workstreams again.
