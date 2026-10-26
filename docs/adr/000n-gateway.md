@@ -37,6 +37,9 @@
 7. **GitHub reads as the public sees it, with the Internet.** What no grant covers on GitHub takes
    routes of its own, open to the Internet's grant, for reads only, with the same PAT: a public
    repository can be cloned and read, never written to or pushed to without its profile.
+8. **On an MCP server, the grants name the tools.** Every call is a `POST` to one path: a grant
+   carries the tools a call may name, and the server's route, an MCP backend of the gateway, checks
+   the tool in the protocol before it sets the server's credential.
 
 ```mermaid
 flowchart LR
@@ -207,6 +210,18 @@ address: 403 from the gateway, and no branch on GitHub; what a grant covers thro
 and `github-git` as before; without `internet`, 403. The header, sent by the sandbox, reached
 an echo service overwritten, and not at all through a route that removes it.
 
+### Read and write on one MCP server (2026-10-26)
+
+The vault's MCP server reads and writes through the same `POST /mcp`; the tool is in the JSON-RPC
+body. It takes one identity, a Pocket-ID machine client, and knows no levels.
+
+| Option | Why not, or why |
+| --- | --- |
+| A path or method per level | There is none: host, path and method are the same for `read_note` and `delete_note`. |
+| A regular expression on the body (CEL `request.body`) | Reads JSON as text: a batch, a key order, an escape or a second `name` defeats it. |
+| Two identities, one per level, the server telling them apart | A change in the server, which the levels belong to no more than the GitHub PAT does; the gateway would still have to route by level. |
+| The tools in the grant, checked by the gateway's MCP backend (kept) | agentgateway parses the protocol: `mcpAuthorization` runs a CEL rule on each `tools/call` and filters `tools/list`, with the JWT's claims in scope (read in its 1.6.0 code). One rule for every composition, as on the other routes; a tool the grants do not name never reaches the server. Measured with the 1.6.0 binary on the configuration infra-k8s #295 renders (2026-10-26): a grant naming the six read tools listed those six and was refused `create_note`; a grant without `tools` listed the twelve and the prompt. |
+
 ### Other gateways (surveyed 2026-09-28)
 
 | Candidate | Why not |
@@ -261,3 +276,7 @@ an echo service overwritten, and not at all through a route that removes it.
   upgraded deliberately, live cases replayed first.
 - Replacing the gateway leaves the bridge's side unchanged: a token handed at runtime, joined to
   each `CONNECT`.
+- An MCP server's route terminates the protocol: agentgateway keeps the sessions and speaks to the
+  server itself. A replacement gateway has to parse MCP too, or the levels collapse into one.
+- A tool the server adds is closed to the read level until the catalogue names it: the lists follow
+  the server's releases.

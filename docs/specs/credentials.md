@@ -40,8 +40,8 @@ against the execution's grants and sets the credential on the way through.**
 ## Profiles and grants
 
 An execution receives a list of **profiles**. Agora compiles them into **grants**: a host, a
-regular expression anchored on the path and query, methods. The catalogue lives in Agora's code
-(`packages/credentials`).
+regular expression anchored on the path and query, methods, and for an MCP server the tools a call
+may name. The catalogue lives in Agora's code (`packages/credentials`).
 
 | Profile | Grants |
 | --- | --- |
@@ -51,8 +51,29 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
+| `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
+| `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
+
+A grant's `tools` lists the MCP tools a call may name. On an MCP server every message is a `POST` to
+the same path, so host, path and method cannot tell a read from a write: only a route whose backend
+is an MCP server reads `tools`, in the protocol itself ("The vault"). There, a grant without `tools`
+opens everything the server offers — tools, prompts, resources — and a grant with `tools` opens
+those tools and nothing else. In the JWT it is a list of names beside `host`, `path` and
+`methods`, for instance `{"host": "vault.bretagne.dev", "path": "^/mcp$", "methods": ["GET", "POST",
+"DELETE"], "tools": ["read_note", …]}`. Only `vault:read` carries it.
+
+| Vault tool | Level | What it does |
+| --- | --- | --- |
+| `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values` | read | Read notes, their properties, links and the schema. |
+| `create_note`, `update_note`, `delete_note`, `move_note` | write | Change notes. |
+| `update_schema` | write | Writes the schema overlay, `.obsidian/mcp-schema.json`. |
+| `clip_url` | write | Fetches a page through the clipper and writes it into the vault as a note. |
+| Prompt `clip-to-vault` | write | Leads to `clip_url`. |
+
+The server (obsidian-mcp 0.4.0) offers no resource. A tool it adds is closed to `vault:read` until
+the catalogue names it, and open to `vault:write`, which is the whole server.
 
 `internet` never opens a route with a credential: those routes compare the grant's host with the
 request's, and only the `internet` route and GitHub's public routes read `*`. On GitHub it adds what
@@ -65,7 +86,7 @@ profile.
 What a harness needs before any execution — its SDK initializing, for instance — is declared on
 its pool, the `SandboxWarmPool`, in the annotation `agora.bretagne.dev/base-profiles`: profiles
 separated by commas. Only profiles the catalogue marks as base may be declared: those naming a
-service — never a repository, nor `internet`.
+service — never a repository, nor `internet`, nor the vault.
 
 | Profile | Base |
 | --- | --- |
@@ -74,6 +95,7 @@ service — never a repository, nor `internet`.
 | `chatgpt` | Yes |
 | `internet` | No |
 | `github:…` | No |
+| `vault:read`, `vault:write` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
@@ -89,11 +111,23 @@ profile, or a narrower one of the same repository.
 | --- | --- |
 | `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:read` |
 | `github:owner/repo:read` | `github:owner/repo:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet`, `vault:read`, `vault:write` | Itself: `vault:write` offered does not let a Create name `vault:read`; offer both for that. |
 
 Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
 catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
 the server at start.
+
+### MCP servers
+
+A profile may open an MCP server: the execution's `session/new` names it, and the harness reaches it
+through the gateway like any host. The catalogue holds them beside the profiles.
+
+| Element | Rule |
+| --- | --- |
+| `mcpServers` | In `session/new`, and in `session/load` or `session/resume` when a Session is restored: the servers the execution's profiles — its pool's base profiles and its own — open, each once. `[]` when none does. |
+| The vault | With `vault:read` or `vault:write`, or both: one server, `{ "type": "http", "name": "vault", "url": "https://vault.bretagne.dev/mcp", "headers": [] }`. |
+| Headers | None. The gateway sets the server's credential; nothing in `mcpServers` is a secret, and it is written in the log. |
+| A Scope | Changes the token, never the Session's servers, fixed when it opens. A Session opened without the vault does not get it; one opened with it and scoped out of it keeps the server, refused by the gateway (403). |
 
 ## The token
 
@@ -160,6 +194,7 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `github-git` | `github.com`, `x-gateway-grant: covered` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 | `github-api-public` | `api.github.com`, the rest; reads, with `internet` | As `github-api`. |
 | `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`. |
+| `vault` | `vault.bretagne.dev`; an MCP backend, the tools the grants name ("The vault") | `Authorization: Bearer` + an access token of the Pocket-ID machine client `agora_gateway_vault`. |
 | `internet` | Any other | None. |
 
 The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
@@ -171,6 +206,30 @@ The `internet` route can name any host, so the network bounds it: the gateway go
 IPv4 addresses only, on port 443. The private ranges — `10.0.0.0/8`, `100.64.0.0/10`,
 `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16` — hold the operator's networks and the
 cluster: a name resolving there times out (503); an address written as such is refused at TLS.
+
+### The vault
+
+The Obsidian vault's MCP server — obsidian-mcp 0.4.0, namespace `obsidian`, Service `obsidian-mcp`
+port 4000, path `/mcp`, Streamable HTTP with sessions (`mcp-session-id`) — is its own OAuth resource
+server. It takes a Pocket-ID JWT whose `aud` is in `MCP_ALLOWED_AUDIENCE`, and refuses a token
+presenting a client identity — `sub` `client-<uuid>`, as a client-credentials token does — that is not
+in `MCP_ALLOWED_CLIENT_IDS`. It knows neither executions nor levels: whoever it accepts may read and
+write. The gateway is where `vault:read` and `vault:write` are told apart, before the server.
+
+| Element | The `vault` route |
+| --- | --- |
+| Host | `hostnames: [vault.bretagne.dev]`, on the internal bind's HTTPS listener with the other routes: the sandbox sends `CONNECT vault.bretagne.dev:443`, then its MCP messages to `https://vault.bretagne.dev/mcp`. |
+| Backend | An MCP backend with one target: `http://obsidian-mcp.obsidian.svc.cluster.local:4000/mcp`, stateful, tool names unprefixed. agentgateway keeps its own session with the server and reads every message. The Service, not the public address: `vault.bretagne.dev` resolves to the operator's public address, which reaches Traefik only by a hairpin into the private ranges the gateway's egress cuts. |
+| HTTP rule | `authorization`: the rule of every route with a credential, unchanged — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method. With the `vault` grants: `POST`, `GET` and `DELETE` on `/mcp` exactly; `/sse`, `/.well-known/…`, `/health` refused (403). |
+| Tool rule | `mcpAuthorization`, one `allow`: `jwt.grants.exists(g, g.host == "vault.bretagne.dev" && (!has(g.tools) \|\| mcp.tool.name in g.tools))`. agentgateway runs it on each `tools/call`, `prompts/get` and `resources/read`, and filters the lists with it (read in its 1.6.0 code, measured in infra-k8s #295). On a prompt or a resource `mcp.tool` is absent: with `tools` in the grant the expression fails, and it is refused. A refused call is answered by the gateway, JSON-RPC error `-32602` "Unknown tool: `<name>`"; the server never sees it. |
+| Credential | `backendAuth.key`: `Authorization: Bearer` + the file `/etc/agentgateway/vault/access_token`, watched; whatever `Authorization` the sandbox sent never reaches the server. |
+| Identity | The Pocket-ID OIDC client `agora_gateway_vault`, id `7d54f86c-7456-4cbd-b79d-a9bb7452bb62`, declared in `apps/pocket-id/oidc-reconciler/spec.json`: confidential, no callback URL, used for the client-credentials grant only. Its token is asked without `resource` — Pocket-ID 2.18 refuses a resource it has no API registered for —, so `aud` and the `sub` `client-…` both carry its id, which `obsidian-mcp` lists in `MCP_ALLOWED_AUDIENCE` and `MCP_ALLOWED_CLIENT_IDS`. No other client can get a token with that `aud`: it has no callback, so no authorization code. |
+| Keeping the token | `vault-refresher` in `agora-gateway`, every 15 minutes: a client-credentials request to Pocket-ID's token endpoint, in the cluster (Service `pocket-id`, port 1411), with the client's secret (SOPS Secret `vault-client`); it writes `access_token` into the Secret `vault-session`, mounted optional on the gateway at `/etc/agentgateway/vault`. A token lives 60 minutes: three failed runs in a row still leave a valid one. |
+| Network | The gateway: egress to the `obsidian` Pods `app: obsidian-mcp`, port 4000; `obsidian-mcp`: ingress from the `agora-gateway` Pods `app: gateway`, port 4000. `vault-refresher`: Pocket-ID on 1411, and the API server for its one Secret. |
+
+Until the route exists, `vault.bretagne.dev` is a host with no route of its own: the `internet` route
+takes it, refused without `internet` (403), and with it the request leaves with no credential, which
+the server refuses (401). Once the route exists, `internet` never opens it: the route compares hosts.
 
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
@@ -302,6 +361,11 @@ call. The test page does it itself when the agent offers the option.
 | C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit the PAT's; the write and the push: 403 from the gateway; without `internet`: 403. |
 | C39 | `x-gateway-grant: covered` sent by the sandbox with `internet` alone: a read of a public repository, a write on an offered one | The read through `github-api-public`; the write: 403 from the gateway. |
 | C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
+| C41 | The grants of `vault:read` and `vault:write`; a pool declaring either; `vault`, `vault:admin` | Only `vault.bretagne.dev`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host not covered, no grant on `*`; neither a base profile, the pool refused; the others `unknown_profile`. |
+| C42 | Each of the vault's tools, and its prompt, under `vault:read` then `vault:write`, replayed with the `vault` route's two rules; a tool the server would add; `tools/list` | Read: the six read tools covered, the six write tools and the prompt not. Write: all twelve and the prompt. The added tool: write only. The list filtered to what each covers. No other profile names a tool. |
+| C43 | An execution with `vault:read`, one with `vault:write`; one with other profiles, one with none | `session/new` names one MCP server, `http`, `https://vault.bretagne.dev/mcp`, no header; for the other two, `mcpServers` is `[]`. |
+| C44 | Through the gateway, an MCP client with `vault:read`: `initialize`, `tools/list`, `prompts/list`, `read_note` of an existing note, `create_note`; with `vault:write`: `tools/list`, `create_note` then `delete_note` of that note | Read: the six read tools listed, no prompt, the note read; `create_note` refused by the gateway, `-32602`, no note created. Write: twelve tools; the note created, then deleted. The gateway logs the route `vault`; the server accepts client `7d54f86c-…` and never sees the sandbox's `Authorization`. |
+| C45 | `POST https://vault.bretagne.dev/mcp` with `internet` alone, with `anthropic` alone, and with `vault:write` from another address than the token's | 403 from the gateway each time; the server sees none of them. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.
