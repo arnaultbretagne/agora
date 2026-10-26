@@ -120,10 +120,10 @@ export function offeredProfiles(value: string | undefined): string[] {
   return profiles
 }
 
-/** Whether a profile may be named, given those offered: itself, or a repository's read under its write. */
+/** Whether a profile may be named, given those offered: itself, or the read of a repository or of the vault under its write. */
 export function offers(offered: readonly string[], profile: string): boolean {
   if (offered.includes(profile)) return true
-  const read = /^(github:[^:]+):read$/.exec(profile)
+  const read = /^(github:[^:]+|vault):read$/.exec(profile)
   return read !== null && offered.includes(`${read[1]!}:write`)
 }
 

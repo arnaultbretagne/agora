@@ -30,15 +30,33 @@ function allowedOnGitHub(grants: readonly Grant[], host: string, method: string,
   return allowed(grants, host, method, pathAndQuery) || (allowedOnline(grants, method, pathAndQuery) && readsGitHub(host, method, pathAndQuery))
 }
 
+type McpTarget = { tool: string } | { prompt: string }
+
+/** `mcp.tool.name` as CEL reads it: an error on a prompt or a resource, where `mcp.tool` is absent. */
+function toolName(target: McpTarget): string {
+  if (!('tool' in target)) throw new Error('no such key: tool')
+  return target.tool
+}
+
+/** The vault route's tool rule: `(!has(g.tools) || (has(mcp.tool) && mcp.tool.name in g.tools))`. */
+const TOOL_RULE = (g: Grant, target: McpTarget): boolean => g.tools === undefined || ('tool' in target && g.tools.includes(toolName(target)))
+/** The same without `has(mcp.tool)`: `(!has(g.tools) || mcp.tool.name in g.tools)`, which fails on a prompt. */
+const UNGUARDED_RULE = (g: Grant, target: McpTarget): boolean => g.tools === undefined || g.tools.includes(toolName(target))
+
 /**
  * What the vault route decides for an MCP message on `POST /mcp`: its HTTP rule, the one of every route with a
- * credential; then its `mcpAuthorization` rule, `jwt.grants.exists(g, g.host == host && (!has(g.tools) ||
- * mcp.tool.name in g.tools))`. On a prompt, `mcp.tool` is absent: the second operand fails, so only a grant
- * without `tools` lets it through. The gateway filters `tools/list` and `prompts/list` with the same rule.
+ * credential; then its `mcpAuthorization` rule, `jwt.grants.exists(g, g.host == host && <tool rule>)`. `exists`
+ * as agentgateway 1.6.0 runs it (measured in infra-k8s #295): the grants in the JWT's order, stopping at the first
+ * that holds or at the first error, and an error refuses. The gateway filters `tools/list` and `prompts/list`
+ * with the same rule.
  */
-function vaultAllows(grants: readonly Grant[], host: string, target: { tool: string } | { prompt: string }): boolean {
-  const mcp = grants.some((g) => g.host === host && (g.tools === undefined || ('tool' in target && g.tools.includes(target.tool))))
-  return allowed(grants, host, 'POST', '/mcp') && mcp
+function vaultAllows(grants: readonly Grant[], host: string, target: McpTarget, rule = TOOL_RULE): boolean {
+  if (!allowed(grants, host, 'POST', '/mcp')) return false
+  try {
+    return grants.some((g) => g.host === host && rule(g, target))
+  } catch {
+    return false
+  }
 }
 
 describe('profiles', () => {
@@ -193,6 +211,22 @@ describe('profiles', () => {
     assert.ok(compileProfiles(['anthropic', 'zai', 'chatgpt', 'internet', 'github:octo/app:write']).every((g) => g.tools === undefined))
   })
 
+  it('C46 vault:read and vault:write in one token, in either order: the prompt, a write tool and a read tool let through', () => {
+    const host = 'vault.bretagne.dev'
+    for (const order of [['vault:read', 'vault:write'], ['vault:write', 'vault:read']]) {
+      const grants = compileProfiles(order)
+      for (const target of [{ prompt: 'clip-to-vault' }, { tool: 'clip_url' }, { tool: 'delete_note' }, { tool: 'read_note' }]) {
+        assert.equal(vaultAllows(grants, host, target), true, `${order.join(',')}: ${JSON.stringify(target)}`)
+      }
+      // Read alone still refuses the prompt and the write tools.
+      assert.equal(vaultAllows(compileProfiles([order.find((p) => p === 'vault:read')!]), host, { prompt: 'clip-to-vault' }), false)
+    }
+    // Control: without has(mcp.tool), the read grant first fails on the prompt and refuses it, as measured on the
+    // gateway; the write grant first lets it through. The replay tells the two rules apart.
+    assert.equal(vaultAllows(compileProfiles(['vault:read', 'vault:write']), host, { prompt: 'clip-to-vault' }, UNGUARDED_RULE), false)
+    assert.equal(vaultAllows(compileProfiles(['vault:write', 'vault:read']), host, { prompt: 'clip-to-vault' }, UNGUARDED_RULE), true)
+  })
+
   it('opens the vault’s MCP server for session/new once, with no secret, and none without a vault profile', () => {
     const vault = { type: 'http', name: 'vault', url: 'https://vault.bretagne.dev/mcp', headers: [] }
     assert.deepEqual(mcpServers(['anthropic', 'vault:read']), [vault])
@@ -259,6 +293,18 @@ describe('GrantSigner', () => {
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     assert.throws(() => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered: ['dropbox'] }), /unknown profile/)
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
+  })
+
+  it('C47 vault:write offered lets a Create or a Scope name vault:read, as a repository’s write does; vault:read offered, never vault:write', () => {
+    const cases: [string[], string, boolean][] = [
+      [['vault:write'], 'vault:write', true],
+      [['vault:write'], 'vault:read', true],
+      [['vault:read'], 'vault:read', true],
+      [['vault:read'], 'vault:write', false],
+      [['github:o/a:write'], 'vault:read', false],
+      [['anthropic'], 'vault:read', false],
+    ]
+    for (const [offered, profile, expected] of cases) assert.equal(offers(offered, profile), expected, `${offered.join(',')}: ${profile}`)
   })
 
   it('reads a pool\'s base profiles: services only, never a repository nor the Internet', () => {
