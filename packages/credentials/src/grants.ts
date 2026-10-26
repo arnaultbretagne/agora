@@ -14,6 +14,20 @@ export interface Grant {
   readonly path?: string
   /** Every method when absent. */
   readonly methods?: readonly string[]
+  /**
+   * The MCP tools a call may name, on a route whose backend is an MCP server: there every message is a `POST`
+   * to one path, so the gateway checks the tool in the protocol (`mcpAuthorization`). Every tool, prompt and
+   * resource of the server when absent; only these tools, and no prompt or resource, when present.
+   */
+  readonly tools?: readonly string[]
+}
+
+/** An MCP server a profile opens, as `session/new` names it: reached through the gateway like any host, with no secret. */
+export interface McpServer {
+  readonly type: 'http'
+  readonly name: string
+  readonly url: string
+  readonly headers: readonly { readonly name: string; readonly value: string }[]
 }
 
 export class ProfileRefused extends Error {
@@ -22,6 +36,13 @@ export class ProfileRefused extends Error {
 
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const READ = ['GET', 'HEAD'] as const
+
+/** The Obsidian vault's MCP server (obsidian-mcp 0.4.0): the tools that only read it, and those that change it. */
+const VAULT_HOST = 'vault.bretagne.dev'
+export const VAULT_READ_TOOLS: readonly string[] = ['read_note', 'search_content', 'search_properties', 'get_backlinks', 'list_properties', 'get_property_values']
+// clip_url fetches a page and writes it into the vault as a note; update_schema writes the schema overlay.
+export const VAULT_WRITE_TOOLS: readonly string[] = ['create_note', 'update_note', 'delete_note', 'move_note', 'update_schema', 'clip_url']
+const VAULT: McpServer = { type: 'http', name: 'vault', url: `https://${VAULT_HOST}/mcp`, headers: [] }
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -39,6 +60,10 @@ export function compileProfile(profile: string): Grant[] {
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
   if (profile === 'internet') return [{ host: '*' }]
+  // The vault: its MCP endpoint only — POST for every message, GET for the server's stream, DELETE to end the
+  // session. Read names its tools, which leaves out the others, the prompt included; write names none: the whole server.
+  if (profile === 'vault:read') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'], tools: [...VAULT_READ_TOOLS] }]
+  if (profile === 'vault:write') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -76,6 +101,11 @@ export function baseProfiles(annotation: string | undefined): { profiles: string
     .filter((profile) => profile !== '')
   const refused = profiles.find((profile) => !BASE_PROFILES.has(profile)) ?? null
   return refused === null ? { profiles, refused: null } : { profiles: [], refused }
+}
+
+/** The MCP servers an execution's profiles open, for its `session/new` (docs/specs/credentials.md, "MCP servers"): each once. */
+export function mcpServers(profiles: readonly string[]): McpServer[] {
+  return profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write') ? [VAULT] : []
 }
 
 export function compileProfiles(profiles: readonly string[]): Grant[] {
@@ -124,7 +154,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

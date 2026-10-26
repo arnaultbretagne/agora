@@ -6,13 +6,17 @@ export {
   BASE_PROFILES_ANNOTATION,
   GrantSigner,
   ProfileRefused,
+  VAULT_READ_TOOLS,
+  VAULT_WRITE_TOOLS,
   baseProfiles,
   compileProfile,
   compileProfiles,
+  mcpServers,
   offeredProfiles,
   offers,
   type Grant,
   type GrantSignerOptions,
+  type McpServer,
 } from './grants.ts'
 export {
   LIMIT_ENDPOINTS,

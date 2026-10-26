@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { baseProfiles, compileProfile, compileProfiles, GrantSigner, offeredProfiles, offers, type Grant } from '../src/index.ts'
+import { BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -28,6 +28,17 @@ function readsGitHub(host: string, method: string, pathAndQuery: string): boolea
 /** What the gateway decides on GitHub: a request a grant covers takes the routes with a grant, the rest the public ones. */
 function allowedOnGitHub(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
   return allowed(grants, host, method, pathAndQuery) || (allowedOnline(grants, method, pathAndQuery) && readsGitHub(host, method, pathAndQuery))
+}
+
+/**
+ * What the vault route decides for an MCP message on `POST /mcp`: its HTTP rule, the one of every route with a
+ * credential; then its `mcpAuthorization` rule, `jwt.grants.exists(g, g.host == host && (!has(g.tools) ||
+ * mcp.tool.name in g.tools))`. On a prompt, `mcp.tool` is absent: the second operand fails, so only a grant
+ * without `tools` lets it through. The gateway filters `tools/list` and `prompts/list` with the same rule.
+ */
+function vaultAllows(grants: readonly Grant[], host: string, target: { tool: string } | { prompt: string }): boolean {
+  const mcp = grants.some((g) => g.host === host && (g.tools === undefined || ('tool' in target && g.tools.includes(target.tool))))
+  return allowed(grants, host, 'POST', '/mcp') && mcp
 }
 
 describe('profiles', () => {
@@ -120,6 +131,75 @@ describe('profiles', () => {
       ['api.z.ai', 'POST', '/api/paas/v4/chat/completions', false],
     ]
     for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+  })
+
+  it('C41 vault:read and vault:write open the vault’s MCP endpoint on vault.bretagne.dev and nothing else; neither is a base profile', () => {
+    for (const profile of ['vault:read', 'vault:write']) {
+      const grants = compileProfile(profile)
+      assert.deepEqual(new Set(grants.map((g) => g.host)), new Set(['vault.bretagne.dev']), profile)
+      const cases: [string, string, string, boolean][] = [
+        ['vault.bretagne.dev', 'POST', '/mcp', true],
+        ['vault.bretagne.dev', 'GET', '/mcp', true],
+        ['vault.bretagne.dev', 'DELETE', '/mcp', true],
+        ['vault.bretagne.dev', 'PUT', '/mcp', false],
+        ['vault.bretagne.dev', 'POST', '/mcp?x=1', false],
+        ['vault.bretagne.dev', 'POST', '/mcp/other', false],
+        ['vault.bretagne.dev', 'POST', '/sse', false],
+        ['vault.bretagne.dev', 'GET', '/.well-known/oauth-protected-resource', false],
+        ['vault.bretagne.dev', 'GET', '/health', false],
+        ['id.bretagne.dev', 'POST', '/api/oidc/token', false],
+        ['api.anthropic.com', 'POST', '/v1/messages', false],
+        ['api.github.com', 'GET', '/repos/octo/app', false],
+      ]
+      for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${profile}: ${method} ${host}${path}`)
+      // Never the Internet's: no grant on `*`.
+      assert.equal(allowedOnline(grants, 'POST', '/mcp'), false, profile)
+      assert.equal(BASE_PROFILES.has(profile), false, profile)
+      assert.deepEqual(baseProfiles(`anthropic,${profile}`), { profiles: [], refused: profile })
+    }
+    // The Internet opens nothing of the vault: the route compares hosts.
+    assert.equal(vaultAllows(compileProfiles(['internet']), 'vault.bretagne.dev', { tool: 'read_note' }), false)
+    for (const profile of ['vault', 'vault:admin', 'vault:read:write', 'vault:']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
+  })
+
+  it('C42 a vault:read grant covers a call of a read tool, never of a write tool; vault:write covers both', () => {
+    const read = compileProfile('vault:read')
+    const write = compileProfile('vault:write')
+    const host = 'vault.bretagne.dev'
+    for (const tool of VAULT_READ_TOOLS) {
+      assert.equal(vaultAllows(read, host, { tool }), true, `read: ${tool}`)
+      assert.equal(vaultAllows(write, host, { tool }), true, `write: ${tool}`)
+    }
+    for (const tool of VAULT_WRITE_TOOLS) {
+      assert.equal(vaultAllows(read, host, { tool }), false, `read: ${tool}`)
+      assert.equal(vaultAllows(write, host, { tool }), true, `write: ${tool}`)
+    }
+    // The prompt clip-to-vault, which leads to clip_url: write only.
+    assert.equal(vaultAllows(read, host, { prompt: 'clip-to-vault' }), false)
+    assert.equal(vaultAllows(write, host, { prompt: 'clip-to-vault' }), true)
+    // Read and write together: write, as with GitHub.
+    assert.equal(vaultAllows(compileProfiles(['vault:read', 'vault:write']), host, { tool: 'delete_note' }), true)
+    // A tool the server would add: closed to read, open to write, which is the whole server.
+    assert.equal(vaultAllows(read, host, { tool: 'run_command' }), false)
+    assert.equal(vaultAllows(write, host, { tool: 'run_command' }), true)
+    // Another host: nothing.
+    assert.equal(vaultAllows(write, 'vault.example', { tool: 'read_note' }), false)
+    // tools/list, filtered by the same rule.
+    const listed = [...VAULT_READ_TOOLS, ...VAULT_WRITE_TOOLS]
+    assert.deepEqual(listed.filter((tool) => vaultAllows(read, host, { tool })), [...VAULT_READ_TOOLS])
+    assert.deepEqual(listed.filter((tool) => vaultAllows(write, host, { tool })), listed)
+    // The two lists are the server's twelve tools, each in one list; no other profile names a tool.
+    assert.equal(new Set(listed).size, 12)
+    assert.ok(compileProfiles(['anthropic', 'zai', 'chatgpt', 'internet', 'github:octo/app:write']).every((g) => g.tools === undefined))
+  })
+
+  it('opens the vault’s MCP server for session/new once, with no secret, and none without a vault profile', () => {
+    const vault = { type: 'http', name: 'vault', url: 'https://vault.bretagne.dev/mcp', headers: [] }
+    assert.deepEqual(mcpServers(['anthropic', 'vault:read']), [vault])
+    assert.deepEqual(mcpServers(['vault:write']), [vault])
+    assert.deepEqual(mcpServers(['vault:read', 'vault:write']), [vault])
+    assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:write']), [])
+    assert.deepEqual(mcpServers([]), [])
   })
 
   it('refuses what it does not know, and names that could escape the pattern', () => {
