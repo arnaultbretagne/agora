@@ -10,6 +10,11 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/* \
     && git --version
+# kubectl, for kubernetes:read: the cluster through the gateway, with the bridge's kubeconfig (KUBECONFIG) and
+# no credential. Within one minor of the cluster's (k0s 1.36); the release binary, checked against its sha256.
+ADD --chmod=755 --checksum=sha256:33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e \
+    https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl /usr/local/bin/kubectl
+RUN kubectl version --client
 WORKDIR /app
 RUN npm install --global --no-audit --no-fund opencode-linux-x64@1.18.34 \
     && npm cache clean --force \
