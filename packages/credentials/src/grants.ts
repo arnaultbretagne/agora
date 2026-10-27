@@ -23,6 +23,12 @@ export class ProfileRefused extends Error {
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const READ = ['GET', 'HEAD'] as const
 
+/**
+ * The name the sandbox gives the cluster's API server: it resolves nowhere (`.internal` is reserved for private
+ * use), and only the gateway's `kubernetes` route knows it, which sends it to the API server.
+ */
+export const KUBERNETES_HOST = 'kubernetes.agora.internal'
+
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -39,6 +45,9 @@ export function compileProfile(profile: string): Grant[] {
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
   if (profile === 'internet') return [{ host: '*' }]
+  // The cluster, read: GET and HEAD on the API's own paths — a watch is a GET. What may be read is the
+  // credential's RBAC: no Secret, no exec, attach, port-forward or proxy, no token (docs/specs/credentials.md).
+  if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -124,7 +133,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'kubernetes:read'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }
