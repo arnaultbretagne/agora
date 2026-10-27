@@ -136,9 +136,10 @@ describe('bridge', () => {
     const lines = config.split('\n').filter((l) => !l.trimStart().startsWith('#'))
     assert.ok(lines.includes('      server: https://kubernetes.agora.internal'), config)
     assert.ok(lines.includes('      certificate-authority: /etc/agora/credential-proxy/ca.pem'), config)
-    assert.ok(lines.includes('    user: {}'), config)
+    // A user name alone, so that kubectl asks for nothing on stdin; no password.
+    assert.ok(lines.includes('      username: agora'), config)
     // No credential of any kind, and no proxy of its own.
-    for (const key of ['token', 'tokenFile', 'client-certificate', 'client-key', 'username', 'password', 'exec', 'auth-provider', 'proxy-url', 'insecure-skip-tls-verify']) {
+    for (const key of ['token', 'tokenFile', 'client-certificate', 'client-key', 'password', 'exec', 'auth-provider', 'proxy-url', 'insecure-skip-tls-verify']) {
       assert.ok(!lines.some((l) => new RegExp(`^\\s*${key}(-data)?:`).test(l)), key)
     }
   })
