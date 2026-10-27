@@ -14,6 +14,11 @@ export interface Grant {
   readonly path?: string
   /** Every method when absent. */
   readonly methods?: readonly string[]
+  /**
+   * Anchored regex on `request.host`, for a grant on many hosts: only a route whose hostnames are a wildcard reads
+   * it. `host` then holds that wildcard, which no request's host equals, so no other route's rule covers the grant.
+   */
+  readonly hostPattern?: string
 }
 
 export class ProfileRefused extends Error {
@@ -22,6 +27,10 @@ export class ProfileRefused extends Error {
 
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const READ = ['GET', 'HEAD'] as const
+
+/** The previews (infra-k8s ADR 0017 v4, §7): one DNS label, `pr-<n>-<app>`, under `preview.bretagne.dev`. */
+export const PREVIEW_HOSTS = '*.preview.bretagne.dev'
+export const PREVIEW_HOST_PATTERN = '^pr-[1-9][0-9]*-[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.preview\\.bretagne\\.dev$'
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -39,6 +48,8 @@ export function compileProfile(profile: string): Grant[] {
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
   if (profile === 'internet') return [{ host: '*' }]
+  // The previews, for the flows' judge: every method on every path of a preview's host, through its gate.
+  if (profile === 'previews') return [{ host: PREVIEW_HOSTS, hostPattern: PREVIEW_HOST_PATTERN }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -124,7 +135,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'previews'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

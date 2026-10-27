@@ -33,7 +33,10 @@ a round, and so is a verification that took longer than the work: you check, you
   the smallest probe that shows it — a citation added in a throwaway copy, a command run, a file
   read. Install only what a probe needs.
 - **A running system, on its preview.** A criterion that only shows on the change running is checked
-  on its preview deployment, ad hoc. Without a preview, it fails, with what you would check there.
+  on its preview deployment, ad hoc. With `previews` in your access, a preview is
+  `https://pr-<n>-<app>.preview.bretagne.dev`: request it as is — the gateway passes its sign-in gate
+  for you, no browser and no login. Without a preview, or without `previews`, it fails, with what you
+  would check there.
 - **Hunt for fakes.** Results nobody ran, documentation of what does not exist, tests that assert
   nothing, checks skipped, weakened or taken out of CI to go green. One fabrication fails the whole
   verification.

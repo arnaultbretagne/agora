@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { baseProfiles, compileProfile, compileProfiles, GrantSigner, offeredProfiles, offers, type Grant } from '../src/index.ts'
+import { BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, offeredProfiles, offers, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -28,6 +28,15 @@ function readsGitHub(host: string, method: string, pathAndQuery: string): boolea
 /** What the gateway decides on GitHub: a request a grant covers takes the routes with a grant, the rest the public ones. */
 function allowedOnGitHub(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
   return allowed(grants, host, method, pathAndQuery) || (allowedOnline(grants, method, pathAndQuery) && readsGitHub(host, method, pathAndQuery))
+}
+
+/**
+ * What the `previews` route decides, replayed: hostnames `*.preview.bretagne.dev`, and its rule — some grant with a
+ * `hostPattern` the request's host matches, then path and method as on the other routes.
+ */
+function allowedOnPreviews(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
+  if (!host.endsWith('.preview.bretagne.dev')) return false
+  return grants.some((g) => g.hostPattern !== undefined && new RegExp(g.hostPattern).test(host) && (g.path === undefined || new RegExp(g.path).test(pathAndQuery)) && (g.methods === undefined || g.methods.includes(method)))
 }
 
 describe('profiles', () => {
@@ -120,6 +129,44 @@ describe('profiles', () => {
       ['api.z.ai', 'POST', '/api/paas/v4/chat/completions', false],
     ]
     for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+  })
+
+  it('C55 previews opens the hosts pr-<n>-<app>.preview.bretagne.dev and nothing else; it is not a base profile', () => {
+    const grants = compileProfile('previews')
+    const cases: [string, boolean][] = [
+      ['pr-42-rss.preview.bretagne.dev', true],
+      ['pr-7-preview-demo.preview.bretagne.dev', true],
+      ['pr-1234-a.preview.bretagne.dev', true],
+      // Neighbours: another label shape, a second label, another zone, a suffix, a lookalike.
+      ['preview.bretagne.dev', false],
+      ['x.preview.bretagne.dev', false],
+      ['pr-42.preview.bretagne.dev', false],
+      ['pr-0-rss.preview.bretagne.dev', false],
+      ['pr-42-rss-.preview.bretagne.dev', false],
+      ['pr-42-RSS.preview.bretagne.dev', false],
+      ['a.b.preview.bretagne.dev', false],
+      ['pr-42-rss.x.preview.bretagne.dev', false],
+      ['x.pr-42-rss.preview.bretagne.dev', false],
+      ['x.bretagne.dev', false],
+      ['vault.bretagne.dev', false],
+      ['preview.bretagne.dev.evil.com', false],
+      ['pr-42-rss.preview.bretagne.dev.evil.com', false],
+      ['pr-42-rss.preview-bretagne.dev', false],
+      ['pr-42-rss.preview.bretagne.dev:8443', false],
+    ]
+    for (const [host, expected] of cases) {
+      assert.equal(allowedOnPreviews(grants, host, 'GET', '/'), expected, host)
+      // Every method and path of a covered host.
+      if (expected) for (const method of ['POST', 'PUT', 'DELETE']) assert.equal(allowedOnPreviews(grants, host, method, '/api/items?x=1'), true, `${method} ${host}`)
+      // No other route's rule covers it: its `host` is the wildcard, which no request's host equals.
+      assert.equal(allowed(grants, host, 'GET', '/'), false, host)
+    }
+    assert.equal(allowedOnline(grants, 'GET', '/'), false)
+    assert.equal(BASE_PROFILES.has('previews'), false)
+    assert.deepEqual(baseProfiles('anthropic,previews'), { profiles: [], refused: 'previews' })
+    // Nothing else opens a preview: the Internet's grant has no pattern.
+    assert.equal(allowedOnPreviews(compileProfiles(['anthropic', 'internet', 'github:octo/app:write']), 'pr-42-rss.preview.bretagne.dev', 'GET', '/'), false)
+    for (const profile of ['preview', 'previews:read', 'previews:pr-42-rss']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
   })
 
   it('refuses what it does not know, and names that could escape the pattern', () => {

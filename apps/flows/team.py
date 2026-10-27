@@ -378,11 +378,13 @@ def grant(team: Team, decision: Decision) -> list[str]:
     return lines
 
 
-def judge_access(team: Team, feature: str | None) -> list[str]:
-    """Read only: the feature's repository, or every repository the team can reach; the Internet."""
+def judge_access(team: Team, feature: str | None, offered: list[str] | None = None) -> list[str]:
+    """Read only: the feature's repository, or every repository the team can reach; the Internet; and the
+    previews when Agora offers them, to see the change running (docs/specs/credentials.md, "Previews")."""
+    previews = ["previews"] if "previews" in (offered or []) else []
     if feature:
-        return [f"github:{team.features[feature].repo}:read", "internet"]
-    return read_only([p for m in team.members.values() for p in m.access] + ["internet"])
+        return [f"github:{team.features[feature].repo}:read", "internet", *previews]
+    return read_only([p for m in team.members.values() for p in m.access] + ["internet"]) + previews
 
 
 def required_checks(card: Card, feature: Feature) -> list[str]:

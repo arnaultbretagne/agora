@@ -5,6 +5,8 @@ export {
   BASE_PROFILES,
   BASE_PROFILES_ANNOTATION,
   GrantSigner,
+  PREVIEW_HOSTS,
+  PREVIEW_HOST_PATTERN,
   ProfileRefused,
   baseProfiles,
   compileProfile,
