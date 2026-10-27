@@ -28,7 +28,7 @@ takes it from there only (below, "The token").
 ## Profiles and grants
 
 A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `internet`,
-`github:owner/repo:read`, `github:owner/repo:write`. Agora compiles each profile into **grants**,
+`github:owner/repo:read`, `github:owner/repo:write`, `previews`. Agora compiles each profile into **grants**,
 which the gateway can check on a request: a host, a pattern on the path, and the allowed methods.
 
 | Profile | Grants |
@@ -39,6 +39,7 @@ which the gateway can check on a request: a host, a pattern on the path, and the
 | `internet` | `*`, everything: any host without a credential of its own |
 | `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
 | `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
+| `previews` | the hosts `pr-<n>-<app>.preview.bretagne.dev`, through each preview's gateway gate, which takes the gateway's own Pocket-ID client |
 
 Grants add up: any mix of profiles is just a longer list.
 
