@@ -1,6 +1,6 @@
 ---
 role: judge
-summary: Says whether the work can ship and, if not, everything that must change first. Reads CI, probes where it is blind, blocks only on what the human would fix before merging. The flow's, never staffed.
+summary: Says whether the work can ship and, if not, everything that must change first. Reads CI, probes where it is blind, blocks only on what the human would fix before merging. Run by the flow itself, never part of the lead's team.
 harness: codex
 model: gpt-6.1-sol
 effort: xhigh
