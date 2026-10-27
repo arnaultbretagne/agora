@@ -6,6 +6,11 @@ on one host (write on one repo, read on another), the vault's levels replayed ag
 two rules — the HTTP one and the tool one, in either order of the grants (C41, C42, C46) —
 and the MCP server they open, what an offered profile lets a Create name (C47), refused profiles,
 and the JWT checked with Agora's public key, bound to the Pod's address.
+`vault-gateway.test.ts`: the vault through the real gateway — agentgateway 1.6.0's release binary,
+checked against its sha256 and kept in the temporary directory, on `fixtures/vault-gateway.yaml`, the
+routes infra-k8s deploys — with tokens from Agora's signer, the bridge's outbound proxy, an MCP client
+on the server `mcpServers` names, and a stand-in for the vault's server that records what it receives
+(C44–C46). It needs `openssl` and linux-amd64, and downloads the binary once.
 `limits.test.ts`: each provider's answer read into windows, the `limits` grant and the catalogue that
 refuses it, the reads kept and their failures, `GET /api/limits`, and a real GET through a stand-in
 gateway — CONNECT, then TLS with a certificate `openssl` makes for the test.
