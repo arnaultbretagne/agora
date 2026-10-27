@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | R8 | 2026-10-25 | `626fb52` | unit | `npm test -w @agora/flows`: Python 3.13, 39 tests, as R4 with the person's questions against a stand-in stream. |
 | R9 | 2026-10-25 | `fdb0ff2` | unit | `npm test -w @agora/flows`: Python 3.13, 42 tests, as R8, the stand-in Agora showing each turn's prompt as its `user` element. |
 | R10 | 2026-10-25 | `fdb0ff2` | local | `npm test -w @agora/server`: the real server on PostgreSQL 17.11 with a stand-in for Prefect's API that keeps what it is asked and honours idempotency keys; the proxy's identity sent as its header. |
+| R11 | 2026-10-27 | `74fc848` | unit | The `check` job of pull request #155 (GitHub Actions job 122169448411): `npm test -w @agora/flows`, the runner's Python 3, 44 tests, OK. |
 
 ## Cases
 
@@ -79,6 +80,7 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | F20 | simulated: stub (a stream that idles out twice) | unit | R8 | proven | Asked once under the same key; the answer read on one connection; idled out, opened again from cursor `41`, twice. |
 | F21 | simulated: stub (a Write of the person's in the member's execution) | unit | R9 | proven | The member's second turn found by its prompt, the third turn of the Workstream, "Answer 3."; its first found again, "Answer 1."; no command sent twice; a given Workstream the member's, the only one created. |
 | F22 | — | local | R10 | proven | `GET /api/teams` `{"available":true}`; launched: 200, the Workstream in the person's list, Prefect asked once with the goal, the Workstream, the person's identity, their agents folder's and `agora-team-<id>`, the run's address in Prefect's UI; sent again, the same run. A blank goal 400 `invalid_goal`; another's Workstream 409 `workstream_conflict`; Prefect down 502 `teams_unreachable`, nothing asked. |
+| F23 | — | unit | R11 | proven | `previews` offered: the judge's access for a feature `github:acme/app:read`, `internet`, `previews`; without a feature, both repositories' `:read`, `internet`, `previews`; an offer with `zai` and another repository's `:write` added none of them. Not offered: the access as before, the same as without an offer. |
 
 ## Not covered
 
