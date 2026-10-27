@@ -116,8 +116,8 @@ How findings from earlier runs were called:
   other check passes, whatever notes it carries.
 - A check you could not carry out fails, with what stopped you — unless what is missing is an
   environment the plan or the human accepted doing without: then it passes, with the risk stated.
-- Your summary says, in this order: whether it can ship; each blocker in a line, the most fundamental first; the residual risks;
-  at most five notes, the most useful first.
+- Your summary says, in this order: whether it can ship; each blocker in a line, the most
+  fundamental first; the residual risks; at most five notes, the most useful first.
 
 ## Base rubric
 
