@@ -123,6 +123,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C59 | — | local | R23 | proven | Identities swapped without `client-<id>`: the gateway's token refused 2 ms after the swap, a fresh one refused, through the gateway 403; swapped back: taken again. |
 | C60 | — | local | R23 | proven | The credential replaced once the first part of `/slow` had arrived: the response ended whole, both parts; the next request, carrying the new credential, refused by the gate 5 ms after; restored, 200. |
 | C61 | — | cluster | — | not verified | The route, the gateway gate, its HTTPRoute rule and the Pocket-ID client are not deployed. |
+| C62 | — | cluster | — | not verified | No run has Pocket-ID: the secrets' and the client's deletion are read in its 2.18.0 code only. |
 
 The partial verdicts are tracked in #107.
 

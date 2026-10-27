@@ -203,18 +203,19 @@ name, a port.
 | Credential | `backendAuth.key`: `Authorization: Bearer` + the file `/etc/agentgateway/previews/access_token`, watched; whatever `Authorization` the sandbox sent is replaced. |
 
 **The identity.** A Pocket-ID OIDC client of its own, `agora_gateway_previews`, declared in the
-reconciler's `spec.json`: confidential, no callback URL, `allowedGroups` a group of its own with no
-member (`agora-gateway-nobody`), access tokens of 15 minutes. A token is asked by client credentials,
-without `resource` — Pocket-ID 2.18.0 refuses one for which no API is registered (measured in infra-k8s
-#295) —: `sub` `client-<its id>`, `aud` its id (the same measure), no `groups`, no identity scope.
+reconciler's `spec.json`: confidential, no callback URL, `isGroupRestricted: true` with no allowed group,
+`accessTokenDurationMinutes: 15`. A token is asked by client credentials, without `resource`. As read in
+Pocket-ID 2.18.0: its `sub` is `client-<its id>` (`oidc/token_handler.go`), its `aud` the client's id —
+a request without a resource is audienced to the client (`oidc/api_resource.go`, `resolveResource`) —,
+and it carries no `groups` and no identity scope.
 
 | What else it can obtain (read in Pocket-ID 2.18.0) | |
 | --- | --- |
 | Grant types | A confidential client has `authorization_code`, `refresh_token`, `device_code` and `client_credentials` (`oidc/client.go`, `GetGrantTypes`). |
-| `authorization_code` | Nothing: with no callback URL, no redirect URI matches (`oidc/provider.go`, `matchRedirectURI`). |
-| `device_code`, `refresh_token` | Nothing: both are bound to a user, whom every token request checks again against the client's groups (`oidc/token_handler.go`, `ValidateUserAccess`); a group with no member lets none through. |
-| `client_credentials` | Its own token, as above. Pocket-ID drops identity scopes from it (`token_handler.go`), and gives an API audience only for an API granted to the client (RFC 8707 resource): none is. |
-| Where it is accepted | Only by the previews' gateway gates, which name its id as their audience and `client-<its id>` as their one identity. The browser gates take no bearer token (C58); no other application lists it. |
+| `authorization_code` | Nothing: with no callback URL, no redirect URI matches — neither in fosite (`MatchRedirectURIWithClientRedirectURIs`, pocket-id/fosite 1.3.0) nor in Pocket-ID's own list (`oidc/provider.go`, `matchRedirectURI`). |
+| `device_code`, `refresh_token` | Nothing: both are bound to a user, whom every token request checks again against the client's group restriction (`oidc/token_handler.go`, `ValidateUserAccess`; `oidc/authorization_service.go`, `IsUserGroupAllowedToAuthorize`); restricted with no allowed group, no user passes. |
+| `client_credentials` | Its own token, as above, without identity scopes (`token_handler.go` drops them). With a `resource`, only an API registered and granted to the client; otherwise `invalid_target` or `access_denied` (`api_resource.go`). None is to be granted to it. |
+| Where it is accepted | Only by the previews' gateway gates, which name its id as their audience and `client-<its id>` as their one identity. The browser gate's settings take no bearer token (C58); no other application is to name it. |
 
 **The gateway gate.** Per preview, beside the browser gate and in `preview-system` like it, a second
 oauth2-proxy of the same version, on its own port. The preview's HTTPRoute sends the requests carrying
@@ -223,7 +224,7 @@ oauth2-proxy of the same version, on its own port. The preview's HTTPRoute sends
 | Setting | Value |
 | --- | --- |
 | `provider`, `oidc-issuer-url` | `oidc`, `https://id.bretagne.dev`. |
-| `client-id` | `agora_gateway_previews`'s id: the audience a bearer token must carry. `client-secret` `unused`, which oauth2-proxy requires: the gate never redeems a code, and holds no secret of that client. |
+| `client-id` | `agora_gateway_previews`'s id: the audience a bearer token must carry. `client-secret` `unused`: oauth2-proxy requires one for `oidc` (`pkg/validation/providers.go`), the gate never redeems a code, and it holds no secret of that client. |
 | `skip-jwt-bearer-tokens`, `bearer-token-login-fallback` | `true`, `false`: a bearer token checked against Pocket-ID's keys — issuer, audience, expiry — is the session; an invalid one is refused, 403. |
 | `oidc-email-claim`, `authenticated-emails-file` | `sub`, and a file naming `client-<its id>` alone: the session's identity is the token's `sub` (`providers/oidc.go`, `CreateSessionFromToken`), which must be in that file. No `email-domain`, no `allowed-group`. The file is the ConfigMap `preview-gateway-identities`, in `preview-system`. |
 | `pass-basic-auth`, `basic-auth-password` | `true`, `none`: oauth2-proxy then replaces the `Authorization` it received by its own (`pkg/apis/options/legacy_options.go`: the header is stripped only when it injects one). |
@@ -240,19 +241,40 @@ client's secret in `agora-gateway`.
 | `x-agora-gate` | `gateway`. |
 | The request | Its method, path, query and body as the sandbox sent them; what the sandbox sent as `X-Forwarded-User` is not passed on (C56). |
 
+**Its secret.** Pocket-ID 2.18.0 keeps up to 20 secrets per client, each with an optional expiry, and
+takes any of them that has not expired (`model/oidc.go`, `ActiveSecrets`; `oidc/client.go`,
+`GetHashedSecret` and `GetRotatedHashes`). Creating one (`POST /api/oidc/clients/{id}/secrets`) adds it
+and removes none (`service/oidc_service.go`, `CreateClientSecret`); only `DELETE
+/api/oidc/clients/{id}/secrets/{secretId}` removes one (`DeleteClientSecret`). The client is read from the
+database at each token request (`oidc/store.go`, `GetClient`): a change to its secrets, or its deletion,
+counts from the next request. The client has one secret, held by `previews-refresher` alone, in the SOPS
+Secret `previews-client` of `agora-gateway`.
+
+| Rotating the secret | |
+| --- | --- |
+| 1 | Create the new secret, with an expiry if wanted. Until step 3, the old one works too: creating a secret cuts nothing. |
+| 2 | Put it in `previews-client`; the refresher uses it from its next run. |
+| 3 | Delete the old secret, by its id. From the next token request, one with the old secret is refused; tokens it already minted stay valid until they expire, 15 minutes at most. |
+
 **Keeping the token.** `previews-refresher` in `agora-gateway`, as `vault-refresher`: every 5 minutes a
 client-credentials request to Pocket-ID, `access_token` written into the Secret `previews-session`,
 mounted optional on the gateway at `/etc/agentgateway/previews`. A new token never breaks a request
 under way: the gateway sets the header when it sends a request, the gate checks the token once, when
 the request arrives (`pkg/middleware/jwt_session.go`), and a response under way goes on past the change (C60). The token it replaces stays valid until it expires.
 
-**Revocation.**
+**Revocation.** A gate checks a token offline, against Pocket-ID's keys, its audience and its expiry
+(`providers/oidc.go`, `CreateSessionFromToken`): nothing done in Pocket-ID reaches a token already issued.
+Only the gates' identities cut those.
 
-| Step | Effect | When |
+| Operation | What it cuts | When |
 | --- | --- | --- |
-| `client-<its id>` taken out of `preview-gateway-identities` | Every token of the client refused by every gateway gate, expired or not: each carries that `sub`, and no other identity is named. | Once the kubelet updates the mounted ConfigMap (about a minute, its sync); oauth2-proxy reloads the file on that change (`watcher.go`), 5 ms after a swap as the kubelet makes it (C59). |
-| The client disabled, deleted, or its secret regenerated, in Pocket-ID | No new token. | At once; a token already issued lives out its 15 minutes, refused by the gates once the step above is done. |
+| `client-<its id>` taken out of `preview-gateway-identities` | Every token of the client, at every gateway gate, whatever secret minted it: each carries that `sub`, and no other identity is named. | Once the kubelet has updated the mounted ConfigMap — its sync, not measured for this ConfigMap —, oauth2-proxy reloads the file (`pkg/watcher/watcher.go`): 2 to 5 ms after a swap as the kubelet makes it (C59). |
+| A secret deleted (`DELETE /api/oidc/clients/{id}/secrets/{secretId}`) | Every new token asked with that secret. | From the next token request. Tokens it already minted: valid at the gates until they expire, 15 minutes at most, unless the identity is taken out too. |
+| The client deleted (`DELETE /api/oidc/clients/{id}`) | Every new token of the client, whatever the secret. | From the next token request. Tokens already issued: as above. |
 | `previews` taken out of `OFFERED_PROFILES` | No new execution is given it. | Tokens already handed expire with them. |
+
+A secret leaked: take the identity out of the gates, which cuts every token, then delete that secret —
+or the client —, which stops new ones; creating a new secret alone cuts nothing.
 
 **The browser path is unchanged**: the browser gate's configuration and the HTTPRoute's rule for it
 stay as they are, and a browser never sends `x-agora-gate`. One that sends it reaches the gateway gate,
@@ -400,6 +422,7 @@ call. The test page does it itself when the agent offers the option.
 | C59 | The gateway gate's identities swapped, as the kubelet updates a ConfigMap, without `client-<id>`; then with it | The gateway's tokens, a fresh one included, refused — through the gateway too; then taken again. |
 | C60 | The gateway's credential replaced while a response from the app is under way | That response ends whole; the next request carries the new credential. |
 | C61 | In the cluster, the route and the gateway gate deployed, a preview open: the judge with `previews`; a browser without a session; the client `agora_gateway_previews` asked for a device code and an authorization code | The judge reaches the preview's app through the gateway gate; the browser is sent to Pocket-ID by the browser gate; Pocket-ID gives no user token for the client. |
+| C62 | In Pocket-ID, `agora_gateway_previews` given a second secret, a token asked with each; the first secret deleted; then the client deleted | A token for each while both exist; once the first is deleted, it is refused and the second still answered; once the client is deleted, neither; the tokens already issued still taken by the gateway gate until they expire, and refused once `client-<id>` is out of its identities. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.
