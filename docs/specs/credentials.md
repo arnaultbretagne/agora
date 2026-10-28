@@ -256,8 +256,9 @@ Secret `previews-client` of `agora-gateway`.
 | 2 | Put it in `previews-client`; the refresher uses it from its next run. |
 | 3 | Delete the old secret, by its id. From the next token request, one with the old secret is refused; tokens it already minted stay valid until they expire, 15 minutes at most. |
 
-**Keeping the token.** `previews-refresher` in `agora-gateway`, as `vault-refresher`: every 5 minutes a
-client-credentials request to Pocket-ID, `access_token` written into the Secret `previews-session`,
+**Keeping the token.** `previews-refresher`, a CronJob in `agora-gateway`: every 5 minutes, a
+client-credentials request to Pocket-ID, without `resource`, with the client's secret from
+`previews-client`, which it alone mounts; it writes `access_token` into the Secret `previews-session`,
 mounted optional on the gateway at `/etc/agentgateway/previews`. A new token never breaks a request
 under way: the gateway sets the header when it sends a request, the gate checks the token once, when
 the request arrives (`pkg/middleware/jwt_session.go`), and a response under way goes on past the change (C60). The token it replaces stays valid until it expires.
