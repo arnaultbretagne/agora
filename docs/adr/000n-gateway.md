@@ -276,7 +276,7 @@ body. It takes one identity, a Pocket-ID machine client, and knows no levels.
   upgraded deliberately, live cases replayed first.
 - Replacing the gateway leaves the bridge's side unchanged: a token handed at runtime, joined to
   each `CONNECT`.
-- An MCP server's route terminates the protocol: agentgateway keeps the sessions and speaks to the
-  server itself. A replacement gateway has to parse MCP too, or the levels collapse into one.
+- An MCP server's route terminates the protocol: agentgateway reads every message and speaks to
+  the server itself. A replacement gateway has to parse MCP too, or the levels collapse into one.
 - A tool the server adds is closed to the read level until the catalogue names it: the lists follow
   the server's releases.
