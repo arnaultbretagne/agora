@@ -18,7 +18,7 @@ export interface TeamOptions {
 export function teamFrom(env: NodeJS.ProcessEnv): TeamOptions | undefined {
   const prefect = env.TEAM_PREFECT_API
   if (prefect === undefined || prefect === '') return undefined
-  const deployment = env.TEAM_DEPLOYMENT ?? 'lead/design-agora-foundations'
+  const deployment = env.TEAM_DEPLOYMENT ?? 'lead/main'
   if (!/^[^/]+\/[^/]+$/.test(deployment)) throw new Error('TEAM_DEPLOYMENT must be <flow>/<deployment>')
   return {
     prefect: prefect.replace(/\/$/, ''),

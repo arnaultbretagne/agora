@@ -71,7 +71,7 @@ def source_link(path: str) -> str:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         sha = ""
-    return f"{SOURCE}/blob/{sha}/apps/flows/{path}" if sha else f"{SOURCE}/tree/design/agora-foundations/apps/flows/{path}"
+    return f"{SOURCE}/blob/{sha}/apps/flows/{path}" if sha else f"{SOURCE}/tree/main/apps/flows/{path}"
 
 
 def fenced(text: str, lang: str = "text") -> str:
@@ -416,7 +416,7 @@ REHEARSAL_SCRIPT: dict[str, Any] = {
     "decisions": [
         {"decision": "steps", "why": "refused: no plan yet", "steps": [{"member": "dev-1", "feature": "echo", "brief": "too early"}]},
         {"decision": "plan", "title": "Make the mock echo", "why": "One feature, one dev, one sre.",
-         "features": [{"id": "echo", "title": "The mock echoes", "repo": "arnaultbretagne/agora", "base": "design/agora-foundations",
+         "features": [{"id": "echo", "title": "The mock echoes", "repo": "arnaultbretagne/agora", "base": "main",
                        "criteria": ["The mock answers with its prompt."]}],
          "team": [{"name": "dev-1", "role": "dev", "access": ["github:arnaultbretagne/agora:read", "internet"]},
                   {"name": "sre-1", "role": "sre", "access": ["internet"]}]},
