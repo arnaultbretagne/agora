@@ -28,7 +28,7 @@ only port open to sandboxes).
 | `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants. |
 | `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway. |
 | `TEAM_PREFECT_API` | — | Prefect's API, in-cluster; with it, a team can be launched from the client (`docs/specs/flows.md`, "Launching from Agora"). |
-| `TEAM_DEPLOYMENT` | `lead/design-agora-foundations` | The deployment a team's run comes from, `<flow>/<deployment>`. |
+| `TEAM_DEPLOYMENT` | `lead/main` | The deployment a team's run comes from, `<flow>/<deployment>`. |
 | `TEAM_PREFECT_UI` | — | Prefect's UI, for the run's address in a launch's answer. |
 | `AGORA_FAULT` | — | Tests only: `<point>[:<method>]` kills the process at that fault point (`packages/log/src/workstreams.ts`). |
 
