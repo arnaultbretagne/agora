@@ -190,7 +190,7 @@ LEAD = """\
 | Who | Does | Access |
 | --- | --- | --- |
 | **lead** | Cuts the goal into features, staffs them, briefs, sends work to the judge, decides when it is done. Never designs or codes. | Read only, every offered repository; the Internet |
-| **dev** | Designs, codes and proves one feature on its own branch `flow/<run>/<feature>`, up to a draft pull request. | What the plan gives it, approved by you |
+| **dev** | Designs, codes and proves one feature on its branch, named in the plan after what it carries, up to a draft pull request. | What the plan gives it, approved by you |
 | **sre** | Owns how things run on the cluster, production only: changes it through its GitOps repository, with a rollout, a way back and proof. | What the plan gives it, approved by you |
 | **judge** | Verifies what the lead asks, fresh each time: reads CI, probes where it is blind; a feature ships only once judged shippable. | Read only |
 
@@ -416,7 +416,7 @@ REHEARSAL_SCRIPT: dict[str, Any] = {
     "decisions": [
         {"decision": "steps", "why": "refused: no plan yet", "steps": [{"member": "dev-1", "feature": "echo", "brief": "too early"}]},
         {"decision": "plan", "title": "Make the mock echo", "why": "One feature, one dev, one sre.",
-         "features": [{"id": "echo", "title": "The mock echoes", "repo": "arnaultbretagne/agora", "base": "main",
+         "features": [{"id": "echo", "title": "The mock echoes", "repo": "arnaultbretagne/agora", "base": "main", "branch": "feat/mock-echo",
                        "criteria": ["The mock answers with its prompt."]}],
          "team": [{"name": "dev-1", "role": "dev", "access": ["github:arnaultbretagne/agora:read", "internet"]},
                   {"name": "sre-1", "role": "sre", "access": ["internet"]}]},
@@ -428,7 +428,7 @@ REHEARSAL_SCRIPT: dict[str, Any] = {
         {"decision": "ask", "why": "The sre must read the infrastructure.", "question": "Give sre-1 read access to infra-k8s?",
          "add": {"access": {"sre-1": ["github:arnaultbretagne/infra-k8s:read", "internet"]}}},
         {"decision": "steps", "why": "Check how it runs.", "steps": [{"member": "sre-1", "brief": "Check how the echo runs."}]},
-        {"decision": "done", "why": "Shippable.", "summary": "The mock echoes; branch flow/<run>/echo."},
+        {"decision": "done", "why": "Shippable.", "summary": "The mock echoes; branch feat/mock-echo."},
     ],
     "verdicts": ["fail", "pass"],
     "answers": {"envelope": {"optionId": "approve", "note": "Rehearsal: approved."}, "ask": {"optionId": "yes", "note": "Rehearsal: granted."}},
