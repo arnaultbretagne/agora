@@ -17,17 +17,23 @@ const Greeting: FC = () => (
   </div>
 )
 
+/** Messages by their first and their number: another Workstream's, or more of this one. */
+const keyOf = (messages: readonly { id?: string | undefined }[]): string | null =>
+  messages.length === 0 ? null : `${String(messages[0]!.id)} ${String(messages.length)}`
+
 /**
  * A Workstream opens on its last message, as Scroll to the bottom leaves it: while it is caught up — what
  * the browser kept first, then the rest — each time more messages show, and once caught up; unless the
- * user has scrolled meanwhile. assistant-ui does it only for a thread that was empty, never for one
- * opened from another.
+ * user has scrolled meanwhile. Caught up means assistant-ui shows what the caught-up state gives: it
+ * shows the messages a render after the state, later still on a slow device, and a scroll before that
+ * stops short of what the catch-up brought. assistant-ui does it only for a thread that was empty,
+ * never for one opened from another.
  */
 function useOpensAtBottom(): RefObject<HTMLDivElement | null> {
-  const { id, state } = useAgora()
+  const { id, state, messages } = useAgora()
   const viewport = useThreadViewportStore()
-  // The messages shown, by their first and their number: another Workstream's, or more of this one.
-  const shown = useAuiState((s) => (s.thread.messages.length === 0 ? null : `${s.thread.messages[0]!.id} ${String(s.thread.messages.length)}`))
+  const shown = useAuiState((s) => keyOf(s.thread.messages))
+  const given = keyOf(messages)
   const ref = useRef<HTMLDivElement>(null)
   const opening = useRef({ id: undefined as string | null | undefined, shown: null as string | null, behind: false, done: false, moved: false })
   useEffect(() => {
@@ -49,13 +55,13 @@ function useOpensAtBottom(): RefObject<HTMLDivElement | null> {
     // For a render, the Workstream left can still be the state: complete counts once seen incomplete.
     if (!state.complete) o.behind = true
     if (o.done || o.moved || shown === null) return
-    const caughtUp = o.behind && state.complete
+    const caughtUp = o.behind && state.complete && shown === given
     if (shown === o.shown && !caughtUp) return
     o.shown = shown
     o.done = caughtUp
-    // assistant-ui has the messages a render after the state: scrolled once they are laid out.
+    // Scrolled once the messages shown are laid out.
     requestAnimationFrame(() => viewport.getState().scrollToBottom({ behavior: 'instant' }))
-  }, [id, shown, state.complete, viewport])
+  }, [id, shown, given, state.complete, viewport])
   return ref
 }
 

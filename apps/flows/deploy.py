@@ -11,7 +11,7 @@ from prefect.runner.storage import GitRepository
 
 REPOSITORY = "https://github.com/arnaultbretagne/agora.git"
 
-branch = sys.argv[1] if len(sys.argv) > 1 else "design/agora-foundations"
+branch = sys.argv[1] if len(sys.argv) > 1 else "main"
 source = GitRepository(url=REPOSITORY, branch=branch)
 for entrypoint in (
     "apps/flows/flows.py:lead",

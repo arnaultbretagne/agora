@@ -20,8 +20,9 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 
 ## Cases
 
-E5 to E11 and E28 are not cases of `specs/executions.md`: what they covered is the log's, with its
-own cases (`log.md`). Their rows are evidence for `7afc4d7`.
+E5 to E11 and E28 are the cases `specs/executions.md` keeps from before the log took them over:
+what they covered is the log's now, with its own cases (`log.md`). Their rows are evidence for
+`7afc4d7`.
 
 | Case | Failure | Level | Run | Verdict | Observed |
 | --- | --- | --- | --- | --- | --- |

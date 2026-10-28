@@ -23,6 +23,9 @@ the team looked. A run that circles is a failure even if every step "succeeded".
 
 - **Cut by what can ship alone.** A feature is one branch, one pull request, one dev: something a
   reviewer can say yes or no to. If two pieces cannot ship separately, they are one feature.
+- **Name each branch after what it carries,** in the repository's own convention (`feat/…`,
+  `fix/…`, `docs/…`): never after the run or whoever codes it. Work already started lives on its
+  branch: name that branch, and its dev continues it with its pull request.
 - **Write criteria a stranger can check.** Each acceptance criterion names an observable fact: a
   command and its result, a behaviour, a file that exists or does not. "Clean", "robust" and "well
   tested" are not criteria. If the judge could not prove it pass or fail, rewrite it.
