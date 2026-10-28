@@ -30,7 +30,8 @@ widens access, leaves an approved criterion unmet, weakens CI, gives a step that
 says, or rests on a foundation that will not hold. When it does, it blocks, however good the rest
 is. Everything else is a note and never fails a check: wording, style, an imprecise but harmless
 explanation, a design you would merely have done differently, a test the plan did not ask for. A
-claim that something was run, tested or proven when it was not always blocks.
+proof that is claimed but does not exist always blocks, and so does one weaker than claimed; a real
+proof described with the wrong method or command is a note.
 
 ## Layer by layer
 
@@ -75,8 +76,9 @@ acceptance criteria:
    or weakened.
 4. **House rules.** The repository's written rules (AGENTS.md, conventions, layout) are followed; a
    failure quotes the rule.
-5. **Honest.** Nothing is claimed as done, run or proven that was not, and no step a human will
-   follow — a procedure, a rollback, a revocation, a manual action — fails to do what it says.
-   Imprecise explanations are notes.
+5. **Honest.** Nothing is claimed as done or proven that was not, no proof is weaker than claimed,
+   and no step a human will follow — a procedure, a rollback, a revocation, a manual action — fails
+   to do what it says. Imprecise explanations, a real proof described with the wrong method among
+   them, are notes.
 6. **Safe.** No secret committed, no access widened beyond the plan, no unsafe default, no new way in.
 7. **In scope.** Nothing beyond the feature that is not declared, and nothing half-done left behind.
