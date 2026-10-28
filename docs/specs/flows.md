@@ -145,7 +145,7 @@ lead's Workstream and asks Prefect for the run; the person never opens Prefect.
 
 | Name | Rule |
 | --- | --- |
-| Configured | `TEAM_PREFECT_API`, Prefect's API in-cluster; `TEAM_DEPLOYMENT`, `<flow>/<deployment>`, `lead/design-agora-foundations` by default. Without the first, `/api/teams` answers 404 `teams_unavailable`. |
+| Configured | `TEAM_PREFECT_API`, Prefect's API in-cluster; `TEAM_DEPLOYMENT`, `<flow>/<deployment>`, `lead/main` by default. Without the first, `/api/teams` answers 404 `teams_unavailable`. |
 | `GET /api/teams` | `available` true. |
 | `POST /api/teams` | `id` and `goal`, 1 to 4,000 characters once trimmed. The Workstream `id` is created, the person's — the identity the proxy passes, the body's `owner` without one — then the deployment's run created with the parameters `goal`, `lead_workstream` the id, `owner` the person's identity, `members_owner` the person's agents' folder (`log.md`, "HTTP") — the person's identity without the proxy —, and the idempotency key `agora-team-<id>`: the same launch sent again finds the same run. 200 with `workstream`, `flowRun`, and its address in Prefect when `TEAM_PREFECT_UI` is set. |
 | Refused | 400 `invalid_goal`, `invalid_identifier`, `invalid_body`; 409 `workstream_conflict` for another's Workstream; 502 `team_deployment_missing`, `team_refused`, `teams_unreachable` when Prefect does not answer as it should. |

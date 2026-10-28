@@ -8,10 +8,10 @@ name: ci
 
 on:
   push:
-    branches: [design/agora-foundations, 'feat/**', 'fix/**', 'chore/**']
+    branches: [main, 'feat/**', 'fix/**', 'chore/**']
     paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
   pull_request:
-    branches: [design/agora-foundations]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
       # the same files were checked there.
       - name: Already checked at the pull request's head?
         id: checked
-        if: github.event_name == 'push' && github.ref == 'refs/heads/design/agora-foundations'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -188,7 +188,7 @@ jobs:
   # inputs did not change are left as they are. Merging stays the operator's.
   propose-infra:
     needs: image
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/design/agora-foundations')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -231,7 +231,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
         run: |
-          if [ "${{ github.ref_name }}" = design/agora-foundations ]; then branch=agora/images; else branch="agora/images-$(printf '%s' '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
+          if [ "${{ github.ref_name }}" = main ]; then branch=agora/images; else branch="agora/images-$(printf '%s' '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
           title="feat(agora): images from ${{ github.ref_name }} ${GITHUB_SHA::7}"
           cd infra
           git config user.name 'github-actions[bot]'
