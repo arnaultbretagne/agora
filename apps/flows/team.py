@@ -22,6 +22,8 @@ OVERRIDABLE = ("harness", "model", "effort")
 # A setting's id per harness: effort is `reasoning_effort` for codex.
 EFFORT_IDS = ("effort", "reasoning_effort")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+# A branch git accepts (git check-ref-format), at most 100 characters.
+BRANCH = re.compile(r"^(?![./-])(?!.*(?:\.\.|//|@\{|/\.|\.lock(?:/|$)))[A-Za-z0-9._/-]{1,100}(?<![./])$")
 REPO = re.compile(r"^github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+):(read|write)$")
 MAX_FEATURES, MAX_MEMBERS, MAX_CRITERIA, MAX_STEPS = 8, 8, 15, 10
 KINDS = ("plan", "steps", "verify", "ask", "done", "stop")
@@ -194,9 +196,6 @@ class Team:
     def tag(self) -> str:
         return f"[flow {self.run[:8]}]"
 
-    def branch(self, feature: str) -> str:
-        return f"flow/{self.run[:8]}/{feature}"
-
     def shippable(self) -> list[str]:
         return [f for f in self.features if f in self.passed and self.passed[f] > self.changed.get(f, 0)]
 
@@ -223,8 +222,21 @@ def _name(value: Any, what: str) -> str:
     return value
 
 
+def _branch(value: Any, id: str, base: str, taken: dict[str, str]) -> str:
+    """The feature's branch, as the lead names it after what it carries: a new one, or one to continue."""
+    if not isinstance(value, str) or not BRANCH.match(value):
+        raise Refused(f"feature {id}: branch {value!r} must be a git branch named after what it carries, e.g. `feat/{id}`")
+    if value in (base, "main", "master"):
+        raise Refused(f"feature {id}: branch {value!r} is {'its base' if value == base else 'a default branch'}; "
+                      "name the feature's own branch after what it carries")
+    if value in taken:
+        raise Refused(f"feature {id}: branch {value!r} already carries feature {taken[value]!r}")
+    return value
+
+
 def _features(team: Team, catalogue: Catalogue, raw: Any, low: int = 1) -> list[Feature]:
     features = []
+    taken = {f.branch: f.id for f in team.features.values()}
     for i, item in enumerate(_list(raw, "features", low, MAX_FEATURES - len(team.features))):
         if not isinstance(item, dict):
             raise Refused(f"features[{i}] must be an object")
@@ -235,9 +247,11 @@ def _features(team: Team, catalogue: Catalogue, raw: Any, low: int = 1) -> list[
         if repo not in catalogue.repositories():
             raise Refused(f"feature {id}: repository {repo!r} is not offered; offered: {', '.join(catalogue.repositories())}")
         base = _text(item.get("base"), f"feature {id}: base", 200)
+        branch = _branch(item.get("branch"), id, base, taken)
+        taken[branch] = id
         criteria = [_text(c, f"feature {id}: a criterion", 600) for c in _list(item.get("criteria"), f"feature {id}: criteria", 1, MAX_CRITERIA)]
         features.append(Feature(id=id, title=_text(item.get("title"), f"feature {id}: title", 200), repo=repo, base=base,
-                                criteria=criteria, branch=team.branch(id)))
+                                criteria=criteria, branch=branch))
     return features
 
 
@@ -416,7 +430,7 @@ JUDGE_REPORT = ('{"verdict": "pass | fail", "checks": [{"id": "<R1, C1… or you
 DECISIONS = """\
 | Decision | What the flow does | Its JSON |
 | --- | --- | --- |
-| `plan` | Shows the human the envelope, under your title: features (each on its own branch, with its acceptance criteria) and team (each member's role, harness, model, effort and access). Their one approval covers the whole run; or they ask you to revise. | `{"decision": "plan", "title": "<your plan's name, one line>", "why": "…", "features": [{"id": "short-name", "title": "…", "repo": "owner/name", "base": "<branch it starts from>", "criteria": ["…"]}], "team": [{"name": "dev-1", "role": "dev", "harness": "…", "model": "…", "effort": "…", "access": ["…"]}]}` |
+| `plan` | Shows the human the envelope, under your title: features (each on the branch you name, with its acceptance criteria) and team (each member's role, harness, model, effort and access). Their one approval covers the whole run; or they ask you to revise. | `{"decision": "plan", "title": "<your plan's name, one line>", "why": "…", "features": [{"id": "short-name", "title": "…", "repo": "owner/name", "base": "<branch it starts from>", "branch": "<named after what it carries, e.g. feat/short-name; an existing branch to continue it>", "criteria": ["…"]}], "team": [{"name": "dev-1", "role": "dev", "harness": "…", "model": "…", "effort": "…", "access": ["…"]}]}` |
 | `steps` | Runs the steps one after the other, each by a member of the team; each member keeps its context from one step to the next. Comes back with each one's report and answer. | `{"decision": "steps", "why": "…", "steps": [{"member": "dev-1", "feature": "short-name", "brief": "<everything they need: what, why, done when, out of scope>"}]}` |
 | `verify` | Has the judge verify what you ask: a fresh context, read-only. `shippable: true` asks whether a feature can ship: its acceptance criteria and the judge's base rubric are checked on top of your question. Comes back with each check and its evidence. | `{"decision": "verify", "why": "…", "feature": "short-name or null", "shippable": true, "question": "<what to verify>"}` |
 | `ask` | Asks the human and waits for the answer, the whole run with it: a right, a new member, a new feature, an action only they can take. What `add` holds is added if they say yes. | `{"decision": "ask", "why": "…", "question": "…", "add": {"features": [], "team": [], "access": {"dev-1": ["<the member's whole access after the change>"]}}}` |
@@ -500,8 +514,9 @@ def _where(team: Team, feature: Feature | None, member: Member) -> str:
     if feature is None:
         return "Repositories you can reach: " + (", ".join(f"https://github.com/{m.group(1)}" for p in member.access if (m := REPO.match(p))) or "none") + "."
     criteria = "\n".join(f"- C{i}. {c}" for i, c in enumerate(feature.criteria, 1))
-    branch = (f"Your branch: `{feature.branch}`. Start it from `{feature.base}` if it does not exist yet, otherwise continue it; "
-              f"push your commits there, and keep a draft pull request open from it to `{feature.base}`."
+    branch = (f"Your branch: `{feature.branch}`. If it exists, continue it, brought up to date with `{feature.base}` first; otherwise "
+              f"start it from `{feature.base}`. Push your commits there, and keep one draft pull request open from it to `{feature.base}`: "
+              f"the one already open, if there is one."
               if member.role == "dev" else f"The feature's work is on the branch `{feature.branch}`.")
     return (f"Feature `{feature.id}`: {feature.title}\n\nRepository https://github.com/{feature.repo}, base `{feature.base}`. {branch}\n\n"
             f"Its acceptance criteria, which the judge will check:\n{criteria}")
@@ -529,7 +544,7 @@ def judge_prompt(team: Team, card: Card, number: int, decision: Decision, access
         owed = (f"\n\n## Can it ship?\n\nThis verification decides whether the feature ships. Your checks must include each of these, "
                 f"by its id.\n\nThe base rubric:\n{rubric}\n\nThe acceptance criteria the human approved:\n{criteria}")
     where = (f"\n\n## Where\n\nFeature `{feature.id}`: {feature.title}. Repository https://github.com/{feature.repo}, base `{feature.base}`, "
-             f"branch `{feature.branch}`; its draft pull request, if any, is from that branch." if feature else "")
+             f"branch `{feature.branch}`; its pull request, if any, is from that branch." if feature else "")
     question = decision.data["question"]
     return (f"{team.tag} judge: verification {number}{f' of {feature.id}' if feature else ''}\n\n{card.text}\n\n---\n\n"
             f"# This verification\n\n**Goal of the whole run, for context:** {team.goal}\n\n"
