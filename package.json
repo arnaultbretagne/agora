@@ -13,8 +13,9 @@
   },
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "check": "npm run typecheck && npm test && npm run test:browser -w @agora/web"
+    "test": "npm run test --workspaces --if-present && node --test scripts/*.test.ts",
+    "check:case-ids": "node scripts/case-ids.ts",
+    "check": "npm run check:case-ids && npm run typecheck && npm test && npm run test:browser -w @agora/web"
   },
   "devDependencies": {
     "@types/node": "24.19.0",
