@@ -330,7 +330,8 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | Above it: a refusal; the uncertain turn's banner (**Cancel the turn**, **Stop the sandbox**); why sending is closed | **ours** |
 
 A Workstream opens on its last message, as **Scroll to the bottom** leaves it, whether from the list,
-from another Workstream or by its address. It stays there while it catches up, unless the user scrolls.
+from another Workstream or by its address. It stays there while it catches up, unless the user scrolls; it
+has caught up once the messages the catch-up brought are shown, however late a slow device shows them.
 
 Registry components kept: `MarkdownText`, `DiffViewer`, `ContextDisplay`, `Attachment`, and the `surfaces` helpers. Every string is
 in English.
