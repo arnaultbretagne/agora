@@ -19,7 +19,7 @@ other.
 | The sre | Owns how things run on the cluster, which is production only: changes it through its GitOps repository, with a rollout, a way back and proof. | Its Workstream and its branch. |
 | The judge | Verifies what the lead asks, read-only, in a fresh Workstream each time. A feature ships only once judged shippable after its last change. | One Workstream per verification. |
 | Agora | Runs each member's agent in a sandbox and keeps its Workstream: commands, ACP lines, answers. | The record of every turn. |
-| The repository | Carries the work: each feature on its own branch, `flow/<run>/<feature>`. | The work itself. |
+| The repository | Carries the work: each feature on its branch, which the lead names in the plan after what it carries; a branch belongs to no run, and work already started is continued on its own. | The work itself. |
 | The person | Launches the team from Agora's client — Team, then the goal —, approves the envelope once, answers what the lead asks, merges: in Agora, in the lead's Workstream. | The lead's Workstream, the only merge. |
 | The agents' folder | The person's own folder in Agora, which owns every member's Workstream of their teams: their list holds the leads only, the folder below it opens on the members', and two people's members never mix. | The members' Workstreams. |
 

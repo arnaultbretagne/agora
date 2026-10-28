@@ -356,6 +356,20 @@ request through its way out, or dies. It writes a real native file and reads it 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).
 
+The cases the log took over keep their IDs, for the runs that showed them before
+(`reliability/executions.md`): their Expected no longer holds, and the log's cases say what does.
+
+| ID | Case | Expected |
+| --- | --- | --- |
+| E5 | Relay: `initialize`, `session/new`, prompt | `initialize` answered by Agora, positions numbered by Agora, turn closed. |
+| E6 | Second prompt during a turn | Refused with a JSON-RPC error. |
+| E7 | Cancel a turn | Ends `cancelled`, execution ready. |
+| E8 | Permission, consumer gone then back | The request is replayed, the answer unblocks the turn. |
+| E9 | Consumer disconnected during a turn | The turn continues; resuming returns the missed frames. |
+| E10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. |
+| E11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. |
+| E28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. |
+
 **To be specified:** detached tasks, resuming after the process is lost.
 Credentials: `credentials.md`.
 

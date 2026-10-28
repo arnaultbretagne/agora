@@ -1,9 +1,8 @@
-# Agora — rewrite
+# Agora
 
 Agora runs agents in sandboxes, keeps their exchanges and finds the work again after an
-interruption. `design/agora-foundations` is the base branch of the rewrite: it starts from
-scratch, with no history shared with `main`, and nothing from earlier versions is carried over
-unless it is written in `docs/`.
+interruption. Nothing from earlier versions is carried over unless it is written in `docs/`; the
+first version, with no history shared with this one, is kept as the tag `archive/v1`.
 
 | Folder | Content |
 | --- | --- |
@@ -19,7 +18,7 @@ A deployable never depends on another; a package never depends on a deployable.
 
 | Rule | Detail |
 | --- | --- |
-| One base | `design/agora-foundations`. Never commit to it directly: everything enters through a PR. |
+| One base | `main`. Never commit to it directly: everything enters through a PR. |
 | One branch per subject | Branched from the base, prefixed `feat/`, `fix/`, `chore/` or `docs/` (example: `feat/executions`). |
 | Docs and code together | A subject's docs (its contract in `docs/specs/`) change in the same branch as its code, never separately. |
 | Stay current | Merge the base into your branch; never merge one subject branch into another. |

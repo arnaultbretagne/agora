@@ -95,6 +95,8 @@ export interface Agora {
   readonly account: Account
   /** The Workstreams of the person's agents' folder: their runs' members. */
   readonly agents: WorkstreamView[]
+  /** The messages handed to assistant-ui, which shows them a render later. */
+  readonly messages: readonly ThreadMessageLike[]
 }
 
 const AgoraContext = createContext<Agora | null>(null)
@@ -423,6 +425,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     teams,
     account,
     agents,
+    messages,
   }
   return (
     <AgoraContext.Provider value={agora}>

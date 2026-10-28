@@ -26,7 +26,8 @@ CATALOGUE = Catalogue.from_agora(POOLS, OFFERED, exclude={"mock"})
 CARDS = load_cards()
 PLAN: dict[str, Any] = {
     "decision": "plan", "title": "Reliable uploads", "why": "one feature",
-    "features": [{"id": "retry", "title": "Retry the upload", "repo": "acme/app", "base": "main", "criteria": ["A failed upload is retried 3 times."]}],
+    "features": [{"id": "retry", "title": "Retry the upload", "repo": "acme/app", "base": "main", "branch": "feat/upload-retry",
+                  "criteria": ["A failed upload is retried 3 times."]}],
     "team": [{"name": "dev-1", "role": "dev", "access": ["github:acme/app:write", "internet"]},
              {"name": "sre-1", "role": "sre", "harness": "codex", "access": ["github:acme/infra:read"]}],
 }
@@ -85,7 +86,7 @@ class Plan(unittest.TestCase):
         decision = decide(PLAN, t, CARDS, CATALOGUE)
         approve(t, decision)
         self.assertTrue(t.approved)
-        self.assertEqual(t.features["retry"].branch, "flow/01234567/retry")
+        self.assertEqual(t.features["retry"].branch, "feat/upload-retry")
         dev, sre = t.members["dev-1"], t.members["sre-1"]
         self.assertEqual((dev.harness, dev.model, dev.effort), ("claude-code", "opus", "high"))  # the card's defaults
         self.assertEqual((sre.harness, sre.model, sre.effort), ("codex", "default", "default"))  # another harness: its defaults
@@ -113,6 +114,24 @@ class Plan(unittest.TestCase):
         self.assertIn("criteria", refused(no_criteria, team()))
         elsewhere = {**PLAN, "features": [{**PLAN["features"][0], "repo": "other/repo"}]}
         self.assertIn("not offered", refused(elsewhere, team()))
+
+    def test_F24_the_lead_names_each_branch_after_what_it_carries(self) -> None:
+        def with_branch(branch: Any, **more: Any) -> dict[str, Any]:
+            feature = {k: v for k, v in PLAN["features"][0].items() if k != "branch"}
+            return {**PLAN, "features": [{**feature, **({} if branch is None else {"branch": branch}), **more}]}
+        # A branch already started, from another run or by hand, is named as it is.
+        t = team()
+        approve(t, decide(with_branch("feat/credentials-vault"), t, CARDS, CATALOGUE))
+        self.assertEqual(t.features["retry"].branch, "feat/credentials-vault")
+        self.assertIn("must be a git branch", refused(with_branch(None), team()))
+        for bad in ("feat/upload retry", "feat/../x", "-x", "feat/x.lock", "feat/x/"):
+            self.assertIn("must be a git branch", refused(with_branch(bad), team()), bad)
+        self.assertIn("its base", refused(with_branch("develop", base="develop"), team()))
+        self.assertIn("a default branch", refused(with_branch("main", base="develop"), team()))
+        two = {**PLAN, "features": [PLAN["features"][0], {**PLAN["features"][0], "id": "again"}]}
+        self.assertIn("already carries feature 'retry'", refused(two, team()))
+        self.assertIn("already carries feature 'retry'", refused({"decision": "ask", "question": "One more?", "add": {
+            "features": [{**PLAN["features"][0], "id": "again"}]}}, approved()))
 
     def test_F9_what_the_launch_sets_wins_over_the_lead(self) -> None:
         t = team(dev={"harness": "codex", "model": "gpt-6-luna"})
@@ -200,11 +219,12 @@ class Ask(unittest.TestCase):
         decision = decide({"decision": "ask", "question": "Read the infra?", "add": {
             "access": {"dev-1": ["github:acme/app:write", "github:acme/infra:read", "internet"]},
             "team": [{"name": "dev-2", "role": "dev", "access": ["github:acme/infra:write"]}],
-            "features": [{"id": "alerts", "title": "Alert on failures", "repo": "acme/infra", "base": "main", "criteria": ["An alert fires."]}],
+            "features": [{"id": "alerts", "title": "Alert on failures", "repo": "acme/infra", "base": "main", "branch": "feat/failure-alerts",
+                          "criteria": ["An alert fires."]}],
         }}, t, CARDS, CATALOGUE)
         self.assertEqual(len(grant(t, decision)), 3)
         self.assertIn("github:acme/infra:read", t.members["dev-1"].access)
-        self.assertEqual(t.features["alerts"].branch, "flow/01234567/alerts")
+        self.assertEqual(t.features["alerts"].branch, "feat/failure-alerts")
         self.assertIn("dev-2", t.members)
 
     def test_F17_an_ask_cannot_add_what_agora_does_not_offer(self) -> None:
@@ -228,7 +248,7 @@ class Prompts(unittest.TestCase):
         self.assertIn("# Dev", first)
         self.assertNotIn("# Dev", later)
         for prompt in (first, later):
-            self.assertIn("Your branch: `flow/01234567/retry`", prompt)
+            self.assertIn("Your branch: `feat/upload-retry`. If it exists, continue it", prompt)
             self.assertIn("C1. A failed upload is retried 3 times.", prompt)
 
     def test_F14_the_judge_reads_the_question_as_data_and_owes_each_check(self) -> None:
