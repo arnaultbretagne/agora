@@ -187,6 +187,21 @@ class Verify(unittest.TestCase):
         self.assertEqual(judge_access(t, "retry"), ["github:acme/app:read", "internet"])
         self.assertEqual(judge_access(t, None), ["github:acme/app:read", "internet", "github:acme/infra:read"])
 
+    def test_F23_with_previews_offered_the_judge_also_reaches_the_previews_and_nothing_else(self) -> None:
+        t = approved()
+        offered = [*OFFERED, "previews"]
+        self.assertEqual(judge_access(t, "retry", offered), ["github:acme/app:read", "internet", "previews"])
+        self.assertEqual(judge_access(t, None, offered), ["github:acme/app:read", "internet", "github:acme/infra:read", "previews"])
+        # Nothing else of the offer comes with it: no write, no other profile.
+        self.assertTrue(all(p.endswith(":read") or p in ("internet", "previews") for p in judge_access(t, None, [*offered, "zai", "github:acme/other:write"])))
+        self.assertNotIn("zai", judge_access(t, None, [*offered, "zai"]))
+
+    def test_F23_without_previews_offered_the_judge_s_access_is_unchanged(self) -> None:
+        t = approved()
+        self.assertEqual(judge_access(t, "retry", OFFERED), ["github:acme/app:read", "internet"])
+        self.assertEqual(judge_access(t, None, OFFERED), ["github:acme/app:read", "internet", "github:acme/infra:read"])
+        self.assertEqual(judge_access(t, "retry", OFFERED), judge_access(t, "retry"))
+
     def test_F15_a_pass_needs_every_owed_check_passed(self) -> None:
         required = required_checks(CARDS["judge"], approved().features["retry"])
         self.assertEqual(required, ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "C1"])

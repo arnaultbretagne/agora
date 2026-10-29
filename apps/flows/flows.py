@@ -341,7 +341,7 @@ def drive(goal: str, overrides: dict[str, dict[str, str]], max_verifications: in
             team.verifications += 1
             feature_id = decision.data["feature"]
             judge = cards["judge"]
-            access = judge_access(team, feature_id)
+            access = judge_access(team, feature_id, catalogue().offered)
             required = required_checks(judge, team.features[feature_id]) if decision.data["shippable"] else []
             spec = TurnSpec(run=run, member=f"judge-{team.verifications}", turn=1, harness=judge.harness,
                             prompt=judge_prompt(team, judge, team.verifications, decision, access) + tail("judge", team.verifications, required),

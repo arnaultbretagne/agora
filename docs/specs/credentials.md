@@ -41,7 +41,8 @@ against the execution's grants and sets the credential on the way through.**
 
 An execution receives a list of **profiles**. Agora compiles them into **grants**: a host, a
 regular expression anchored on the path and query, methods, and for an MCP server the tools a call
-may name. The catalogue lives in Agora's code (`packages/credentials`).
+may name; for many hosts, a regular expression on the host. The catalogue lives in Agora's code
+(`packages/credentials`).
 
 | Profile | Grants |
 | --- | --- |
@@ -54,6 +55,7 @@ may name. The catalogue lives in Agora's code (`packages/credentials`).
 | `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
+| `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
@@ -75,6 +77,11 @@ those tools and nothing else. In the JWT it is a list of names beside `host`, `p
 
 The server (obsidian-mcp 0.4.0) offers no resource. A tool it adds is closed to `vault:read` until
 the catalogue names it, and open to `vault:write`, which is the whole server.
+
+A grant on many hosts keeps a `host`, the wildcard of the route that serves them, which no request's
+host equals: the rule of every other route compares `host` with the request's, so none covers it. Its
+`hostPattern`, a regular expression anchored on the request's host, is read only by that route, behind
+`has(g.hostPattern)`: a grant without one never makes that rule fail. Only `previews` has one.
 
 `internet` never opens a route with a credential: those routes compare the grant's host with the
 request's, and only the `internet` route and GitHub's public routes read `*`. On GitHub it adds what
@@ -98,6 +105,7 @@ service — never a repository, nor `internet`, nor the vault.
 | `github:…` | No |
 | `vault:read`, `vault:write` | No |
 | `kubernetes:read` | No |
+| `previews` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
@@ -115,7 +123,7 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews` | Itself |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
@@ -202,6 +210,7 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`. |
 | `vault` | `vault.bretagne.dev`; an MCP backend, the tools the grants name ("The vault") | `Authorization: Bearer` + an access token of the Pocket-ID machine client `agora_gateway_vault`. |
 | `kubernetes` | `kubernetes.agora.internal`, to the cluster's API server ("Kubernetes") | `Authorization: Bearer` + the token of the gateway's own ServiceAccount, projected, read only by its RBAC. |
+| `previews` | `*.preview.bretagne.dev`, the hosts a grant's `hostPattern` covers ("Previews") | `Authorization: Bearer` + a token of the Pocket-ID client `agora_gateway_previews`; `x-agora-gate: gateway`. |
 | `internet` | Any other | None. |
 
 The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
@@ -272,6 +281,112 @@ refuse it; nothing bound to `system:anonymous` or `system:unauthenticated` beyon
 | No credential | No token, no client certificate, no password, no `exec` or `auth-provider`. The user name is there only because kubectl asks for credentials on stdin for a user it cannot identify (client-go 1.36.5, `canIdentifyUser`): kubectl then sends `Authorization: Basic` of `agora:`, which the gateway replaces. |
 | The way out | No `proxy-url`: client-go then takes `HTTPS_PROXY` (`http.ProxyFromEnvironment`, read in client-go 1.36.5, `transport/cache.go`), the bridge's outbound proxy, which adds the token to the `CONNECT`. |
 | The root | The gateway's alone: client-go builds its pool from `certificate-authority` only, without the system's roots (`transport/transport.go`, `rootCertPool`). |
+
+### Previews
+
+A preview (infra-k8s ADR 0017 v4, §7) is served at `pr-<n>-<app>.preview.bretagne.dev`, behind a gate
+in `preview-system`: oauth2-proxy, which lets an `admin` through with a browser session. `previews`
+lets an execution — the flows' judge — reach a preview with no browser and no credential in the
+sandbox: the gateway presents an identity of its own to a second gate beside the browser's, which
+takes that identity and no other.
+
+| Grant | Value |
+| --- | --- |
+| `host` | `*.preview.bretagne.dev` |
+| `hostPattern` | `^pr-[1-9][0-9]*-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.preview\.bretagne\.dev$` |
+| `path`, `methods` | None: every path, every method — a preview is the change running, to be exercised. |
+
+Not covered, among others: `preview.bretagne.dev`, `x.preview.bretagne.dev`, `a.b.preview.bretagne.dev`,
+`pr-42-rss.x.preview.bretagne.dev`, `x.bretagne.dev`, `preview.bretagne.dev.evil.com`, an upper-case
+name, a port.
+
+| Element | The `previews` route |
+| --- | --- |
+| Host | `hostnames: ["*.preview.bretagne.dev"]`, on the internal bind's HTTPS listener with the other routes. |
+| Backend | `dynamic`, `backendTLS: {}`: the preview's public name, as a browser reaches it — Traefik, the wildcard certificate. The gateway already reaches the operator's sites so (from a sandbox through `internet`, 2026-10-27: `vault.bretagne.dev/health` 200, a preview's name answered). |
+| Rule | `authorization`: `jwt.ip == source.address && !request.pathAndQuery.matches("(?i)(/[.][.]?(/\|[?]\|$)\|%2e\|%2f)") && jwt.grants.exists(g, has(g.hostPattern) && request.host.matches(g.hostPattern) && (!has(g.path) \|\| request.pathAndQuery.matches(g.path)) && (!has(g.methods) \|\| request.method in g.methods))`. A name the pattern refuses is never sent with the credential: 403 without `internet` (C57). |
+| Marker | `requestHeaderModifier`: `set` `x-agora-gate: gateway`, overwriting what the sandbox sent. |
+| Credential | `backendAuth.key`: `Authorization: Bearer` + the file `/etc/agentgateway/previews/access_token`, watched; whatever `Authorization` the sandbox sent is replaced. |
+
+**The identity.** A Pocket-ID OIDC client of its own, `agora_gateway_previews`, declared in the
+reconciler's `spec.json`: confidential, no callback URL, `isGroupRestricted: true` with no allowed group,
+`accessTokenDurationMinutes: 15`. A token is asked by client credentials, without `resource`. As read in
+Pocket-ID 2.18.0: its `sub` is `client-<its id>` (`oidc/token_handler.go`), its `aud` the client's id —
+a request without a resource is audienced to the client (`oidc/api_resource.go`, `resolveResource`) —,
+and it carries no `groups` and no identity scope.
+
+| What else it can obtain (read in Pocket-ID 2.18.0) | |
+| --- | --- |
+| Grant types | A confidential client has `authorization_code`, `refresh_token`, `device_code` and `client_credentials` (`oidc/client.go`, `GetGrantTypes`). |
+| `authorization_code` | Nothing: with no callback URL, no redirect URI matches — neither in fosite (`MatchRedirectURIWithClientRedirectURIs`, pocket-id/fosite 1.3.0) nor in Pocket-ID's own list (`oidc/provider.go`, `matchRedirectURI`). |
+| `device_code`, `refresh_token` | Nothing: both are bound to a user, whom every token request checks again against the client's group restriction (`oidc/token_handler.go`, `ValidateUserAccess`; `oidc/authorization_service.go`, `IsUserGroupAllowedToAuthorize`); restricted with no allowed group, no user passes. |
+| `client_credentials` | Its own token, as above, without identity scopes (`token_handler.go` drops them). With a `resource`, only an API registered and granted to the client; otherwise `invalid_target` or `access_denied` (`api_resource.go`). None is to be granted to it. |
+| Where it is accepted | Only by the previews' gateway gates, which name its id as their audience and `client-<its id>` as their one identity. The browser gate's settings take no bearer token (C58); no other application is to name it. |
+
+**The gateway gate.** Per preview, beside the browser gate and in `preview-system` like it, a second
+oauth2-proxy of the same version, on its own port. The preview's HTTPRoute sends the requests carrying
+`x-agora-gate: gateway` to it, every other request to the browser gate as today.
+
+| Setting | Value |
+| --- | --- |
+| `provider`, `oidc-issuer-url` | `oidc`, `https://id.bretagne.dev`. |
+| `client-id` | `agora_gateway_previews`'s id: the audience a bearer token must carry. `client-secret` `unused`: oauth2-proxy requires one for `oidc` (`pkg/validation/providers.go`), the gate never redeems a code, and it holds no secret of that client. |
+| `skip-jwt-bearer-tokens`, `bearer-token-login-fallback` | `true`, `false`: a bearer token checked against Pocket-ID's keys — issuer, audience, expiry — is the session; an invalid one is refused, 403. |
+| `oidc-email-claim`, `authenticated-emails-file` | `sub`, and a file naming `client-<its id>` alone: the session's identity is the token's `sub` (`providers/oidc.go`, `CreateSessionFromToken`), which must be in that file. No `email-domain`, no `allowed-group`. The file is the ConfigMap `preview-gateway-identities`, in `preview-system`. |
+| `pass-basic-auth`, `basic-auth-password` | `true`, `none`: oauth2-proxy then replaces the `Authorization` it received by its own (`pkg/apis/options/legacy_options.go`: the header is stripped only when it injects one). |
+| `api-route` | `^/`: no sign-in page; a request without a valid token gets 401 or 403. |
+| `upstream`, `proxy-prefix`, `redirect-url`, `cookie-secret`, `reverse-proxy` | As the browser gate's. |
+
+Nothing reaches a `pv-*` namespace: the ConfigMap and the cookie secret stay in `preview-system`, the
+client's secret in `agora-gateway`.
+
+| What the app receives | |
+| --- | --- |
+| `X-Forwarded-User`, `X-Forwarded-Email` | `client-<its id>`, from the gate. |
+| `Authorization` | `Basic` of `client-<its id>:none`: the gate's, never the gateway's token nor the sandbox's (C56). |
+| `x-agora-gate` | `gateway`. |
+| The request | Its method, path, query and body as the sandbox sent them; what the sandbox sent as `X-Forwarded-User` is not passed on (C56). |
+
+**Its secret.** Pocket-ID 2.18.0 keeps up to 20 secrets per client, each with an optional expiry, and
+takes any of them that has not expired (`model/oidc.go`, `ActiveSecrets`; `oidc/client.go`,
+`GetHashedSecret` and `GetRotatedHashes`). Creating one (`POST /api/oidc/clients/{id}/secrets`) adds it
+and removes none (`service/oidc_service.go`, `CreateClientSecret`); only `DELETE
+/api/oidc/clients/{id}/secrets/{secretId}` removes one (`DeleteClientSecret`). The client is read from the
+database at each token request (`oidc/store.go`, `GetClient`): a change to its secrets, or its deletion,
+counts from the next request. The client has one secret, the Pocket-ID reconciler's (`"secret"` in the
+spec): it mints it into the Secret `previews-client` of `agora-gateway`, which `previews-refresher` alone
+mounts, and deletes every other secret of the client. Nobody holds it.
+
+| Rotating the secret | |
+| --- | --- |
+| 1 | Empty `previews-client`, or delete it: Flux recreates it empty. |
+| 2 | The reconciler's next run, within 15 minutes, mints a new secret and writes it there; the refresher uses it from its next run. |
+| 3 | The same run deletes the old secret. From the next token request, one with the old secret is refused; tokens it already minted stay valid until they expire, 15 minutes at most. |
+
+**Keeping the token.** `previews-refresher`, a CronJob in `agora-gateway`: every 5 minutes, a
+client-credentials request to Pocket-ID, without `resource`, with the client's secret from
+`previews-client`, which it alone mounts; it writes `access_token` into the Secret `previews-session`,
+mounted optional on the gateway at `/etc/agentgateway/previews`. A new token never breaks a request
+under way: the gateway sets the header when it sends a request, the gate checks the token once, when
+the request arrives (`pkg/middleware/jwt_session.go`), and a response under way goes on past the change (C60). The token it replaces stays valid until it expires.
+
+**Revocation.** A gate checks a token offline, against Pocket-ID's keys, its audience and its expiry
+(`providers/oidc.go`, `CreateSessionFromToken`): nothing done in Pocket-ID reaches a token already issued.
+Only the gates' identities cut those.
+
+| Operation | What it cuts | When |
+| --- | --- | --- |
+| `client-<its id>` taken out of `preview-gateway-identities` | Every token of the client, at every gateway gate, whatever secret minted it: each carries that `sub`, and no other identity is named. | Once the kubelet has updated the mounted ConfigMap — its sync, not measured for this ConfigMap —, oauth2-proxy reloads the file (`pkg/watcher/watcher.go`): 2 to 5 ms after a swap as the kubelet makes it (C59). |
+| A secret deleted (`DELETE /api/oidc/clients/{id}/secrets/{secretId}`) | Every new token asked with that secret. | From the next token request. Tokens it already minted: valid at the gates until they expire, 15 minutes at most, unless the identity is taken out too. |
+| The client deleted (`DELETE /api/oidc/clients/{id}`) | Every new token of the client, whatever the secret. | From the next token request. Tokens already issued: as above. |
+| `previews` taken out of `OFFERED_PROFILES` | No new execution is given it. | Tokens already handed expire with them. |
+
+A secret leaked: take the identity out of the gates, which cuts every token, then delete that secret —
+or the client —, which stops new ones; creating a new secret alone cuts nothing.
+
+**The browser path is unchanged**: the browser gate's configuration and the HTTPRoute's rule for it
+stay as they are, and a browser never sends `x-agora-gate`. One that sends it reaches the gateway gate,
+which refuses it without the client's token.
 
 The `internet` route can name any host, so the network bounds it: the gateway goes out to public
 IPv4 addresses only, on port 443. The private ranges — `10.0.0.0/8`, `100.64.0.0/10`,
@@ -446,6 +561,14 @@ call. The test page does it itself when the agent offers the option.
 | C52 | kubectl, the execution with `anthropic` alone, with `internet` alone, and with `kubernetes:read` from another address than the token's | 403 from the gateway each time; the API server receives nothing. |
 | C53 | In the cluster, the `kubernetes` route deployed, an execution with `kubernetes:read`: `kubectl get pods -A`, `get nodes`, `logs`; then `get secrets -A`, `exec`, `attach`, `port-forward`, `get --raw` of a node's `proxy/`, `create token`, `get pods --as=system:admin` | The reads answered. Each of the others refused: by the API server, 403 Forbidden, for those sent as a `GET`; by the gateway, 403, for the `POST`s. |
 | C54 | `kubectl version --client` in the claude-code, codex and opencode images | 1.36.5. |
+| C55 | The grants of `previews`; a pool declaring it; neighbouring hosts | `pr-<n>-<app>.preview.bretagne.dev` covered, every method and path; the neighbours listed in "Previews" not; no other route's rule and no `internet` grant covers it; not a base profile, the pool refused. |
+| C56 | Through the gateway and a gateway gate, `previews` with the judge's other profiles: a `GET` with a query and a `POST` with a body, the sandbox sending its own `Authorization` and `X-Forwarded-User` | Both answered by the app, the body passed. The app receives `X-Forwarded-User` and `X-Forwarded-Email` `client-<id>`, `Authorization: Basic` of `client-<id>:none`, `x-agora-gate: gateway`; never the gateway's token, nor what the sandbox sent. |
+| C57 | `previews` alone to `a.b.preview.bretagne.dev`, `pr-42-demo.x.preview.bretagne.dev`, `x.preview.bretagne.dev`, `x.bretagne.dev`, `preview.bretagne.dev.evil.com`, `pr-42-demo.preview.bretagne.dev.evil.com`; a preview with `anthropic` alone, with `internet` and a repository, and with `previews` from another address | 403 from the gateway each time; the app receives nothing; `previews` from its own address: answered. |
+| C58 | Straight to a gateway gate: the gateway's token; another client's; another client's claiming the gateway's audience; an `admin`'s token for the gateway's client; the gateway's expired; no token. The gateway's token to the browser gate | Only the first passes; the others 401 or 403, the app receiving none. The browser gate: 302 to Pocket-ID's sign-in, not the app. |
+| C59 | The gateway gate's identities swapped, as the kubelet updates a ConfigMap, without `client-<id>`; then with it | The gateway's tokens, a fresh one included, refused — through the gateway too; then taken again. |
+| C60 | The gateway's credential replaced while a response from the app is under way | That response ends whole; the next request carries the new credential. |
+| C61 | In the cluster, the route and the gateway gate deployed, a preview open: the judge with `previews`; a browser without a session; the client `agora_gateway_previews` asked for a device code and an authorization code | The judge reaches the preview's app through the gateway gate; the browser is sent to Pocket-ID by the browser gate; Pocket-ID gives no user token for the client. |
+| C62 | In Pocket-ID, `agora_gateway_previews` given a second secret, a token asked with each; the first secret deleted; then the client deleted | A token for each while both exist; once the first is deleted, it is refused and the second still answered; once the client is deleted, neither; the tokens already issued still taken by the gateway gate until they expire, and refused once `client-<id>` is out of its identities. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.
