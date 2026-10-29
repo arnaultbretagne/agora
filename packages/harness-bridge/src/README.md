@@ -7,6 +7,7 @@
 | `outbound.ts` | The outbound proxy: forwards the adapter's `CONNECT`s with the execution's token, refuses everything before. |
 | `instructions.ts` | What the agent is told: `AGENTS.md` in the workspace, the claims of its token in `~/.agora/access.json`. |
 | `agent-instructions.md` | The text of that `AGENTS.md`, the same for every harness. |
+| `kubeconfig.yaml` | kubectl's configuration, named in the adapter's `KUBECONFIG`: the cluster through the gateway, no credential. |
 | `token.ts` | Agora's Ed25519 token: signing (Agora) and verification (bridge). |
 | `anchor.ts` | The anchor: each harness's native directory, reading en bloc, push, restore. |
 | `index.ts` | What the package exports. |

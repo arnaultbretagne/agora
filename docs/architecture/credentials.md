@@ -28,8 +28,9 @@ takes it from there only (below, "The token").
 ## Profiles and grants
 
 A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `internet`,
-`github:owner/repo:read`, `github:owner/repo:write`, `previews`. Agora compiles each profile into **grants**,
-which the gateway can check on a request: a host, a pattern on the path, and the allowed methods.
+`github:owner/repo:read`, `github:owner/repo:write`, `vault:read`, `vault:write`, `kubernetes:read`,
+`previews`. Agora compiles each profile into **grants**, which the gateway can check on a request: a host, a
+pattern on the path, the allowed methods, and for an MCP server the tools a call may name.
 
 | Profile | Grants |
 | --- | --- |
@@ -39,6 +40,9 @@ which the gateway can check on a request: a host, a pattern on the path, and the
 | `internet` | `*`, everything: any host without a credential of its own |
 | `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
 | `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
+| `vault:read` | `vault.bretagne.dev` on `/mcp`, the vault's MCP tools that only read |
+| `vault:write` | `vault.bretagne.dev` on `/mcp`, everything the vault's MCP server offers |
+| `kubernetes:read` | `kubernetes.agora.internal`, the cluster's API, `GET` and `HEAD` only; what may be read is the gateway's RBAC |
 | `previews` | the hosts `pr-<n>-<app>.preview.bretagne.dev`, through each preview's gateway gate, which takes the gateway's own Pocket-ID client |
 
 Grants add up: any mix of profiles is just a longer list.
@@ -48,9 +52,16 @@ the operator — the **offered** profiles, each at its widest access — and pic
 before the execution or between its turns.
 
 Grants are the only restriction, so they stop at what the gateway can check: a host, a path, a
-method. An ACP permission, an installed tool or an instruction given to the model restricts
+method — and on an MCP server, where every call is a `POST` to the same path, the tool named, which
+the gateway reads in the protocol itself. An ACP permission, an installed tool or an instruction given to the model restricts
 nothing on the service's side. If the gateway refuses or does not answer, the request fails;
 nothing ever widens the grants.
+
+A profile can open an **MCP server** too: the execution's `session/new` names it, by its public
+address and with no secret, and the harness reaches it through the gateway like any host. The
+gateway's route holds the server's credential — the identity of a machine client — and lets
+through only the tools the grants name. With `vault:read` or `vault:write`, the execution gets the
+Obsidian vault's server; without, none.
 
 ## From a warm Pod to an execution
 

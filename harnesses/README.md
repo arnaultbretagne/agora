@@ -7,6 +7,8 @@ from the root.
 What differs between harnesses is declared by the image, not coded in the bridge: the adapter
 (`BRIDGE_ADAPTER`), the native directory an anchor saves (`BRIDGE_NATIVE_DIR`), and whether the
 adapter opens it at start and must be restarted to receive an anchor (`BRIDGE_RESTART_ON_ANCHOR`).
+claude-code, opencode and codex also carry kubectl 1.36.5, for `kubernetes:read`: its configuration is
+the bridge's (`KUBECONFIG`).
 
 | Folder | Image | Harness |
 | --- | --- | --- |

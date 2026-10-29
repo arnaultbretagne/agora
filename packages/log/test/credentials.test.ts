@@ -91,6 +91,34 @@ test('C12 a token that cannot be renewed fails the prompt, credentials_refused, 
   assert.equal([...(await lab.state(ws)).turns.values()].at(-1)?.status, 'failed')
 })
 
+/** The MCP servers the execution's `session/new` named, as Agora sent it. */
+async function opened(lab: Lab, ws: string): Promise<unknown> {
+  const opening = lines(await lab.entries(ws), 'out', 'session/new')
+  assert.equal(opening.length, 1)
+  return (opening[0]!.content.params as { mcpServers?: unknown }).mcpServers
+}
+
+test('C43 an execution with vault:read, then one with vault:write: session/new names the vault’s MCP server alone, over HTTP, with no header', async (t) => {
+  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
+  for (const [workstream, profile] of [[ws, 'vault:read'], [await lab.workstream(), 'vault:write']] as const) {
+    const e = await lab.open(workstream, { pool: 'claude-test', profiles: [profile] })
+    // The rights to reach it are in the token, through the gateway.
+    assert.deepEqual([...signer.minted.find((m) => m.label === `agora ${e.id}`)!.profiles], ['anthropic', profile])
+    const servers = (await opened(lab, workstream)) as { type: string; name: string; url: string; headers: unknown[] }[]
+    assert.deepEqual(servers, [{ type: 'http', name: 'vault', url: 'https://vault.bretagne.dev/mcp', headers: [] }], profile)
+    assert.equal(new URL(servers[0]!.url).origin, 'https://vault.bretagne.dev')
+  }
+})
+
+test('C43 control: an execution with other profiles and none of the vault, and one with no profile: session/new names no MCP server', async (t) => {
+  const { lab, ws } = await started(t, { 'claude-test': 'anthropic' })
+  await lab.open(ws, { pool: 'claude-test', profiles: ['github:owner/repo:write', 'internet'] })
+  assert.deepEqual(await opened(lab, ws), [])
+  const bare = await lab.workstream()
+  await lab.open(bare, { pool: 'mock-test' })
+  assert.deepEqual(await opened(lab, bare), [])
+})
+
 test('C14 a Create naming an unknown profile is refused, unknown_profile, and nothing is written', async (t) => {
   const { lab, ws } = await started(t)
   assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['dropbox:everything'] }), { accepted: false, reason: 'unknown_profile' })

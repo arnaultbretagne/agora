@@ -19,6 +19,20 @@ export interface Grant {
    * it. `host` then holds that wildcard, which no request's host equals, so no other route's rule covers the grant.
    */
   readonly hostPattern?: string
+  /**
+   * The MCP tools a call may name, on a route whose backend is an MCP server: there every message is a `POST`
+   * to one path, so the gateway checks the tool in the protocol (`mcpAuthorization`). Every tool, prompt and
+   * resource of the server when absent; only these tools, and no prompt or resource, when present.
+   */
+  readonly tools?: readonly string[]
+}
+
+/** An MCP server a profile opens, as `session/new` names it: reached through the gateway like any host, with no secret. */
+export interface McpServer {
+  readonly type: 'http'
+  readonly name: string
+  readonly url: string
+  readonly headers: readonly { readonly name: string; readonly value: string }[]
 }
 
 export class ProfileRefused extends Error {
@@ -31,6 +45,17 @@ const READ = ['GET', 'HEAD'] as const
 /** The previews (infra-k8s ADR 0017 v4, §7): one DNS label, `pr-<n>-<app>`, under `preview.bretagne.dev`. */
 export const PREVIEW_HOSTS = '*.preview.bretagne.dev'
 export const PREVIEW_HOST_PATTERN = '^pr-[1-9][0-9]*-[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.preview\\.bretagne\\.dev$'
+/** The Obsidian vault's MCP server (obsidian-mcp 0.4.0): the tools that only read it, and those that change it. */
+const VAULT_HOST = 'vault.bretagne.dev'
+export const VAULT_READ_TOOLS: readonly string[] = ['read_note', 'search_content', 'search_properties', 'get_backlinks', 'list_properties', 'get_property_values']
+// clip_url fetches a page and writes it into the vault as a note; update_schema writes the schema overlay.
+export const VAULT_WRITE_TOOLS: readonly string[] = ['create_note', 'update_note', 'delete_note', 'move_note', 'update_schema', 'clip_url']
+const VAULT: McpServer = { type: 'http', name: 'vault', url: `https://${VAULT_HOST}/mcp`, headers: [] }
+/**
+ * The name the sandbox gives the cluster's API server: it resolves nowhere (`.internal` is reserved for private
+ * use), and only the gateway's `kubernetes` route knows it, which sends it to the API server.
+ */
+export const KUBERNETES_HOST = 'kubernetes.agora.internal'
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -50,6 +75,13 @@ export function compileProfile(profile: string): Grant[] {
   if (profile === 'internet') return [{ host: '*' }]
   // The previews, for the flows' judge: every method on every path of a preview's host, through its gate.
   if (profile === 'previews') return [{ host: PREVIEW_HOSTS, hostPattern: PREVIEW_HOST_PATTERN }]
+  // The vault: its MCP endpoint only — POST for every message, GET for the server's stream, DELETE to end the
+  // session. Read names its tools, which leaves out the others, the prompt included; write names none: the whole server.
+  if (profile === 'vault:read') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'], tools: [...VAULT_READ_TOOLS] }]
+  if (profile === 'vault:write') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
+  // The cluster, read: GET and HEAD on the API's own paths — a watch is a GET. What may be read is the
+  // credential's RBAC: no Secret, no exec, attach, port-forward or proxy, no token (docs/specs/credentials.md).
+  if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -89,6 +121,11 @@ export function baseProfiles(annotation: string | undefined): { profiles: string
   return refused === null ? { profiles, refused: null } : { profiles: [], refused }
 }
 
+/** The MCP servers an execution's profiles open, for its `session/new` (docs/specs/credentials.md, "MCP servers"): each once. */
+export function mcpServers(profiles: readonly string[]): McpServer[] {
+  return profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write') ? [VAULT] : []
+}
+
 export function compileProfiles(profiles: readonly string[]): Grant[] {
   if (profiles.length === 0) throw new ProfileRefused('no profile')
   return profiles.flatMap(compileProfile)
@@ -101,10 +138,10 @@ export function offeredProfiles(value: string | undefined): string[] {
   return profiles
 }
 
-/** Whether a profile may be named, given those offered: itself, or a repository's read under its write. */
+/** Whether a profile may be named, given those offered: itself, or the read of a repository or of the vault under its write. */
 export function offers(offered: readonly string[], profile: string): boolean {
   if (offered.includes(profile)) return true
-  const read = /^(github:[^:]+):read$/.exec(profile)
+  const read = /^(github:[^:]+|vault):read$/.exec(profile)
   return read !== null && offered.includes(`${read[1]!}:write`)
 }
 
@@ -135,7 +172,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'previews'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }
