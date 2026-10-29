@@ -14,7 +14,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
     rolldownOptions: {
       output: {
-        advancedChunks: {
+        codeSplitting: {
           groups: [
             { name: 'react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
             { name: 'assistant-ui', test: /node_modules[\\/]@assistant-ui[\\/]/ },

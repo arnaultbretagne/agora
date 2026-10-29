@@ -118,6 +118,10 @@ const reasoningDuration = (timing: ThreadGroupPart["timing"]) =>
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
+  /** Agora demo: replaces the user row, e.g. to render a host-written report turn. */
+  UserMessage?: ComponentType | undefined;
+  /** Agora demo: rendered under an assistant message's parts, e.g. an aggregate of its tool calls. */
+  AssistantMessageAfterParts?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
@@ -284,15 +288,17 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
 };
 
 const ThreadMessage: FC = () => {
-  const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
-    useContext(ThreadComponentsContext);
+  const {
+    AssistantMessage: AssistantMessageComponent = AssistantMessage,
+    UserMessage: UserMessageComponent = UserMessage,
+  } = useContext(ThreadComponentsContext);
   const role = useAuiState((s) => s.message.role);
   const isEditing = useAuiState((s) => s.message.composer.isEditing);
   const isSpoken = useAuiState((s) => s.message.metadata.modality === "voice");
 
   if (isEditing) return <EditComposer />;
   if (isSpoken) return <SpokenMessage />;
-  if (role === "user") return <UserMessage />;
+  if (role === "user") return <UserMessageComponent />;
   return <AssistantMessageComponent />;
 };
 
@@ -676,6 +682,7 @@ const AssistantMessage: FC = () => {
     ToolGroup,
     ReasoningGroup,
     TaskGroup: TaskGroupComponent,
+    AssistantMessageAfterParts,
   } = useContext(ThreadComponentsContext);
   const groupBy = TaskGroupComponent ? taskAwareGroupBy : messageGroupBy;
 
@@ -763,6 +770,7 @@ const AssistantMessage: FC = () => {
             }
           }}
         </MessagePrimitive.GroupedParts>
+        {AssistantMessageAfterParts && <AssistantMessageAfterParts />}
         <MessageError />
       </div>
 
@@ -871,7 +879,7 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
   </div>
 );
 
-const UserMessage: FC = () => {
+export const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
