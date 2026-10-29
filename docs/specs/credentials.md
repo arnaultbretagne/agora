@@ -247,14 +247,15 @@ takes any of them that has not expired (`model/oidc.go`, `ActiveSecrets`; `oidc/
 and removes none (`service/oidc_service.go`, `CreateClientSecret`); only `DELETE
 /api/oidc/clients/{id}/secrets/{secretId}` removes one (`DeleteClientSecret`). The client is read from the
 database at each token request (`oidc/store.go`, `GetClient`): a change to its secrets, or its deletion,
-counts from the next request. The client has one secret, held by `previews-refresher` alone, in the SOPS
-Secret `previews-client` of `agora-gateway`.
+counts from the next request. The client has one secret, the Pocket-ID reconciler's (`"secret"` in the
+spec): it mints it into the Secret `previews-client` of `agora-gateway`, which `previews-refresher` alone
+mounts, and deletes every other secret of the client. Nobody holds it.
 
 | Rotating the secret | |
 | --- | --- |
-| 1 | Create the new secret, with an expiry if wanted. Until step 3, the old one works too: creating a secret cuts nothing. |
-| 2 | Put it in `previews-client`; the refresher uses it from its next run. |
-| 3 | Delete the old secret, by its id. From the next token request, one with the old secret is refused; tokens it already minted stay valid until they expire, 15 minutes at most. |
+| 1 | Empty `previews-client`, or delete it: Flux recreates it empty. |
+| 2 | The reconciler's next run, within 15 minutes, mints a new secret and writes it there; the refresher uses it from its next run. |
+| 3 | The same run deletes the old secret. From the next token request, one with the old secret is refused; tokens it already minted stay valid until they expire, 15 minutes at most. |
 
 **Keeping the token.** `previews-refresher`, a CronJob in `agora-gateway`: every 5 minutes, a
 client-credentials request to Pocket-ID, without `resource`, with the client's secret from
