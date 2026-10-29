@@ -5,6 +5,7 @@ export {
   BASE_PROFILES,
   BASE_PROFILES_ANNOTATION,
   GrantSigner,
+  KUBERNETES_HOST,
   ProfileRefused,
   baseProfiles,
   compileProfile,

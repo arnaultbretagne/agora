@@ -33,7 +33,7 @@ against the execution's grants and sets the credential on the way through.**
 | --- | --- |
 | `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token and closes the tunnels opened with it: later tunnels use the new one. |
 | `GET /info`, `outbound` field | Proxy, expiry, when the credential was attached, number of tunnels, number of refusals, and for each target the number of tunnels and the last response to the `CONNECT`. Never the token. |
-| Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`, `NODE_USE_ENV_PROXY` set to `1` so that Node's own `fetch` goes through it too. Everything the agent runs inherits it. |
+| Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`, `NODE_USE_ENV_PROXY` set to `1` so that Node's own `fetch` goes through it too, `KUBECONFIG` set to the bridge's kubeconfig ("Kubernetes"). Everything the agent runs inherits it. |
 | The agent's access | At each `PUT /credentials`, before answering: the token's claims — its payload as JSON, never the token or its signature — written to `~/.agora/access.json`, replacing the previous ones as a whole, in the order the tokens came. A token whose claims cannot be read removes the file. |
 | What is relayed | `CONNECT` only. An `http://` request is refused (501): the gateway serves HTTPS only. |
 
@@ -51,6 +51,7 @@ regular expression anchored on the path and query, methods. The catalogue lives 
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
+| `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
@@ -74,6 +75,7 @@ service — never a repository, nor `internet`.
 | `chatgpt` | Yes |
 | `internet` | No |
 | `github:…` | No |
+| `kubernetes:read` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
@@ -89,7 +91,7 @@ profile, or a narrower one of the same repository.
 | --- | --- |
 | `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:read` |
 | `github:owner/repo:read` | `github:owner/repo:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read` | Itself |
 
 Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
 catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
@@ -160,12 +162,77 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `github-git` | `github.com`, `x-gateway-grant: covered` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
 | `github-api-public` | `api.github.com`, the rest; reads, with `internet` | As `github-api`. |
 | `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`. |
+| `kubernetes` | `kubernetes.agora.internal`, to the cluster's API server ("Kubernetes") | `Authorization: Bearer` + the token of the gateway's own ServiceAccount, projected, read only by its RBAC. |
 | `internet` | Any other | None. |
 
 The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
 must reach no private repository: through the public routes, an execution with `internet` reads
 whatever the PAT reads. A private repository to offer calls for a second credential on the public
 routes, one that reads public repositories only.
+
+### Kubernetes
+
+`kubernetes:read` lets an execution read the cluster with kubectl. The sandbox holds no token and no
+client certificate: the gateway sets its own ServiceAccount's token, and that token's RBAC is what may
+be read. The grant cuts the methods to `GET` and `HEAD`; RBAC bounds the rest — the credential bounds,
+the grants cut.
+
+**The host.** `kubernetes.agora.internal`: `.internal` is reserved for private use and resolves
+nowhere, and only the gateway's `kubernetes` route knows the name. The sandbox never resolves it:
+kubectl sends `CONNECT kubernetes.agora.internal:443` to the bridge. Until the route exists, the name
+falls to the `internet` route: 403 without `internet`; with it, a name that does not resolve, 503.
+
+| Element | The `kubernetes` route |
+| --- | --- |
+| Host | `hostnames: [kubernetes.agora.internal]`, on the internal bind's HTTPS listener with the other routes. |
+| Backend | `host: kubernetes.default.svc.cluster.local:443`, the API server's Service. `backendTLS`: `root` the cluster's CA — `ca.crt` of the ConfigMap `kube-root-ca.crt` that every namespace has, mounted in the gateway —, `hostname: kubernetes.default.svc`, a name the API server's certificate carries. |
+| Rule | `authorization`: the rule of every route with a credential, unchanged — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method. |
+| Credential | `backendAuth.key`: `Authorization: Bearer` + the file `/etc/agentgateway/kubernetes/token`, watched; whatever `Authorization` kubectl sent is replaced. |
+| Identity | The gateway's own ServiceAccount, `gateway` in `agora-gateway`, named by its Deployment (`serviceAccountName`), `automountServiceAccountToken` still `false`. Its token comes from a projected volume (`serviceAccountToken`, `expirationSeconds: 3600`, the API server's own audience) mounted at `/etc/agentgateway/kubernetes`: the kubelet renews the file before it expires, and the gateway reads it again, as it does the Secrets' files. No refresher, no token in git. |
+| Network | The gateway's policy: egress to the API server (Cilium's `kube-apiserver` entity), on the port it listens on behind the Service — 6443 on k0s. Nothing else of the cluster. |
+
+**The RBAC the token carries.** One ClusterRole, `agora-kubernetes-read`, bound to that ServiceAccount
+by the ClusterRoleBinding of the same name. Its verbs are `get`, `list` and `watch`, written out, in
+every rule; its resources and API groups are named one by one.
+
+| API group | Resources |
+| --- | --- |
+| `""` | `pods`, `pods/log`, `pods/status`, `services`, `endpoints`, `events`, `namespaces`, `nodes`, `configmaps`, `serviceaccounts`, `persistentvolumes`, `persistentvolumeclaims`, `replicationcontrollers`, `resourcequotas`, `limitranges` |
+| `apps` | `deployments`, `replicasets`, `statefulsets`, `daemonsets`, `controllerrevisions` |
+| `batch` | `jobs`, `cronjobs` |
+| `networking.k8s.io`, `discovery.k8s.io`, `policy`, `autoscaling` | `ingresses`, `networkpolicies`; `endpointslices`; `poddisruptionbudgets`; `horizontalpodautoscalers` |
+| `events.k8s.io`, `storage.k8s.io`, `apiextensions.k8s.io`, `metrics.k8s.io` | `events`; `storageclasses`; `customresourcedefinitions`; `pods`, `nodes` |
+| The cluster's own custom resources | Each by its group and plural, as infra-k8s lists them; none whose objects hold a credential. |
+
+| Never | Why |
+| --- | --- |
+| `*` in `verbs`, `resources` or `apiGroups` | A wildcard would take in what the cluster adds, Secrets included. |
+| Any verb but `get`, `list`, `watch` — `create`, `update`, `patch`, `delete`, `deletecollection`, `impersonate`, `bind`, `escalate` | Read only. Without `impersonate`, kubectl's `--as` is refused. |
+| `secrets` | The cluster's credentials. |
+| `pods/exec`, `pods/attach`, `pods/portforward` | kubectl may run them over WebSocket, whose handshake is a `GET`, which the grant lets through: RBAC refuses them, `pods` never standing for its subresources. |
+| `pods/proxy`, `services/proxy`, `nodes/proxy` | A way into the Pods, and through `nodes/proxy` into the kubelet, which runs commands. |
+| `serviceaccounts/token`, `pods/ephemeralcontainers` | A token minted, a container added. |
+
+A ConfigMap and a Pod's log are readable: neither may hold a credential. `kubectl auth can-i` and
+`kubectl auth whoami` are `POST`s: refused by the gateway, like every write.
+
+**The API server is the gateway's one private destination.** Its egress rule cannot tell routes
+apart: the `internet` route reaches the API server too, through any name that resolves to its
+Service's address, a public name included — the gateway dials port 443 only, which the Service
+translates. Such a request carries no credential, the `internet` route setting none: the API server
+takes it as anonymous. So the API server must answer an anonymous request only with what it gives
+anyone — `/version`, `/healthz`, `/livez`, `/readyz`, the `system:public-info-viewer` defaults — or
+refuse it; nothing bound to `system:anonymous` or `system:unauthenticated` beyond them.
+
+**kubectl in the sandbox.**
+
+| Element | Rule |
+| --- | --- |
+| The binary | kubectl 1.36.5, within one minor of the cluster's (k0s 1.36), in the claude-code, codex and opencode images: the release binary, checked against its sha256 at the build, which runs `kubectl version --client`. Not in the mock's. |
+| Its configuration | `KUBECONFIG`, set by the bridge in the adapter's environment, names `kubeconfig.yaml`, shipped with the bridge (`packages/harness-bridge/src`), which every image copies — not `~/.kube/config`: `HOME` is a `tmpfs` in the cluster. One cluster, `server: https://kubernetes.agora.internal`, `certificate-authority: /etc/agora/credential-proxy/ca.pem`; one user, `username: agora`; one context, current. |
+| No credential | No token, no client certificate, no password, no `exec` or `auth-provider`. The user name is there only because kubectl asks for credentials on stdin for a user it cannot identify (client-go 1.36.5, `canIdentifyUser`): kubectl then sends `Authorization: Basic` of `agora:`, which the gateway replaces. |
+| The way out | No `proxy-url`: client-go then takes `HTTPS_PROXY` (`http.ProxyFromEnvironment`, read in client-go 1.36.5, `transport/cache.go`), the bridge's outbound proxy, which adds the token to the `CONNECT`. |
+| The root | The gateway's alone: client-go builds its pool from `certificate-authority` only, without the system's roots (`transport/transport.go`, `rootCertPool`). |
 
 The `internet` route can name any host, so the network bounds it: the gateway goes out to public
 IPv4 addresses only, on port 443. The private ranges — `10.0.0.0/8`, `100.64.0.0/10`,
@@ -302,6 +369,12 @@ call. The test page does it itself when the agent offers the option.
 | C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit the PAT's; the write and the push: 403 from the gateway; without `internet`: 403. |
 | C39 | `x-gateway-grant: covered` sent by the sandbox with `internet` alone: a read of a public repository, a write on an offered one | The read through `github-api-public`; the write: 403 from the gateway. |
 | C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
+| C49 | The grants of `kubernetes:read`; a pool declaring it; `kubernetes:write`, `kubernetes` | `kubernetes.agora.internal` only, `GET` and `HEAD` on `/api`, `/apis`, `/openapi`, `/version` and below, a watch included; `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `/`, `/healthz`, `/logs`, another host: not covered; no grant on `*`; not a base profile, the pool refused; the others `unknown_profile`. |
+| C50 | What a command of the agent inherits from the bridge | `KUBECONFIG` names the bridge's `kubeconfig.yaml`: `https://kubernetes.agora.internal`, the gateway's root, the user `agora` with no password; no token, certificate, `exec`, `auth-provider` or `proxy-url`; `HTTPS_PROXY` the bridge's outbound proxy. |
+| C51 | Through the gateway, kubectl with that kubeconfig and `HTTPS_PROXY` alone, the execution with `kubernetes:read`: `version`, `get pods`, `get pod`, a watch; `delete`, `patch`, `create`; a read with `--password` | The reads answered by the API server, the watch's event printed. The writes refused by the gateway, 403, the API server receiving none. Every request the API server receives carries the gateway's credential, never kubectl's. |
+| C52 | kubectl, the execution with `anthropic` alone, with `internet` alone, and with `kubernetes:read` from another address than the token's | 403 from the gateway each time; the API server receives nothing. |
+| C53 | In the cluster, the `kubernetes` route deployed, an execution with `kubernetes:read`: `kubectl get pods -A`, `get nodes`, `logs`; then `get secrets -A`, `exec`, `attach`, `port-forward`, `get --raw` of a node's `proxy/`, `create token`, `get pods --as=system:admin` | The reads answered. Each of the others refused: by the API server, 403 Forbidden, for those sent as a `GET`; by the gateway, 403, for the `POST`s. |
+| C54 | `kubectl version --client` in the claude-code, codex and opencode images | 1.36.5. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

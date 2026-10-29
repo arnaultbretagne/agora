@@ -36,6 +36,9 @@ if (mode === 'split') {
   // What a harness finds in its working directory as it starts, where it loads project instructions.
   const path = join(process.cwd(), 'AGENTS.md')
   writeFileSync(`${directory}/seen`, existsSync(path) ? readFileSync(path) : 'missing')
+} else if (mode === 'env') {
+  // What a command the agent runs inherits.
+  writeFileSync(`${directory}/env`, JSON.stringify({ KUBECONFIG: process.env.KUBECONFIG, HTTPS_PROXY: process.env.HTTPS_PROXY }))
 } else if (mode === 'fetch') {
   // A script of the agent's: Node's own fetch, with nothing but the environment it inherits.
   let outcome: string

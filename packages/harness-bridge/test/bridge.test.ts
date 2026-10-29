@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { startBridge, MAX_LINE_BYTES } from '../src/server.ts'
+import { startBridge, KUBECONFIG, MAX_LINE_BYTES } from '../src/server.ts'
 import { after, describe, it } from 'node:test'
 import { mintBridgeToken } from '../src/token.ts'
 import { checksumOf, pushBundle, type Bundle } from '../src/anchor.ts'
@@ -122,6 +122,26 @@ describe('bridge', () => {
     // The outbound proxy, with no credential yet, refused it: the request reached the proxy, not the Internet.
     const info = (await (await fetch(`http://${target.url}/info`, { headers: auth() })).json()) as { outbound: { refused: number } }
     assert.equal(info.outbound.refused, 1)
+  })
+
+  it('C50 the adapter’s environment names a kubeconfig for the cluster through the gateway, with no credential', async () => {
+    const target = await stdio('env')
+    const env = JSON.parse((await written(join(target.home, 'env'))).toString('utf8')) as { KUBECONFIG?: string; HTTPS_PROXY?: string }
+    // The file shipped with the bridge, which every harness image copies.
+    assert.equal(env.KUBECONFIG, fileURLToPath(new URL('../src/kubeconfig.yaml', import.meta.url)))
+    assert.equal(env.KUBECONFIG, KUBECONFIG)
+    // kubectl takes HTTPS_PROXY, the bridge's outbound proxy, when the kubeconfig names no proxy-url.
+    assert.match(env.HTTPS_PROXY ?? '', /^http:\/\/127\.0\.0\.1:\d+$/)
+    const config = readFileSync(env.KUBECONFIG, 'utf8')
+    const lines = config.split('\n').filter((l) => !l.trimStart().startsWith('#'))
+    assert.ok(lines.includes('      server: https://kubernetes.agora.internal'), config)
+    assert.ok(lines.includes('      certificate-authority: /etc/agora/credential-proxy/ca.pem'), config)
+    // A user name alone, so that kubectl asks for nothing on stdin; no password.
+    assert.ok(lines.includes('      username: agora'), config)
+    // No credential of any kind, and no proxy of its own.
+    for (const key of ['token', 'tokenFile', 'client-certificate', 'client-key', 'password', 'exec', 'auth-provider', 'proxy-url', 'insecure-skip-tls-verify']) {
+      assert.ok(!lines.some((l) => new RegExp(`^\\s*${key}(-data)?:`).test(l)), key)
+    }
   })
 
   it('C28 control: without NODE_USE_ENV_PROXY, the same fetch never reaches the outbound proxy', async () => {
