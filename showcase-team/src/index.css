@@ -165,3 +165,10 @@
 .dark .brand-architrave { y: 18.7px; height: 6.1px; }
 .dark .brand-echinus { y: 27.9px; height: 5.1px; }
 .dark .brand-columns { stroke-width: 3.7px; }
+/* Frozen threads (catalogue frames): assistant-ui's Thread as is, its composer hidden and its height
+   left to its content. */
+.frozen { width: 100%; }
+.frozen .aui-thread-root { height: auto; }
+.frozen .aui-thread-viewport-footer { display: none; }
+.frozen [data-slot="aui_thread-viewport"] { overflow: visible; }
+.frozen [data-slot="aui_message-group"] { margin-bottom: 0; }
