@@ -234,6 +234,8 @@ describe('profiles', () => {
     assert.deepEqual(mcpServers(['vault:read', 'vault:write']), [vault])
     assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:write']), [])
     assert.deepEqual(mcpServers([]), [])
+  })
+
   it('C49 kubernetes:read opens GET and HEAD on the API of kubernetes.agora.internal, nothing else; it is not a base profile', () => {
     const grants = compileProfile('kubernetes:read')
     assert.equal(KUBERNETES_HOST, 'kubernetes.agora.internal')
