@@ -31,7 +31,7 @@ import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validQuestion } from './questions.ts'
-import { compileProfile, offers as offersProfile } from '@agora/credentials'
+import { compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -717,7 +717,8 @@ export class Workstreams implements Handler {
       return
     }
     let method = 'session/new'
-    let params: Record<string, unknown> = { cwd: info.workspace, mcpServers: [] }
+    // The MCP servers its profiles open (docs/specs/credentials.md, "MCP servers"): the gateway sets their credential.
+    let params: Record<string, unknown> = { cwd: info.workspace, mcpServers: mcpServers(await this.profilesOf(e)) }
     if (e.body.anchor) {
       const anchor = await this.store.anchorBytes(String(e.body.anchor))
       const initialize = (await this.store.entries(workstream)).find(
