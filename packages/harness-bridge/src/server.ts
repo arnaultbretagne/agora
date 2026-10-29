@@ -4,6 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { mkdir, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -12,6 +13,9 @@ import { bearerOf, verifyBridgeToken } from './token.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from './anchor.ts'
 import { parseCredentials, startOutbound } from './outbound.ts'
 import { writeAccess, writeInstructions } from './instructions.ts'
+
+/** The cluster's configuration for kubectl, with no credential (docs/specs/credentials.md, "Kubernetes"). */
+export const KUBECONFIG = fileURLToPath(new URL('./kubeconfig.yaml', import.meta.url))
 
 export interface BridgeOptions {
   readonly port: number
@@ -60,7 +64,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const outbound = await startOutbound({ port: options.outboundPort ?? 0, log })
   const loopback = 'localhost,127.0.0.1'
   // NODE_USE_ENV_PROXY: Node's own fetch ignores HTTPS_PROXY without it, and the agent's scripts use it.
-  const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback, NODE_USE_ENV_PROXY: '1' }
+  // KUBECONFIG: kubectl reaches the cluster through the same proxy, the gateway setting its credential.
+  const env = { ...process.env, HTTPS_PROXY: outbound.url, https_proxy: outbound.url, NO_PROXY: loopback, no_proxy: loopback, NODE_USE_ENV_PROXY: '1', KUBECONFIG }
 
   const [command, ...args] = options.adapterCommand
   if (command === undefined) throw new Error('the adapter command is empty')

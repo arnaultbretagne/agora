@@ -43,6 +43,11 @@ export const VAULT_READ_TOOLS: readonly string[] = ['read_note', 'search_content
 // clip_url fetches a page and writes it into the vault as a note; update_schema writes the schema overlay.
 export const VAULT_WRITE_TOOLS: readonly string[] = ['create_note', 'update_note', 'delete_note', 'move_note', 'update_schema', 'clip_url']
 const VAULT: McpServer = { type: 'http', name: 'vault', url: `https://${VAULT_HOST}/mcp`, headers: [] }
+/**
+ * The name the sandbox gives the cluster's API server: it resolves nowhere (`.internal` is reserved for private
+ * use), and only the gateway's `kubernetes` route knows it, which sends it to the API server.
+ */
+export const KUBERNETES_HOST = 'kubernetes.agora.internal'
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -64,6 +69,9 @@ export function compileProfile(profile: string): Grant[] {
   // session. Read names its tools, which leaves out the others, the prompt included; write names none: the whole server.
   if (profile === 'vault:read') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'], tools: [...VAULT_READ_TOOLS] }]
   if (profile === 'vault:write') return [{ host: VAULT_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
+  // The cluster, read: GET and HEAD on the API's own paths — a watch is a GET. What may be read is the
+  // credential's RBAC: no Secret, no exec, attach, port-forward or proxy, no token (docs/specs/credentials.md).
+  if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -154,7 +162,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

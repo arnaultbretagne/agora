@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
+import { BASE_PROFILES, KUBERNETES_HOST, baseProfiles, compileProfile, compileProfiles, GrantSigner, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -234,6 +234,44 @@ describe('profiles', () => {
     assert.deepEqual(mcpServers(['vault:read', 'vault:write']), [vault])
     assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:write']), [])
     assert.deepEqual(mcpServers([]), [])
+  it('C49 kubernetes:read opens GET and HEAD on the API of kubernetes.agora.internal, nothing else; it is not a base profile', () => {
+    const grants = compileProfile('kubernetes:read')
+    assert.equal(KUBERNETES_HOST, 'kubernetes.agora.internal')
+    assert.deepEqual(new Set(grants.map((g) => g.host)), new Set([KUBERNETES_HOST]))
+    const h = KUBERNETES_HOST
+    const cases: [string, string, string, boolean][] = [
+      [h, 'GET', '/api', true],
+      [h, 'GET', '/apis', true],
+      [h, 'GET', '/version?timeout=32s', true],
+      [h, 'GET', '/openapi/v3', true],
+      [h, 'GET', '/api/v1/namespaces/agora/pods?limit=500', true],
+      [h, 'HEAD', '/api/v1/nodes', true],
+      // A watch is a GET.
+      [h, 'GET', '/api/v1/namespaces/agora/pods?watch=true&resourceVersion=12', true],
+      [h, 'GET', '/apis/apps/v1/namespaces/agora/deployments/server', true],
+      [h, 'POST', '/api/v1/namespaces/agora/pods', false],
+      [h, 'PUT', '/api/v1/namespaces/agora/configmaps/c', false],
+      [h, 'PATCH', '/apis/apps/v1/namespaces/agora/deployments/server', false],
+      [h, 'DELETE', '/api/v1/namespaces/agora/pods/p', false],
+      [h, 'POST', '/api/v1/namespaces/agora/pods/p/exec?command=sh', false],
+      [h, 'POST', '/api/v1/namespaces/agora/serviceaccounts/default/token', false],
+      [h, 'OPTIONS', '/api', false],
+      // The API's paths only: not the server's health or logs, nor the root.
+      [h, 'GET', '/', false],
+      [h, 'GET', '/healthz', false],
+      [h, 'GET', '/logs/kube-apiserver.log', false],
+      [h, 'GET', '/apiz', false],
+      ['kubernetes.default.svc', 'GET', '/api', false],
+      ['api.github.com', 'GET', '/repos/octo/app', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+    assert.equal(allowedOnline(grants, 'GET', '/api'), false)
+    // Not a base profile: a pool declaring it gets no warm token.
+    assert.equal(BASE_PROFILES.has('kubernetes:read'), false)
+    assert.deepEqual(baseProfiles('anthropic,kubernetes:read'), { profiles: [], refused: 'kubernetes:read' })
+    // The Internet never opens it: the route compares hosts.
+    assert.equal(allowed(compileProfile('internet'), h, 'GET', '/api'), false)
+    for (const profile of ['kubernetes', 'kubernetes:write', 'kubernetes:admin', 'kubernetes:read:all']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
   })
 
   it('refuses what it does not know, and names that could escape the pattern', () => {

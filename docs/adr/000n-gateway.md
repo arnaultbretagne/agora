@@ -248,7 +248,9 @@ body. It takes one identity, a Pocket-ID machine client, and knows no levels.
   the grant's host against the request's, so the Internet never opens them; GitHub's public routes
   read `*` too, for reads only.
 - The `internet` route can name any host: the gateway's egress is limited to public addresses on
-  port 443, so no name leads it into the operator's networks or the cluster.
+  port 443, so no name leads it into the operator's networks or the cluster — but for the cluster's
+  API server, which `kubernetes:read` needs. The `internet` route reaches it too, with no
+  credential: the API server must serve the anonymous nothing but its version and health.
 - With the Internet, an agent steered by what it reads can send what it holds anywhere — a
   repository it was given included; credentials stay in the gateway. It is never a base profile,
   and an execution gets it only when its Create or a Scope names it: the interface names it for a
