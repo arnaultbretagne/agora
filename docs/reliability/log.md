@@ -26,6 +26,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R18 | 2026-10-22 | `f65d77a` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, the mock accepting images and embedded resources, not audio. |
 | R19 | 2026-10-25 | `6a94b80` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube; questions asked on Workstreams with and without an execution. |
 | R20 | 2026-10-25 | `fdb0ff2` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; the real server (`apps/server/src/main.ts`), the proxy's identity sent as its header. |
+| R21 | 2026-10-31 | `0fddf58` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, its `/crash` and `/fail`; FakeKube deleting a claim at its deadline, its Pod pushing the anchor; renewal step 1 s and lease 60 s for L30 and L77. Before it, L30 and L77 alone with the change taken out of `workstreams.ts`: both failed, L30 timed out on "the deadline moved", L77 on `execution.lost`. |
 
 ## Cases
 
@@ -73,6 +74,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L28 | real: PostgreSQL terminates a capture's connection during a turn | local | R1 | proven | 5 log lines checked; no fragment of the 6 secrets nor of the anchor's files. |
 | L29 | real: the lab process killed by SIGKILL at its fault point `after_anchor`; simulated: fake-kube, the deadline brought to now | local | R1 | proven | Every assertion held. |
 | L30 | real: the adapter exits (mock `/crash`, code 3) | local | R1 | proven | Every assertion held. |
+| L30 | real: the adapter exits (mock `/crash`, code 3) | local | R21 | proven | Lost (`adapter_exited`); the deadline set to `2026-10-30T23:01:50.230Z`, 0 ms before the patch, and no other; Write `execution_unavailable`, Create `execution_active`, another Workstream's `quota` while the deletion was held; then one `execution.ended` naming the anchor received, and a new execution. |
 | L31 | simulated: fake-kube, the foreground deletion held | local | R1 | proven | Every assertion held. |
 | L32 | simulated: fake-kube, the Pod's UID changed; Agora halted in process (fault-point) | local | R1 | proven | Every assertion held. |
 | L33 | real: the adapter answers the prompt twice, and writes a second answer to `session/new` (mock `/raw`); simulated: synthetic-event, that answer handed over after the end | local | R1 | proven | Every assertion held, in each of its two tests. |
@@ -127,6 +129,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L74 | — | local | R19 | proven | The same Ask under its id after its Answer returned its first answer, canonical encoding equal; one question; the view's `question` null. |
 | L75 | — | local | R20 | proven | `person@example.org`: `{"email":"person@example.org"}`; without the header: `{"email":null}`. |
 | L76 | — | local | R20 | proven | One Workstream each: the person's, their agents folder's, someone else's agents folder's; the person's list its own only; their `folder=agents` their folder's only; someone else's `folder=agents` theirs only; `folder=archive` 400 `unknown_folder`; without the proxy, `folder=agents` all three. |
+| L77 | real: the agent answers with an internal error (mock `/fail`, `-32603`), its adapter running | local | R21 | proven | After a normal turn the deadline 60,000 ms ahead and the execution not lost; after `/fail` the turn failed with code `-32603`, lost (`agent_failed`), the deadline −1 ms from its patch and the last one set; Write `execution_unavailable`; `execution.ended` naming the anchor received; the next execution's `session.opened` restoring it. |
 
 ## Not covered
 
