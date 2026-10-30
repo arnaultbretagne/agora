@@ -66,10 +66,10 @@ stateDiagram-v2
     ready --> stopped: stop
     in_turn --> stopped: stop (the turn is cancelled)
     ready --> lost: adapter died
-    in_turn --> lost: adapter died
+    in_turn --> lost: adapter died, or internal error
     ready --> ending: deadline
     stopped --> ending: deadline
-    lost --> ending: deadline
+    lost --> ending: deadline, moved to now
     in_turn --> ending: turn limit
     ending --> [*]: anchor received
 ```
@@ -87,10 +87,14 @@ the deadline passes.
 | Creation | now + 10 minutes (the lease) |
 | During a turn, every minute | the earlier of now + 10 minutes and turn start + 1 hour |
 | End of the turn | now + 10 minutes, then nothing until the next prompt |
+| The agent dies | now, once |
 | Stop | nothing: Agora stops renewing |
 
 An idle execution therefore disappears one lease after its last turn, and a runaway turn after
-one hour. The turn start that bounds it is in the log, so a restart of Agora keeps the limit.
+one hour. A dead agent has nothing left to serve: its Pod ends at once, its anchor arrives, and
+the next message continues the Workstream in a new execution. An agent is dead when its adapter
+exits, or when the adapter answers a prompt with an internal error, which is how claude-agent-acp
+reports that the Claude Code process under it died. The turn start that bounds it is in the log, so a restart of Agora keeps the limit.
 
 ## The end of the Pod and the anchor
 

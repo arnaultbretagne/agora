@@ -26,6 +26,7 @@ export type Reason =
   | 'claim_conflict'
   | 'claim_missing'
   | 'adapter_exited'
+  | 'agent_failed'
   | 'instance_changed'
   | 'deadline_reached'
   | 'stopped'

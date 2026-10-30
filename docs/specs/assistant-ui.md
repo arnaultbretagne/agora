@@ -293,7 +293,7 @@ the screen.
 | `session.ended`, reason `replaced` | "Another session replaced this one." Any other reason is not shown: the execution's own notice says it. |
 | `execution.break` | "The connection to the sandbox was interrupted." Not shown when the next notice of the same execution is its loss or its end, which explains it. |
 | `request.failed` | `response_timeout` "The agent did not answer in time.", `deadline_refused` "The sandbox's deadline could not be extended.", `transport_error` "A message could not reach the sandbox.", else "A request to the agent failed." |
-| `execution.lost` | `adapter_exited` "The agent's process exited", `claim_missing` "The sandbox disappeared", `claim_conflict` and `instance_changed` "The sandbox was replaced", else "The sandbox was lost"; then ". The history is kept." |
+| `execution.lost` | `adapter_exited` "The agent's process exited", `agent_failed` "The agent stopped on an internal error", `claim_missing` "The sandbox disappeared", `claim_conflict` and `instance_changed` "The sandbox was replaced", else "The sandbox was lost"; then ". The history is kept." |
 | `execution.failed` | `startup_failed` "The sandbox could not start", `restore_failed` "The saved session could not be restored", `anchor_missing` "The saved session was not found", `credentials_refused` "The agent's credentials were refused", else "The execution could not start"; then "." |
 | `execution.ended` | "The sandbox has ended." |
 

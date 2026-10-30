@@ -372,11 +372,16 @@ await check('E19', 'Adapter died', async () => {
   await w.turn('done', 30_000)
   assert((await w.write('/crash')).status === 200, 'Write refused')
   const lost = await until('lost', async () => (await w.entries()).find((x) => x.kind === 'execution.lost'), 20_000)
-  const shutdown = (await view(w.execution))?.shutdownTime
-  const end = await w.ended(150_000)
+  // The deadline moved to now: the lease of the turn before would have kept it 60 s ahead.
+  const shutdown = await until('the deadline moved', async () => {
+    const at = (await view(w.execution))?.shutdownTime
+    return at && Date.parse(String(at)) <= Date.parse(String(lost.time)) + 5_000 ? String(at) : null
+  }, 20_000)
+  const end = await w.ended(60_000)
   assert(lost.content.reason === 'adapter_exited' && typeof end.content.anchor === 'string', JSON.stringify({ lost: lost.content, end: end.content }))
   assert((await anchorText(String(end.content.anchor))).includes('before the fall'), 'empty anchor')
-  return `lost (adapter_exited), deadline left at ${String(shutdown)}; anchor ${String(end.content.anchor)} pushed despite the dead adapter`
+  const after = Math.round((Date.parse(String(end.time)) - Date.parse(String(lost.time))) / 1000)
+  return `lost (adapter_exited) at ${String(lost.time)}, deadline moved to ${shutdown}; ended ${String(after)} s after the loss, anchor ${String(end.content.anchor)} pushed despite the dead adapter`
 })
 
 await check('E20', 'Tokens refused', async () => {

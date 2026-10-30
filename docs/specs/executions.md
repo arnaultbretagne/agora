@@ -183,7 +183,7 @@ That is why the workspace is the same path in every image.
 | `AGORA_ANCHOR_URL` | Agora's route for receiving anchors |
 | Projected token | `serviceAccountToken` volume, audience `agora-anchors`, mounted on `/var/run/agora/token` |
 | Readiness | `GET /healthz` on port 8080 |
-| Resources | 50m CPU and 512 MiB reserved, 1 CPU and 1 GiB at most: an idle sandbox uses ~1m, and the node has only 6 cores. |
+| Resources | 50m CPU and 512 MiB reserved, 1 CPU and 4 GiB at most: an idle sandbox uses ~1m, and the node has only 6 cores. Kata sizes the VM at the memory limit, so the limit is all the RAM the agent has: at 1 GiB, three sub-agents and 25 processes started at once ran it out. |
 | `HOME` | `emptyDir` mounted on `/home/harness` |
 | User | 10001, read-only root, no capabilities |
 | Egress | Through the gateway only, and its TLS trust (`credentials.md`) |
@@ -240,7 +240,8 @@ The log decides each move and keeps the turn start; the mechanics apply it.
 | Every minute of a turn, while connected to the bridge | min(now + lease, turn start + maximum duration) |
 | End of turn confirmed | now + lease, once, then nothing more until the next prompt |
 | Stop requested | Nothing more; `session/cancel` if a turn is in progress |
-| Adapter lost, instance changed, claim ending | Nothing more |
+| Adapter exited, or a prompt answered with an internal error (JSON-RPC `-32603`) | now, once, then nothing more: the execution is lost, and its Pod ends and pushes its anchor without waiting out the lease |
+| Instance changed, claim ending | Nothing more |
 
 ### An execution's states
 
@@ -254,7 +255,7 @@ Each state is read from the log, and from the claim for its readiness and its en
 | **ready** | A Session open, no turn. | `session.opened`, no turn in progress. |
 | **in turn** | `session/prompt` dispatched, final response not received yet. | Its `acp.dispatching`, no answer. |
 | **uncertain** | The end of the turn could not be seen. | An unclean break or a local failure since the dispatch. Only its answer, or the end of the execution, resolves it. |
-| **lost** | The adapter died, the bridge instance changed, or the claim conflicts with the record. | `execution.lost`. |
+| **lost** | The adapter died, the agent answered a prompt with an internal error, the bridge instance changed, or the claim conflicts with the record. | `execution.lost`. |
 | **stopped** | Sending closed, no more renewal. | The Stop command. |
 | **error** | Startup or restore failed. | `execution.failed`: a claim's terminal reason (for example `WarmPoolNotFound`), an unanswered `initialize`, a failed restore. |
 | **ending** | The infrastructure is deleting the claim; the anchor is expected. | `deletionTimestamp` on the claim, or its deadline passed. |
@@ -342,7 +343,7 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E16 | Stop | No more renewal, destruction at the deadline, anchor received. |
 | E17 | Stop during a turn | Turn cancelled, then as in E16. |
 | E18 | Restore an anchor | New execution, same ACP session, the agent remembers. |
-| E19 | Dead adapter | *Lost*, no more renewal; the anchor still leaves with the Pod. |
+| E19 | Dead adapter | *Lost*; the deadline moved to now, then no more renewal; the execution ends at once, the anchor leaving with the Pod. |
 | E20 | Bridge with no token, expired, for another sandbox, another key | 401 every time. |
 | E21 | Anchor push without a valid projected token | 401, nothing is stored. |
 | E22 | Real harness (claude-code) | Real `initialize` and `session/new`; anchor pushed and restored. |
