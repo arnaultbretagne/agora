@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R9 | 2026-10-04 | `4261ef0` | local | `npm run check`: Node 24.20.0, real bridges with the stdio test adapter. |
 | R10 | 2026-10-06 | `25bc00a` | live | g4 under Kata. The server `agora-server@sha256:2547a1f5…` and the pools claude-code `0345a542…`, opencode `44f3d8c2…` and codex `e88bc2bb…`, built from `4e33168` (infra-k8s #212), each in the mode, model and effort its pool declares: `bypassPermissions`, `opus`, `high`; `build`, `zai-coding-plan/glm-5.3`, `high`; `agent-full-access`, `gpt-6.1-sol`, `high`. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`. Billed: two short turns per harness. |
 | R11 | 2026-10-06 | `b4efc8e` | cluster, live | As R15 of `credentials.md`: the server signing each token with its Pod's address, the gateway checking it on every route. One case per run. E22, E30 and E31 billed. |
+| R12 | 2026-10-31 | `3bbe489` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:774ba830…` and the pool `mock-8315d36582ec`, built from that commit (infra-k8s #313); the template at 1 CPU and 4 GiB (infra-k8s #312). `apps/server/scripts/live-cases.ts` from that commit, on the server Pod's address. |
 
 ## Cases
 
@@ -75,6 +76,7 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E19 | real: the adapter exits (mock `/crash`, code 3) | cluster | R1 | partial: the end of renewal is not asserted | *Lost*; anchor pushed despite the dead adapter. |
 | E19 | real: the adapter exits (mock `/crash`, code 3) | cluster | R4 | partial: the end of renewal is not asserted | Lost (`adapter_exited`); anchor pushed despite the dead adapter. |
 | E19 | real: the adapter exits (mock `/crash`, code 3) | cluster | R8 | partial: the end of renewal is not asserted | Lost (`adapter_exited`), the deadline left alone; the anchor pushed despite the dead adapter. |
+| E19 | real: the adapter exits (mock `/crash`, code 3) | cluster | R12 | proven | Lost (`adapter_exited`) at `2026-10-31T09:02:31.203Z`, the deadline moved to `2026-10-31T09:02:31.207Z`; ended 1 s after the loss, the anchor `ca1f817d…` pushed despite the dead adapter, holding the turn before. |
 | E20 | — | cluster | R1 | proven | 401 everywhere; valid token 200 / 101. |
 | E20 | — | local | R3 | proven | Every assertion held. |
 | E20 | — | cluster | R4 | proven | 401 everywhere; valid token 200 / 101. |
