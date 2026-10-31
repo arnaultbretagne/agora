@@ -296,6 +296,10 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       answerTwice = true
       return 'end_turn'
     }
+    // What claude-agent-acp answers when the Claude Code process under it dies: an internal error,
+    // the adapter itself still running.
+    case '/fail':
+      throw new Error('mock-agent: /fail asked, the agent process exited')
     case '/crash': {
       process.stderr.write('mock-agent: /crash asked, exiting with code 3\n')
       process.exit(3)

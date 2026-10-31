@@ -27,6 +27,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R19 | 2026-10-25 | `2a7fe89` | unit, local | The client's unit tests, and `test:browser` for U19 and U50 alone, as R18; the question rendered as one box. Screenshots taken in Chromium — pending with its note written, then answered, wide and on a phone — and looked at. |
 | R20 | 2026-10-25 | `fdb0ff2` | unit, local | `npm run check`, with `npm run test:browser`, as R19; the server with a stand-in for Prefect's API (`TEAM_PREFECT_API`, deployment `lead/main`); for U51 and U52 the browser sending the proxy's identity as its header. Screenshots taken — the harness menu with Team, a team's draft, its Workstream starting; the agents folder closed, open, one of its Workstreams open, the account's menu; wide and on a phone — and looked at. |
 | R21 | 2026-10-28 | `47400b2`, then `4d45a9d` | local | `npm run test:browser`'s suite, its 26 cases, run again and again pinned to two CPUs (`taskset -c 0,1`), as a GitHub runner has; Chromium recording every scroll from each phone page's load (`addInitScript`, a capture-phase listener), nothing done at the tap, and on U40's timeout the record, the viewport's measures and assistant-ui's top anchors. |
+| R22 | 2026-10-31 | `0fddf58` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0. |
 
 ## Cases
 
@@ -58,6 +59,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U10 | — | cluster | R2 | partial: one notice | "Session started with mock." |
 | U10 | — | local | R3 | proven | Six notices of the history in plain words, the Session's end and the break the loss follows left out; no reason code; four more from their objects. |
 | U10 | — | local | R10 | proven | As R3, and the Session notices with a catch-up: restored with 2, restored with 0, new with 3 and 1 left out, new with 0 after another and first. |
+| U10 | — | local | R22 | proven | As R10, and a loss for `agent_failed`: "The agent stopped on an internal error. The history is kept." |
 | U11 | — | local | R1 | proven | starting, ready, interrupted, lost, ended, stopped from the history, failed and none built: each badge, open or not, and its reason. |
 | U11 | — | cluster | R2 | partial: starting, ready, stopped | `starting` in the list; `ready` in the header with Stop, the composer open; then `stopped` and "Stopped. The sandbox ends at its deadline." |
 | U11 | — | local | R3 | proven | starting, ready, interrupted, lost, stopped closed with their reasons; ended and failed open, sending starting an execution; none built. |

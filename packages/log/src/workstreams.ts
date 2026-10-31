@@ -37,6 +37,8 @@ const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
 const OPENING = ['session/new', 'session/resume', 'session/load']
 const CONTROL = new Set(['session/set_config_option'])
+// JSON-RPC's "Internal error".
+const INTERNAL_ERROR = -32603
 /** A burst of received lines is projected a few times a second, never once per line. */
 const PROJECT_EVERY_MS = 250
 
@@ -538,6 +540,21 @@ export class Workstreams implements Handler {
     this.projections.forget(workstream)
   }
 
+  /**
+   * docs/specs/executions.md, "The deadline": a dead agent ends its execution at once. Its deadline
+   * moves to now, so the Pod ends and pushes its anchor without waiting out the lease.
+   */
+  private async agentLost(workstream: string, e: Execution, reason: 'adapter_exited' | 'agent_failed'): Promise<void> {
+    await this.store.fact(workstream, { kind: 'execution.lost', execution: e.id, content: { reason } })
+    this.executions.hold(e.id)
+    if (!e.uid) return
+    try {
+      await this.executions.renew(e.id, e.uid, iso(Date.now()))
+    } catch {
+      this.report({ operation: 'renew', outcome: 'failed', workstream, execution: e.id, errorClass: 'transport' })
+    }
+  }
+
   private async fail(workstream: string, entry: Entry, reason: Reason): Promise<void> {
     await this.store.fact(workstream, {
       kind: 'request.failed',
@@ -879,11 +896,15 @@ export class Workstreams implements Handler {
       !this.ending(e) &&
       state.answeredBy.get(entry.request_position ?? '') === entry.position
     ) {
-      try {
-        await this.executions.renew(execution, e.uid, iso(Date.now() + limitsOf(e).leaseSeconds * 1000))
-      } catch {
-        this.report({ operation: 'renew', outcome: 'failed', workstream, execution, errorClass: 'transport' })
-      }
+      // An internal error is how an adapter reports that the agent under it died: nothing answers there any more.
+      if (entry.rpc_kind === 'error' && schemaValue(object(entry.content.error)?.code) === INTERNAL_ERROR)
+        await this.agentLost(workstream, e, 'agent_failed')
+      else
+        try {
+          await this.executions.renew(execution, e.uid, iso(Date.now() + limitsOf(e).leaseSeconds * 1000))
+        } catch {
+          this.report({ operation: 'renew', outcome: 'failed', workstream, execution, errorClass: 'transport' })
+        }
     }
     // After a turn, what went out through the bridge: tunnels, the proxy's answers, in the mechanics' view.
     if (entry?.correlated_method === 'session/prompt' && ['response', 'error'].includes(entry.rpc_kind ?? ''))
@@ -933,10 +954,7 @@ export class Workstreams implements Handler {
         content: { connection, code, clean: drained && proven },
       })
       const e = state.executions.get(execution)
-      if (code === 1011 && e && !e.lost && !e.ended) {
-        await this.store.fact(workstream, { kind: 'execution.lost', execution, content: { reason: 'adapter_exited' } })
-        this.executions.hold(execution)
-      }
+      if (code === 1011 && e && !e.lost && !e.ended) await this.agentLost(workstream, e, 'adapter_exited')
       await this.project(workstream)
     })
   }

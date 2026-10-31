@@ -279,13 +279,17 @@ test('L29 an anchor stored without its anchor.received gets one at the next star
   assert.equal((await entries(run)).filter((x) => x.kind === 'anchor.received').length, 1)
 })
 
-test('L30 the adapter dies: execution.lost, no dispatch or renewal, counted until its claim disappears', async (t) => {
+test('L30 the adapter dies: execution.lost, its deadline moved to now, counted until its claim disappears, then ended with its anchor', async (t) => {
   // A renewal step of 1 s: a renewal after the loss would show within the window below.
-  const { lab, ws, e } = await opened(t, { workstreams: { maxActive: 1, renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
+  const { lab, ws, e } = await opened(t, { receiver: true, workstreams: { maxActive: 1, renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
+  // The deletion held, the claim stays while the counting is checked.
+  lab.kube.holdDeletion = true
+  const patches = lab.kube.deadlines.length
   assert.ok((await lab.write(ws, '/crash')).accepted)
   const lost = await until('execution.lost', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.lost'))
   assert.equal(lost.content.reason, 'adapter_exited')
-  const patches = lab.kube.deadlines.length
+  const moved = await until('the deadline moved', () => lab.kube.deadlines.slice(patches).find((d) => d.name === e.claimName && Date.parse(d.shutdownTime) <= d.at))
+  t.diagnostic(`deadline set to ${moved.shutdownTime}, ${String(moved.at - Date.parse(moved.shutdownTime))} ms before the patch`)
   assert.deepEqual(await lab.write(ws, 'after the loss'), { accepted: false, reason: 'execution_unavailable' })
   assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test' }), { accepted: false, reason: 'execution_active' })
   const other = await lab.workstream()
@@ -293,13 +297,49 @@ test('L30 the adapter dies: execution.lost, no dispatch or renewal, counted unti
   await sleep(1500)
   const after = (await lab.entries(ws)).filter((x) => BigInt(x.position) > BigInt(lost.position))
   assert.equal(after.filter((x) => x.kind === 'acp.dispatching').length, 0)
-  assert.equal(lab.kube.deadlines.length, patches)
-  await expire(lab.kube, e.claimName)
-  await until('execution.ended', async () => (await lab.entries(ws)).some((x) => x.kind === 'execution.ended'))
+  // The prompt's own renewal, if any, came before the loss; after it, the move to now alone.
+  assert.deepEqual(lab.kube.deadlines.slice(lab.kube.deadlines.indexOf(moved)), [moved])
+  lab.kube.releaseDeletion()
+  const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended'))
+  const anchor = (await lab.entries(ws)).find((x) => x.kind === 'anchor.received' && x.execution === e.id)
+  assert.ok(anchor)
+  assert.equal(ended.content.anchor, anchor.content.id)
   await sleep(500)
   assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'execution.ended').length, 1)
   const next = await lab.open(ws)
   assert.notEqual(next.id, e.id)
+})
+
+test('L77 the agent answers a prompt with an internal error: the turn failed, execution.lost, its deadline moved to now; the next execution restores its anchor', async (t) => {
+  const { lab, ws, e } = await opened(t, { receiver: true, workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
+  // Control: a turn answered normally grants a lease, and the execution goes on.
+  assert.ok((await lab.write(ws, 'before the failure')).accepted)
+  await lab.turn(ws, 'done')
+  const granted = await until('the lease granted', () => lab.kube.deadlines.findLast((d) => d.name === e.claimName && Date.parse(d.shutdownTime) - d.at >= 50_000))
+  t.diagnostic(`after a normal turn: deadline ${String(Date.parse(granted.shutdownTime) - granted.at)} ms ahead`)
+  assert.equal((await lab.state(ws)).current?.lost, false)
+  const patches = lab.kube.deadlines.length
+  assert.ok((await lab.write(ws, '/fail')).accepted)
+  const turn = await lab.turn(ws, 'failed')
+  assert.equal(String(object(turn.failure)?.code), '-32603')
+  const lost = await until('execution.lost', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.lost'))
+  assert.equal(lost.content.reason, 'agent_failed')
+  assert.equal(lost.execution, e.id)
+  const moved = lab.kube.deadlines.slice(patches).filter((d) => d.name === e.claimName && Date.parse(d.shutdownTime) > d.at - 60_000)
+  const last = moved.at(-1)
+  assert.ok(last && Date.parse(last.shutdownTime) <= last.at, JSON.stringify(moved))
+  t.diagnostic(`after the internal error: deadline ${String(Date.parse(last.shutdownTime) - last.at)} ms from the patch`)
+  assert.deepEqual(await lab.write(ws, 'after the failure'), { accepted: false, reason: 'execution_unavailable' })
+  const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended'))
+  const anchor = (await lab.entries(ws)).find((x) => x.kind === 'anchor.received' && x.execution === e.id)
+  assert.ok(anchor)
+  assert.equal(ended.content.anchor, anchor.content.id)
+  // No renewal after the loss: the move to now is the last deadline of that claim.
+  assert.equal(lab.kube.deadlines.filter((d) => d.name === e.claimName).at(-1), last)
+  const next = await lab.open(ws)
+  assert.notEqual(next.id, e.id)
+  const opening = (await lab.entries(ws)).find((x) => x.kind === 'session.opened' && x.execution === next.id)
+  assert.equal(opening?.content.origin, anchor.content.id)
 })
 
 test('L31 the claim being deleted while its Pod lives, across a restart: admission closed, counted until it disappears', async (t) => {

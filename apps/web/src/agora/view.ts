@@ -183,6 +183,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
 
 const LOST: Record<string, string> = {
   adapter_exited: "The agent's process exited",
+  agent_failed: 'The agent stopped on an internal error',
   claim_missing: 'The sandbox disappeared',
   claim_conflict: 'The sandbox was replaced',
   instance_changed: 'The sandbox was replaced',

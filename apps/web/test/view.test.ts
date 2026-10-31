@@ -217,6 +217,7 @@ test('U10 each notice type: its text', () => {
   assert.equal(noticeText({ type: 'request.failed', reason: 'something_new' }, false), 'A request to the agent failed.')
   assert.equal(noticeText({ type: 'execution.failed', reason: 'startup_failed' }, false), 'The sandbox could not start.')
   assert.equal(noticeText({ type: 'execution.lost', reason: 'claim_missing' }, false), 'The sandbox disappeared. The history is kept.')
+  assert.equal(noticeText({ type: 'execution.lost', reason: 'agent_failed' }, false), 'The agent stopped on an internal error. The history is kept.')
   // No reason code reaches the screen.
   for (const [, text] of notices) assert.doesNotMatch(String(text), /[a-z]+_[a-z]+/)
 })

@@ -30,7 +30,7 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `execution.break` | A connection to the bridge closes, after every line received on it is committed. | The connection, the close code when known, clean or not. |
 | `session.opened` | `session/new`, `session/load` or `session/resume` is answered without error. | The ACP session id, the pool, the harness, the origin: new, or the anchor restored; and the exchanges its first prompt will give and those left out ("Continuing"). |
 | `session.ended` | The execution is lost, failed or ended, or another ACP session replaces this one. | The reason. |
-| `execution.lost` | The adapter died, the bridge instance changed, or the claim conflicts with the record. | The reason. |
+| `execution.lost` | The adapter died, the agent answered a prompt with an internal error (JSON-RPC `-32603`), the bridge instance changed, or the claim conflicts with the record. | The reason. |
 | `execution.failed` | Startup or restoration cannot complete. | The reason and the request position when there is one. |
 | `anchor.received` | An authenticated anchor is stored. | Its id; never its bytes. |
 | `execution.ended` | The claim has disappeared. | The reason, and the anchor received if any. |
@@ -89,7 +89,7 @@ later valid answer still resolves it.
 Closed reasons: `invalid_utf8`, `invalid_json`, `invalid_envelope`, `batch`, `wrong_direction`,
 `invalid_body`, `unsafe_id`, `line_too_large`, `unsupported_json_value`, `transport_error`,
 `response_timeout`, `deadline_refused`, `startup_failed`, `restore_failed`, `claim_conflict`,
-`claim_missing`, `adapter_exited`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`,
+`claim_missing`, `adapter_exited`, `agent_failed`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`,
 `anchor_missing`, `credentials_refused`. No parser, database or transport message becomes a reason.
 
 ### Dispatch and recovery
@@ -446,7 +446,7 @@ exception message.
 | L27 | Migrations run at once in two databases of one cluster | Both succeed; no existing role gains a privilege. |
 | L28 | Prompts, tool content, tokens, headers, query strings, anchor bytes and exception messages fed to every logger entry point | None of them, nor a fragment, is emitted. |
 | L29 | An anchor stored without its `anchor.received` | One `anchor.received` appended at the next start, before the anchor is exposed. |
-| L30 | The adapter dies | `execution.lost`; no dispatch or renewal; the execution counted and Create refused until the claim disappears; then one `execution.ended`, and a new execution can be created. |
+| L30 | The adapter dies | `execution.lost` (`adapter_exited`); no dispatch; the deadline moved once, to now, and no other renewal; the execution counted and Create refused until the claim disappears; then one `execution.ended` naming the anchor received, and a new execution can be created. |
 | L31 | The claim is being deleted while its Pod lives, across a restart | Admission closed; the execution counted and Create refused until the claim disappears. |
 | L32 | A Pod pushes its anchor after a restart, with no connection open | Stored, attributed to the original Session, one `anchor.received`; a push whose Pod UID differs is refused. |
 | L33 | The same opening or final answer received twice, including after the end of the execution | Each captured; the first valid applies once; no Session reopened. |
@@ -493,6 +493,7 @@ exception message.
 | L74 | The same Ask again under its id, once answered | Its first answer; no second question. |
 | L75 | The account, with the proxy's identity and without | The e-mail; null. |
 | L76 | A Workstream of the person's, one of their agents' folder, one of someone else's folder: lists with and without `folder=agents`, for each, an unknown folder; without the proxy | The person's list its own only; their folder its own only; someone else's folder theirs only; 400 `unknown_folder`; every Workstream. |
+| L77 | The agent answers a prompt with an internal error (JSON-RPC `-32603`), its adapter still running; before it, a turn answered normally | The normal turn grants a lease and the execution goes on. Then the turn failed with that error; `execution.lost` (`agent_failed`); Write refused; the deadline moved to now, the last one set; `execution.ended` naming the anchor received; the next execution restores that anchor. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and
