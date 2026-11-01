@@ -258,13 +258,28 @@ export class LogStore {
   async close(): Promise<void> {
     await Promise.all([this.writer.end(), this.projector.end(), this.anchors.end()])
   }
-  async create(workstream: string, owner: string): Promise<void> {
-    await this.writer.query('INSERT INTO workstreams(id,owner) VALUES($1,$2) ON CONFLICT DO NOTHING', [
+  /**
+   * Creates a Workstream (docs/specs/log.md, "HTTP"). With a parent, a sub-stream of it ("Sub-streams"): the
+   * parent's owner, root and depth plus one, the parent one of `allowed` owners when they are given.
+   */
+  async create(workstream: string, owner: string | null, parent: string | null = null, allowed: readonly string[] | null = null): Promise<void> {
+    let line: { owner: string; root: string | null; depth: number }
+    if (parent === null) line = { owner: uuid(owner), root: null, depth: 0 }
+    else {
+      const found = await this.writer.query('SELECT owner, coalesce(root,id) AS root, depth FROM workstreams WHERE id=$1', [uuid(parent)])
+      const p = found.rows[0] as { owner: string; root: string; depth: number } | undefined
+      if (!p || (allowed !== null && !allowed.includes(p.owner))) throw new Error('unknown_parent')
+      line = { owner: p.owner, root: p.root, depth: p.depth + 1 }
+    }
+    await this.writer.query('INSERT INTO workstreams(id,owner,parent,root,depth) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [
       uuid(workstream),
-      uuid(owner),
+      line.owner,
+      parent,
+      line.root,
+      line.depth,
     ])
-    const result = await this.writer.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])
-    if (result.rows[0].owner !== owner) throw new Error('workstream_conflict')
+    const result = await this.writer.query('SELECT owner, parent FROM workstreams WHERE id=$1', [workstream])
+    if (result.rows[0].owner !== line.owner || result.rows[0].parent !== parent) throw new Error('workstream_conflict')
   }
   async workstreams(): Promise<string[]> {
     return (await this.writer.query('SELECT id FROM workstreams ORDER BY id')).rows.map((r) => r.id as string)

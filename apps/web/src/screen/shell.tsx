@@ -10,7 +10,7 @@ import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
-import { useSearch, type ListFeed } from '../agora/hooks.ts'
+import { useList, useSearch, type ListFeed } from '../agora/hooks.ts'
 import { useAgora } from '../agora/runtime.tsx'
 import { harnessName, merged, sections, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
@@ -71,25 +71,131 @@ const DOT: Partial<Record<WorkstreamState, string>> = {
   failed: 'bg-destructive',
 }
 
-const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void }> = ({ w, active, onOpen }) => (
-  <button
-    type="button"
-    onClick={onOpen}
-    title={`${harnessName(w.harness)} · ${w.state}`}
-    aria-current={active ? 'page' : undefined}
-    className={cn(
-      'rounded-control flex h-8 w-full shrink-0 items-center gap-2 px-2 text-left text-[13px] transition-colors',
-      active ? 'bg-foreground/[0.06] text-foreground' : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
-    )}
-  >
-    <span className="min-w-0 flex-1 truncate">{w.title}</span>
-    {w.question ? (
-      <span className="text-primary shrink-0 text-[11px] font-medium">waiting for you</span>
-    ) : (
-      DOT[w.state] && <span aria-label={w.state} className={cn('size-1.5 shrink-0 rounded-full', DOT[w.state])} />
-    )}
-  </button>
-)
+/** What a folded row shows of what lies under it: one waiting for the person first, else how many are live, else how many. */
+const Below: FC<{ below: NonNullable<ListRow['below']> }> = ({ below }) =>
+  below.live > 0 ? (
+    <span className="text-muted-foreground shrink-0 text-[11px] tabular-nums">{below.live} active</span>
+  ) : (
+    <span className="text-muted-foreground/70 shrink-0 text-[11px] tabular-nums">{below.count}</span>
+  )
+
+/**
+ * A row of the list (docs/specs/assistant-ui.md, "Sidebar"): its title, and its state's dot or "waiting for
+ * you". A row with sub-streams has a chevron before it; folded, what lies under it shows at its end.
+ */
+const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open: boolean; toggle: () => void } }> = ({ w, active, onOpen, fold }) => {
+  const folded = fold !== undefined && !fold.open && w.below !== undefined
+  const waiting = w.question || (folded && w.below!.waiting > 0)
+  return (
+    <div
+      className={cn(
+        'rounded-control flex h-8 w-full shrink-0 items-center text-[13px] transition-colors',
+        active ? 'bg-foreground/[0.06] text-foreground' : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
+      )}
+    >
+      {fold ? (
+        <button
+          type="button"
+          onClick={fold.toggle}
+          aria-label={fold.open ? 'Fold' : 'Unfold'}
+          aria-expanded={fold.open}
+          className="hover:text-foreground grid h-8 w-5 shrink-0 place-items-center pl-1.5"
+        >
+          <ChevronRightIcon className={cn('size-3.5 transition-transform', fold.open && 'rotate-90')} />
+        </button>
+      ) : (
+        <span aria-hidden className="w-5 shrink-0" />
+      )}
+      <button
+        type="button"
+        onClick={onOpen}
+        title={`${harnessName(w.harness)} · ${w.state}`}
+        aria-current={active ? 'page' : undefined}
+        className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-1 text-left"
+      >
+        <span className="min-w-0 flex-1 truncate">{w.title}</span>
+        {waiting ? (
+          <span className="text-primary shrink-0 text-[11px] font-medium">waiting for you</span>
+        ) : (
+          <>
+            {DOT[w.state] && <span aria-label={w.state} className={cn('size-1.5 shrink-0 rounded-full', DOT[w.state])} />}
+            {folded && <Below below={w.below!} />}
+          </>
+        )}
+      </button>
+    </div>
+  )
+}
+
+const FOLDS_KEY = 'agora:unfolded'
+/** The rows unfolded, remembered in the browser; the open Workstream's parents unfold by themselves. */
+function useFolds(line: readonly ListRow[]): { isOpen: (id: string) => boolean; toggle: (id: string) => void } {
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(FOLDS_KEY) ?? '[]') as string[])
+    } catch {
+      return new Set()
+    }
+  })
+  const keep = (next: ReadonlySet<string>) => {
+    setUnfolded(next)
+    try {
+      localStorage.setItem(FOLDS_KEY, JSON.stringify([...next]))
+    } catch {
+      // Remembered for this page only.
+    }
+  }
+  useEffect(() => {
+    if (line.some((r) => !unfolded.has(r.id))) keep(new Set([...unfolded, ...line.map((r) => r.id)]))
+    // Only a new line unfolds: folding a parent of the open one stays folded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [line])
+  return {
+    isOpen: (id) => unfolded.has(id),
+    toggle: (id) => {
+      const next = new Set(unfolded)
+      if (!next.delete(id)) next.add(id)
+      keep(next)
+    },
+  }
+}
+
+type Folds = ReturnType<typeof useFolds>
+
+/** A row and, unfolded, its sub-streams below it, read from its own list, folded in turn. */
+const Branch: FC<{ w: ListRow; folds: Folds; onNavigate: () => void }> = ({ w, folds, onNavigate }) => {
+  const { id, open } = useAgora()
+  const parent = (w.below?.count ?? 0) > 0
+  const unfolded = parent && folds.isOpen(w.id)
+  return (
+    <div className="flex flex-col gap-0.5">
+      <Item
+        w={w}
+        active={w.id === id}
+        onOpen={() => {
+          open(w.id)
+          onNavigate()
+        }}
+        fold={parent ? { open: unfolded, toggle: () => folds.toggle(w.id) } : undefined}
+      />
+      {unfolded && <SubStreams parent={w.id} folds={folds} onNavigate={onNavigate} />}
+    </div>
+  )
+}
+
+/** A Workstream's sub-streams, as its list gives them (docs/specs/log.md, "The list"), indented under it. */
+const SubStreams: FC<{ parent: string; folds: Folds; onNavigate: () => void }> = ({ parent, folds, onNavigate }) => {
+  const { api } = useAgora()
+  const list = useList(api, null, true, parent)
+  return (
+    <div role="group" className="border-foreground/10 ml-[11px] flex flex-col gap-0.5 border-l pl-1">
+      {list.rows.map((w) => (
+        <Branch key={w.id} w={w} folds={folds} onNavigate={onNavigate} />
+      ))}
+      {!list.end && <End key={list.rows.length} onVisible={list.more} />}
+    </div>
+  )
+}
 
 /**
  * The end of a list (docs/specs/assistant-ui.md, "Sidebar"): in view, its next page is read. Given a new
@@ -224,12 +330,13 @@ const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, 
 }
 
 const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
-  const { api, list, id, open } = useAgora()
+  const { api, list, id, open, line } = useAgora()
+  const folds = useFolds(line)
   const [search, setSearch] = useState('')
   // A search: the server's rows whose title holds the text, with the loaded ones that do (docs/specs/assistant-ui.md, "Sidebar").
   const found = useSearch(api, null, search)
   const rows = useMemo(() => (found ? merged(list.rows, found.rows) : list.rows), [found, list.rows])
-  const groups = useMemo(() => sections(rows, new Date(), search, id), [rows, search, id])
+  const groups = useMemo(() => sections(rows, new Date(), search, id, line.map((r) => r.id)), [rows, search, id, line])
   const feed = feedOf(search, list, found)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -265,17 +372,22 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
           <section key={g.label}>
             <p className="text-muted-foreground mt-5 mb-1 px-2 text-xs font-medium">{g.label}</p>
             <div className="flex flex-col gap-0.5">
-              {g.workstreams.map((w) => (
-                <Item
-                  key={w.id}
-                  w={w}
-                  active={w.id === id}
-                  onOpen={() => {
-                    open(w.id)
-                    onNavigate()
-                  }}
-                />
-              ))}
+              {g.workstreams.map((w) =>
+                // A search shows what it found as it is, sub-streams among the roots.
+                search.trim() === '' ? (
+                  <Branch key={w.id} w={w} folds={folds} onNavigate={onNavigate} />
+                ) : (
+                  <Item
+                    key={w.id}
+                    w={w}
+                    active={w.id === id}
+                    onOpen={() => {
+                      open(w.id)
+                      onNavigate()
+                    }}
+                  />
+                ),
+              )}
             </div>
           </section>
         ))}
@@ -300,12 +412,21 @@ const STATE_LABEL: Partial<Record<WorkstreamState, string>> = {
 }
 
 const Title: FC = () => {
-  const { id, view, pending, send, connection } = useAgora()
+  const { id, view, pending, send, connection, line, open } = useAgora()
   const stoppable = view.execution !== null && ['starting', 'ready', 'interrupted', 'lost'].includes(view.state)
   if (id === null) return <span className="min-w-0 flex-1 truncate text-[13px] font-medium">New workstream</span>
   const state = pending ? 'starting' : view.state
   return (
     <>
+      {line.map((parent, i) => (
+        // Its parents, each opening its Workstream; on a phone, the nearest only.
+        <span key={parent.id} className={cn('flex min-w-0 shrink items-center gap-1', i < line.length - 1 && 'max-sm:hidden')}>
+          <button type="button" onClick={() => open(parent.id)} className="text-muted-foreground hover:text-foreground min-w-0 max-w-40 truncate text-[13px]">
+            {parent.title}
+          </button>
+          <ChevronRightIcon aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
+        </span>
+      ))}
       <span className="min-w-0 truncate text-[13px] font-medium">{pending ? pending.text.split('\n')[0] : view.title}</span>
       {STATE_LABEL[state] && (
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">

@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U55: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U58: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -974,5 +974,77 @@ test('U55 the title of a Workstream not loaded typed in Search, in another case:
   await page.getByLabel('Search the workstreams').fill('')
   await until('the list as before', async () => (await listItems(page).count()) === 50)
   assert.equal(await nav.getByText('Quarterly Kubernetes audit').count(), 0)
+  await page.context().close()
+})
+
+/** A Workstream of the tree, owned by `owner` or under `parent`, with a question that stays pending, or answered. */
+async function grown(id: string, at: { owner?: string; parent?: string }, waiting = false): Promise<void> {
+  assert.equal((await server.post('/api/workstreams', { id, ...at })).status, 200)
+  const asked = await server.command(id, 'Ask', {}, listed)
+  assert.equal(asked.status, 200)
+  if (!waiting) assert.equal((await server.command(id, 'Answer', { question: String(asked.body.position) }, { optionId: 'a' })).status, 200)
+}
+
+test('U56 a root whose sub-stream two levels down waits: folded, a chevron and "waiting for you"; unfolded, its sub-streams, then the one under the first', async () => {
+  const email = 'tree@example.org'
+  const [root, first, second, under] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()]
+  await grown(root, { owner: identity('owner', email) })
+  await grown(first, { parent: root })
+  await grown(second, { parent: root })
+  await grown(under, { parent: first }, true)
+  const page = await proxied(email)
+  await page.goto(`${server.url}/`)
+  const nav = page.getByRole('navigation', { name: 'Workstreams' })
+  await until('the root alone', async () => (await listItems(page).count()) === 1)
+  await nav.getByText('waiting for you').waitFor()
+  assert.equal(await nav.getByRole('button', { name: 'Unfold' }).getAttribute('aria-expanded'), 'false')
+  await nav.getByRole('button', { name: 'Unfold' }).click()
+  await until('its two sub-streams', async () => (await listItems(page).count()) === 3)
+  // The first's own sub-stream behind its chevron, still waiting.
+  const inner = nav.getByRole('group').getByRole('button', { name: 'Unfold' })
+  assert.equal(await inner.count(), 1)
+  await inner.click()
+  await until('the one under the first', async () => (await listItems(page).count()) === 4)
+  assert.equal(await nav.getByRole('group').getByRole('group').locator('button[title]').count(), 1)
+  await nav.getByRole('group').getByRole('group').getByText('waiting for you').waitFor()
+  await page.context().close()
+})
+
+test('U57 a sub-stream under a folded root asks a question from another client: the root first, waiting for you, without a reload', async () => {
+  const email = 'tree-live@example.org'
+  const [root, sub, other] = [randomUUID(), randomUUID(), randomUUID()]
+  await grown(root, { owner: identity('owner', email) })
+  await grown(sub, { parent: root })
+  // Another root, more recent, its question pending: listed, first.
+  await grown(other, { owner: identity('owner', email) }, true)
+  const page = await proxied(email)
+  const reads = listReads(page)
+  await page.goto(`${server.url}/w/${root}`)
+  await until('both roots', async () => (await listItems(page).count()) === 2)
+  assert.equal(await listItems(page).nth(1).getAttribute('aria-current'), 'page')
+  const waiting = page.getByRole('navigation', { name: 'Workstreams' }).getByText('waiting for you')
+  assert.equal(await waiting.count(), 1)
+  assert.equal((await server.command(sub, 'Ask', {}, listed)).status, 200)
+  await until('the root first', async () => (await listItems(page).nth(0).getAttribute('aria-current')) === 'page', 10_000)
+  await until('the folded root waiting', async () => (await waiting.count()) === 2)
+  assert.deepEqual([...reads].sort(), ['folder', 'list'])
+  await page.context().close()
+})
+
+test('U58 a sub-stream two levels down opened by its address: its line unfolds; the header names its two parents, each opening its Workstream', async () => {
+  const email = 'tree-open@example.org'
+  const [root, first, under] = [randomUUID(), randomUUID(), randomUUID()]
+  await grown(root, { owner: identity('owner', email) })
+  await grown(first, { parent: root })
+  await grown(under, { parent: first })
+  const page = await proxied(email)
+  await page.goto(`${server.url}/w/${under}`)
+  await until('its line unfolded', async () => (await listItems(page).count()) === 3)
+  const nav = page.getByRole('navigation', { name: 'Workstreams' })
+  assert.equal(await nav.getByRole('group').getByRole('group').locator('[aria-current="page"]').count(), 1)
+  const parents = page.locator('header button', { hasText: 'New workstream' })
+  await until('two parents in the header', async () => (await parents.count()) === 2)
+  await parents.first().click()
+  await page.waitForURL(new RegExp(`/w/${root}$`))
   await page.context().close()
 })

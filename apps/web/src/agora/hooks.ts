@@ -31,25 +31,25 @@ const UNKNOWN: Older = { rows: [], next: null, known: false }
 const rowsOf = (state: ThreadState): ListRow[] => [...state.objects.values()].map((o) => o.object as unknown as ListRow)
 
 /** A page read once at a time; a page for a cursor no longer wanted is dropped. */
-function usePages(api: Api, folder: Folder | null, title: string, older: Older, onPage: (at: string, page: Page) => void): () => void {
+function usePages(api: Api, folder: Folder | null, title: string, older: Older, onPage: (at: string, page: Page) => void, parent: string | null = null): () => void {
   const reading = useRef(false)
   return useCallback(() => {
     const at = older.next
     if (reading.current || at === null) return
     reading.current = true
     void api
-      .page(folder, at, title)
+      .page(folder, at, title, parent)
       .then((page) => onPage(at, page), () => undefined)
       .finally(() => (reading.current = false))
-  }, [api, folder, title, older.next, onPage])
+  }, [api, folder, title, older.next, onPage, parent])
 }
 
 /**
- * A list of the person's (docs/specs/assistant-ui.md, "The exchanges"), or one of their folders': its
- * most recent rows then each change, read as the thread is and never fetched again whole; below them,
- * the older rows a page at a time.
+ * A list of the person's (docs/specs/assistant-ui.md, "The exchanges"), one of their folders', or a
+ * Workstream's sub-streams: its most recent rows then each change, read as the thread is and never
+ * fetched again whole; below them, the older rows a page at a time.
  */
-export function useList(api: Api, folder: Folder | null = null, enabled = true): ListFeed {
+export function useList(api: Api, folder: Folder | null = null, enabled = true, parent: string | null = null): ListFeed {
   const [state, setState] = useState<ThreadState>(empty)
   const [older, setOlder] = useState<Older>(UNKNOWN)
   useEffect(() => {
@@ -58,7 +58,7 @@ export function useList(api: Api, folder: Folder | null = null, enabled = true):
     if (!enabled) return
     let first = true
     const stream = new ThreadStream(empty, {
-      url: (cursor) => api.listUrl(folder, cursor),
+      url: (cursor) => api.listUrl(folder, cursor, parent),
       onChange: (next) => {
         setState(next)
         // Below the first snapshot's oldest row, the older pages; none below fewer than a page. A row read
@@ -72,9 +72,9 @@ export function useList(api: Api, folder: Folder | null = null, enabled = true):
     })
     stream.start()
     return () => stream.stop()
-  }, [api, folder, enabled])
+  }, [api, folder, enabled, parent])
   const onPage = useCallback((at: string, page: Page) => setOlder((o) => (o.next === at ? { rows: [...o.rows, ...page.rows], next: page.next, known: true } : o)), [])
-  const more = usePages(api, folder, '', older, onPage)
+  const more = usePages(api, folder, '', older, onPage, parent)
   const rows = useMemo(() => merged(rowsOf(state), older.rows), [state, older.rows])
   return { rows, more, end: older.known && older.next === null }
 }
@@ -110,6 +110,34 @@ export function useSearch(api: Api, folder: Folder | null, text: string, enabled
   const more = usePages(api, folder, found?.text ?? '', older, onPage)
   if (wanted === '' || found === null) return null
   return { text: found.text, rows: found.older.rows, more, end: found.older.next === null }
+}
+
+/**
+ * The open Workstream's parents, its root first (docs/specs/assistant-ui.md, "Header"): its row, then each
+ * parent's, read one at a time; none for a root.
+ */
+export function useLine(api: Api, id: string | null): readonly ListRow[] {
+  const [line, setLine] = useState<readonly ListRow[]>([])
+  useEffect(() => {
+    setLine([])
+    if (id === null) return
+    let live = true
+    void (async () => {
+      const up: ListRow[] = []
+      let row = await api.row(id)
+      while (live && row?.parent) {
+        const parent: ListRow | null = await api.row(row.parent)
+        if (parent === null) break
+        up.unshift(parent)
+        row = parent
+      }
+      if (live) setLine(up)
+    })().catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [api, id])
+  return line
 }
 
 const KEY = (id: string) => `agora:thread:${id}`
