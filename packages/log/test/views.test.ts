@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { canonical, core, CoreProjection, decode, encode, fromFold, hash, identity, LogStore, object, project, Projections, ThreadClient, type Entry, type ProjectedObject } from '../src/index.ts'
-import { call, database, expire, Lab, opened, readThread, sleep, until } from './support.ts'
+import { call, database, expire, Lab, opened, readThread, sleep, until, view } from './support.ts'
 
 test('L22 the real claude-code transcript, folded incrementally and through a rebuild, gives the recorded hash', async (t) => {
   const fixture = decode(await readFile(new URL('fixtures/claude-code.json', import.meta.url), 'utf8')) as {
@@ -132,7 +132,6 @@ test('L24 the thread read while updates commit, cut before snapshot-end, then re
 })
 
 // docs/specs/log.md, "The Workstream view", "Notices" and "HTTP": what the client reads of a Workstream.
-const views = async (lab: Lab) => (await call(lab.url, 'GET', '/api/workstreams')).body.workstreams as Record<string, unknown>[]
 /** The Workstream view through the entries, one at a time, as the projector folds them. */
 function viewsOver(entries: readonly Entry[]): Record<string, unknown>[] {
   const projection = new CoreProjection()
@@ -147,17 +146,34 @@ function viewsOver(entries: readonly Entry[]): Record<string, unknown>[] {
 const sessionInfo = (acpId: string, title: string) =>
   `/raw ${Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acpId, update: { sessionUpdate: 'session_info_update', title } } })).toString('base64')}`
 
-test('L42 Workstreams listed while one changes: every view, a new one first, then the one changed last', async (t) => {
-  const { lab, ws } = await opened(t)
-  const second = await lab.workstream()
+test('L42 Workstreams of one owner listed while one changes: none without an entry, the one changed last first', async (t) => {
+  const db = await database()
+  const lab = await Lab.start({ db })
+  t.after(async () => {
+    await lab.close()
+    await db.drop()
+  })
+  const owner = randomUUID()
+  const first = await lab.workstream(owner)
+  await lab.open(first)
+  const second = await lab.workstream(owner)
   await lab.open(second)
-  const fresh = await lab.workstream()
-  assert.deepEqual((await views(lab)).map((v) => v.id), [fresh, second, ws])
-  assert.equal((await views(lab))[0]!.state, 'none')
-  assert.ok((await lab.write(ws, 'a change')).accepted)
-  const listed = await views(lab)
-  assert.deepEqual(listed.map((v) => v.id), [fresh, ws, second])
-  assert.deepEqual(listed.map((v) => v.title), ['New workstream', 'a change', 'New workstream'])
+  const fresh = await lab.workstream(owner)
+  const listed = async () => (await call(lab.url, 'GET', `/api/workstreams/page?owner=${owner}`)).body.rows as { id: string; title: string }[]
+  assert.deepEqual((await listed()).map((r) => r.id), [second, first])
+  assert.ok((await lab.write(first, 'a change')).accepted)
+  const changed = await until('the change listed first', async () => {
+    const rows = await listed()
+    return rows[0]?.id === first ? rows : null
+  })
+  assert.deepEqual(
+    changed.map((r) => [r.id, r.title]),
+    [
+      [first, 'a change'],
+      [second, 'New workstream'],
+    ],
+  )
+  assert.ok(!changed.some((r) => r.id === fresh))
 })
 
 test('L43 a Workstream through Create, a Session, a break, Stop and its end: the view\'s state, fields and title', async (t) => {
@@ -168,7 +184,7 @@ test('L43 a Workstream through Create, a Session, a break, Stop and its end: the
     await db.drop()
   })
   const ws = await lab.workstream()
-  assert.equal((await views(lab)).find((v) => v.id === ws)?.state, 'none')
+  assert.equal(await view(lab.url, ws), undefined, 'no view before the first entry')
   const e = await lab.open(ws)
   assert.ok((await lab.write(ws, 'Fix the login page\nwith a second line')).accepted)
   await lab.turn(ws, 'done')
@@ -192,7 +208,7 @@ test('L43 a Workstream through Create, a Session, a break, Stop and its end: the
     [...new Set(seen.map((v) => v.title))],
     ['New workstream', 'Fix the login page', 'The agent names it'],
   )
-  const last = (await views(lab)).find((v) => v.id === ws)!
+  const last = (await view(lab.url, ws))!
   assert.deepEqual(
     [last.state, last.pool, last.harness, last.execution, last.session, last.anchor, last.title],
     ['ended', 'mock-test', 'mock', e.id, null, ended.content.anchor, 'The agent names it'],
@@ -251,7 +267,7 @@ test('L45 a Workstream created through the proxy: owned by the identity it passe
   assert.equal(await create(ws, 'someone@example.org'), 409)
 })
 
-test('L56 Workstreams listed by identity: each sees its own; without one, every Workstream', async (t) => {
+test('L56 Workstreams listed by identity: each sees its own; without one, the owner given', async (t) => {
   const db = await database()
   const lab = await Lab.start({ db })
   t.after(async () => {
@@ -264,21 +280,26 @@ test('L56 Workstreams listed by identity: each sees its own; without one, every 
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify({ id, ...body }),
     }).then((r) => r.status)
-  const list = (headers: Record<string, string>) =>
-    fetch(`${lab.url}/api/workstreams`, { headers })
-      .then((r) => r.json() as Promise<{ workstreams: { id: string }[] }>)
-      .then((r) => r.workstreams.map((v) => v.id).sort())
+  const list = (headers: Record<string, string>, query = '') =>
+    fetch(`${lab.url}/api/workstreams/page${query}`, { headers }).then(async (r) =>
+      r.status === 200 ? ((await r.json()) as { rows: { id: string }[] }).rows.map((v) => v.id).sort() : [r.status, ((await r.json()) as { reason: string }).reason],
+    )
   const a = 'operator@example.org',
     b = 'someone@example.org'
   const [a1, a2, b1, other] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()]
+  const elsewhere = randomUUID()
   assert.equal(await create(a1, { 'x-forwarded-email': a }), 200)
   assert.equal(await create(a2, { 'x-forwarded-email': a }, { owner: randomUUID() }), 200)
   assert.equal(await create(b1, { 'x-forwarded-email': b }), 200)
-  assert.equal(await create(other, {}, { owner: randomUUID() }), 200)
+  assert.equal(await create(other, {}, { owner: elsewhere }), 200)
+  // Listed once they have an entry: a question each.
+  const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
+  for (const id of [a1, a2, b1, other]) assert.ok((await lab.command(id, 'Ask', {}, ask)).accepted)
   assert.deepEqual(await list({ 'x-forwarded-email': a }), [a1, a2].sort())
   assert.deepEqual(await list({ 'x-forwarded-email': b }), [b1])
   assert.deepEqual(await list({ 'x-forwarded-email': 'nobody@example.org' }), [])
-  assert.deepEqual(await list({}), [a1, a2, b1, other].sort())
+  assert.deepEqual(await list({}, `?owner=${elsewhere}`), [other])
+  assert.deepEqual(await list({}), [400, 'invalid_identifier'])
 })
 
 test('L46 Agora started after its core projector changed version: a Workstream no longer followed is rebuilt too', async (t) => {
@@ -288,13 +309,16 @@ test('L46 Agora started after its core projector changed version: a Workstream n
   await context.lab.turn(ws, 'done')
   await context.lab.command(ws, 'Stop', { execution: e.id })
   await expire(context.lab.kube, e.claimName)
-  await until('ended and projected', async () => (await views(context.lab)).find((v) => v.id === ws)?.state === 'ended')
+  await until('ended and projected', async () => (await view(context.lab.url, ws))?.state === 'ended')
   // As an older version of the projector left it.
   await db.admin.query("UPDATE checkpoints SET version='0' WHERE workstream=$1 AND projector='core'", [ws])
   await db.admin.query(`UPDATE objects SET object='{"title":"Workstream"}'::jsonb WHERE workstream=$1 AND projector='core' AND kind='workstream'`, [ws])
   context.lab = await context.lab.restart('clean')
-  const view = await until('rebuilt', async () => (await views(context.lab)).find((v) => v.id === ws && v.state === 'ended'), 10_000)
-  assert.equal(view.title, 'before the upgrade')
+  const rebuilt = await until('rebuilt', async () => {
+    const v = await view(context.lab.url, ws)
+    return v?.state === 'ended' ? v : undefined
+  }, 10_000)
+  assert.equal(rebuilt.title, 'before the upgrade')
   const { rows } = await db.admin.query("SELECT version FROM checkpoints WHERE workstream=$1 AND projector='core'", [ws])
   assert.equal(rows[0].version, core.version)
 })

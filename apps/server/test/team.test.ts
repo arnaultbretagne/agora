@@ -94,9 +94,8 @@ test('F22 a team launched from Agora: the lead\'s Workstream the person\'s, the 
     parameters: { goal: 'Make uploads reliable', lead_workstream: id, owner: identity('owner', PERSON), members_owner: folderOwner('agents', PERSON) },
     idempotency_key: `agora-team-${id}`,
   })
-  // The person's Workstream, in their list.
-  const mine = (await (await fetch(`${server.url}/api/workstreams`, { headers: { 'x-forwarded-email': PERSON } })).json()) as { workstreams: { id: string }[] }
-  assert.ok(mine.workstreams.some((w) => w.id === id))
+  // The person's Workstream.
+  assert.equal((await db.admin.query('SELECT owner FROM workstreams WHERE id=$1', [id])).rows[0]?.owner, identity('owner', PERSON))
   // Sent again: the same run.
   const again = await launch({ id, goal: 'Make uploads reliable' })
   assert.deepEqual([again.status, again.body.flowRun], [200, first.body.flowRun])

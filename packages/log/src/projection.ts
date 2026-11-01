@@ -359,20 +359,23 @@ export class Projections {
     )
     return rows.rows.map((r) => ({ ...r, object: decode(r.object) })) as ProjectedObject[]
   }
-  /** docs/specs/log.md, "HTTP": the Workstreams' views, an owner's or every one, the most recently changed first. */
-  async views(owner?: string): Promise<Record<string, unknown>[]> {
+  /**
+   * docs/specs/log.md, "HTTP" (`GET /api/pools`): per pool and per harness, the view most recently changed
+   * among those with a Session's settings — what its last Session gave. Only those views leave PostgreSQL.
+   */
+  async lastSessions(): Promise<{ pools: Map<string, Record<string, unknown>>; harnesses: Map<string, Record<string, unknown>> }> {
     const rows = await this.store.projector.query(
-      "SELECT w.id, o.object::text AS object FROM workstreams w LEFT JOIN objects o ON o.workstream=w.id AND o.kind='workstream' AND o.projector=$1" +
-        (owner === undefined ? '' : ' WHERE w.owner=$2'),
-      owner === undefined ? [core.name] : [core.name, owner],
+      `SELECT DISTINCT ON (scope, name) scope, name, object::text AS object FROM (
+         SELECT 'pool' AS scope, object->>'pool' AS name, object FROM objects WHERE kind='workstream' AND projector=$1 AND jsonb_typeof(object->'settings')='array'
+         UNION ALL
+         SELECT 'harness', object->>'harness', object FROM objects WHERE kind='workstream' AND projector=$1 AND jsonb_typeof(object->'settings')='array'
+       ) settled WHERE name IS NOT NULL ORDER BY scope, name, (object->>'changedAt')::timestamptz DESC NULLS LAST`,
+      [core.name],
     )
-    // A Workstream with no entry yet has no view: listed as new, first.
-    const views = rows.rows.map((r) =>
-      r.object === null
-        ? { id: r.id as string, title: 'New workstream', state: 'none', execution: null, session: null, pool: null, harness: null, anchor: null, changedAt: null }
-        : (decode(r.object as string) as Record<string, unknown>),
-    )
-    return views.sort((a, b) => (a.changedAt === null ? -1 : b.changedAt === null ? 1 : String(b.changedAt).localeCompare(String(a.changedAt))))
+    const last = { pools: new Map<string, Record<string, unknown>>(), harnesses: new Map<string, Record<string, unknown>>() }
+    for (const r of rows.rows as { scope: string; name: string; object: string }[])
+      (r.scope === 'pool' ? last.pools : last.harnesses).set(r.name, decode(r.object) as Record<string, unknown>)
+    return last
   }
 
   async snapshot(workstream: string, after: string): Promise<{ rows: ThreadRow[]; end: string }> {

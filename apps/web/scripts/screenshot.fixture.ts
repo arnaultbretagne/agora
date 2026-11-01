@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { cluster, database, Server, until } from '../../../packages/log/test/support.ts'
+import { cluster, database, Server, until, view as viewOf } from '../../../packages/log/test/support.ts'
 import { NOBODY } from '../src/agora/api.ts'
 
 const shell = join(homedir(), '.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell')
@@ -31,8 +31,10 @@ test('screenshots of the client', { timeout: 40 * 60_000 }, async (t) => {
   await server.post('/api/workstreams', { id: ws, owner: NOBODY })
   shoot(`${server.url}/w/${ws}`, '1-new.png')
   await server.command(ws, 'Create', {}, { pool: 'mock-test' })
-  const views = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: Record<string, unknown>[] }).workstreams
-  const view = await until('ready', async () => (await views()).find((v) => v.id === ws && v.state === 'ready'))
+  const view = await until('ready', async () => {
+    const v = await viewOf(server.url, ws)
+    return v?.state === 'ready' ? v : undefined
+  })
   const entries = async () => (await (await fetch(`${server.url}/api/workstreams/${ws}/entries`)).json()) as Record<string, unknown>[]
   const answered = async () => (await entries()).filter((e) => e.direction === 'in' && e.correlated_method === 'session/prompt').length
   const write = async (text: string) => server.command(ws, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text }] })

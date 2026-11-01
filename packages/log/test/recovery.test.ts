@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { ANCHOR_FORMAT, checksumOf } from '@agora/harness-bridge/anchor'
 import { LogStore, object, type Entry, type Execution } from '../src/index.ts'
-import { cluster, database, type Db, expire, Lab, lines, opened, Server, sleep, terminate, until } from './support.ts'
+import { cluster, database, type Db, expire, Lab, lines, opened, Server, sleep, terminate, until, view } from './support.ts'
 
 interface Served {
   readonly db: Db
@@ -50,10 +50,7 @@ async function open(run: Served, body: Record<string, unknown> = {}): Promise<Ex
   })
   // The mock gives its commands right after the Session opens: waited for in the projected view, as in
   // Lab.open, so that their capture has returned.
-  await until('the agent commands', async () => {
-    const views = (await (await fetch(`${run.server.url}/api/workstreams`)).json()) as { workstreams: { id: string; commands?: unknown[] }[] }
-    return (views.workstreams.find((w) => w.id === run.ws)?.commands?.length ?? 0) > 0
-  })
+  await until('the agent commands', async () => (((await view(run.server.url, run.ws))?.commands as unknown[] | undefined)?.length ?? 0) > 0)
   return { ...(await run.reader.state(run.ws)).current! }
 }
 
