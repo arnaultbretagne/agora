@@ -271,16 +271,23 @@ test('L84 back-filling gives each Workstream with a view and no row its row once
   assert.deepEqual(titles(read.snapshot), ['C', 'B', 'A'])
 })
 
-test('L85 two Workstreams of one owner projected at the same time: both rows, distinct positions, in their order', async (t) => {
+test('L85 two Workstreams of one owner projected at the same time, the list read live: both rows, distinct positions, in their order', async (t) => {
   const b = await bench(t)
   const owner = randomUUID()
   const first = await b.workstream(owner, { title: 'First' })
   const second = await b.workstream(owner, { title: 'Second' })
   await b.write(first, { state: 'starting' }, false)
   await b.write(second, { state: 'starting' }, false)
-  await Promise.all([b.projections.run(first, views), b.projections.run(second, views)])
-  const read = await readList(b.url, `after=2&owner=${owner}`)
-  assert.equal(read.end, '4')
-  assert.deepEqual(read.snapshot.map((r) => r.position), ['3', '4'])
-  assert.deepEqual(new Set(read.snapshot.map((r) => r.id)), new Set([first, second]))
+  const read = await readList(b.url, `after=2&owner=${owner}`, {
+    during: async () => {
+      await Promise.all([b.projections.run(first, views), b.projections.run(second, views)])
+    },
+    more: (live) => live.length < 2,
+  })
+  assert.equal(read.end, '2')
+  assert.deepEqual(
+    read.live.map((r) => r.position),
+    ['3', '4'],
+  )
+  assert.deepEqual(new Set(read.live.map((r) => r.id)), new Set([first, second]))
 })
