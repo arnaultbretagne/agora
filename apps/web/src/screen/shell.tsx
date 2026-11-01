@@ -7,11 +7,12 @@
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
 import { ChevronRightIcon, ChevronUpIcon, FolderIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
-import { useEffect, useMemo, useState, type FC } from 'react'
+import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
+import { useSearch, type ListFeed } from '../agora/hooks.ts'
 import { useAgora } from '../agora/runtime.tsx'
-import { harnessName, sections, type WorkstreamState, type WorkstreamView } from '../agora/view.ts'
+import { harnessName, merged, sections, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
 import { Thread } from './thread.tsx'
 import { useVisualViewport } from './viewport.ts'
@@ -70,7 +71,7 @@ const DOT: Partial<Record<WorkstreamState, string>> = {
   failed: 'bg-destructive',
 }
 
-const Item: FC<{ w: WorkstreamView; active: boolean; onOpen: () => void }> = ({ w, active, onOpen }) => (
+const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void }> = ({ w, active, onOpen }) => (
   <button
     type="button"
     onClick={onOpen}
@@ -89,6 +90,28 @@ const Item: FC<{ w: WorkstreamView; active: boolean; onOpen: () => void }> = ({ 
     )}
   </button>
 )
+
+/**
+ * The end of a list (docs/specs/assistant-ui.md, "Sidebar"): in view, its next page is read. Given a new
+ * key at each page, it is watched again, and reads on while it stays in view.
+ */
+const End: FC<{ onVisible: () => void }> = ({ onVisible }) => {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = ref.current
+    if (element === null) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onVisible()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [onVisible])
+  return <div ref={ref} aria-hidden className="h-px shrink-0" />
+}
+
+/** What the end of a list reads more of: the list, or the search typed once its rows have come; nothing before. */
+const feedOf = (search: string, list: ListFeed, found: (ListFeed & { readonly text: string }) | null): ListFeed | null =>
+  search.trim() === '' ? list : found !== null && found.text === search.trim() ? found : null
 
 // ---------------------------------------------------------------- the account
 
@@ -149,9 +172,12 @@ const storedFolder = (): boolean => {
  * Workstreams of their runs' members, closed at first, its state remembered. None while it is empty.
  */
 const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, onNavigate }) => {
-  const { agents, id, open } = useAgora()
+  const { api, account, agents, id, open } = useAgora()
   const [opened, setOpened] = useState(storedFolder)
-  const shown = useMemo(() => sections(agents, new Date(), search, id).flatMap((s) => s.workstreams), [agents, search, id])
+  const found = useSearch(api, 'agents', search, account.email !== null)
+  const rows = useMemo(() => (found ? merged(agents.rows, found.rows) : agents.rows), [found, agents.rows])
+  const shown = useMemo(() => sections(rows, new Date(), search, id).flatMap((s) => s.workstreams), [rows, search, id])
+  const feed = feedOf(search, agents, found)
   if (shown.length === 0) return null
   const toggle = () => {
     setOpened(!opened)
@@ -172,7 +198,10 @@ const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, 
         <ChevronRightIcon className={cn('size-3 transition-transform', opened && 'rotate-90')} />
         <FolderIcon className="size-3.5" />
         Agents
-        <span className="text-muted-foreground/70 ml-auto tabular-nums">{shown.length}</span>
+        <span className="text-muted-foreground/70 ml-auto tabular-nums">
+          {shown.length}
+          {feed !== null && !feed.end ? '+' : ''}
+        </span>
       </button>
       {opened && (
         <div className="flex flex-col gap-0.5 pl-3">
@@ -187,6 +216,7 @@ const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, 
               }}
             />
           ))}
+          {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
         </div>
       )}
     </section>
@@ -194,9 +224,13 @@ const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, 
 }
 
 const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
-  const { workstreams, id, open } = useAgora()
+  const { api, list, id, open } = useAgora()
   const [search, setSearch] = useState('')
-  const groups = useMemo(() => sections(workstreams, new Date(), search, id), [workstreams, search, id])
+  // A search: the server's rows whose title holds the text, with the loaded ones that do (docs/specs/assistant-ui.md, "Sidebar").
+  const found = useSearch(api, null, search)
+  const rows = useMemo(() => (found ? merged(list.rows, found.rows) : list.rows), [found, list.rows])
+  const groups = useMemo(() => sections(rows, new Date(), search, id), [rows, search, id])
+  const feed = feedOf(search, list, found)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-2">
@@ -224,7 +258,9 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
         </label>
       </div>
       <nav aria-label="Workstreams" className="-mx-3 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-        {groups.length === 0 && <p className="text-muted-foreground mt-5 px-2 text-[13px]">{search.trim() ? 'No workstream found' : 'No workstream yet'}</p>}
+        {groups.length === 0 && feed !== null && (feed.end || search.trim() !== '') && (
+          <p className="text-muted-foreground mt-5 px-2 text-[13px]">{search.trim() ? 'No workstream found' : 'No workstream yet'}</p>
+        )}
         {groups.map((g) => (
           <section key={g.label}>
             <p className="text-muted-foreground mt-5 mb-1 px-2 text-xs font-medium">{g.label}</p>
@@ -243,6 +279,7 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
             </div>
           </section>
         ))}
+        {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
         <AgentsFolder search={search} onNavigate={onNavigate} />
       </nav>
       <AccountMenu />

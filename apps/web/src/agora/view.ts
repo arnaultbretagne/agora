@@ -655,9 +655,12 @@ export function resetIn(resetsAt: string | null, now: number): string | null {
 
 // ---------------------------------------------------------------- the list
 
+/** A Workstream as the list holds it (docs/specs/log.md, "The list"): a few of its view's fields. */
+export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' | 'question' | 'changedAt'>
+
 export interface Section {
   readonly label: string
-  readonly workstreams: readonly WorkstreamView[]
+  readonly workstreams: readonly ListRow[]
 }
 
 const DAY = 86_400_000
@@ -666,7 +669,7 @@ const DAY = 86_400_000
  * The Workstreams by when they last changed: today, yesterday, the past week, then older. One with no
  * entry is left out, unless it is the one open; a search keeps the titles that contain it.
  */
-export function sections(workstreams: readonly WorkstreamView[], now: Date, search: string, current: string | null): Section[] {
+export function sections(workstreams: readonly ListRow[], now: Date, search: string, current: string | null): Section[] {
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const wanted = search.trim().toLowerCase()
   const groups: { label: string; from: number }[] = [
@@ -675,7 +678,7 @@ export function sections(workstreams: readonly WorkstreamView[], now: Date, sear
     { label: 'Previous 7 days', from: midnight - 7 * DAY },
     { label: 'Older', from: -Infinity },
   ]
-  const out = groups.map((g) => ({ label: g.label, workstreams: [] as WorkstreamView[] }))
+  const out = groups.map((g) => ({ label: g.label, workstreams: [] as ListRow[] }))
   for (const w of workstreams) {
     if (w.state === 'none' && w.id !== current && !w.question) continue
     if (wanted !== '' && !w.title.toLowerCase().includes(wanted)) continue
@@ -683,6 +686,22 @@ export function sections(workstreams: readonly WorkstreamView[], now: Date, sear
     out[groups.findIndex((g) => at >= g.from)]!.workstreams.push(w)
   }
   return out.filter((s) => s.workstreams.length > 0)
+}
+
+const changed = (w: ListRow): number => (w.changedAt ? Date.parse(w.changedAt) : 0)
+
+/**
+ * Rows read by different ways — the list's stream, its older pages, a search — as one list: each
+ * Workstream once, its most recently changed row (the first given when they tie), newest first.
+ */
+export function merged(...lists: readonly (readonly ListRow[])[]): ListRow[] {
+  const byId = new Map<string, ListRow>()
+  for (const list of lists)
+    for (const row of list) {
+      const known = byId.get(row.id)
+      if (!known || changed(row) > changed(known)) byId.set(row.id, row)
+    }
+  return [...byId.values()].sort((a, b) => changed(b) - changed(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }
 
 // ---------------------------------------------------------------- messages

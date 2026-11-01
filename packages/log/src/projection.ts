@@ -26,6 +26,41 @@ export interface Projector {
 }
 export const core: Projector = { name: 'core', version: '8', create: () => new CoreProjection() }
 
+/** A Workstream's row in its owner's list (docs/specs/log.md, "The list"): what a list shows of its view. */
+export type ListRow = { id: string; title: unknown; state: unknown; harness: unknown; question: unknown; changedAt: string }
+export const LIST_PAGE = 50
+
+function listRow(workstream: string, view: Record<string, unknown>): ListRow | null {
+  // A view with no entry yet has no time to be listed by.
+  if (typeof view.changedAt !== 'string') return null
+  return {
+    id: workstream,
+    title: view.title ?? null,
+    state: view.state ?? null,
+    harness: view.harness ?? null,
+    question: view.question ?? null,
+    changedAt: view.changedAt,
+  }
+}
+
+/** A list row as the thread's rows travel: an upsert of a `workstream` object. */
+const listed = (r: { workstream: string; position: string; row: string }): ThreadRow => ({
+  position: r.position,
+  operation: 'upsert',
+  kind: 'workstream',
+  id: r.workstream,
+  object: decode(r.row),
+})
+
+/** A page cursor: the last row's `changedAt` and id. */
+function pageCursor(text: string): [string, string] {
+  const comma = text.lastIndexOf(',')
+  const changedAt = text.slice(0, comma),
+    id = text.slice(comma + 1)
+  if (comma < 1 || Number.isNaN(Date.parse(changedAt)) || !/^[0-9a-f-]{36}$/.test(id)) throw new Error('invalid_cursor')
+  return [changedAt, id]
+}
+
 /** A projector from a pure fold over all entries: simple, and quadratic; for tests and small views. */
 export function fromFold(name: string, version: string, fold: (entries: readonly Entry[]) => ProjectedObject[]): Projector {
   return {
@@ -100,7 +135,11 @@ export class Projections {
         const all = await client.query('SELECT kind,id,object::text FROM objects WHERE workstream=$1 ORDER BY kind,id', [
           workstream,
         ])
-        for (const o of all.rows) await emit('upsert', o.kind, o.id, decode(o.object))
+        for (const o of all.rows) {
+          const value = decode(o.object)
+          await emit('upsert', o.kind, o.id, value)
+          if (o.kind === 'workstream') await this.list(client, workstream, value)
+        }
       } else {
         const key = `${workstream}:${projector.name}`
         const from = previous?.position ?? '0'
@@ -121,6 +160,7 @@ export class Projections {
             if (item) {
               await this.upsert(client, workstream, projector, item)
               await emit('upsert', item.kind, item.id, item.object)
+              if (item.kind === 'workstream') await this.list(client, workstream, item.object)
             } else {
               const removed = await client.query(
                 'DELETE FROM objects WHERE workstream=$1 AND projector=$2 AND id=$3 RETURNING kind',
@@ -196,6 +236,117 @@ export class Projections {
       'INSERT INTO checkpoints(workstream,projector,version,position) VALUES($1,$2,$3,$4) ON CONFLICT(workstream,projector) DO UPDATE SET version=excluded.version,position=excluded.position',
       [workstream, projector.name, projector.version, projection.position],
     )
+  }
+  /**
+   * Writes a Workstream's row in its owner's list with the owner's next position, unless it is the row
+   * already stored (docs/specs/log.md, "The list"). The owner's `lists` row stays locked until the
+   * transaction commits, so positions are committed in their order.
+   */
+  private async list(client: PoolClient, workstream: string, view: unknown): Promise<void> {
+    const row = listRow(workstream, (view ?? {}) as Record<string, unknown>)
+    if (row === null) return
+    const prior = await client.query('SELECT row::text FROM listings WHERE workstream=$1', [workstream])
+    if (prior.rowCount && hash(decode(prior.rows[0].row)) === hash(row)) return
+    const owner = (await client.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])).rows[0]?.owner as string | undefined
+    if (owner === undefined) return
+    await client.query('INSERT INTO lists(owner) VALUES($1) ON CONFLICT DO NOTHING', [owner])
+    const next = (await client.query('UPDATE lists SET last_position=last_position+1 WHERE owner=$1 RETURNING last_position', [owner])).rows[0]
+      .last_position as string
+    await client.query(
+      'INSERT INTO listings(workstream,owner,position,changed_at,title,row) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(workstream) DO UPDATE SET position=excluded.position,changed_at=excluded.changed_at,title=excluded.title,row=excluded.row',
+      [workstream, owner, next, row.changedAt, typeof row.title === 'string' ? row.title : '', encode(row)],
+    )
+  }
+  /** At start: a Workstream with a view and no row in its owner's list gets one; the number written. */
+  async backfill(): Promise<number> {
+    const missing = await this.store.projector.query(
+      "SELECT o.workstream FROM objects o LEFT JOIN listings l ON l.workstream=o.workstream WHERE o.kind='workstream' AND o.id=o.workstream AND l.workstream IS NULL",
+    )
+    let written = 0
+    for (const { workstream } of missing.rows as { workstream: string }[]) {
+      const client = await this.store.projector.connect()
+      let broken = false
+      try {
+        await client.query('BEGIN')
+        // The projector's lock, as a run takes it: a run and a back-fill never write the row together.
+        await client.query('INSERT INTO threads(workstream) VALUES($1) ON CONFLICT DO NOTHING', [workstream])
+        await client.query('SELECT last_position FROM threads WHERE workstream=$1 FOR UPDATE', [workstream])
+        const view = await client.query("SELECT object::text FROM objects WHERE workstream=$1 AND kind='workstream' AND id=$1", [workstream])
+        const listed = await client.query('SELECT 1 FROM listings WHERE workstream=$1', [workstream])
+        if (view.rowCount && !listed.rowCount) {
+          await this.list(client, workstream, decode(view.rows[0].object))
+          written++
+        }
+        await client.query('COMMIT')
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => (broken = true))
+        throw error
+      } finally {
+        client.release(broken)
+      }
+    }
+    return written
+  }
+  /** docs/specs/log.md, "The list": from zero, the most recent page; from C, the rows written in (C, H]; then H. */
+  async listSnapshot(owner: string, after: string): Promise<{ rows: ThreadRow[]; end: string }> {
+    cursor(after)
+    const client = await this.store.projector.connect()
+    let broken = false
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      const high = await client.query('SELECT last_position FROM lists WHERE owner=$1', [owner])
+      const end = (high.rows[0]?.last_position as string | undefined) ?? '0'
+      if (cursor(after) > cursor(end)) throw new Error('future_cursor')
+      const rows =
+        after === '0'
+          ? await client.query('SELECT workstream,position,row::text FROM listings WHERE owner=$1 ORDER BY changed_at DESC,workstream DESC LIMIT $2', [
+              owner,
+              LIST_PAGE,
+            ])
+          : await client.query('SELECT workstream,position,row::text FROM listings WHERE owner=$1 AND position>$2 AND position<=$3 ORDER BY position', [
+              owner,
+              after,
+              end,
+            ])
+      await client.query('COMMIT')
+      return { rows: rows.rows.map(listed), end }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => (broken = true))
+      throw error
+    } finally {
+      client.release(broken)
+    }
+  }
+  async listTail(owner: string, after: string): Promise<ThreadRow[]> {
+    cursor(after)
+    const rows = await this.store.projector.query(
+      'SELECT workstream,position,row::text FROM listings WHERE owner=$1 AND position>$2 ORDER BY position LIMIT 256',
+      [owner, after],
+    )
+    return rows.rows.map(listed)
+  }
+  /** docs/specs/log.md, "The list": the rows older than a page cursor, whose title holds a text when one is given. */
+  async listPage(owner: string, before: string | null, title: string | null): Promise<{ rows: ListRow[]; next: string | null }> {
+    const params: unknown[] = [owner, LIST_PAGE + 1]
+    let where = 'owner=$1'
+    if (before !== null) {
+      const [changedAt, id] = pageCursor(before)
+      params.push(changedAt, id)
+      where += ` AND (changed_at,workstream) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`
+    }
+    if (title !== null && title.trim() !== '') {
+      params.push(title.trim().toLowerCase())
+      where += ` AND strpos(lower(title),$${params.length}) > 0`
+    }
+    const rows = await this.store.projector.query(
+      `SELECT row::text FROM listings WHERE ${where} ORDER BY changed_at DESC,workstream DESC LIMIT $2`,
+      params,
+    )
+    const page = rows.rows.map((r) => decode(r.row as string) as ListRow)
+    const more = page.length > LIST_PAGE
+    if (more) page.pop()
+    const last = page.at(-1)
+    return { rows: page, next: more && last ? `${last.changedAt},${last.id}` : null }
   }
   /** Lets go of a Workstream's projections in memory; the next run folds up to its checkpoint again. */
   forget(workstream: string): void {

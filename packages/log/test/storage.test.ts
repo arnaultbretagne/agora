@@ -40,6 +40,10 @@ test('L25 each role does what it may, then is denied each thing it may not', asy
     ['projector', "INSERT INTO checkpoints(workstream,projector,version,position) VALUES($1,'core','1',1)", [ws]],
     ['projector', "UPDATE checkpoints SET position=1 WHERE workstream=$1", [ws]],
     ['projector', 'DELETE FROM objects WHERE workstream=$1', [ws]],
+    ['projector', 'INSERT INTO lists(owner) VALUES($1)', [ws]],
+    ['projector', 'UPDATE lists SET last_position=1 WHERE owner=$1', [ws]],
+    ["projector", "INSERT INTO listings(workstream,owner,position,changed_at,title,row) VALUES($1,$1,1,now(),'t','{}')", [ws]],
+    ["projector", "UPDATE listings SET title='u' WHERE workstream=$1", [ws]],
   ]
   for (const [role, sql, values] of may) await assert.doesNotReject(pools[role].query(sql, values), `${role} may: ${sql}`)
   const mayNot: [keyof typeof pools, string, unknown[]][] = [
@@ -57,6 +61,9 @@ test('L25 each role does what it may, then is denied each thing it may not', asy
     ['projector', 'SELECT id FROM anchors', []],
     ['projector', "UPDATE thread SET object='{}'", []],
     ['projector', 'DELETE FROM thread', []],
+    ['projector', 'DELETE FROM listings', []],
+    ['writer', "INSERT INTO lists(owner) VALUES($1)", [randomUUID()]],
+    ['writer', 'SELECT workstream FROM listings', []],
     ['anchors', "INSERT INTO entries(workstream,position,kind,content) VALUES($1,2,'command','{}')", [ws]],
     ['anchors', "INSERT INTO commands(workstream,id,kind,target,fingerprint,answer,position) VALUES($1,$2,'Create','{}','f','{}',1)", [ws, randomUUID()]],
     ['anchors', "INSERT INTO sessions(id,workstream,execution,acp_id,opened_position) VALUES($1,$2,$3,'acp',1)", [randomUUID(), ws, execution]],

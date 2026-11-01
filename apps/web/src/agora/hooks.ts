@@ -1,32 +1,115 @@
-// React's side of the exchanges (docs/specs/assistant-ui.md, "The exchanges"): the Workstream list,
-// read again every 10 seconds and whenever asked; a Workstream's thread, kept in the browser with its
-// cursor — reused only together — and read again from that cursor.
-import { useCallback, useEffect, useState } from 'react'
-import type { Api, Folder } from './api.ts'
+// React's side of the exchanges (docs/specs/assistant-ui.md, "The exchanges"): a list, read as the thread
+// is, its older rows a page at a time, a search on the server; a Workstream's thread, kept in the browser
+// with its cursor — reused only together — and read again from that cursor.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Api, Folder, Page } from './api.ts'
 import { empty, type ThreadState, type ViewObject } from './objects.ts'
 import { ThreadStream, type Connection } from './stream.ts'
-import type { WorkstreamView } from './view.ts'
+import { merged, type ListRow } from './view.ts'
 
-export function useWorkstreams(api: Api, folder: Folder | null = null, enabled = true): { workstreams: WorkstreamView[]; loading: boolean; reload: () => void } {
-  const [workstreams, setWorkstreams] = useState<WorkstreamView[]>([])
-  const [loading, setLoading] = useState(true)
-  const [tick, setTick] = useState(0)
-  const reload = useCallback(() => setTick((t) => t + 1), [])
-  useEffect(() => {
-    if (!enabled) return
-    let live = true
+/** A list as the sidebar shows it: its rows, newest first, and the way to the older ones. */
+export interface ListFeed {
+  readonly rows: readonly ListRow[]
+  /** Reads the next page of older rows, unless one is being read or none is left. */
+  readonly more: () => void
+  /** Whether no older row is left to read. */
+  readonly end: boolean
+}
+
+/** The rows a page holds, newest first, as the server sends them. */
+const PAGE = 50
+
+/** The pages read below a list's first rows: their rows, the next one's cursor, and whether it is known yet. */
+interface Older {
+  readonly rows: readonly ListRow[]
+  readonly next: string | null
+  readonly known: boolean
+}
+
+const UNKNOWN: Older = { rows: [], next: null, known: false }
+
+const rowsOf = (state: ThreadState): ListRow[] => [...state.objects.values()].map((o) => o.object as unknown as ListRow)
+
+/** A page read once at a time; a page for a cursor no longer wanted is dropped. */
+function usePages(api: Api, folder: Folder | null, title: string, older: Older, onPage: (at: string, page: Page) => void): () => void {
+  const reading = useRef(false)
+  return useCallback(() => {
+    const at = older.next
+    if (reading.current || at === null) return
+    reading.current = true
     void api
-      .workstreams(folder)
-      .then((list) => live && setWorkstreams(list))
-      .catch(() => undefined)
-      .finally(() => live && setLoading(false))
-    const timer = setTimeout(reload, 10_000)
+      .page(folder, at, title)
+      .then((page) => onPage(at, page), () => undefined)
+      .finally(() => (reading.current = false))
+  }, [api, folder, title, older.next, onPage])
+}
+
+/**
+ * A list of the person's (docs/specs/assistant-ui.md, "The exchanges"), or one of their folders': its
+ * most recent rows then each change, read as the thread is and never fetched again whole; below them,
+ * the older rows a page at a time.
+ */
+export function useList(api: Api, folder: Folder | null = null, enabled = true): ListFeed {
+  const [state, setState] = useState<ThreadState>(empty)
+  const [older, setOlder] = useState<Older>(UNKNOWN)
+  useEffect(() => {
+    setState(empty)
+    setOlder(UNKNOWN)
+    if (!enabled) return
+    let first = true
+    const stream = new ThreadStream(empty, {
+      url: (cursor) => api.listUrl(folder, cursor),
+      onChange: (next) => {
+        setState(next)
+        // Below the first snapshot's oldest row, the older pages; none below fewer than a page. A row read
+        // twice — the snapshot read again after a break — only comes back in a page, once in the list.
+        if (first && next.complete) {
+          first = false
+          const oldest = merged(rowsOf(next)).at(-1)
+          setOlder({ rows: [], next: next.objects.size < PAGE || !oldest ? null : `${oldest.changedAt ?? ''},${oldest.id}`, known: true })
+        }
+      },
+    })
+    stream.start()
+    return () => stream.stop()
+  }, [api, folder, enabled])
+  const onPage = useCallback((at: string, page: Page) => setOlder((o) => (o.next === at ? { rows: [...o.rows, ...page.rows], next: page.next, known: true } : o)), [])
+  const more = usePages(api, folder, '', older, onPage)
+  const rows = useMemo(() => merged(rowsOf(state), older.rows), [state, older.rows])
+  return { rows, more, end: older.known && older.next === null }
+}
+
+/**
+ * The rows of a list whose title holds a text (docs/specs/assistant-ui.md, "Sidebar"), from every page:
+ * read from the server 250 ms after the last key, a page at a time; null while the text is empty. Until
+ * the text's first page comes, the last text's rows stay, for the screen to filter.
+ */
+export function useSearch(api: Api, folder: Folder | null, text: string, enabled = true): (ListFeed & { readonly text: string }) | null {
+  const wanted = text.trim()
+  const [found, setFound] = useState<{ text: string; older: Older } | null>(null)
+  useEffect(() => {
+    if (!enabled || wanted === '') return setFound(null)
+    let live = true
+    const timer = setTimeout(() => {
+      void api.page(folder, null, wanted).then(
+        (page) => live && setFound({ text: wanted, older: { rows: page.rows, next: page.next, known: true } }),
+        () => undefined,
+      )
+    }, 250)
     return () => {
       live = false
       clearTimeout(timer)
     }
-  }, [api, folder, enabled, tick, reload])
-  return { workstreams, loading, reload }
+  }, [api, folder, wanted, enabled])
+  const older = found?.older ?? UNKNOWN
+  const onPage = useCallback(
+    (at: string, page: Page) =>
+      setFound((f) => (f && f.older.next === at ? { text: f.text, older: { rows: [...f.older.rows, ...page.rows], next: page.next, known: true } } : f)),
+    [],
+  )
+  const more = usePages(api, folder, found?.text ?? '', older, onPage)
+  if (wanted === '' || found === null) return null
+  return { text: found.text, rows: found.older.rows, more, end: found.older.next === null }
 }
 
 const KEY = (id: string) => `agora:thread:${id}`

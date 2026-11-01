@@ -7,6 +7,7 @@ import type { CredentialSource } from '@agora/executions'
 import { parseBundle } from '@agora/harness-bridge/anchor'
 import type { Workstreams } from './workstreams.ts'
 import type { Command } from './store.ts'
+import type { ThreadRow } from './projection.ts'
 import { uuid, object, decode, encode, cursor, identity } from './json.ts'
 import { MAX_LINE } from './acp.ts'
 
@@ -15,6 +16,7 @@ const VALIDATION = new Set([
   'invalid_identifier',
   'invalid_cursor',
   'future_cursor',
+  'unknown_folder',
   'control_refused',
   'invalid_json',
   'duplicate_key',
@@ -100,6 +102,22 @@ export async function logHttp(
       // The caller's own folder; without the proxy, every Workstream, as every list is.
       return reply(200, { workstreams: await workstreams.projections.views(email === null ? undefined : folderOwner('agents', email)) }), true
     }
+    if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
+      // docs/specs/log.md, "The list": the caller's own, or its agents' folder; without the proxy, the owner given.
+      const folder = url.searchParams.get('folder')
+      if (folder !== null && !(FOLDERS as readonly string[]).includes(folder)) throw new Error('unknown_folder')
+      const owner = email === null ? uuid(url.searchParams.get('owner')) : folder === null ? caller! : folderOwner('agents', email)
+      if (url.pathname === '/api/workstreams/page')
+        return reply(200, await workstreams.projections.listPage(owner, url.searchParams.get('before'), url.searchParams.get('title'))), true
+      const after = url.searchParams.get('after') ?? '0'
+      cursor(after)
+      await feed(
+        res,
+        () => workstreams.projections.listSnapshot(owner, after),
+        (position) => workstreams.projections.listTail(owner, position),
+      )
+      return true
+    }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
@@ -173,7 +191,23 @@ export async function logHttp(
 async function thread(workstreams: Workstreams, workstream: string, url: URL, res: ServerResponse): Promise<void> {
   const after = url.searchParams.get('after') ?? '0'
   cursor(after)
-  const snapshot = await workstreams.projections.snapshot(workstream, after)
+  await feed(
+    res,
+    () => workstreams.projections.snapshot(workstream, after),
+    (position) => workstreams.projections.tail(workstream, position),
+  )
+}
+
+/**
+ * Server-sent events of a feed — the thread, a list (docs/specs/log.md, "The thread", "The list"): its
+ * snapshot, `snapshot-end` carrying H, then what follows H, read again every 250 ms while nothing comes.
+ */
+async function feed(
+  res: ServerResponse,
+  first: () => Promise<{ rows: ThreadRow[]; end: string }>,
+  next: (after: string) => Promise<ThreadRow[]>,
+): Promise<void> {
+  const snapshot = await first()
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' })
   let closed = false
   res.on('close', () => {
@@ -196,7 +230,7 @@ async function thread(workstreams: Workstreams, workstream: string, url: URL, re
   await send({ type: 'snapshot-end', position: snapshot.end })
   let position = snapshot.end
   while (!closed) {
-    const rows = await workstreams.projections.tail(workstream, position)
+    const rows = await next(position)
     for (const row of rows) {
       await send({ type: 'live', ...row })
       position = row.position

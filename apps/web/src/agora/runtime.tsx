@@ -9,7 +9,7 @@ import { AssistantRuntimeProvider, useExternalStoreRuntime, type CompleteAttachm
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
-import { useThread, useWorkstreams } from './hooks.ts'
+import { useList, useThread, type ListFeed } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
 import {
@@ -54,7 +54,8 @@ export interface Agora {
   readonly view: WorkstreamView
   readonly composer: Composer
   readonly connection: Connection
-  readonly workstreams: readonly WorkstreamView[]
+  /** The person's list (docs/specs/assistant-ui.md, "The exchanges"). */
+  readonly list: ListFeed
   readonly pools: readonly Pool[] | null
   /** The pool a new execution starts in. */
   readonly pool: string | null
@@ -93,8 +94,8 @@ export interface Agora {
   readonly teams: boolean
   /** Who the proxy says the person is. */
   readonly account: Account
-  /** The Workstreams of the person's agents' folder: their runs' members. */
-  readonly agents: WorkstreamView[]
+  /** The person's agents' folder: their runs' members. */
+  readonly agents: ListFeed
   /** The messages handed to assistant-ui, which shows them a render later. */
   readonly messages: readonly ThreadMessageLike[]
 }
@@ -142,8 +143,8 @@ const storedPool = (): string | null => {
 export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string | null) => void; children: ReactNode }) {
   // Who the proxy says the person is; their agents' folder, read only behind it (docs/specs/assistant-ui.md, "Accounts").
   const [account, setAccount] = useState<Account>({ email: null })
-  const { workstreams, reload } = useWorkstreams(api)
-  const { workstreams: agents } = useWorkstreams(api, 'agents', account.email !== null)
+  const list = useList(api)
+  const agents = useList(api, 'agents', account.email !== null)
   useEffect(() => {
     void api.account().then(setAccount, () => undefined)
   }, [api])
@@ -251,10 +252,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       if (workstream === null) return { accepted: false, reason: 'no_workstream' }
       const answer = await api.command(workstream, kind, target, body)
       if (!answer.accepted) setRefusal(refusalText(answer.reason ?? 'unavailable'))
-      reload()
       return answer
     },
-    [api, id, reload],
+    [api, id],
   )
 
   const answer = useCallback(
@@ -290,7 +290,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
           return
         }
         setLaunched((l) => new Set(l).add(workstream))
-        reload()
         onOpen(workstream)
         return
       }
@@ -309,7 +308,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       setPending({ workstream, execution: created.execution, ...draft, prompt, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, send, onOpen, harnessOf, chosen, access, reload],
+    [api, id, pool, send, onOpen, harnessOf, chosen, access],
   )
 
   const chooseSetting = useCallback(
@@ -401,7 +400,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     view,
     composer,
     connection,
-    workstreams,
+    list,
     pools,
     pool,
     pending: pending !== null && pending.workstream === id ? pending : null,

@@ -29,7 +29,8 @@ Workstream.
 
 | Exchange | Route | Content |
 | --- | --- | --- |
-| Workstreams | `GET /api/workstreams` | The view of every Workstream the signed-in identity owns, the most recently active first; and, with `folder=agents`, those of its agents' folder ("Accounts"). Read again whenever the thread on screen changes, and every 10 seconds. |
+| Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `folder=agents`, its agents' folder ("Accounts"). Without the proxy, the list of the owner the client creates with. |
+| Older Workstreams, a search | `GET /api/workstreams/page?before=B&title=T` | The next 50 older rows, when the end of the list comes into view; the rows whose title holds the search box's text, from every page. |
 | The account | `GET /api/account` | Once the page opens: the identity the proxy passes (`log.md`, "HTTP"). |
 | Teams | `GET /api/teams`, `POST /api/teams` | Whether a team can be launched, once the page opens; a team's goal, on its first message ("Teams"; `flows.md`, "Launching from Agora"). |
 | Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
@@ -53,7 +54,8 @@ What the client reads of each view object. Every object also carries `id`, `firs
 
 | Kind | Fields read |
 | --- | --- |
-| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation`, and in the list `changedAt` |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation` |
+| a list row | `title`, `state`, `harness`, `question`, `changedAt` |
 | `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
 | `element` | `type`, `turn`, `session`, and per type below |
 | `notice` | `type`, `reason`, `origin`, `harness` |
@@ -156,7 +158,7 @@ their teams' members, theirs alone (`log.md`, "HTTP"; `flows.md`, "Launching fro
 | --- | --- |
 | The account | At the foot of the sidebar, as assistant-ui's own demo has it: the person's e-mail, its initial on a plate. None without the proxy's identity. |
 | Opened | Upwards: **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
-| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's, the search applying. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
+| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number, a + after it while older ones are unread; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's, the search applying. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
 
 ## Context and limits
 
@@ -310,9 +312,9 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Area | Element | Component |
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
-| Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles | **ours** |
+| Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles: 250 ms after the last key, the server's rows whose title holds the text replace the list until the box is empty | **ours** |
 | Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
-| Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
+| Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; the next 50 older rows when its end comes into view; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
 | Header | Title, or a waiting first message; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
@@ -399,7 +401,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U11 | Each Workstream state | Its label, whether sending is open and starts an execution, and why it is not. |
 | U12 | A real claude-code history: files written and edited, each after a permission | Each change's line labelled with its action and file, its diff taken from its permission, the lines added and removed; each permission answered. |
 | U13 | Real codex and opencode histories: shell commands, some failing, a todo list, reasoning | Commands without their shell; the failures marked; the todo list as entries; the reasoning kept. |
-| U14 | Workstreams changed today, yesterday, this week, before, and two with no entry | Grouped by day; those with no entry left out unless open; a search keeps the titles that contain it. |
+| U14 | Workstreams changed today, yesterday, this week, before, and two with no entry; one of them read twice, by the stream and by a page | Grouped by day; those with no entry left out unless open; a search keeps the titles that contain it; the one read twice listed once, as last changed. |
 | U15 | A first message, while its execution starts, opens, or fails | Waits; is written once that execution is `ready` with its Session; is given back if it fails, ends or is lost first. |
 | U16 | In a browser, **New workstream** from an open Workstream, then Back | The draft at `/`, the greeting, no message of the other; Back: that Workstream and its messages. |
 | U17 | In a browser, two Workstreams switched in the list | Each shows its own messages only; the open one marked in the list. |
@@ -438,6 +440,9 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | One box holding the title, the text, "waiting for you", the note's field and the options; "waiting for you" in the list; "Answer the question above."; chosen: Answer sent with the option and the note, the field and options gone, the box's foot noting them, sending open. |
 | U51 | In a browser, teams available: Team picked in a draft, a goal sent | No model or access picker, "Describe the goal for the team…"; `POST /api/teams` with the goal: the run asked with it, the new Workstream as the lead's, the person's identity, their agents' folder for the members; the Workstream open, sending closed, "The team is starting…". |
 | U52 | In a browser, the proxy's identity: a Workstream of the person's, one of their agents' folder, one of someone else's folder; the account opened; the folder opened, its Workstream opened; the page reloaded | The person's e-mail at the sidebar's foot; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the folder closed, counting 1, the list the person's one Workstream; opened, the folder's Workstream, which opens; reloaded, the folder still open. |
+| U53 | In a browser, 60 Workstreams; the end of the list scrolled into view | The 50 most recent first; then the 10 older below them. |
+| U54 | In a browser, a Workstream of the list changed by another client; the network watched for 15 seconds | It moves to the top without a reload; no request fetches the list again whole. |
+| U55 | In a browser, the title of a Workstream not loaded typed in Search, in another case; then the box emptied | That Workstream listed; emptied, the list as before. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
