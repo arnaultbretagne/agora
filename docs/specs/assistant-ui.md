@@ -29,8 +29,9 @@ Workstream.
 
 | Exchange | Route | Content |
 | --- | --- | --- |
-| Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `folder=agents`, its agents' folder ("Accounts"). Without the proxy, the list of the owner the client creates with. |
+| Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `folder=agents`, its agents' folder ("Accounts"); with `parent`, a Workstream's sub-streams, read while it is unfolded. Without the proxy, the list of the owner the client creates with. |
 | Older Workstreams, a search | `GET /api/workstreams/page?before=B&title=T` | The next 50 older rows, when the end of the list comes into view; the rows whose title holds the search box's text, from every page. |
+| A sub-stream's parents | `GET /api/workstreams/{id}/row` | The rows of an open sub-stream's parents, one by one up to its root, when the list has not loaded them: for the header. |
 | The account | `GET /api/account` | Once the page opens: the identity the proxy passes (`log.md`, "HTTP"). |
 | Teams | `GET /api/teams`, `POST /api/teams` | Whether a team can be launched, once the page opens; a team's goal, on its first message ("Teams"; `flows.md`, "Launching from Agora"). |
 | Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
@@ -312,10 +313,10 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Area | Element | Component |
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
-| Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles: 250 ms after the last key, the server's rows whose title holds the text replace the list until the box is empty | **ours** |
+| Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles: 250 ms after the last key, the server's rows whose title holds the text, sub-streams included, replace the list until the box is empty | **ours** |
 | Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
-| Sidebar | The list: Today, Yesterday, Previous 7 days, Older, by `changedAt`; the next 50 older rows when its end comes into view; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
-| Header | Title, or a waiting first message; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
+| Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open or a question of its waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
+| Header | Title, or a waiting first message; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
 | Thread | User message, on the right in a bubble, with its turn's note | `MessagePrimitive` (**ours**) |
@@ -443,6 +444,9 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U53 | In a browser, 60 Workstreams; the end of the list scrolled into view | The 50 most recent first; then the 10 older below them. |
 | U54 | In a browser, a Workstream of the list changed by another client; the network watched for 15 seconds | It moves to the top without a reload; no request fetches the list again whole. |
 | U55 | In a browser, the title of a Workstream not loaded typed in Search, in another case; then the box emptied | That Workstream listed; emptied, the list as before. |
+| U56 | In a browser, a root with sub-streams, one two levels down waiting for the person; the root unfolded, then the first sub-stream | Folded: a chevron and "waiting for you"; unfolded: its sub-streams indented below it; the first's own sub-stream behind its chevron, then below it. |
+| U57 | A sub-stream under a folded root asks a question, from another client | The root moves to the top and shows "waiting for you", without a reload. |
+| U58 | A sub-stream two levels down opened by its address | Its line unfolds in the list; the header shows its two parents before its title, each opening its Workstream. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

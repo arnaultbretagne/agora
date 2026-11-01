@@ -232,6 +232,21 @@ asks the person, and the interface answers.
 An uncertain turn is never resent. It changes only on proof: its valid answer — `cancelled` once a
 Cancel reaches a turn still running — or the end of its execution.
 
+## Sub-streams
+
+A Workstream started from another is its sub-stream. It records its parent once, when it is created,
+and with it its root — the Workstream at the top of its line — and its depth, one more than its
+parent's; a Workstream without a parent is a root: its own root, at depth 0. Agora sets no limit on
+depth: whatever starts a sub-stream checks its own. A sub-stream belongs to the owner of its root.
+
+| Rule | Detail |
+| --- | --- |
+| Parent | Given when the Workstream is created, never changed: a Workstream of the same owner. |
+| Root and depth | The parent's root, and the parent's depth plus one. |
+| Owner | The parent's, whoever creates it: a sub-stream belongs to the person who owns its root. |
+| Its row | In its parent's list, not in its owner's ("The list"). |
+| What comes up | A Workstream's row counts what lies under it, at every depth: the sub-streams; those in state `starting`, `ready` or `interrupted`; those with a question pending. Its `changedAt` is the latest of its own and theirs. |
+
 ## Views
 
 The client's objects — Workstream, turn, element, notice — are projections of the entries. How
@@ -337,22 +352,24 @@ changes instead of fetching every view again.
 
 | Rule | Detail |
 | --- | --- |
-| Row | The Workstream's id, and of its view `title`, `state`, `harness`, `question` and `changedAt`. Written in the transaction that writes the view, once the Workstream has one. |
-| Owner | The Workstream's owner: the person's identity for their own, their agents' folder for their agents' ("HTTP"). Each owner's rows form one list. |
-| Positions | Per owner, strictly increasing and never reused: each row written takes the owner's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
-| Reading | From cursor C, as the thread: from zero, the 50 most recently changed rows, by `changedAt` then id; from C, the current row of each Workstream whose row was written in (C, H]; then `snapshot-end` carrying H, the owner's last position; then the rows written after H, live. |
-| Pages | The rows older than a page cursor, by `changedAt` then id, 50 at most, with the next page's cursor or none; only those whose title holds a text, ignoring case, when one is given. A page cursor is the last row's `changedAt` and id. |
+| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness` and `question`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
+| List | A root's row is in its owner's list: the person's identity for their own, their agents' folder for their agents' ("HTTP"). A sub-stream's row is in its parent's list. |
+| Positions | Per list, strictly increasing and never reused: each row written takes its list's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
+| Up the line | A row written writes its parent's row again in the same transaction, then its parent's, up to the root, each with what lies under it, each in its own list. Lists are taken from the sub-stream up, so that two lines never wait on each other. |
+| Reading | From cursor C, as the thread: from zero, the 50 most recently changed rows, by `changedAt` then id; from C, the current row of each Workstream whose row was written in (C, H]; then `snapshot-end` carrying H, the list's last position; then the rows written after H, live. |
+| Pages | The rows older than a page cursor, by `changedAt` then id, 50 at most, with the next page's cursor or none. With a text, the rows whose title holds it, ignoring case, from every list of the owner's: sub-streams included, at any depth. A page cursor is the last row's `changedAt` and id. |
 | Removal | None is sent: a Workstream deleted from the log leaves the list at its next reading from zero. |
-| Back-filling | At start, a Workstream with a view and no row gets one. |
+| Back-filling | At start, a Workstream with a view and no row gets one, and its ancestors' rows count it. |
 
 ## HTTP
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list") — the owner its identity gives, as for a Create: `snapshot` rows, `snapshot-end`, then `live` rows. With `folder`, one of the caller's folders: `agents`, the Workstreams of the agents its runs staff, owned by the name-based UUID of its identity under `agents` rather than `owner` — the caller's folder alone, out of its own list; 400 `unknown_folder` for any other. Without the proxy, the list of the `owner` given; 400 `invalid_identifier` without one. A Workstream's whole view is read in its thread. |
-| `GET /api/workstreams/page?before=B&title=T` | JSON: `rows`, the caller's rows older than page cursor B — the most recent without one —, whose title holds T when given; `next`, the following page's cursor, or null. `folder` and `owner` as for the list; 400 `invalid_cursor` for a malformed cursor. |
+| `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list") — the owner its identity gives, as for a Create: `snapshot` rows, `snapshot-end`, then `live` rows. With `folder`, one of the caller's folders: `agents`, the Workstreams of the agents its runs staff, owned by the name-based UUID of its identity under `agents` rather than `owner` — the caller's folder alone, out of its own list; 400 `unknown_folder` for any other. With `parent`, a Workstream's list, its sub-streams: the caller's, 404 `unknown_workstream` otherwise. Without the proxy, the list of the `owner` or `parent` given; 400 `invalid_identifier` without either. A Workstream's whole view is read in its thread. |
+| `GET /api/workstreams/page?before=B&title=T` | JSON: `rows`, the caller's rows older than page cursor B — the most recent without one —, whose title holds T when given; `next`, the following page's cursor, or null. `folder`, `parent` and `owner` as for the list; 400 `invalid_cursor` for a malformed cursor. |
+| `GET /api/workstreams/{id}/row` | The Workstream's row ("The list"), the caller's: its parent and depth, so that a client climbs its line one row at a time. 404 `unknown_workstream` before its first entry or for another's. |
 | `GET /api/account` | `email`: the identity the proxy passes, as it passes it, or null without one. |
-| `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
+| `POST /api/workstreams` | Creates a Workstream: `id`, and `parent`, the Workstream it is started from, if any ("Sub-streams"). The owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one; with a parent, the parent's: 404 `unknown_parent` for a parent that does not exist or is not the caller's. 409 if the id belongs to another owner or has another parent. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
@@ -398,7 +415,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 
 | Table | Key | Holds |
 | --- | --- | --- |
-| `workstreams` | id | Owner, last entry position. |
+| `workstreams` | id | Owner, parent, root, depth, last entry position. |
 | `threads` | Workstream | The thread's last position; its row is the projector's lock. |
 | `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
 | `commands` | Workstream, id | Kind, target, SHA-256 of the canonical request, the answer, its entry's position, the execution and claim name of a Create. |
@@ -408,13 +425,13 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | `objects` | Workstream, kind, id | The view object, its projector, its first and last positions. |
 | `thread` | Workstream, position | Operation, object kind and id, the object. |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
-| `lists` | Owner | The list's last position; its row is the lock that orders the owner's rows. |
-| `listings` | Workstream | Owner, position, `changedAt`, title, the row. |
+| `lists` | List | The list's last position — a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
+| `listings` | Workstream | List, position, `changedAt`, title, the row. |
 
 | Role | May | May not |
 | --- | --- | --- |
 | `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread or checkpoints. |
-| `agora_projector` | Read Workstream ids and owners, and entries; write views, checkpoints, the thread and the lists; update the thread's and a list's last position. | Write entries, commands or Sessions; read anchors; change thread rows; delete a list's rows. |
+| `agora_projector` | Read Workstream ids, owners and lines, and entries; write views, checkpoints, the thread and the lists; update the thread's and a list's last position. | Write entries, commands or Sessions; read anchors; change thread rows; delete a list's rows. |
 | `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
 
 | Rule | Detail |
@@ -521,6 +538,15 @@ exception message.
 | L83 | A list cursor beyond the last position, a negative one; a malformed page cursor; no owner without the proxy | `future_cursor`; `invalid_cursor`; `invalid_cursor`; `invalid_identifier`. |
 | L84 | Agora started on a log whose Workstreams have views and no rows | Each gets its row once; started again, none is written. |
 | L85 | Two Workstreams of one owner projected at the same time, the list read live | Both rows arrive, with distinct positions, in the order of their positions. |
+| L86 | A Workstream created with a parent, then one with that one as its parent; through the proxy, each body naming another `owner` | Their root the first's, their depths 1 then 2; both owned by the root's owner. |
+| L87 | A parent that does not exist; a parent of another owner; the same id sent again with another parent | 404 `unknown_parent`; 404 `unknown_parent`; 409 `workstream_conflict`; nothing written. |
+| L88 | A root with two sub-streams and one under the first; the lists read | The owner's list the root alone; the root's its two sub-streams; the first's its own; each list with its own positions. |
+| L89 | A sub-stream two levels down asks a question, then gets its answer | Its parent's and its root's rows written again each time, at their lists' next positions: `waiting` 1 then 0, `changedAt` the question's then the answer's. |
+| L90 | Two sub-streams of one parent projected at the same time | The parent's row counts both: no count lost. |
+| L91 | Agora started on a log whose sub-streams have no row | Each gets its row in its parent's list, and each ancestor's row counts it. |
+| L92 | A Workstream six levels down | Created, at depth 6: Agora sets no limit. |
+| L93 | A sub-stream's row read by its id; a Workstream without an entry; another person's | Its parent and depth; 404 `unknown_workstream`; 404 `unknown_workstream`. |
+| L94 | A title search on the owner's list, a sub-stream two levels down holding the text | The sub-stream among the rows, with its parent. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and
