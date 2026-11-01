@@ -28,6 +28,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R20 | 2026-10-25 | `fdb0ff2` | unit, local | `npm run check`, with `npm run test:browser`, as R19; the server with a stand-in for Prefect's API (`TEAM_PREFECT_API`, deployment `lead/main`); for U51 and U52 the browser sending the proxy's identity as its header. Screenshots taken — the harness menu with Team, a team's draft, its Workstream starting; the agents folder closed, open, one of its Workstreams open, the account's menu; wide and on a phone — and looked at. |
 | R21 | 2026-10-28 | `47400b2`, then `4d45a9d` | local | `npm run test:browser`'s suite, its 26 cases, run again and again pinned to two CPUs (`taskset -c 0,1`), as a GitHub runner has; Chromium recording every scroll from each phone page's load (`addInitScript`, a capture-phase listener), nothing done at the tap, and on U40's timeout the record, the viewport's measures and assistant-ui's top anchors. |
 | R22 | 2026-10-31 | `0fddf58` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0. |
+| R23 | 2026-11-01 | `3511c86` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U53–U55 the browser sending an identity of each case's own, its Workstreams created over the API, one asked a question each, U55's titled by its first message to the mock agent. Before it, U55 failed: typed, the list filtered short, its end in view, older pages of the whole list read before the search's first page came; fixed. |
 
 ## Cases
 
@@ -66,6 +67,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U12 | — | local | R3 | proven | Write fizzbuzz.js, Write fizzbuzz.test.js, Edit fizzbuzz.js twice, Edit fizzbuzz.test.js; each with the diff its permission carried (the first +12 −0); seven permissions allowed once. |
 | U13 | — | local | R3 | proven | codex: its commands without `/usr/bin/bash -lc`, nested quoting included, the failed ones marked; opencode: its four todos as entries, "Edit fizzbuzz.js" from a path title, its reasoning kept. |
 | U14 | — | local | R3 | proven | Today, Yesterday, Previous 7 days, Older; the two with no entry left out, the open one kept; "FIZZ" keeps one. |
+| U14 | — | unit | R23 | proven | As R3; `Ancient` read by a page as it was and by the stream renamed: once, `Ancient, renamed`, first. |
 | U15 | — | local | R3 | proven | Waits before the snapshot, while starting and while the view shows the previous execution; writes once ready with its Session; gives back on failed, ended and lost. |
 | U15 | — | cluster | R4 | partial: the message given back is not exercised | From the draft: the message shown at once, "waiting for the sandbox", "starting Mock agent"; the address `/w/<id>`; written once ready; nothing created before the send. |
 | U16 | — | local | R5 | proven | The draft at `/`, "What shall we work on?", none of the open Workstream's messages; Back: its address and "Echo #1" again. Without the fix (the thread kept on a draft), the old message stayed: the bug seen on the preview. |
@@ -117,6 +119,9 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U50 | — | local | R19 | proven | One box, `data-question` `pending`, holding the title, the text, "waiting for you", the note's field and the buttons Approve and Revise; "waiting for you" on the list's row; "Answer the question above.". The note written and Revise chosen: the Answer command `{"question":"1"}`, `{"optionId":"revise","note":"One criterion per behaviour."}`; the box `answered`, its foot "Revise — One criterion per behaviour.", the note's field gone, Send enabled. |
 | U51 | — | local | R20 | proven | Team picked: no Model or Access button, "Describe the goal for the team…"; the goal sent: Prefect asked with `goal` "Make uploads reliable", `lead_workstream` the Workstream opened, `owner` the person's identity, `members_owner` their agents folder's, the key `agora-team-<id>`; "The team is starting…", Send disabled. |
 | U52 | — | local | R20 | proven | The account button holding `person@example.org`; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the folder Agents closed, counting 1, the list one Workstream, the person's; opened, the folder's Workstream, which opens at its address; reloaded, the folder still open. Someone else's folder's Workstream shown nowhere. |
+| U53 | — | local | R23 | proven | 50 rows, no page read; the 50th opening the 11th Workstream created; the list's end in view: 60 rows, the 60th opening the first created; requests the list's stream, the folder's and one page. |
+| U54 | — | local | R23 | proven | The open one second; its question answered over the API: first, without a reload; in 15 s, no request but the list's stream and the folder's. |
+| U55 | — | local | R23 | proven | 50 rows without `Quarterly Kubernetes audit`; `kubernetes AUDIT` typed: it alone; the box emptied: 50 rows, it not among them. |
 
 ## Not covered
 

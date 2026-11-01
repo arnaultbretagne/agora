@@ -27,6 +27,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R19 | 2026-10-25 | `6a94b80` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube; questions asked on Workstreams with and without an execution. |
 | R20 | 2026-10-25 | `fdb0ff2` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; the real server (`apps/server/src/main.ts`), the proxy's identity sent as its header. |
 | R21 | 2026-10-31 | `0fddf58` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, its `/crash` and `/fail`; FakeKube deleting a claim at its deadline, its Pod pushing the anchor; renewal step 1 s and lease 60 s for L30 and L77. Before it, L30 and L77 alone with the change taken out of `workstreams.ts`: both failed, L30 timed out on "the deadline moved", L77 on `execution.lost`. |
+| R22 | 2026-11-01 | `3511c86`, then `6bd9fe5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the list's cases on the log's HTTP routes served in the test process by a projector of their own, the entries' times chosen a second apart, without the proxy and with its header. At `6bd9fe5`, `list.test.ts` alone, L85 reading the list live. Beside them, the back-fill timed once on 1,500 Workstreams with a view and no row: 4.5 s. |
 
 ## Cases
 
@@ -130,6 +131,14 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L75 | — | local | R20 | proven | `person@example.org`: `{"email":"person@example.org"}`; without the header: `{"email":null}`. |
 | L76 | — | local | R20 | proven | One Workstream each: the person's, their agents folder's, someone else's agents folder's; the person's list its own only; their `folder=agents` their folder's only; someone else's `folder=agents` theirs only; `folder=archive` 400 `unknown_folder`; without the proxy, `folder=agents` all three. |
 | L77 | real: the agent answers with an internal error (mock `/fail`, `-32603`), its adapter running | local | R21 | proven | After a normal turn the deadline 60,000 ms ahead and the execution not lost; after `/fail` the turn failed with code `-32603`, lost (`agent_failed`), the deadline −1 ms from its patch and the last one set; Write `execution_unavailable`; `execution.ended` naming the anchor received; the next execution's `session.opened` restoring it. |
+| L78 | — | local | R22 | proven | Positions 1, 2, 3: the first entry, the title changed, the state changed; the row `Second`, `starting`, harness `mock`, question null; after the rebuild still 3, the owner's last position 3. |
+| L79 | — | local | R22 | proven | The person's list their Workstream alone, at position 1; their agents' folder its own alone, at 1; someone else's list theirs alone, at 1; `folder=archive` 400 `unknown_folder`. |
+| L80 | — | local | R22 | proven | 50 rows, `Report 59` first, `Report 10` last; `snapshot-end` 60. |
+| L81 | — | local | R22 | proven | `snapshot-end` 2; the rename live once, at 3; read again from 3: no row, `snapshot-end` 3, then the other Workstream's change live once, at 4. |
+| L82 | — | local | R22 | proven | 50 rows from `Report 59` and a next cursor; from it 10, `Report 0` last, next null; `KuBeRnEtEs`: `Kubernetes rights`, `The KUBERNETES profile`, `kubernetes route`, the last from beyond the first page; from the second's cursor, `kubernetes route` alone. |
+| L83 | — | local | R22 | proven | `after=9` for a last position 1: 400 `future_cursor`; `after=-1`: 400 `invalid_cursor`; `before=yesterday`: 400 `invalid_cursor`; no owner without the proxy: 400 `invalid_identifier`. |
+| L84 | — | local | R22 | proven | The rows deleted as on a log from before the list; the back-fill `start` runs, called directly: 3 rows, then 0; the list read from zero `C`, `B`, `A`. |
+| L85 | — | local | R22 | proven | Read from 2 while both projections ran: `snapshot-end` 2, then live 3 and 4, one row of each Workstream. |
 
 ## Not covered
 
