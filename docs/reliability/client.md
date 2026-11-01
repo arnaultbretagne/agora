@@ -29,6 +29,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R21 | 2026-10-28 | `47400b2`, then `4d45a9d` | local | `npm run test:browser`'s suite, its 26 cases, run again and again pinned to two CPUs (`taskset -c 0,1`), as a GitHub runner has; Chromium recording every scroll from each phone page's load (`addInitScript`, a capture-phase listener), nothing done at the tap, and on U40's timeout the record, the viewport's measures and assistant-ui's top anchors. |
 | R22 | 2026-10-31 | `0fddf58` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0. |
 | R23 | 2026-11-01 | `3511c86` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U53–U55 the browser sending an identity of each case's own, its Workstreams created over the API, one asked a question each, U55's titled by its first message to the mock agent. Before it, U55 failed: typed, the list filtered short, its end in view, older pages of the whole list read before the search's first page came; fixed. |
+| R24 | 2026-11-01 | `4d7e0f4` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the server's Workstreams counted in its database for U18; for U23, U36 and U55 a Workstream's view read in its thread. |
 
 ## Cases
 
@@ -73,6 +74,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U16 | — | local | R5 | proven | The draft at `/`, "What shall we work on?", none of the open Workstream's messages; Back: its address and "Echo #1" again. Without the fix (the thread kept on a draft), the old message stayed: the bug seen on the preview. |
 | U17 | — | local | R5 | proven | alpha shows only its own, marked `aria-current` in the list; beta likewise. |
 | U18 | — | local | R5 | proven | The list unchanged by the draft and the harness picked; the message on screen within 1 s of Send; `/w/<id>`; "Echo #1"; one Workstream more, listed under its title. |
+| U18 | — | local | R24 | proven | The Workstreams in the server's database unchanged by the draft opened and a harness picked; one more once sent; the message at once, the address `/w/<id>`, the answer, the list. |
 | U19 | — | local | R5 | proven | Allow and Reject, "Answer the permission request above."; Allow: "Permission: allow-once.", the card gone, Send enabled. |
 | U20 | — | local | R5 | proven | Same address, "Echo #1", the message once. |
 | U21 | — | local | R5 | proven | `stopped` in the header, no Stop, "Stopped. The sandbox ends at its deadline.", Send disabled. |

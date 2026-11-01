@@ -28,14 +28,19 @@ const get = async (path: string, email: string | null) => {
   const response = await fetch(`${server.url}${path}`, { headers: email ? { 'x-forwarded-email': email } : {} })
   return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
-const ids = (body: Record<string, unknown>) => (body.workstreams as { id: string }[]).map((w) => w.id).sort()
+/** A list's ids through its pages (docs/specs/log.md, "The list"), or the refusal. */
+const listed = async (query: string, email: string | null) => {
+  const { status, body } = await get(`/api/workstreams/page?${query}`, email)
+  return status === 200 ? (body.rows as { id: string }[]).map((w) => w.id).sort() : [status, body.reason]
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 test('L75 the account: the identity the proxy passes; none without it', async () => {
   assert.deepEqual(await get('/api/account', PERSON), { status: 200, body: { email: PERSON } })
   assert.deepEqual(await get('/api/account', null), { status: 200, body: { email: null } })
 })
 
-test('L76 the agents\' folder: the caller\'s own, out of its list, nobody else\'s; an unknown folder refused', async () => {
+test('L76 the agents\' folder: the caller\'s own, out of its list, nobody else\'s; an unknown folder refused; without the proxy, the owner given', async () => {
   // The person's Workstream, their folder's, someone else's folder's; each with a question, so that it is listed.
   const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
   const owners = { own: identity('owner', PERSON), folder: folderOwner('agents', PERSON), other: folderOwner('agents', SOMEONE) }
@@ -46,13 +51,12 @@ test('L76 the agents\' folder: the caller\'s own, out of its list, nobody else\'
     assert.equal((await server.command(id, 'Ask', {}, ask)).status, 200)
     made[name] = id
   }
-  // The views are projected after the commands: waited for in the list without the proxy, which shows all.
-  await until('the three listed', async () => ids((await get('/api/workstreams', null)).body).length >= 3)
-  assert.deepEqual(ids((await get('/api/workstreams', PERSON)).body), [made.own])
-  assert.deepEqual(ids((await get('/api/workstreams?folder=agents', PERSON)).body), [made.folder])
-  assert.deepEqual(ids((await get('/api/workstreams?folder=agents', SOMEONE)).body), [made.other])
-  assert.deepEqual(await get('/api/workstreams?folder=archive', PERSON), { status: 400, body: { reason: 'unknown_folder' } })
-  // Without the proxy, every Workstream, as every list is.
-  const all = ids((await get('/api/workstreams?folder=agents', null)).body)
-  assert.ok(Object.values(made).every((id) => all.includes(id)))
+  // The views are projected after the commands: each list waited for.
+  await until('the person\'s own', async () => same(await listed('', PERSON), [made.own]))
+  await until('their folder\'s', async () => same(await listed('folder=agents', PERSON), [made.folder]))
+  await until('someone else\'s folder\'s', async () => same(await listed('folder=agents', SOMEONE), [made.other]))
+  assert.deepEqual(await listed('folder=archive', PERSON), [400, 'unknown_folder'])
+  // Without the proxy, the owner given; none, refused.
+  assert.deepEqual(await listed(`owner=${owners.folder}`, null), [made.folder])
+  assert.deepEqual(await listed('', null), [400, 'invalid_identifier'])
 })

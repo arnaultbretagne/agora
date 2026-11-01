@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { chromium, type Page } from 'playwright'
-import { cluster, database, Server, until } from '../../../packages/log/test/support.ts'
+import { cluster, database, Server, until, view as viewOf } from '../../../packages/log/test/support.ts'
 import { NOBODY } from '../src/agora/api.ts'
 
 const shots = process.env.SHOTS ?? '/tmp/shots'
@@ -36,8 +36,10 @@ test('the client on a phone', { timeout: 40 * 60_000 }, async (t) => {
   const ws = randomUUID()
   await server.post('/api/workstreams', { id: ws, owner: NOBODY })
   await server.command(ws, 'Create', {}, { pool: 'mock-test' })
-  const views = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: Record<string, unknown>[] }).workstreams
-  const view = await until('ready', async () => (await views()).find((v) => v.id === ws && v.state === 'ready'))
+  const view = await until('ready', async () => {
+    const v = await viewOf(server.url, ws)
+    return v?.state === 'ready' ? v : undefined
+  })
   const entries = async () => (await (await fetch(`${server.url}/api/workstreams/${ws}/entries`)).json()) as Record<string, unknown>[]
   const answered = async () => (await entries()).filter((e) => e.direction === 'in' && e.correlated_method === 'session/prompt').length
   const write = async (text: string) => server.command(ws, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text }] })

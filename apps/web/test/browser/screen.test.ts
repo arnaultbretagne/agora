@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
-import { cluster, database, expire, Server, until, type Db } from '../../../../packages/log/test/support.ts'
+import { cluster, database, expire, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
 import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
 import { NOBODY } from '../../src/agora/api.ts'
 
@@ -167,7 +167,8 @@ const accessChoice = (page: Page, repository: string, choice: string) => page.ge
 /** The Internet's switch in the access menu, the menu open. */
 const internetSwitch = (page: Page) => page.getByRole('menuitemcheckbox', { name: 'Internet' })
 
-const workstreams = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string }[] }).workstreams
+/** Every Workstream on the server, whoever owns it. */
+const stored = async () => Number((await db.admin.query('SELECT count(*) AS n FROM workstreams')).rows[0].n)
 
 test('U16 New workstream from an open one: the draft, empty, at /; Back: the Workstream again', async () => {
   const page = await fresh()
@@ -203,13 +204,13 @@ test('U18 a first message: nothing on the server before it; then shown at once, 
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
   await composerInput(page).fill('a brand new task')
-  const before = (await workstreams()).length
-  assert.equal((await workstreams()).length, before, 'opening the draft and picking a harness create nothing')
+  const before = await stored()
+  assert.equal(await stored(), before, 'opening the draft and picking a harness create nothing')
   await page.getByRole('button', { name: 'Send' }).click()
   await thread(page).getByText('a brand new task', { exact: true }).waitFor({ timeout: 1000 })
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
   await thread(page).getByText('Echo #1: a brand new task.').waitFor()
-  assert.equal((await workstreams()).length, before + 1)
+  assert.equal(await stored(), before + 1)
   await page.getByRole('navigation', { name: 'Workstreams' }).getByText('a brand new task').waitFor()
 })
 
@@ -264,7 +265,7 @@ test('U22 the theme: dark when toggled, kept after a reload; light in another br
 test('U23 an ended Workstream: a message continues it from its anchor, the agent remembering', async () => {
   const page = await fresh()
   const id = await started(page, 'remember mirabelle')
-  const view = (await workstreams()).find((w) => w.id === id) as unknown as { execution: string }
+  const view = (await viewOf(server.url, id)) as { execution: string }
   await page.locator('header').getByRole('button', { name: /Stop/ }).click()
   await expire(c.kube, claimName(view.execution))
   await stateLabel(page, 'ended').waitFor()
@@ -279,7 +280,7 @@ test('U23 an ended Workstream: a message continues it from its anchor, the agent
 test('U36 an ended Workstream whose Pod left no anchor: said before sending; sent, the agent is given the exchanges above', async () => {
   const page = await fresh()
   const id = await started(page, 'remember quetsche')
-  const view = (await workstreams()).find((w) => w.id === id) as unknown as { execution: string }
+  const view = (await viewOf(server.url, id)) as { execution: string }
   await page.locator('header').getByRole('button', { name: /Stop/ }).click()
   // The Pod's push never reaches the server, as when the node dies.
   const url = c.kube.anchorUrl
@@ -895,14 +896,13 @@ async function asked(owner: string, count: number): Promise<string[]> {
 }
 
 const listItems = (page: Page) => page.locator('nav[aria-label="Workstreams"] button[title]')
-/** The lists' requests, by what they read: the person's list, the agents' folder, a page, the whole list. */
+/** The lists' requests, by what they read: the person's list, the agents' folder, a page. */
 const listReads = (page: Page): string[] => {
   const reads: string[] = []
   page.on('request', (request) => {
     const url = new URL(request.url())
     if (url.pathname === '/api/workstreams/list') reads.push(url.searchParams.has('folder') ? 'folder' : 'list')
     else if (url.pathname === '/api/workstreams/page') reads.push('page')
-    else if (url.pathname === '/api/workstreams') reads.push('whole')
   })
   return reads
 }
@@ -955,11 +955,10 @@ test('U55 the title of a Workstream not loaded typed in Search, in another case:
   const titled = randomUUID()
   assert.equal((await server.post('/api/workstreams', { id: titled, owner })).status, 200)
   assert.equal((await server.command(titled, 'Create', {}, { pool: 'mock-test' })).status, 200)
-  const view = await until('ready', async () =>
-    ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string; state: string; execution: string; session: string }[] }).workstreams.find(
-      (w) => w.id === titled && w.state === 'ready',
-    ),
-  )
+  const view = await until('ready', async () => {
+    const v = (await viewOf(server.url, titled)) as { state: string; execution: string; session: string } | undefined
+    return v?.state === 'ready' ? v : undefined
+  })
   const write = await server.command(titled, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text: 'Quarterly Kubernetes audit' }] })
   assert.equal(write.status, 200)
   await until('its answer', async () => (await entriesOf(titled)).some((e) => (e as { direction?: string; correlated_method?: string }).direction === 'in' && (e as { correlated_method?: string }).correlated_method === 'session/prompt'))

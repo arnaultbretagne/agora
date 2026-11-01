@@ -95,13 +95,6 @@ export async function logHttp(
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
     const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
-    if (req.method === 'GET' && url.pathname === '/api/workstreams') {
-      const folder = url.searchParams.get('folder')
-      if (folder === null) return reply(200, { workstreams: await workstreams.projections.views(caller) }), true
-      if (!(FOLDERS as readonly string[]).includes(folder)) return reply(400, { reason: 'unknown_folder' }), true
-      // The caller's own folder; without the proxy, every Workstream, as every list is.
-      return reply(200, { workstreams: await workstreams.projections.views(email === null ? undefined : folderOwner('agents', email)) }), true
-    }
     if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
       // docs/specs/log.md, "The list": the caller's own, or its agents' folder; without the proxy, the owner given.
       const folder = url.searchParams.get('folder')

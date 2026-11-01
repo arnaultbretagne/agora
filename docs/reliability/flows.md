@@ -19,6 +19,7 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | R10 | 2026-10-25 | `fdb0ff2` | local | `npm test -w @agora/server`: the real server on PostgreSQL 17.11 with a stand-in for Prefect's API that keeps what it is asked and honours idempotency keys; the proxy's identity sent as its header. |
 | R11 | 2026-10-28 | `d7d60ca` | unit | `npm test -w @agora/flows`: Python 3.13, 43 tests, as R9, each plan's feature on the branch its lead names. |
 | R12 | 2026-10-27 | `74fc848` | unit | The `check` job of pull request #155 (GitHub Actions job 122169448411): `npm test -w @agora/flows`, the runner's Python 3, 44 tests, OK. |
+| R13 | 2026-11-01 | `4d7e0f4` | local | `npm run check`, all green: the real server (`apps/server/src/main.ts`) with a stand-in for Prefect's API, the proxy's identity sent as its header; the lead's Workstream's owner read from the database. |
 
 ## Cases
 
@@ -81,6 +82,7 @@ The evidence behind the acceptance cases of `specs/flows.md`. R1 to R3 ran the f
 | F20 | simulated: stub (a stream that idles out twice) | unit | R8 | proven | Asked once under the same key; the answer read on one connection; idled out, opened again from cursor `41`, twice. |
 | F21 | simulated: stub (a Write of the person's in the member's execution) | unit | R9 | proven | The member's second turn found by its prompt, the third turn of the Workstream, "Answer 3."; its first found again, "Answer 1."; no command sent twice; a given Workstream the member's, the only one created. |
 | F22 | — | local | R10 | proven | `GET /api/teams` `{"available":true}`; launched: 200, the Workstream in the person's list, Prefect asked once with the goal, the Workstream, the person's identity, their agents folder's and `agora-team-<id>`, the run's address in Prefect's UI; sent again, the same run. A blank goal 400 `invalid_goal`; another's Workstream 409 `workstream_conflict`; Prefect down 502 `teams_unreachable`, nothing asked. |
+| F22 | — | local | R13 | proven | As R10, the Workstream stored under the person's identity rather than found in their list. |
 | F23 | — | unit | R12 | proven | `previews` offered: the judge's access for a feature `github:acme/app:read`, `internet`, `previews`; without a feature, both repositories' `:read`, `internet`, `previews`; an offer with `zai` and another repository's `:write` added none of them. Not offered: the access as before, the same as without an offer. |
 | F24 | — | unit | R11 | proven | `feat/credentials-vault`, a branch another run started, kept as named; no branch, `feat/upload retry`, `feat/../x`, `-x`, `feat/x.lock`, `feat/x/` refused as no branch git accepts; `develop` as its own base, `main` from `develop`, refused; a second feature on `feat/upload-retry`, in the plan and by an `ask`, refused as carried by `retry`; the dev's prompt: "Your branch: `feat/upload-retry`. If it exists, continue it". |
 

@@ -339,9 +339,9 @@ export class Lab {
     for (const relay of this.relays.values()) relay.cut()
   }
 
-  async workstream(): Promise<string> {
+  async workstream(owner = randomUUID()): Promise<string> {
     const id = randomUUID()
-    await this.store.create(id, randomUUID())
+    await this.store.create(id, owner)
     return id
   }
 
@@ -567,6 +567,11 @@ export async function readThread(
  * A fresh database, a Lab on it, a Workstream, and an open execution. The Lab in `lab` when the test
  * ends is closed, then the database dropped: a test that restarts Agora puts the new Lab there.
  */
+/** A Workstream's view as its thread gives it (docs/specs/log.md, "HTTP"); none before its first entry. */
+export async function view(base: string, workstream: string): Promise<Record<string, unknown> | undefined> {
+  return (await readThread(base, workstream, '0')).snapshot.find((r) => r.kind === 'workstream')?.object as Record<string, unknown> | undefined
+}
+
 export async function opened(
   t: { after(fn: () => Promise<void>): void },
   options: Omit<LabOptions, 'db'> = {},
