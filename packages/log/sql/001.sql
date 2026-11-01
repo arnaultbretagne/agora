@@ -5,6 +5,11 @@ DO $$ BEGIN CREATE ROLE agora_anchors NOLOGIN; EXCEPTION WHEN duplicate_object O
 CREATE TABLE IF NOT EXISTS workstreams (
  id uuid PRIMARY KEY, owner uuid NOT NULL, last_position bigint NOT NULL DEFAULT 0 CHECK(last_position >= 0)
 );
+-- A sub-stream's line (docs/specs/log.md, "Sub-streams"): its parent, its root — none for a root, which is its
+-- own — and its depth. Added so that a server of the schema before keeps writing roots as it did.
+ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS parent uuid REFERENCES workstreams(id);
+ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS root uuid REFERENCES workstreams(id);
+ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS depth integer NOT NULL DEFAULT 0 CHECK(depth >= 0);
 -- The projector's own row: its lock never waits on capture, which locks the Workstream row.
 CREATE TABLE IF NOT EXISTS threads (
  workstream uuid PRIMARY KEY REFERENCES workstreams(id), last_position bigint NOT NULL DEFAULT 0 CHECK(last_position >= 0)
@@ -69,7 +74,7 @@ DO $$ BEGIN
  EXECUTE format('GRANT CONNECT ON DATABASE %I TO agora_writer, agora_projector, agora_anchors', current_database());
 END $$;
 GRANT USAGE ON SCHEMA public TO agora_writer,agora_projector,agora_anchors;
-GRANT SELECT(id,owner,last_position), INSERT(id,owner), UPDATE(last_position) ON workstreams TO agora_writer;
+GRANT SELECT(id,owner,last_position,parent,root,depth), INSERT(id,owner,parent,root,depth), UPDATE(last_position) ON workstreams TO agora_writer;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal),
  INSERT(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_writer;
 GRANT SELECT(workstream,id,kind,target,fingerprint,answer,position,execution,claim_name), INSERT(workstream,id,kind,target,fingerprint,answer,position,execution,claim_name) ON commands TO agora_writer;
@@ -77,7 +82,7 @@ GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position), INS
 GRANT SELECT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256,time), INSERT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256) ON diagnostics TO agora_writer;
 GRANT UPDATE(ended_position) ON sessions TO agora_writer;
 GRANT SELECT(id,workstream,execution,session,metadata,time) ON anchors TO agora_writer;
-GRANT SELECT(id,owner) ON workstreams TO agora_projector;
+GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
 GRANT SELECT(workstream,last_position), INSERT(workstream), UPDATE(last_position) ON threads TO agora_projector;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_projector;
 GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position), INSERT(workstream,projector,kind,id,object,first_position,last_position), UPDATE(object,first_position,last_position) ON objects TO agora_projector;

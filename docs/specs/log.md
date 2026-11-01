@@ -415,7 +415,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 
 | Table | Key | Holds |
 | --- | --- | --- |
-| `workstreams` | id | Owner, parent, root, depth, last entry position. |
+| `workstreams` | id | Owner; parent, root — none for a root, its own — and depth; last entry position. |
 | `threads` | Workstream | The thread's last position; its row is the projector's lock. |
 | `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
 | `commands` | Workstream, id | Kind, target, SHA-256 of the canonical request, the answer, its entry's position, the execution and claim name of a Create. |
@@ -425,8 +425,8 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | `objects` | Workstream, kind, id | The view object, its projector, its first and last positions. |
 | `thread` | Workstream, position | Operation, object kind and id, the object. |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
-| `lists` | List | The list's last position — a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
-| `listings` | Workstream | List, position, `changedAt`, title, the row. |
+| `lists` | Owner | The list's last position; its owner is a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
+| `listings` | Workstream | Its list's owner, position, `changedAt`, title, the row. |
 
 | Role | May | May not |
 | --- | --- | --- |

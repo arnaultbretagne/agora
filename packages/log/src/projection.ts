@@ -26,20 +26,46 @@ export interface Projector {
 }
 export const core: Projector = { name: 'core', version: '8', create: () => new CoreProjection() }
 
-/** A Workstream's row in its owner's list (docs/specs/log.md, "The list"): what a list shows of its view. */
-export type ListRow = { id: string; title: unknown; state: unknown; harness: unknown; question: unknown; changedAt: string }
+/** What lies under a Workstream, at every depth (docs/specs/log.md, "Sub-streams"). */
+export type Below = { count: number; live: number; waiting: number }
+/** A Workstream's row in its list (docs/specs/log.md, "The list"): what a list shows of its view and of what lies under it. */
+export type ListRow = {
+  id: string
+  parent: string | null
+  depth: number
+  title: unknown
+  state: unknown
+  harness: unknown
+  question: unknown
+  below: Below
+  changedAt: string
+}
 export const LIST_PAGE = 50
+/** The states of a Workstream with an execution: those a folded parent counts as live. */
+const LIVE = new Set(['starting', 'ready', 'interrupted'])
 
-function listRow(workstream: string, view: Record<string, unknown>): ListRow | null {
+function listRow(workstream: string, line: { parent: string | null; depth: number }, view: Record<string, unknown>, children: readonly ListRow[]): ListRow | null {
   // A view with no entry yet has no time to be listed by.
   if (typeof view.changedAt !== 'string') return null
+  const below: Below = { count: 0, live: 0, waiting: 0 }
+  let changedAt = view.changedAt
+  for (const child of children) {
+    const under = child.below ?? { count: 0, live: 0, waiting: 0 }
+    below.count += 1 + under.count
+    below.live += (LIVE.has(String(child.state)) ? 1 : 0) + under.live
+    below.waiting += (child.question ? 1 : 0) + under.waiting
+    if (Date.parse(child.changedAt) > Date.parse(changedAt)) changedAt = child.changedAt
+  }
   return {
     id: workstream,
+    parent: line.parent,
+    depth: line.depth,
     title: view.title ?? null,
     state: view.state ?? null,
     harness: view.harness ?? null,
     question: view.question ?? null,
-    changedAt: view.changedAt,
+    below,
+    changedAt,
   }
 }
 
@@ -238,24 +264,54 @@ export class Projections {
     )
   }
   /**
-   * Writes a Workstream's row in its owner's list with the owner's next position, unless it is the row
-   * already stored (docs/specs/log.md, "The list"). The owner's `lists` row stays locked until the
-   * transaction commits, so positions are committed in their order.
+   * Writes a Workstream's row in its list — its parent's, or its owner's for a root —, then its parent's row
+   * in its own, up to the root (docs/specs/log.md, "The list", "Up the line"). Each list's row is locked
+   * before the row it orders is computed, from the sub-stream up, and stays locked until the transaction
+   * commits: positions commit in their order, and what a row counts below it is what the lines written
+   * before it committed. A row as stored ends the climb.
    */
   private async list(client: PoolClient, workstream: string, view: unknown): Promise<void> {
-    const row = listRow(workstream, (view ?? {}) as Record<string, unknown>)
-    if (row === null) return
-    const prior = await client.query('SELECT row::text FROM listings WHERE workstream=$1', [workstream])
-    if (prior.rowCount && hash(decode(prior.rows[0].row)) === hash(row)) return
-    const owner = (await client.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])).rows[0]?.owner as string | undefined
-    if (owner === undefined) return
-    await client.query('INSERT INTO lists(owner) VALUES($1) ON CONFLICT DO NOTHING', [owner])
-    const next = (await client.query('UPDATE lists SET last_position=last_position+1 WHERE owner=$1 RETURNING last_position', [owner])).rows[0]
-      .last_position as string
-    await client.query(
-      'INSERT INTO listings(workstream,owner,position,changed_at,title,row) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(workstream) DO UPDATE SET position=excluded.position,changed_at=excluded.changed_at,title=excluded.title,row=excluded.row',
-      [workstream, owner, next, row.changedAt, typeof row.title === 'string' ? row.title : '', encode(row)],
-    )
+    let current: string | null = workstream
+    let own: unknown = view
+    while (current !== null) {
+      const line = (await client.query('SELECT owner, parent, depth FROM workstreams WHERE id=$1', [current])).rows[0] as
+        | { owner: string; parent: string | null; depth: number }
+        | undefined
+      if (line === undefined) return
+      const list = line.parent ?? line.owner
+      await client.query('INSERT INTO lists(owner) VALUES($1) ON CONFLICT DO NOTHING', [list])
+      await client.query('SELECT last_position FROM lists WHERE owner=$1 FOR UPDATE', [list])
+      if (own === undefined) {
+        const stored = await client.query("SELECT object::text FROM objects WHERE workstream=$1 AND kind='workstream' AND id=$1", [current])
+        own = stored.rowCount ? decode(stored.rows[0].object) : {}
+      }
+      const children = (await client.query('SELECT row::text FROM listings WHERE owner=$1', [current])).rows.map((r) => decode(r.row) as ListRow)
+      const row = listRow(current, line, (own ?? {}) as Record<string, unknown>, children)
+      if (row === null) return
+      const prior = await client.query('SELECT row::text FROM listings WHERE workstream=$1', [current])
+      if (prior.rowCount && hash(decode(prior.rows[0].row)) === hash(row)) return
+      const next = (await client.query('UPDATE lists SET last_position=last_position+1 WHERE owner=$1 RETURNING last_position', [list])).rows[0]
+        .last_position as string
+      await client.query(
+        'INSERT INTO listings(workstream,owner,position,changed_at,title,row) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(workstream) DO UPDATE SET position=excluded.position,changed_at=excluded.changed_at,title=excluded.title,row=excluded.row',
+        [current, list, next, row.changedAt, typeof row.title === 'string' ? row.title : '', encode(row)],
+      )
+      current = line.parent
+      own = undefined
+    }
+  }
+  /** Whether a Workstream exists and belongs to one of `owners`; any owner when none are given. */
+  async belongs(workstream: string, owners: readonly string[] | null): Promise<boolean> {
+    const found = await this.store.projector.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])
+    return found.rowCount === 1 && (owners === null || owners.includes(found.rows[0].owner as string))
+  }
+  /** docs/specs/log.md, "HTTP": a Workstream's row, one of `owners`' when they are given; null before its first entry. */
+  async row(workstream: string, owners: readonly string[] | null): Promise<ListRow | null> {
+    const found = await this.store.projector.query('SELECT l.row::text, w.owner FROM listings l JOIN workstreams w ON w.id=l.workstream WHERE l.workstream=$1', [
+      workstream,
+    ])
+    if (!found.rowCount || (owners !== null && !owners.includes(found.rows[0].owner as string))) return null
+    return decode(found.rows[0].row) as ListRow
   }
   /** At start: a Workstream with a view and no row in its owner's list gets one; the number written. */
   async backfill(): Promise<number> {
@@ -326,20 +382,25 @@ export class Projections {
     return rows.rows.map(listed)
   }
   /** docs/specs/log.md, "The list": the rows older than a page cursor, whose title holds a text when one is given. */
-  async listPage(owner: string, before: string | null, title: string | null): Promise<{ rows: ListRow[]; next: string | null }> {
-    const params: unknown[] = [owner, LIST_PAGE + 1]
-    let where = 'owner=$1'
+  /**
+   * docs/specs/log.md, "The list": the rows of a list older than a page cursor; with a title, of every list of
+   * the owner's when `tree`, sub-streams included at any depth.
+   */
+  async listPage(list: string, before: string | null, title: string | null, tree = false): Promise<{ rows: ListRow[]; next: string | null }> {
+    const params: unknown[] = [list, LIST_PAGE + 1]
+    const searching = title !== null && title.trim() !== ''
+    let where = searching && tree ? 'w.owner=$1' : 'l.owner=$1'
     if (before !== null) {
       const [changedAt, id] = pageCursor(before)
       params.push(changedAt, id)
-      where += ` AND (changed_at,workstream) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`
+      where += ` AND (l.changed_at,l.workstream) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`
     }
-    if (title !== null && title.trim() !== '') {
+    if (searching) {
       params.push(title.trim().toLowerCase())
-      where += ` AND strpos(lower(title),$${params.length}) > 0`
+      where += ` AND strpos(lower(l.title),$${params.length}) > 0`
     }
     const rows = await this.store.projector.query(
-      `SELECT row::text FROM listings WHERE ${where} ORDER BY changed_at DESC,workstream DESC LIMIT $2`,
+      `SELECT l.row::text FROM listings l JOIN workstreams w ON w.id=l.workstream WHERE ${where} ORDER BY l.changed_at DESC,l.workstream DESC LIMIT $2`,
       params,
     )
     const page = rows.rows.map((r) => decode(r.row as string) as ListRow)

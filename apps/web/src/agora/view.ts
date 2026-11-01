@@ -656,7 +656,13 @@ export function resetIn(resetsAt: string | null, now: number): string | null {
 // ---------------------------------------------------------------- the list
 
 /** A Workstream as the list holds it (docs/specs/log.md, "The list"): a few of its view's fields. */
-export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' | 'question' | 'changedAt'>
+export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' | 'question' | 'changedAt'> & {
+  /** Its line (docs/specs/log.md, "Sub-streams"): absent on a row written before the tree. */
+  readonly parent?: string | null
+  readonly depth?: number
+  /** What lies under it, at every depth: the sub-streams, those live, those waiting for the person. */
+  readonly below?: { readonly count: number; readonly live: number; readonly waiting: number }
+}
 
 export interface Section {
   readonly label: string
@@ -667,9 +673,10 @@ const DAY = 86_400_000
 
 /**
  * The Workstreams by when they last changed: today, yesterday, the past week, then older. One with no
- * entry is left out, unless it is the one open; a search keeps the titles that contain it.
+ * entry is left out, unless it is the one open, one of its parents (`line`), or something waits under it;
+ * a search keeps the titles that contain it.
  */
-export function sections(workstreams: readonly ListRow[], now: Date, search: string, current: string | null): Section[] {
+export function sections(workstreams: readonly ListRow[], now: Date, search: string, current: string | null, line: readonly string[] = []): Section[] {
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const wanted = search.trim().toLowerCase()
   const groups: { label: string; from: number }[] = [
@@ -680,7 +687,7 @@ export function sections(workstreams: readonly ListRow[], now: Date, search: str
   ]
   const out = groups.map((g) => ({ label: g.label, workstreams: [] as ListRow[] }))
   for (const w of workstreams) {
-    if (w.state === 'none' && w.id !== current && !w.question) continue
+    if (w.state === 'none' && w.id !== current && !line.includes(w.id) && !w.question && !w.below?.waiting) continue
     if (wanted !== '' && !w.title.toLowerCase().includes(wanted)) continue
     const at = w.changedAt ? Date.parse(w.changedAt) : now.getTime()
     out[groups.findIndex((g) => at >= g.from)]!.workstreams.push(w)

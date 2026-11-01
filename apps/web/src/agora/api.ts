@@ -67,20 +67,33 @@ export class Api {
     return `${this.base}/api/workstreams/${encodeURIComponent(workstream)}/thread?after=${encodeURIComponent(cursor)}`
   }
 
-  /** The caller's list, or one of its folders', from a cursor (docs/specs/log.md, "The list"); the owner only counts without the proxy. */
-  listUrl(folder: Folder | null, cursor: string): string {
-    return `${this.base}/api/workstreams/list?after=${encodeURIComponent(cursor)}&owner=${NOBODY}${folder === null ? '' : `&folder=${folder}`}`
+  /**
+   * The caller's list, one of its folders', or a Workstream's sub-streams, from a cursor (docs/specs/log.md,
+   * "The list"); the owner only counts without the proxy.
+   */
+  listUrl(folder: Folder | null, cursor: string, parent: string | null = null): string {
+    const query = new URLSearchParams({ after: cursor, owner: NOBODY })
+    if (folder !== null) query.set('folder', folder)
+    if (parent !== null) query.set('parent', parent)
+    return `${this.base}/api/workstreams/list?${query.toString()}`
   }
 
   /** The rows of a list older than `before` — the most recent without it —, those whose title holds `title` when given. */
-  async page(folder: Folder | null, before: string | null, title = ''): Promise<Page> {
+  async page(folder: Folder | null, before: string | null, title = '', parent: string | null = null): Promise<Page> {
     const query = new URLSearchParams({ owner: NOBODY })
     if (folder !== null) query.set('folder', folder)
+    if (parent !== null) query.set('parent', parent)
     if (before !== null) query.set('before', before)
     if (title.trim() !== '') query.set('title', title.trim())
     const { status, body } = await this.read(`/api/workstreams/page?${query.toString()}`)
     if (status !== 200) throw new Error(String(body.reason ?? 'unavailable'))
     return { rows: (Array.isArray(body.rows) ? body.rows : []) as ListRow[], next: typeof body.next === 'string' ? body.next : null }
+  }
+
+  /** A Workstream's row (docs/specs/log.md, "HTTP"): its line, for the header; null before its first entry. */
+  async row(workstream: string): Promise<ListRow | null> {
+    const { status, body } = await this.read(`/api/workstreams/${encodeURIComponent(workstream)}/row`)
+    return status === 200 ? (body as unknown as ListRow) : null
   }
 
   /** Who the proxy says the caller is (docs/specs/log.md, "HTTP"). */

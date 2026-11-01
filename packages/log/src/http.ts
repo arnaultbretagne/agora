@@ -95,38 +95,48 @@ export async function logHttp(
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
     const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
+    // What the caller owns: its own Workstreams and its agents' folder's; anything without the proxy.
+    const owned = email === null ? null : [caller!, folderOwner('agents', email)]
     if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
-      // docs/specs/log.md, "The list": the caller's own, or its agents' folder; without the proxy, the owner given.
+      // docs/specs/log.md, "The list": the caller's own, its agents' folder, or one of its Workstreams'
+      // sub-streams; without the proxy, the owner or parent given.
       const folder = url.searchParams.get('folder')
       if (folder !== null && !(FOLDERS as readonly string[]).includes(folder)) throw new Error('unknown_folder')
-      const owner = email === null ? uuid(url.searchParams.get('owner')) : folder === null ? caller! : folderOwner('agents', email)
+      const parent = url.searchParams.get('parent')
+      let list: string
+      if (parent !== null) {
+        list = uuid(parent)
+        if (!(await workstreams.projections.belongs(list, owned))) throw new Error('unknown_workstream')
+      } else list = email === null ? uuid(url.searchParams.get('owner')) : folder === null ? caller! : folderOwner('agents', email)
       if (url.pathname === '/api/workstreams/page')
-        return reply(200, await workstreams.projections.listPage(owner, url.searchParams.get('before'), url.searchParams.get('title'))), true
+        return reply(200, await workstreams.projections.listPage(list, url.searchParams.get('before'), url.searchParams.get('title'), parent === null)), true
       const after = url.searchParams.get('after') ?? '0'
       cursor(after)
       await feed(
         res,
-        () => workstreams.projections.listSnapshot(owner, after),
-        (position) => workstreams.projections.listTail(owner, position),
+        () => workstreams.projections.listSnapshot(list, after),
+        (position) => workstreams.projections.listTail(list, position),
       )
       return true
     }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
-      // The caller's identity; the body's owner without one.
+      // The caller's identity; the body's owner without one; with a parent, the parent's ("Sub-streams").
       const id = uuid(input.id),
-        owner = caller ?? uuid(input.owner)
+        parent = input.parent === undefined || input.parent === null ? null : uuid(input.parent),
+        owner = caller ?? (parent === null ? uuid(input.owner) : null)
       try {
-        await store.create(id, owner)
+        await store.create(id, owner, parent, owned)
       } catch (error) {
         if (error instanceof Error && error.message === 'workstream_conflict') return reply(409, { reason: 'workstream_conflict' }), true
+        if (error instanceof Error && error.message === 'unknown_parent') return reply(404, { reason: 'unknown_parent' }), true
         throw error
       }
       reply(200, { id })
       return true
     }
-    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials)$/.exec(url.pathname)
+    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials|row)$/.exec(url.pathname)
     if (!route) return reply(404, { reason: 'unknown_route' }), true
     const workstream = uuid(decodeURIComponent(route[1]!)),
       verb = route[2]
@@ -141,6 +151,11 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)
+    if (req.method === 'GET' && verb === 'row') {
+      // docs/specs/log.md, "HTTP": a Workstream's row, so that a client climbs its line.
+      const row = await workstreams.projections.row(workstream, owned)
+      return row === null ? reply(404, { reason: 'unknown_workstream' }) : reply(200, row), true
+    }
     if (!options.testRoutes) return reply(404, { reason: 'unknown_route' }), true
     if (req.method === 'POST' && verb === 'control') {
       const input = await body(),

@@ -9,7 +9,7 @@ import { AssistantRuntimeProvider, useExternalStoreRuntime, type CompleteAttachm
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
-import { useList, useThread, type ListFeed } from './hooks.ts'
+import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
 import {
@@ -30,6 +30,7 @@ import {
   type AgentCommand,
   type Composer,
   type Setting,
+  type ListRow,
   type WorkstreamView,
 } from './view.ts'
 
@@ -96,6 +97,8 @@ export interface Agora {
   readonly account: Account
   /** The person's agents' folder: their runs' members. */
   readonly agents: ListFeed
+  /** The open Workstream's parents, its root first; none for a root (docs/specs/assistant-ui.md, "Header"). */
+  readonly line: readonly ListRow[]
   /** The messages handed to assistant-ui, which shows them a render later. */
   readonly messages: readonly ThreadMessageLike[]
 }
@@ -145,6 +148,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const [account, setAccount] = useState<Account>({ email: null })
   const list = useList(api)
   const agents = useList(api, 'agents', account.email !== null)
+  const line = useLine(api, id)
   useEffect(() => {
     void api.account().then(setAccount, () => undefined)
   }, [api])
@@ -424,6 +428,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     teams,
     account,
     agents,
+    line,
     messages,
   }
   return (
