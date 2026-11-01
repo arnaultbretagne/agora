@@ -29,6 +29,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R21 | 2026-10-31 | `0fddf58` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, its `/crash` and `/fail`; FakeKube deleting a claim at its deadline, its Pod pushing the anchor; renewal step 1 s and lease 60 s for L30 and L77. Before it, L30 and L77 alone with the change taken out of `workstreams.ts`: both failed, L30 timed out on "the deadline moved", L77 on `execution.lost`. |
 | R22 | 2026-11-01 | `3511c86`, then `6bd9fe5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the list's cases on the log's HTTP routes served in the test process by a projector of their own, the entries' times chosen a second apart, without the proxy and with its header. At `6bd9fe5`, `list.test.ts` alone, L85 reading the list live. Beside them, the back-fill timed once on 1,500 Workstreams with a view and no row: 4.5 s. |
 | R23 | 2026-11-01 | `4d7e0f4` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; `GET /api/workstreams` gone, a Workstream's view read in its thread, the lists through `GET /api/workstreams/page`, with and without `X-Forwarded-Email`. |
+| R24 | 2026-11-01 | `bd2f569` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the tree's cases on the lists' bench (`packages/log/test/lists.ts`), entries a second apart, with and without the proxy's header. Beside it, the one-off mapping script on a throwaway database shaped as production: the dry run changed nothing, applied it moved the 33, run again it refused. |
 
 ## Cases
 
@@ -137,6 +138,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L76 | — | local | R23 | proven | The person's list their Workstream alone; their `folder=agents` their folder's alone; someone else's theirs alone; `folder=archive` 400 `unknown_folder`; without the proxy, their folder's owner given: its Workstream alone; none given: 400 `invalid_identifier`. |
 | L77 | real: the agent answers with an internal error (mock `/fail`, `-32603`), its adapter running | local | R21 | proven | After a normal turn the deadline 60,000 ms ahead and the execution not lost; after `/fail` the turn failed with code `-32603`, lost (`agent_failed`), the deadline −1 ms from its patch and the last one set; Write `execution_unavailable`; `execution.ended` naming the anchor received; the next execution's `session.opened` restoring it. |
 | L78 | — | local | R22 | proven | Positions 1, 2, 3: the first entry, the title changed, the state changed; the row `Second`, `starting`, harness `mock`, question null; after the rebuild still 3, the owner's last position 3. |
+| L78 | — | local | R24 | proven | Positions 1, 2, 3; the row with `parent` null, `depth` 0 and `below` all 0; after the rebuild still 3. |
 | L79 | — | local | R22 | proven | The person's list their Workstream alone, at position 1; their agents' folder its own alone, at 1; someone else's list theirs alone, at 1; `folder=archive` 400 `unknown_folder`. |
 | L80 | — | local | R22 | proven | 50 rows, `Report 59` first, `Report 10` last; `snapshot-end` 60. |
 | L81 | — | local | R22 | proven | `snapshot-end` 2; the rename live once, at 3; read again from 3: no row, `snapshot-end` 3, then the other Workstream's change live once, at 4. |
@@ -144,6 +146,15 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L83 | — | local | R22 | proven | `after=9` for a last position 1: 400 `future_cursor`; `after=-1`: 400 `invalid_cursor`; `before=yesterday`: 400 `invalid_cursor`; no owner without the proxy: 400 `invalid_identifier`. |
 | L84 | — | local | R22 | proven | The rows deleted as on a log from before the list; the back-fill `start` runs, called directly: 3 rows, then 0; the list read from zero `C`, `B`, `A`. |
 | L85 | — | local | R22 | proven | Read from 2 while both projections ran: `snapshot-end` 2, then live 3 and 4, one row of each Workstream. |
+| L86 | — | local | R24 | proven | The root, the first and the second: the person's identity as owner whatever the body's `owner`; parents none, the root, the first; root the root; depths 0, 1, 2. Created without the proxy under the second: the person's, depth 3. The same POST again: 200. |
+| L87 | — | local | R24 | proven | An unknown parent, another person's, the same id under an unknown parent: 404 `unknown_parent` each; under another existing parent and with none: 409 `workstream_conflict`; one Workstream more, the sibling made for the case. |
+| L88 | — | local | R24 | proven | The owner's list the root alone; the root's the first at 3 and the second at 2, the first after its own sub-stream changed; the first's its sub-stream at 1; `below` 3 and 3 live on the root, 1 and 1 on the first. |
+| L89 | — | local | R24 | proven | Asked: the first's and the root's `waiting` 1, their `changedAt` the question's, each at a later position; answered: 0 and 0, the root's `changedAt` the answer's, a later position again; a newer root listed after it once its sub-stream changed. |
+| L90 | — | local | R24 | proven | Two sub-streams projected at once, both `starting`, one asking: the root's `below` count 2, live 2, waiting 1. |
+| L91 | — | local | R24 | proven | Two rows deleted, the root's `below` zeroed: the back-fill wrote 2, the first in the root's list and its sub-stream in the first's; the root's `below` 2, 2, 1; again, 0. |
+| L92 | — | local | R24 | proven | Six levels down: depth 6 in the table and in the row. |
+| L93 | — | local | R24 | proven | The sub-stream two levels down: 200, its parent, depth 2, its title; one without an entry: 404 `unknown_workstream`; another person's: 404 `unknown_workstream`. |
+| L94 | — | local | R24 | proven | `GATEWAY` found the sub-stream two levels down, with its parent; without a text, the owner's list the root alone. |
 
 ## Not covered
 
