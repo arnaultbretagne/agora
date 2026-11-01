@@ -155,6 +155,8 @@ export class Workstreams implements Handler {
     }
     await this.executions.start(this)
     for (const workstream of new Set([...this.live, ...(await this.store.behind(core.version))])) await this.serial(workstream, () => this.project(workstream))
+    // docs/specs/log.md, "The list": a Workstream with a view and no row in its owner's list gets one.
+    await this.projections.backfill()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
   }
 

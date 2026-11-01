@@ -29,6 +29,7 @@ import {
   poolLimits,
   poolSettings,
   resetIn,
+  merged,
   sections,
   startBody,
   windowName,
@@ -301,6 +302,10 @@ test('U14 the Workstream list: by the day it last changed, without the empty one
   ])
   assert.deepEqual(sections(list, now, '', 'e')[0]!.workstreams.map((x) => x.id), ['a', 'e'])
   assert.deepEqual(sections(list, now, 'FIZZ', null).map((s) => s.workstreams.map((x) => x.id)), [['b']])
+  // Read by the stream as just changed, and by an older page as it was: once, as last changed, first.
+  const page = [w('d', 'Ancient', at(40)), w('c', 'Old task', at(5))]
+  const stream = [w('d', 'Ancient, renamed', at(0, 14)), list[0]!]
+  assert.deepEqual(merged(page, stream).map((x) => [x.id, x.title]), [['d', 'Ancient, renamed'], ['a', 'Fix the login'], ['c', 'Old task']])
 })
 
 test('U15 a first message waits for the Session its Create opens: written once ready, given back if the execution fails', () => {

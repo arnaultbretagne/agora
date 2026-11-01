@@ -3,6 +3,7 @@
 BEGIN;
 CREATE TEMP TABLE purged ON COMMIT DROP AS
   SELECT id FROM workstreams WHERE owner = 'c45e0000-0000-4000-8000-000000000000';
+DELETE FROM listings WHERE workstream IN (SELECT id FROM purged);
 DELETE FROM thread WHERE workstream IN (SELECT id FROM purged);
 DELETE FROM threads WHERE workstream IN (SELECT id FROM purged);
 DELETE FROM objects WHERE workstream IN (SELECT id FROM purged);

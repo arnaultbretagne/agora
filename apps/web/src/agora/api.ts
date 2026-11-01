@@ -2,7 +2,7 @@
 // is given, for the tests.
 import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
-import type { AccountLimits, AgentCommand, Setting, WorkstreamView } from './view.ts'
+import type { AccountLimits, AgentCommand, ListRow, Setting } from './view.ts'
 import type { PromptCapabilities } from './attachments.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
@@ -14,6 +14,15 @@ export interface Account {
 
 /** A folder of the person's (docs/specs/log.md, "HTTP"): `agents`, the Workstreams of their runs' agents. */
 export type Folder = 'agents'
+
+/** The owner where the proxy passes no identity: the one the client creates with, and lists. */
+export const NOBODY = '00000000-0000-4000-8000-000000000000'
+
+/** A page of a list (docs/specs/log.md, "The list"): its rows, and the next page's cursor or null. */
+export interface Page {
+  readonly rows: readonly ListRow[]
+  readonly next: string | null
+}
 
 export interface Answer {
   readonly accepted: boolean
@@ -58,10 +67,20 @@ export class Api {
     return `${this.base}/api/workstreams/${encodeURIComponent(workstream)}/thread?after=${encodeURIComponent(cursor)}`
   }
 
-  /** The caller's Workstreams, or those of one of its folders. */
-  async workstreams(folder: Folder | null = null): Promise<WorkstreamView[]> {
-    const query = folder === null ? '' : `?folder=${folder}`
-    return ((await this.read(`/api/workstreams${query}`)).body.workstreams ?? []) as WorkstreamView[]
+  /** The caller's list, or one of its folders', from a cursor (docs/specs/log.md, "The list"); the owner only counts without the proxy. */
+  listUrl(folder: Folder | null, cursor: string): string {
+    return `${this.base}/api/workstreams/list?after=${encodeURIComponent(cursor)}&owner=${NOBODY}${folder === null ? '' : `&folder=${folder}`}`
+  }
+
+  /** The rows of a list older than `before` — the most recent without it —, those whose title holds `title` when given. */
+  async page(folder: Folder | null, before: string | null, title = ''): Promise<Page> {
+    const query = new URLSearchParams({ owner: NOBODY })
+    if (folder !== null) query.set('folder', folder)
+    if (before !== null) query.set('before', before)
+    if (title.trim() !== '') query.set('title', title.trim())
+    const { status, body } = await this.read(`/api/workstreams/page?${query.toString()}`)
+    if (status !== 200) throw new Error(String(body.reason ?? 'unavailable'))
+    return { rows: (Array.isArray(body.rows) ? body.rows : []) as ListRow[], next: typeof body.next === 'string' ? body.next : null }
   }
 
   /** Who the proxy says the caller is (docs/specs/log.md, "HTTP"). */
@@ -82,7 +101,7 @@ export class Api {
       const { status, body } = await this.read('/api/teams', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, goal, owner: '00000000-0000-4000-8000-000000000000' }),
+        body: JSON.stringify({ id, goal, owner: NOBODY }),
       })
       return status === 200 ? { accepted: true } : { accepted: false, reason: String(body.reason ?? 'unavailable') }
     } catch {
@@ -110,7 +129,7 @@ export class Api {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // The owner is the proxy's identity; this one only stands in where there is none.
-      body: JSON.stringify({ id, owner: '00000000-0000-4000-8000-000000000000' }),
+      body: JSON.stringify({ id, owner: NOBODY }),
     })
     return status === 200 ? { accepted: true } : { accepted: false, reason: String(body.reason ?? 'unavailable') }
   }

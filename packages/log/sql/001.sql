@@ -51,8 +51,17 @@ CREATE TABLE IF NOT EXISTS checkpoints (
  workstream uuid NOT NULL REFERENCES workstreams(id), projector text NOT NULL, version text NOT NULL,
  position bigint NOT NULL, PRIMARY KEY(workstream,projector)
 );
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints FROM PUBLIC;
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints FROM agora_writer,agora_projector,agora_anchors;
+-- An owner's list (docs/specs/log.md, "The list"): its row is the lock that orders the owner's rows.
+CREATE TABLE IF NOT EXISTS lists (
+ owner uuid PRIMARY KEY, last_position bigint NOT NULL DEFAULT 0 CHECK(last_position >= 0)
+);
+CREATE TABLE IF NOT EXISTS listings (
+ workstream uuid PRIMARY KEY REFERENCES workstreams(id), owner uuid NOT NULL, position bigint NOT NULL CHECK(position > 0),
+ changed_at timestamptz NOT NULL, title text NOT NULL, row jsonb NOT NULL, UNIQUE(owner,position)
+);
+CREATE INDEX IF NOT EXISTS listings_recent ON listings(owner,changed_at DESC,workstream DESC);
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM PUBLIC;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;
 -- Only the log's roles connect, besides the owner applying this file.
 DO $$ BEGIN
@@ -76,6 +85,8 @@ GRANT DELETE ON objects TO agora_projector;
 GRANT SELECT(workstream,projector,version,position), INSERT(workstream,projector,version,position), UPDATE(version,position) ON checkpoints TO agora_projector;
 GRANT DELETE ON checkpoints TO agora_projector;
 GRANT SELECT(workstream,position,operation,kind,id,object), INSERT(workstream,position,operation,kind,id,object) ON thread TO agora_projector;
+GRANT SELECT(owner,last_position), INSERT(owner), UPDATE(last_position) ON lists TO agora_projector;
+GRANT SELECT(workstream,owner,position,changed_at,title,row), INSERT(workstream,owner,position,changed_at,title,row), UPDATE(position,changed_at,title,row) ON listings TO agora_projector;
 GRANT SELECT(id,owner) ON workstreams TO agora_anchors;
 GRANT SELECT(workstream,execution,session,kind,position) ON entries TO agora_anchors;
 GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position) ON sessions TO agora_anchors;

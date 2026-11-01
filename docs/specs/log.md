@@ -329,11 +329,29 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 | Reading | From cursor C: a consistent snapshot through high-water mark H — the latest state or removal of each object changed in (C, H], then `snapshot-end` carrying H — then live updates after H. A `reset` in (C, H] sends the complete state at H. |
 | Cursor | A decimal string, compared losslessly. Zero asks for a complete snapshot; a negative cursor or one beyond H is refused. |
 
+### The list
+
+What the client's list of Workstreams reads (`assistant-ui.md`, "The exchanges"): one light row per
+Workstream, written beside its view, read as the thread is read, so that a client follows the
+changes instead of fetching every view again.
+
+| Rule | Detail |
+| --- | --- |
+| Row | The Workstream's id, and of its view `title`, `state`, `harness`, `question` and `changedAt`. Written in the transaction that writes the view, once the Workstream has one. |
+| Owner | The Workstream's owner: the person's identity for their own, their agents' folder for their agents' ("HTTP"). Each owner's rows form one list. |
+| Positions | Per owner, strictly increasing and never reused: each row written takes the owner's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
+| Reading | From cursor C, as the thread: from zero, the 50 most recently changed rows, by `changedAt` then id; from C, the current row of each Workstream whose row was written in (C, H]; then `snapshot-end` carrying H, the owner's last position; then the rows written after H, live. |
+| Pages | The rows older than a page cursor, by `changedAt` then id, 50 at most, with the next page's cursor or none; only those whose title holds a text, ignoring case, when one is given. A page cursor is the last row's `changedAt` and id. |
+| Removal | None is sent: a Workstream deleted from the log leaves the list at its next reading from zero. |
+| Back-filling | At start, a Workstream with a view and no row gets one. |
+
 ## HTTP
 
 | Route | Answer |
 | --- | --- |
 | `GET /api/workstreams` | The views of the Workstreams the caller owns — the owner its identity gives, as for a Create; every Workstream's when the proxy passes none —, the most recently changed first (`changedAt`); a Workstream with no entry yet comes first, in state `none`. With `folder`, one of the caller's folders: `agents`, the Workstreams of the agents its runs staff, owned by the name-based UUID of its identity under `agents` rather than `owner` — the caller's folder alone, out of its own list; every Workstream's without the proxy; 400 `unknown_folder` for any other. |
+| `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list"): `snapshot` rows, `snapshot-end`, then `live` rows. With `folder=agents`, its agents' folder's. Without the proxy, the list of the `owner` given; 400 `invalid_identifier` without one. |
+| `GET /api/workstreams/page?before=B&title=T` | JSON: `rows`, the caller's rows older than page cursor B — the most recent without one —, whose title holds T when given; `next`, the following page's cursor, or null. `folder` and `owner` as for the list; 400 `invalid_cursor` for a malformed cursor. |
 | `GET /api/account` | `email`: the identity the proxy passes, as it passes it, or null without one. |
 | `POST /api/workstreams` | Creates a Workstream: `id`; the owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one. 409 if the id belongs to another owner. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
@@ -391,11 +409,13 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | `objects` | Workstream, kind, id | The view object, its projector, its first and last positions. |
 | `thread` | Workstream, position | Operation, object kind and id, the object. |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
+| `lists` | Owner | The list's last position; its row is the lock that orders the owner's rows. |
+| `listings` | Workstream | Owner, position, `changedAt`, title, the row. |
 
 | Role | May | May not |
 | --- | --- | --- |
 | `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread or checkpoints. |
-| `agora_projector` | Read Workstream ids and owners, and entries; write views, checkpoints and the thread; update the thread's last position. | Write entries, commands or Sessions; read anchors; change thread rows. |
+| `agora_projector` | Read Workstream ids and owners, and entries; write views, checkpoints, the thread and the lists; update the thread's and a list's last position. | Write entries, commands or Sessions; read anchors; change thread rows; delete a list's rows. |
 | `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
 
 | Rule | Detail |
@@ -494,6 +514,14 @@ exception message.
 | L75 | The account, with the proxy's identity and without | The e-mail; null. |
 | L76 | A Workstream of the person's, one of their agents' folder, one of someone else's folder: lists with and without `folder=agents`, for each, an unknown folder; without the proxy | The person's list its own only; their folder its own only; someone else's folder theirs only; 400 `unknown_folder`; every Workstream. |
 | L77 | The agent answers a prompt with an internal error (JSON-RPC `-32603`), its adapter still running; before it, a turn answered normally | The normal turn grants a lease and the execution goes on. Then the turn failed with that error; `execution.lost` (`agent_failed`); Write refused; the deadline moved to now, the last one set; `execution.ended` naming the anchor received; the next execution restores that anchor. |
+| L78 | A Workstream's view changes its title, then its state; then its views are rebuilt | A row with the owner's next position each time; none for the rebuild, its row unchanged. |
+| L79 | Two owners, one with a Workstream in its agents' folder, each list read | Each list holds its owner's rows only, each with its own positions. |
+| L80 | 60 Workstreams of one owner, its list read from zero | The 50 most recently changed, newest first, then `snapshot-end` with the owner's last position. |
+| L81 | The list read from zero, then a Workstream changes; then read again from the last cursor received | The change arrives live, once; read again, nothing more until the next change, which arrives once. |
+| L82 | 60 Workstreams of one owner, pages; a title filter in another case | The first page the 50 most recent, then the 10 others and no next cursor; the filter the rows whose title holds the text, from every page. |
+| L83 | A list cursor beyond the last position, a negative one; a malformed page cursor; no owner without the proxy | `future_cursor`; `invalid_cursor`; `invalid_cursor`; `invalid_identifier`. |
+| L84 | Agora started on a log whose Workstreams have views and no rows | Each gets its row once; started again, none is written. |
+| L85 | Two Workstreams of one owner projected at the same time, the list read live | Both rows arrive, with distinct positions, in the order of their positions. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

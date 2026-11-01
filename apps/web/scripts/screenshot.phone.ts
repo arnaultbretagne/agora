@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { chromium, type Page } from 'playwright'
 import { cluster, database, Server, until } from '../../../packages/log/test/support.ts'
+import { NOBODY } from '../src/agora/api.ts'
 
 const shots = process.env.SHOTS ?? '/tmp/shots'
 const SAFE_AREA = { top: 47, bottom: 34, left: 0, right: 0 }
@@ -33,7 +34,7 @@ test('the client on a phone', { timeout: 40 * 60_000 }, async (t) => {
     await db.drop()
   })
   const ws = randomUUID()
-  await server.post('/api/workstreams', { id: ws, owner: randomUUID() })
+  await server.post('/api/workstreams', { id: ws, owner: NOBODY })
   await server.command(ws, 'Create', {}, { pool: 'mock-test' })
   const views = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: Record<string, unknown>[] }).workstreams
   const view = await until('ready', async () => (await views()).find((v) => v.id === ws && v.state === 'ready'))

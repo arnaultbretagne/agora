@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U52: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U55: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -13,6 +13,7 @@ import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, Server, until, type Db } from '../../../../packages/log/test/support.ts'
 import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
+import { NOBODY } from '../../src/agora/api.ts'
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
@@ -69,9 +70,9 @@ async function fresh(): Promise<Page> {
   return page
 }
 
-/** A wide screen behind the proxy: the person's identity passed with every request, as oauth2-proxy does. */
-async function proxied(): Promise<Page> {
-  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: { 'x-forwarded-email': PERSON } })
+/** A wide screen behind the proxy: an identity passed with every request, as oauth2-proxy does. */
+async function proxied(email = PERSON): Promise<Page> {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: { 'x-forwarded-email': email } })
   const page = await context.newPage()
   page.setDefaultTimeout(30_000)
   return page
@@ -783,7 +784,8 @@ test('U46 attachments: a photo and a Markdown file attached in a draft, a binary
 test('U50 a question: one box, its text and options; waiting in the list; a note and an option chosen: Answer sent, the options gone, sending open', async () => {
   const page = await fresh()
   const id = randomUUID()
-  assert.equal((await server.post('/api/workstreams', { id, owner: randomUUID() })).status, 200)
+  // Its owner the one the client lists without the proxy.
+  assert.equal((await server.post('/api/workstreams', { id, owner: NOBODY })).status, 200)
   const options = [
     { optionId: 'approve', name: 'Approve', kind: 'allow_once' },
     { optionId: 'revise', name: 'Revise', kind: 'reject_once' },
@@ -874,5 +876,104 @@ test('U52 the account at the sidebar\'s foot, Sign out; the agents\' folder belo
   await page.reload()
   await page.getByRole('region', { name: 'Agents' }).locator('button[title]').waitFor()
   assert.equal(await page.getByRole('region', { name: 'Agents' }).getByRole('button', { name: /Agents/ }).getAttribute('aria-expanded'), 'true')
+  await page.context().close()
+})
+
+/** A question that keeps a Workstream with no execution in the list: one row of it. */
+const listed = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
+
+/** Workstreams of an owner, each with a question, one after the other: the last the most recent. */
+async function asked(owner: string, count: number): Promise<string[]> {
+  const ids: string[] = []
+  for (let i = 0; i < count; i++) {
+    const id = randomUUID()
+    assert.equal((await server.post('/api/workstreams', { id, owner })).status, 200)
+    assert.equal((await server.command(id, 'Ask', {}, listed)).status, 200)
+    ids.push(id)
+  }
+  return ids
+}
+
+const listItems = (page: Page) => page.locator('nav[aria-label="Workstreams"] button[title]')
+/** The lists' requests, by what they read: the person's list, the agents' folder, a page, the whole list. */
+const listReads = (page: Page): string[] => {
+  const reads: string[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/workstreams/list') reads.push(url.searchParams.has('folder') ? 'folder' : 'list')
+    else if (url.pathname === '/api/workstreams/page') reads.push('page')
+    else if (url.pathname === '/api/workstreams') reads.push('whole')
+  })
+  return reads
+}
+
+test('U53 sixty Workstreams: the 50 most recent listed; the end of the list in view, the 10 older below them', async () => {
+  const email = 'pages@example.org'
+  const ids = await asked(identity('owner', email), 60)
+  const page = await proxied(email)
+  const reads = listReads(page)
+  await page.goto(`${server.url}/`)
+  await until('the 50 most recent', async () => (await listItems(page).count()) === 50)
+  assert.equal(reads.filter((r) => r === 'page').length, 0, 'no page read while the end is out of view')
+  // The last of them: the 50th most recent.
+  await listItems(page).nth(49).click()
+  await page.waitForURL(new RegExp(`/w/${ids[10]!}$`))
+  await page.locator('nav[aria-label="Workstreams"]').evaluate((nav) => nav.scrollTo(0, nav.scrollHeight))
+  await until('the 10 older below', async () => (await listItems(page).count()) === 60)
+  await listItems(page).nth(59).click()
+  await page.waitForURL(new RegExp(`/w/${ids[0]!}$`))
+  assert.deepEqual([...reads].sort(), ['folder', 'list', 'page'])
+  await page.context().close()
+})
+
+test('U54 a Workstream of the list changed by another client: at the top without a reload; nothing reads the list again whole', async (t) => {
+  const email = 'live@example.org'
+  const owner = identity('owner', email)
+  const older = randomUUID()
+  assert.equal((await server.post('/api/workstreams', { id: older, owner })).status, 200)
+  const question = (await server.command(older, 'Ask', {}, listed)).body.position
+  await asked(owner, 1)
+  const page = await proxied(email)
+  const reads = listReads(page)
+  await page.goto(`${server.url}/w/${older}`)
+  // Open, it is marked: the second, the other one more recent.
+  await until('both listed', async () => (await listItems(page).count()) === 2)
+  assert.equal(await listItems(page).nth(1).getAttribute('aria-current'), 'page')
+  assert.equal((await server.command(older, 'Answer', { question: String(question) }, { optionId: 'a' })).status, 200)
+  await until('at the top', async () => (await listItems(page).nth(0).getAttribute('aria-current')) === 'page', 10_000)
+  // Longer than the 10 s the list was read again in.
+  await new Promise((resolve) => setTimeout(resolve, 15_000))
+  t.diagnostic(`list reads: ${reads.join(' ')}`)
+  assert.deepEqual([...reads].sort(), ['folder', 'list'])
+  await page.context().close()
+})
+
+test('U55 the title of a Workstream not loaded typed in Search, in another case: listed; the box emptied, the list as before', async () => {
+  const email = 'search@example.org'
+  const owner = identity('owner', email)
+  // An older Workstream titled by its first message, then 55 more recent ones.
+  const titled = randomUUID()
+  assert.equal((await server.post('/api/workstreams', { id: titled, owner })).status, 200)
+  assert.equal((await server.command(titled, 'Create', {}, { pool: 'mock-test' })).status, 200)
+  const view = await until('ready', async () =>
+    ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: { id: string; state: string; execution: string; session: string }[] }).workstreams.find(
+      (w) => w.id === titled && w.state === 'ready',
+    ),
+  )
+  const write = await server.command(titled, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text: 'Quarterly Kubernetes audit' }] })
+  assert.equal(write.status, 200)
+  await until('its answer', async () => (await entriesOf(titled)).some((e) => (e as { direction?: string; correlated_method?: string }).direction === 'in' && (e as { correlated_method?: string }).correlated_method === 'session/prompt'))
+  await asked(owner, 55)
+  const page = await proxied(email)
+  await page.goto(`${server.url}/`)
+  const nav = page.getByRole('navigation', { name: 'Workstreams' })
+  await until('the 50 most recent', async () => (await listItems(page).count()) === 50)
+  assert.equal(await nav.getByText('Quarterly Kubernetes audit').count(), 0, 'not loaded')
+  await page.getByLabel('Search the workstreams').fill('kubernetes AUDIT')
+  await nav.getByText('Quarterly Kubernetes audit').waitFor()
+  assert.equal(await listItems(page).count(), 1)
+  await page.getByLabel('Search the workstreams').fill('')
+  await until('the list as before', async () => (await listItems(page).count()) === 50)
+  assert.equal(await nav.getByText('Quarterly Kubernetes audit').count(), 0)
   await page.context().close()
 })

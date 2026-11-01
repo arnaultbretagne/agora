@@ -8,6 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { cluster, database, Server, until } from '../../../packages/log/test/support.ts'
+import { NOBODY } from '../src/agora/api.ts'
 
 const shell = join(homedir(), '.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell')
 const shots = process.env.SHOTS ?? '/tmp/shots'
@@ -27,7 +28,7 @@ test('screenshots of the client', { timeout: 40 * 60_000 }, async (t) => {
     await db.drop()
   })
   const ws = randomUUID()
-  await server.post('/api/workstreams', { id: ws, owner: randomUUID() })
+  await server.post('/api/workstreams', { id: ws, owner: NOBODY })
   shoot(`${server.url}/w/${ws}`, '1-new.png')
   await server.command(ws, 'Create', {}, { pool: 'mock-test' })
   const views = async () => ((await (await fetch(`${server.url}/api/workstreams`)).json()) as { workstreams: Record<string, unknown>[] }).workstreams
