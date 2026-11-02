@@ -1,6 +1,6 @@
 # ADR 000n — MCP
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 
 ## Context
@@ -46,7 +46,8 @@ sequenceDiagram
   checks, same log line. Nothing new runs in the sandbox, and nothing in `mcpServers` is secret.
 - **A caller the sandbox cannot name.** The header comes from the token's subject, which Agora
   signed and the gateway verified, bound to the sandbox's address; whatever the sandbox writes in
-  it is replaced. Only the gateway reaches the port that trusts it.
+  it is replaced. Of the cluster's Pods, only the gateway reaches the port that trusts it; the node,
+  which runs the cluster, reaches it as it reaches every Pod's ports.
 - **Rights where they are recorded.** Agora wrote the execution's profiles into its log; it reads
   them there, so a Scope takes effect at Agora's next call without waiting for a token.
 
