@@ -434,7 +434,7 @@ Agora opens its tools by the rights it recorded.
 | HTTP rule | `authorization`: the rule of every route with a grant — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method. With `agora:read`'s grant: `GET`, `POST` and `DELETE` on `/mcp` exactly; any other path refused (403). |
 | The caller | `x-agora-execution`, set from the JWT's `sub` — `agora <execution>` — over whatever the sandbox sent. |
 | Credential | None. |
-| Network | The gateway: egress to the `agora` Pods `app: server`, port 8082. The server: ingress on port 8082 from the `agora-gateway` Pods `app: gateway`, and from nothing else; its Service gains port `mcp`, 8082. |
+| Network | The gateway: egress to the `agora` Pods `app: server`, port 8082. The server: ingress on port 8082 from the `agora-gateway` Pods `app: gateway`, and from no other Pod — the node reaches it, as Cilium lets a node reach every port of its Pods; its Service gains port `mcp`, 8082. |
 
 Until the route exists, `mcp.agora.internal` is a host with no route of its own: the `internet` route
 takes it, refused without `internet` (403), and with it the gateway cannot resolve the name. Once the

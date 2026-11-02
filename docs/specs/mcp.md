@@ -14,7 +14,7 @@ execution's rights open, and answers as the person's own search and read would.*
 | --- | --- |
 | Address | `https://mcp.agora.internal/mcp`, the server `agora` of the session's `mcpServers` (`credentials.md`, "MCP servers"). The host resolves nowhere: only the gateway's route `agora` knows it. |
 | The route | The gateway's route `agora` (`credentials.md`, "Agora's MCP"): the token checked, a grant covering the host, the path and the method; the token's subject set as `x-agora-execution`, over whatever the sandbox sent; then the server's port 8082. |
-| The server | Port 8082, `POST /mcp`: MCP over Streamable HTTP, stateless — no `mcp-session-id`, one JSON answer per message; `GET` and `DELETE` answered 405. Only the gateway reaches the port. |
+| The server | Port 8082, `POST /mcp`: MCP over Streamable HTTP, stateless — no `mcp-session-id`, one JSON answer per message; `GET` and `DELETE` answered 405. Of the cluster's Pods, only the gateway reaches the port; the node reaches it, as it reaches every Pod's ports. |
 | The caller | `x-agora-execution`, `agora <execution>`: the execution, the Workstream its Create started, that Workstream's owner — the person, a sub-stream's owner being its root's. A message without it, or naming an execution Agora does not know: 401, nothing read. |
 | Rights | The execution's own profiles as the log records them (`log.md`, "The Workstream view": `profiles`), not the token's: `agora:read` opens `search` and `read`. `tools/list` lists what they open; a call to another tool is refused (`not_allowed`). |
 | Reach | The person's Workstreams and their sub-streams, as the person's own search reaches them, but for the agents' folder, which an agent does not reach. Never another person's. |
