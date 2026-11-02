@@ -70,26 +70,31 @@ CREATE TABLE IF NOT EXISTS listings (
  changed_at timestamptz NOT NULL, title text NOT NULL, row jsonb NOT NULL, UNIQUE(owner,position)
 );
 CREATE INDEX IF NOT EXISTS listings_recent ON listings(owner,changed_at DESC,workstream DESC);
+-- A user's message in a transcript: its blocks, one after the other.
+CREATE OR REPLACE FUNCTION transcript_user_text(element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT string_agg(part, E'\n' ORDER BY i) FROM (
+    SELECT i, CASE b->>'type'
+      WHEN 'text' THEN coalesce(b->>'text', '')
+      WHEN 'resource_link' THEN '[link: ' || coalesce(b->>'name', b->>'uri', '') || ']'
+      WHEN 'resource' THEN '[resource: ' || coalesce(b->'resource'->>'uri', '') || ']'
+      ELSE '[' || coalesce(b->>'type', 'content') || ']' END AS part
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(element->'content') = 'array' THEN element->'content' ELSE '[]'::jsonb END) WITH ORDINALITY AS x(b, i)
+  ) parts WHERE part <> ''
+$$;
 -- An element's text in a transcript (docs/specs/search.md, "The transcript"): what the catch-up gives of it
--- (docs/specs/log.md, "Continuing", "An exchange").
+-- (docs/specs/log.md, "Continuing", "An exchange"). One expression, no sub-select, so that PostgreSQL inlines
+-- it in the queries that call it: a search calls it for every message, and a call costs more than the text.
 CREATE OR REPLACE FUNCTION transcript_text(element_type text, element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE element_type
     WHEN 'agent_message_chunk' THEN btrim(coalesce(element->>'text', ''), E' \t\r\n')
     WHEN 'tool' THEN '[tool: ' || coalesce(nullif(element->>'title', ''), 'unnamed') || CASE WHEN element->>'status' = 'failed' THEN ' — failed' ELSE '' END || ']'
-    WHEN 'user' THEN (
-      SELECT string_agg(part, E'\n' ORDER BY i) FROM (
-        SELECT i, CASE b->>'type'
-          WHEN 'text' THEN coalesce(b->>'text', '')
-          WHEN 'resource_link' THEN '[link: ' || coalesce(b->>'name', b->>'uri', '') || ']'
-          WHEN 'resource' THEN '[resource: ' || coalesce(b->'resource'->>'uri', '') || ']'
-          ELSE '[' || coalesce(b->>'type', 'content') || ']' END AS part
-        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(element->'content') = 'array' THEN element->'content' ELSE '[]'::jsonb END) WITH ORDINALITY AS x(b, i)
-      ) parts WHERE part <> '')
+    WHEN 'user' THEN transcript_user_text(element)
   END
 $$;
 -- Workstreams' transcripts (docs/specs/search.md, "The transcript"): each exchange as numbered lines, in the
 -- order of its turn's prompt — its header and the user's text, then the agent's header, its text and its tools,
--- in the order of their first positions. Elements outside any turn are left out.
+-- in the order of their first positions. Elements outside any turn are left out, and so are those with no
+-- text: each element's text is computed once, then split.
 CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
   RETURNS TABLE(workstream uuid, line bigint, exchange bigint, kind text, text text) LANGUAGE sql STABLE AS $$
   WITH turns AS (
@@ -109,8 +114,7 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
     WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool')
   )
   SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
-  FROM parts p CROSS JOIN LATERAL regexp_split_to_table(p.text, E'\n') WITH ORDINALITY AS l(text, ord)
-  WHERE p.text IS NOT NULL AND p.text <> ''
+  FROM parts p CROSS JOIN LATERAL regexp_split_to_table(nullif(p.text, ''), E'\n') WITH ORDINALITY AS l(text, ord)
 $$;
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM PUBLIC;
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
@@ -133,8 +137,8 @@ GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
 GRANT SELECT(workstream,last_position), INSERT(workstream), UPDATE(last_position) ON threads TO agora_projector;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_projector;
 GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type), INSERT(workstream,projector,kind,id,object,first_position,last_position,type), UPDATE(object,first_position,last_position,type) ON objects TO agora_projector;
-REVOKE ALL ON FUNCTION transcript_text(text, jsonb), transcript(uuid[]) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION transcript_text(text, jsonb), transcript(uuid[]) TO agora_projector;
+REVOKE ALL ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) TO agora_projector;
 GRANT DELETE ON objects TO agora_projector;
 GRANT SELECT(workstream,projector,version,position), INSERT(workstream,projector,version,position), UPDATE(version,position) ON checkpoints TO agora_projector;
 GRANT DELETE ON checkpoints TO agora_projector;
