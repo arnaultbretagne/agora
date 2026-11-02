@@ -216,6 +216,17 @@ export class Workstreams implements Handler {
     return workstream === '' ? undefined : workstream
   }
 
+  /**
+   * Who calls Agora's MCP server (docs/specs/mcp.md, "The path"): the Workstream the execution serves, and the
+   * execution's own profiles as the log records them; undefined for an execution Agora does not know.
+   */
+  async caller(execution: string): Promise<{ workstream: string; profiles: readonly string[] } | undefined> {
+    const workstream = this.workstreamOf(execution)
+    if (workstream === undefined) return undefined
+    const e = (await this.store.state(workstream)).executions.get(execution)
+    return e === undefined ? undefined : { workstream, profiles: e.profiles }
+  }
+
   // ---------------------------------------------------------------- commands
 
   async command(workstream: string, command: Command): Promise<Answer> {

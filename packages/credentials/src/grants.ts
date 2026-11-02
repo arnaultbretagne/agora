@@ -56,6 +56,12 @@ const VAULT: McpServer = { type: 'http', name: 'vault', url: `https://${VAULT_HO
  * use), and only the gateway's `kubernetes` route knows it, which sends it to the API server.
  */
 export const KUBERNETES_HOST = 'kubernetes.agora.internal'
+/**
+ * The name the sandbox gives Agora's own MCP server (docs/specs/mcp.md): it resolves nowhere, and only the
+ * gateway's `agora` route knows it, which sends it to the server's port for the gateway alone.
+ */
+export const AGORA_MCP_HOST = 'mcp.agora.internal'
+const AGORA: McpServer = { type: 'http', name: 'agora', url: `https://${AGORA_MCP_HOST}/mcp`, headers: [] }
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -82,6 +88,9 @@ export function compileProfile(profile: string): Grant[] {
   // The cluster, read: GET and HEAD on the API's own paths — a watch is a GET. What may be read is the
   // credential's RBAC: no Secret, no exec, attach, port-forward or proxy, no token (docs/specs/credentials.md).
   if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
+  // Agora's own MCP server: its endpoint only, as the vault's. No tools: Agora tells its tools apart itself, by
+  // the rights it recorded (docs/specs/mcp.md).
+  if (profile === 'agora:read') return [{ host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -123,7 +132,10 @@ export function baseProfiles(annotation: string | undefined): { profiles: string
 
 /** The MCP servers an execution's profiles open, for its `session/new` (docs/specs/credentials.md, "MCP servers"): each once. */
 export function mcpServers(profiles: readonly string[]): McpServer[] {
-  return profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write') ? [VAULT] : []
+  const servers: McpServer[] = []
+  if (profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write')) servers.push(VAULT)
+  if (profiles.includes('agora:read')) servers.push(AGORA)
+  return servers
 }
 
 export function compileProfiles(profiles: readonly string[]): Grant[] {

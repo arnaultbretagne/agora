@@ -56,6 +56,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
 | `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
+| `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
@@ -106,6 +107,7 @@ service — never a repository, nor `internet`, nor the vault.
 | `vault:read`, `vault:write` | No |
 | `kubernetes:read` | No |
 | `previews` | No |
+| `agora:read` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
@@ -123,7 +125,7 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews`, `agora:read` | Itself |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
@@ -140,6 +142,7 @@ through the gateway like any host. The catalogue holds them beside the profiles.
 | --- | --- |
 | `mcpServers` | In `session/new`, and in `session/load` or `session/resume` when a Session is restored: the servers the execution's profiles — its pool's base profiles and its own — open, each once. `[]` when none does. |
 | The vault | With `vault:read` or `vault:write`, or both: one server, `{ "type": "http", "name": "vault", "url": "https://vault.bretagne.dev/mcp", "headers": [] }`. |
+| Agora | With `agora:read`: one server, `{ "type": "http", "name": "agora", "url": "https://mcp.agora.internal/mcp", "headers": [] }`. |
 | Headers | None. The gateway sets the server's credential; nothing in `mcpServers` is a secret, and it is written in the log. |
 | A Scope | Changes the token, never the Session's servers, fixed when it opens. A Session opened without the vault does not get it; one opened with it and scoped out of it keeps the server, refused by the gateway (403). |
 
@@ -211,6 +214,7 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `vault` | `vault.bretagne.dev`; an MCP backend, the tools the grants name ("The vault") | `Authorization: Bearer` + an access token of the Pocket-ID machine client `agora_gateway_vault`. |
 | `kubernetes` | `kubernetes.agora.internal`, to the cluster's API server ("Kubernetes") | `Authorization: Bearer` + the token of the gateway's own ServiceAccount, projected, read only by its RBAC. |
 | `previews` | `*.preview.bretagne.dev`, the hosts a grant's `hostPattern` covers ("Previews") | `Authorization: Bearer` + a token of the Pocket-ID client `agora_gateway_previews`; `x-agora-gate: gateway`. |
+| `agora` | `mcp.agora.internal`, to Agora's server, port 8082 ("Agora's MCP") | None; `x-agora-execution` set to the JWT's `sub`. |
 | `internet` | Any other | None. |
 
 The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
@@ -417,6 +421,25 @@ Until the route exists, `vault.bretagne.dev` is a host with no route of its own:
 takes it, refused without `internet` (403), and with it the request leaves with no credential, which
 the server refuses (401). Once the route exists, `internet` never opens it: the route compares hosts.
 
+### Agora's MCP
+
+Agora's own MCP server (`mcp.md`) is a host of the gateway like any other. The gateway checks the
+token and the grant and tells Agora who calls; it sets no credential and reads no MCP message:
+Agora opens its tools by the rights it recorded.
+
+| Element | The `agora` route |
+| --- | --- |
+| Host | `hostnames: [mcp.agora.internal]`, on the internal bind's HTTPS listener with the other routes: the sandbox sends `CONNECT mcp.agora.internal:443`, then its MCP messages to `https://mcp.agora.internal/mcp`. The name resolves nowhere: only this route knows it. |
+| Backend | `http://server.agora.svc.cluster.local:8082`, an HTTP backend: the messages pass as the sandbox sent them. |
+| HTTP rule | `authorization`: the rule of every route with a grant — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method. With `agora:read`'s grant: `GET`, `POST` and `DELETE` on `/mcp` exactly; any other path refused (403). |
+| The caller | `x-agora-execution`, set from the JWT's `sub` — `agora <execution>` — over whatever the sandbox sent. |
+| Credential | None. |
+| Network | The gateway: egress to the `agora` Pods `app: server`, port 8082. The server: ingress on port 8082 from the `agora-gateway` Pods `app: gateway`, and from nothing else; its Service gains port `mcp`, 8082. |
+
+Until the route exists, `mcp.agora.internal` is a host with no route of its own: the `internet` route
+takes it, refused without `internet` (403), and with it the gateway cannot resolve the name. Once the
+route exists, `internet` never opens it.
+
 The credentials are in the SOPS Secret `upstream-credentials`, mounted as files. The gateway
 watches these files: a rotation is a commit, with no restart. Verified: a replaced PAT was
 reloaded about a minute after the merge, the time the kubelet takes to sync the Secret. Its
@@ -569,6 +592,7 @@ call. The test page does it itself when the agent offers the option.
 | C60 | The gateway's credential replaced while a response from the app is under way | That response ends whole; the next request carries the new credential. |
 | C61 | In the cluster, the route and the gateway gate deployed, a preview open: the judge with `previews`; a browser without a session; the client `agora_gateway_previews` asked for a device code and an authorization code | The judge reaches the preview's app through the gateway gate; the browser is sent to Pocket-ID by the browser gate; Pocket-ID gives no user token for the client. |
 | C62 | In Pocket-ID, `agora_gateway_previews` given a second secret, a token asked with each; the first secret deleted; then the client deleted | A token for each while both exist; once the first is deleted, it is refused and the second still answered; once the client is deleted, neither; the tokens already issued still taken by the gateway gate until they expire, and refused once `client-<id>` is out of its identities. |
+| C63 | The grant of `agora:read`; a pool declaring it; `agora`, `agora:write` | Only `mcp.agora.internal`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host refused; never the Internet's grant, which opens nothing of it; not a base profile; the others unknown. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

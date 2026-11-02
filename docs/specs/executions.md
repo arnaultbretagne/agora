@@ -224,6 +224,7 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
 | `GET /api/config` | Whether the test routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
+| `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
 (`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 3,600 s for

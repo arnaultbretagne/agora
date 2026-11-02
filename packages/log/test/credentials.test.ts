@@ -119,6 +119,15 @@ test('C43 control: an execution with other profiles and none of the vault, and o
   assert.deepEqual(await opened(lab, bare), [])
 })
 
+test('M1 an execution with agora:read, then one without: session/new names Agora’s MCP server, over HTTP, with no header; then none', async (t) => {
+  const { lab, ws } = await started(t, { 'claude-test': 'anthropic' })
+  await lab.open(ws, { pool: 'claude-test', profiles: ['agora:read'] })
+  assert.deepEqual(await opened(lab, ws), [{ type: 'http', name: 'agora', url: 'https://mcp.agora.internal/mcp', headers: [] }])
+  const without = await lab.workstream()
+  await lab.open(without, { pool: 'claude-test', profiles: ['internet', 'github:owner/repo:read'] })
+  assert.deepEqual(await opened(lab, without), [])
+})
+
 test('C14 a Create naming an unknown profile is refused, unknown_profile, and nothing is written', async (t) => {
   const { lab, ws } = await started(t)
   assert.deepEqual(await lab.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['dropbox:everything'] }), { accepted: false, reason: 'unknown_profile' })

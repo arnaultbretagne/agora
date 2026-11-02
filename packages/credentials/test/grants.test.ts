@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
+import { AGORA_MCP_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -225,6 +225,29 @@ describe('profiles', () => {
     // The Internet opens nothing of the vault: the route compares hosts.
     assert.equal(vaultAllows(compileProfiles(['internet']), 'vault.bretagne.dev', { tool: 'read_note' }), false)
     for (const profile of ['vault', 'vault:admin', 'vault:read:write', 'vault:']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
+  })
+
+  it('C63 agora:read opens Agora’s MCP endpoint on mcp.agora.internal and nothing else; not a base profile', () => {
+    const grants = compileProfile('agora:read')
+    assert.deepEqual(new Set(grants.map((g) => g.host)), new Set([AGORA_MCP_HOST]))
+    const cases: [string, string, string, boolean][] = [
+      [AGORA_MCP_HOST, 'POST', '/mcp', true],
+      [AGORA_MCP_HOST, 'GET', '/mcp', true],
+      [AGORA_MCP_HOST, 'DELETE', '/mcp', true],
+      [AGORA_MCP_HOST, 'PUT', '/mcp', false],
+      [AGORA_MCP_HOST, 'POST', '/mcp?x=1', false],
+      [AGORA_MCP_HOST, 'POST', '/mcp/other', false],
+      [AGORA_MCP_HOST, 'GET', '/api/workstreams', false],
+      ['agora.bretagne.dev', 'POST', '/mcp', false],
+      [KUBERNETES_HOST, 'GET', '/api', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+    // Never the Internet's: no grant on `*`; and the Internet's grant opens nothing of it.
+    assert.equal(allowedOnline(grants, 'POST', '/mcp'), false)
+    assert.equal(allowed(compileProfiles(['internet']), AGORA_MCP_HOST, 'POST', '/mcp'), false)
+    assert.equal(BASE_PROFILES.has('agora:read'), false)
+    assert.deepEqual(baseProfiles('anthropic,agora:read'), { profiles: [], refused: 'agora:read' })
+    for (const profile of ['agora', 'agora:write', 'agora:read:all', 'agora:']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
   })
 
   it('C42 a vault:read grant covers a call of a read tool, never of a write tool; vault:write covers both', () => {
