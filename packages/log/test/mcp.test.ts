@@ -87,7 +87,8 @@ test('M5 port 8082 without x-agora-execution, naming an execution Agora does not
   const list = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }
   const post = (headers: Record<string, string>) =>
     fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body: JSON.stringify(list) })
-  for (const headers of [{}, { [CALLER_HEADER]: `agora ${randomUUID()}` }, { [CALLER_HEADER]: execution }]) {
+  const callers: Record<string, string>[] = [{}, { [CALLER_HEADER]: `agora ${randomUUID()}` }, { [CALLER_HEADER]: execution }]
+  for (const headers of callers) {
     const response = await post(headers)
     assert.deepEqual([response.status, await response.json()], [401, { reason: 'unknown_caller' }], JSON.stringify(headers))
   }
