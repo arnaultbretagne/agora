@@ -67,9 +67,8 @@ test('L23 a projector version change drops its object, resets, and keeps the oth
   await first.run(ws, extra('1', ['kept', 'dropped']))
   await lab.workstreams.projections.run(ws)
   const before = await first.objects(ws)
-  const thread = async () => (await lab.store.projector.query('SELECT position,operation FROM thread WHERE workstream=$1 ORDER BY position', [ws])).rows
-  const rowsBefore = await thread()
-  const last = BigInt(rowsBefore.at(-1)!.position)
+  const high = async () => (await lab.store.projector.query('SELECT last_position,reset_position FROM threads WHERE workstream=$1', [ws])).rows[0]
+  const last = BigInt((await high()).last_position)
   const second = new Projections(lab.store, [core, extra('2', ['kept'])])
   await second.run(ws, extra('2', ['kept']))
   const after = await second.objects(ws)
@@ -80,16 +79,14 @@ test('L23 a projector version change drops its object, resets, and keeps the oth
     coreAfter = after.filter((o) => object(o.object)?.type !== 'extra')
   assert.equal(hash(coreAfter), hash(coreBefore))
   assert.equal(object(after.find((o) => o.id === identity(ws, 'extra', 'kept'))!.object)?.version, '2')
-  const rowsAfter = await thread()
-  // Nothing truncated: the earlier rows stay, then reset and the complete state follow.
-  assert.deepEqual(rowsAfter.slice(0, rowsBefore.length), rowsBefore)
-  const appended = rowsAfter.slice(rowsBefore.length)
-  assert.deepEqual(appended.map((r) => BigInt(r.position)), appended.map((_, i) => last + 1n + BigInt(i)))
-  assert.equal(appended[0]!.operation, 'reset')
-  assert.deepEqual(appended.slice(1).map((r) => r.operation), after.map(() => 'upsert'))
+  // Positions go on: the reset takes the next one, then every object one after it.
+  const now = await high()
+  assert.equal(BigInt(now.reset_position), last + 1n)
+  assert.equal(BigInt(now.last_position), last + 1n + BigInt(after.length))
   const read = await readThread(lab.url, ws, String(last))
-  assert.equal(read.snapshot[0]?.operation, 'reset')
+  assert.deepEqual(read.snapshot.map((r) => [r.operation, BigInt(r.position)]), [['reset', last + 1n], ...after.map((_, i) => ['upsert', last + 2n + BigInt(i)])])
   assert.deepEqual(read.snapshot.slice(1).map((r) => r.id).sort(), ids(after).sort())
+  t.diagnostic(`reset at ${String(last + 1n)}, ${String(after.length)} objects after it, the last at ${String(now.last_position)}`)
 })
 
 test('L24 the thread read while updates commit, cut before snapshot-end, then read again: nothing skipped, nothing twice', async (t) => {
@@ -108,9 +105,11 @@ test('L24 the thread read while updates commit, cut before snapshot-end, then re
   for (const row of read.snapshot) client.apply(row)
   client.snapshotEnd(read.end!)
   for (const row of read.live) client.live(row)
+  // Live rows carry each object at its last change: strictly after H, strictly increasing.
   const positions = read.live.map((r) => BigInt(r.position))
   assert.ok(positions.length > 0)
-  assert.deepEqual(positions, positions.map((_, i) => BigInt(read.end!) + 1n + BigInt(i)))
+  assert.ok(positions[0]! > BigInt(read.end!))
+  assert.ok(positions.every((p, i) => i === 0 || p > positions[i - 1]!), positions.join(','))
   // Once everything is projected, a read from the cursor brings the client to the stored state.
   await lab.turn(ws, 'done')
   await until('projection settled', async () => {
@@ -321,4 +320,85 @@ test('L46 Agora started after its core projector changed version: a Workstream n
   assert.equal(rebuilt.title, 'before the upgrade')
   const { rows } = await db.admin.query("SELECT version FROM checkpoints WHERE workstream=$1 AND projector='core'", [ws])
   assert.equal(rows[0].version, core.version)
+})
+
+/** The thread's last position once the projector has written everything: it holds still. */
+async function settled(lab: Lab, ws: string): Promise<string> {
+  let last = ''
+  await until('projection settled', async () => {
+    const before = (await lab.store.projector.query('SELECT last_position FROM threads WHERE workstream=$1', [ws])).rows[0]?.last_position as string
+    await sleep(300)
+    last = (await lab.store.projector.query('SELECT last_position FROM threads WHERE workstream=$1', [ws])).rows[0]?.last_position as string
+    return before === last
+  })
+  return last
+}
+/** Writes, then waits for that turn to be done. */
+async function answered(lab: Lab, ws: string, text: string): Promise<void> {
+  const count = (await lab.state(ws)).turns.size
+  assert.ok((await lab.write(ws, text)).accepted)
+  await until('the turn done', async () => {
+    const turns = [...(await lab.state(ws)).turns.values()]
+    return turns.length === count + 1 && turns.at(-1)!.status === 'done'
+  })
+}
+
+test('L95 an element changed several times, the thread read from before its first change: one row, its last state, at its last change', async (t) => {
+  const { lab, ws } = await opened(t)
+  const before = await settled(lab, ws)
+  await answered(lab, ws, '/sleep 3')
+  const end = await settled(lab, ws)
+  const read = await readThread(lab.url, ws, before)
+  assert.equal(read.end, end)
+  const texts = (await lab.workstreams.projections.objects(ws)).filter((o) => o.kind === 'element' && object(o.object)?.type === 'agent_message_chunk')
+  assert.equal(texts.length, 1)
+  const text = texts[0]!
+  assert.match(String(object(text.object)?.text), /second 1\/3[\s\S]*second 3\/3[\s\S]*Slept 3 s\./)
+  const rows = read.snapshot.filter((r) => r.id === text.id)
+  assert.equal(rows.length, 1)
+  assert.equal(canonical(rows[0]!.object), canonical(text.object))
+  const position = (await lab.store.projector.query('SELECT position FROM objects WHERE workstream=$1 AND id=$2', [ws, text.id])).rows[0].position as string
+  assert.equal(rows[0]!.position, position)
+  // Each object once, in position order, after the cursor; the thread's last position counts every change.
+  const ids = read.snapshot.map((r) => r.id)
+  assert.equal(new Set(ids).size, ids.length)
+  const positions = read.snapshot.map((r) => BigInt(r.position))
+  assert.ok(positions.every((p, i) => p > BigInt(before) && p <= BigInt(end) && (i === 0 || p > positions[i - 1]!)), positions.join(','))
+  const changes = BigInt(end) - BigInt(before)
+  assert.ok(changes > BigInt(read.snapshot.length), `${String(changes)} changes, ${String(read.snapshot.length)} rows`)
+  t.diagnostic(`${String(changes)} changes after ${before}, ${String(read.snapshot.length)} rows read, the text once at ${position}`)
+})
+
+test('L96 a fold drops an object without a version change: reset at the next position, then the complete state after it', async (t) => {
+  const { lab, ws } = await opened(t)
+  await answered(lab, ws, 'something to project')
+  let drop = Number.POSITIVE_INFINITY
+  const extra = fromFold('extra', '1', (entries) =>
+    (entries.length === 0 ? [] : entries.length < drop ? ['kept', 'dropped'] : ['kept']).map((name) => ({
+      kind: 'element' as const,
+      id: identity(ws, 'extra', name),
+      object: { type: 'extra', name },
+      first_position: entries[0]!.position,
+      last_position: entries[0]!.position,
+    })),
+  )
+  const projections = new Projections(lab.store, [core, extra])
+  await projections.run(ws, extra)
+  const kept = identity(ws, 'extra', 'kept'),
+    dropped = identity(ws, 'extra', 'dropped')
+  assert.equal((await projections.objects(ws)).filter((o) => o.id === kept || o.id === dropped).length, 2)
+  drop = Number((await lab.store.writer.query('SELECT last_position FROM workstreams WHERE id=$1', [ws])).rows[0].last_position) + 1
+  await answered(lab, ws, 'one more entry')
+  const last = BigInt(await settled(lab, ws))
+  await projections.run(ws, extra)
+  const stored = await projections.objects(ws)
+  assert.ok(stored.some((o) => o.id === kept))
+  assert.ok(!stored.some((o) => o.id === dropped))
+  const high = (await lab.store.projector.query('SELECT last_position,reset_position FROM threads WHERE workstream=$1', [ws])).rows[0]
+  assert.equal(BigInt(high.reset_position), last + 1n)
+  assert.equal(BigInt(high.last_position), last + 1n + BigInt(stored.length))
+  const read = await readThread(lab.url, ws, String(last))
+  assert.deepEqual(read.snapshot.map((r) => [r.operation, BigInt(r.position)]), [['reset', last + 1n], ...stored.map((_, i) => ['upsert', last + 2n + BigInt(i)])])
+  assert.deepEqual(read.snapshot.slice(1).map((r) => r.id).sort(), stored.map((o) => o.id).sort())
+  t.diagnostic(`reset at ${String(last + 1n)}, ${String(stored.length)} objects after it, ${dropped} gone`)
 })
