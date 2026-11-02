@@ -994,6 +994,40 @@ await check('C31', 'The accounts\' limits, read through the gateway', async () =
   return `${read.map((p) => `${p} ${first[p]!.windows.map((w) => `${w.kind} ${String(w.usedPercent)} %`).join(', ')}`).join('; ')}; gateway ${routes.join(', ')}; none read again`
 })
 
+// docs/specs/mcp.md, M9: each real harness, given agora:read, finds a past conversation of the cases' owner by a word,
+// through the gateway and Agora's MCP server, reads it, and quotes its line. The key it must quote is in that
+// conversation alone, never in the prompt: only search and read can give it. Billed.
+await check('M9', 'MCP, each real harness: search, then read, a past conversation', async () => {
+  const word = `zebu${randomUUID().slice(0, 8)}`
+  const key = `key-${randomUUID().slice(0, 8)}`
+  const past = new Workstream()
+  await past.open(mock, SHORT)
+  assert((await past.write(`The probe word is ${word}; its key is ${key}.`)).status === 200, 'Write refused')
+  await past.turn('done', 60_000)
+  await past.stop()
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, { ...SHORT, profiles: ['agora:read'] })
+    const prompt = `With the tools of the agora MCP server, search my past conversations for the word ${word}, read the conversation you find, and quote in full the line where ${word} appears.`
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const turn = await w.turn(['done', 'failed'], 300_000)
+    const titles = (await w.entries())
+      .filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
+      .map((x) => (x.content.params as Json)?.update)
+      .filter((u) => u?.sessionUpdate === 'tool_call')
+      .map((u) => String(u.title ?? ''))
+    const reply = await w.said()
+    await w.stop()
+    assert(turn.status === 'done', `${harness}: turn ${turn.status}`)
+    assert(titles.some((t) => /search/i.test(t)) && titles.some((t) => /read/i.test(t)), `${harness}: tools ${JSON.stringify(titles)}`)
+    assert(reply.includes(key), `${harness}: ${reply.trim().slice(0, 200)}`)
+    seen.push(`${harness}: ${titles.join(', ')}; ${key} quoted`)
+  }
+  return seen.join(' | ')
+})
+
 await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const pod = await warmed()
