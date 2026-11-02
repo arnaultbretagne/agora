@@ -244,6 +244,8 @@ The log decides each move and keeps the turn start; the mechanics apply it.
 | Adapter exited, or a prompt answered with an internal error (JSON-RPC `-32603`) | now, once, then nothing more: the execution is lost, and its Pod ends and pushes its anchor without waiting out the lease |
 | Instance changed, claim ending | Nothing more |
 
+The maximum duration counts a turn's time but the time its approvals waited (`delegation.md`, "Approval"): each wait, from the approval's Ask to its answer, refusal or expiry, pushes the turn start back by as much.
+
 ### An execution's states
 
 Each state is read from the log, and from the claim for its readiness and its end.

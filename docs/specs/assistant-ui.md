@@ -99,7 +99,9 @@ In `ready`, sending is open when the snapshot is complete, no turn is saved, in 
 uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
 above the composer: the state's, then "Answer the permission request above.", then "Applying the
 settings…", then the uncertain turn's banner. A pending question closes sending in every state,
-starting an execution included, before any other reason: "Answer the question above."
+starting an execution included, before any other reason: "Answer the question above." A pending
+approval leaves sending open, a turn running included: what is sent refuses it (`delegation.md`,
+"Approval"), the composer saying "Write to refuse, or to ask for a change".
 
 ## Sending
 
@@ -219,9 +221,11 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
+| A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
-Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown.
+Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown. A `user`
+element with `from` is shown as its caller's, named by the caller's title, not as the person's.
 
 ### A turn's states
 
@@ -274,6 +278,8 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | Tone | Running (`pending`, `in_progress`): shimmer, coral marker. A permission pending: attention. `failed`: red. |
 | Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"); else "failed"; else, for a change, the lines added and removed. |
 | Open | At first only while a permission is pending. |
+| `delegate`'s | Its label the delegate's title and harness, a link to its Workstream; its note the delegation's state, read from the delegate's row: "waiting for you", "working", "done", "failed", "stopped". |
+| An approval's | On the `delegate` line it gates, open: the proposal — harness, model, the rights beyond the caller's, the instructions — and one button, Approve; once settled, "Approved", "Refused" and the words, or "Expired before a decision". Matched to no line, the same box at the approval's position. |
 | A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 
 | Plan entry `status` | Shown |
@@ -449,6 +455,11 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U57 | A sub-stream under a folded root asks a question, from another client | The root moves to the top and shows "waiting for you", without a reload. |
 | U58 | A sub-stream two levels down opened by its address | Its line unfolds in the list; the header shows its two parents before its title, each opening its Workstream. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
+| U60 | In a browser, an agent's `delegate` within its rights, its delegate working, then done | The line names the delegate and links to its Workstream; "working", then "done"; a report line, "From Agora", opening on its text, then the agent's answer. |
+| U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
+| U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |
+| U63 | An approval left unanswered | "Expired before a decision" on its line. |
+| U64 | A delegate's Workstream opened | Its first message shown as from its caller, by the caller's title, not as the person's. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
