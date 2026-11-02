@@ -6,7 +6,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode, type ReadAnswer, type SearchAnswer } from './search.ts'
+import { object } from './json.ts'
 import type { Workstreams } from './workstreams.ts'
+import { Refused as DelegationRefused } from './delegation.ts'
 
 /** The header the gateway sets from the token's subject, over whatever the sandbox sent. */
 export const CALLER_HEADER = 'x-agora-execution'
@@ -21,6 +23,7 @@ const SEARCH: Tool = {
     'Search the person’s Workstreams — their conversations with agents, yours included — the way `grep -n` searches files. ' +
     'Each Workstream is a transcript of numbered lines: for each exchange, a `## <n> · <time> · you` header, the person’s lines, ' +
     'a `## <n> · agent` header, then the agent’s lines, and its tools as `[tool: <title>]` lines when `tools` is true. ' +
+    'A delegate’s message from its caller has a `caller` header; a report of Agora’s, an `agora` header, its lines never searched. ' +
     '`pattern` is a regular expression, PostgreSQL’s, `\\b` being a word’s edge as in ripgrep, matched line by line; case counts unless `ignore_case`. ' +
     'The most recently changed Workstreams come first. `output_mode`: `workstreams_with_matches` (each Workstream, its title, how many lines match, ' +
     'and its latest matching line), `content` (each matching line as `<workstream>:<line>:<text>`, with `before`, `after` or `context` lines around it ' +
@@ -49,7 +52,8 @@ const READ: Tool = {
   name: 'read',
   description:
     'Read one of the person’s Workstreams the way Read reads a file: its transcript in numbered lines, `<number>` and a tab then the text — ' +
-    'for each exchange a `you` header, the person’s lines, an `agent` header, the agent’s lines and its tools — from `offset`, at most `limit` lines and 50 KB; ' +
+    'for each exchange a header naming who wrote — `you`, `caller` or `agora` —, their lines, an `agent` header, the agent’s lines and its tools — ' +
+    'from `offset`, at most `limit` lines and 50 KB; ' +
     'a line longer than 2,000 characters is cut. The last line gives the next offset when more follow.',
   inputSchema: {
     type: 'object',
@@ -64,8 +68,39 @@ const READ: Tool = {
   annotations: { readOnlyHint: true },
 }
 
-/** The tools each right opens (docs/specs/mcp.md, "The path"). */
-const RIGHTS: Readonly<Record<string, readonly Tool[]>> = { 'agora:read': [SEARCH, READ] }
+const DELEGATE: Tool = {
+  name: 'delegate',
+  description:
+    'Hand work to another agent, which runs on its own as a sub-stream of your Workstream. The call answers once it has started; ' +
+    'its outcome comes back to you later as a message from Agora — do not wait or poll for it, carry on or end your turn. ' +
+    '`to` continues one of your delegates with a next message. `output_schema` asks for a result of that shape (a JSON Schema whose root is an object): ' +
+    'give one when you will act on fields of the result — a verdict, findings, a number —, leave it out when you will read prose. ' +
+    'Rights beyond your own wait for the person’s approval.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instructions: { type: 'string', description: 'The delegate’s first message, or the next one with `to`.' },
+      harness: { type: 'string', description: 'claude-code, codex or opencode; yours by default.' },
+      model: { type: 'string', description: 'A model the harness offers; its default otherwise.' },
+      effort: { type: 'string', description: 'An effort the harness offers; its default otherwise.' },
+      rights: { type: 'array', items: { type: 'string' }, description: 'The delegate’s rights, as profiles — e.g. github:owner/repo:read; none by default.' },
+      output_schema: { type: 'object', description: 'A JSON Schema, its root an object: the shape of the result to hand back with `submit`.' },
+      to: { type: 'string', format: 'uuid', description: 'One of your delegates, to continue.' },
+    },
+    required: ['instructions'],
+    additionalProperties: false,
+  },
+}
+
+/** `submit`, its input the schema the delegation asked for (docs/specs/delegation.md, "Typed results"). */
+const submitTool = (schema: Record<string, unknown>): Tool => ({
+  name: 'submit',
+  description: 'Hand your result to the agent that asked for it: once, when the work is done, in the shape it asked.',
+  inputSchema: schema as Tool['inputSchema'],
+})
+
+/** The tools each right opens (docs/specs/mcp.md, "The path"); `agora:submit`'s depends on the step. */
+const RIGHTS: Readonly<Record<string, readonly Tool[]>> = { 'agora:read': [SEARCH, READ], 'agora:delegate': [DELEGATE] }
 
 /** What a tool answers instead of its result: the reason, as the HTTP API gives it. */
 class Refused extends Error {}
@@ -183,21 +218,50 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
   } catch {
     return reply(res, 400, 'invalid_message')
   }
-  const tools = caller.profiles.flatMap((profile) => RIGHTS[profile] ?? [])
+  const delegations = workstreams.delegations
+  const tools = caller.profiles.flatMap((profile) => (delegations === null && profile === 'agora:delegate' ? [] : (RIGHTS[profile] ?? [])))
+  if (delegations !== null && caller.profiles.includes('agora:submit')) {
+    const schema = await delegations.schemaOf(caller.workstream)
+    if (schema !== null) tools.push(submitTool(schema))
+  }
+  const execution = subject![1]!
   const server = new Server({ name: 'agora', version: '1.0.0' }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...tools] }))
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const tool = tools.find((t) => t.name === request.params.name)
     if (tool === undefined) throw new McpError(ErrorCode.InvalidParams, 'not_allowed')
+    const args = request.params.arguments ?? {}
     try {
-      return { content: [{ type: 'text', text: await call(workstreams, owner, tool.name, request.params.arguments ?? {}) }] }
+      if (tool.name === 'delegate' || tool.name === 'submit') {
+        const who = { workstream: caller.workstream, execution, profiles: caller.profiles }
+        if (tool.name === 'submit') return { content: [{ type: 'text', text: await delegations!.submit(who, args) }] }
+        // A held call hears progress, so that no harness gives up first (docs/specs/delegation.md, "Approval").
+        const token = request.params._meta?.progressToken
+        let progress = 0
+        const hold = {
+          progress: () => {
+            if (token !== undefined) void extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: ++progress, message: 'waiting for the person’s approval' } })
+          },
+          aborted: extra.signal,
+          toolUseId: typeof request.params._meta?.['claudecode/toolUseId'] === 'string' ? (request.params._meta['claudecode/toolUseId'] as string) : null,
+        }
+        return { content: [{ type: 'text', text: await delegations!.delegate(who, args, hold) }] }
+      }
+      return { content: [{ type: 'text', text: await call(workstreams, owner, tool.name, args) }] }
     } catch (error) {
-      const reason = error instanceof Refused ? error.message : error instanceof Error && ['invalid_pattern', 'unknown_workstream'].includes(error.message) ? error.message : null
+      const reason =
+        error instanceof Refused || error instanceof DelegationRefused
+          ? error.message
+          : error instanceof Error && ['invalid_pattern', 'unknown_workstream'].includes(error.message)
+            ? error.message
+            : null
       if (reason === null) throw error
       return { content: [{ type: 'text', text: reason }], isError: true }
     }
   })
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  // One JSON answer per message, but `delegate`'s: an SSE stream, its progress then its answer (docs/specs/mcp.md, "The path").
+  const streaming = object(message)?.method === 'tools/call' && object(object(message)?.params)?.name === 'delegate'
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !streaming })
   res.on('close', () => {
     void transport.close()
     void server.close()

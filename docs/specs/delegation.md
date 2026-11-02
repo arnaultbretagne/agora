@@ -31,9 +31,9 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | The caller | The execution that calls `delegate` (`mcp.md`, "The path"), and its Workstream. |
-| The delegate | A new Workstream, a sub-stream of the caller's: the same person, one level deeper. Its execution: the pool of the `harness` named, the caller's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise; the rights given (`rights`), none by default; the caller's lease and turn duration. Its first message: `instructions`, marked as its caller's. |
+| The delegate | A new Workstream, a sub-stream of the caller's: the same person, one level deeper. Its execution: the pool of the `harness` named, the caller's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise; the rights given (`rights`), none by default; the caller's lease and turn duration. Its first message: `instructions`, marked as its caller's; its title, their first line. |
 | Started | Once the delegate's Workstream exists and its Create is accepted. Its instructions are written as soon as its Session opens; a Session that does not open fails the delegation. |
-| Continuing | `to` names one of the caller's delegates — a sub-stream of the caller's Workstream. `instructions` is its next message, written once its turn has ended (`delegate_busy` while it runs); its execution continued first if it has ended (`log.md`, "Continuing"). With `to`, only `instructions` and `output_schema` are given. |
+| Continuing | `to` names one of the caller's delegates — a sub-stream of the caller's Workstream. `instructions` is its next message (`delegation.continued`), written once it can take one (`delegate_busy` while a turn runs or a message waits); its execution continued first if it has ended (`log.md`, "Continuing"). With `to`, only `instructions` and `output_schema` are given. |
 | Depth | A delegate sits at most three levels below the person's Workstream: a caller at depth 3 is refused, `depth_exceeded`. |
 | At once | At most three of a caller's delegates awaiting approval or working: another is refused, `too_many_delegates`. |
 | Rights | Each right given must be offered (`credentials.md`, "Offered profiles"; `profile_not_offered`). When every one is covered by one of the caller execution's own profiles — as an offered profile covers a narrower one —, the delegate starts at once; otherwise the call waits for the person ("Approval"). |
@@ -51,7 +51,7 @@ sequenceDiagram
 | No answer | At its expiry, the call answers `expired` and the approval is marked `expired`. |
 | For that call alone | An approval starts that delegate, that once; the next call beyond the caller's rights asks again. |
 | One at a time | A call needing approval while another approval of the caller's Workstream waits is refused, `approval_pending`. |
-| The call kept open | A held call's answer is an SSE stream: a progress notification every 30 s while it waits, then the call's answer (`mcp.md`, "The path"). |
+| The call kept open | A `delegate` call answers in an SSE stream: while Agora holds it, a progress notification every 30 s, then the call's answer (`mcp.md`, "The path"). |
 | The caller's turn | While an approval waits, the turn's clock stops (`executions.md`, "The deadline"). |
 | Matching | The approval names the tool line it gates. Claude Code: the caller's tool line whose `toolCallId` is the call's `_meta` `claudecode/toolUseId`. The others: the caller's last tool line still running whose title names `delegate` and whose `rawInput` equals the call's arguments. Without a match, it names none. |
 

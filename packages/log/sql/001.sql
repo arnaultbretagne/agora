@@ -16,13 +16,21 @@ CREATE TABLE IF NOT EXISTS threads (
 );
 CREATE TABLE IF NOT EXISTS entries (
  workstream uuid NOT NULL REFERENCES workstreams(id), position bigint NOT NULL CHECK(position > 0),
- kind text NOT NULL CHECK(kind IN ('command','acp','acp.dispatching','acp.sent','request.failed','execution.obtained','execution.failed','anchor.received','session.opened','session.ended','execution.connected','execution.break','execution.lost','execution.ended')),
+ kind text NOT NULL,
  execution uuid, session uuid, content jsonb NOT NULL, time timestamptz NOT NULL DEFAULT now(),
  direction text CHECK(direction IN ('in','out')), rpc_kind text CHECK(rpc_kind IN ('request','response','error','notification')),
  method text, correlated_method text, request_position bigint, rpc_id jsonb, command uuid, connection uuid, receive_ordinal bigint,
  PRIMARY KEY(workstream,position), UNIQUE(connection,receive_ordinal),
  CHECK((connection IS NULL) = (receive_ordinal IS NULL) OR receive_ordinal IS NULL)
 );
+-- An entry's kinds, set here so that a log of an older schema gets the newer ones: the delegations' facts and an
+-- approval's expiry (docs/specs/delegation.md). Its rows are not checked again — every kind it held still is one.
+DO $$ BEGIN
+ IF coalesce((SELECT pg_get_constraintdef(oid) NOT LIKE '%question.expired%' FROM pg_constraint WHERE conrelid = 'entries'::regclass AND conname = 'entries_kind_check'), true) THEN
+  ALTER TABLE entries DROP CONSTRAINT IF EXISTS entries_kind_check;
+  ALTER TABLE entries ADD CONSTRAINT entries_kind_check CHECK(kind IN ('command','acp','acp.dispatching','acp.sent','request.failed','execution.obtained','execution.failed','anchor.received','session.opened','session.ended','execution.connected','execution.break','execution.lost','execution.ended','question.expired','delegation.started','delegation.continued','delegation.result','delegation.reported')) NOT VALID;
+ END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS entries_execution ON entries(execution,position);
 CREATE TABLE IF NOT EXISTS commands (
  workstream uuid NOT NULL REFERENCES workstreams(id), id uuid NOT NULL, kind text NOT NULL, target jsonb NOT NULL,
@@ -103,12 +111,14 @@ $$;
 -- (docs/specs/log.md, "Continuing", "An exchange"). One expression, no sub-select, so that PostgreSQL inlines
 -- it in the queries that call it: a search calls it for every message, and a call costs more than the text.
 -- Its helper is named with its schema: PostgreSQL computes an index's expression with `pg_catalog` alone in
--- its search path, and objects_text below is one.
+-- its search path, and objects_text below is one. Its `report` branch reaches no row objects_text holds — those are
+-- user, agent and tool elements —, so adding it rebuilt nothing.
 CREATE OR REPLACE FUNCTION transcript_text(element_type text, element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE element_type
     WHEN 'agent_message_chunk' THEN btrim(coalesce(element->>'text', ''), E' \t\r\n')
     WHEN 'tool' THEN '[tool: ' || coalesce(nullif(element->>'title', ''), 'unnamed') || CASE WHEN element->>'status' = 'failed' THEN ' — failed' ELSE '' END || ']'
     WHEN 'user' THEN public.transcript_user_text(element)
+    WHEN 'report' THEN btrim(coalesce(element->>'text', ''), E' \t\r\n')
   END
 $$;
 -- Workstreams' transcripts (docs/specs/search.md, "The transcript"): each exchange as numbered lines, in the
@@ -119,19 +129,22 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
   RETURNS TABLE(workstream uuid, line bigint, exchange bigint, kind text, text text) LANGUAGE sql STABLE AS $$
   WITH turns AS (
     SELECT o.workstream, o.id AS turn, o.object->>'startedAt' AS started,
-      row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange
+      row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange,
+      -- Who wrote its prompt (docs/specs/search.md, "Who wrote"): a report is Agora's, a marked message a caller's.
+      (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
+        WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text LIMIT 1) AS author
     FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
   ), parts AS (
     SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 'header' AS kind,
-      '## ' || t.exchange || coalesce(' · ' || to_char(t.started::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') || ' · you' AS text
+      '## ' || t.exchange || coalesce(' · ' || to_char(t.started::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') || ' · ' || coalesce(t.author, 'you') AS text
     FROM turns t
     UNION ALL
     SELECT t.workstream, t.exchange, 2, 0, 'header', '## ' || t.exchange || ' · agent' FROM turns t
     UNION ALL
-    SELECT t.workstream, t.exchange, CASE e.type WHEN 'user' THEN 1 ELSE 3 END, e.first_position,
-      CASE e.type WHEN 'user' THEN 'user' WHEN 'tool' THEN 'tool' ELSE 'agent' END, transcript_text(e.type, e.object)
+    SELECT t.workstream, t.exchange, CASE WHEN e.type IN ('user', 'report') THEN 1 ELSE 3 END, e.first_position,
+      CASE e.type WHEN 'user' THEN 'user' WHEN 'tool' THEN 'tool' WHEN 'report' THEN 'agora' ELSE 'agent' END, transcript_text(e.type, e.object)
     FROM objects e JOIN turns t ON t.workstream = e.workstream AND t.turn::text = e.object->>'turn'
-    WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool')
+    WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool', 'report')
   )
   SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
   FROM parts p CROSS JOIN LATERAL regexp_split_to_table(nullif(p.text, ''), E'\n') WITH ORDINALITY AS l(text, ord)

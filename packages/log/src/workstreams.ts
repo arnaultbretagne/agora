@@ -22,16 +22,17 @@ import {
 } from '@agora/executions'
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
-import { type LogStore, type Answer, type Command, type Entry } from './store.ts'
-import { acceptsPrompt, type Execution, type State } from './state.ts'
+import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
+import type { Delegations } from './delegation.ts'
+import { acceptsPrompt, isApproval, waited, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
-import { answerRefusal, validQuestion } from './questions.ts'
-import { compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
+import { answerRefusal, validApproval, validQuestion } from './questions.ts'
+import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -96,6 +97,8 @@ export class Workstreams implements Handler {
   private halted = false
   private timer: NodeJS.Timeout | null = null
   private ticking = false
+  /** The delegations' engine (docs/specs/delegation.md), attached by the server. */
+  delegations: Delegations | null = null
 
   constructor(options: WorkstreamsOptions) {
     this.options = options
@@ -110,6 +113,15 @@ export class Workstreams implements Handler {
   }
   private report(fields: Record<string, unknown>): void {
     telemetry(fields, this.options.sink ?? (() => {}))
+  }
+
+  /** A fact of Agora's own in a Workstream's log, under its dispatcher, then its views. */
+  async record(workstream: string, input: Append): Promise<string> {
+    return this.serial(workstream, async () => {
+      const position = await this.store.fact(workstream, input)
+      await this.project(workstream)
+      return position
+    })
   }
 
   /** One dispatcher per Workstream: decisions and effects run one after the other. */
@@ -157,6 +169,8 @@ export class Workstreams implements Handler {
     for (const workstream of new Set([...this.live, ...(await this.store.behind(core.version))])) await this.serial(workstream, () => this.project(workstream))
     // docs/specs/log.md, "The list": a Workstream with a view and no row in its owner's list gets one.
     await this.projections.backfill()
+    // docs/specs/delegation.md: the approvals no call holds any more expire; the outcomes not reported are found again.
+    await this.delegations?.start()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
   }
 
@@ -229,8 +243,14 @@ export class Workstreams implements Handler {
 
   // ---------------------------------------------------------------- commands
 
-  async command(workstream: string, command: Command): Promise<Answer> {
+  /**
+   * A command, the person's or Agora's own (`origin`): only Agora asks for an approval or gives its own
+   * profiles (docs/specs/delegation.md).
+   */
+  async command(workstream: string, command: Command, origin: 'person' | 'agora' = 'person'): Promise<Answer> {
     if (this.stopped) return { accepted: false, reason: 'unavailable' }
+    // The approval a command settles, when it does: its position, and how (docs/specs/delegation.md, "Approval").
+    let settles: { position: string; outcome: 'approved' | 'refused'; words?: string } | null = null
     // docs/specs/log.md, "Commands": the catalogue is read before the transaction, never under its lock.
     const catalogue = command.kind === 'Create' ? await this.executions.pools() : []
     return this.serial(workstream, async () => {
@@ -259,7 +279,7 @@ export class Workstreams implements Handler {
           const own = ownSettings(command.body.settings)
           if (own === null) return 'invalid_create'
           const settings = resolveSettings(pool.sessionConfig, own)
-          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles)
+          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles, origin)
           if (profiles === 'invalid') return 'invalid_create'
           if (typeof profiles === 'string') return profiles
           // docs/specs/log.md, "Continuing": the anchor given, else the Workstream's last of this harness;
@@ -294,11 +314,21 @@ export class Workstreams implements Handler {
         // docs/specs/log.md, "Commands": a question, whatever the execution; no line to any agent.
         if (command.kind === 'Ask') {
           if (state.question) return 'question_pending'
+          if (command.body.kind === 'approval') return origin === 'agora' && validApproval(command.body) ? {} : 'invalid_question'
           return validQuestion(command.body) ? {} : 'invalid_question'
         }
         if (command.kind === 'Answer') {
           if (!state.question || command.target.question !== state.question.position) return 'stale_question'
-          return answerRefusal(object(state.question.content.body) ?? {}, command.body) ?? {}
+          const refusal = answerRefusal(object(state.question.content.body) ?? {}, command.body)
+          if (refusal === null && isApproval(state.question)) settles = { position: state.question.position, outcome: 'approved' }
+          return refusal ?? {}
+        }
+        // A Write while an approval waits is its refusal, whatever the turn: no line to any agent.
+        if (command.kind === 'Write' && isApproval(state.question)) {
+          const blocks = Array.isArray(command.body.prompt) ? (command.body.prompt as unknown[]) : []
+          const words = blocks.map((b) => object(b)).filter((b) => b?.type === 'text').map((b) => String(b!.text)).join('\n')
+          settles = { position: state.question!.position, outcome: 'refused', words }
+          return {}
         }
         if (!current || current.ended) return 'execution_unavailable'
         if (command.target.execution !== current.id) return 'stale_execution'
@@ -342,7 +372,7 @@ export class Workstreams implements Handler {
         if (command.kind === 'Scope') {
           // docs/specs/log.md, "Commands": between turns; the token follows once accepted.
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
-          const profiles = this.checkProfiles(command.body.profiles)
+          const profiles = this.checkProfiles(command.body.profiles, origin)
           if (profiles === 'invalid') return 'invalid_scope'
           if (typeof profiles === 'string') return profiles
           return { execution: current.id, body: { profiles } }
@@ -376,6 +406,7 @@ export class Workstreams implements Handler {
         }
       })
       this.report({ operation: 'admission', outcome: answer.accepted ? 'accepted' : 'refused', workstream, command: command.id })
+      if (answer.accepted && settles !== null) this.delegations?.settled(workstream, settles.position, settles.outcome, settles.words)
       if (answer.accepted) {
         if (command.kind === 'Create' && answer.execution) {
           // A replayed Create answers as the first did; an execution that has ended is not run again.
@@ -412,16 +443,20 @@ export class Workstreams implements Handler {
   }
 
   /** A Create's or a Scope's profiles, checked (docs/specs/credentials.md, "Offered profiles"): each once, or the refusal. */
-  private checkProfiles(value: unknown): string[] | 'invalid' | 'unknown_profile' | 'profile_not_offered' {
+  private checkProfiles(value: unknown, origin: 'person' | 'agora' = 'person'): string[] | 'invalid' | 'unknown_profile' | 'profile_not_offered' {
     if (!Array.isArray(value) || value.some((p) => typeof p !== 'string')) return 'invalid'
     const profiles = [...new Set(value as string[])]
+    // Agora's own profiles are given by Agora alone (docs/specs/credentials.md, "Profiles and grants").
+    if (profiles.some((p) => AGORA_OWN_PROFILES.has(p))) {
+      if (origin !== 'agora') return 'unknown_profile'
+    }
     try {
       for (const profile of profiles) compileProfile(profile)
     } catch {
       return 'unknown_profile'
     }
     const offered = this.options.credentials?.offered ?? []
-    if (offered.length > 0 && profiles.some((p) => !offersProfile(offered, p))) return 'profile_not_offered'
+    if (offered.length > 0 && profiles.some((p) => !AGORA_OWN_PROFILES.has(p) && !offersProfile(offered, p))) return 'profile_not_offered'
     return profiles
   }
 
@@ -1033,6 +1068,8 @@ export class Workstreams implements Handler {
           await this.project(workstream)
         }).catch(() => this.report({ operation: 'recover', outcome: 'blocked', workstream, errorClass: 'database' }))
       }
+      // docs/specs/delegation.md: instructions to write, reminders, reports to deliver.
+      await this.delegations?.tick().catch(() => this.report({ operation: 'delegation', outcome: 'blocked', errorClass: 'unknown' }))
     } finally {
       this.ticking = false
     }
@@ -1078,7 +1115,8 @@ export class Workstreams implements Handler {
     // Recovery is bounded by the deadline already granted: no renewal without the connection.
     if (!e.connection || this.executions.connectionOf(e.id) !== e.connection) return
     const { leaseSeconds, turnCapSeconds } = limitsOf(e)
-    const cap = Date.parse(turn.startedAt) + turnCapSeconds * 1000
+    // The turn's maximum counts its time but its approvals' waits (docs/specs/executions.md, "The deadline").
+    const cap = Date.parse(turn.startedAt) + turnCapSeconds * 1000 + waited(state, turn.startedAt, Date.now())
     const next = Math.min(Date.now() + leaseSeconds * 1000, cap)
     const current = Date.parse(this.executions.claimOf(e.id)?.spec?.lifecycle?.shutdownTime ?? '0')
     const step = Math.min(this.options.renewSeconds, leaseSeconds / 3) * 1000

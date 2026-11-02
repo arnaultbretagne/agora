@@ -35,8 +35,9 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `anchor.received` | An authenticated anchor is stored. | Its id; never its bytes. |
 | `execution.ended` | The claim has disappeared. | The reason, and the anchor received if any. |
 | `delegation.started` | A delegate's Workstream is created by `delegate` (`delegation.md`), in that Workstream. | The caller's Workstream and execution; the harness, model, effort, rights and `output_schema` given; the approval's position in the caller's Workstream, when one was asked. |
-| `delegation.result` | A delegate's `submit` fits its schema, in the delegate's Workstream. | The turn, and the result. |
-| `delegation.reported` | A report carrying a delegate's outcome is accepted, in the delegate's Workstream. | The turn whose outcome it carried, and the report's command in the caller's Workstream. |
+| `delegation.continued` | `to` gives a delegate its next message, in the delegate's Workstream. | The instructions, and the `output_schema` if any. |
+| `delegation.result` | A delegate's `submit` fits its schema, in the delegate's Workstream. | The step — the position of its `delegation.started` or `delegation.continued` —, the turn, and the result. |
+| `delegation.reported` | A report carrying a delegate's outcome is accepted, in the delegate's Workstream. | The step whose outcome it carried, and the report's command id in the caller's Workstream. |
 | `question.expired` | An approval reaches its expiry unanswered. | The question's position. |
 
 | Rule | Detail |
@@ -279,8 +280,8 @@ the client shows them is `assistant-ui.md`.
 
 | `type` | Folded from | Fields |
 | --- | --- | --- |
-| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one; `from`: the caller's Workstream, when a block is marked `_meta` `agora.bretagne.dev/delegation` (`delegation.md`) |
-| `report` | Agora's `session/prompt` whose block is marked `_meta` `agora.bretagne.dev/report`, in place of `user` | `turn`, `session`, `text`, `delegates`: the delegates whose outcomes it carries |
+| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one; `from`: the caller's Workstream, when a block is marked `_meta` `agora.bretagne.dev/delegation` — its value `{ caller, step }` (`delegation.md`) |
+| `report` | Agora's `session/prompt` whose block is marked `_meta` `agora.bretagne.dev/report` — its value `{ delegates }`, or `{ reminds }` for a reminder to a delegate —, in place of `user` | `turn`, `session`, `text`, `delegates`: the delegates whose outcomes it carries |
 | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |

@@ -250,6 +250,13 @@ describe('profiles', () => {
     for (const profile of ['agora', 'agora:write', 'agora:read:all', 'agora:']) assert.throws(() => compileProfile(profile), /unknown profile/, profile)
   })
 
+  it('C64 agora:delegate and agora:submit open what agora:read opens, and nothing else; neither a base profile', () => {
+    for (const profile of ['agora:delegate', 'agora:submit']) {
+      assert.deepEqual(compileProfile(profile), compileProfile('agora:read'), profile)
+      assert.equal(BASE_PROFILES.has(profile), false, profile)
+    }
+  })
+
   it('C42 a vault:read grant covers a call of a read tool, never of a write tool; vault:write covers both', () => {
     const read = compileProfile('vault:read')
     const write = compileProfile('vault:write')
