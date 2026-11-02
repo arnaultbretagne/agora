@@ -393,7 +393,7 @@ test('U29 / in the composer: the commands listed; one chosen with the keyboard; 
 
 test('U34 an access picked in the draft: carried by the Create, shown once the Session is ready', async () => {
   const config = (await (await fetch(`${server.url}/api/config`)).json()) as { credentials: { offered: string[] } }
-  assert.deepEqual(config.credentials.offered, ['github:owner/a:write', 'github:owner/b:read', 'internet'])
+  assert.deepEqual(config.credentials.offered, ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:delegate'])
   const page = await fresh()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')

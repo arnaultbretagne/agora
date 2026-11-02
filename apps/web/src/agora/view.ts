@@ -317,10 +317,14 @@ export function startedDelegate(output: string): { id: string; title: string } |
 const outputOf = (tool: Json): string =>
   tool.rawOutput === undefined ? contentText(tool.content) : typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)
 
+/** A `delegate` line, by its title as each harness gives it: `delegate`, `mcp__agora__delegate`, `agora_delegate`… */
+const delegating = (tool: Json): boolean => /delegate/i.test(text(tool.title))
+
 /** The delegates this Workstream's `delegate` lines started: whose rows their lines read. */
 export function delegatesOf(state: ThreadState): string[] {
   return ofKind(state, 'element').flatMap((e) => {
-    const started = e.object.type === 'tool' ? startedDelegate(outputOf(e.object)) : null
+    // Only a `delegate` line's output is read: every other tool's would cost its whole size at each change.
+    const started = e.object.type === 'tool' && delegating(e.object) ? startedDelegate(outputOf(e.object)) : null
     return started ? [started.id] : []
   })
 }
@@ -336,7 +340,7 @@ function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObj
   const diffs = diffsOf(tool.content)
   const asked = diffs.length === 0 && permission ? diffsOf(json(json(permission.object.params)?.toolCall)?.content) : []
   const todos = list(input?.todos).map((t) => json(t)).filter((t): t is Json => typeof t?.content === 'string')
-  const delegate = startedDelegate(output)
+  const delegate = delegating(tool) ? startedDelegate(output) : null
   return {
     type: 'tool-call',
     toolCallId: text(tool.toolCallId),
