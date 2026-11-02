@@ -22,8 +22,3 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | S8 | — | local | R1 | proven | 20 results and `next` 20; from 20, 10 and `next` null. |
 | S9 | — | local | R1 | proven | From 3, two lines: 3 and 4, total 704, next 5; beyond the end: none, total 704, next null; read whole: stopped under 50 KB, the next offset its next line; the 3,000-character line cut at 2,000 and marked. |
 | S10 | — | local | R1 | proven | Four lines: the two headers, `hello`, `the answer`; no replayed text, no reasoning, no question. |
-
-## Not covered
-
-| Failure | Issue |
-| --- | --- |
