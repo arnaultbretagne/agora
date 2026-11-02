@@ -108,6 +108,18 @@ export function waited(state: State, since: string, now: number): number {
   const start = Date.parse(since)
   return state.waits.filter((w) => Date.parse(w.from) >= start).reduce((sum, w) => sum + ((w.to === null ? now : Date.parse(w.to)) - Date.parse(w.from)), 0)
 }
+/**
+ * A delegate's state (docs/specs/delegation.md, "States"): once the turn its last step gave has ended, as it ended;
+ * before, `working`, unless its execution failed, was lost or was stopped.
+ */
+function delegationOf(state: State, step: string): 'working' | 'completed' | 'failed' | 'cancelled' {
+  const turn = [...state.turns.values()].at(-1)
+  if (turn && BigInt(turn.requestPosition) > BigInt(step) && !['saved', 'in_progress', 'uncertain'].includes(turn.status))
+    return turn.status === 'done' ? 'completed' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
+  const e = state.current
+  return e?.failed || e?.lost ? 'failed' : e?.stopped ? 'cancelled' : 'working'
+}
+
 /** The profiles a Create or a Scope recorded. */
 function profilesIn(body: unknown): string[] {
   const profiles = object(body)?.profiles
@@ -357,6 +369,8 @@ export class CoreProjection {
   /** The approval pending, as an element's id: what a Write refuses (docs/specs/delegation.md, "Approval"). */
   private pendingQuestion: string | null = null
   private agentTitle: string | null = null
+  /** A delegate's last step, its `delegation.started` or `delegation.continued` (docs/specs/delegation.md); null on any other. */
+  private step: string | null = null
   /** The anchor each ended execution names, and the Sessions that have ended. */
   private readonly anchors = new Map<string, string>()
   private readonly endedSessions = new Set<string>()
@@ -412,12 +426,11 @@ export class CoreProjection {
           {
             type: 'question',
             position: entry.position,
-            kind: approval ? 'approval' : 'question',
             title: body.title,
             text: body.text,
             options: body.options,
             note: body.note === true,
-            ...(approval ? { toolCallId: body.toolCallId ?? null, expiresAt: body.expiresAt } : {}),
+            ...(approval ? { kind: 'approval', toolCallId: body.toolCallId ?? null, expiresAt: body.expiresAt } : {}),
             status: 'pending',
           },
           entry.position,
@@ -456,6 +469,7 @@ export class CoreProjection {
         }
       }
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
+      if (entry.kind === 'delegation.started' || entry.kind === 'delegation.continued') this.step = entry.position
       noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
       // Settings, commands, usage and prompt capabilities change with ACP lines too: the view is put when what it shows of them changed.
@@ -471,6 +485,10 @@ export class CoreProjection {
         entry.kind === 'command' ||
         entry.kind === 'anchor.received' ||
         (entry.kind === 'acp.dispatching' && state.requestPositions.get(String(entry.content.requestPosition))?.method === 'session/prompt') ||
+        // A delegate's: each step, and each turn's end — its answer or its failure.
+        entry.kind === 'delegation.started' ||
+        entry.kind === 'delegation.continued' ||
+        (this.step !== null && ((entry.kind === 'acp' && entry.direction === 'in' && entry.correlated_method === 'session/prompt') || entry.kind === 'request.failed')) ||
         entry.kind.startsWith('execution.') ||
         entry.kind.startsWith('session.')
       ) {
@@ -507,6 +525,7 @@ export class CoreProjection {
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
             question: state.question?.position ?? null,
+            ...(this.step !== null ? { delegation: delegationOf(state, this.step) } : {}),
             continuation,
             changedAt: entry.time,
           },

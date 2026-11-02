@@ -286,7 +286,7 @@ the client shows them is `assistant-ui.md`.
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
-| `question` | An Ask, then its Answer, a refusing Write or its expiry | `position`: the Ask's; `kind` (`question`, `approval`); `title`, `text`, `options`, `note`, and for an approval `toolCallId` and `expiresAt`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text |
+| `question` | An Ask, then its Answer, a refusing Write or its expiry | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel` | `turn`, `session`, `line`: the line whole |
 
 A pending permission becomes `cancelled` when its Session ends, or its execution is lost, fails or
@@ -295,7 +295,7 @@ ends.
 ### The Workstream view
 
 One object per Workstream, changed by its commands, its execution entries, its Sessions, its
-anchors, the dispatch of its prompts and the agent's title.
+anchors, the dispatch of its prompts, the agent's title, and a delegate's steps and turns' ends.
 
 | Field | Value |
 | --- | --- |
@@ -313,6 +313,7 @@ anchors, the dispatch of its prompts and the agent's title.
 | `promptCapabilities` | What the last execution's agent accepts in a prompt beyond text and resource links, from its `initialize` answer: `image`, `audio` and `embeddedContext`, each true only when it says so; kept once it has ended; null before it has answered. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `question` | The pending question's position, or null. |
+| `delegation` | A delegate's state (`delegation.md`, "States"): once the turn its last `delegation.started` or `delegation.continued` gave has ended, `completed`, `cancelled` or `failed` as it ended; before, `working`, or `failed` or `cancelled` when its execution failed, was lost or was stopped. Absent on any other Workstream. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
 
@@ -359,7 +360,7 @@ changes instead of fetching every view again.
 
 | Rule | Detail |
 | --- | --- |
-| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness` and `question`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
+| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question` and a delegate's `delegation`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
 | List | A root's row is in its owner's list: the person's identity for their own, their agents' folder for their agents' ("HTTP"). A sub-stream's row is in its parent's list. |
 | Positions | Per list, strictly increasing and never reused: each row written takes its list's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
 | Up the line | A row written writes its parent's row again in the same transaction, then its parent's, up to the root, each with what lies under it, each in its own list. Lists are taken from the sub-stream up, so that two lines never wait on each other. |
@@ -557,6 +558,7 @@ exception message.
 | L96 | A projector's fold drops an object without a version change | `reset` at the next position, then every remaining object after it, in order; the dropped object gone, the others kept. |
 | L97 | Anchors stored for a Workstream: two of one harness, one of another, one of another Workstream; then the last stored again | The earlier anchor of that harness removed; the other harness's, the other Workstream's and the last kept; storing the last again removes nothing. |
 | L98 | The schema applied to a database that kept every change of the thread in a table of its own, a reset among them, and two anchors of one harness | Each object at the position of its last change, the last reset kept, the table gone; a read from before the reset gives it then the complete state, one from after it what changed since; that harness's last anchor kept, the other removed; applied again, nothing changes. |
+| L99 | A delegate through its turn, then continued with `to`; its caller | Its view's and its row's `delegation` `working`, then `completed`, then `working` and `completed` again; none in its caller's view or row. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

@@ -311,7 +311,23 @@ test('S12 a delegate’s transcript, its caller’s instructions then a report i
   assert.deepEqual(hits.filter((h) => h.workstream === ws && reported.has(h.line)), [])
 })
 
-test('M10tools/list with agora:delegate; from a delegate asked for a result, with agora:submit alone: delegate; submit alone, the schema its input', async (t) => {
+test('L99 a delegate through its turn, then continued with `to`; its caller: its view’s and its row’s delegation working, completed, working, completed; none in its caller’s', async (t) => {
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const view = async (id: string) => (await lab.workstreams.projections.objects(id)).find((o) => o.kind === 'workstream')?.object
+  const row = async (id: string) => (await db.admin.query('SELECT row FROM listings WHERE workstream=$1', [id])).rows[0]?.row as Record<string, unknown> | undefined
+  const both = (id: string, state: string) => async () => (await view(id))?.delegation === state && (await row(id))?.delegation === state
+  const delegate = delegateOf(text(await c.callTool({ name: 'delegate', arguments: { instructions: '/sleep 2', harness: 'mock' } })))
+  await until('working', both(delegate, 'working'))
+  await until('completed', both(delegate, 'completed'), 20_000)
+  assert.equal(text(await c.callTool({ name: 'delegate', arguments: { to: delegate, instructions: '/sleep 2' } })), `started ${delegate} · /sleep 2`)
+  await until('working again', both(delegate, 'working'))
+  await until('completed again', both(delegate, 'completed'), 20_000)
+  assert.equal((await view(ws))?.delegation, undefined)
+  assert.equal((await row(ws))?.delegation, undefined)
+})
+
+test('M10 tools/list with agora:delegate; from a delegate asked for a result, with agora:submit alone: delegate; submit alone, the schema its input', async (t) => {
   const { lab, url, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const [tool] = (await c.listTools()).tools

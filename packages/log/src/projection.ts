@@ -38,6 +38,7 @@ export type ListRow = {
   state: unknown
   harness: unknown
   question: unknown
+  delegation?: unknown
   below: Below
   changedAt: string
 }
@@ -65,6 +66,8 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
     state: view.state ?? null,
     harness: view.harness ?? null,
     question: view.question ?? null,
+    // A delegate's alone: any other row stays as it was written.
+    ...(view.delegation ? { delegation: view.delegation } : {}),
     below,
     changedAt,
   }
