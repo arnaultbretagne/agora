@@ -87,8 +87,8 @@ const workstreams = new Workstreams({
 })
 
 try {
-  // docs/specs/delegation.md: the engine behind `delegate`, `submit` and the reports.
-  new Delegations(workstreams)
+  // docs/specs/delegation.md: the engine behind `delegate`, `submit` and the reports; an approval held 4 min 30 s.
+  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
   await workstreams.start()
 } catch (error) {
   // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.

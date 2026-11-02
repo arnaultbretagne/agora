@@ -370,7 +370,13 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           rows={1}
           autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
-          placeholder={team ? 'Describe the goal for the team…' : (placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…'))}
+          placeholder={
+            team
+              ? 'Describe the goal for the team…'
+              : composer.refuses
+                ? 'Write to refuse, or to ask for a change'
+                : (placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…'))
+          }
           className="placeholder:text-muted-foreground field-sizing-content max-h-48 min-h-11 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-base leading-6 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2">

@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { offers } from '@agora/credentials'
-import { object } from './json.ts'
+import { canonical, object } from './json.ts'
 import { DELEGATION_META, REPORT_META } from './marks.ts'
 import { isApproval, type State } from './state.ts'
 import type { Entry } from './store.ts'
@@ -15,6 +15,9 @@ import type { Workstreams } from './workstreams.ts'
 /** An approval lives this long on Agora's clock; the call it holds hears progress this often. */
 export const APPROVAL_MS = 270_000
 export const PROGRESS_MS = 30_000
+/** How long an approval waits for the tool line it gates to reach Agora: ten looks, 200 ms apart. */
+const MATCH_TRIES = 10,
+  MATCH_EVERY_MS = 200
 const MAX_DEPTH = 3
 const AT_ONCE = 3
 const LAST_WORDS = 2_000
@@ -251,10 +254,16 @@ export class Delegations {
     args: Readonly<Record<string, unknown>>,
     hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
   ): Promise<{ settled: Settled; position: string }> {
-    const toolCallId = hold.toolUseId ?? (await this.match(caller.workstream, args))
+    // A harness may give its tool line just after its call: looked for again a moment, then asked without one.
+    let toolCallId = hold.toolUseId ?? (await this.match(caller.workstream, args))
+    for (let tries = 0; toolCallId === null && tries < MATCH_TRIES && !hold.aborted.aborted; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, MATCH_EVERY_MS))
+      toolCallId = await this.match(caller.workstream, args)
+    }
     const expiresAt = new Date(Date.now() + this.approvalMs).toISOString()
     const body = [
       `**${proposal.harness}**${proposal.settings.model ? `, ${proposal.settings.model}` : ''}${proposal.settings.effort ? `, effort ${proposal.settings.effort}` : ''}`,
+      '',
       `Rights beyond the caller's: ${proposal.beyond.map((r) => `\`${r}\``).join(', ')}`,
       '',
       proposal.instructions
@@ -317,11 +326,13 @@ export class Delegations {
       "SELECT object::text FROM objects WHERE workstream=$1 AND kind='element' AND type='tool' ORDER BY first_position DESC LIMIT 20",
       [caller],
     )
-    const wanted = JSON.stringify(args)
+    const wanted = canonical(args)
     for (const row of found.rows as { object: string }[]) {
       const tool = object(JSON.parse(row.object))
       if (!tool || !['pending', 'in_progress'].includes(String(tool.status)) || !/delegate/i.test(String(tool.title ?? ''))) continue
-      if (JSON.stringify(object(tool.rawInput) ?? tool.rawInput) === wanted && typeof tool.toolCallId === 'string') return tool.toolCallId
+      // Its input, or the arguments of the MCP call it wraps (`{ server, tool, arguments }`).
+      const input = object(tool.rawInput)
+      if ([input, object(input?.arguments)].some((v) => v !== null && canonical(v) === wanted) && typeof tool.toolCallId === 'string') return tool.toolCallId
     }
     return null
   }
@@ -500,7 +511,9 @@ export class Delegations {
     const titleOf = new Map((titles.rows as { workstream: string; title: string }[]).map((r) => [r.workstream, r.title]))
     const report = [
       'From Agora, not the person:',
-      ...outcomes.map((o) => `- ${o.delegate} "${titleOf.get(o.delegate) ?? line(o.step.instructions)}": ${o.outcome}. Read ${o.delegate} for the rest.`),
+      ...outcomes.map(
+        (o) => `- ${o.delegate} "${titleOf.get(o.delegate) ?? line(o.step.instructions)}": ${o.outcome}${/[.!?]$/.test(o.outcome) ? '' : '.'} Read ${o.delegate} for the rest.`,
+      ),
     ].join('\n')
     const id = randomUUID()
     const written = await this.workstreams.command(

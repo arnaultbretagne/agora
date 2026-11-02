@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U64: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
-import { cluster, database, expire, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
+import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
 import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
 import { NOBODY } from '../../src/agora/api.ts'
 
@@ -27,14 +27,17 @@ const PERSON = 'person@example.org'
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
   db = await database()
+  // Agora's MCP server where the mock agent's `/delegate` calls it: the lab has no gateway (packages/mock-agent).
+  const mcpPort = await freePort()
+  process.env.AGORA_MOCK_MCP = `http://127.0.0.1:${String(mcpPort)}/mcp`
   c = await cluster()
   // As the pools in the cluster: every Session starts with full access.
   c.kube.sessionConfig['mock-test'] = 'mode=full-access'
-  // A signer of its own, two repositories and the Internet offered, as in the cluster
+  // A signer of its own, two repositories, the Internet and delegating offered, as in the cluster
   // (docs/specs/credentials.md, "Offered profiles"); the gateway is never reached.
   const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
-  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet' }
+  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet,agora:delegate' }
   prefect = createServer((req, res) => {
     const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
     if (req.url === '/api/deployments/name/lead/main') return reply(200, { id: 'deployment-1' })
@@ -48,7 +51,8 @@ before(async () => {
   await new Promise<void>((resolve) => prefect.listen(0, '127.0.0.1', resolve))
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', ...credentials, ...team } })
+  // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -166,6 +170,25 @@ const accessPicker = (page: Page) => page.getByRole('button', { name: 'Access', 
 const accessChoice = (page: Page, repository: string, choice: string) => page.getByRole('group', { name: repository }).getByRole('menuitemradio', { name: choice })
 /** The Internet's switch in the access menu, the menu open. */
 const internetSwitch = (page: Page) => page.getByRole('menuitemcheckbox', { name: 'Internet' })
+
+/** A Workstream of the mock agent's given agora:delegate (docs/specs/delegation.md), once it answered its first message. */
+async function delegating(page: Page, text: string): Promise<string> {
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await accessPicker(page).click()
+  await page.getByRole('menuitemcheckbox', { name: 'agora:delegate' }).click()
+  await page.keyboard.press('Escape')
+  await send(page, text)
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText(`Echo #1: ${text}.`).waitFor()
+  return idOf(page)
+}
+/** What the mock agent is told to call `delegate` with (packages/mock-agent). */
+const delegateCall = (args: Record<string, unknown>) => `/delegate ${JSON.stringify(args)}`
+/** A `delegate` line of the thread, by its label. */
+const delegateLine = (page: Page, label: string) => thread(page).locator('[data-delegate]').filter({ hasText: label })
+/** The calls that need the person: a right beyond the caller's — a repository it was not given. */
+const beyond = (instructions: string) => delegateCall({ instructions, harness: 'mock', rights: ['github:owner/b:read'] })
 
 /** Every Workstream on the server, whoever owns it. */
 const stored = async () => Number((await db.admin.query('SELECT count(*) AS n FROM workstreams')).rows[0].n)
@@ -415,7 +438,7 @@ test('U44 the Internet: a right among the others, on in a draft; off, the Create
   await pickHarness(page, 'Mock agent')
   await accessPicker(page).click()
   const rights = await page.getByRole('menu').getByRole('menuitemcheckbox').or(page.getByRole('menu').getByRole('group')).all()
-  assert.deepEqual(await Promise.all(rights.map(async (r) => (await r.getAttribute('aria-label')) ?? (await r.innerText()).trim())), ['Internet', 'owner/a', 'owner/b'], 'the Internet first, then the repositories')
+  assert.deepEqual(await Promise.all(rights.map(async (r) => (await r.getAttribute('aria-label')) ?? (await r.innerText()).trim())), ['Internet', 'agora:delegate', 'owner/a', 'owner/b'], 'the Internet first, then the other services, then the repositories')
   assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'true', 'on by default')
   await internetSwitch(page).click()
   assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'false', 'the menu stays open')
@@ -539,7 +562,15 @@ test('U39 a phone: each bar coloured by an edge of its own, in the theme, as it 
 /** With SHOTS set to a directory, a picture of the page there: what a person checks by eye. */
 async function shot(page: Page, name: string): Promise<void> {
   if (!process.env.SHOTS) return
-  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)))
+  // The animations that end, ended: never a running line's shimmer, nor one a render cancels.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  )
   await page.screenshot({ path: join(process.env.SHOTS, `${name}.png`) })
 }
 
@@ -1096,4 +1127,85 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and far in
   await until('the list as before', async () => (await listItems(page).count()) === 50)
   assert.equal(await nav.getByText('an older talk').count(), 0)
   await page.context().close()
+})
+
+test('U60 an agent’s delegate within its rights, its delegate working, then done: the line names and links to it; working, then done; a report line opening on its text, then the agent’s answer', async () => {
+  const page = await fresh()
+  await delegating(page, 'before delegating')
+  await send(page, delegateCall({ instructions: '/sleep 3', harness: 'mock' }))
+  const line = delegateLine(page, '/sleep 3 · Mock agent')
+  await line.getByText('working', { exact: true }).waitFor()
+  await shot(page, 'u60-working')
+  assert.match(String(await line.getByRole('link', { name: '/sleep 3 · Mock agent' }).getAttribute('href')), /^\/w\/[0-9a-f-]{36}$/)
+  await line.getByText('done', { exact: true }).waitFor()
+  const report = thread(page).locator('[data-report]')
+  await report.getByText('From Agora', { exact: true }).click()
+  await report.getByText(/^From Agora, not the person:/).waitFor()
+  await shot(page, 'u60-report')
+  assert.match(await report.innerText(), /completed, its last message:[\s\S]*Slept 3 s\./)
+  await thread(page).getByText(/Echo #\d+: From Agora, not the person:/).waitFor()
+})
+
+test('U61 an approval pending on that line; Approve: the proposal and one button, the row waiting for you; after Approve, Approved and the delegate working', async () => {
+  const page = await fresh()
+  const caller = await delegating(page, 'before asking')
+  await send(page, beyond('/sleep 5'))
+  const box = delegateLine(page, 'delegate · /sleep 5').locator('[data-approval="pending"]')
+  await box.waitFor()
+  await shot(page, 'u61-approval')
+  // On the agent's own line: the approval names it, matched by its arguments (docs/specs/delegation.md, "Matching").
+  const ask = (await entriesOf(caller)).find((e) => e.kind === 'command' && e.content.kind === 'Ask')!
+  assert.match(String((ask.content.body as { toolCallId?: unknown }).toolCallId), /^outil-/)
+  assert.match(await box.innerText(), /Rights beyond the caller's: github:owner\/b:read/)
+  assert.deepEqual(await box.getByRole('button').allInnerTexts(), ['Approve'])
+  await page.locator('button[aria-current="page"]').getByText('waiting for you').waitFor()
+  await box.getByRole('button', { name: 'Approve' }).click()
+  const line = delegateLine(page, '/sleep 5 · Mock agent')
+  await line.locator('[data-approval="answered"]').getByText('Approved').waitFor()
+  await line.getByText('working', { exact: true }).waitFor()
+  await shot(page, 'u61-approved')
+})
+
+test('U62 an approval pending; the person writes “use the read-only rights”: sending open while the turn runs, the composer saying so; once sent, Refused and the words on the line; no new turn', async () => {
+  const page = await fresh()
+  const caller = await delegating(page, 'before refusing')
+  await send(page, beyond('/sleep 5'))
+  const line = delegateLine(page, 'delegate · /sleep 5')
+  await line.locator('[data-approval="pending"]').waitFor()
+  const prompts = async () => (await entriesOf(caller)).filter((e) => e.kind === 'acp' && e.content.method === 'session/prompt').length
+  const before = await prompts()
+  await page.getByPlaceholder('Write to refuse, or to ask for a change').fill('use the read-only rights')
+  assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true, 'open while the turn runs')
+  await shot(page, 'u62-refusing')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await line.locator('[data-approval="refused"]').getByText('“use the read-only rights”').waitFor()
+  await thread(page).getByText('Delegated: refused: use the read-only rights').waitFor()
+  await shot(page, 'u62-refused')
+  assert.equal(await prompts(), before, 'no new turn')
+})
+
+test('U63 an approval left unanswered: “Expired before a decision” on its line', async () => {
+  const page = await fresh()
+  await delegating(page, 'before expiring')
+  await send(page, beyond('/sleep 5'))
+  const line = delegateLine(page, 'delegate · /sleep 5')
+  await line.locator('[data-approval="pending"]').waitFor()
+  await line.locator('[data-approval="expired"]').getByText('Expired before a decision').waitFor({ timeout: 40_000 })
+  await thread(page).getByText('Delegated: expired').waitFor()
+  await shot(page, 'u63-expired')
+})
+
+test('U64 a delegate’s Workstream opened: its first message shown as from its caller, by the caller’s title, not as the person’s', async () => {
+  const page = await fresh()
+  const caller = await delegating(page, 'the caller')
+  await send(page, delegateCall({ instructions: 'hello delegate', harness: 'mock' }))
+  await delegateLine(page, 'hello delegate · Mock agent').getByRole('link').click()
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const first = thread(page).locator('[data-role="user"]').first()
+  await first.getByText('hello delegate').waitFor()
+  assert.equal(await first.getAttribute('data-from'), caller)
+  assert.equal(await first.getByRole('link').innerText(), 'From the caller')
+  await shot(page, 'u64-delegate')
+  await first.getByRole('link').click()
+  await page.waitForURL(`${server.url}/w/${caller}`)
 })

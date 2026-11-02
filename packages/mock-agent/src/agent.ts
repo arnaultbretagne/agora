@@ -140,6 +140,45 @@ function readSession(sessionId: string, cwd: string): Session | null {
   return session
 }
 
+/**
+ * A tool of Agora's MCP server called as a harness calls it (docs/specs/mcp.md), at AGORA_MOCK_MCP — the lab has no
+ * gateway —, the execution named as the gateway names it: its token's `sub`, which the bridge writes in
+ * ~/.agora/access.json. One JSON answer, or an SSE stream whose last event is the answer.
+ */
+async function callAgora(name: string, args: Record<string, unknown>, turn: Turn): Promise<{ text: string; isError: boolean }> {
+  const url = process.env.AGORA_MOCK_MCP
+  if (url === undefined || url === '') return { text: 'AGORA_MOCK_MCP missing', isError: true }
+  let sub: string
+  try {
+    sub = String((JSON.parse(readFileSync(join(home, '.agora', 'access.json'), 'utf8')) as { sub?: unknown }).sub ?? '')
+  } catch {
+    return { text: 'no access file', isError: true }
+  }
+  const aborted = new AbortController()
+  turn.wake = () => aborted.abort()
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'x-agora-execution': sub },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+      signal: aborted.signal,
+    })
+    const body = await response.text()
+    const last = String(response.headers.get('content-type')).includes('text/event-stream')
+      ? (body
+          .split('\n')
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5))
+          .at(-1) ?? '')
+      : body
+    const message = JSON.parse(last) as { result?: { content?: { text?: string }[]; isError?: boolean }; error?: { message?: string } }
+    if (message.error) return { text: String(message.error.message), isError: true }
+    return { text: (message.result?.content ?? []).map((c) => c.text ?? '').join('\n'), isError: message.result?.isError === true }
+  } catch (error) {
+    return { text: error instanceof Error ? error.message : String(error), isError: true }
+  }
+}
+
 /** Waits up to `ms`, returning early (with true) when the turn is cancelled. */
 function pause(turn: Turn, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -311,6 +350,25 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       const reply = await fetchOut(method, words.shift() ?? 'https://api.anthropic.com/v1/models', words.join(' '))
       remember(session, 'agent', reply)
       say(session.id, reply)
+      return 'end_turn'
+    }
+    case '/delegate': {
+      // /delegate {json}: a `delegate` call, as a harness makes one (docs/specs/delegation.md): its tool line,
+      // the call to Agora's MCP server, then its answer on the line and in a message.
+      const args = JSON.parse(text.trim().slice('/delegate'.length).trim() || '{}') as Record<string, unknown>
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'delegate', kind: 'other', status: 'in_progress', rawInput: args })
+      const answer = await callAgora('delegate', args, turn)
+      if (turn.cancelled) return 'cancelled'
+      update(session.id, {
+        sessionUpdate: 'tool_call_update',
+        toolCallId,
+        status: answer.isError ? 'failed' : 'completed',
+        rawOutput: answer.text,
+        content: [{ type: 'content', content: { type: 'text', text: answer.text } }],
+      })
+      remember(session, 'agent', `Delegated: ${answer.text}`)
+      say(session.id, `Delegated: ${answer.text}`)
       return 'end_turn'
     }
     case '/recall': {

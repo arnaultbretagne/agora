@@ -1,5 +1,6 @@
 // What a tool call's line says (docs/specs/assistant-ui.md, "Parts"): the agent's title made readable,
 // and the size of its change. Pure, like view.ts.
+import type { Gate } from './view.ts'
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
 export type Todo = { content: string; status: string }
@@ -14,6 +15,9 @@ export type Artifact = {
   note?: boolean
   answer?: string
   answerNote?: string | null
+  /** A `delegate` line's: the delegate its call started; the approval it waits for or waited for. */
+  delegate?: { id: string; title: string }
+  gate?: Gate
 }
 
 const basename = (path: string | undefined): string => (path ? (path.split('/').at(-1) ?? path) : '')

@@ -134,6 +134,8 @@ export interface Composer {
   readonly cancellable: ViewObject | null
   readonly uncertain: ViewObject | null
   readonly pendingPermission: ViewObject | null
+  /** What is sent refuses the pending approval (docs/specs/delegation.md, "Approval"). */
+  readonly refuses: boolean
 }
 
 const STATE_REASON: Record<WorkstreamState, string | null> = {
@@ -157,10 +159,14 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const uncertain = active && status(active) === 'uncertain' ? active : null
   const pendingPermission =
     ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending' && e.object.session === view.session) ?? null
-  const pendingQuestion = ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending')
+  const pending = (approval: boolean) =>
+    ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending' && (e.object.kind === 'approval') === approval)
+  const pendingQuestion = pending(false)
   const running = last !== undefined && ['saved', 'in_progress'].includes(status(last))
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
   const settling = view.state === 'ready' && view.configuring === true
+  // A pending approval leaves sending open, a turn running included: what is sent refuses it (docs/specs/assistant-ui.md).
+  if (state.complete && pending(true)) return { open: true, create: false, reason: null, running, cancellable, uncertain, pendingPermission, refuses: true }
   const reason = !state.complete
     ? 'Loading…'
     : pendingQuestion
@@ -176,7 +182,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   // A question holds sending back in every state, a first message included (docs/specs/assistant-ui.md).
   const create = state.complete && IDLE.includes(view.state) && !pendingQuestion
   const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null && !pendingQuestion && !settling)
-  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission }
+  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false }
 }
 
 // ---------------------------------------------------------------- notices
@@ -273,17 +279,64 @@ function contentText(content: unknown): string {
     .join('\n')
 }
 
+/** An approval (docs/specs/assistant-ui.md, "A tool's line"): on the `delegate` line it gates, or a box of its own. */
+export interface Gate {
+  readonly id: string
+  readonly status: 'pending' | 'answered' | 'refused' | 'expired'
+  readonly title: string
+  /** The proposal, as Markdown. */
+  readonly text: string
+  /** A refusing Write's words. */
+  readonly words: string | null
+}
+
+function gateOf(question: ViewObject): Gate {
+  const q = question.object
+  const note = json(q.answer)?.note
+  return {
+    id: question.id,
+    status: (text(q.status) || 'pending') as Gate['status'],
+    title: text(q.title),
+    text: text(q.text),
+    words: q.status === 'refused' && typeof note === 'string' ? note : null,
+  }
+}
+
+const isGate = (e: ViewObject): boolean => e.object.type === 'question' && e.object.kind === 'approval'
+
+/**
+ * A `delegate` call's answer once its delegate has started, `started <id> · <title>` (docs/specs/mcp.md, "Tools"):
+ * as a harness gives it, the text alone or inside the JSON of its result.
+ */
+export function startedDelegate(output: string): { id: string; title: string } | null {
+  const m = /started ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
+  return m ? { id: m[1]!, title: m[2]!.trim() } : null
+}
+
+/** What a tool printed: its raw output, as text or as JSON, else its content's text. */
+const outputOf = (tool: Json): string =>
+  tool.rawOutput === undefined ? contentText(tool.content) : typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)
+
+/** The delegates this Workstream's `delegate` lines started: whose rows their lines read. */
+export function delegatesOf(state: ThreadState): string[] {
+  return ofKind(state, 'element').flatMap((e) => {
+    const started = e.object.type === 'tool' ? startedDelegate(outputOf(e.object)) : null
+    return started ? [started.id] : []
+  })
+}
+
 const diffsOf = (content: unknown): Json[] => list(content).map((c) => json(c)).filter((c): c is Json => c?.type === 'diff')
 
-function toolPart(tool: Json, permission: ViewObject | undefined): Part {
+function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObject): Part {
   const done = tool.status === 'completed' || tool.status === 'failed'
   const title = text(tool.title) || text(tool.kind) || 'Tool'
   const input = json(tool.rawInput)
-  const output = tool.rawOutput === undefined ? contentText(tool.content) : typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)
+  const output = outputOf(tool)
   // An agent may send the change only with the permission it asks for it.
   const diffs = diffsOf(tool.content)
   const asked = diffs.length === 0 && permission ? diffsOf(json(json(permission.object.params)?.toolCall)?.content) : []
   const todos = list(input?.todos).map((t) => json(t)).filter((t): t is Json => typeof t?.content === 'string')
+  const delegate = startedDelegate(output)
   return {
     type: 'tool-call',
     toolCallId: text(tool.toolCallId),
@@ -300,12 +353,14 @@ function toolPart(tool: Json, permission: ViewObject | undefined): Part {
       locations: list(tool.locations),
       diffs: diffs.length > 0 ? diffs : asked,
       ...(todos.length > 0 ? { todos: todos.map((t) => ({ content: text(t.content), status: text(t.status) })) } : {}),
+      ...(delegate ? { delegate } : {}),
+      ...(gate ? { gate: gateOf(gate) } : {}),
     },
     ...(permission ? { approval: approvalOf(permission, title) } : {}),
   }
 }
 
-function partsOf(elements: ViewObject[]): Part[] {
+function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>): Part[] {
   const permissions = new Map<string, ViewObject>()
   for (const e of elements)
     if (e.object.type === 'permission') permissions.set(text(json(json(e.object.params)?.toolCall)?.toolCallId), e)
@@ -315,7 +370,7 @@ function partsOf(elements: ViewObject[]): Part[] {
     const o = e.object
     if (o.type === 'agent_message_chunk') parts.push({ type: 'text', text: text(o.text) })
     else if (o.type === 'agent_thought_chunk') parts.push({ type: 'reasoning', text: text(o.text) })
-    else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId))))
+    else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId)), gates.get(text(o.toolCallId))))
     else if (o.type === 'plan') parts.push({ type: 'data', name: 'plan', data: { entries: list(o.entries) } as never })
     else if (o.type === 'permission') {
       const call = json(json(o.params)?.toolCall) ?? {}
@@ -359,6 +414,28 @@ function questionMessage(question: ViewObject): ThreadMessageLike {
     ],
     status: chosen ? { type: 'complete', reason: 'stop' } : { type: 'requires-action', reason: 'tool-calls' },
     metadata: { custom: { question: question.id } },
+  }
+}
+
+/** An approval matched to no line (docs/specs/assistant-ui.md, "A tool's line"): the same box, at its position. */
+function gateMessage(question: ViewObject): ThreadMessageLike {
+  const gate = gateOf(question)
+  return {
+    id: `${question.id}:approval`,
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool-call',
+        toolCallId: question.id,
+        toolName: 'delegate',
+        args: {} as never,
+        argsText: '',
+        ...(gate.status === 'pending' ? {} : { result: gate.status }),
+        artifact: { title: `delegate · ${gate.title}`, kind: 'other', status: gate.status === 'pending' ? 'pending' : 'completed', gate },
+      },
+    ],
+    status: { type: 'complete', reason: 'stop' },
+    metadata: { custom: { approval: question.id } },
   }
 }
 
@@ -662,6 +739,8 @@ export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' 
   readonly depth?: number
   /** What lies under it, at every depth: the sub-streams, those live, those waiting for the person. */
   readonly below?: { readonly count: number; readonly live: number; readonly waiting: number }
+  /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `completed`, `failed`, `cancelled`. */
+  readonly delegation?: string
 }
 
 export interface Section {
@@ -737,33 +816,52 @@ export function excerpt(line: string, text: string, lead = 16): Excerpt {
 export function messagesOf(state: ThreadState): ThreadMessageLike[] {
   const elements = ofKind(state, 'element').sort(byPosition)
   const placed: { position: string; messages: ThreadMessageLike[] }[] = []
+  // An approval goes on the tool line it names, when this Workstream holds it.
+  const tools = new Set(elements.filter((e) => e.object.type === 'tool').map((e) => text(e.object.toolCallId)))
+  const gates = new Map(elements.filter((e) => isGate(e) && tools.has(text(e.object.toolCallId))).map((e) => [text(e.object.toolCallId), e]))
   for (const turn of turnsOf(state)) {
     const own = elements.filter((e) => e.object.turn === turn.id)
     const prompt = own.find((e) => e.object.type === 'user')
+    // A report of Agora's in place of the person's message (docs/specs/delegation.md, "Reports").
+    const report = own.find((e) => e.object.type === 'report')
+    const from = text(prompt?.object.from)
     const custom = { turnStatus: status(turn), turn: turn.id }
     const pending = own.some((e) => e.object.type === 'permission' && e.object.status === 'pending')
     placed.push({
       position: text(turn.object.requestPosition),
       messages: [
-        {
-          id: `${turn.id}:user`,
-          role: 'user',
-          content: [{ type: 'text', text: list(prompt?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n') }],
-          attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
-          metadata: { custom },
-        },
+        report
+          ? {
+              id: `${turn.id}:report`,
+              role: 'system',
+              content: [{ type: 'text', text: text(report.object.text) }],
+              metadata: { custom: { ...custom, report: list(report.object.delegates).length } },
+            }
+          : {
+              id: `${turn.id}:user`,
+              role: 'user',
+              content: [{ type: 'text', text: list(prompt?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n') }],
+              attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
+              // A delegate's message from its caller is the caller's, not the person's.
+              metadata: { custom: from ? { ...custom, from } : custom },
+            },
         {
           id: `${turn.id}:assistant`,
           role: 'assistant',
-          content: partsOf(own.filter((e) => e.object.type !== 'user')),
+          content: partsOf(
+            own.filter((e) => e.object.type !== 'user' && e.object.type !== 'report'),
+            gates,
+          ),
           status: assistantStatus(turn, pending),
           metadata: { custom },
         },
       ],
     })
   }
-  for (const question of elements.filter((e) => e.object.type === 'question'))
-    placed.push({ position: text(question.object.position), messages: [questionMessage(question)] })
+  for (const question of elements.filter((e) => e.object.type === 'question')) {
+    if (isGate(question) && gates.get(text(question.object.toolCallId)) === question) continue
+    placed.push({ position: text(question.object.position), messages: [isGate(question) ? gateMessage(question) : questionMessage(question)] })
+  }
   let sessions = 0
   const notices = ofKind(state, 'notice').sort(byPosition)
   // A break the execution's loss or end follows is explained by it: only the end is shown.

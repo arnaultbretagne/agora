@@ -221,7 +221,7 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
-| A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
+| A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes — "a reminder" for one to a delegate —, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
 Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown. A `user`
