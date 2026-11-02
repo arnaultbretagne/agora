@@ -1,5 +1,5 @@
 // Checks that every acceptance case cited in docs/reliability is defined in docs/specs (docs/README.md):
-// a case ID — C, E, F, L or U and digits — is defined by a row of a spec's case table, `| C1 | … |`.
+// a case ID — C, E, F, L, S or U and digits — is defined by a row of a spec's case table, `| C1 | … |`.
 // Every citation in every .md file of docs/reliability counts, a range — `C1–C4`, `C1-C4`, `C1–4` or
 // `C1 to C4` — for each case in it; run IDs (R1, R0g…) are not case IDs. No dependency: Node 24.
 //
@@ -12,7 +12,7 @@ import { join, relative } from 'node:path'
 function defined(text: string): Set<string> {
   const out = new Set<string>()
   for (const line of text.split('\n')) {
-    const m = /^\|\s*([CEFLU]\d+)\s*\|/.exec(line)
+    const m = /^\|\s*([CEFLSU]\d+)\s*\|/.exec(line)
     if (m) out.add(m[1]!)
   }
   return out
@@ -21,7 +21,7 @@ function defined(text: string): Set<string> {
 /** The case IDs a text cites, with their line: `C1`, and each case of a range. */
 function cited(text: string): { id: string; line: number }[] {
   const out: { id: string; line: number }[] = []
-  const id = /(?<![A-Za-z0-9_])([CEFLU])(\d+)(?:[–-]\1?(\d+)|\s+(?:to|through)\s+\1(\d+))?(?![A-Za-z0-9_])/g
+  const id = /(?<![A-Za-z0-9_])([CEFLSU])(\d+)(?:[–-]\1?(\d+)|\s+(?:to|through)\s+\1(\d+))?(?![A-Za-z0-9_])/g
   for (const [i, line] of text.split('\n').entries()) {
     for (const m of line.matchAll(id)) {
       const from = Number(m[2])
