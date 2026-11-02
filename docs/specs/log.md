@@ -268,7 +268,7 @@ the client shows them is `assistant-ui.md`.
 | --- | --- |
 | Deterministic | A fold reads entries in position order and nothing else: no diagnostic row, clock or live execution. |
 | Version | Each projector has a version. A checkpoint records, per projector and Workstream, the version and the last position folded; a checkpoint from another version counts as none. |
-| Same transaction | Views, their thread updates and their checkpoint commit together, under a projector lock of their own, separate from the capture lock. |
+| Same transaction | Views, their thread positions and their checkpoint commit together, under a projector lock of their own, separate from the capture lock. |
 | Rebuild | For the same version and source position, gives the same identities and rows as the incremental run: a hash of the canonical encoding of the rows, sorted by id, with no field left out. A rebuild publishes atomically and removes obsolete objects. |
 
 ### Elements
@@ -339,9 +339,10 @@ What the client reads (`assistant-ui.md`, "The exchanges").
 
 | Rule | Detail |
 | --- | --- |
-| Update | Each change to a view appends an update: its position, the operation (`upsert` with the whole object, or `remove`), the object's kind and id. |
-| Positions | Strictly increasing and never reused. A rebuild appends `reset`, then every object; it never truncates. |
-| Reading | From cursor C: a consistent snapshot through high-water mark H — the latest state or removal of each object changed in (C, H], then `snapshot-end` carrying H — then live updates after H. A `reset` in (C, H] sends the complete state at H. |
+| Update | Each change to a view takes the Workstream's next thread position, stored with the object: an object holds the position of its last change, never the changes before it. A row is an `upsert` with the whole object, its kind and id, at that position. |
+| Reset | A rebuild, or a change that removes an object, takes the next position for a `reset`, then gives every object a position after it: the complete state, in order. A removal is never sent on its own. |
+| Positions | Strictly increasing and never reused; the thread's last position and its last reset's are kept with the projector's lock. |
+| Reading | From cursor C: a consistent snapshot through high-water mark H — each object changed in (C, H], in position order; after a `reset` in (C, H], that `reset` then every object — then `snapshot-end` carrying H; then live, the same from the last position sent: a change made twice in between arrives once, as it stands. |
 | Cursor | A decimal string, compared losslessly. Zero asks for a complete snapshot; a negative cursor or one beyond H is refused. |
 
 ### The list
@@ -416,23 +417,22 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | Table | Key | Holds |
 | --- | --- | --- |
 | `workstreams` | id | Owner; parent, root — none for a root, its own — and depth; last entry position. |
-| `threads` | Workstream | The thread's last position; its row is the projector's lock. |
+| `threads` | Workstream | The thread's last position and its last reset's; its row is the projector's lock. |
 | `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
 | `commands` | Workstream, id | Kind, target, SHA-256 of the canonical request, the answer, its entry's position, the execution and claim name of a Create. |
 | `sessions` | id | Workstream, execution, ACP session id, the positions where it opened and ended. |
 | `diagnostics` | id | Execution, connection, receive ordinal, direction, reason, size, SHA-256, time. |
-| `anchors` | id | Workstream, execution, Session, metadata, content (`bytea`). |
-| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; an element's `type`, in a column of its own, for search (`search.md`). |
-| `thread` | Workstream, position | Operation, object kind and id, the object. |
+| `anchors` | id | Workstream, execution, Session, metadata, content (`bytea`). A Workstream keeps its last anchor per harness: one stored removes the earlier ones of its harness. |
+| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; the thread position of its last change; an element's `type`, in a column of its own, for search (`search.md`). |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
 | `lists` | Owner | The list's last position; its owner is a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
 | `listings` | Workstream | Its list's owner, position, `changedAt`, title, the row. |
 
 | Role | May | May not |
 | --- | --- | --- |
-| `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread or checkpoints. |
-| `agora_projector` | Read Workstream ids, owners and lines, and entries; write views, checkpoints, the thread and the lists; update the thread's and a list's last position. | Write entries, commands or Sessions; read anchors; change thread rows; delete a list's rows. |
-| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read and insert anchors, bytes included. | Write entries, commands, Sessions, views; change anchors. |
+| `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread's positions or checkpoints. |
+| `agora_projector` | Read Workstream ids, owners and lines, and entries; write views with their thread positions, checkpoints and the lists; update the thread's last position and last reset, and a list's last position. | Write entries, commands or Sessions; read anchors; delete the thread's row or a list's rows. |
+| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read, insert and delete anchors, bytes included. | Write entries, commands, Sessions, views; update an anchor. |
 
 | Rule | Detail |
 | --- | --- |
@@ -476,7 +476,7 @@ exception message.
 | L21 | A capture commit succeeds but its acknowledgement is lost | The retry finds the same receive identity: one entry. |
 | L22 | The real claude-code transcript, folded incrementally and through a rebuild | The same identities, and the hash recorded at capture. |
 | L23 | A projector's version changes and drops an object, while another projector's objects remain | `reset`, then the complete state; positions go on; the dropped object is gone, the others stay. |
-| L24 | The thread read while updates commit, cut before `snapshot-end`, read again | No change skipped, none applied twice; a negative cursor or one beyond H refused. |
+| L24 | The thread read while updates commit, cut before `snapshot-end`, read again | Live rows after H in strictly increasing positions; the client ends at the stored state, no object missed, none applied twice; a negative cursor or one beyond H refused. |
 | L25 | Each role does what it may, then what it may not | The first succeed; each of the second is denied. |
 | L26 | Positions and cursors beyond 2⁵³ − 1 | Exact arithmetic, order, request ids and thread reads. |
 | L27 | Migrations run at once in two databases of one cluster | Both succeed; no existing role gains a privilege. |
@@ -547,6 +547,10 @@ exception message.
 | L92 | A Workstream six levels down | Created, at depth 6: Agora sets no limit. |
 | L93 | A sub-stream's row read by its id; a Workstream without an entry; another person's | Its parent and depth; 404 `unknown_workstream`; 404 `unknown_workstream`. |
 | L94 | A title search on the owner's list, a sub-stream two levels down holding the text | The sub-stream among the rows, with its parent. |
+| L95 | An element changed several times — a text streamed in several chunks —, the thread read from before its first change | One row for it: its last state, at the position of its last change, as stored; each object once, in position order; the thread's last position counts every change. |
+| L96 | A projector's fold drops an object without a version change | `reset` at the next position, then every remaining object after it, in order; the dropped object gone, the others kept. |
+| L97 | Anchors stored for a Workstream: two of one harness, one of another, one of another Workstream; then the last stored again | The earlier anchor of that harness removed; the other harness's, the other Workstream's and the last kept; storing the last again removes nothing. |
+| L98 | The schema applied to a database that kept every change of the thread in a table of its own, a reset among them, and two anchors of one harness | Each object at the position of its last change, the last reset kept, the table gone; a read from before the reset gives it then the complete state, one from after it what changed since; that harness's last anchor kept, the other removed; applied again, nothing changes. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

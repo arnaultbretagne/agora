@@ -235,7 +235,7 @@ export class LogStore {
         EXISTS(SELECT 1 FROM pg_roles b WHERE b.rolname=$1 AND (b.rolcanlogin OR b.rolsuper OR b.rolcreaterole OR b.rolcreatedb OR b.rolbypassrls)) AS boundary_bad,
         EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolsuper OR p.rolcreaterole OR p.rolcreatedb OR p.rolbypassrls) AND pg_has_role(current_user,p.oid,'MEMBER')) AS privileged,
         EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolname=ANY($2) OR p.rolname IN ('pg_read_all_data','pg_write_all_data')) AND pg_has_role(current_user,p.oid,'MEMBER')) AS other,
-        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','threads','entries','commands','sessions','diagnostics','anchors','objects','thread','checkpoints','lists','listings') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
+        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','threads','entries','commands','sessions','diagnostics','anchors','objects','checkpoints','lists','listings') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
         FROM pg_roles r WHERE r.rolname=current_user`,
         [`agora_${role}`, ['writer', 'projector', 'anchors'].filter((r) => r !== role).map((r) => `agora_${r}`)],
       )
@@ -587,7 +587,10 @@ export class LogStore {
       return position
     })
   }
-  /** Stores an anchor with the anchor role; `publishAnchors` then appends its entry. */
+  /**
+   * Stores an anchor with the anchor role; `publishAnchors` then appends its entry. The Workstream keeps its
+   * last anchor per harness (docs/specs/log.md, "Storage"): one stored removes the earlier ones of its harness.
+   */
   async storeAnchor(input: {
     id: string
     workstream: string
@@ -597,7 +600,11 @@ export class LogStore {
     bytes: Uint8Array
   }): Promise<void> {
     await this.anchors.query(
-      'INSERT INTO anchors(id,workstream,execution,session,metadata,content) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT DO NOTHING',
+      `WITH stored AS (
+         INSERT INTO anchors(id,workstream,execution,session,metadata,content) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT DO NOTHING
+         RETURNING id, workstream, metadata->>'harness' AS harness
+       )
+       DELETE FROM anchors a USING stored s WHERE a.workstream=s.workstream AND a.id<>s.id AND a.metadata->>'harness' IS NOT DISTINCT FROM s.harness`,
       [
         uuid(input.id),
         input.workstream,

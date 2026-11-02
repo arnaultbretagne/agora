@@ -15,7 +15,7 @@ export interface ViewObject {
 export interface ThreadRow {
   readonly type: 'snapshot' | 'snapshot-end' | 'live'
   readonly position: string
-  readonly operation?: 'upsert' | 'remove' | 'reset'
+  readonly operation?: 'upsert' | 'reset'
   readonly kind?: string | null
   readonly id?: string | null
   readonly object?: Json | null
@@ -38,7 +38,6 @@ export function after(a: string, b: string): boolean {
 
 function change(objects: Map<string, ViewObject>, row: ThreadRow): void {
   if (row.operation === 'reset') objects.clear()
-  else if (row.operation === 'remove' && row.id) objects.delete(row.id)
   else if (row.operation === 'upsert' && row.id && row.object) objects.set(row.id, { kind: row.kind as Kind, id: row.id, object: row.object })
 }
 

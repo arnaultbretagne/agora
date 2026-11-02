@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS anchors (
  id uuid PRIMARY KEY, workstream uuid NOT NULL REFERENCES workstreams(id), execution uuid NOT NULL, session uuid,
  metadata jsonb NOT NULL, content bytea NOT NULL, time timestamptz NOT NULL DEFAULT now()
 );
+-- A Workstream keeps its last anchor per harness (docs/specs/log.md, "Storage"): those stored before it go.
+DELETE FROM anchors a USING (
+ SELECT id, row_number() OVER (PARTITION BY workstream, metadata->>'harness' ORDER BY time DESC, id DESC) AS rank FROM anchors
+) r WHERE a.id = r.id AND r.rank > 1;
 CREATE TABLE IF NOT EXISTS objects (
  workstream uuid NOT NULL REFERENCES workstreams(id), projector text NOT NULL, kind text NOT NULL CHECK(kind IN ('workstream','turn','element','notice')),
  id uuid NOT NULL, object jsonb NOT NULL, first_position bigint NOT NULL, last_position bigint NOT NULL,
@@ -52,11 +56,25 @@ CREATE TABLE IF NOT EXISTS objects (
 ALTER TABLE objects ADD COLUMN IF NOT EXISTS type text;
 UPDATE objects SET type = object->>'type' WHERE kind = 'element' AND type IS NULL AND object ? 'type';
 CREATE INDEX IF NOT EXISTS objects_type ON objects(type, workstream) WHERE kind = 'element';
-CREATE TABLE IF NOT EXISTS thread (
- workstream uuid NOT NULL REFERENCES workstreams(id), position bigint NOT NULL,
- operation text NOT NULL CHECK(operation IN ('upsert','remove','reset')), kind text, id uuid, object jsonb,
- PRIMARY KEY(workstream,position)
-);
+-- The thread is read from the objects themselves (docs/specs/log.md, "The thread"): each object carries the
+-- position of its last change, the projector's row the position of the last reset. A database that kept every
+-- change in a table of its own gets each object's last position and each Workstream's last reset from it, then
+-- loses it; a server of the schema before cannot project meanwhile, and the next one catches up from the
+-- checkpoints.
+ALTER TABLE objects ADD COLUMN IF NOT EXISTS position bigint NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS reset_position bigint NOT NULL DEFAULT 0;
+DO $$ BEGIN
+ IF to_regclass('thread') IS NOT NULL THEN
+  UPDATE objects o SET position = t.position
+   FROM (SELECT workstream, kind, id, max(position) AS position FROM thread WHERE operation = 'upsert' GROUP BY workstream, kind, id) t
+   WHERE o.workstream = t.workstream AND o.kind = t.kind AND o.id = t.id;
+  UPDATE threads s SET reset_position = r.position
+   FROM (SELECT workstream, max(position) AS position FROM thread WHERE operation = 'reset' GROUP BY workstream) r
+   WHERE s.workstream = r.workstream;
+  DROP TABLE thread;
+ END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS objects_thread ON objects(workstream, position);
 CREATE TABLE IF NOT EXISTS checkpoints (
  workstream uuid NOT NULL REFERENCES workstreams(id), projector text NOT NULL, version text NOT NULL,
  position bigint NOT NULL, PRIMARY KEY(workstream,projector)
@@ -116,8 +134,8 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
   SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
   FROM parts p CROSS JOIN LATERAL regexp_split_to_table(nullif(p.text, ''), E'\n') WITH ORDINALITY AS l(text, ord)
 $$;
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM PUBLIC;
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM PUBLIC;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;
 -- Only the log's roles connect, besides the owner applying this file.
 DO $$ BEGIN
@@ -134,18 +152,18 @@ GRANT SELECT(id,workstream,execution,connection,receive_ordinal,direction,reason
 GRANT UPDATE(ended_position) ON sessions TO agora_writer;
 GRANT SELECT(id,workstream,execution,session,metadata,time) ON anchors TO agora_writer;
 GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
-GRANT SELECT(workstream,last_position), INSERT(workstream), UPDATE(last_position) ON threads TO agora_projector;
+GRANT SELECT(workstream,last_position,reset_position), INSERT(workstream), UPDATE(last_position,reset_position) ON threads TO agora_projector;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_projector;
-GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type), INSERT(workstream,projector,kind,id,object,first_position,last_position,type), UPDATE(object,first_position,last_position,type) ON objects TO agora_projector;
+GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type,position), INSERT(workstream,projector,kind,id,object,first_position,last_position,type,position), UPDATE(object,first_position,last_position,type,position) ON objects TO agora_projector;
 REVOKE ALL ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) TO agora_projector;
 GRANT DELETE ON objects TO agora_projector;
 GRANT SELECT(workstream,projector,version,position), INSERT(workstream,projector,version,position), UPDATE(version,position) ON checkpoints TO agora_projector;
 GRANT DELETE ON checkpoints TO agora_projector;
-GRANT SELECT(workstream,position,operation,kind,id,object), INSERT(workstream,position,operation,kind,id,object) ON thread TO agora_projector;
 GRANT SELECT(owner,last_position), INSERT(owner), UPDATE(last_position) ON lists TO agora_projector;
 GRANT SELECT(workstream,owner,position,changed_at,title,row), INSERT(workstream,owner,position,changed_at,title,row), UPDATE(position,changed_at,title,row) ON listings TO agora_projector;
 GRANT SELECT(id,owner) ON workstreams TO agora_anchors;
 GRANT SELECT(workstream,execution,session,kind,position) ON entries TO agora_anchors;
 GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position) ON sessions TO agora_anchors;
 GRANT SELECT(id,workstream,execution,session,metadata,content,time), INSERT(id,workstream,execution,session,metadata,content) ON anchors TO agora_anchors;
+GRANT DELETE ON anchors TO agora_anchors;
