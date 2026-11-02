@@ -2,7 +2,7 @@
 // is, its older rows a page at a time, a search on the server; a Workstream's thread, kept in the browser
 // with its cursor — reused only together — and read again from that cursor.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Api, Folder, Page } from './api.ts'
+import type { Api, Folder, Hit, Page } from './api.ts'
 import { empty, type ThreadState, type ViewObject } from './objects.ts'
 import { ThreadStream, type Connection } from './stream.ts'
 import { merged, type ListRow } from './view.ts'
@@ -110,6 +110,31 @@ export function useSearch(api: Api, folder: Folder | null, text: string, enabled
   const more = usePages(api, folder, found?.text ?? '', older, onPage)
   if (wanted === '' || found === null) return null
   return { text: found.text, rows: found.older.rows, more, end: found.older.next === null }
+}
+
+/**
+ * The Workstreams whose exchanges hold a text (docs/specs/assistant-ui.md, "Sidebar"; docs/specs/search.md),
+ * asked 250 ms after the last key; null while the text is empty. Until the text's answer comes, the last
+ * text's stays, for the screen to wait on.
+ */
+export function useWords(api: Api, text: string): { readonly text: string; readonly hits: readonly Hit[] } | null {
+  const wanted = text.trim()
+  const [found, setFound] = useState<{ text: string; hits: readonly Hit[] } | null>(null)
+  useEffect(() => {
+    if (wanted === '') return setFound(null)
+    let live = true
+    const timer = setTimeout(() => {
+      void api.search(wanted).then(
+        (hits) => live && setFound({ text: wanted, hits }),
+        () => live && setFound({ text: wanted, hits: [] }),
+      )
+    }, 250)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [api, wanted])
+  return wanted === '' ? null : found
 }
 
 /**

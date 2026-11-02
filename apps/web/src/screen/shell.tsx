@@ -10,7 +10,7 @@ import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
-import { useList, useSearch, type ListFeed } from '../agora/hooks.ts'
+import { useList, useSearch, useWords, type ListFeed } from '../agora/hooks.ts'
 import { useAgora } from '../agora/runtime.tsx'
 import { harnessName, merged, sections, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
@@ -83,13 +83,20 @@ const Below: FC<{ below: NonNullable<ListRow['below']> }> = ({ below }) =>
  * A row of the list (docs/specs/assistant-ui.md, "Sidebar"): its title, and its state's dot or "waiting for
  * you". A row with sub-streams has a chevron before it; folded, what lies under it shows at its end.
  */
-const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open: boolean; toggle: () => void } }> = ({ w, active, onOpen, fold }) => {
+const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open: boolean; toggle: () => void }; match?: string }> = ({
+  w,
+  active,
+  onOpen,
+  fold,
+  match,
+}) => {
   const folded = fold !== undefined && !fold.open && w.below !== undefined
   const waiting = w.question || (folded && w.below!.waiting > 0)
   return (
     <div
       className={cn(
-        'rounded-control flex h-8 w-full shrink-0 items-center text-[13px] transition-colors',
+        'rounded-control flex w-full shrink-0 items-center text-[13px] transition-colors',
+        match === undefined ? 'h-8' : 'py-1',
         active ? 'bg-foreground/[0.06] text-foreground' : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
       )}
     >
@@ -111,9 +118,16 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
         onClick={onOpen}
         title={`${harnessName(w.harness)} · ${w.state}`}
         aria-current={active ? 'page' : undefined}
-        className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-1 text-left"
+        className={cn('flex min-w-0 flex-1 items-center gap-2 pr-2 pl-1 text-left', match === undefined && 'h-8')}
       >
-        <span className="min-w-0 flex-1 truncate">{w.title}</span>
+        {match === undefined ? (
+          <span className="min-w-0 flex-1 truncate">{w.title}</span>
+        ) : (
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate">{w.title}</span>
+            <span className="text-muted-foreground/80 truncate text-[11.5px]">{match}</span>
+          </span>
+        )}
         {waiting ? (
           <span className="text-primary shrink-0 text-[11px] font-medium">waiting for you</span>
         ) : (
@@ -277,13 +291,12 @@ const storedFolder = (): boolean => {
  * The person's agents' folder (docs/specs/assistant-ui.md, "Accounts"), at the foot of the list: the
  * Workstreams of their runs' members, closed at first, its state remembered. None while it is empty.
  */
-const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, onNavigate }) => {
-  const { api, account, agents, id, open } = useAgora()
+const AgentsFolder: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
+  const { agents, id, open } = useAgora()
   const [opened, setOpened] = useState(storedFolder)
-  const found = useSearch(api, 'agents', search, account.email !== null)
-  const rows = useMemo(() => (found ? merged(agents.rows, found.rows) : agents.rows), [found, agents.rows])
-  const shown = useMemo(() => sections(rows, new Date(), search, id).flatMap((s) => s.workstreams), [rows, search, id])
-  const feed = feedOf(search, agents, found)
+  const rows = agents.rows
+  const shown = useMemo(() => sections(rows, new Date(), '', id).flatMap((s) => s.workstreams), [rows, id])
+  const feed: ListFeed | null = agents
   if (shown.length === 0) return null
   const toggle = () => {
     setOpened(!opened)
@@ -330,14 +343,24 @@ const AgentsFolder: FC<{ search: string; onNavigate: () => void }> = ({ search, 
 }
 
 const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
-  const { api, list, id, open, line } = useAgora()
+  const { api, list, id, open, line, account } = useAgora()
   const folds = useFolds(line)
   const [search, setSearch] = useState('')
-  // A search: the server's rows whose title holds the text, with the loaded ones that do (docs/specs/assistant-ui.md, "Sidebar").
+  const wanted = search.trim()
+  // A search (docs/specs/assistant-ui.md, "Sidebar"): the Workstreams whose title holds the text — the person's
+  // and their folder's — and those whose exchanges do, each with its latest matching line. Until both answer,
+  // the loaded rows whose title holds it.
   const found = useSearch(api, null, search)
-  const rows = useMemo(() => (found ? merged(list.rows, found.rows) : list.rows), [found, list.rows])
-  const groups = useMemo(() => sections(rows, new Date(), search, id, line.map((r) => r.id)), [rows, search, id, line])
-  const feed = feedOf(search, list, found)
+  const foundInFolder = useSearch(api, 'agents', search, account.email !== null)
+  const words = useWords(api, search)
+  const answered = wanted !== '' && found?.text === wanted && words?.text === wanted
+  const matches = useMemo(() => new Map((words?.hits ?? []).map((h) => [h.row.id, h.text])), [words])
+  const rows = useMemo(
+    () => (answered ? merged(found!.rows, foundInFolder?.rows ?? [], words!.hits.map((h) => h.row)) : list.rows),
+    [answered, found, foundInFolder, words, list.rows],
+  )
+  const groups = useMemo(() => sections(rows, new Date(), answered ? '' : search, id, line.map((r) => r.id)), [rows, answered, search, id, line])
+  const feed = feedOf(search, list, answered ? found : null)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-2">
@@ -381,6 +404,7 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
                     key={w.id}
                     w={w}
                     active={w.id === id}
+                    match={matches.get(w.id)}
                     onOpen={() => {
                       open(w.id)
                       onNavigate()
@@ -392,7 +416,7 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
           </section>
         ))}
         {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
-        <AgentsFolder search={search} onNavigate={onNavigate} />
+        {wanted === '' && <AgentsFolder onNavigate={onNavigate} />}
       </nav>
       <AccountMenu />
     </div>

@@ -28,7 +28,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | --- | --- |
 | Pattern | A regular expression, PostgreSQL's, `\b` being a word's edge as in ripgrep; case is matched unless `-i`. An invalid one is refused. |
 | Searched | The `user` and `agent` lines of the caller's Workstreams — its own, sub-streams included, and its agents' folder's —, or of one of them; with `tools`, the `tool` lines too. Never a header. |
-| Output | `workstreams_with_matches`, the default: each Workstream with a match, the most recently changed first, with its title and its latest matching line. `content`: each matching line as `<workstream>:<line>:<text>`, with `-A`, `-B` or `-C` lines of context as `<workstream>-<line>-<text>`. `count`: how many lines match in each Workstream. |
+| Output | `workstreams_with_matches`, the default: each Workstream with a match, the most recently changed first, with its row (`log.md`, "The list"), how many of its lines match, and its latest matching line. `content`: each matching line, its Workstream, number and text — `<workstream>:<line>:<text>` as grep writes it —, with `-A`, `-B` or `-C` lines of context around it, marked as context. `count`: each Workstream's title and how many of its lines match. |
 | Long lines | A line found or given as context is cut to 300 characters around its first match, the cuts marked `…`. |
 | Pages | At most `head_limit` results, 20 by default and 100 at most, after skipping `offset`; when more follow, the next `offset`. |
 
