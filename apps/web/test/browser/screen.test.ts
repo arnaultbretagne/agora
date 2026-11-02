@@ -1065,7 +1065,7 @@ async function talked(id: string, at: { owner?: string; parent?: string }, messa
   }
 }
 
-test('U59 a word said only in an exchange of a Workstream not loaded, and only in a sub-stream\'s: both found with their line; emptied, the list as before', async () => {
+test('U59 a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream\'s: both found with their line, the word in view and marked; emptied, the list as before', async () => {
   const email = 'words@example.org'
   const owner = identity('owner', email)
   const old = randomUUID(),
@@ -1074,7 +1074,8 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and only i
   // Said in a second exchange: neither title holds it.
   await talked(old, { owner }, ['an older talk', 'the quokka came by'])
   await grown(root, { owner })
-  await talked(sub, { parent: root }, ['a sub-stream', 'a quokka again'])
+  // Far into a long line: a narrow row shows it only from just before it.
+  await talked(sub, { parent: root }, ['a sub-stream', `${'a long way round, '.repeat(12)}then a quokka again`])
   // More recent ones: the older talk is not in the first 50.
   await asked(owner, 55)
   const page = await proxied(email)
@@ -1086,9 +1087,11 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and only i
   await nav.getByText('an older talk', { exact: true }).waitFor()
   await nav.getByText('a sub-stream', { exact: true }).waitFor()
   assert.equal(await listItems(page).count(), 2)
-  // Under each title, its latest matching line: the agent's echo of the message that said it.
-  await nav.getByText('Echo #2: the quokka came by.').waitFor()
-  await nav.getByText('Echo #2: a quokka again.').waitFor()
+  // Under each title, its latest matching line: the agent's echo of the message that said it, from the word
+  // before the word searched, which is marked.
+  await nav.getByText('Echo #2: the quokka came by. Before, you told me "an older talk".', { exact: true }).waitFor()
+  await nav.getByText('…round, then a quokka again. Before, you told me "a sub-stream".', { exact: true }).waitFor()
+  assert.deepEqual(await nav.locator('mark').allTextContents(), ['quokka', 'quokka'])
   await page.getByLabel('Search the workstreams').fill('')
   await until('the list as before', async () => (await listItems(page).count()) === 50)
   assert.equal(await nav.getByText('an older talk').count(), 0)

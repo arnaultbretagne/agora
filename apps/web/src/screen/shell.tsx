@@ -12,7 +12,7 @@ import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
 import { useList, useSearch, useWords, type ListFeed } from '../agora/hooks.ts'
 import { useAgora } from '../agora/runtime.tsx'
-import { harnessName, merged, sections, type ListRow, type WorkstreamState } from '../agora/view.ts'
+import { excerpt, harnessName, merged, sections, type Excerpt, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
 import { Thread } from './thread.tsx'
 import { useVisualViewport } from './viewport.ts'
@@ -83,7 +83,7 @@ const Below: FC<{ below: NonNullable<ListRow['below']> }> = ({ below }) =>
  * A row of the list (docs/specs/assistant-ui.md, "Sidebar"): its title, and its state's dot or "waiting for
  * you". A row with sub-streams has a chevron before it; folded, what lies under it shows at its end.
  */
-const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open: boolean; toggle: () => void }; match?: string }> = ({
+const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open: boolean; toggle: () => void }; match?: Excerpt }> = ({
   w,
   active,
   onOpen,
@@ -125,7 +125,11 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
         ) : (
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate">{w.title}</span>
-            <span className="text-muted-foreground/80 truncate text-[11.5px]">{match}</span>
+            <span className="text-muted-foreground/80 truncate text-[11.5px]">
+              {match.before}
+              <mark className="text-foreground bg-transparent">{match.text}</mark>
+              {match.after}
+            </span>
           </span>
         )}
         {waiting ? (
@@ -354,7 +358,7 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
   const foundInFolder = useSearch(api, 'agents', search, account.email !== null)
   const words = useWords(api, search)
   const answered = wanted !== '' && found?.text === wanted && words?.text === wanted
-  const matches = useMemo(() => new Map((words?.hits ?? []).map((h) => [h.row.id, h.text])), [words])
+  const matches = useMemo(() => new Map((words?.hits ?? []).map((h) => [h.row.id, excerpt(h.text, words!.text)])), [words])
   const rows = useMemo(
     () => (answered ? merged(found!.rows, foundInFolder?.rows ?? [], words!.hits.map((h) => h.row)) : list.rows),
     [answered, found, foundInFolder, words, list.rows],

@@ -711,6 +711,27 @@ export function merged(...lists: readonly (readonly ListRow[])[]): ListRow[] {
   return [...byId.values()].sort((a, b) => changed(b) - changed(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 }
 
+/** A matching line as a row shows it: what comes before the text, the text, what follows. */
+export interface Excerpt {
+  readonly before: string
+  readonly text: string
+  readonly after: string
+}
+
+/**
+ * A search's matching line under a row's title (docs/specs/assistant-ui.md, "Sidebar"): from the word before the
+ * text, so that a narrow row shows it, the text apart to be marked. The line whole when the text is not in it.
+ */
+export function excerpt(line: string, text: string, lead = 16): Excerpt {
+  const found = text === '' ? null : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').exec(line)
+  if (!found) return { before: line, text: '', after: '' }
+  let start = Math.max(0, found.index - lead)
+  const space = start > 0 ? line.indexOf(' ', start) : -1
+  if (space >= 0 && space < found.index) start = space + 1
+  const end = found.index + found[0].length
+  return { before: `${start > 0 ? '…' : ''}${line.slice(start, found.index)}`, text: found[0], after: line.slice(end) }
+}
+
 // ---------------------------------------------------------------- messages
 
 export function messagesOf(state: ThreadState): ThreadMessageLike[] {
