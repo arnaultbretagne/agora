@@ -256,3 +256,21 @@ test('S10 replayed history outside any turn, reasoning, a question to the person
     ['## 1 · 2026-11-02 09:00 · you', 'hello', '## 1 · agent', 'the answer'],
   )
 })
+
+test('S11 a pattern opening with its own options, then a literal: as PostgreSQL reads them, line by line still', async (t) => {
+  const b = await bench(t)
+  const owner = randomUUID()
+  await craft(b, owner, [{ user: 'the Kube cluster\na kube node\nk.be written as such' }], { changedAt: '2026-11-02 08:00:00+00' })
+  const count = async (pattern: string) => {
+    const { status, body } = await searchOf(b.url, owner, `pattern=${encodeURIComponent(pattern)}&output_mode=count`)
+    assert.equal(status, 200, pattern)
+    return (body.results as { count: number }[])[0]?.count ?? 0
+  }
+  // Case matched, the control: one line.
+  assert.equal(await count('kube'), 1)
+  // Its own options: case ignored, as -i; `^` still at each line's start, not the text's alone.
+  assert.equal(await count('(?i)KUBE'), 2)
+  assert.equal(await count('(?i)^A KUBE'), 1)
+  // A literal: `.` as written, never any character.
+  assert.equal(await count('***=k.be'), 1)
+})

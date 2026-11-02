@@ -102,11 +102,13 @@ $$;
 -- An element's text in a transcript (docs/specs/search.md, "The transcript"): what the catch-up gives of it
 -- (docs/specs/log.md, "Continuing", "An exchange"). One expression, no sub-select, so that PostgreSQL inlines
 -- it in the queries that call it: a search calls it for every message, and a call costs more than the text.
+-- Its helper is named with its schema: PostgreSQL computes an index's expression with `pg_catalog` alone in
+-- its search path, and objects_text below is one.
 CREATE OR REPLACE FUNCTION transcript_text(element_type text, element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE element_type
     WHEN 'agent_message_chunk' THEN btrim(coalesce(element->>'text', ''), E' \t\r\n')
     WHEN 'tool' THEN '[tool: ' || coalesce(nullif(element->>'title', ''), 'unnamed') || CASE WHEN element->>'status' = 'failed' THEN ' — failed' ELSE '' END || ']'
-    WHEN 'user' THEN transcript_user_text(element)
+    WHEN 'user' THEN public.transcript_user_text(element)
   END
 $$;
 -- Workstreams' transcripts (docs/specs/search.md, "The transcript"): each exchange as numbered lines, in the
@@ -134,6 +136,13 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
   SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
   FROM parts p CROSS JOIN LATERAL regexp_split_to_table(nullif(p.text, ''), E'\n') WITH ORDINALITY AS l(text, ord)
 $$;
+-- Search's index (docs/specs/search.md, "Search"): the trigrams of each message's and tool's text, so that a
+-- pattern with three characters in a row reads only the elements that may hold it. PostgreSQL keeps it with
+-- what transcript_text returned when each element was written: a change to what that function returns
+-- rebuilds it (REINDEX INDEX objects_text) in the same file.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS objects_text ON objects USING gin (transcript_text(type, object) gin_trgm_ops)
+ WHERE kind = 'element' AND type IN ('user', 'agent_message_chunk', 'tool');
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM PUBLIC;
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;

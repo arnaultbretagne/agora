@@ -423,7 +423,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | `sessions` | id | Workstream, execution, ACP session id, the positions where it opened and ended. |
 | `diagnostics` | id | Execution, connection, receive ordinal, direction, reason, size, SHA-256, time. |
 | `anchors` | id | Workstream, execution, Session, metadata, content (`bytea`). A Workstream keeps its last anchor per harness: one stored removes the earlier ones of its harness. |
-| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; the thread position of its last change; an element's `type`, in a column of its own, for search (`search.md`). |
+| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; the thread position of its last change; an element's `type`, in a column of its own, and its text's trigrams, in an index (`objects_text`, PostgreSQL's `pg_trgm`), for search (`search.md`). |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
 | `lists` | Owner | The list's last position; its owner is a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
 | `listings` | Workstream | Its list's owner, position, `changedAt`, title, the row. |

@@ -37,6 +37,19 @@ export function postgresPattern(pattern: string): string {
   return out
 }
 
+/**
+ * A pattern for `~`, the operator the index of texts serves, which takes no flags: line by line (`n`) asked inside
+ * it, before the options it opens with — theirs win, as over flags — and after its director. A literal (`***=`)
+ * has no lines to mind and takes no options.
+ */
+export function inLines(pattern: string): string {
+  if (pattern.startsWith('***=')) return pattern
+  const director = pattern.startsWith('***:') ? '***:' : ''
+  const rest = pattern.slice(director.length)
+  const options = /^\(\?([a-z]+)\)/.exec(rest)
+  return options ? `${director}(?n${options[1]!})${rest.slice(options[0].length)}` : `${director}(?n)${rest}`
+}
+
 /** A line cut to 300 characters around a match starting at `at` (1-based; 0 for none), the cuts marked. */
 function around(text: string, at: number): string {
   if (text.length <= AROUND) return text
@@ -47,10 +60,10 @@ function around(text: string, at: number): string {
 const typesOf = (tools: boolean) => (tools ? ['user', 'agent_message_chunk', 'tool'] : ['user', 'agent_message_chunk'])
 const kindsOf = (tools: boolean) => (tools ? ['user', 'agent', 'tool'] : ['user', 'agent'])
 
-/** Refuses a pattern PostgreSQL cannot compile, before anything is read. */
+/** Refuses a pattern PostgreSQL cannot compile, as lines read it and as the index's operator does, before anything is read. */
 async function compiled(pool: Pool, pattern: string, flags: string): Promise<void> {
   try {
-    await pool.query('SELECT regexp_like($1, $2, $3)', ['', pattern, flags])
+    await pool.query('SELECT regexp_like($1, $2, $3), $1 ~ $4', ['', pattern, flags, inLines(pattern)])
   } catch (error) {
     if ((error as { code?: string }).code === '2201B') throw new Error('invalid_pattern')
     throw error
@@ -71,14 +84,15 @@ export async function search(pool: Pool, owners: readonly string[], q: SearchQue
   // Line by line: `.` and anchors never cross a line break.
   const flags = q.ignoreCase ? 'ni' : 'n'
   await compiled(pool, pattern, flags)
-  // The Workstreams with an element that may hold a matching line; their lines decide below.
-  const params: unknown[] = [typesOf(q.tools), owners, pattern, flags]
+  // The Workstreams with an element that may hold a matching line, through the index of their texts' trigrams
+  // (objects_text), which serves `~` and `~*`; their lines decide below.
+  const params: unknown[] = [typesOf(q.tools), owners, inLines(pattern)]
   if (q.workstream !== null) params.push(q.workstream)
   const found = (
     await pool.query(
       `SELECT e.workstream FROM objects e JOIN workstreams w ON w.id = e.workstream LEFT JOIN listings l ON l.workstream = e.workstream
-       WHERE e.kind = 'element' AND e.type = ANY($1) AND e.object ? 'turn' AND w.owner = ANY($2)${q.workstream !== null ? ' AND e.workstream = $5' : ''}
-         AND regexp_like(transcript_text(e.type, e.object), $3, $4)
+       WHERE e.kind = 'element' AND e.type = ANY($1) AND e.object ? 'turn' AND w.owner = ANY($2)${q.workstream !== null ? ' AND e.workstream = $4' : ''}
+         AND transcript_text(e.type, e.object) ${q.ignoreCase ? '~*' : '~'} $3
        GROUP BY e.workstream, l.changed_at ORDER BY l.changed_at DESC NULLS LAST, e.workstream DESC`,
       params,
     )
