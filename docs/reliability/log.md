@@ -30,6 +30,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R22 | 2026-11-01 | `3511c86`, then `6bd9fe5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the list's cases on the log's HTTP routes served in the test process by a projector of their own, the entries' times chosen a second apart, without the proxy and with its header. At `6bd9fe5`, `list.test.ts` alone, L85 reading the list live. Beside them, the back-fill timed once on 1,500 Workstreams with a view and no row: 4.5 s. |
 | R23 | 2026-11-01 | `4d7e0f4` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; `GET /api/workstreams` gone, a Workstream's view read in its thread, the lists through `GET /api/workstreams/page`, with and without `X-Forwarded-Email`. |
 | R24 | 2026-11-01 | `bd2f569` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the tree's cases on the lists' bench (`packages/log/test/lists.ts`), entries a second apart, with and without the proxy's header. Beside it, the one-off mapping script on a throwaway database shaped as production: the dry run changed nothing, applied it moved the 33, run again it refused. |
+| R25 | 2026-11-02 | `71a5cdb` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the thread read from the objects, real bridges and the mock agent on FakeKube. A first run that day failed L19 alone: the restarted lab's port was taken meanwhile (`EADDRINUSE`) while a restore ran on the same server; L19 alone then passed three times. Beside it, the schema applied to a copy of production's database, dumped that day: 121,438 thread rows, 88,556 objects, 168 anchors. |
 
 ## Cases
 
@@ -68,8 +69,11 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L22 | — | local | R10 | proven | The hash recorded for core projector 4, `3e8f9051…`, incrementally and through a rebuild. |
 | L22 | — | local | R14 | proven | The hash recorded again for core projector 5, `5738029b…`, incrementally and through a rebuild. |
 | L23 | — | local | R1 | proven | Every assertion held. |
+| L23 | — | local | R25 | proven | The reset at 15, the 7 objects after it, the last at 22; the dropped object gone, the other projector's kept. |
 | L24 | real: the stream closed before `snapshot-end`, updates committing meanwhile | local | R1 | proven | Every assertion held. |
+| L24 | real: the stream closed before `snapshot-end`, updates committing meanwhile | local | R25 | proven | Every assertion held: live rows after H, strictly increasing; the client at the stored state. |
 | L25 | — | local | R1 | proven | Every assertion held. |
+| L25 | — | local | R25 | proven | Every assertion held: the projector writes positions and the last reset but deletes no thread row; the anchor role deletes anchors but updates none. |
 | L26 | simulated: forced-state, the Workstream's and the thread's last positions set beyond 2⁵³ | local | R1 | proven | Every assertion held. |
 | L27 | real: two migration processes at once, the same new logins | local | R1 | proven | Every assertion held. |
 | L27 | real: two migration processes at once, the same new logins, other test files creating and dropping their databases meanwhile | local | R12 | proven | Every assertion held in each of the three runs; the databases compared are those there both before and after. |
@@ -155,11 +159,16 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L92 | — | local | R24 | proven | Six levels down: depth 6 in the table and in the row. |
 | L93 | — | local | R24 | proven | The sub-stream two levels down: 200, its parent, depth 2, its title; one without an entry: 404 `unknown_workstream`; another person's: 404 `unknown_workstream`. |
 | L94 | — | local | R24 | proven | `GATEWAY` found the sub-stream two levels down, with its parent; without a text, the owner's list the root alone. |
+| L95 | — | local | R25 | proven | 7 changes after position 7, 4 rows read; the text once, at 13, as stored. |
+| L96 | simulated: a test projector whose fold drops one of its two objects from a given entry on | local | R25 | proven | The reset at 20, the 10 objects after it; the dropped object gone, the kept one there. |
+| L97 | — | local | R25 | proven | 3 anchors left: the earlier one of the harness removed; storing the last again removed nothing. |
+| L98 | simulated: forced-state, the `thread` table and its rows written as the schema before left them | local | R25 | proven | Objects at 5 and 6, the reset at 3, `thread` gone, 2 anchors left; read from 2, the reset then both; from 5, the one changed since; applied again, unchanged. |
+| L98 | — | local | R25 | proven | On the copy of production: all 88,556 objects at their last change, none at zero; the 42 last resets; `thread` gone; 94 anchors left, exactly the last per Workstream and harness; 770 MB, then 588 MB, 421 MB once compacted. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
 | What the real harnesses accept, in the cluster's catalogue, and the blocks they are given (L67 and L68 run with the mock agent) | #147 |
-| A long streamed message: each chunk rewrites its whole element and a thread row, quadratic in its length | #113 |
+| A long streamed message: each chunk rewrites its whole element, quadratic in its length | #113 |
 | A failed restore — `anchor_missing`, `restore_failed` — and a Session opening left unanswered | #109 |
