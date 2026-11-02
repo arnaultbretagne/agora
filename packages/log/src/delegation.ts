@@ -8,7 +8,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js'
 import { offers } from '@agora/credentials'
 import { canonical, object } from './json.ts'
 import { DELEGATION_META, REPORT_META } from './marks.ts'
-import { isApproval, type State } from './state.ts'
+import type { State } from './state.ts'
 import type { Entry } from './store.ts'
 import type { Workstreams } from './workstreams.ts'
 
@@ -88,8 +88,11 @@ const markOf = (entry: Entry, key: string): Record<string, unknown> | null => {
 
 export class Delegations {
   private readonly workstreams: Workstreams
-  /** The delegates Agora knows: each delegate's Workstream, to its caller's. */
-  private readonly delegates = new Map<string, string>()
+  /**
+   * The delegates with an outcome not yet reported, each to its caller's Workstream: the others need nothing more until
+   * `to` gives them a step. A new entry per step, so that one forgotten as reported is never a step just given.
+   */
+  private readonly delegates = new Map<string, { readonly caller: string }>()
   /** The approvals a call holds, by the caller's Workstream. */
   private readonly held = new Map<string, { position: string; settle: (s: Settled) => void }>()
   private ticking = false
@@ -116,17 +119,19 @@ export class Delegations {
 
   // ---------------------------------------------------------------- start and the clock
 
-  /** At start: every delegate from the log; the approvals no call holds any more expire. */
+  /** At start: the delegates with a step not yet reported, from the log; the approvals no call holds any more expire. */
   async start(): Promise<void> {
-    const found = await this.store.writer.query("SELECT workstream, content::text FROM entries WHERE kind='delegation.started'")
-    for (const row of found.rows as { workstream: string; content: string }[]) {
-      const caller = object(JSON.parse(row.content))?.caller
-      if (typeof caller === 'string') this.delegates.set(row.workstream, caller)
-    }
-    for (const caller of new Set(this.delegates.values())) {
-      const state = await this.store.state(caller)
-      if (isApproval(state.question)) await this.expire(caller, state.question!.position)
-    }
+    const found = await this.store.writer.query(
+      `SELECT d.workstream, d.content->>'caller' AS caller FROM entries d WHERE d.kind = 'delegation.started' AND EXISTS (
+         SELECT 1 FROM entries s WHERE s.workstream = d.workstream AND s.kind IN ('delegation.started', 'delegation.continued') AND NOT EXISTS (
+           SELECT 1 FROM entries r WHERE r.workstream = s.workstream AND r.kind = 'delegation.reported' AND r.content->>'step' = s.position::text))`,
+    )
+    for (const row of found.rows as { workstream: string; caller: string | null }[]) if (row.caller !== null) this.delegates.set(row.workstream, { caller: row.caller })
+    // Every caller's, as its view shows them pending: the call that held each ended with the process before.
+    const pending = await this.store.projector.query(
+      "SELECT workstream, object->>'position' AS position FROM objects WHERE kind='element' AND type='question' AND object->>'kind'='approval' AND object->>'status'='pending'",
+    )
+    for (const row of pending.rows as { workstream: string; position: string }[]) await this.expire(row.workstream, row.position)
   }
 
   /** Each second: instructions to write, reminders to send, outcomes to report. */
@@ -135,11 +140,17 @@ export class Delegations {
     this.ticking = true
     try {
       const due = new Map<string, { delegate: string; step: Step; outcome: string }[]>()
-      for (const [delegate, caller] of this.delegates) {
-        for (const outcome of await this.advance(delegate)) {
-          const list = due.get(caller) ?? []
+      for (const [delegate, known] of this.delegates) {
+        const outcomes = await this.advance(delegate)
+        // Every step reported: forgotten, unless `to` gave it another meanwhile.
+        if (outcomes === null) {
+          if (this.delegates.get(delegate) === known) this.delegates.delete(delegate)
+          continue
+        }
+        for (const outcome of outcomes) {
+          const list = due.get(known.caller) ?? []
           list.push({ delegate, ...outcome })
-          due.set(caller, list)
+          due.set(known.caller, list)
         }
       }
       for (const [caller, outcomes] of due) await this.deliver(caller, outcomes)
@@ -220,25 +231,30 @@ export class Delegations {
         ...(approval !== null ? { approval } : {}),
       },
     })
-    this.delegates.set(delegate, caller.workstream)
+    this.delegates.set(delegate, { caller: caller.workstream })
     return `started ${delegate} · ${line(instructions)}`
   }
 
   /** `to`: the next message of one of the caller's delegates, once its turn has ended. */
   private async continueDelegate(caller: Caller, to: string, instructions: string, schema: Record<string, unknown> | null, args: Readonly<Record<string, unknown>>): Promise<string> {
     for (const key of ['harness', 'model', 'effort', 'rights']) if (args[key] !== undefined && args[key] !== null) throw new Refused(`invalid_query: ${key}`)
-    if (this.delegates.get(to) !== caller.workstream) throw new Refused('not_a_delegate')
+    const delegate = await this.store.writer.query(
+      "SELECT 1 FROM workstreams w WHERE w.id = $1 AND w.parent = $2 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
+      [to, caller.workstream],
+    )
+    if (delegate.rowCount === 0) throw new Refused('not_a_delegate')
     const state = await this.store.state(to)
     if (state.active || (await this.pending(to)).length > 0) throw new Refused('delegate_busy')
     await this.workstreams.record(to, { kind: 'delegation.continued', content: { instructions, ...(schema !== null ? { output_schema: schema } : {}) } })
+    this.delegates.set(to, { caller: caller.workstream })
     return `started ${to} · ${line(instructions)}`
   }
 
   /** The caller's delegates awaiting approval or working (docs/specs/delegation.md, "A delegation"). */
   private async working(caller: string): Promise<number> {
     let count = this.held.has(caller) ? 1 : 0
-    for (const [delegate, of] of this.delegates) {
-      if (of !== caller) continue
+    for (const [delegate, known] of this.delegates) {
+      if (known.caller !== caller) continue
       const state = await this.store.state(delegate)
       if (state.current && !state.current.ended && (state.active || (await this.pending(delegate)).length > 0)) count++
     }
@@ -392,13 +408,14 @@ export class Delegations {
   }
 
   /**
-   * One delegate, one second: its instructions written when it can take them, a reminder when a result is missing,
-   * and the outcomes not yet reported.
+   * One delegate, one beat: its instructions written when it can take them, a reminder when a result is missing, and
+   * the outcomes not yet reported; null once every step is reported.
    */
-  private async advance(delegate: string): Promise<{ step: Step; outcome: string }[]> {
+  private async advance(delegate: string): Promise<{ step: Step; outcome: string }[] | null> {
     const { entries, state, steps } = await this.steps(delegate)
     const prompts = entries.filter((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt')
     const reported = new Set(entries.filter((e) => e.kind === 'delegation.reported').map((e) => String(object(e.content)?.step)))
+    if (steps.every((step) => reported.has(step.position))) return null
     const results = entries.filter((e) => e.kind === 'delegation.result')
     const outcomes: { step: Step; outcome: string }[] = []
     for (const step of steps) {
@@ -448,7 +465,7 @@ export class Delegations {
 
   /** Writes a step's instructions once the delegate can take a message; continues its execution if it has ended. */
   private async write(delegate: string, state: State, step: Step): Promise<void> {
-    const caller = this.delegates.get(delegate)!
+    const caller = this.delegates.get(delegate)!.caller
     const e = state.current
     if (!e || e.ended) return this.resume(delegate, state)
     if (!e.session || state.active) return

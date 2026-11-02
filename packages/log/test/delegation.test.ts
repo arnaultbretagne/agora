@@ -274,6 +274,21 @@ test('D14 a restart with an outcome not yet reported: a fresh engine on the same
   assert.equal((await kinds(lab, delegate, 'delegation.reported')).length, 1)
 })
 
+test('D17 a restart while an approval waits, in a caller with no delegate yet: the approval marked expired at start', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 5_000 })
+  const call = (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: 'never asked again', harness: 'mock', rights: ['internet'] } })
+  await until('the approval', async () => (await lab.state(ws)).question)
+  // Another engine, as after a restart: the call that held the approval is gone with the one before.
+  await new Delegations(lab.workstreams, { manual: true }).start()
+  const [approval] = await elements(lab, ws, 'question')
+  assert.equal(approval?.status, 'expired')
+  assert.equal((await kinds(lab, ws, 'question.expired')).length, 1)
+  assert.equal((await lab.state(ws)).question, null)
+  // The call before, its engine's clock aside: answered expired, the fact not written twice.
+  assert.equal(text(await call), 'expired')
+  assert.equal((await kinds(lab, ws, 'question.expired')).length, 1)
+})
+
 test('C65 a Create, then a Scope, naming agora:submit; a delegate asked for a result: unknown_profile both times; the delegate’s execution holds it, given by Agora', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const other = await lab.workstream()

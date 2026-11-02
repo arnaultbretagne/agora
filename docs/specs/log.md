@@ -38,7 +38,7 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `delegation.continued` | `to` gives a delegate its next message, in the delegate's Workstream. | The instructions, and the `output_schema` if any. |
 | `delegation.result` | A delegate's `submit` fits its schema, in the delegate's Workstream. | The step — the position of its `delegation.started` or `delegation.continued` —, the turn, and the result. |
 | `delegation.reported` | A report carrying a delegate's outcome is accepted, in the delegate's Workstream. | The step whose outcome it carried, and the report's command id in the caller's Workstream. |
-| `question.expired` | An approval reaches its expiry unanswered. | The question's position. |
+| `question.expired` | An approval reaches its expiry unanswered, or the server starts while it waits (`delegation.md`, "Approval"). | The question's position. |
 
 | Rule | Detail |
 | --- | --- |

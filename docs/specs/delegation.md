@@ -49,6 +49,7 @@ sequenceDiagram
 | Approve | The Answer: the delegate starts; the call answers `started`. |
 | Writing | A Write in the caller's Workstream while the approval is pending is its refusal, accepted whatever the turn: no prompt is sent, the approval is answered with the words, and the call answers `refused` with them. |
 | No answer | At its expiry, the call answers `expired` and the approval is marked `expired`. |
+| A restart | An approval whose call ended with the server is marked `expired` as the server starts: no call is left to start anything. |
 | For that call alone | An approval starts that delegate, that once; the next call beyond the caller's rights asks again. |
 | One at a time | A call needing approval while another approval of the caller's Workstream waits is refused, `approval_pending`. |
 | The call kept open | A `delegate` call answers in an SSE stream: while Agora holds it, a progress notification every 30 s, then the call's answer (`mcp.md`, "The path"). |
@@ -93,6 +94,7 @@ sequenceDiagram
 | D14 | A restart with an outcome not yet reported | Reported after the restart, once. |
 | D15 | Live, each harness — Claude Code, Codex, opencode — given `agora:delegate`, delegating a typed task within its rights | `started`; the delegate submits; the report reaches the caller, which uses the result. |
 | D16 | Live, each harness calling `delegate` beyond its rights | The approval names the caller's `delegate` tool line, by its id on Claude Code and by its arguments on the others. |
+| D17 | A restart while an approval waits, in a caller with no delegate yet | The approval marked `expired` at start. |
 
 ## To be specified
 

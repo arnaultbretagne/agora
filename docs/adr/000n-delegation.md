@@ -1,7 +1,7 @@
 # ADR 000n — Delegation
 
-- **Status:** proposed
-- **Date:** 2026-11-02
+- **Status:** accepted
+- **Date:** 2026-11-03
 
 ## Context
 
@@ -63,6 +63,7 @@
 - The log gains the delegation's facts, report turns marked as Agora's, approvals with an expiry,
   and a Write that refuses an approval instead of prompting.
 - A turn's maximum duration no longer counts the time its approvals waited.
+- A delegate's view and its row in the list carry its state, which its caller's `delegate` line shows.
 - A call Agora holds answers in an SSE stream; every other message stays one JSON answer.
 - The Prefect lead flow becomes one composition among others, to retire once teams are built of
   delegations.
