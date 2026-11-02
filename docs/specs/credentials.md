@@ -592,6 +592,7 @@ call. The test page does it itself when the agent offers the option.
 | C60 | The gateway's credential replaced while a response from the app is under way | That response ends whole; the next request carries the new credential. |
 | C61 | In the cluster, the route and the gateway gate deployed, a preview open: the judge with `previews`; a browser without a session; the client `agora_gateway_previews` asked for a device code and an authorization code | The judge reaches the preview's app through the gateway gate; the browser is sent to Pocket-ID by the browser gate; Pocket-ID gives no user token for the client. |
 | C62 | In Pocket-ID, `agora_gateway_previews` given a second secret, a token asked with each; the first secret deleted; then the client deleted | A token for each while both exist; once the first is deleted, it is refused and the second still answered; once the client is deleted, neither; the tokens already issued still taken by the gateway gate until they expire, and refused once `client-<id>` is out of its identities. |
+| C63 | The grant of `agora:read`; a pool declaring it; `agora`, `agora:write` | Only `mcp.agora.internal`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host refused; never the Internet's grant, which opens nothing of it; not a base profile; the others unknown. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

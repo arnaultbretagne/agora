@@ -26,8 +26,8 @@ Both are marked read-only (`readOnlyHint`). Their parameters are the search's an
 
 | Tool | Parameters | Answer |
 | --- | --- | --- |
-| `search` | `pattern`, required; `output_mode`: `workstreams_with_matches` by default, `content`, `count`; `ignore_case`; `before`, `after`, `context`, 0 to 50; `head_limit`, 1 to 100, 20 by default; `offset`; `tools`; `workstream`. | `workstreams_with_matches`: for each Workstream, `<id> · <title> · <count> lines`, then its latest matching line, `<line>:<text>`. `content`: `<id>:<line>:<text>` for a match, `<id>-<line>-<text>` for context, `--` between groups that do not touch. `count`: `<id>:<count> · <title>`. When more follow, a last line `(more: offset <next>)`. Nothing found: `(no match)`. |
-| `read` | `workstream`, required; `offset`, from 1, 1 by default; `limit`, 1 to 2,000, 2,000 by default. | Each line `<number>` and a tab, then its text; then `(lines <first>–<last> of <total>; next offset <next>)`, or `(lines <first>–<last> of <total>)` at the end. From beyond the end: `(no line from <offset>; <total> lines)`. |
+| `search` | `pattern`, required; `output_mode`: `workstreams_with_matches` by default, `content`, `count`; `ignore_case`; `before`, `after`, `context`, 0 to 50; `head_limit`, 1 to 100, 20 by default; `offset`; `tools`; `workstream`. | `workstreams_with_matches`: for each Workstream, `<id> · <title> · <count> lines` — `1 line` for one —, then, indented by two spaces, its latest matching line, `<line>:<text>`. `content`: `<id>:<line>:<text>` for a match, `<id>-<line>-<text>` for context, `--` between groups that do not touch. `count`: `<id>:<count> · <title>`. When more follow, a last line `(more: offset <next>)`. Nothing found: `(no match)`. |
+| `read` | `workstream`, required; `offset`, from 1, 1 by default; `limit`, 1 to 2,000, 2,000 by default. | Each line `<number>` and a tab, then its text; then `(lines <first>–<last> of <total>; next offset <next>)`, or `(lines <first>–<last> of <total>)` at the end. From beyond the end: `(no line from <offset>; <total> lines)`, `1 line` for one. |
 
 | Description | What it tells the agent |
 | --- | --- |
@@ -48,11 +48,11 @@ Both are marked read-only (`readOnlyHint`). Their parameters are the search's an
 | M1 | An execution created with `agora:read`, then one without; their `session/new` | `mcpServers` holds `agora`, `https://mcp.agora.internal/mcp`, no headers; then `[]`. |
 | M2 | `tools/list` from an execution with `agora:read` | `search` and `read`, each read-only, with the parameters above. |
 | M3 | A word said in another of the person's Workstreams and in a sub-stream of it, and in another person's; `search` from an execution of the person's | The two, the most recently changed first, each with its latest matching line; never the other person's. |
-| M4 | `read` of one of the person's Workstreams from an offset with a limit; of another person's | Its numbered lines and the next offset; `unknown_workstream`. |
-| M5 | A message to port 8082 without `x-agora-execution`; naming an execution Agora does not know | 401 each time, nothing read. |
-| M6 | An execution scoped out of `agora:read`, calling `search` on port 8082 | `not_allowed`. |
+| M4 | `read` of one of the person's Workstreams from an offset with a limit; to its end; beyond it; of another person's | Its numbered lines and the next offset; its last lines and no next offset; `(no line from <offset>; <total> lines)`; `unknown_workstream`. |
+| M5 | A message to port 8082 without `x-agora-execution`; naming an execution Agora does not know; naming one without `agora ` before it; then a `GET` | 401 each time, nothing read, the same message accepted once the execution is named as the gateway names it; 405. |
+| M6 | An execution without `agora:read` — never given it, or scoped out of it —, listing the tools and calling `search` on port 8082 | No tool listed; `not_allowed`. |
 | M7 | `search` with the pattern `(`; with `head_limit` 500 | `invalid_pattern`; `invalid_query` naming `head_limit`. |
-| M8 | Through the gateway, an execution without `agora:read` sending to `mcp.agora.internal`; one with it sending `x-agora-execution` naming another execution | 403 at the gateway, nothing at Agora; the token's own execution reaches Agora. |
+| M8 | Through the gateway: an execution with `agora:read`, sending `x-agora-execution` itself or not; one without it — `anthropic`, `internet` —, one from another address, one on another path | The message reaches Agora with the token's own execution, whatever the sandbox sent; 403 at the gateway for the others, nothing reaching Agora. |
 | M9 | Live: a turn of Claude Code, of Codex and of opencode, each asked to find a past conversation by a word and quote it | Each calls `search`, then `read`, through the gateway, and quotes the line. |
 
 ## To be specified

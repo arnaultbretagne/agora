@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { LogStore, Workstreams, logHttp, telemetry } from '@agora/log'
+import { LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { teamFrom, teamHttp } from './team.ts'
@@ -120,6 +120,9 @@ const receiver = createAnchorReceiver({
   verify: (token) => kube.reviewToken(token, audience),
 })
 receiver.listen(number('ANCHOR_PORT', 8081), () => console.log(`- anchor receiver on :${String(number('ANCHOR_PORT', 8081))}`))
+// docs/specs/mcp.md: Agora's MCP server, on a port only the gateway reaches.
+const mcp = createMcpServer(workstreams)
+mcp.listen(number('MCP_PORT', 8082), () => console.log(`- MCP server on :${String(number('MCP_PORT', 8082))}`))
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
@@ -132,6 +135,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
         clearTimeout(forceExit)
         server.close()
         receiver.close()
+        mcp.close()
         process.exit(0)
       })
   })

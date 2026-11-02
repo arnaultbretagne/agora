@@ -301,6 +301,11 @@ export class Projections {
     }
   }
   /** Whether a Workstream exists and belongs to one of `owners`; any owner when none are given. */
+  /** docs/specs/mcp.md, "The path": a Workstream's owner — the person, a sub-stream's being its root's —, or null. */
+  async ownerOf(workstream: string): Promise<string | null> {
+    const found = await this.store.projector.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])
+    return found.rowCount === 1 ? (found.rows[0].owner as string) : null
+  }
   async belongs(workstream: string, owners: readonly string[] | null): Promise<boolean> {
     const found = await this.store.projector.query('SELECT owner FROM workstreams WHERE id=$1', [workstream])
     return found.rowCount === 1 && (owners === null || owners.includes(found.rows[0].owner as string))
