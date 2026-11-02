@@ -422,7 +422,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | `sessions` | id | Workstream, execution, ACP session id, the positions where it opened and ended. |
 | `diagnostics` | id | Execution, connection, receive ordinal, direction, reason, size, SHA-256, time. |
 | `anchors` | id | Workstream, execution, Session, metadata, content (`bytea`). |
-| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions. |
+| `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; an element's `type`, in a column of its own, for search (`search.md`). |
 | `thread` | Workstream, position | Operation, object kind and id, the object. |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
 | `lists` | Owner | The list's last position; its owner is a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |

@@ -10,6 +10,7 @@ import type { Command } from './store.ts'
 import type { ThreadRow } from './projection.ts'
 import { uuid, object, decode, encode, cursor, identity } from './json.ts'
 import { MAX_LINE } from './acp.ts'
+import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode } from './search.ts'
 
 const VALIDATION = new Set([
   'invalid_body',
@@ -17,6 +18,8 @@ const VALIDATION = new Set([
   'invalid_cursor',
   'future_cursor',
   'unknown_folder',
+  'invalid_pattern',
+  'invalid_query',
   'control_refused',
   'invalid_json',
   'duplicate_key',
@@ -51,7 +54,7 @@ export async function logHttp(
     return true
   }
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && url.pathname !== '/api/pools' && url.pathname !== '/api/account') return false
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !['/api/pools', '/api/account', '/api/search'].includes(url.pathname)) return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -119,6 +122,40 @@ export async function logHttp(
       )
       return true
     }
+    if (req.method === 'GET' && url.pathname === '/api/search') {
+      // docs/specs/search.md, "Search": the caller's Workstreams; without the proxy, the owner given.
+      const q = url.searchParams
+      const number = (name: string, fallback: number, max: number) => {
+        const raw = q.get(name)
+        if (raw === null || raw === '') return fallback
+        const value = Number(raw)
+        if (!Number.isInteger(value) || value < 0 || value > max) throw new Error('invalid_query')
+        return value
+      }
+      const flag = (name: string) => q.get(name) === 'true'
+      const pattern = q.get('pattern') ?? ''
+      if (pattern === '') throw new Error('invalid_pattern')
+      const output = (q.get('output_mode') ?? 'workstreams_with_matches') as OutputMode
+      if (!OUTPUT_MODES.includes(output)) throw new Error('invalid_query')
+      const context = number('context', 0, 50)
+      const only = q.get('workstream') === null ? null : uuid(q.get('workstream'))
+      const owners = owned ?? [uuid(q.get('owner'))]
+      if (only !== null && !(await workstreams.projections.belongs(only, owners))) throw new Error('unknown_workstream')
+      const headLimit = number('head_limit', HEAD_LIMIT.default, HEAD_LIMIT.max)
+      if (headLimit === 0) throw new Error('invalid_query')
+      const answer = await search(workstreams.projections.store.projector, owners, {
+        pattern,
+        ignoreCase: flag('ignore_case'),
+        output,
+        before: number('before', context, 50),
+        after: number('after', context, 50),
+        tools: flag('tools'),
+        workstream: only,
+        headLimit,
+        offset: number('offset', 0, 1_000_000),
+      })
+      return reply(200, answer), true
+    }
     if (req.method === 'GET' && url.pathname === '/api/pools') return reply(200, { pools: await workstreams.catalogue() }), true
     if (req.method === 'POST' && url.pathname === '/api/workstreams') {
       const input = await body()
@@ -136,7 +173,7 @@ export async function logHttp(
       reply(200, { id })
       return true
     }
-    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials|row)$/.exec(url.pathname)
+    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials|row|read)$/.exec(url.pathname)
     if (!route) return reply(404, { reason: 'unknown_route' }), true
     const workstream = uuid(decodeURIComponent(route[1]!)),
       verb = route[2]
@@ -151,6 +188,19 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)
+    if (req.method === 'GET' && verb === 'read') {
+      // docs/specs/search.md, "Read": a window of one of the caller's Workstreams' transcript.
+      if (!(await workstreams.projections.belongs(workstream, owned))) throw new Error('unknown_workstream')
+      const value = (name: string, fallback: number, min: number, max: number) => {
+        const raw = url.searchParams.get(name)
+        if (raw === null || raw === '') return fallback
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n < min || n > max) throw new Error('invalid_query')
+        return n
+      }
+      const answer = await read(workstreams.projections.store.projector, workstream, value('offset', 1, 1, 1_000_000_000), value('limit', READ_LIMIT.lines, 1, READ_LIMIT.lines))
+      return reply(200, answer), true
+    }
     if (req.method === 'GET' && verb === 'row') {
       // docs/specs/log.md, "HTTP": a Workstream's row, so that a client climbs its line.
       const row = await workstreams.projections.row(workstream, owned)

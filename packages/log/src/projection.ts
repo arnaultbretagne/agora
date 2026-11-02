@@ -223,9 +223,11 @@ export class Projections {
     projector: Projector,
     item: ProjectedObject,
   ): Promise<void> {
+    // An element's type in its own column, for search (docs/specs/search.md).
+    const type = item.kind === 'element' && typeof item.object.type === 'string' ? item.object.type : null
     const written = await client.query(
-      'INSERT INTO objects(workstream,projector,kind,id,object,first_position,last_position) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(workstream,kind,id) DO UPDATE SET object=excluded.object,first_position=excluded.first_position,last_position=excluded.last_position WHERE objects.projector=excluded.projector',
-      [workstream, projector.name, item.kind, item.id, encode(item.object), item.first_position, item.last_position],
+      'INSERT INTO objects(workstream,projector,kind,id,object,first_position,last_position,type) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8) ON CONFLICT(workstream,kind,id) DO UPDATE SET object=excluded.object,first_position=excluded.first_position,last_position=excluded.last_position,type=excluded.type WHERE objects.projector=excluded.projector',
+      [workstream, projector.name, item.kind, item.id, encode(item.object), item.first_position, item.last_position, type],
     )
     if (written.rowCount !== 1) throw new Error('projector_object_conflict')
   }
@@ -313,8 +315,12 @@ export class Projections {
     if (!found.rowCount || (owners !== null && !owners.includes(found.rows[0].owner as string))) return null
     return decode(found.rows[0].row) as ListRow
   }
-  /** At start: a Workstream with a view and no row in its owner's list gets one; the number written. */
+  /**
+   * At start: an element projected without its type — by a server of the schema before — gets it
+   * (docs/specs/search.md); a Workstream with a view and no row in its list gets one. The number of rows written.
+   */
   async backfill(): Promise<number> {
+    await this.store.projector.query("UPDATE objects SET type = object->>'type' WHERE kind = 'element' AND type IS NULL AND object ? 'type'")
     const missing = await this.store.projector.query(
       "SELECT o.workstream FROM objects o LEFT JOIN listings l ON l.workstream=o.workstream WHERE o.kind='workstream' AND o.id=o.workstream AND l.workstream IS NULL",
     )

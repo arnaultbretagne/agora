@@ -18,6 +18,13 @@ export type Folder = 'agents'
 /** The owner where the proxy passes no identity: the one the client creates with, and lists. */
 export const NOBODY = '00000000-0000-4000-8000-000000000000'
 
+/** A Workstream a search of the exchanges found (docs/specs/search.md, "Search"): its row and its latest matching line. */
+export interface Hit {
+  readonly row: ListRow
+  readonly line: number
+  readonly text: string
+}
+
 /** A page of a list (docs/specs/log.md, "The list"): its rows, and the next page's cursor or null. */
 export interface Page {
   readonly rows: readonly ListRow[]
@@ -88,6 +95,21 @@ export class Api {
     const { status, body } = await this.read(`/api/workstreams/page?${query.toString()}`)
     if (status !== 200) throw new Error(String(body.reason ?? 'unavailable'))
     return { rows: (Array.isArray(body.rows) ? body.rows : []) as ListRow[], next: typeof body.next === 'string' ? body.next : null }
+  }
+
+  /**
+   * The Workstreams whose exchanges hold a text, as typed and ignoring case (docs/specs/search.md, "Search"):
+   * the text is escaped, so that the pattern is the text itself.
+   */
+  async search(text: string): Promise<Hit[]> {
+    const pattern = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const query = new URLSearchParams({ pattern, ignore_case: 'true', head_limit: '50', owner: NOBODY })
+    const { status, body } = await this.read(`/api/search?${query.toString()}`)
+    if (status !== 200) throw new Error(String(body.reason ?? 'unavailable'))
+    return (Array.isArray(body.results) ? body.results : []).flatMap((r) => {
+      const result = r as { row?: ListRow | null; line?: unknown; text?: unknown }
+      return result.row ? [{ row: result.row, line: Number(result.line), text: String(result.text ?? '') }] : []
+    })
   }
 
   /** A Workstream's row (docs/specs/log.md, "HTTP"): its line, for the header; null before its first entry. */

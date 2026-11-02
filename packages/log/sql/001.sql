@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS objects (
  id uuid NOT NULL, object jsonb NOT NULL, first_position bigint NOT NULL, last_position bigint NOT NULL,
  PRIMARY KEY(workstream,kind,id)
 );
+-- An element's type in a column of its own (docs/specs/search.md): what a search filters on without reading
+-- the object. Filled once for the elements projected before it.
+ALTER TABLE objects ADD COLUMN IF NOT EXISTS type text;
+UPDATE objects SET type = object->>'type' WHERE kind = 'element' AND type IS NULL AND object ? 'type';
+CREATE INDEX IF NOT EXISTS objects_type ON objects(type, workstream) WHERE kind = 'element';
 CREATE TABLE IF NOT EXISTS thread (
  workstream uuid NOT NULL REFERENCES workstreams(id), position bigint NOT NULL,
  operation text NOT NULL CHECK(operation IN ('upsert','remove','reset')), kind text, id uuid, object jsonb,
@@ -65,6 +70,48 @@ CREATE TABLE IF NOT EXISTS listings (
  changed_at timestamptz NOT NULL, title text NOT NULL, row jsonb NOT NULL, UNIQUE(owner,position)
 );
 CREATE INDEX IF NOT EXISTS listings_recent ON listings(owner,changed_at DESC,workstream DESC);
+-- An element's text in a transcript (docs/specs/search.md, "The transcript"): what the catch-up gives of it
+-- (docs/specs/log.md, "Continuing", "An exchange").
+CREATE OR REPLACE FUNCTION transcript_text(element_type text, element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE element_type
+    WHEN 'agent_message_chunk' THEN btrim(coalesce(element->>'text', ''), E' \t\r\n')
+    WHEN 'tool' THEN '[tool: ' || coalesce(nullif(element->>'title', ''), 'unnamed') || CASE WHEN element->>'status' = 'failed' THEN ' — failed' ELSE '' END || ']'
+    WHEN 'user' THEN (
+      SELECT string_agg(part, E'\n' ORDER BY i) FROM (
+        SELECT i, CASE b->>'type'
+          WHEN 'text' THEN coalesce(b->>'text', '')
+          WHEN 'resource_link' THEN '[link: ' || coalesce(b->>'name', b->>'uri', '') || ']'
+          WHEN 'resource' THEN '[resource: ' || coalesce(b->'resource'->>'uri', '') || ']'
+          ELSE '[' || coalesce(b->>'type', 'content') || ']' END AS part
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(element->'content') = 'array' THEN element->'content' ELSE '[]'::jsonb END) WITH ORDINALITY AS x(b, i)
+      ) parts WHERE part <> '')
+  END
+$$;
+-- Workstreams' transcripts (docs/specs/search.md, "The transcript"): each exchange as numbered lines, in the
+-- order of its turn's prompt — its header and the user's text, then the agent's header, its text and its tools,
+-- in the order of their first positions. Elements outside any turn are left out.
+CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
+  RETURNS TABLE(workstream uuid, line bigint, exchange bigint, kind text, text text) LANGUAGE sql STABLE AS $$
+  WITH turns AS (
+    SELECT o.workstream, o.id AS turn, o.object->>'startedAt' AS started,
+      row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange
+    FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
+  ), parts AS (
+    SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 'header' AS kind,
+      '## ' || t.exchange || coalesce(' · ' || to_char(t.started::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') || ' · you' AS text
+    FROM turns t
+    UNION ALL
+    SELECT t.workstream, t.exchange, 2, 0, 'header', '## ' || t.exchange || ' · agent' FROM turns t
+    UNION ALL
+    SELECT t.workstream, t.exchange, CASE e.type WHEN 'user' THEN 1 ELSE 3 END, e.first_position,
+      CASE e.type WHEN 'user' THEN 'user' WHEN 'tool' THEN 'tool' ELSE 'agent' END, transcript_text(e.type, e.object)
+    FROM objects e JOIN turns t ON t.workstream = e.workstream AND t.turn::text = e.object->>'turn'
+    WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool')
+  )
+  SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
+  FROM parts p CROSS JOIN LATERAL regexp_split_to_table(p.text, E'\n') WITH ORDINALITY AS l(text, ord)
+  WHERE p.text IS NOT NULL AND p.text <> ''
+$$;
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM PUBLIC;
 REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,thread,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;
@@ -85,7 +132,9 @@ GRANT SELECT(id,workstream,execution,session,metadata,time) ON anchors TO agora_
 GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
 GRANT SELECT(workstream,last_position), INSERT(workstream), UPDATE(last_position) ON threads TO agora_projector;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_projector;
-GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position), INSERT(workstream,projector,kind,id,object,first_position,last_position), UPDATE(object,first_position,last_position) ON objects TO agora_projector;
+GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type), INSERT(workstream,projector,kind,id,object,first_position,last_position,type), UPDATE(object,first_position,last_position,type) ON objects TO agora_projector;
+REVOKE ALL ON FUNCTION transcript_text(text, jsonb), transcript(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION transcript_text(text, jsonb), transcript(uuid[]) TO agora_projector;
 GRANT DELETE ON objects TO agora_projector;
 GRANT SELECT(workstream,projector,version,position), INSERT(workstream,projector,version,position), UPDATE(version,position) ON checkpoints TO agora_projector;
 GRANT DELETE ON checkpoints TO agora_projector;

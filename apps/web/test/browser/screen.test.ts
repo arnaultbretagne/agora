@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U58: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -969,7 +969,7 @@ test('U55 the title of a Workstream not loaded typed in Search, in another case:
   await until('the 50 most recent', async () => (await listItems(page).count()) === 50)
   assert.equal(await nav.getByText('Quarterly Kubernetes audit').count(), 0, 'not loaded')
   await page.getByLabel('Search the workstreams').fill('kubernetes AUDIT')
-  await nav.getByText('Quarterly Kubernetes audit').waitFor()
+  await nav.getByText('Quarterly Kubernetes audit', { exact: true }).waitFor()
   assert.equal(await listItems(page).count(), 1)
   await page.getByLabel('Search the workstreams').fill('')
   await until('the list as before', async () => (await listItems(page).count()) === 50)
@@ -1046,5 +1046,51 @@ test('U58 a sub-stream two levels down opened by its address: its line unfolds; 
   await until('two parents in the header', async () => (await parents.count()) === 2)
   await parents.first().click()
   await page.waitForURL(new RegExp(`/w/${root}$`))
+  await page.context().close()
+})
+
+/** A Workstream that talked with the mock agent: created (under `parent`, or the owner's), started, its messages sent and answered. */
+async function talked(id: string, at: { owner?: string; parent?: string }, messages: readonly string[]): Promise<void> {
+  assert.equal((await server.post('/api/workstreams', { id, ...at })).status, 200)
+  assert.equal((await server.command(id, 'Create', {}, { pool: 'mock-test' })).status, 200)
+  const view = await until('ready', async () => {
+    const v = (await viewOf(server.url, id)) as { state: string; execution: string; session: string } | undefined
+    return v?.state === 'ready' ? v : undefined
+  })
+  for (const [i, text] of messages.entries()) {
+    assert.equal((await server.command(id, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text }] })).status, 200)
+    await until(`answer ${String(i + 1)}`, async () =>
+      (await entriesOf(id)).filter((e) => (e as { direction?: string; correlated_method?: string }).direction === 'in' && (e as { correlated_method?: string }).correlated_method === 'session/prompt').length === i + 1,
+    )
+  }
+}
+
+test('U59 a word said only in an exchange of a Workstream not loaded, and only in a sub-stream\'s: both found with their line; emptied, the list as before', async () => {
+  const email = 'words@example.org'
+  const owner = identity('owner', email)
+  const old = randomUUID(),
+    root = randomUUID(),
+    sub = randomUUID()
+  // Said in a second exchange: neither title holds it.
+  await talked(old, { owner }, ['an older talk', 'the quokka came by'])
+  await grown(root, { owner })
+  await talked(sub, { parent: root }, ['a sub-stream', 'a quokka again'])
+  // More recent ones: the older talk is not in the first 50.
+  await asked(owner, 55)
+  const page = await proxied(email)
+  await page.goto(`${server.url}/`)
+  const nav = page.getByRole('navigation', { name: 'Workstreams' })
+  await until('the 50 most recent', async () => (await listItems(page).count()) === 50)
+  assert.equal(await nav.getByText('an older talk').count(), 0, 'not loaded')
+  await page.getByLabel('Search the workstreams').fill('QUOKKA')
+  await nav.getByText('an older talk', { exact: true }).waitFor()
+  await nav.getByText('a sub-stream', { exact: true }).waitFor()
+  assert.equal(await listItems(page).count(), 2)
+  // Under each title, its latest matching line: the agent's echo of the message that said it.
+  await nav.getByText('Echo #2: the quokka came by.').waitFor()
+  await nav.getByText('Echo #2: a quokka again.').waitFor()
+  await page.getByLabel('Search the workstreams').fill('')
+  await until('the list as before', async () => (await listItems(page).count()) === 50)
+  assert.equal(await nav.getByText('an older talk').count(), 0)
   await page.context().close()
 })

@@ -31,6 +31,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R23 | 2026-11-01 | `3511c86` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U53–U55 the browser sending an identity of each case's own, its Workstreams created over the API, one asked a question each, U55's titled by its first message to the mock agent. Before it, U55 failed: typed, the list filtered short, its end in view, older pages of the whole list read before the search's first page came; fixed. |
 | R24 | 2026-11-01 | `4d7e0f4` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the server's Workstreams counted in its database for U18; for U23, U36 and U55 a Workstream's view read in its thread. |
 | R25 | 2026-11-01 | `bd2f569` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U56–U58 a browser identity of each case's own, the tree made over the API, each Workstream with a question, all answered but one. Before it, two failures, both fixed: a sub-stream created without the proxy was refused (400), and a root in `none` whose sub-stream was open was left out of the list. |
+| R26 | 2026-11-02 | `baf9ad3` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U59 a browser identity of its own, two Workstreams talking with the mock agent, the word in their second message, and 55 more recent ones. U55 and U59 find a title exactly: a matching line under it may hold it too, the mock's answers repeating what was said before. |
 
 ## Cases
 
@@ -125,9 +126,11 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U53 | — | local | R23 | proven | 50 rows, no page read; the 50th opening the 11th Workstream created; the list's end in view: 60 rows, the 60th opening the first created; requests the list's stream, the folder's and one page. |
 | U54 | — | local | R23 | proven | The open one second; its question answered over the API: first, without a reload; in 15 s, no request but the list's stream and the folder's. |
 | U55 | — | local | R23 | proven | 50 rows without `Quarterly Kubernetes audit`; `kubernetes AUDIT` typed: it alone; the box emptied: 50 rows, it not among them. |
+| U55 | — | local | R26 | proven | As R23, the search now also asking the exchanges: one row, the title found, its matching line under it. |
 | U56 | — | local | R25 | proven | The root alone, "waiting for you", its chevron `aria-expanded` false; unfolded, three rows; the first's chevron unfolded, four rows, the last indented twice, "waiting for you". |
 | U57 | — | local | R25 | proven | The open root second, one "waiting for you"; its sub-stream's question asked over the API: the root first and two "waiting for you", without a reload; requests the list's stream and the folder's. |
 | U58 | — | local | R25 | proven | Opened at its address: three rows, the open one indented twice; two parents in the header; the first opens the root. |
+| U59 | — | local | R26 | proven | The older talk not among the 50; `QUOKKA` typed: two rows, `an older talk` and `a sub-stream`, under each the agent's answer that holds the word, `Echo #2: the quokka came by.` and `Echo #2: a quokka again.`; emptied: the 50 rows, the older talk not among them. |
 
 ## Not covered
 
