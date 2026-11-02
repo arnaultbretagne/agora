@@ -30,7 +30,8 @@ Workstream.
 | Exchange | Route | Content |
 | --- | --- | --- |
 | Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `folder=agents`, its agents' folder ("Accounts"); with `parent`, a Workstream's sub-streams, read while it is unfolded. Without the proxy, the list of the owner the client creates with. |
-| Older Workstreams, a search | `GET /api/workstreams/page?before=B&title=T` | The next 50 older rows, when the end of the list comes into view; the rows whose title holds the search box's text, from every page. |
+| Older Workstreams | `GET /api/workstreams/page?before=B` | The next 50 older rows, when the end of the list comes into view. |
+| A search | `GET /api/workstreams/page?title=T`, `GET /api/search?pattern=P` | The search box's text, as typed and ignoring case: the rows whose title holds it, from every page, and the Workstreams whose exchanges hold it, each with its latest matching line (`search.md`). |
 | A sub-stream's parents | `GET /api/workstreams/{id}/row` | The rows of an open sub-stream's parents, one by one up to its root, when the list has not loaded them: for the header. |
 | The account | `GET /api/account` | Once the page opens: the identity the proxy passes (`log.md`, "HTTP"). |
 | Teams | `GET /api/teams`, `POST /api/teams` | Whether a team can be launched, once the page opens; a team's goal, on its first message ("Teams"; `flows.md`, "Launching from Agora"). |
@@ -159,7 +160,7 @@ their teams' members, theirs alone (`log.md`, "HTTP"; `flows.md`, "Launching fro
 | --- | --- |
 | The account | At the foot of the sidebar, as assistant-ui's own demo has it: the person's e-mail, its initial on a plate. None without the proxy's identity. |
 | Opened | Upwards: **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
-| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number, a + after it while older ones are unread; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's, the search applying. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
+| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number, a + after it while older ones are unread; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's; hidden while a search shows its results. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
 
 ## Context and limits
 
@@ -313,7 +314,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Area | Element | Component |
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
-| Sidebar | **New workstream**: the draft at `/`; **Search**, on the titles: 250 ms after the last key, the server's rows whose title holds the text, sub-streams included, replace the list until the box is empty | **ours** |
+| Sidebar | **New workstream**: the draft at `/`; **Search**: 250 ms after the last key, the Workstreams whose title or exchanges hold the text — sub-streams and the agents' folder's included —, the most recently changed first, each a row of the list with the latest matching line of its exchanges under its title, replace the list and the folder until the box is empty | **ours** |
 | Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
 | Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
 | Header | Title, or a waiting first message; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
@@ -447,6 +448,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U56 | In a browser, a root with sub-streams, one two levels down waiting for the person; the root unfolded, then the first sub-stream | Folded: a chevron and "waiting for you"; unfolded: its sub-streams indented below it; the first's own sub-stream behind its chevron, then below it. |
 | U57 | A sub-stream under a folded root asks a question, from another client | The root moves to the top and shows "waiting for you", without a reload. |
 | U58 | A sub-stream two levels down opened by its address | Its line unfolds in the list; the header shows its two parents before its title, each opening its Workstream. |
+| U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and only in a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title; emptied, the list as before. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
