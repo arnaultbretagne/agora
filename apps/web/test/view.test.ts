@@ -18,6 +18,7 @@ import {
   accessOf,
   commandsMatching,
   composerOf,
+  excerpt,
   continuationNote,
   firstMessageStep,
   messagesOf,
@@ -306,6 +307,17 @@ test('U14 the Workstream list: by the day it last changed, without the empty one
   const page = [w('d', 'Ancient', at(40)), w('c', 'Old task', at(5))]
   const stream = [w('d', 'Ancient, renamed', at(0, 14)), list[0]!]
   assert.deepEqual(merged(page, stream).map((x) => [x.id, x.title]), [['d', 'Ancient, renamed'], ['a', 'Fix the login'], ['c', 'Old task']])
+})
+
+test('U59 the line under a title: from the word before the text, the text apart, as the line wrote it', () => {
+  const long = `Echo #2: ${'a long way round, '.repeat(12)}then a quokka again.`
+  assert.deepEqual(excerpt(long, 'QUOKKA'), { before: '…round, then a ', text: 'quokka', after: ' again.' })
+  // Near the line's start: nothing cut.
+  assert.deepEqual(excerpt('Echo #2: the quokka came by.', 'quokka'), { before: 'Echo #2: the ', text: 'quokka', after: ' came by.' })
+  // A text that is not in the line (a pattern's match the screen cannot find): the line whole, nothing apart.
+  assert.deepEqual(excerpt('Echo #2: the quokka came by.', 'kangaroo'), { before: 'Echo #2: the quokka came by.', text: '', after: '' })
+  // Characters a pattern would read as such are matched as typed.
+  assert.deepEqual(excerpt('costs (a+b) twice', '(a+b)'), { before: 'costs ', text: '(a+b)', after: ' twice' })
 })
 
 test('U15 a first message waits for the Session its Create opens: written once ready, given back if the execution fails', () => {

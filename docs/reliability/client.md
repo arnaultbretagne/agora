@@ -32,6 +32,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R24 | 2026-11-01 | `4d7e0f4` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the server's Workstreams counted in its database for U18; for U23, U36 and U55 a Workstream's view read in its thread. |
 | R25 | 2026-11-01 | `bd2f569` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U56–U58 a browser identity of each case's own, the tree made over the API, each Workstream with a question, all answered but one. Before it, two failures, both fixed: a sub-stream created without the proxy was refused (400), and a root in `none` whose sub-stream was open was left out of the list. |
 | R26 | 2026-11-02 | `baf9ad3` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U59 a browser identity of its own, two Workstreams talking with the mock agent, the word in their second message, and 55 more recent ones. U55 and U59 find a title exactly: a matching line under it may hold it too, the mock's answers repeating what was said before. |
+| R27 | 2026-11-02 | `cecb6ff` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; U59 as R26, the sub-stream's second message now a long one, the word 223 characters into it. |
 
 ## Cases
 
@@ -131,6 +132,8 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U57 | — | local | R25 | proven | The open root second, one "waiting for you"; its sub-stream's question asked over the API: the root first and two "waiting for you", without a reload; requests the list's stream and the folder's. |
 | U58 | — | local | R25 | proven | Opened at its address: three rows, the open one indented twice; two parents in the header; the first opens the root. |
 | U59 | — | local | R26 | proven | The older talk not among the 50; `QUOKKA` typed: two rows, `an older talk` and `a sub-stream`, under each the agent's answer that holds the word, `Echo #2: the quokka came by.` and `Echo #2: a quokka again.`; emptied: the 50 rows, the older talk not among them. |
+| U59 | — | unit | R27 | proven | The long line from `…round, then a `, `quokka` apart, then ` again.`; a line where the word is near its start whole before it; a text not in the line: the line whole, nothing apart; `(a+b)` matched as typed. |
+| U59 | — | local | R27 | proven | The older talk not among the 50; `QUOKKA` typed: two rows, under `an older talk` the line `Echo #2: the quokka came by. Before, you told me "an older talk".`, under `a sub-stream` the line `…round, then a quokka again. Before, you told me "a sub-stream".`; the marked words `quokka` and `quokka`; emptied, the 50 rows, the older talk not among them. |
 
 ## Not covered
 
