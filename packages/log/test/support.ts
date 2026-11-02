@@ -410,7 +410,9 @@ export class Server {
     const dir = mkdtempSync(join(tmpdir(), 'lab-'))
     writeFileSync(join(dir, 'signing.pem'), options.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }))
     writeFileSync(join(dir, 'token'), 'test')
-    const [port, anchorPort] = [await freePort(), await freePort()]
+    // Every port the server listens on, its MCP server's included: tests run side by side, and a restart may start
+    // one before the other is gone.
+    const [port, anchorPort, mcpPort] = [await freePort(), await freePort(), await freePort()]
     const child = spawn(process.execPath, [new URL('../../../apps/server/src/main.ts', import.meta.url).pathname], {
       env: {
         ...process.env,
@@ -423,6 +425,7 @@ export class Server {
         LOG_ANCHORS_URL: options.db.urls.anchors,
         PORT: String(port),
         ANCHOR_PORT: String(anchorPort),
+        MCP_PORT: String(mcpPort),
         TEST_ROUTES: 'true',
         ...options.env,
       },
