@@ -32,7 +32,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R24 | 2026-11-01 | `4d7e0f4` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the server's Workstreams counted in its database for U18; for U23, U36 and U55 a Workstream's view read in its thread. |
 | R25 | 2026-11-01 | `bd2f569` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U56–U58 a browser identity of each case's own, the tree made over the API, each Workstream with a question, all answered but one. Before it, two failures, both fixed: a sub-stream created without the proxy was refused (400), and a root in `none` whose sub-stream was open was left out of the list. |
 | R26 | 2026-11-02 | `baf9ad3` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U59 a browser identity of its own, two Workstreams talking with the mock agent, the word in their second message, and 55 more recent ones. U55 and U59 find a title exactly: a matching line under it may hold it too, the mock's answers repeating what was said before. |
-| R27 | 2026-11-02 | `cecb6ff` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; U59 as R26, the sub-stream's second message now a long one, the word 225 characters into it. |
+| R27 | 2026-11-02 | `cecb6ff` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; U59 as R26, the sub-stream's second message now a long one, the word 223 characters into it. |
 
 ## Cases
 
