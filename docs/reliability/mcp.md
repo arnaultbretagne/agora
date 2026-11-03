@@ -8,6 +8,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | --- | --- | --- | --- | --- |
 | R1 | 2026-11-02 | `231b28c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own. M1 with the lab's executions and the mock harness; M2–M7 against the MCP server on a port of its own, through the MCP TypeScript SDK 1.32.2's own client; M8 through agentgateway 1.6.0 (`agentgateway-linux-amd64`, sha256 `496ed27e…`) on `packages/credentials/test/fixtures/agora-gateway.yaml`, tokens from Agora's `GrantSigner`, the bridge's outbound proxy, and a stand-in for the server's port. |
 | R2 | 2026-11-02 | `203d147` | live | `apps/server/scripts/live-cases.ts` against production, case M9: server `agora-server@sha256:6ad6106d…`, the pools `claude-code-ac7dcc0b2234`, `codex-249acf30983c`, `opencode-9fc3fd77cff0` and `mock-440d5648b04f`, agentgateway 1.6.0 with the route `agora` (infra-k8s `60da3c8`); each harness with its pool's default model; the cases' owner `c45e0000-…`. Output: `✔ M9 MCP, each real harness: search, then read, a past conversation — claude-code: ToolSearch, mcp__agora__search, mcp__agora__read; key-0e160c4d quoted \| codex: mcp.agora.search, mcp.agora.read; key-0e160c4d quoted \| opencode: agora_search, agora_read, agora_read, agora_read; key-0e160c4d quoted (50 s)`, `1/1 cases validated`. |
+| R3 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 and M11 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client and plain `fetch`. |
 
 ## Cases
 
@@ -22,6 +23,8 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M7 | — | local | R1 | proven | `(`: a tool error, `invalid_pattern`; `head_limit` 500: a tool error, `invalid_query: head_limit`. |
 | M8 | — | local | R1 | proven | With `agora:read`, with and without an `x-agora-execution` of the sandbox's: two messages at the stand-in, `POST /mcp`, each naming its token's own subject; `anthropic`, `internet`, `agora:read` from 10.244.9.9, `agora:read` on `/api/workstreams`: 403, nothing at the stand-in; the control reaching it. |
 | M9 | — | live | R2 | proven | Claude Code, Codex and opencode, each given `agora:read`, called the server's `search`, then `read` — `mcp__agora__…`, `mcp.agora.…`, `agora_…` — through the gateway, and quoted `key-0e160c4d`, which only the past conversation held. |
+| M10 | — | local | R3 | proven | With `agora:delegate`: `delegate` alone, not read-only, `instructions`, `harness`, `model`, `effort`, `rights`, `output_schema`, `to`; from a delegate asked for a result, with `agora:submit` alone: `submit` alone, its input the delegation's schema. |
+| M11 | — | local | R3 | proven | `tools/list`: `application/json`; a `delegate` call held by an approval of 1.5 s: `text/event-stream`, 3 progress notifications or more, then the answer to request 2; the approval `expired`. |
 
 ## Not covered
 
