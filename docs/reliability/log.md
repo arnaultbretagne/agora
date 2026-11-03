@@ -31,6 +31,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R23 | 2026-11-01 | `4d7e0f4` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; `GET /api/workstreams` gone, a Workstream's view read in its thread, the lists through `GET /api/workstreams/page`, with and without `X-Forwarded-Email`. |
 | R24 | 2026-11-01 | `bd2f569` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the tree's cases on the lists' bench (`packages/log/test/lists.ts`), entries a second apart, with and without the proxy's header. Beside it, the one-off mapping script on a throwaway database shaped as production: the dry run changed nothing, applied it moved the 33, run again it refused. |
 | R25 | 2026-11-02 | `71a5cdb` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the thread read from the objects, real bridges and the mock agent on FakeKube. A first run that day failed L19 alone: the restarted lab's port was taken meanwhile (`EADDRINUSE`) while a restore ran on the same server; L19 alone then passed three times. Beside it, the schema applied to a copy of production's database, dumped that day: 121,438 thread rows, 88,556 objects, 168 anchors. |
+| R26 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; L99 on a real delegation in the lab. Beside it, `001.sql` of main then this commit's, twice, on a database with an entry: the entries' kinds widened in 72 ms, not checked again, the same constraint the second time, the entry kept, `delegation.started` accepted, an unknown kind refused. |
 
 ## Cases
 
@@ -164,6 +165,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L97 | — | local | R25 | proven | 3 anchors left: the earlier one of the harness removed; storing the last again removed nothing. |
 | L98 | simulated: forced-state, the `thread` table and its rows written as the schema before left them | local | R25 | proven | Objects at 5 and 6, the reset at 3, `thread` gone, 2 anchors left; read from 2, the reset then both; from 5, the one changed since; applied again, unchanged. |
 | L98 | — | local | R25 | proven | On the copy of production: all 88,556 objects at their last change, none at zero; the 42 last resets; `thread` gone; 94 anchors left, exactly the last per Workstream and harness; 770 MB, then 588 MB, 421 MB once compacted. |
+| L99 | — | local | R26 | proven | The delegate's view and its row: `working`, then `completed`, then after `to` `working` and `completed` again; the caller's view and row: no `delegation`. |
 
 ## Not covered
 

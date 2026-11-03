@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
+import { Delegations, LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { teamFrom, teamHttp } from './team.ts'
@@ -87,6 +87,8 @@ const workstreams = new Workstreams({
 })
 
 try {
+  // docs/specs/delegation.md: the engine behind `delegate`, `submit` and the reports; an approval held 4 min 30 s.
+  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
   await workstreams.start()
 } catch (error) {
   // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.

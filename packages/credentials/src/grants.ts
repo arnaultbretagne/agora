@@ -62,6 +62,13 @@ export const KUBERNETES_HOST = 'kubernetes.agora.internal'
  */
 export const AGORA_MCP_HOST = 'mcp.agora.internal'
 const AGORA: McpServer = { type: 'http', name: 'agora', url: `https://${AGORA_MCP_HOST}/mcp`, headers: [] }
+/** The profiles that open Agora's MCP server; Agora tells their tools apart (docs/specs/mcp.md, "The path"). */
+const AGORA_PROFILES: ReadonlySet<string> = new Set(['agora:read', 'agora:delegate', 'agora:submit'])
+/**
+ * Agora's own profiles, given by Agora alone — `agora:submit` to a delegate asked for a result
+ * (docs/specs/delegation.md, "Typed results") —: never offered, never named by a Create or a Scope.
+ */
+export const AGORA_OWN_PROFILES: ReadonlySet<string> = new Set(['agora:submit'])
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -90,7 +97,7 @@ export function compileProfile(profile: string): Grant[] {
   if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
   // Agora's own MCP server: its endpoint only, as the vault's. No tools: Agora tells its tools apart itself, by
   // the rights it recorded (docs/specs/mcp.md).
-  if (profile === 'agora:read') return [{ host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
+  if (profile === 'agora:read' || profile === 'agora:delegate' || profile === 'agora:submit') return [{ host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
   const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
@@ -134,7 +141,7 @@ export function baseProfiles(annotation: string | undefined): { profiles: string
 export function mcpServers(profiles: readonly string[]): McpServer[] {
   const servers: McpServer[] = []
   if (profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write')) servers.push(VAULT)
-  if (profiles.includes('agora:read')) servers.push(AGORA)
+  if (profiles.some((profile) => AGORA_PROFILES.has(profile))) servers.push(AGORA)
   return servers
 }
 

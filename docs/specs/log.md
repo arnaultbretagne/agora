@@ -34,6 +34,11 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | `execution.failed` | Startup or restoration cannot complete. | The reason and the request position when there is one. |
 | `anchor.received` | An authenticated anchor is stored. | Its id; never its bytes. |
 | `execution.ended` | The claim has disappeared. | The reason, and the anchor received if any. |
+| `delegation.started` | A delegate's Workstream is created by `delegate` (`delegation.md`), in that Workstream. | The caller's Workstream and execution; the harness, model, effort, rights and `output_schema` given; the approval's position in the caller's Workstream, when one was asked. |
+| `delegation.continued` | `to` gives a delegate its next message, in the delegate's Workstream. | The instructions, and the `output_schema` if any. |
+| `delegation.result` | A delegate's `submit` fits its schema, in the delegate's Workstream. | The step — the position of its `delegation.started` or `delegation.continued` —, the turn, and the result. |
+| `delegation.reported` | A report carrying a delegate's outcome is accepted, in the delegate's Workstream. | The step whose outcome it carried, and the report's command id in the caller's Workstream. |
+| `question.expired` | An approval reaches its expiry unanswered, or the server starts while it waits (`delegation.md`, "Approval"). | The question's position. |
 
 | Rule | Detail |
 | --- | --- |
@@ -183,12 +188,12 @@ asks the person, and the interface answers.
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for Write, Cancel and Respond to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
 | Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any; without one, the log finds it ("Continuing"). The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), no question is pending (`question_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no permission is pending (`permission_pending`), no question is pending (`question_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). While an approval is pending, a Write is that approval's refusal instead (`delegation.md`, "Approval"): accepted whatever the turn, no line goes to any agent. |
 | Configure | Carries the Session, a setting's id and a value. Accepted on the same conditions as Write, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
-| Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. |
+| Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. An approval is an Ask of Agora's own, `kind` `approval` (`delegation.md`, "Approval"): one option, `allow_once`; the gated tool line's `toolCallId`, when matched; its `expiresAt`. |
 | Answer | Carries the pending question's position (`question`). Its body: the `optionId` chosen and, when the question allows one, a `note` of at most 10,000 characters. Accepted while that question is pending. No line goes to any agent. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
 
@@ -275,12 +280,13 @@ the client shows them is `assistant-ui.md`.
 
 | `type` | Folded from | Fields |
 | --- | --- | --- |
-| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one |
+| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one; `from`: the caller's Workstream, when a block is marked `_meta` `agora.bretagne.dev/delegation` — its value `{ caller, step }` (`delegation.md`) |
+| `report` | Agora's `session/prompt` whose block is marked `_meta` `agora.bretagne.dev/report` — its value `{ delegates }`, or `{ reminds }` for a reminder to a delegate —, in place of `user` | `turn`, `session`, `text`, `delegates`: the delegates whose outcomes it carries |
 | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
-| `question` | An Ask, then its Answer | `position`: the Ask's; `title`, `text`, `options`, `note`: the Ask's; `status` (`pending`, `answered`); `answer`: the Answer's `optionId`, and its `note` when it gave one |
+| `question` | An Ask, then its Answer, a refusing Write or its expiry | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel` | `turn`, `session`, `line`: the line whole |
 
 A pending permission becomes `cancelled` when its Session ends, or its execution is lost, fails or
@@ -289,7 +295,7 @@ ends.
 ### The Workstream view
 
 One object per Workstream, changed by its commands, its execution entries, its Sessions, its
-anchors, the dispatch of its prompts and the agent's title.
+anchors, the dispatch of its prompts, the agent's title, and a delegate's steps and turns' ends.
 
 | Field | Value |
 | --- | --- |
@@ -307,6 +313,7 @@ anchors, the dispatch of its prompts and the agent's title.
 | `promptCapabilities` | What the last execution's agent accepts in a prompt beyond text and resource links, from its `initialize` answer: `image`, `audio` and `embeddedContext`, each true only when it says so; kept once it has ended; null before it has answered. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `question` | The pending question's position, or null. |
+| `delegation` | A delegate's state (`delegation.md`, "States"): once the turn its last `delegation.started` or `delegation.continued` gave has ended, `completed`, `cancelled` or `failed` as it ended; before, `working`, or `failed` or `cancelled` when its execution failed, was lost or was stopped. Absent on any other Workstream. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
 
@@ -353,7 +360,7 @@ changes instead of fetching every view again.
 
 | Rule | Detail |
 | --- | --- |
-| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness` and `question`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
+| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question` and a delegate's `delegation`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
 | List | A root's row is in its owner's list: the person's identity for their own, their agents' folder for their agents' ("HTTP"). A sub-stream's row is in its parent's list. |
 | Positions | Per list, strictly increasing and never reused: each row written takes its list's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
 | Up the line | A row written writes its parent's row again in the same transaction, then its parent's, up to the root, each with what lies under it, each in its own list. Lists are taken from the sub-stream up, so that two lines never wait on each other. |
@@ -551,6 +558,7 @@ exception message.
 | L96 | A projector's fold drops an object without a version change | `reset` at the next position, then every remaining object after it, in order; the dropped object gone, the others kept. |
 | L97 | Anchors stored for a Workstream: two of one harness, one of another, one of another Workstream; then the last stored again | The earlier anchor of that harness removed; the other harness's, the other Workstream's and the last kept; storing the last again removes nothing. |
 | L98 | The schema applied to a database that kept every change of the thread in a table of its own, a reset among them, and two anchors of one harness | Each object at the position of its last change, the last reset kept, the table gone; a read from before the reset gives it then the complete state, one from after it what changed since; that harness's last anchor kept, the other removed; applied again, nothing changes. |
+| L99 | A delegate through its turn, then continued with `to`; its caller | Its view's and its row's `delegation` `working`, then `completed`, then `working` and `completed` again; none in its caller's view or row. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

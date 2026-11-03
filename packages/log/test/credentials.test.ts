@@ -1,6 +1,7 @@
 // docs/specs/credentials.md, "On Agora's side": the execution's token before `initialize`, its renewal
 // before a prompt, and the profiles a Create may name. Real bridges, a real signer.
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { keys } from '@agora/testkit'
 import { database, FakeKube, grants, Lab, lines, until } from './support.ts'
@@ -126,6 +127,20 @@ test('M1 an execution with agora:read, then one without: session/new names Agora
   const without = await lab.workstream()
   await lab.open(without, { pool: 'claude-test', profiles: ['internet', 'github:owner/repo:read'] })
   assert.deepEqual(await opened(lab, without), [])
+})
+
+test('C64 an execution with agora:delegate; one Agora gave agora:submit; one with both and agora:read: session/new names Agora’s MCP server once', async (t) => {
+  const { lab, ws } = await started(t, { 'claude-test': 'anthropic' })
+  const agora = [{ type: 'http', name: 'agora', url: 'https://mcp.agora.internal/mcp', headers: [] }]
+  await lab.open(ws, { pool: 'claude-test', profiles: ['agora:delegate'] })
+  assert.deepEqual(await opened(lab, ws), agora)
+  // agora:submit is Agora's own: only a Create of Agora's names it (C65).
+  for (const profiles of [['agora:submit'], ['agora:read', 'agora:delegate', 'agora:submit']]) {
+    const delegate = await lab.workstream()
+    assert.equal((await lab.workstreams.command(delegate, { id: randomUUID(), kind: 'Create', target: {}, body: { pool: 'claude-test', profiles } }, 'agora')).accepted, true)
+    await until('session/new', async () => lines(await lab.entries(delegate), 'out', 'session/new').length > 0)
+    assert.deepEqual(await opened(lab, delegate), agora, profiles.join(','))
+  }
 })
 
 test('C14 a Create naming an unknown profile is refused, unknown_profile, and nothing is written', async (t) => {

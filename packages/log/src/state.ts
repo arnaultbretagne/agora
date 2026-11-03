@@ -3,6 +3,7 @@ import { identity, object, schemaValue, encode } from './json.ts'
 import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
 import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, noteAnchor } from './catch-up.ts'
+import { DELEGATION_META, REPORT_META } from './marks.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 
@@ -95,7 +96,30 @@ export interface State {
   permissions: Map<string, Entry>
   /** The pending question: its Ask (docs/specs/log.md, "Commands"). */
   question: Entry | null
+  /** Each approval's wait (docs/specs/delegation.md, "Approval"): from its Ask to its end, open while pending. */
+  waits: { from: string; to: string | null }[]
 }
+
+/** Whether a question's Ask is one of Agora's approvals (docs/specs/delegation.md, "Approval"). */
+export const isApproval = (ask: Entry | null): boolean => ask !== null && object(ask.content.body)?.kind === 'approval'
+
+/** How long the approvals asked since `since` waited, those still pending counted until `now` (ms). */
+export function waited(state: State, since: string, now: number): number {
+  const start = Date.parse(since)
+  return state.waits.filter((w) => Date.parse(w.from) >= start).reduce((sum, w) => sum + ((w.to === null ? now : Date.parse(w.to)) - Date.parse(w.from)), 0)
+}
+/**
+ * A delegate's state (docs/specs/delegation.md, "States"): once the turn its last step gave has ended, as it ended;
+ * before, `working`, unless its execution failed, was lost or was stopped.
+ */
+function delegationOf(state: State, step: string): 'working' | 'completed' | 'failed' | 'cancelled' {
+  const turn = [...state.turns.values()].at(-1)
+  if (turn && BigInt(turn.requestPosition) > BigInt(step) && !['saved', 'in_progress', 'uncertain'].includes(turn.status))
+    return turn.status === 'done' ? 'completed' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
+  const e = state.current
+  return e?.failed || e?.lost ? 'failed' : e?.stopped ? 'cancelled' : 'working'
+}
+
 /** The profiles a Create or a Scope recorded. */
 function profilesIn(body: unknown): string[] {
   const profiles = object(body)?.profiles
@@ -122,6 +146,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     current: null,
     permissions: new Map(),
     question: null,
+    waits: [],
   }
   const turnsByRequest = new Map<string, Turn>([...state.turns.values()].map((turn) => [turn.requestPosition, turn]))
   for (const entry of entries) {
@@ -149,8 +174,22 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       state.current = execution
     }
     const execution = entry.execution ? state.executions.get(entry.execution) : undefined
-    if (entry.kind === 'command' && content.kind === 'Ask') state.question = entry
-    if (entry.kind === 'command' && content.kind === 'Answer') state.question = null
+    if (entry.kind === 'command' && content.kind === 'Ask') {
+      if (isApproval(entry)) state.waits.push({ from: entry.time, to: null })
+      state.question = entry
+    }
+    // An approval ends answered, refused by a Write, or expired (docs/specs/delegation.md, "Approval").
+    const settles =
+      (entry.kind === 'command' && content.kind === 'Answer') ||
+      (entry.kind === 'command' && content.kind === 'Write' && isApproval(state.question)) ||
+      (entry.kind === 'question.expired' && state.question !== null && String(object(content)?.question) === state.question.position)
+    if (settles) {
+      if (isApproval(state.question)) {
+        const open = state.waits.at(-1)
+        if (open && open.to === null) open.to = entry.time
+      }
+      state.question = null
+    }
     if (entry.kind === 'command' && content.kind === 'Stop' && execution) execution.stopped = true
     if (entry.kind === 'command' && content.kind === 'Scope' && execution) execution.profiles = profilesIn(content.body)
     if (entry.kind === 'execution.obtained' && execution) execution.uid = String(content.uid)
@@ -327,7 +366,11 @@ export class CoreProjection {
   private readonly turnCodes = new Map<string, string>()
   /** The Workstream view's title sources (docs/specs/log.md, "The Workstream view"). */
   private firstWrite: string | null = null
+  /** The approval pending, as an element's id: what a Write refuses (docs/specs/delegation.md, "Approval"). */
+  private pendingQuestion: string | null = null
   private agentTitle: string | null = null
+  /** A delegate's last step, its `delegation.started` or `delegation.continued` (docs/specs/delegation.md); null on any other. */
+  private step: string | null = null
   /** The anchor each ended execution names, and the Sessions that have ended. */
   private readonly anchors = new Map<string, string>()
   private readonly endedSessions = new Set<string>()
@@ -376,12 +419,36 @@ export class CoreProjection {
       // A question to the person (docs/specs/log.md, "Elements"): its Ask, then its Answer.
       if (entry.kind === 'command' && entry.content.kind === 'Ask') {
         const body = object(entry.content.body) ?? {}
+        const approval = body.kind === 'approval'
         put(
           'element',
           identity(entry.workstream, entry.position, 'question'),
-          { type: 'question', position: entry.position, title: body.title, text: body.text, options: body.options, note: body.note === true, status: 'pending' },
+          {
+            type: 'question',
+            position: entry.position,
+            title: body.title,
+            text: body.text,
+            options: body.options,
+            note: body.note === true,
+            ...(approval ? { kind: 'approval', toolCallId: body.toolCallId ?? null, expiresAt: body.expiresAt } : {}),
+            status: 'pending',
+          },
           entry.position,
         )
+        this.pendingQuestion = approval ? identity(entry.workstream, entry.position, 'question') : null
+      }
+      // An approval refused by a Write: its text the answer; no turn (docs/specs/delegation.md, "Approval").
+      if (entry.kind === 'command' && entry.content.kind === 'Write' && this.pendingQuestion !== null) {
+        const id = this.pendingQuestion
+        const blocks = object(entry.content.body)?.prompt
+        const text = (Array.isArray(blocks) ? blocks : []).map((b) => object(b)).filter((b) => b?.type === 'text').map((b) => String(b!.text)).join('\n')
+        put('element', id, { ...objects.get(id)?.object, status: 'refused', answer: { note: text } }, entry.position)
+        this.pendingQuestion = null
+      }
+      if (entry.kind === 'question.expired') {
+        const id = identity(entry.workstream, String(object(entry.content)?.question), 'question')
+        if (objects.get(id)?.object.status === 'pending') put('element', id, { ...objects.get(id)?.object, status: 'expired' }, entry.position)
+        this.pendingQuestion = null
       }
       if (entry.kind === 'command' && entry.content.kind === 'Answer') {
         const id = identity(entry.workstream, String(object(entry.content.target)?.question), 'question')
@@ -392,6 +459,7 @@ export class CoreProjection {
           { ...objects.get(id)?.object, status: 'answered', answer: { optionId: body.optionId, ...(typeof body.note === 'string' ? { note: body.note } : {}) } },
           entry.position,
         )
+        this.pendingQuestion = null
       }
       if (entry.kind === 'acp' && entry.method === 'session/update') {
         const update = object(object(entry.content.params)?.update)
@@ -401,6 +469,7 @@ export class CoreProjection {
         }
       }
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
+      if (entry.kind === 'delegation.started' || entry.kind === 'delegation.continued') this.step = entry.position
       noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
       // Settings, commands, usage and prompt capabilities change with ACP lines too: the view is put when what it shows of them changed.
@@ -416,6 +485,10 @@ export class CoreProjection {
         entry.kind === 'command' ||
         entry.kind === 'anchor.received' ||
         (entry.kind === 'acp.dispatching' && state.requestPositions.get(String(entry.content.requestPosition))?.method === 'session/prompt') ||
+        // A delegate's: each step, and each turn's end — its answer or its failure.
+        entry.kind === 'delegation.started' ||
+        entry.kind === 'delegation.continued' ||
+        (this.step !== null && ((entry.kind === 'acp' && entry.direction === 'in' && entry.correlated_method === 'session/prompt') || entry.kind === 'request.failed')) ||
         entry.kind.startsWith('execution.') ||
         entry.kind.startsWith('session.')
       ) {
@@ -452,6 +525,7 @@ export class CoreProjection {
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
             question: state.question?.position ?? null,
+            ...(this.step !== null ? { delegation: delegationOf(state, this.step) } : {}),
             continuation,
             changedAt: entry.time,
           },
@@ -509,16 +583,28 @@ export class CoreProjection {
         // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
         const blocks = Array.isArray(params?.prompt) ? (params.prompt as unknown[]) : null
         const catchUp = blocks?.map((b) => object(object(b)?._meta)?.[CATCH_UP_META]).find((m) => m !== undefined)
+        // Who wrote it (docs/specs/log.md, "Elements"): a report of Agora's, a delegate's caller, or the person.
+        const report = blocks?.map((b) => object(object(b)?._meta)?.[REPORT_META]).find((m) => m !== undefined)
+        const from = blocks?.map((b) => object(object(b)?._meta)?.[DELEGATION_META]).find((m) => m !== undefined)
         put(
           'element',
           identity(entry.session ?? entry.execution!, entry.position, 'prompt'),
-          {
-            type: 'user',
-            turn: turn?.id,
-            session: entry.session,
-            content: blocks ? blocks.filter((b) => !isCatchUp(b)) : params?.prompt,
-            ...(catchUp !== undefined ? { catchUp } : {}),
-          },
+          report !== undefined
+            ? {
+                type: 'report',
+                turn: turn?.id,
+                session: entry.session,
+                text: (blocks ?? []).map((b) => object(b)).filter((b) => b?.type === 'text').map((b) => String(b!.text)).join('\n'),
+                delegates: Array.isArray(object(report)?.delegates) ? object(report)!.delegates : [],
+              }
+            : {
+                type: 'user',
+                turn: turn?.id,
+                session: entry.session,
+                content: blocks ? blocks.filter((b) => !isCatchUp(b)) : params?.prompt,
+                ...(catchUp !== undefined ? { catchUp } : {}),
+                ...(from !== undefined ? { from: object(from)?.caller ?? from } : {}),
+              },
           entry.position,
         )
       } else if (

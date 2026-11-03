@@ -1,6 +1,7 @@
 // A tool call, in the trace grammar (docs/specs/assistant-ui.md, "Parts"): one line with the agent's
 // own title, opening onto its diff, its output or its input; and, while the agent waits for it, the
-// permission it asks, with the options it offers.
+// permission it asks, with the options it offers. A `delegate` line names its delegate and its state, and holds
+// the approval it waits for.
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState, type FC } from 'react'
@@ -8,7 +9,8 @@ import { DiffViewer } from '@/components/ui/diff-viewer'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
 import { diffStats, labelOf, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
-import { harnessName } from '../agora/view.ts'
+import { harnessName, type Gate } from '../agora/view.ts'
+import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
 
 type Option = { id: string; kind: string; label: string }
@@ -90,8 +92,81 @@ export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNo
   )
 }
 
+/** A delegation's state as its caller's line says it (docs/specs/assistant-ui.md, "A tool's line"). */
+const DELEGATION: Record<string, string> = { working: 'working', completed: 'done', failed: 'failed', cancelled: 'stopped' }
+
+const SETTLED: Record<Exclude<Gate['status'], 'pending'>, string> = { answered: 'Approved', refused: 'Refused', expired: 'Expired before a decision' }
+
+/** An approval on the line it gates: while pending, the proposal, then Approve at its foot; once settled, how. */
+const ApprovalBox: FC<{ gate: Gate }> = ({ gate }) => {
+  const { answer } = useAgora()
+  const [busy, setBusy] = useState(false)
+  if (gate.status !== 'pending')
+    return (
+      <p data-approval={gate.status} className="border-foreground/10 text-muted-foreground ms-[5px] mb-1 flex flex-wrap items-baseline gap-x-1.5 border-s ps-4 text-[13px]">
+        <span>{SETTLED[gate.status]}</span>
+        {gate.words && <span className="text-foreground">“{gate.words}”</span>}
+      </p>
+    )
+  return (
+    <div data-approval="pending" className="border-primary/40 bg-background rounded-surface my-2 flex flex-col gap-3 border p-3">
+      <Markdown text={gate.text} />
+      <div className="border-foreground/10 flex items-center justify-end gap-2 border-t pt-2.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            void answer(gate.id, 'approve').finally(() => setBusy(false))
+          }}
+          className="bg-primary text-primary-foreground rounded-control h-7 px-3 text-[13px] transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          Approve
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** A `delegate` line: its delegate's title and harness, a link to it, the state its row gives; its approval. */
+const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isError: boolean; running: boolean }> = ({ artifact: a, args, isError, running }) => {
+  const { delegates, open, view } = useAgora()
+  const d = a.delegate
+  const row = d ? delegates.find((r) => r.id === d.id) : undefined
+  const state = d ? (row?.delegation ?? 'working') : null
+  const waiting = a.gate?.status === 'pending' || Boolean(row?.question)
+  const settled = a.gate !== undefined && a.gate.status !== 'pending' && d === undefined
+  const tone: Tone = waiting ? 'attention' : state === 'failed' || (isError && !settled) ? 'error' : state === 'working' || (d === undefined && running) ? 'live' : 'quiet'
+  const meta = waiting ? 'waiting for you' : state !== null ? DELEGATION[state] : isError && !settled ? 'failed' : undefined
+  const harness = row?.harness ?? (typeof args.harness === 'string' ? args.harness : view.harness)
+  const label = d ? (
+    <a
+      href={`/w/${d.id}`}
+      onClick={(event) => {
+        event.preventDefault()
+        open(d.id)
+      }}
+      className="hover:text-foreground underline-offset-2 hover:underline"
+    >
+      {row?.title || d.title} · {harnessName(harness)}
+    </a>
+  ) : a.gate ? (
+    `delegate · ${a.gate.title}`
+  ) : (
+    labelOf(a, 'delegate')
+  )
+  return (
+    <div data-delegate={d?.id ?? ''}>
+      <TraceLine tone={tone} label={label} meta={meta} />
+      {a.gate && <ApprovalBox gate={a.gate} />}
+    </div>
+  )
+}
+
 export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval }) => {
   const a = (artifact ?? {}) as Artifact
+  if (a.delegate || a.gate)
+    return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} />
   const ask = approval as Approval | undefined
   const waiting = ask !== undefined && ask.optionId === undefined && ask.resolution === undefined
   const running = a.status === 'pending' || a.status === 'in_progress'

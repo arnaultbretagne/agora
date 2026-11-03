@@ -57,6 +57,8 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
 | `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
 | `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). |
+| `agora:delegate` | The same grant as `agora:read`; Agora opens `delegate` to it (`delegation.md`). |
+| `agora:submit` | The same grant as `agora:read`; Agora opens `submit` to it. Agora's own: given by Agora to a delegate asked for a result, never offered, never named by a Create or a Scope (`unknown_profile`). |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
@@ -108,6 +110,7 @@ service — never a repository, nor `internet`, nor the vault.
 | `kubernetes:read` | No |
 | `previews` | No |
 | `agora:read` | No |
+| `agora:delegate`, `agora:submit` | No |
 
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
@@ -125,7 +128,7 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews`, `agora:read` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews`, `agora:read`, `agora:delegate` | Itself |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
@@ -142,7 +145,7 @@ through the gateway like any host. The catalogue holds them beside the profiles.
 | --- | --- |
 | `mcpServers` | In `session/new`, and in `session/load` or `session/resume` when a Session is restored: the servers the execution's profiles — its pool's base profiles and its own — open, each once. `[]` when none does. |
 | The vault | With `vault:read` or `vault:write`, or both: one server, `{ "type": "http", "name": "vault", "url": "https://vault.bretagne.dev/mcp", "headers": [] }`. |
-| Agora | With `agora:read`: one server, `{ "type": "http", "name": "agora", "url": "https://mcp.agora.internal/mcp", "headers": [] }`. |
+| Agora | With `agora:read`, `agora:delegate` or `agora:submit`, or several: one server, `{ "type": "http", "name": "agora", "url": "https://mcp.agora.internal/mcp", "headers": [] }`. |
 | Headers | None. The gateway sets the server's credential; nothing in `mcpServers` is a secret, and it is written in the log. |
 | A Scope | Changes the token, never the Session's servers, fixed when it opens. A Session opened without the vault does not get it; one opened with it and scoped out of it keeps the server, refused by the gateway (403). |
 
@@ -593,6 +596,8 @@ call. The test page does it itself when the agent offers the option.
 | C61 | In the cluster, the route and the gateway gate deployed, a preview open: the judge with `previews`; a browser without a session; the client `agora_gateway_previews` asked for a device code and an authorization code | The judge reaches the preview's app through the gateway gate; the browser is sent to Pocket-ID by the browser gate; Pocket-ID gives no user token for the client. |
 | C62 | In Pocket-ID, `agora_gateway_previews` given a second secret, a token asked with each; the first secret deleted; then the client deleted | A token for each while both exist; once the first is deleted, it is refused and the second still answered; once the client is deleted, neither; the tokens already issued still taken by the gateway gate until they expire, and refused once `client-<id>` is out of its identities. |
 | C63 | The grant of `agora:read`; a pool declaring it; `agora`, `agora:write` | Only `mcp.agora.internal`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host refused; never the Internet's grant, which opens nothing of it; not a base profile; the others unknown. |
+| C64 | The grants of `agora:delegate` and `agora:submit`; an execution with either | `agora:read`'s grant each; `session/new` names the server `agora` once, with them both or with `agora:read` too. |
+| C65 | A Create, then a Scope, naming `agora:submit`; a delegate asked for a result | `unknown_profile` both times; the delegate's execution holds `agora:submit`, given by Agora. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

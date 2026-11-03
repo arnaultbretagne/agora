@@ -12,7 +12,7 @@ import { join, relative } from 'node:path'
 function defined(text: string): Set<string> {
   const out = new Set<string>()
   for (const line of text.split('\n')) {
-    const m = /^\|\s*([CEFLMSU]\d+)\s*\|/.exec(line)
+    const m = /^\|\s*([CDEFLMSU]\d+)\s*\|/.exec(line)
     if (m) out.add(m[1]!)
   }
   return out
@@ -21,7 +21,7 @@ function defined(text: string): Set<string> {
 /** The case IDs a text cites, with their line: `C1`, and each case of a range. */
 function cited(text: string): { id: string; line: number }[] {
   const out: { id: string; line: number }[] = []
-  const id = /(?<![A-Za-z0-9_])([CEFLMSU])(\d+)(?:[–-]\1?(\d+)|\s+(?:to|through)\s+\1(\d+))?(?![A-Za-z0-9_])/g
+  const id = /(?<![A-Za-z0-9_])([CDEFLMSU])(\d+)(?:[–-]\1?(\d+)|\s+(?:to|through)\s+\1(\d+))?(?![A-Za-z0-9_])/g
   for (const [i, line] of text.split('\n').entries()) {
     for (const m of line.matchAll(id)) {
       const from = Number(m[2])

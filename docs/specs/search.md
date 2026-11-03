@@ -20,7 +20,8 @@ lines, read from its view's objects — its turns and their elements — and nev
 | An exchange's lines | In the order of its turn's prompt: `## <n> · <started> · you`, then its `user` element's text; `## <n> · agent`, then its `agent_message_chunk` elements' text and one line per `tool` element — `[tool: <title>]`, or `[tool: <title> — failed]` when its status is `failed` — in the order of their first positions. `<n>` counts the turns from 1; `<started>` is the turn's `startedAt`, to the minute, in UTC. |
 | Text | A `user` element's blocks as the catch-up gives them (`log.md`, "Continuing"); an `agent_message_chunk` element's `text`. Each is split at its line breaks; an element without text gives no line. |
 | Numbers | From 1, across the Workstream, in that order. An exchange's numbers never change: only the last element of the exchange in progress grows, and nothing follows it; a rebuild gives the same lines. |
-| Kinds | `header`, `user`, `agent`, `tool`. |
+| Kinds | `header`, `user`, `agent`, `tool`, `agora`. |
+| Who wrote | A header names who wrote the exchange's prompt: `you`; `agora` for a report (`delegation.md`, "Reports"); `caller` for a delegate's message from its caller. A caller's lines are `user` lines; a report's are `agora` lines, read, never searched: the delegates' own Workstreams hold what they say. |
 | Left out | Reasoning, tool content, plans, permissions, questions to the person, and what a resumed Session replays outside any turn. |
 
 ## Search
@@ -62,3 +63,4 @@ lines, read from its view's objects — its turns and their elements — and nev
 | S9 | A read from an offset with a limit; from beyond the end; a window that reaches 50 KB first; a line of 3,000 characters | The window, numbered, the next `offset` and the total; none, the total; cut at 50 KB, the next `offset`; the line cut and marked. |
 | S10 | A resumed Session replaying its history outside any turn; reasoning; a question to the person | In no line. |
 | S11 | `kube`; a pattern opening with its own options, `(?i)KUBE`, then `(?i)^A KUBE`; a literal, `***=k.be` — on `the Kube cluster`, `a kube node`, `k.be written as such` | 1 line; case ignored, 2 lines, then 1, `^` at each line's start; the literal's line alone. |
+| S12 | A delegate's transcript, its caller's instructions then a report in its caller's | `## 1 · <started> · caller` in the delegate's, its lines found as the person's are; `## <n> · <started> · agora` in the caller's, its lines of kind `agora`, never found. |

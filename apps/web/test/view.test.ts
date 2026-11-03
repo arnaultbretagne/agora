@@ -33,6 +33,7 @@ import {
   merged,
   sections,
   startBody,
+  startedDelegate,
   windowName,
   withAccess,
   workstreamOf,
@@ -598,4 +599,51 @@ test('U49 a Workstream in none whose question waits is listed though not open; o
   }
   assert.deepEqual(listed(pendingQuestion), [QUESTION_WS])
   assert.deepEqual(listed(answeredQuestion), [])
+})
+
+const proposal = {
+  kind: 'approval',
+  title: 'Review the change',
+  text: "**mock**\nRights beyond the caller's: `internet`\n\n> Review the change",
+  options: [{ optionId: 'approve', name: 'Approve', kind: 'allow_once' }],
+  expiresAt: '2026-10-25T10:04:30.000Z',
+}
+const factEntry = (position: number, kind: string, content: Record<string, unknown>): Entry =>
+  ({ workstream: QUESTION_WS, position: String(position), time: `2026-10-25T10:00:0${String(position)}.000Z`, kind, content }) as unknown as Entry
+const pendingApproval = [commandEntry(1, 'Ask', {}, proposal)]
+const settled = {
+  answered: [...pendingApproval, commandEntry(2, 'Answer', { question: '1' }, { optionId: 'approve' })],
+  refused: [...pendingApproval, commandEntry(2, 'Write', {}, { prompt: [{ type: 'text', text: 'use the read-only rights' }] })],
+  expired: [...pendingApproval, factEntry(2, 'question.expired', { question: '1' })],
+}
+
+test('U60 a `delegate` answer read as a harness gives it: the text alone, or inside its result’s JSON', () => {
+  const id = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
+  assert.deepEqual(startedDelegate(`started ${id} · Review the change`), { id, title: 'Review the change' })
+  assert.deepEqual(startedDelegate(JSON.stringify({ content: [{ type: 'text', text: `started ${id} · Review the change` }] }, null, 2)), { id, title: 'Review the change' })
+  assert.equal(startedDelegate('refused: use the read-only rights'), null)
+})
+
+test('U62 an approval pending: sending open, no Create, what is sent refusing it; refused, sending as it was', () => {
+  const state = stateOf(pendingApproval)
+  const open = composerOf(state, workstreamOf(state, QUESTION_WS))
+  assert.deepEqual([open.open, open.create, open.reason, open.refuses], [true, false, null, true])
+  const after = stateOf(settled.refused)
+  const back = composerOf(after, workstreamOf(after, QUESTION_WS))
+  assert.deepEqual([back.open, back.create, back.refuses], [true, true, false])
+})
+
+test('U63 an approval matched to no line: its box at its position, pending; then answered, refused with the words, or expired', () => {
+  const gate = (entries: readonly Entry[]) => {
+    const messages = messagesOf(stateOf(entries))
+    assert.equal(messages.length, 1)
+    const [part] = messages[0]!.content as unknown as QuestionPart[]
+    assert.deepEqual([messages[0]!.role, part!.toolName], ['assistant', 'delegate'])
+    return part!.artifact!.gate!
+  }
+  const pending = gate(pendingApproval)
+  assert.deepEqual([pending.status, pending.title, pending.text, pending.words], ['pending', 'Review the change', proposal.text, null])
+  assert.equal(gate(settled.answered).status, 'answered')
+  assert.deepEqual([gate(settled.refused).status, gate(settled.refused).words], ['refused', 'use the read-only rights'])
+  assert.equal(gate(settled.expired).status, 'expired')
 })

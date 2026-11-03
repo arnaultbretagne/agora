@@ -16,6 +16,7 @@ import {
   accessDefault,
   accessGranted,
   composerOf,
+  delegatesOf,
   firstMessageStep,
   messagesOf,
   poolOffered,
@@ -99,6 +100,8 @@ export interface Agora {
   readonly agents: ListFeed
   /** The open Workstream's parents, its root first; none for a root (docs/specs/assistant-ui.md, "Header"). */
   readonly line: readonly ListRow[]
+  /** The rows of the delegates its `delegate` lines started, read live (docs/specs/assistant-ui.md, "A tool's line"). */
+  readonly delegates: readonly ListRow[]
   /** The messages handed to assistant-ui, which shows them a render later. */
   readonly messages: readonly ThreadMessageLike[]
 }
@@ -160,6 +163,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // The teams launched from this page whose lead has not written yet: their Workstream waits for it.
   const [launched, setLaunched] = useState<ReadonlySet<string>>(new Set())
   const { state, connection } = useThread(api, id)
+  // Its sub-streams' rows, read only once a `delegate` line has started one.
+  const delegating = useMemo(() => delegatesOf(state).length > 0, [state])
+  const delegates = useList(api, null, id !== null && delegating, id)
   const [refusal, setRefusal] = useState<string | null>(null)
   const [pools, setPools] = useState<Pool[] | null>(null)
   // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
@@ -176,7 +182,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // A draft has no thread to wait for: sending is offered at once, and starts everything. A team just
   // launched waits for its lead's first turn.
   const composer = useMemo<Composer>(() => {
-    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null }
+    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false }
     const own = composerOf(state, view)
     const starting = launched.has(id) && state.complete && ![...state.objects.values()].some((o) => o.kind === 'turn')
     return starting ? { ...own, open: false, create: false, reason: 'The team is starting…' } : own
@@ -372,7 +378,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages,
     convertMessage: (message) => message,
-    isRunning: composer.running || (pending !== null && pending.workstream === id),
+    // While an approval waits, Send in place of Cancel: what is sent refuses it.
+    isRunning: (composer.running && !composer.refuses) || (pending !== null && pending.workstream === id),
     isSendDisabled: !composer.open || (pending !== null && pending.workstream === id),
     onNew: async (message) => {
       const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
@@ -429,6 +436,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     account,
     agents,
     line,
+    delegates: delegates.rows,
     messages,
   }
   return (

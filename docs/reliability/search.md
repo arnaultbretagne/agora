@@ -9,6 +9,7 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | R1 | 2026-11-02 | `baf9ad3` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own. S1–S4 on transcripts the core projector folded from real exchanges with the mock agent, its tools written with `/raw`; S5–S10 on objects written as the projector writes them, rows in their lists for the searches' order. |
 | R2 | 2026-11-02 | `4510577` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own, as R1. The transcript now inlines an element's text and computes it once; the tests are R1's, unchanged. |
 | R3 | 2026-11-02 | `15b6b66` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6, each test on a database of its own. The search's first step reads `objects_text`; S1–S10 are R2's tests, unchanged. |
+| R4 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; S12 on a real delegation in the lab — the caller's MCP calls, the delegate on the mock agent, Agora's report —, read and searched through the MCP server. |
 
 ## Cases
 
@@ -45,3 +46,4 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | S10 | — | local | R2 | proven | As R1: four lines; no replayed text, reasoning or question. |
 | S10 | — | local | R3 | proven | As R2. |
 | S11 | — | local | R3 | proven | On `the Kube cluster`, `a kube node`, `k.be written as such`: `kube` 1 line; `(?i)KUBE` 2; `(?i)^A KUBE` 1; `***=k.be` 1; each answered 200. |
+| S12 | — | local | R4 | proven | The delegate's line 1 `## 1 · <started> · caller`, line 2 its instructions; the caller's `## <n> · <started> · agora`, then lines all of kind `agora`, the first `From Agora, not the person:`; the word found on the delegate's line 2, never on a line of the report. |

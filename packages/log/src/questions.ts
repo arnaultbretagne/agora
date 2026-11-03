@@ -24,6 +24,20 @@ export function validQuestion(body: Record<string, unknown>): boolean {
   return true
 }
 
+/**
+ * Whether an approval's Ask is within its bounds (docs/specs/delegation.md, "Approval"): Agora's own — a
+ * one-line title, Markdown, one option, `allow_once`, its expiry, and the tool line it gates when matched.
+ */
+export function validApproval(body: Record<string, unknown>): boolean {
+  if (!within(body.title, 1, 200) || /[\r\n]/.test(body.title)) return false
+  if (!within(body.text, 0, 100_000) || typeof body.expiresAt !== 'string' || Number.isNaN(Date.parse(body.expiresAt))) return false
+  if (body.toolCallId !== undefined && body.toolCallId !== null && !within(body.toolCallId, 1, 200)) return false
+  const options = body.options
+  if (!Array.isArray(options) || options.length !== 1) return false
+  const option = object(options[0])
+  return option !== null && within(option.optionId, 1, 64) && within(option.name, 1, 80) && option.kind === 'allow_once'
+}
+
 /** Why an Answer cannot be given to this pending question, or null when it can. */
 export function answerRefusal(question: Record<string, unknown>, body: Record<string, unknown>): string | null {
   const options = Array.isArray(question.options) ? question.options : []
