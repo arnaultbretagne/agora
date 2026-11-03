@@ -343,7 +343,8 @@ test('L99 a delegate through its turn, then continued with `to`; its caller: its
 })
 
 test('M10 tools/list with agora:delegate; from a delegate asked for a result, with agora:submit alone: delegate; submit alone, the schema its input', async (t) => {
-  const { lab, url, execution } = await started(t, ['agora:delegate'])
+  // The engine held: the delegate's instructions are not written until the test says.
+  const { lab, url, execution } = await started(t, ['agora:delegate'], { manual: true })
   const c = await client(t, url, execution)
   const [tool] = (await c.listTools()).tools
   assert.deepEqual([tool?.name, tool?.annotations?.readOnlyHint, Object.keys(tool?.inputSchema.properties ?? {})], [
@@ -353,8 +354,10 @@ test('M10 tools/list with agora:delegate; from a delegate asked for a result, wi
   ])
   const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
   const delegate = delegateOf(text(await c.callTool({ name: 'delegate', arguments: { instructions: '/sleep 3', harness: 'mock', output_schema: schema } })))
-  const running = await until('the delegate working', async () => ((await lab.state(delegate)).active ? (await lab.state(delegate)).current : null))
-  assert.deepEqual((await (await client(t, url, running.id)).listTools()).tools.map((x) => [x.name, x.inputSchema]), [['submit', schema]])
+  // As its Session opens, before its instructions: what a harness listing its tools once is given (Codex).
+  const opened = await until('the delegate’s Session', async () => ((await lab.state(delegate)).current?.session ? (await lab.state(delegate)).current : null))
+  assert.equal((await lab.state(delegate)).turns.size, 0)
+  assert.deepEqual((await (await client(t, url, opened.id)).listTools()).tools.map((x) => [x.name, x.inputSchema]), [['submit', schema]])
 })
 
 test('M11 a delegate call Agora holds: an SSE stream, progress then the answer; another message, one JSON answer', async (t) => {

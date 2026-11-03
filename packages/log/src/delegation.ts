@@ -355,15 +355,18 @@ export class Delegations {
 
   // ---------------------------------------------------------------- submit
 
-  /** The schema `submit` takes now, for a delegate asked for a result; null when none is asked. */
+  /**
+   * The schema `submit` takes, for a delegate asked for a result; null when none is asked. Its last step's, from its start:
+   * a harness lists its tools as its Session opens, before the instructions are written, and keeps that list.
+   */
   async schemaOf(delegate: string): Promise<Record<string, unknown> | null> {
-    const step = await this.current(delegate)
+    const step = await this.last(delegate)
     return step?.schema ?? null
   }
 
   /** docs/specs/delegation.md, "Typed results": the result, checked against the step's schema. */
   async submit(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
-    const step = await this.current(caller.workstream)
+    const step = await this.last(caller.workstream)
     if (step === null || step.schema === null) throw new Refused('not_allowed')
     const check = ajv.compile(step.schema)
     if (!check(args)) throw new Refused(`invalid_result: ${(check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
@@ -399,12 +402,9 @@ export class Delegations {
     return steps.filter((s) => !marked.has(s.position))
   }
 
-  /** The step the delegate works on now: the last whose instructions were written. */
-  private async current(delegate: string): Promise<Step | null> {
-    const { entries, steps } = await this.steps(delegate)
-    const marked = entries.filter((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt').map((e) => markOf(e, DELEGATION_META)?.step)
-    const last = [...marked].reverse().find((s) => s !== undefined)
-    return steps.find((s) => s.position === String(last)) ?? null
+  /** The step the delegate works on: its last, its instructions written or about to be — `to` waits for the one before to end. */
+  private async last(delegate: string): Promise<Step | null> {
+    return (await this.steps(delegate)).steps.at(-1) ?? null
   }
 
   /**

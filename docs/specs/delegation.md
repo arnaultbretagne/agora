@@ -61,7 +61,7 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | `output_schema` | Optional. A JSON Schema whose root is an object, using only `type`, `properties`, `required`, `items`, `enum`, `description`, `additionalProperties`: anything else is refused, `invalid_schema`. |
-| `submit` | The delegate's `agora` server lists `submit`, its input that schema (`mcp.md`, "Tools"). A call that does not fit is a tool error naming the mismatch; one that fits is the result — recorded in the delegate's log, answered `submitted`. A second call replaces the first. |
+| `submit` | The delegate's `agora` server lists `submit` from its start — a harness may list its tools once, as its Session opens, before the instructions —, its input that schema (`mcp.md`, "Tools"). A call that does not fit is a tool error naming the mismatch; one that fits is the result — recorded in the delegate's log, answered `submitted`. A second call replaces the first. |
 | No result | A delegate whose turn ends without a result is written once: "You were asked for a result: call submit with it." Its next turn ending without one, the delegation completes with no result. |
 
 ## Reports
