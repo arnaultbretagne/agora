@@ -49,6 +49,12 @@ const text = (result: unknown) => (result as Text).content.map((c) => c.text).jo
 const delegateOf = (answer: string) => /^started ([0-9a-f-]{36}) · /.exec(answer)?.[1] ?? assert.fail(`not started: ${answer}`)
 const elements = async (lab: Lab, ws: string, type: string) =>
   (await lab.workstreams.projections.objects(ws)).filter((o) => o.kind === 'element' && o.object.type === type).map((o) => o.object)
+/** The elements of a type once one `ok` accepts is projected: the log's fold, which `lab.state` reads, runs ahead of the projector. */
+const projected = (lab: Lab, ws: string, type: string, ok: (o: Record<string, unknown>) => boolean = () => true) =>
+  until(`a ${type} projected`, async () => {
+    const found = await elements(lab, ws, type)
+    return found.some(ok) ? found : null
+  })
 const reportsOf = (lab: Lab, ws: string) => elements(lab, ws, 'report')
 const kinds = async (lab: Lab, ws: string, kind: string) => (await lab.entries(ws)).filter((e) => e.kind === kind)
 /** A manual engine beating until the delegate has answered its instructions: its Session opens on its own time. */
@@ -66,7 +72,7 @@ test('D1 delegate within the caller’s rights: started at once; a sub-stream on
   const row = (await db.admin.query('SELECT parent, depth FROM workstreams WHERE id=$1', [delegate])).rows[0] as { parent: string; depth: number }
   assert.deepEqual([row.parent, row.depth], [ws, 1])
   await lab.turn(delegate, 'done')
-  const [user] = await elements(lab, delegate, 'user')
+  const [user] = await projected(lab, delegate, 'user')
   assert.equal(user?.from, ws)
   assert.equal((user?.content as { text: string }[])[0]?.text, 'hello delegate')
   assert.equal((await lab.state(delegate)).current?.body.pool, 'mock-test')
@@ -139,7 +145,7 @@ test('D6 rights beyond the caller’s, then Approve: the call held, an approval 
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const call = (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: 'needs the internet', harness: 'mock', rights: ['internet'] } })
   const ask = await until('the approval', async () => (await lab.state(ws)).question)
-  const [approval] = await elements(lab, ws, 'question')
+  const [approval] = await projected(lab, ws, 'question')
   assert.deepEqual([approval?.kind, approval?.status, (approval?.options as unknown[]).length], ['approval', 'pending', 1])
   assert.match(String(approval?.text), /Rights beyond the caller's: `internet`/)
   assert.equal((await lab.command(ws, 'Answer', { question: ask.position }, { optionId: 'approve' })).accepted, true)
@@ -156,7 +162,7 @@ test('D7 the person writes while the approval waits: refused with the words; no 
   const answer = (await call) as Text
   assert.deepEqual([answer.isError, text(answer)], [true, 'refused: use the read-only rights'])
   assert.equal((await lab.state(ws)).turns.size, turns, 'no prompt')
-  const [approval] = await elements(lab, ws, 'question')
+  const [approval] = await projected(lab, ws, 'question', (q) => q.status !== 'pending')
   assert.deepEqual([approval?.status, (approval?.answer as { note: string }).note], ['refused', 'use the read-only rights'])
   assert.equal(Number((await db.admin.query('SELECT count(*) FROM workstreams WHERE parent=$1', [ws])).rows[0].count), 0)
 })
@@ -175,7 +181,7 @@ test('D8 no answer: expired at the approval’s end; progress meanwhile; the cal
   )) as Text
   assert.deepEqual([answer.isError, text(answer)], [true, 'expired'])
   assert.ok(progress >= 3, `${String(progress)} progress notifications`)
-  const [approval] = await elements(lab, ws, 'question')
+  const [approval] = await projected(lab, ws, 'question', (q) => q.status !== 'pending')
   assert.equal(approval?.status, 'expired')
   await lab.turn(ws, 'done', 20_000)
   // Its deadline, at most turn start + maximum duration, moved on by the approval's 2 s.
@@ -277,7 +283,8 @@ test('D14 a restart with an outcome not yet reported: a fresh engine on the same
 test('D17 a restart while an approval waits, in a caller with no delegate yet: the approval marked expired at start', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 5_000 })
   const call = (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: 'never asked again', harness: 'mock', rights: ['internet'] } })
-  await until('the approval', async () => (await lab.state(ws)).question)
+  // Projected, as a server's start projects the Workstreams it recovers before the engine looks.
+  await projected(lab, ws, 'question', (q) => q.status === 'pending')
   // Another engine, as after a restart: the call that held the approval is gone with the one before.
   await new Delegations(lab.workstreams, { manual: true }).start()
   const [approval] = await elements(lab, ws, 'question')
@@ -371,5 +378,5 @@ test('M11 a delegate call Agora holds: an SSE stream, progress then the answer; 
   const events = (await held.text()).split('\n').filter((l) => l.startsWith('data:')).map((l) => JSON.parse(l.slice(5)) as { method?: string; id?: number; result?: unknown })
   assert.ok(events.filter((e) => e.method === 'notifications/progress').length >= 3)
   assert.equal(events.at(-1)?.id, 2)
-  assert.equal(((await elements(lab, ws, 'question'))[0])?.status, 'expired')
+  assert.equal((await projected(lab, ws, 'question', (q) => q.status !== 'pending'))[0]?.status, 'expired')
 })
