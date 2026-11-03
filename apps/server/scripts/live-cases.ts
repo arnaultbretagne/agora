@@ -1028,6 +1028,86 @@ await check('M9', 'MCP, each real harness: search, then read, a past conversatio
   return seen.join(' | ')
 })
 
+// docs/specs/delegation.md, D15: each real harness, given agora:delegate, delegates a typed task within its rights; the
+// delegate — on the caller's harness — submits its result; Agora reports it once the caller is free; the caller answers
+// with it. The product is in no prompt of the caller's after its first: only the report can give it. Billed.
+const delegatedTo = async (w: Workstream): Promise<string | null> => {
+  for (const x of await w.entries()) {
+    const update = x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' ? (x.content.params as Json)?.update : null
+    const m = update?.sessionUpdate === 'tool_call_update' ? /started ([0-9a-f-]{36}) · /.exec(JSON.stringify(update)) : null
+    if (m) return m[1]!
+  }
+  return null
+}
+const toolLines = async (w: Workstream) =>
+  (await w.entries())
+    .filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
+    .map((x) => (x.content.params as Json)?.update)
+    .filter((u) => u?.sessionUpdate === 'tool_call')
+    .map((u) => ({ id: String(u.toolCallId), title: String(u.title ?? '') }))
+
+await check('D15', 'Delegation, each real harness: a typed task, submitted, reported, used', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const [x, y] = [11 + Math.floor(Math.random() * 80), 11 + Math.floor(Math.random() * 80)]
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      `With the delegate tool of the agora MCP server, ask a delegate to compute ${String(x)} times ${String(y)}, with an output_schema ` +
+      'asking for an object whose number "product" is required. Once it has started, end your turn. When its report comes back, ' +
+      'answer with the product it gave, as a number alone.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const first = await w.turn(['done', 'failed'], 300_000)
+    assert(first.status === 'done', `${harness}: the caller's first turn ${first.status}`)
+    // What it says from here on answers the report alone.
+    const before = (await w.said()).length
+    const delegate = await delegatedTo(w)
+    assert(delegate !== null, `${harness}: no delegate started; tools ${JSON.stringify(await toolLines(w))}`)
+    const d = { id: delegate, entries: async () => ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]) ?? [] }
+    const result = await until('the result', async () => (await d.entries()).find((e) => e.kind === 'delegation.result'), 600_000)
+    const product = (result.content.result as Json)?.product
+    assert(product === x * y, `${harness}: the delegate submitted ${JSON.stringify(result.content.result)}`)
+    const report = await until('the report', async () => (await w.entries()).find((e) => e.kind === 'command' && JSON.stringify(e.content).includes('agora.bretagne.dev/report')), 600_000)
+    await until('the answer', async () => {
+      const turns = [...(await w.state()).turns.values()]
+      return turns.length >= 2 && ['done', 'failed'].includes(turns.at(-1)!.status) ? true : null
+    }, 300_000)
+    const answer = (await w.said()).slice(before)
+    await w.stop()
+    assert(answer.includes(String(x * y)), `${harness}: after the report, "${answer.trim().slice(0, 160)}"`)
+    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, submitted { product: ${String(product)} }, report at ${report.position}, answered "${answer.trim().slice(0, 30)}"`)
+  }
+  return seen.join(' | ')
+})
+
+// D16: each real harness calling `delegate` with a right it does not hold: the approval Agora asks names the caller's
+// `delegate` tool line — by its id on Claude Code, by its arguments on the others. Refused by writing, as the person would.
+await check('D16', 'Delegation beyond the caller’s rights, each real harness: the approval names its delegate line', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      'With the delegate tool of the agora MCP server, delegate this task, giving the delegate the rights ["internet"]: ' +
+      '"Fetch https://example.org and give its title." Wait for the tool to answer, then tell me what it answered.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const ask = await until('the approval', async () => (await w.entries()).find((e) => e.kind === 'command' && e.content.kind === 'Ask' && (e.content.body as Json)?.kind === 'approval'), 300_000)
+    const named = String((ask.content.body as Json)?.toolCallId ?? '')
+    const lines = await toolLines(w)
+    const line = lines.find((l) => l.id === named)
+    // Refused as the person would: by writing.
+    const refused = await w.write('No. Do nothing more: end your turn.')
+    assert(refused.status === 200, `${harness}: the refusal not accepted: ${JSON.stringify(refused)}`)
+    await w.turn(['done', 'failed'], 300_000)
+    await w.stop()
+    assert(line !== undefined && /delegate/i.test(line.title), `${harness}: the approval names "${named}"; tool lines ${JSON.stringify(lines)}`)
+    seen.push(`${harness}: the approval names ${named} ("${line.title}")`)
+  }
+  return seen.join(' | ')
+})
+
 await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const pod = await warmed()
