@@ -1231,6 +1231,7 @@ test('U76 a delegate’s message while its delegator runs a command: waiting, sa
   await waitingList(page).first().waitFor({ state: 'detached', timeout: 20_000 })
   const said = thread(page).locator('[data-from]').filter({ hasText: 'Slept 2 s.' })
   await said.waitFor()
+  assert.equal(await said.getByRole('link').innerText(), 'From /sleep 2')
   await thread(page).getByText(/Heard: … second 1\/2/).waitFor()
   await shot(page, 'u76-in-the-thread')
   // One of Agora's.

@@ -64,6 +64,11 @@ const prompts = async (lab: Lab, ws: string) => lines(await lab.entries(ws), 'ou
 const steerings = async (lab: Lab, ws: string) => lines(await lab.entries(ws), 'out', '_session/steering').filter((x) => x.rpc_kind === 'request')
 const blocksOf = (line: Entry) => object(line.content.params)?.prompt as { text: string; _meta?: Record<string, unknown> }[]
 const wordsOf = (o: Record<string, unknown>) => (o.content as { text: string }[]).map((b) => b.text).join('\n')
+/** The last Write of a Workstream, as it was answered. */
+const lastAnswer = async (lab: Lab, db: { admin: { query(sql: string, values: unknown[]): Promise<{ rows: unknown[] }> } }, ws: string) => {
+  const write = (await kinds(lab, ws, 'command')).filter((x) => x.content.kind === 'Write').at(-1)!
+  return ((await db.admin.query('SELECT answer FROM commands WHERE workstream=$1 AND id=$2', [ws, write.command])).rows[0] as { answer: Record<string, unknown> }).answer
+}
 /** A delegate's execution, once it runs a turn: what its harness calls Agora's MCP server as. */
 const working = (lab: Lab, delegate: string) =>
   until('the delegate working', async () => {
@@ -510,6 +515,11 @@ test('D32 an agent titling itself with Agora’s line: the title stays its instr
   // The control: another title of the agent's is taken, even one opening on the same word.
   assert.match(text(await c.callTool({ name: 'delegate', arguments: { to: delegate, instructions: `/raw ${titled('From Agora logs to a report')}` } })), /^sent /)
   await until('its own title', async () => (await title()) === 'From Agora logs to a report')
+  // That title stays, in its turn.
+  assert.match(text(await c.callTool({ name: 'delegate', arguments: { to: delegate, instructions: `/raw ${titled('From your delegate x "y", not the person:')}` } })), /^sent /)
+  await until('its turn over', async () => (await lab.state(delegate)).turns.size === 4 && (await lab.state(delegate)).active === null)
+  await sleep(500)
+  assert.equal(await title(), 'From Agora logs to a report')
 })
 
 test('D33 a delegate that delegates: its own delegate’s last message makes a turn of the middle one, whose last message reaches the top one; the same once the middle one has ended and is continued', async (t) => {
@@ -861,8 +871,43 @@ test('L125 a Write of Agora’s before the Session opens: accepted, waiting; sen
   assert.equal(blocksOf((await prompts(lab, fresh))[0]!)[1]!.text, 'early words')
 })
 
+test('L125 a Write of Agora’s with the execution ended: accepted, waiting; a Create with its pool, settings, profiles and limits, then sent', async (t) => {
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { open: { settings: { model: 'mock-large' }, limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
+  const d = await client(t, url, (await working(lab, delegate)).id)
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  await until('the delegator ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  const before = (await lab.state(ws)).current!
+  assert.equal(text(await d.callTool({ name: 'submit', arguments: { message: 'after its end' } })), 'sent')
+  assert.equal((await lastAnswer(lab, db, ws)).waiting, true)
+  const next = await until('continued', async () => {
+    const state = await lab.state(ws)
+    return state.executions.size === 2 && state.current
+  }, 30_000)
+  assert.deepEqual([next.body.pool, next.body.settings, next.profiles, next.body.limits], [before.body.pool, before.body.settings, before.profiles, before.body.limits])
+  assert.equal(String(object(next.body.limits)?.turnCapSeconds), '600')
+  await until('sent', async () => (await prompts(lab, ws)).length === 1, 30_000)
+  assert.equal(blocksOf((await prompts(lab, ws))[0]!).at(-1)!.text, 'after its end')
+})
+
+test('L125 a Write of Agora’s after a Stop: accepted, waiting; no Create, until the person’s next one', async (t) => {
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'])
+  const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
+  const d = await client(t, url, (await working(lab, delegate)).id)
+  assert.ok((await lab.command(ws, 'Stop', { execution })).accepted)
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  await until('the delegator ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  assert.equal(text(await d.callTool({ name: 'submit', arguments: { message: 'after the Stop' } })), 'sent')
+  assert.equal((await lastAnswer(lab, db, ws)).waiting, true)
+  await sleep(1_500)
+  assert.deepEqual([(await lab.state(ws)).executions.size, (await prompts(lab, ws)).length], [1, 0])
+  await lab.open(ws)
+  await until('sent', async () => (await prompts(lab, ws)).length === 1, 20_000)
+  assert.equal((await lab.state(ws)).executions.size, 2)
+})
+
 test('L125 a Write of Agora’s with the execution ended, its pool gone: continued in a pool of its harness, its settings, profiles and limits', async (t) => {
-  const { lab, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const e = await working(lab, delegate)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)
@@ -872,6 +917,7 @@ test('L125 a Write of Agora’s with the execution ended, its pool gone: continu
   lab.kube.morePools.length = 0
   await sleep(10_200)
   assert.equal(text(await (await client(t, url, e.id)).callTool({ name: 'submit', arguments: { message: 'to a gone pool' } })), 'sent')
+  assert.equal((await lastAnswer(lab, db, ws)).waiting, true)
   const next = await until('continued', async () => {
     const state = await lab.state(ws)
     return state.executions.size === 2 && state.current
@@ -880,7 +926,7 @@ test('L125 a Write of Agora’s with the execution ended, its pool gone: continu
 })
 
 test('L125 a Write of Agora’s with the execution ended, its Create refused quota: tried again once a place is free', async (t) => {
-  const { lab, url, ws, execution } = await started(t, ['agora:delegate'], {}, { workstreams: { maxActive: 3 } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { workstreams: { maxActive: 3 } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const d = await client(t, url, (await working(lab, delegate)).id)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)
@@ -889,6 +935,7 @@ test('L125 a Write of Agora’s with the execution ended, its Create refused quo
   await lab.open(one)
   await lab.open(two)
   assert.equal(text(await d.callTool({ name: 'submit', arguments: { message: 'behind the quota' } })), 'sent')
+  assert.equal((await lastAnswer(lab, db, ws)).waiting, true)
   await sleep(1_500)
   assert.equal((await lab.state(ws)).executions.size, 1)
   await expire(lab.kube, (await lab.state(one)).current!.claimName)
