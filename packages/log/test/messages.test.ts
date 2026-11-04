@@ -164,18 +164,24 @@ test('L108 a message into the running turn: one steering line, injected, a user 
 
 test('L109 two messages in a row: the second steering line once the first is answered, both injected, in order', async (t) => {
   const { lab, ws } = await opened(t)
-  assert.ok((await lab.write(ws, '/sleep 3')).accepted)
+  // Each answered 2.5 s after it comes: time to see the second wait for the first's answer.
+  assert.ok((await lab.write(ws, '/steering late 7')).accepted)
   await running(lab, ws)
-  const [one, two] = await Promise.all([say(lab, ws, 'one'), say(lab, ws, 'two')])
-  assert.ok(one.accepted && two.accepted)
-  await lab.turn(ws, 'done')
+  const one = await say(lab, ws, 'one')
+  assert.ok(one.accepted)
+  await until('the first line', async () => steerings(await lab.entries(ws)).at(0))
+  const two = await say(lab, ws, 'two')
+  assert.ok(two.accepted)
+  await sleep(500)
+  assert.equal(steerings(await lab.entries(ws)).length, 1)
+  await lab.turn(ws, 'done', 20_000)
   const entries = await lab.entries(ws)
   const sent = steerings(entries)
   assert.equal(sent.length, 2)
   assert.equal(prompts(entries).length, 1)
   const answer = entries.find((x) => x.direction === 'in' && x.request_position === sent[0]!.position)!
   assert.ok(BigInt(answer.position) < BigInt(sent[1]!.position))
-  assert.deepEqual(sent.map((x) => promptText(x)[0]), BigInt(one.position) < BigInt(two.position) ? ['one', 'two'] : ['two', 'one'])
+  assert.deepEqual(sent.map((x) => promptText(x)[0]), ['one', 'two'])
   assert.deepEqual(entries.filter((x) => x.direction === 'in' && x.correlated_method === '_session/steering').map((x) => object(x.content.result)?.outcome), ['injected', 'injected'])
 })
 
@@ -432,6 +438,18 @@ test('L118 Stop during a turn with a message waiting: no line after the Stop; it
   const after = prompts(await lab.entries(ws)).slice(1)
   assert.equal(promptText(after[0]!).at(-1), 'after the stop')
   assert.ok([...after, ...steerings(await lab.entries(ws))].some((x) => promptText(x).at(-1) === 'and this'))
+})
+
+test('L118 Stop during a turn the agent ends all the same, a message waiting: no line for it after the Stop', async (t) => {
+  const { lab, ws, e } = await opened(t, noSteering())
+  assert.ok((await lab.write(ws, '/stubborn 2')).accepted)
+  await running(lab, ws)
+  assert.ok((await say(lab, ws, 'after the stop')).accepted)
+  assert.ok((await lab.command(ws, 'Stop', { execution: e.id })).accepted)
+  await lab.turn(ws, 'done')
+  await sleep(500)
+  assert.equal(prompts(await lab.entries(ws)).length, 1)
+  assert.equal((await lab.state(ws)).waiting.length, 1)
 })
 
 test('L119 a catch-up over a turn with a message sent into it: in its place, marked as the user\'s', async (t) => {

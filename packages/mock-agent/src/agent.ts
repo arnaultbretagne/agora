@@ -366,6 +366,12 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, 'Before the answer.')
       return 'end_turn'
     }
+    // A turn that ends as it would have, a `session/cancel` or not (docs/specs/log.md, L118).
+    case '/stubborn': {
+      await new Promise((resolve) => setTimeout(resolve, n * 1000))
+      say(session.id, 'Done all the same.')
+      return 'end_turn'
+    }
     // The agent dies during a turn (docs/specs/log.md, L117): the adapter exits after that many seconds.
     case '/die': {
       if (await pause(turn, n * 1000)) return 'cancelled'
