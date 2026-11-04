@@ -309,8 +309,15 @@ const Notes: FC = () => {
 
 /** The messages waiting, oldest first, each with its cross (docs/specs/assistant-ui.md, "Messages during a turn"). */
 const WaitingMessages: FC = () => {
-  const { waiting, composer } = useAgora()
+  const { waiting, composer, line, delegates } = useAgora()
   if (waiting.length === 0) return null
+  // Who wrote a message that is not the person's, as its bubble says it.
+  const writer = (id: string): string | null => {
+    const message = waiting.find((w) => w.id === id)
+    if (message?.as === 'agora') return 'From Agora'
+    if (!message?.from) return null
+    return `From ${[...line, ...delegates].find((r) => r.id === message.from)?.title ?? 'another agent'}`
+  }
   return (
     <div role="list" aria-label="Messages waiting" className="border-foreground/10 rounded-surface -mb-1 flex flex-col border p-1">
       {composer.held && <p className="text-muted-foreground px-2 py-1 text-[12px]">These go with your next message.</p>}
@@ -320,6 +327,7 @@ const WaitingMessages: FC = () => {
           return (
             <div role="listitem" className="flex items-center gap-2 rounded-sm px-2 text-[13px]">
               <ClockIcon aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
+              {writer(queueItem.id) !== null && <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-[12px]">{writer(queueItem.id)}</span>}
               <QueueItemPrimitive.Text className="min-w-0 flex-1 truncate" />
               {attached > 0 && (
                 <span title={`${String(attached)} attached`} className="text-muted-foreground flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums">

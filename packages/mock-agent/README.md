@@ -25,6 +25,8 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/invalid-then-valid` | Answers the prompt with an invalid body, then with a valid one a second later. |
 | `/answer-twice` | Answers the prompt twice. |
 | `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/specs/credentials.md`); answers with what came back. GET by default. |
+| `/words N` | One message of N characters. |
+| `/submit {json}` | A `submit` call to Agora's MCP server at `AGORA_MOCK_MCP`; says its answer. |
 | `/delegate {json}` | A `delegate` call to Agora's MCP server at `AGORA_MOCK_MCP`, like a real harness (`docs/specs/delegation.md`): its tool line, the call — the execution named by the `sub` of `~/.agora/access.json`, as the gateway names it —, then its answer on the line. |
 
 During a turn it takes `_session/steering`, answers `injected`, and says what it heard the next time it

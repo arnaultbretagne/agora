@@ -3,7 +3,7 @@ import { identity, object, schemaValue, encode } from './json.ts'
 import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
 import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, noteAnchor } from './catch-up.ts'
-import { DELEGATION_META, REPORT_META } from './marks.ts'
+import { DELEGATION_META, FROM_META, REPORT_META } from './marks.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 /** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
@@ -123,15 +123,27 @@ export function waited(state: State, since: string, now: number): number {
   return state.waits.filter((w) => Date.parse(w.from) >= start).reduce((sum, w) => sum + ((w.to === null ? now : Date.parse(w.to)) - Date.parse(w.from)), 0)
 }
 /**
- * A delegate's state (docs/specs/delegation.md, "States"): once the turn its last step gave has ended, as it ended;
- * before, `working`, unless its execution failed, was lost or was stopped.
+ * A delegate's state (docs/specs/delegation.md, "A delegation"): `working` while its Session opens, a turn runs or a
+ * message waits; else as its last turn ended; `failed` or `cancelled` when its execution failed, was lost or was stopped.
  */
-function delegationOf(state: State, step: string): 'working' | 'completed' | 'failed' | 'cancelled' {
-  const turn = [...state.turns.values()].at(-1)
-  if (turn && BigInt(turn.requestPosition) > BigInt(step) && !['saved', 'in_progress', 'uncertain'].includes(turn.status))
-    return turn.status === 'done' ? 'completed' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
+export function delegationOf(state: State): 'working' | 'idle' | 'failed' | 'cancelled' {
   const e = state.current
-  return e?.failed || e?.lost ? 'failed' : e?.stopped ? 'cancelled' : 'working'
+  if (e?.failed || e?.lost) return 'failed'
+  if (e?.stopped) return 'cancelled'
+  if (state.active || state.waiting.length > 0) return 'working'
+  const turn = [...state.turns.values()].at(-1)
+  if (!turn) return 'working'
+  return turn.status === 'done' ? 'idle' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
+}
+
+/** A message's blocks as its element holds them, and who wrote it, Agora's line left out (docs/specs/log.md, "Elements"). */
+function said(prompt: unknown): { content: unknown; from?: unknown; as?: unknown } {
+  if (!Array.isArray(prompt)) return { content: prompt }
+  const blocks = (prompt as unknown[]).filter((b) => !isCatchUp(b))
+  const mark = object(object(object(blocks[0])?._meta)?.[FROM_META])
+  if (mark !== null) return { content: blocks.slice(1), from: mark.workstream, as: mark.as }
+  const earlier = blocks.map((b) => object(object(b)?._meta)?.[DELEGATION_META]).find((m) => m !== undefined)
+  return earlier === undefined ? { content: blocks } : { content: blocks, from: object(earlier)?.caller ?? earlier }
 }
 
 /** The profiles a Create or a Scope recorded. */
@@ -201,7 +213,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     // An approval ends answered, refused by a Write, or expired (docs/specs/delegation.md, "Approval").
     const settles =
       (entry.kind === 'command' && content.kind === 'Answer') ||
-      (entry.kind === 'command' && content.kind === 'Write' && isApproval(state.question)) ||
+      (entry.kind === 'command' && content.kind === 'Write' && content.waits !== true && isApproval(state.question)) ||
       (entry.kind === 'question.expired' && state.question !== null && String(object(content)?.question) === state.question.position)
     if (settles) {
       if (isApproval(state.question)) {
@@ -422,8 +434,8 @@ export class CoreProjection {
   /** The approval pending, as an element's id: what a Write refuses (docs/specs/delegation.md, "Approval"). */
   private pendingQuestion: string | null = null
   private agentTitle: string | null = null
-  /** A delegate's last step, its `delegation.started` or `delegation.continued` (docs/specs/delegation.md); null on any other. */
-  private step: string | null = null
+  /** The Workstream is a delegate's (docs/specs/delegation.md): its view says how it stands. */
+  private delegate = false
   /** The anchor each ended execution names, and the Sessions that have ended. */
   private readonly anchors = new Map<string, string>()
   private readonly endedSessions = new Set<string>()
@@ -469,7 +481,8 @@ export class CoreProjection {
       }
       let titled = false
       if (entry.kind === 'command' && entry.content.kind === 'Write' && this.firstWrite === null) {
-        const blocks = Array.isArray(object(entry.content.body)?.prompt) ? (object(entry.content.body)!.prompt as unknown[]) : []
+        const written = said(object(entry.content.body)?.prompt).content
+        const blocks = Array.isArray(written) ? (written as unknown[]) : []
         const text = blocks.map((b) => object(b)).find((b) => b?.type === 'text' && typeof b.text === 'string')?.text as string | undefined
         const line = text?.split('\n').map((l) => l.trim()).find((l) => l !== '')
         if (line) this.firstWrite = line.slice(0, 80)
@@ -478,7 +491,7 @@ export class CoreProjection {
       if (entry.kind === 'command' && entry.content.kind === 'Write' && entry.content.waits === true) {
         const id = identity(entry.workstream, entry.position, 'waiting')
         this.waitingElements.set(String(entry.command), id)
-        put('element', id, { type: 'waiting', position: entry.position, status: 'waiting', content: object(entry.content.body)?.prompt }, entry.position)
+        put('element', id, { type: 'waiting', position: entry.position, status: 'waiting', ...said(object(entry.content.body)?.prompt) }, entry.position)
       }
       if (entry.kind === 'command' && entry.content.kind === 'Retract')
         left(identity(entry.workstream, String(object(entry.content.target)?.message), 'waiting'), 'retracted', entry.position)
@@ -504,7 +517,7 @@ export class CoreProjection {
         this.pendingQuestion = approval ? identity(entry.workstream, entry.position, 'question') : null
       }
       // An approval refused by a Write: its text the answer; no turn (docs/specs/delegation.md, "Approval").
-      if (entry.kind === 'command' && entry.content.kind === 'Write' && this.pendingQuestion !== null) {
+      if (entry.kind === 'command' && entry.content.kind === 'Write' && entry.content.waits !== true && this.pendingQuestion !== null) {
         const id = this.pendingQuestion
         const blocks = object(entry.content.body)?.prompt
         const text = (Array.isArray(blocks) ? blocks : []).map((b) => object(b)).filter((b) => b?.type === 'text').map((b) => String(b!.text)).join('\n')
@@ -535,7 +548,7 @@ export class CoreProjection {
         }
       }
       if (entry.kind === 'execution.ended' && entry.execution && typeof entry.content.anchor === 'string') this.anchors.set(entry.execution, entry.content.anchor)
-      if (entry.kind === 'delegation.started' || entry.kind === 'delegation.continued') this.step = entry.position
+      if (entry.kind === 'delegation.started') this.delegate = true
       noteAnchor(this.known, entry, state)
       if (entry.kind === 'session.ended' && entry.session) this.endedSessions.add(entry.session)
       // Settings, commands, usage and prompt capabilities change with ACP lines too: the view is put when what it shows of them changed.
@@ -551,10 +564,10 @@ export class CoreProjection {
         entry.kind === 'command' ||
         entry.kind === 'anchor.received' ||
         (entry.kind === 'acp.dispatching' && state.requestPositions.get(String(entry.content.requestPosition))?.method === 'session/prompt') ||
-        // A delegate's: each step, and each turn's end — its answer or its failure.
+        // A delegate's: its start, and each turn's end — its answer or its failure.
         entry.kind === 'delegation.started' ||
         entry.kind === 'delegation.continued' ||
-        (this.step !== null && ((entry.kind === 'acp' && entry.direction === 'in' && entry.correlated_method === 'session/prompt') || entry.kind === 'request.failed')) ||
+        (this.delegate && ((entry.kind === 'acp' && entry.direction === 'in' && (entry.correlated_method === 'session/prompt' || entry.correlated_method === STEERING)) || entry.kind === 'request.failed')) ||
         entry.kind.startsWith('execution.') ||
         entry.kind.startsWith('session.')
       ) {
@@ -591,7 +604,7 @@ export class CoreProjection {
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
             question: state.question?.position ?? null,
-            ...(this.step !== null ? { delegation: delegationOf(state, this.step) } : {}),
+            ...(this.delegate ? { delegation: delegationOf(state) } : {}),
             continuation,
             changedAt: entry.time,
           },
@@ -650,9 +663,8 @@ export class CoreProjection {
         // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
         const blocks = Array.isArray(params?.prompt) ? (params.prompt as unknown[]) : null
         const catchUp = blocks?.map((b) => object(object(b)?._meta)?.[CATCH_UP_META]).find((m) => m !== undefined)
-        // Who wrote it (docs/specs/log.md, "Elements"): a report of Agora's, a delegate's caller, or the person.
+        // An earlier delegation's report of Agora's (docs/specs/log.md, "Elements").
         const report = blocks?.map((b) => object(object(b)?._meta)?.[REPORT_META]).find((m) => m !== undefined)
-        const from = blocks?.map((b) => object(object(b)?._meta)?.[DELEGATION_META]).find((m) => m !== undefined)
         put(
           'element',
           identity(entry.session ?? entry.execution!, entry.position, 'prompt'),
@@ -668,9 +680,8 @@ export class CoreProjection {
                 type: 'user',
                 turn: turn?.id,
                 session: entry.session,
-                content: blocks ? blocks.filter((b) => !isCatchUp(b)) : params?.prompt,
+                ...said(params?.prompt),
                 ...(catchUp !== undefined ? { catchUp } : {}),
-                ...(from !== undefined ? { from: object(from)?.caller ?? from } : {}),
               },
           entry.position,
         )
@@ -761,7 +772,7 @@ export class CoreProjection {
           put(
             'element',
             identity(request.session ?? entry.execution!, request.position, 'prompt'),
-            { type: 'user', steered: true, turn: turn?.id, session: request.session, content: object(request.content.params)?.prompt },
+            { type: 'user', steered: true, turn: turn?.id, session: request.session, ...said(object(request.content.params)?.prompt) },
             entry.position,
           )
           if (turn) runs.delete(turn.id)

@@ -336,6 +336,11 @@ export class Workstreams implements Handler {
           if (!message || (state.steering !== null && state.requestPositions.get(state.steering)?.command === message.command)) return 'stale_message'
           return {}
         }
+        // A Write of Agora's (docs/specs/delegation.md, "Messages"): only its line's checks refuse it; it waits, and goes as any.
+        if (command.kind === 'Write' && origin === 'agora') {
+          const line = validate(encode({ jsonrpc: '2.0', id: 'waits', method: 'session/prompt', params: { sessionId: 'waits', prompt: command.body.prompt } }), 'out')
+          return line.ok ? { waits: true } : line.reason
+        }
         // A Write while an approval waits is its refusal, whatever the turn: no line to any agent.
         if (command.kind === 'Write' && isApproval(state.question)) {
           const blocks = Array.isArray(command.body.prompt) ? (command.body.prompt as unknown[]) : []

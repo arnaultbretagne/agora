@@ -206,6 +206,7 @@ function pause(turn: Turn, ms: number): Promise<boolean> {
 interface Block {
   type?: string
   text?: string
+  _meta?: Record<string, unknown>
   mimeType?: string
   data?: string
   resource?: { uri?: string; mimeType?: string; text?: string }
@@ -220,6 +221,14 @@ function describe(block: Block): string | null {
   }
   if (block.type === 'resource') return `${String(block.resource?.uri)}, ${String(block.resource?.mimeType)}, ${String(block.resource?.text?.length ?? 0)} characters`
   return block.type === 'text' ? null : `a ${String(block.type)} block`
+}
+
+/** A prompt's text, Agora's line saying who writes left aside: what a command is read from. */
+function words(blocks: readonly Block[]): string {
+  return blocks
+    .filter((block) => block.type === 'text' && block._meta?.['agora.bretagne.dev/from'] === undefined)
+    .map((block) => block.text ?? '')
+    .join('\n')
 }
 
 /** A PNG's or a JPEG's width × height, from its header. */
@@ -393,6 +402,11 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, 'Tool done.')
       return 'end_turn'
     }
+    // One message of N characters (docs/specs/delegation.md, D19, U65).
+    case '/words': {
+      say(session.id, 'word '.repeat(Math.ceil(Number(argument) / 5)).slice(0, Number(argument)))
+      return 'end_turn'
+    }
     case '/big': {
       const kib = Math.min(n, 4096)
       for (let i = 0; i < kib; i++) say(session.id, `${String(i).padStart(5, '0')} ${'x'.repeat(1017)}\n`)
@@ -436,6 +450,14 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       const reply = await fetchOut(method, words.shift() ?? 'https://api.anthropic.com/v1/models', words.join(' '))
       remember(session, 'agent', reply)
       say(session.id, reply)
+      return 'end_turn'
+    }
+    // /submit {json}: a `submit` call, as a harness makes one (docs/specs/delegation.md): the words in its delegator's Workstream.
+    case '/submit': {
+      const args = JSON.parse(text.trim().slice('/submit'.length).trim() || '{}') as Record<string, unknown>
+      const answer = await callAgora('submit', args, turn)
+      if (turn.cancelled) return 'cancelled'
+      say(session.id, `Submitted: ${answer.text}`)
       return 'end_turn'
     }
     case '/delegate': {
@@ -603,10 +625,7 @@ async function handle(message: Message): Promise<void> {
       const blocks = Array.isArray(params.prompt) ? (params.prompt as Block[]) : []
       const received = blocks.map(describe).filter((d) => d !== null)
       if (received.length > 0) say(session.id, `Received ${received.join('; ')}.\n\n`)
-      const text = blocks
-        .filter((block) => block.type === 'text')
-        .map((block) => block.text ?? '')
-        .join('\n')
+      const text = words(blocks)
       remember(session, 'user', text)
       const turn: Turn = { cancelled: false, wake: () => {}, steering: 'injected', steered: [] }
       turns.set(session.id, turn)
@@ -640,8 +659,7 @@ async function handle(message: Message): Promise<void> {
       if (turn.steering === 'silent') return
       if (turn.steering === 'promptRequired') return send({ id: message.id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } })
       if (turn.steering === 'failed') return send({ id: message.id, result: { outcome: 'failed', message: 'steering failed' } })
-      const blocks = Array.isArray(params.prompt) ? (params.prompt as Block[]) : []
-      const text = blocks.map((block) => block.text ?? '').join('\n')
+      const text = words(Array.isArray(params.prompt) ? (params.prompt as Block[]) : [])
       remember(session, 'user', text)
       turn.steered.push(text)
       // `late`: answered after a while, for a restart in between (docs/specs/log.md, L116).

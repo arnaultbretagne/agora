@@ -197,6 +197,9 @@ export interface Waiting {
   readonly text: string
   /** Its blocks that are not text. */
   readonly attachments: number
+  /** Who wrote it, when not the person (docs/specs/log.md, "Elements"). */
+  readonly from: string | null
+  readonly as: string | null
 }
 
 /** The messages waiting, oldest first. */
@@ -211,6 +214,8 @@ export function waitingOf(state: ThreadState): Waiting[] {
         position: text(e.object.position),
         text: blocks.filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n'),
         attachments: blocks.filter((b) => b?.type !== 'text').length,
+        from: text(e.object.from) || null,
+        as: text(e.object.as) || null,
       }
     })
 }
@@ -335,11 +340,11 @@ function gateOf(question: ViewObject): Gate {
 const isGate = (e: ViewObject): boolean => e.object.type === 'question' && e.object.kind === 'approval'
 
 /**
- * A `delegate` call's answer once its delegate has started, `started <id> · <title>` (docs/specs/mcp.md, "Tools"):
+ * A `delegate` call's answer, `started <id> · <title>`, or with `to`, `sent <id> · <title>` (docs/specs/mcp.md, "Tools"):
  * as a harness gives it, the text alone or inside the JSON of its result.
  */
 export function startedDelegate(output: string): { id: string; title: string } | null {
-  const m = /started ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
+  const m = /(?:started|sent) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
   return m ? { id: m[1]!, title: m[2]!.trim() } : null
 }
 
@@ -773,7 +778,7 @@ export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' 
   readonly depth?: number
   /** What lies under it, at every depth: the sub-streams, those live, those waiting for the person. */
   readonly below?: { readonly count: number; readonly live: number; readonly waiting: number }
-  /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `completed`, `failed`, `cancelled`. */
+  /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `idle`, `failed`, `cancelled`; an earlier delegate's may say `completed`. */
   readonly delegation?: string
 }
 
@@ -860,12 +865,14 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
   for (const turn of turnsOf(state)) {
     const own = elements.filter((e) => e.object.turn === turn.id)
     const prompt = own.find((e) => e.object.type === 'user' && e.object.steered !== true)
-    // A report of Agora's in place of the person's message (docs/specs/delegation.md, "Reports").
+    // An earlier delegation's report of Agora's, in place of the person's message.
     const report = own.find((e) => e.object.type === 'report')
     const from = text(prompt?.object.from)
     const custom = { turnStatus: status(turn), turn: turn.id }
     const pending = own.some((e) => e.object.type === 'permission' && e.object.status === 'pending')
     // The response, cut at each message sent into the turn (docs/specs/assistant-ui.md, "Messages").
+    /** A message of Agora's, in a line of its own (docs/specs/assistant-ui.md, "Messages"). */
+    const agoras = (id: string, e: ViewObject): ThreadMessageLike => ({ id, role: 'system', content: [{ type: 'text', text: textOf(e) }], metadata: { custom: { ...custom, fromAgora: true } } })
     const responses: { said: ViewObject | null; parts: ViewObject[] }[] = [{ said: null, parts: [] }]
     for (const e of own) {
       if (e.object.steered === true) responses.push({ said: e, parts: [] })
@@ -881,7 +888,9 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
               content: [{ type: 'text', text: text(report.object.text) }],
               metadata: { custom: { ...custom, report: list(report.object.delegates).length } },
             }
-          : {
+          : prompt?.object.as === 'agora'
+            ? agoras(`${turn.id}:report`, prompt)
+            : {
               id: `${turn.id}:user`,
               role: 'user',
               content: [{ type: 'text', text: textOf(prompt) }],
@@ -894,15 +903,17 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
           const last = i === responses.length - 1
           return [
             ...(said
-              ? [
-                  {
-                    id: `${turn.id}:user${at}`,
-                    role: 'user' as const,
-                    content: [{ type: 'text' as const, text: textOf(said) }],
-                    attachments: attachmentsOf(list(said.object.content), said.object),
-                    metadata: { custom: { turn: turn.id, steered: true } },
-                  },
-                ]
+              ? said.object.as === 'agora'
+                ? [agoras(`${turn.id}:report${at}`, said)]
+                : [
+                    {
+                      id: `${turn.id}:user${at}`,
+                      role: 'user' as const,
+                      content: [{ type: 'text' as const, text: textOf(said) }],
+                      attachments: attachmentsOf(list(said.object.content), said.object),
+                      metadata: { custom: { turn: turn.id, steered: true, ...(text(said.object.from) ? { from: text(said.object.from) } : {}) } },
+                    },
+                  ]
               : []),
             ...(last || parts.length > 0
               ? [

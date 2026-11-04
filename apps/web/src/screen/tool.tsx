@@ -93,7 +93,7 @@ export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNo
 }
 
 /** A delegation's state as its caller's line says it (docs/specs/assistant-ui.md, "A tool's line"). */
-const DELEGATION: Record<string, string> = { working: 'working', completed: 'done', failed: 'failed', cancelled: 'stopped' }
+const DELEGATION: Record<string, string> = { working: 'working', idle: 'idle', completed: 'idle', failed: 'failed', cancelled: 'stopped' }
 
 const SETTLED: Record<Exclude<Gate['status'], 'pending'>, string> = { answered: 'Approved', refused: 'Refused', expired: 'Expired before a decision' }
 

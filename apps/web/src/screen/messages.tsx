@@ -1,6 +1,6 @@
 // The messages (docs/specs/assistant-ui.md, "Messages" and "The screen"), in assistant-ui's base skin:
 // the user's in a bubble on the right, the agent's bare on the page, its steps as trace lines, and the
-// notices between them as quiet lines; Agora's reports as a line opening on their text.
+// notices between them as quiet lines; a message of Agora's as a line opening on its text.
 import { ActionBarPrimitive, AuiIf, MessagePrimitive, groupPartByType, useAuiState } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, CopyIcon, LoaderCircleIcon } from 'lucide-react'
 import type { FC } from 'react'
@@ -27,9 +27,10 @@ export const UserMessage: FC = () => {
   const status = useAuiState((s) => String(custom(s).turnStatus ?? ''))
   // A message of attachments alone has no bubble (docs/specs/assistant-ui.md, "Attachments").
   const said = useAuiState((s) => s.message.content.some((p) => p.type === 'text' && p.text.trim() !== ''))
-  // A delegate's message from its caller: the caller's, by its title, not the person's.
+  // A message of another Workstream's: its writer's, by its title, not the person's.
   const from = useAuiState((s) => String(custom(s).from ?? ''))
-  const { line, open } = useAgora()
+  const words = useAuiState((s) => s.message.content.map((p) => (p.type === 'text' ? p.text : '')).join(''))
+  const { line, delegates, open } = useAgora()
   const note = TURN_NOTE[status]
   if (from !== '')
     return (
@@ -46,10 +47,10 @@ export const UserMessage: FC = () => {
           }}
           className="text-muted-foreground hover:text-foreground mb-1 px-1 text-[12px]"
         >
-          From {line.find((r) => r.id === from)?.title ?? 'its caller'}
+          From {[...line, ...delegates].find((r) => r.id === from)?.title ?? 'another agent'}
         </a>
-        <div className="border-foreground/15 rounded-thread max-w-[80%] border px-4 py-2 text-[15px] leading-relaxed wrap-break-word whitespace-pre-wrap">
-          <MessagePrimitive.Parts />
+        <div className="border-foreground/15 rounded-thread max-w-[80%] border px-4 py-2 text-[15px] leading-relaxed wrap-break-word">
+          <Markdown text={words} />
         </div>
         {note && <span className="text-muted-foreground/70 mt-1 px-1 font-mono text-[11px]">{note}</span>}
       </MessagePrimitive.Root>
@@ -176,8 +177,17 @@ export const Notice: FC = () => {
     return first?.type === 'text' ? first.text : ''
   })
   const type = useAuiState((s) => String(custom(s).notice ?? ''))
-  // A report of Agora's (docs/specs/assistant-ui.md, "Messages"): one line, opening on its text.
+  // A message of Agora's (docs/specs/assistant-ui.md, "Messages"): one line, opening on its text; an earlier delegation's report counts its outcomes.
   const outcomes = useAuiState((s) => custom(s).report)
+  const agora = useAuiState((s) => custom(s).fromAgora === true)
+  if (agora)
+    return (
+      <MessagePrimitive.Root data-agora className="mx-auto w-full max-w-(--thread-max-width)">
+        <TraceDisclosure tone="quiet" label="From Agora">
+          <Markdown text={text} />
+        </TraceDisclosure>
+      </MessagePrimitive.Root>
+    )
   if (typeof outcomes === 'number')
     return (
       <MessagePrimitive.Root data-report={outcomes} className="mx-auto w-full max-w-(--thread-max-width)">

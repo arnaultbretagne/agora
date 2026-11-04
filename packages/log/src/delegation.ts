@@ -1,15 +1,14 @@
-// Delegation (docs/specs/delegation.md): an agent hands work to another through Agora's MCP server. `delegate` starts a
-// delegate — a sub-stream of the caller's Workstream — or continues one; a call giving more rights than the caller holds
-// waits for the person; a typed result comes through `submit`; each outcome goes back to the caller as a report, once
-// the caller is free. Everything is read back from the log: a step is a fact in the delegate's Workstream, its
-// instructions a prompt marked with that step, its result and its report facts beside it.
+// Delegation (docs/specs/delegation.md): an agent hands work to another through Agora's MCP server. Two Workstreams, one
+// gesture: a message written in the other's, by the primitive the person uses, Agora then deciding as for any message
+// whether it goes into the running turn or as the next (docs/specs/log.md, "Messages during a turn"). A call giving more
+// rights than the caller holds waits for the person. Everything is read back from the log.
 import { randomUUID } from 'node:crypto'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { offers } from '@agora/credentials'
-import { canonical, object } from './json.ts'
-import { DELEGATION_META, REPORT_META } from './marks.ts'
-import type { State } from './state.ts'
-import type { Entry } from './store.ts'
+import { canonical, identity, object } from './json.ts'
+import { FROM_META } from './marks.ts'
+import { delegationOf, STEERING, type State, type Turn } from './state.ts'
+import type { Answer, Entry } from './store.ts'
 import type { Workstreams } from './workstreams.ts'
 
 /** An approval lives this long on Agora's clock; the call it holds hears progress this often. */
@@ -20,7 +19,6 @@ const MATCH_TRIES = 10,
   MATCH_EVERY_MS = 200
 const MAX_DEPTH = 3
 const AT_ONCE = 3
-const LAST_WORDS = 2_000
 const KEYWORDS = new Set(['type', 'properties', 'required', 'items', 'enum', 'description', 'additionalProperties'])
 const ajv = new Ajv2020({ strict: false, allErrors: true })
 
@@ -35,11 +33,13 @@ export interface Caller {
 
 type Settled = { outcome: 'approved' } | { outcome: 'refused'; words: string } | { outcome: 'expired' }
 
-/** A step of a delegation: the fact that asked for it, its instructions, its schema. */
-interface Step {
-  readonly position: string
-  readonly instructions: string
-  readonly schema: Record<string, unknown> | null
+/** Who a message says wrote it (docs/specs/delegation.md, "Messages"). */
+interface Mark {
+  readonly workstream: string
+  readonly as: 'delegator' | 'delegate' | 'agora'
+  readonly output_schema?: Record<string, unknown>
+  /** On a delegate's: the turn it wrote in, which then submits nothing by itself. */
+  readonly turn?: string | null
 }
 
 /** Why a schema cannot be a delegation's `output_schema`, or null when it can (docs/specs/delegation.md, "Typed results"). */
@@ -70,29 +70,39 @@ export function schemaRefusal(schema: unknown): string | null {
 }
 
 const line = (text: string): string => text.split('\n').map((l) => l.trim()).find((l) => l !== '')?.slice(0, 80) ?? 'Delegate'
-const text = (blocks: unknown): string =>
-  (Array.isArray(blocks) ? blocks : [])
-    .map((b) => object(b))
-    .filter((b) => b?.type === 'text')
-    .map((b) => String(b!.text))
-    .join('\n')
-const markOf = (entry: Entry, key: string): Record<string, unknown> | null => {
-  const blocks = object(entry.content.params)?.prompt
-  if (!Array.isArray(blocks)) return null
-  for (const block of blocks) {
-    const mark = object(object(object(block)?._meta)?.[key])
-    if (mark !== null) return mark
+
+/** A prompt's mark, on its first block: who wrote it. */
+const markOf = (prompt: unknown): Record<string, unknown> | null => object(object(object(Array.isArray(prompt) ? prompt[0] : null)?._meta)?.[FROM_META])
+
+/** What a turn says last: its text since its last tool or its reasoning, whole (docs/specs/delegation.md, "Messages"). */
+function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined): string {
+  const from = BigInt(turn.requestPosition)
+  const to = next === undefined ? null : BigInt(next.requestPosition)
+  let words = ''
+  let speaker: unknown
+  let cut = true
+  for (const e of entries) {
+    if (e.kind !== 'acp' || e.direction !== 'in' || e.method !== 'session/update') continue
+    const at = BigInt(e.position)
+    if (at <= from || (to !== null && at >= to)) continue
+    const update = object(object(e.content.params)?.update)
+    if (update?.sessionUpdate === 'agent_message_chunk') {
+      const content = object(update.content)
+      if (cut || update.messageId !== speaker) words = ''
+      cut = false
+      speaker = update.messageId
+      if (content?.type === 'text') words += String(content.text)
+    } else if (['tool_call', 'agent_thought_chunk'].includes(String(update?.sessionUpdate))) cut = true
   }
-  return null
+  return words.trim()
 }
 
 export class Delegations {
   private readonly workstreams: Workstreams
-  /**
-   * The delegates with an outcome not yet reported, each to its caller's Workstream: the others need nothing more until
-   * `to` gives them a step. A new entry per step, so that one forgotten as reported is never a step just given.
-   */
-  private readonly delegates = new Map<string, { readonly caller: string }>()
+  /** The delegates with an execution not ended, each with its delegator and the turns already seen to their end. */
+  private readonly followed = new Map<string, { readonly delegator: string; readonly seen: Set<string> }>()
+  /** The Workstreams a message of Agora's may need to continue: the attempt comes back at each beat, `quota` lifting. */
+  private readonly continuing = new Set<string>()
   /** The approvals a call holds, by the caller's Workstream. */
   private readonly held = new Map<string, { position: string; settle: (s: Settled) => void }>()
   private ticking = false
@@ -119,14 +129,20 @@ export class Delegations {
 
   // ---------------------------------------------------------------- start and the clock
 
-  /** At start: the delegates with a step not yet reported, from the log; the approvals no call holds any more expire. */
+  /** At start, from the log: the delegates still running; the messages of Agora's still waiting; the approvals no call holds any more expire. */
   async start(): Promise<void> {
-    const found = await this.store.writer.query(
-      `SELECT d.workstream, d.content->>'caller' AS caller FROM entries d WHERE d.kind = 'delegation.started' AND EXISTS (
-         SELECT 1 FROM entries s WHERE s.workstream = d.workstream AND s.kind IN ('delegation.started', 'delegation.continued') AND NOT EXISTS (
-           SELECT 1 FROM entries r WHERE r.workstream = s.workstream AND r.kind = 'delegation.reported' AND r.content->>'step' = s.position::text))`,
+    const running = await this.store.writer.query(
+      `SELECT DISTINCT d.workstream, w.parent FROM entries d JOIN workstreams w ON w.id = d.workstream WHERE d.kind = 'delegation.started' AND EXISTS (
+         SELECT 1 FROM commands c WHERE c.workstream = d.workstream AND c.kind = 'Create' AND NOT EXISTS (
+           SELECT 1 FROM entries e WHERE e.workstream = c.workstream AND e.execution = c.execution AND e.kind = 'execution.ended'))`,
     )
-    for (const row of found.rows as { workstream: string; caller: string | null }[]) if (row.caller !== null) this.delegates.set(row.workstream, { caller: row.caller })
+    for (const row of running.rows as { workstream: string; parent: string | null }[]) if (row.parent !== null) this.followed.set(row.workstream, { delegator: row.parent, seen: new Set() })
+    const waiting = await this.store.writer.query(
+      `SELECT DISTINCT e.workstream FROM entries e WHERE e.kind = 'command' AND e.content->>'kind' = 'Write' AND e.content->>'waits' = 'true'
+         AND e.content->'body'->'prompt'->0->'_meta' ? '${FROM_META}'
+         AND NOT EXISTS (SELECT 1 FROM entries l WHERE l.workstream = e.workstream AND l.kind = 'acp' AND l.direction = 'out' AND l.command = e.command AND l.method = 'session/prompt')`,
+    )
+    for (const row of waiting.rows as { workstream: string }[]) this.continuing.add(row.workstream)
     // Every caller's, as its view shows them pending: the call that held each ended with the process before.
     const pending = await this.store.projector.query(
       "SELECT workstream, object->>'position' AS position FROM objects WHERE kind='element' AND type='question' AND object->>'kind'='approval' AND object->>'status'='pending'",
@@ -134,46 +150,81 @@ export class Delegations {
     for (const row of pending.rows as { workstream: string; position: string }[]) await this.expire(row.workstream, row.position)
   }
 
-  /** Each second: instructions to write, reminders to send, outcomes to report. */
+  /** Each second: the delegates' turns ended, what to tell their delegators, the Workstreams to continue. */
   async tick(force = false): Promise<void> {
     if (this.ticking || (this.manual && !force)) return
     this.ticking = true
     try {
-      const due = new Map<string, { delegate: string; step: Step; outcome: string }[]>()
-      for (const [delegate, known] of this.delegates) {
-        const outcomes = await this.advance(delegate)
-        // Every step reported: forgotten, unless `to` gave it another meanwhile.
-        if (outcomes === null) {
-          if (this.delegates.get(delegate) === known) this.delegates.delete(delegate)
-          continue
-        }
-        for (const outcome of outcomes) {
-          const list = due.get(known.caller) ?? []
-          list.push({ delegate, ...outcome })
-          due.set(known.caller, list)
-        }
-      }
-      for (const [caller, outcomes] of due) await this.deliver(caller, outcomes)
+      for (const [delegate, known] of this.followed) await this.follow(delegate, known)
+      for (const workstream of this.continuing) await this.continueIt(workstream)
     } finally {
       this.ticking = false
     }
   }
 
+  // ---------------------------------------------------------------- a message
+
+  /** A message of Agora's: its line, then the words, by the primitive the person uses; its Workstream continued if it must be. */
+  private async write(to: string, id: string, mark: Mark, agoraLine: string, words: string): Promise<Answer> {
+    const answer = await this.workstreams.command(
+      to,
+      { id, kind: 'Write', target: {}, body: { prompt: [{ type: 'text', text: agoraLine, _meta: { [FROM_META]: mark } }, { type: 'text', text: words }], mayWait: true } },
+      'agora',
+    )
+    if (answer.accepted) await this.continueIt(to)
+    return answer
+  }
+
+  /** docs/specs/log.md, "Messages during a turn": a message of Agora's waiting, the last execution ended and not stopped: a Create of Agora's own. */
+  private async continueIt(workstream: string): Promise<void> {
+    const state = await this.store.state(workstream)
+    const last = [...state.executions.values()].at(-1)
+    // Nothing of ours waits: nothing to do. A Stop leaves it for the person's next Create.
+    if (!last || last.stopped || !state.waiting.some((w) => markOf(object(w.content.body)?.prompt) !== null)) {
+      this.continuing.delete(workstream)
+      return
+    }
+    // Kept until it has gone: the execution running now may end first.
+    this.continuing.add(workstream)
+    if (!last.ended) return
+    const pools = await this.workstreams.catalogue()
+    // Its pool, or, gone with an older image, one of its harness.
+    const pool = pools.find((p) => p.name === last.body.pool) ?? pools.find((p) => p.harness === last.body.harness)
+    if (!pool) return
+    const settings = Array.isArray(last.body.settings) ? Object.fromEntries(last.body.settings.map((s) => [String(object(s)?.id), String(object(s)?.value)])) : {}
+    await this.workstreams.command(
+      workstream,
+      {
+        id: randomUUID(),
+        kind: 'Create',
+        target: {},
+        body: { pool: pool.name, ...(Object.keys(settings).length > 0 ? { settings } : {}), profiles: last.profiles, limits: last.body.limits },
+      },
+      'agora',
+    )
+  }
+
+  /** A title as a line says it: as the list gives it, or from what started it. */
+  private async titleOf(workstream: string, fallback = 'Delegate'): Promise<string> {
+    const row = await this.store.projector.query('SELECT title FROM listings WHERE workstream=$1', [workstream])
+    return String(row.rows[0]?.title ?? fallback)
+  }
+
   // ---------------------------------------------------------------- delegate
 
   /**
-   * docs/specs/delegation.md: starts a delegate, or continues one with `to`, at once or once the person approves.
+   * docs/specs/delegation.md: starts a delegate, at once or once the person approves; with `to`, writes to one again.
    * `progress` keeps a held call open; `toolUseId` is the caller's tool line when its harness names it.
    */
   async delegate(caller: Caller, args: Readonly<Record<string, unknown>>, hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null }): Promise<string> {
     const instructions = args.instructions
     if (typeof instructions !== 'string' || instructions.trim() === '') throw new Refused('invalid_query: instructions')
-    const schema = args.output_schema === undefined || args.output_schema === null ? null : args.output_schema
+    const schema = args.output_schema === undefined || args.output_schema === null ? null : (args.output_schema as Record<string, unknown>)
     if (schema !== null) {
       const refusal = schemaRefusal(schema)
       if (refusal !== null) throw new Refused(refusal)
     }
-    if (args.to !== undefined && args.to !== null) return this.continueDelegate(caller, String(args.to), instructions, schema as Record<string, unknown> | null, args)
+    if (args.to !== undefined && args.to !== null) return this.writeTo(caller, String(args.to), instructions, schema, args)
     const found = await this.store.writer.query('SELECT depth, owner FROM workstreams WHERE id=$1', [caller.workstream])
     const depth = Number(found.rows[0]?.depth ?? 0)
     if (depth >= MAX_DEPTH) throw new Refused('depth_exceeded')
@@ -209,7 +260,7 @@ export class Delegations {
         body: {
           pool: pool.name,
           ...(Object.keys(settings).length > 0 ? { settings } : {}),
-          profiles: [...rights, ...(schema !== null ? ['agora:submit'] : [])],
+          profiles: [...rights, 'agora:submit'],
           limits: { leaseSeconds: limits.leaseSeconds, turnCapSeconds: limits.turnCapSeconds },
         },
       },
@@ -219,44 +270,46 @@ export class Delegations {
     // Recorded once its execution is accepted: a Create refused (`quota`) leaves an empty sub-stream, never listed, never followed.
     await this.workstreams.record(delegate, {
       kind: 'delegation.started',
-      content: {
-        caller: caller.workstream,
-        callerExecution: caller.execution,
-        harness: pool.harness,
-        pool: pool.name,
-        settings,
-        rights,
-        instructions,
-        ...(schema !== null ? { output_schema: schema } : {}),
-        ...(approval !== null ? { approval } : {}),
-      },
+      content: { delegator: caller.workstream, delegatorExecution: caller.execution, harness: pool.harness, pool: pool.name, settings, rights, ...(approval !== null ? { approval } : {}) },
     })
-    this.delegates.set(delegate, { caller: caller.workstream })
+    this.followed.set(delegate, { delegator: caller.workstream, seen: new Set() })
+    const written = await this.fromDelegator(caller.workstream, delegate, instructions, schema)
+    if (!written.accepted) throw new Refused(written.reason)
     return `started ${delegate} · ${line(instructions)}`
   }
 
-  /** `to`: the next message of one of the caller's delegates, once its turn has ended. */
-  private async continueDelegate(caller: Caller, to: string, instructions: string, schema: Record<string, unknown> | null, args: Readonly<Record<string, unknown>>): Promise<string> {
+  /** `to`: a message to one of the caller's delegates, whatever it is doing (docs/specs/delegation.md, "Messages"). */
+  private async writeTo(caller: Caller, to: string, instructions: string, schema: Record<string, unknown> | null, args: Readonly<Record<string, unknown>>): Promise<string> {
     for (const key of ['harness', 'model', 'effort', 'rights']) if (args[key] !== undefined && args[key] !== null) throw new Refused(`invalid_query: ${key}`)
     const delegate = await this.store.writer.query(
       "SELECT 1 FROM workstreams w WHERE w.id = $1 AND w.parent = $2 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
       [to, caller.workstream],
     )
     if (delegate.rowCount === 0) throw new Refused('not_a_delegate')
-    const state = await this.store.state(to)
-    if (state.active || (await this.pending(to)).length > 0) throw new Refused('delegate_busy')
-    await this.workstreams.record(to, { kind: 'delegation.continued', content: { instructions, ...(schema !== null ? { output_schema: schema } : {}) } })
-    this.delegates.set(to, { caller: caller.workstream })
-    return `started ${to} · ${line(instructions)}`
+    if ((await this.store.state(to)).current?.stopped) throw new Refused('delegate_stopped')
+    if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: new Set(await this.endedTurns(to)) })
+    const written = await this.fromDelegator(caller.workstream, to, instructions, schema)
+    if (!written.accepted) throw new Refused(written.reason)
+    return `sent ${to} · ${await this.titleOf(to, line(instructions))}`
+  }
+
+  private fromDelegator(delegator: string, delegate: string, instructions: string, schema: Record<string, unknown> | null): Promise<Answer> {
+    const asked = schema === null ? '' : ` Give submit a result of this shape: ${JSON.stringify(schema)}`
+    return this.write(
+      delegate,
+      randomUUID(),
+      { workstream: delegator, as: 'delegator', ...(schema !== null ? { output_schema: schema } : {}) },
+      `From your delegator ${delegator}, an agent, not the person. It receives your last message:${asked}`,
+      instructions,
+    )
   }
 
   /** The caller's delegates awaiting approval or working (docs/specs/delegation.md, "A delegation"). */
   private async working(caller: string): Promise<number> {
     let count = this.held.has(caller) ? 1 : 0
-    for (const [delegate, known] of this.delegates) {
-      if (known.caller !== caller) continue
-      const state = await this.store.state(delegate)
-      if (state.current && !state.current.ended && (state.active || (await this.pending(delegate)).length > 0)) count++
+    for (const [delegate, known] of this.followed) {
+      if (known.delegator !== caller) continue
+      if (delegationOf(await this.store.state(delegate)) === 'working') count++
     }
     return count
   }
@@ -355,195 +408,106 @@ export class Delegations {
 
   // ---------------------------------------------------------------- submit
 
-  /**
-   * The schema `submit` takes, for a delegate asked for a result; null when none is asked. Its last step's, from its start:
-   * a harness lists its tools as its Session opens, before the instructions are written, and keeps that list.
-   */
-  async schemaOf(delegate: string): Promise<Record<string, unknown> | null> {
-    const step = await this.last(delegate)
-    return step?.schema ?? null
-  }
-
-  /** docs/specs/delegation.md, "Typed results": the result, checked against the step's schema. */
-  async submit(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
-    const step = await this.last(caller.workstream)
-    if (step === null || step.schema === null) throw new Refused('not_allowed')
-    const check = ajv.compile(step.schema)
-    if (!check(args)) throw new Refused(`invalid_result: ${(check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
-    const state = await this.store.state(caller.workstream)
-    await this.workstreams.record(caller.workstream, { kind: 'delegation.result', content: { step: step.position, turn: state.active?.id ?? null, result: args } })
-    return 'submitted'
-  }
-
-  // ---------------------------------------------------------------- the steps, read back from the log
-
-  private async steps(delegate: string): Promise<{ entries: readonly Entry[]; state: State; steps: Step[] }> {
+  /** The schema its delegator's last message gave, or null (docs/specs/delegation.md, "Typed results"). */
+  private async schemaOf(delegate: string): Promise<Record<string, unknown> | null> {
     const entries = await this.store.entries(delegate)
-    const state = await this.store.state(delegate)
-    const steps: Step[] = []
-    for (const entry of entries) {
-      if (entry.kind !== 'delegation.started' && entry.kind !== 'delegation.continued') continue
-      const content = object(entry.content) ?? {}
-      steps.push({ position: entry.position, instructions: String(content.instructions ?? ''), schema: object(content.output_schema) })
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]!
+      if (e.kind !== 'command' || e.content.kind !== 'Write') continue
+      const mark = markOf(object(e.content.body)?.prompt)
+      if (mark?.as === 'delegator') return object(mark.output_schema)
     }
-    return { entries, state, steps }
+    return null
   }
 
-  /** The steps whose instructions are not written yet. */
-  private async pending(delegate: string): Promise<Step[]> {
-    const { entries, steps } = await this.steps(delegate)
-    const marked = new Set(
-      entries
-        .filter((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt')
-        .map((e) => markOf(e, DELEGATION_META)?.step)
-        .filter((s) => s !== undefined)
-        .map(String),
-    )
-    return steps.filter((s) => !marked.has(s.position))
+  /** docs/specs/delegation.md, "Messages": the words, written in its delegator's Workstream. */
+  async submit(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
+    const message = args.message
+    if (typeof message !== 'string' || message.trim() === '') throw new Refused('invalid_query: message')
+    const parent = await this.store.writer.query('SELECT parent FROM workstreams WHERE id=$1', [caller.workstream])
+    const delegator = parent.rows[0]?.parent as string | null | undefined
+    if (!delegator) throw new Refused('not_allowed')
+    const schema = await this.schemaOf(caller.workstream)
+    const result = args.result
+    if (schema !== null) {
+      const check = ajv.compile(schema)
+      if (!check(result)) throw new Refused(`invalid_result: ${result === undefined ? 'a result is asked for' : (check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
+    }
+    const words = result === undefined ? message : `${message}\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``
+    const turn = (await this.store.state(caller.workstream)).active?.id ?? null
+    const written = await this.fromDelegate(delegator, caller.workstream, randomUUID(), words, turn)
+    if (!written.accepted) throw new Refused(written.reason)
+    return 'sent'
   }
 
-  /** The step the delegate works on: its last, its instructions written or about to be — `to` waits for the one before to end. */
-  private async last(delegate: string): Promise<Step | null> {
-    return (await this.steps(delegate)).steps.at(-1) ?? null
+  private async fromDelegate(delegator: string, delegate: string, id: string, words: string, turn: string | null): Promise<Answer> {
+    return this.write(delegator, id, { workstream: delegate, as: 'delegate', turn }, `From your delegate ${delegate} "${await this.titleOf(delegate)}", not the person:`, words)
+  }
+
+  // ---------------------------------------------------------------- what comes back by itself
+
+  /** The turns of a delegate over: nothing more to say of them. */
+  private async endedTurns(delegate: string): Promise<string[]> {
+    return [...(await this.store.state(delegate)).turns.values()].filter((t) => !['saved', 'in_progress', 'uncertain'].includes(t.status)).map((t) => t.id)
+  }
+
+  /** One delegate, one beat: each turn seen to its end once, then what its execution became; forgotten once it has ended. */
+  private async follow(delegate: string, known: { readonly delegator: string; readonly seen: Set<string> }): Promise<void> {
+    const state = await this.store.state(delegate)
+    const turns = [...state.turns.values()]
+    for (const [i, turn] of turns.entries()) {
+      if (known.seen.has(turn.id) || ['saved', 'in_progress', 'uncertain'].includes(turn.status)) continue
+      await this.turnEnded(delegate, known.delegator, state, turn, turns[i + 1])
+      known.seen.add(turn.id)
+    }
+    for (const e of state.executions.values()) {
+      const what = e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed ? 'Its execution could not start.' : null
+      const id = identity(delegate, e.id, 'its end')
+      if (what === null || known.seen.has(id)) continue
+      await this.notice(known.delegator, delegate, id, what)
+      known.seen.add(id)
+    }
+    if (state.current?.ended && !state.active && state.waiting.length === 0) this.followed.delete(delegate)
   }
 
   /**
-   * One delegate, one beat: its instructions written when it can take them, a reminder when a result is missing, and
-   * the outcomes not yet reported; null once every step is reported.
+   * docs/specs/delegation.md, "Messages" and "What Agora writes", each written once whatever a restart does: its command's
+   * id comes from what it is about. The end of an execution says the end of its turn.
    */
-  private async advance(delegate: string): Promise<{ step: Step; outcome: string }[] | null> {
-    const { entries, state, steps } = await this.steps(delegate)
-    const prompts = entries.filter((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt')
-    const reported = new Set(entries.filter((e) => e.kind === 'delegation.reported').map((e) => String(object(e.content)?.step)))
-    if (steps.every((step) => reported.has(step.position))) return null
-    const results = entries.filter((e) => e.kind === 'delegation.result')
-    const outcomes: { step: Step; outcome: string }[] = []
-    for (const step of steps) {
-      if (reported.has(step.position)) continue
-      const prompt = prompts.find((p) => String(markOf(p, DELEGATION_META)?.step) === step.position)
-      if (!prompt) {
-        const e = state.current
-        if (e && (e.failed || e.lost)) outcomes.push({ step, outcome: `failed: the delegate's execution ${e.failed ? 'failed' : 'was lost'} before its instructions` })
-        else await this.write(delegate, state, step)
-        break
-      }
-      const turn = [...state.turns.values()].find((t) => t.requestPosition === prompt.position)
-      if (!turn || !['done', 'failed', 'cancelled'].includes(turn.status)) break
-      const result = results.findLast((r) => String(object(r.content)?.step) === step.position)
-      if (turn.status === 'done' && step.schema !== null && result === undefined) {
-        const reminder = prompts.find((p) => String(markOf(p, REPORT_META)?.reminds) === step.position)
-        if (!reminder) {
-          await this.remind(delegate, state, step)
-          break
-        }
-        const after = [...state.turns.values()].find((t) => t.requestPosition === reminder.position)
-        if (!after || !['done', 'failed', 'cancelled'].includes(after.status)) break
-      }
-      outcomes.push({ step, outcome: await this.describe(delegate, turn.status, result, turn.failure, step.schema !== null) })
+  private async turnEnded(delegate: string, delegator: string, state: State, turn: Turn, next: Turn | undefined): Promise<void> {
+    const e = state.executions.get(turn.execution)
+    const entries = await this.store.entries(delegate)
+    if (turn.status === 'failed') {
+      if (!e?.lost && !e?.failed && !e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${turn.failure ? `: ${JSON.stringify(turn.failure).slice(0, 300)}` : ''}.`)
+      return
     }
-    return outcomes
+    if (turn.status === 'cancelled') {
+      if (!e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
+      return
+    }
+    if (!this.holdsAnothers(entries, turn, next)) return
+    if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return
+    const words = lastMessageOf(entries, turn, next)
+    const id = identity(delegate, turn.id, 'last message')
+    if (words === '') await this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.')
+    else await this.fromDelegate(delegator, delegate, id, words, turn.id)
   }
 
-  /** An outcome as the report gives it (docs/specs/delegation.md, "Reports"). */
-  private async describe(delegate: string, status: string, result: Entry | undefined, failure: unknown, asked: boolean): Promise<string> {
-    if (status === 'failed') return `failed${failure ? `: ${JSON.stringify(failure).slice(0, 300)}` : ''}`
-    if (status === 'cancelled') return 'cancelled'
-    if (result !== undefined) return `completed, result: ${JSON.stringify(object(result.content)?.result)}`
-    if (asked) return `completed with no result${await this.lastWords(delegate)}`
-    return `completed${await this.lastWords(delegate)}`
+  /** A turn holding a message that is not the person's: its prompt's, or one sent into it. */
+  private holdsAnothers(entries: readonly Entry[], turn: Turn, next: Turn | undefined): boolean {
+    const prompt = entries.find((e) => e.position === turn.requestPosition)
+    if (markOf(object(prompt?.content.params)?.prompt) !== null) return true
+    const to = next === undefined ? null : BigInt(next.requestPosition)
+    return entries.some((e) => {
+      if (e.kind !== 'acp' || e.direction !== 'in' || e.correlated_method !== STEERING || object(e.content.result)?.outcome !== 'injected' || e.request_position === null) return false
+      const at = BigInt(e.position)
+      if (at <= BigInt(turn.requestPosition) || (to !== null && at >= to)) return false
+      return markOf(object(entries.find((x) => x.position === e.request_position)?.content.params)?.prompt) !== null
+    })
   }
 
-  /** The delegate's last message, cut to 2,000 characters. */
-  private async lastWords(delegate: string): Promise<string> {
-    const last = await this.store.projector.query(
-      "SELECT object->>'text' AS text FROM objects WHERE workstream=$1 AND kind='element' AND type='agent_message_chunk' ORDER BY first_position DESC LIMIT 1",
-      [delegate],
-    )
-    const words = String(last.rows[0]?.text ?? '').trim()
-    return words ? `, its last message: ${words.length > LAST_WORDS ? `${words.slice(0, LAST_WORDS)}…` : words}` : ', with no message'
-  }
-
-  /** Writes a step's instructions once the delegate can take a message; continues its execution if it has ended. */
-  private async write(delegate: string, state: State, step: Step): Promise<void> {
-    const caller = this.delegates.get(delegate)!.caller
-    const e = state.current
-    if (!e || e.ended) return this.resume(delegate, state)
-    if (!e.session || state.active) return
-    await this.workstreams.command(
-      delegate,
-      {
-        id: randomUUID(),
-        kind: 'Write',
-        target: { execution: e.id, session: e.session },
-        body: { prompt: [{ type: 'text', text: step.instructions, _meta: { [DELEGATION_META]: { caller, step: step.position } } }] },
-      },
-      'agora',
-    )
-  }
-
-  /** A result was asked and none came: written once (docs/specs/delegation.md, "Typed results"). */
-  private async remind(delegate: string, state: State, step: Step): Promise<void> {
-    const e = state.current
-    if (!e || e.ended || !e.session || state.active) return
-    await this.workstreams.command(
-      delegate,
-      {
-        id: randomUUID(),
-        kind: 'Write',
-        target: { execution: e.id, session: e.session },
-        body: { prompt: [{ type: 'text', text: 'From Agora: you were asked for a result: call submit with it.', _meta: { [REPORT_META]: { delegates: [], reminds: step.position } } }] },
-      },
-      'agora',
-    )
-  }
-
-  /** An execution that has ended, continued in the same Workstream with what it had (docs/specs/log.md, "Continuing"). */
-  private async resume(workstream: string, state: State): Promise<void> {
-    const last = [...state.executions.values()].at(-1)
-    if (!last || !last.ended) return
-    await this.workstreams.command(
-      workstream,
-      {
-        id: randomUUID(),
-        kind: 'Create',
-        target: {},
-        body: {
-          pool: last.body.pool,
-          ...(last.body.settings !== undefined ? { settings: Object.fromEntries((Array.isArray(last.body.settings) ? last.body.settings : []).map((s) => [String(object(s)?.configId ?? object(s)?.id), String(object(s)?.value)])) } : {}),
-          profiles: last.profiles,
-          limits: last.body.limits,
-        },
-      },
-      'agora',
-    )
-  }
-
-  /** A report to the caller, once free: every outcome in one prompt, then each recorded as reported. */
-  private async deliver(caller: string, outcomes: { delegate: string; step: Step; outcome: string }[]): Promise<void> {
-    const state = await this.store.state(caller)
-    const e = state.current
-    if (!e || e.ended) return this.resume(caller, state)
-    if (!e.session || state.active || state.question || state.permissions.size > 0) return
-    const titles = await this.store.projector.query('SELECT workstream, title FROM listings WHERE workstream = ANY($1)', [outcomes.map((o) => o.delegate)])
-    const titleOf = new Map((titles.rows as { workstream: string; title: string }[]).map((r) => [r.workstream, r.title]))
-    const report = [
-      'From Agora, not the person:',
-      ...outcomes.map(
-        (o) => `- ${o.delegate} "${titleOf.get(o.delegate) ?? line(o.step.instructions)}": ${o.outcome}${/[.!?]$/.test(o.outcome) ? '' : '.'} Read ${o.delegate} for the rest.`,
-      ),
-    ].join('\n')
-    const id = randomUUID()
-    const written = await this.workstreams.command(
-      caller,
-      {
-        id,
-        kind: 'Write',
-        target: { execution: e.id, session: e.session },
-        body: { prompt: [{ type: 'text', text: report, _meta: { [REPORT_META]: { delegates: outcomes.map((o) => o.delegate) } } }] },
-      },
-      'agora',
-    )
-    if (!written.accepted) return
-    for (const o of outcomes) await this.workstreams.record(o.delegate, { kind: 'delegation.reported', content: { step: o.step.position, report: id } })
+  /** A message `as` `agora`: what a delegate cannot tell its delegator (docs/specs/delegation.md, "What Agora writes"). */
+  private async notice(delegator: string, delegate: string, id: string, what: string): Promise<void> {
+    await this.write(delegator, id, { workstream: delegate, as: 'agora' }, `From Agora, not the person: your delegate ${delegate} "${await this.titleOf(delegate)}"`, what)
   }
 }

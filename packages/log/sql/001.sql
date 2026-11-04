@@ -130,8 +130,8 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
   WITH turns AS (
     SELECT o.workstream, o.id AS turn, o.object->>'startedAt' AS started,
       row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange,
-      -- Who wrote its prompt (docs/specs/search.md, "Who wrote"): a report is Agora's, a marked message a caller's.
-      (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
+      -- Who wrote its prompt (docs/specs/search.md, "Who wrote"): a message says so; an earlier delegation's report is Agora's, its marked message a caller's.
+      (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'as' THEN p.object->>'as' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
         WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text AND NOT p.object ? 'steered' LIMIT 1) AS author
     FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
   ), parts AS (
@@ -147,9 +147,10 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
     WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool', 'report')
     -- A message sent into the turn (docs/specs/search.md, "A message sent into a turn"): a header before it, the agent's after it.
     UNION ALL
-    SELECT t.workstream, t.exchange, 3, e.first_position, h.part, 'header', '## ' || t.exchange || h.who
+    SELECT t.workstream, t.exchange, 3, e.first_position, h.part, 'header',
+      '## ' || t.exchange || ' · ' || CASE h.part WHEN 0 THEN coalesce(e.object->>'as', 'you') || ', during the turn' ELSE 'agent' END
     FROM objects e JOIN turns t ON t.workstream = e.workstream AND t.turn::text = e.object->>'turn'
-      CROSS JOIN (VALUES (0, ' · you, during the turn'), (2, ' · agent')) AS h(part, who)
+      CROSS JOIN (VALUES (0), (2)) AS h(part)
     WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type = 'user' AND e.object ? 'steered'
   )
   SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, p.part, l.ord), p.exchange, p.kind, l.text
