@@ -62,6 +62,10 @@ function configOptions(session: Session): unknown[] {
 interface Turn {
   cancelled: boolean
   wake: () => void
+  /** What it answers a `_session/steering`: `injected` by default. */
+  steering: string
+  /** The messages taken into the turn and not yet heard. */
+  steered: string[]
 }
 
 const home = process.env.HOME ?? '/tmp'
@@ -179,6 +183,14 @@ async function callAgora(name: string, args: Record<string, unknown>, turn: Turn
   }
 }
 
+/** What was sent into the turn since it last spoke, said as heard. */
+function hear(session: Session, turn: Turn): void {
+  for (const text of turn.steered.splice(0)) {
+    remember(session, 'agent', `Heard: ${text}.`)
+    say(session.id, `Heard: ${text}.\n`)
+  }
+}
+
 /** Waits up to `ms`, returning early (with true) when the turn is cancelled. */
 function pause(turn: Turn, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -252,6 +264,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     case '/sleep': {
       for (let i = 1; i <= n; i++) {
         if (await pause(turn, 1000)) return 'cancelled'
+        hear(session, turn)
         say(session.id, `… second ${String(i)}/${String(n)}\n`)
       }
       remember(session, 'agent', `Slept ${String(n)} s.`)
@@ -289,7 +302,74 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: choice === 'allow-once' ? 'completed' : 'failed' })
       remember(session, 'agent', `Permission: ${choice}.`)
       say(session.id, `Permission: ${choice}.`)
+      // `/permission 3`: the turn goes on that long once answered, as an agent with more to do.
+      if (argument !== undefined) {
+        if (await pause(turn, n * 1000)) return 'cancelled'
+        hear(session, turn)
+      }
       return 'end_turn'
+    }
+    // A running tool (docs/specs/log.md, L110): `pending`, then `in_progress`, open that many seconds, then closed as
+    // asked; then the turn goes on, a second unless told: `/tool-open 2 failed 4`.
+    case '/tool-open': {
+      const [seconds, ending, after] = text.trim().split(/\s+/).slice(1)
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'A long command', kind: 'execute', status: 'pending' })
+      if (await pause(turn, 300)) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' })
+      if (await pause(turn, Number(seconds) * 1000)) {
+        update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' })
+        return 'cancelled'
+      }
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: ending === 'failed' ? 'failed' : 'completed' })
+      if (await pause(turn, Number(after ?? 1) * 1000)) return 'cancelled'
+      hear(session, turn)
+      remember(session, 'agent', 'Command done.')
+      say(session.id, 'Command done.')
+      return 'end_turn'
+    }
+    // A permission asked while a tool runs, the tool closing while it is pending; the turn goes on 2 s once answered (L114).
+    case '/tool-permission': {
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'A long command', kind: 'execute', status: 'in_progress' })
+      if (await pause(turn, 1000)) return 'cancelled'
+      const asked = request('session/request_permission', {
+        sessionId: session.id,
+        toolCall: { toolCallId: `outil-${randomUUID().slice(0, 8)}`, title: 'Write demo.txt', kind: 'edit', status: 'pending' },
+        options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }],
+      })
+      if (await pause(turn, 300)) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' })
+      await Promise.race([asked, new Promise((resolve) => (turn.wake = () => resolve(null)))])
+      if (turn.cancelled || (await pause(turn, 2000))) return 'cancelled'
+      hear(session, turn)
+      say(session.id, 'Permission settled.')
+      return 'end_turn'
+    }
+    // How `_session/steering` is answered during this turn (docs/specs/log.md, L111, L112, L116): `/steering <answer> <seconds>`.
+    case '/steering': {
+      const [answer, seconds] = text.trim().split(/\s+/).slice(1)
+      turn.steering = String(answer)
+      if (await pause(turn, Number(seconds) * 1000)) return 'cancelled'
+      hear(session, turn)
+      remember(session, 'agent', 'Steered or not.')
+      say(session.id, 'Steered or not.')
+      return 'end_turn'
+    }
+    // Speaks after its turn's answer (docs/specs/log.md, L120), as Claude Code does once a background task ends.
+    case '/late': {
+      setTimeout(() => {
+        const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+        update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'Read the output', kind: 'read', status: 'completed' })
+        say(session.id, 'Said after the answer.')
+      }, 500)
+      say(session.id, 'Before the answer.')
+      return 'end_turn'
+    }
+    // The agent dies during a turn (docs/specs/log.md, L117): the adapter exits after that many seconds.
+    case '/die': {
+      if (await pause(turn, n * 1000)) return 'cancelled'
+      process.exit(3)
     }
     case '/tool': {
       const toolCallId = `outil-${randomUUID().slice(0, 8)}`
@@ -471,6 +551,8 @@ async function handle(message: Message): Promise<void> {
           },
           agentInfo: { name: 'agora-mock-agent', title: 'The lab\'s mock agent', version: '1.0.0' },
           authMethods: [],
+          // AGORA_MOCK_NO_STEERING=1: as opencode, no message into a running turn.
+          ...(process.env.AGORA_MOCK_NO_STEERING === '1' ? {} : { _meta: { steering: { supported: true } } }),
         },
       })
     }
@@ -520,7 +602,7 @@ async function handle(message: Message): Promise<void> {
         .map((block) => block.text ?? '')
         .join('\n')
       remember(session, 'user', text)
-      const turn: Turn = { cancelled: false, wake: () => {} }
+      const turn: Turn = { cancelled: false, wake: () => {}, steering: 'injected', steered: [] }
       turns.set(session.id, turn)
       try {
         promptId = message.id
@@ -540,6 +622,25 @@ async function handle(message: Message): Promise<void> {
         turn.wake()
       }
       return
+    }
+    // A message for the running turn, as claude-agent-acp and codex-acp take one: `promptRequired` with no turn running.
+    case '_session/steering': {
+      if (process.env.AGORA_MOCK_NO_STEERING === '1') return fail(message.id, -32601, `unknown method: ${message.method}`)
+      const session = sessions.get(String(params.sessionId))
+      if (session === undefined) return fail(message.id, -32002, `session inconnue : ${String(params.sessionId)}`)
+      const turn = turns.get(session.id)
+      if (turn === undefined) return send({ id: message.id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } })
+      if (turn.steering === 'error') return fail(message.id, -32000, 'steering refused')
+      if (turn.steering === 'silent') return
+      if (turn.steering === 'promptRequired') return send({ id: message.id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } })
+      if (turn.steering === 'failed') return send({ id: message.id, result: { outcome: 'failed', message: 'steering failed' } })
+      const blocks = Array.isArray(params.prompt) ? (params.prompt as Block[]) : []
+      const text = blocks.map((block) => block.text ?? '').join('\n')
+      remember(session, 'user', text)
+      turn.steered.push(text)
+      // `late`: answered after a while, for a restart in between (docs/specs/log.md, L116).
+      if (turn.steering === 'late') await new Promise((resolve) => setTimeout(resolve, 2500))
+      return send({ id: message.id, result: { outcome: 'injected' } })
     }
     default:
       return fail(message.id, -32601, `unknown method: ${message.method}`)

@@ -24,7 +24,7 @@ import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
-import { acceptsPrompt, isApproval, waited, type Execution, type State } from './state.ts'
+import { acceptsPrompt, isApproval, STEERING, waited, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, type Reason } from './acp.ts'
@@ -66,6 +66,13 @@ export interface WorkstreamsOptions {
 
 function iso(ms: number): string {
   return new Date(ms).toISOString()
+}
+
+/** A message a running turn can take (docs/specs/log.md, "Messages during a turn"): text alone, not a command. */
+function steerable(prompt: unknown): boolean {
+  if (!Array.isArray(prompt) || prompt.length === 0) return false
+  const blocks = prompt.map((b) => object(b))
+  return blocks.every((b) => b?.type === 'text') && !String(blocks[0]?.text).trimStart().startsWith('/')
 }
 
 /** A set of profiles, as the tokens map compares them. */
@@ -323,6 +330,12 @@ export class Workstreams implements Handler {
           if (refusal === null && isApproval(state.question)) settles = { position: state.question.position, outcome: 'approved' }
           return refusal ?? {}
         }
+        // docs/specs/log.md, "Commands": a waiting message, whatever the execution; no line to any agent.
+        if (command.kind === 'Retract') {
+          const message = state.waiting.find((w) => w.position === String(command.target.message))
+          if (!message || (state.steering !== null && state.requestPositions.get(state.steering)?.command === message.command)) return 'stale_message'
+          return {}
+        }
         // A Write while an approval waits is its refusal, whatever the turn: no line to any agent.
         if (command.kind === 'Write' && isApproval(state.question)) {
           const blocks = Array.isArray(command.body.prompt) ? (command.body.prompt as unknown[]) : []
@@ -339,12 +352,16 @@ export class Workstreams implements Handler {
           if (state.question) return 'question_pending'
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
-          if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
+          // docs/specs/log.md, "Messages during a turn": behind a turn or another message, it waits if it says it may.
+          const behind = state.active !== null || state.waiting.length > 0
+          if (state.active?.status === 'uncertain') return 'turn_uncertain'
+          if (behind && command.body.mayWait !== true) return 'turn_active'
           if (!current.session || command.target.session !== current.session) return 'stale_session'
           if (this.opening(state, current)) return 'opening_session'
           if (state.permissions.size) return 'permission_pending'
           if (!settled(state, current)) return 'settings_pending'
           if (!acceptsPrompt(current.promptCapabilities, command.body.prompt)) return 'prompt_unsupported'
+          if (behind) return { execution: current.id, session: current.session, waits: true }
           const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
           const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
           return {
@@ -622,6 +639,8 @@ export class Workstreams implements Handler {
     state = await this.store.state(workstream)
     const current = state.executions.get(e.id)!
     if (current.lost || current.failed) return
+    await this.release(workstream, current)
+    state = await this.store.state(workstream)
     // Stop cancels the turn in progress, once; it never makes up its end.
     if (current.stopped && state.active && ['in_progress', 'uncertain'].includes(state.active.status)) {
       const stop = (await this.store.entries(workstream)).findLast((x) => x.kind === 'command' && x.execution === e.id && x.content.kind === 'Stop')
@@ -665,6 +684,28 @@ export class Workstreams implements Handler {
       state = await this.store.state(workstream)
       if (sent && entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection)
     }
+  }
+
+  /**
+   * docs/specs/log.md, "Messages during a turn": the Workstream's oldest waiting message goes, into the running
+   * turn when its agent can take it there, as the next turn once none runs.
+   */
+  private async release(workstream: string, e: Execution): Promise<void> {
+    const state = await this.store.state(workstream)
+    const message = state.waiting[0]
+    if (!message || e.stopped || !e.session || state.steering !== null || state.question || state.permissions.size > 0 || this.opening(state, e) || !settled(state, e)) return
+    const blocks = object(message.content.body)?.prompt
+    const session = e.session
+    if (state.active) {
+      if (state.active.status !== 'in_progress' || !e.steering || state.unsteerable || state.tools.size > 0 || !steerable(blocks)) return
+      const params = { sessionId: e.acpId, prompt: blocks, _meta: { steering: { idleBehavior: 'promptRequired' } } }
+      await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: STEERING, params }, session, message.command ?? undefined))
+      return
+    }
+    if (state.held) return
+    const catchUp = this.catchUpFor(await this.store.entries(workstream), state, e, blocks)
+    const prompt = catchUp ? [catchUpBlock(catchUp), ...(blocks as unknown[])] : blocks
+    await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: 'session/prompt', params: { sessionId: e.acpId, prompt } }, session, message.command ?? undefined))
   }
 
   /** ACP: once `session/cancel` is sent, every pending permission of the execution is answered `cancelled`. */
@@ -1085,10 +1126,23 @@ export class Workstreams implements Handler {
     const limit = this.options.responseTimeoutMs ?? 60_000
     for (const position of [...state.unanswered]) {
       const request = state.requestPositions.get(position)
-      if (!request || request.execution !== e.id || !['initialize', ...OPENING].includes(request.method ?? '')) continue
+      if (!request || request.execution !== e.id || ![STEERING, 'initialize', ...OPENING].includes(request.method ?? '')) continue
       if (state.timedOut.has(request.position)) continue
       const sentAt = state.sentAt.get(request.position)
       if (sentAt === undefined || Date.parse(sentAt) + limit > Date.now()) continue
+      // A steering line unanswered fails alone: the execution goes on, its message for the next turn.
+      if (request.method === STEERING) {
+        await this.store.transaction(workstream, async (tx) => {
+          if (tx.state.answers.has(request.position) || tx.state.timedOut.has(request.position)) return
+          await tx.append({
+            kind: 'request.failed',
+            execution: request.execution,
+            session: request.session,
+            content: { requestPosition: request.position, reason: 'response_timeout' },
+          })
+        })
+        return
+      }
       const reason = request.method === 'initialize' || !e.body.anchor ? 'startup_failed' : 'restore_failed'
       const failed = await this.store.transaction(workstream, async (tx) => {
         const current = tx.state.executions.get(e.id)
