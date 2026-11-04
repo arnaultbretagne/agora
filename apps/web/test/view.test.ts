@@ -716,7 +716,7 @@ test('U69 waiting elements: those waiting, in position order, with their text an
   ])
   // Not messages of the thread.
   assert.deepEqual(messagesOf(state), [])
-  // Held once a turn is cancelled, and with no execution running; not during a turn.
+  // Held with no turn running; not during a turn.
   const during = crafted([turnObject('in_progress'), element(5, 'waiting', [{ type: 'text', text: 'the first' }])])
   assert.equal(composerOf(during, workstreamOf(during, MESSAGES_WS)).held, false)
   const cancelled = crafted([turnObject('cancelled'), element(5, 'waiting', [{ type: 'text', text: 'the first' }])])

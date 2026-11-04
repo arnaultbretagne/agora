@@ -27,7 +27,7 @@ import type { Delegations } from './delegation.ts'
 import { acceptsPrompt, isApproval, STEERING, waited, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
-import { idKey, type Reason } from './acp.ts'
+import { idKey, validate, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
@@ -361,7 +361,11 @@ export class Workstreams implements Handler {
           if (state.permissions.size) return 'permission_pending'
           if (!settled(state, current)) return 'settings_pending'
           if (!acceptsPrompt(current.promptCapabilities, command.body.prompt)) return 'prompt_unsupported'
-          if (behind) return { execution: current.id, session: current.session, waits: true }
+          if (behind) {
+            // Refused now what its line would be refused later, as a Write that does not wait is.
+            const line = validate(encode({ jsonrpc: '2.0', id: 'waits', method: 'session/prompt', params: { sessionId: current.acpId, prompt: command.body.prompt } }), 'out')
+            return line.ok ? { execution: current.id, session: current.session, waits: true } : line.reason
+          }
           const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
           const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
           return {
@@ -639,7 +643,8 @@ export class Workstreams implements Handler {
     state = await this.store.state(workstream)
     const current = state.executions.get(e.id)!
     if (current.lost || current.failed) return
-    await this.release(workstream, current)
+    // A message that cannot go stays where it is, retractable; it holds nothing else back.
+    await this.release(workstream, current).catch(() => this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: 'unknown' }))
     state = await this.store.state(workstream)
     // Stop cancels the turn in progress, once; it never makes up its end.
     if (current.stopped && state.active && ['in_progress', 'uncertain'].includes(state.active.status)) {
@@ -1128,10 +1133,10 @@ export class Workstreams implements Handler {
       const request = state.requestPositions.get(position)
       if (!request || request.execution !== e.id || ![STEERING, 'initialize', ...OPENING].includes(request.method ?? '')) continue
       if (state.timedOut.has(request.position)) continue
-      const sentAt = state.sentAt.get(request.position)
-      if (sentAt === undefined || Date.parse(sentAt) + limit > Date.now()) continue
-      // A steering line unanswered fails alone: the execution goes on, its message for the next turn.
+      // A steering line unanswered fails alone: the execution goes on, its message for the next turn. Agora may have
+      // died before writing it: then it counts from its entry, and nothing else would ever answer for it.
       if (request.method === STEERING) {
+        if (state.failures.has(request.position) || Date.parse(state.sentAt.get(request.position) ?? request.time) + limit > Date.now()) continue
         await this.store.transaction(workstream, async (tx) => {
           if (tx.state.answers.has(request.position) || tx.state.timedOut.has(request.position)) return
           await tx.append({
@@ -1143,6 +1148,8 @@ export class Workstreams implements Handler {
         })
         return
       }
+      const sentAt = state.sentAt.get(request.position)
+      if (sentAt === undefined || Date.parse(sentAt) + limit > Date.now()) continue
       const reason = request.method === 'initialize' || !e.body.anchor ? 'startup_failed' : 'restore_failed'
       const failed = await this.store.transaction(workstream, async (tx) => {
         const current = tx.state.executions.get(e.id)

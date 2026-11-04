@@ -136,7 +136,7 @@ export interface Composer {
   readonly pendingPermission: ViewObject | null
   /** What is sent refuses the pending approval (docs/specs/delegation.md, "Approval"). */
   readonly refuses: boolean
-  /** Messages wait for the next one: nothing else sends them (docs/specs/assistant-ui.md, "Messages during a turn"). */
+  /** Messages wait with no turn running: the next one sends them (docs/specs/assistant-ui.md, "Messages during a turn"). */
   readonly held: boolean
 }
 
@@ -185,7 +185,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const create = state.complete && IDLE.includes(view.state) && !pendingQuestion
   // A turn running leaves sending open: what is sent waits (docs/specs/assistant-ui.md, "Messages during a turn").
   const open = create || (state.complete && view.state === 'ready' && uncertain === null && pendingPermission === null && !pendingQuestion && !settling)
-  const held = waitingOf(state).length > 0 && (IDLE.includes(view.state) || (last !== undefined && status(last) === 'cancelled'))
+  const held = open && active === null && waitingOf(state).length > 0
   return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false, held }
 }
 

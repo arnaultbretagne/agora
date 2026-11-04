@@ -276,7 +276,8 @@ test('L113 a Cancel with a message behind an open tool: no line after it, the me
   await until('both turns', async () => prompts(await lab.entries(ws)).length === 3)
   entries = await lab.entries(ws)
   assert.deepEqual(prompts(entries).slice(1).map((x) => promptText(x)), [['held'], ['next']])
-  assert.equal(steerings(entries).length, 0)
+  // Not into the cancelled turn: the next may try the turn of the one before it.
+  assert.ok(steerings(entries).every((x) => BigInt(x.position) > BigInt(prompts(entries)[1]!.position)))
 })
 
 test('L114 a message behind an open tool, a permission asked, the tool closing: no line while it is pending; its steering line once answered', async (t) => {
@@ -392,6 +393,37 @@ test('L116 Agora killed with its steering line dispatched and unanswered: never 
   assert.equal((await lab.state(ws)).waiting.length, 0)
 })
 
+test('L116 Agora killed between its steering line\'s marker and its write: never resent; failed after the timeout; then its own turn', async (t) => {
+  let died = () => {}
+  const dying = new Promise<void>((resolve) => (died = resolve))
+  const context = await opened(t, {
+    workstreams: {
+      responseTimeoutMs: 1500,
+      // Through the fault point the dispatcher declares: held there, as dead, its write never comes.
+      fault: (point, detail) => {
+        if (point !== 'after_marker' || detail.method !== '_session/steering') return
+        died()
+        return new Promise<void>(() => {})
+      },
+    },
+  })
+  assert.ok((await context.lab.write(context.ws, '/sleep 3')).accepted)
+  await running(context.lab, context.ws)
+  assert.ok((await say(context.lab, context.ws, 'never written')).accepted)
+  await dying
+  context.lab = await context.lab.restart('halt', { workstreams: { responseTimeoutMs: 1500 } })
+  const { lab, ws } = context
+  const line = steerings(await lab.entries(ws))[0]!
+  const failed = await until('the timeout', async () => (await lab.entries(ws)).find((x) => x.kind === 'request.failed' && x.content.requestPosition === line.position), 10_000)
+  assert.equal(failed.content.reason, 'response_timeout')
+  await until('its turn', async () => prompts(await lab.entries(ws)).length === 2, 20_000)
+  const entries = await lab.entries(ws)
+  assert.deepEqual(promptText(prompts(entries).at(-1)!), ['never written'])
+  assert.equal(steerings(entries).length, 1)
+  assert.equal(entries.filter((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === line.position).length, 1)
+  assert.equal(entries.filter((x) => x.kind === 'acp.sent' && x.content.requestPosition === line.position).length, 0)
+})
+
 test('L117 the execution lost with a message waiting: it keeps waiting, then goes in the next execution, with the catch-up', async (t) => {
   const { lab, ws, e } = await opened(t, noSteering())
   assert.ok((await lab.write(ws, 'a first exchange')).accepted)
@@ -485,4 +517,50 @@ test('L120 the agent speaks and calls a tool after its turn\'s answer: elements 
   assert.match(exchange!.agent, /Said after the answer\./)
   assert.ok((await lab.write(ws, 'next')).accepted)
   await lab.turn(ws, 'done')
+})
+
+test('L123 a Write that may wait whose prompt is not valid ACP, or beyond the line\'s maximum: refused, nothing written, the turn going on', async (t) => {
+  const { lab, ws } = await opened(t)
+  assert.ok((await lab.write(ws, '/sleep 2')).accepted)
+  await running(lab, ws)
+  const e = (await lab.state(ws)).current!
+  const commands = async () => (await lab.entries(ws)).filter((x) => x.kind === 'command').length
+  const before = await commands()
+  const target = { execution: e.id, session: e.session }
+  assert.deepEqual(await lab.command(ws, 'Write', target, { prompt: 'not blocks', mayWait: true }), { accepted: false, reason: 'invalid_body' })
+  assert.deepEqual(await lab.command(ws, 'Write', target, { prompt: text('x'.repeat(17 * 1024 * 1024)), mayWait: true }), { accepted: false, reason: 'line_too_large' })
+  assert.equal(await commands(), before)
+  assert.equal((await lab.state(ws)).waiting.length, 0)
+  await lab.turn(ws, 'done')
+  assert.equal(prompts(await lab.entries(ws)).length, 1)
+})
+
+test('L124 a Write that may wait after a Cancel, before the turn\'s answer: its turn once the turn is answered', async (t) => {
+  const { lab, ws } = await opened(t, noSteering())
+  assert.ok((await lab.write(ws, '/stubborn 2')).accepted)
+  await running(lab, ws)
+  const turn = await lab.turn(ws, 'in_progress')
+  const e = (await lab.state(ws)).current!
+  assert.ok((await lab.command(ws, 'Cancel', { execution: e.id, turn: turn.id })).accepted)
+  const answer = await say(lab, ws, 'after the cancel')
+  assert.ok(answer.accepted)
+  assert.equal(answer.waiting, true)
+  await allDone(lab, ws, 2)
+  assert.deepEqual(promptText(prompts(await lab.entries(ws)).at(-1)!), ['after the cancel'])
+})
+
+test('L124 a Cancel the agent answers end_turn, a message waiting and no Write after it: no line, still waiting', async (t) => {
+  const { lab, ws } = await opened(t, noSteering())
+  assert.ok((await lab.write(ws, '/stubborn 2')).accepted)
+  await running(lab, ws)
+  const answer = await say(lab, ws, 'before the cancel')
+  assert.ok(answer.accepted)
+  const turn = await lab.turn(ws, 'in_progress')
+  const e = (await lab.state(ws)).current!
+  assert.ok((await lab.command(ws, 'Cancel', { execution: e.id, turn: turn.id })).accepted)
+  await lab.turn(ws, 'done')
+  await sleep(500)
+  assert.equal(prompts(await lab.entries(ws)).length, 1)
+  assert.equal((await lab.state(ws)).waiting.length, 1)
+  await projected(lab, ws, answer.position, 'waiting')
 })

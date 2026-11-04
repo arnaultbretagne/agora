@@ -404,6 +404,8 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           rows={1}
           autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
+          // Escape hides the commands listed; it cancels the turn only with none.
+          cancelOnEscape={matches.length === 0}
           placeholder={
             team
               ? 'Describe the goal for the team…'

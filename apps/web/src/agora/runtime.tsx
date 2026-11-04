@@ -136,6 +136,7 @@ const REFUSALS: Record<string, string> = {
   team_refused: 'The team could not be started.',
   invalid_goal: 'Describe the goal in a message of at most 4,000 characters.',
   prompt_unsupported: 'The agent does not take these attachments.',
+  stale_message: 'This message has already gone.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
@@ -362,10 +363,14 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       return
     }
     writing.current = true
-    void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt], mayWait: true }).finally(() => {
-      writing.current = false
-      setPending(null)
-    })
+    void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt], mayWait: true })
+      .then((written) => {
+        if (!written.accepted) setReturned({ text: pending.text, attachments: pending.attachments })
+      })
+      .finally(() => {
+        writing.current = false
+        setPending(null)
+      })
   }, [pending, id, state.complete, view, send])
 
   const messages = useMemo(() => {
@@ -400,7 +405,12 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       items: waiting.map((w) => ({ id: w.id, prompt: w.text, parts: [{ type: 'text' as const, text: w.text }] })),
       steerItems: [],
       enqueue: (message: AppendMessage) => void onNew(message),
-      steer: (message: AppendMessage) => void onNew(message),
+      steer: (message: AppendMessage) => {
+        void onNew(message)
+        // assistant-ui keeps a message with attachments as a row of the thread until the thread shows it, or its send
+        // rejects. Waiting, it has its place in the list: this takes it out of the thread.
+        if (message.attachments?.length) throw new Error('waiting')
+      },
       move: () => {},
       edit: () => {},
       remove: (item: string) => {

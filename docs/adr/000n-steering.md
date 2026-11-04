@@ -57,6 +57,7 @@ flowchart LR
 | After `session/cancel` | `injected`, `cancelled` answered, then its word said about 900 ms after that answer | `promptRequired`; nothing more |
 | During a shell command of 40 s | `injected`; the tool line `completed` at once, "moved to the background"; the turn ends about 5 s later without the result; about 30 s after, outside any turn, the agent reads the result and honours the message | `injected`; the command ends in its time; honoured; one `end_turn` |
 | During an MCP call of 30 s | The same: moved to the background, the turn ended, the result and the message said about 22 s after its end | The call ends in its time; honoured |
+| A session the deployed version wrote (0.85.1 with CLI 2.1.288; codex-acp 2.1.1 with codex 0.159.3), resumed by this one | The agent recalls the word it was given | The same |
 | As a tool line closes, more to do | `injected` in 4 ms; the next tool ends with its own result; honoured in that turn; one `end_turn`; nothing in the 30 s after | `injected` in 40 ms; honoured in that turn; one `end_turn`; nothing in the 30 s after |
 
 - **Holding the steer gives Claude what Codex does by itself.** Sent as a tool line closes, the message
@@ -91,3 +92,4 @@ flowchart LR
 - What an agent says after its turn's answer is shown, in that turn. Claude's own background tasks do
   this with no steer. The execution's deadline does not move for it.
 - A `session/prompt` line can now be written long after its Write: the catch-up is chosen when it goes.
+- A message held after a Cancel holds what comes after it: a flow's Write is refused `turn_active`, and it escalates after its 15 minutes, until the person sends or retracts.

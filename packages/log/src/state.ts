@@ -108,7 +108,7 @@ export interface State {
   steering: string | null
   /** The running turn takes no more messages: a `session/cancel` was written, or a `_session/steering` did not end `injected`. */
   unsteerable: boolean
-  /** A turn ended `cancelled`, and no Write has been accepted since: the messages waiting stay. */
+  /** A `session/cancel` was written, and no Write has been accepted since: the messages waiting stay. */
   held: boolean
   /** The tool calls of the running turn still open. */
   tools: Set<string>
@@ -338,11 +338,13 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             turn.status =
               entry.rpc_kind === 'error' ? 'failed' : result?.stopReason === 'cancelled' ? 'cancelled' : 'done'
             state.tools.clear()
-            if (turn.status === 'cancelled') state.held = true
           }
         }
       }
-      if (entry.method === 'session/cancel' && entry.direction === 'out') state.unsteerable = true
+      if (entry.method === 'session/cancel' && entry.direction === 'out') {
+        state.unsteerable = true
+        state.held = true
+      }
     }
     if (entry.kind === 'acp' && entry.direction === 'in' && entry.method === 'session/update' && execution && entry.session === execution.session) {
       const update = object(object(content.params)?.update)

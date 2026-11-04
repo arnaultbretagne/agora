@@ -128,7 +128,7 @@ the turn or after it (`log.md`, "Messages during a turn").
 | Send | **Cancel** while a turn runs; **Send** beside it once the composer holds something. Enter sends, as between turns. |
 | Waiting | Above the composer, oldest first, each message that waits as the thread gives it: its text on one line, cut, then its attachments counted; a cross sends **Retract**. Gone once sent or retracted. |
 | Sent into the turn | In the thread at its place, as a user's message; the agent's response goes on under it. |
-| Held | After a Cancel, or with no execution running, above them: "These go with your next message." |
+| Held | While messages wait with no turn running and sending open, as after a Cancel or with no execution running, above them: "These go with your next message." |
 | Refused | The reason above the composer, the text and attachments back in it. |
 
 ## Settings and commands
@@ -235,7 +235,7 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | From | Message | Placed at |
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
-| A message sent into a turn | Its `steered` `user` element: a `user` message, id `{turn}:user:{position}`, its `firstPosition`, with no turn's note, among its turn's messages; the `assistant` message split around it, the part after it id `{turn}:assistant:{position}`. A part with nothing to show is left out; each part `complete`, but the last, which has the turn's `status`. | Within its turn. |
+| A message sent into a turn | Its `steered` `user` element: a `user` message, id `{turn}:user:{position}`, its `firstPosition`, with no turn's note, among its turn's messages; the `assistant` message split around it, the part after it id `{turn}:assistant:{position}`. A part with nothing to show is left out, but the last; each part `complete`, but the last, which has the turn's `status`. | Within its turn. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
 | A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes — "a reminder" for one to a delegate —, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
@@ -484,7 +484,9 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
 | U71 | In a browser, an agent that does not, a turn running: two messages sent, the first retracted | Both above the composer, oldest first; the cross takes the first away, never sent; at the turn's end the second's turn. |
 | U72 | In a browser, a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
-| U73 | In a browser, a Write refused during a turn | Its reason above the composer; the text back in the composer. |
+| U73 | In a browser, a Write refused during a turn; a first message refused | Its reason above the composer; the text back in the composer; likewise. |
+| U74 | In a browser, a turn running: `/` typed, Escape; then Escape again | The commands hidden, the turn going on; then the turn cancelled. |
+| U75 | In a browser, a message with an attachment sent during a turn, then taken back | One line above the composer, its attachment counted; no message of it in the thread; taken back, gone, and never sent. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
