@@ -33,6 +33,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R25 | 2026-11-02 | `71a5cdb` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the thread read from the objects, real bridges and the mock agent on FakeKube. A first run that day failed L19 alone: the restarted lab's port was taken meanwhile (`EADDRINUSE`) while a restore ran on the same server; L19 alone then passed three times. Beside it, the schema applied to a copy of production's database, dumped that day: 121,438 thread rows, 88,556 objects, 168 anchors. |
 | R26 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; L99 on a real delegation in the lab. Beside it, `001.sql` of main then this commit's, twice, on a database with an entry: the entries' kinds widened in 72 ms, not checked again, the same constraint the second time, the entry kept, `delegation.started` accepted, an unknown kind refused. |
 | R27 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, taking `_session/steering` as the adapters do, or, with `AGORA_MOCK_NO_STEERING=1`, not saying it can. Each guard of a message's going was also removed in turn, and its case failed. |
+| R28 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. Cases L121 and L122. |
 
 ## Cases
 
@@ -184,8 +185,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L118 | — | local | R27 | proven | Stop during a turn: 500 ms after `cancelled`, one prompt, the message waiting; the next execution open, still one prompt; a next Write: the message's turn, then its own goes. A turn the agent ends `end_turn` after the Stop (mock `/stubborn`): one prompt, the message waiting. |
 | L119 | — | local | R27 | proven | The exchange's user `/sleep 2`; `[the user, during this turn: also this]` after `… second 1/2` and before `Slept`; the same in the catch-up's text. |
 | L120 | — | local | R27 | proven | The turn's elements `user`, `agent_message_chunk`, `tool`, `agent_message_chunk`, the last two after its answer; the turn `done`; `Said after the answer.` in its exchange; a Write accepted, its turn done. |
-| L121 | — | live | — | not verified | Asserted by `live-cases.ts`; no run on these images yet. |
-| L122 | — | live | — | not verified | Asserted by `live-cases.ts`; no run on these images yet. |
+| L121 | — | live | R28 | proven | Claude Code and Codex: one steering line, `injected`; one turn; the word said. OpenCode: no steering line; two turns; the word said. |
+| L122 | — | live | R28 | proven | A command of 40 s, Claude Code and Codex: no steering line 5 s into it; its line one position after the command closed, `injected`; on Claude Code, `FINISHED-…` in the tool line, not moved to the background; one turn; the word said; nothing said in the 20 s after its answer. |
 | L123 | — | local | R27 | proven | `invalid_body` for a prompt that is a string; `line_too_large` for 17 MiB of text; no command written, nothing waiting; the turn done, one prompt. |
 | L124 | — | local | R27 | proven | A Cancel, then a Write `waiting` true, the agent answering `end_turn`: its own turn. A Cancel with a message waiting and no Write after it, the same answer: 500 ms on, one prompt, the message and its element waiting. |
 
