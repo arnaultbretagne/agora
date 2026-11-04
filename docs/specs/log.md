@@ -602,7 +602,7 @@ exception message.
 | L119 | A catch-up over a turn with a message sent into it | That exchange: the agent's text, the message marked as the user's, the agent's next text, in order. |
 | L120 | The agent speaks and calls a tool after its turn's answer | Elements of that turn, after its others; in its exchange; the turn still `done`; a Write accepted as usual. |
 | L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
-| L122 | On Claude Code and Codex, such a Write during a long shell command, then during a long call to an MCP tool | The message waits until the tool closes; the tool's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
+| L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

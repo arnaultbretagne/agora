@@ -1,4 +1,4 @@
-// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex, E33 on all three), docs/specs/log.md (L…) and
+// Plays acceptance cases of docs/specs/executions.md (E…, E30 on opencode, E31 on codex, E33 on all three), docs/specs/log.md (L…, L121 and L122 on the real harnesses) and
 // docs/specs/credentials.md (C1–C4, C7–C16, C23–C26, C38) against the DEPLOYED lab, with real Kata sandboxes destroyed by
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
@@ -1104,6 +1104,84 @@ await check('D16', 'Delegation beyond the caller’s rights, each real harness: 
     await w.stop()
     assert(line !== undefined && /delegate/i.test(line.title), `${harness}: the approval names "${named}"; tool lines ${JSON.stringify(lines)}`)
     seen.push(`${harness}: the approval names ${named} ("${line.title}")`)
+  }
+  return seen.join(' | ')
+})
+
+// L121, L122 (docs/specs/log.md, "Messages during a turn"): a message written during a turn, as the client writes it.
+const mayWrite = (w: Workstream, text: string) => w.command('Write', { execution: w.execution, session: w.session }, { prompt: [{ type: 'text', text }], mayWait: true })
+const steeringLines = async (w: Workstream) => (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'out' && x.method === '_session/steering')
+const steeringOutcomes = async (w: Workstream) =>
+  (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.correlated_method === '_session/steering').map((x) => (x.content.result as Json)?.outcome)
+const drained = (w: Workstream, timeoutMs: number) =>
+  until('nothing left to go', async () => {
+    const state = await w.state()
+    return state.waiting.length === 0 && state.active === null && state.steering === null ? state : null
+  }, timeoutMs)
+const aWord = () => `WORD${String(100_000 + Math.floor(Math.random() * 900_000))}`
+
+await check('L121', 'A message during a turn, each real harness: into the turn where it can, its own turn otherwise', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const word = aWord()
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 } })
+    assert((await w.write('Write the numbers 1 to 150, one per line, then the word DONE.')).status === 200, `${harness}: Write refused`)
+    await until('its first words', async () => (await w.said()).length > 0, 120_000)
+    const written = await mayWrite(w, `Also finish your answer with the word ${word}.`)
+    assert(written.status === 200 && written.waiting === true, `${harness}: ${JSON.stringify(written)}`)
+    const state = await drained(w, 300_000)
+    const said = await w.said()
+    const [lines, outcomes, turns] = [await steeringLines(w), await steeringOutcomes(w), [...state.turns.values()]]
+    await w.stop()
+    assert(said.includes(word), `${harness}: the word not said: "${said.slice(-160)}"`)
+    if (harness === 'opencode') {
+      assert(lines.length === 0, `${harness}: ${String(lines.length)} steering lines`)
+      assert(turns.length === 2, `${harness}: ${String(turns.length)} turns`)
+    } else {
+      assert(lines.length === 1 && outcomes[0] === 'injected', `${harness}: ${String(lines.length)} steering lines, answered ${JSON.stringify(outcomes)}`)
+      assert(turns.length === 1, `${harness}: ${String(turns.length)} turns`)
+    }
+    seen.push(`${harness}: ${String(turns.length)} turn(s), steering ${JSON.stringify(outcomes)}, the word said`)
+  }
+  return seen.join(' | ')
+})
+
+await check('L122', 'A message during a long shell command, Claude Code and Codex: it waits for the command, then goes into the turn', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const word = aWord()
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 } })
+    const command = `node -e "setTimeout(()=>console.log('FINISHED-'+'${word}'),40000)"`
+    assert((await w.write(`Run exactly this shell command in the foreground, waiting for it, and report its output: ${command}`)).status === 200, `${harness}: Write refused`)
+    await until('the command running', async () => (await w.state()).tools.size > 0, 180_000)
+    const written = await mayWrite(w, `When you are done, also say the word ${word}-SAID.`)
+    assert(written.status === 200 && written.waiting === true, `${harness}: ${JSON.stringify(written)}`)
+    await sleep(5000)
+    assert((await steeringLines(w)).length === 0, `${harness}: a steering line while the command runs`)
+    const state = await drained(w, 300_000)
+    const entries = await w.entries()
+    const [line] = await steeringLines(w)
+    assert(line !== undefined, `${harness}: no steering line`)
+    const answer = entries.find((x) => x.kind === 'acp' && x.direction === 'in' && x.correlated_method === 'session/prompt')!
+    const updates = entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
+    const closes = updates.filter((x) => ['completed', 'failed'].includes(String((x.content.params as Json)?.update?.status)))
+    const finished = closes.find((x) => JSON.stringify(x.content).includes(`FINISHED-${word}`) && !JSON.stringify(x.content).includes('moved to the background'))
+    assert(finished !== undefined || harness === 'codex', `${harness}: the command's own result in no tool line`)
+    assert(BigInt(line.position) > BigInt(closes[0]!.position), `${harness}: the steering line before the command closed`)
+    assert((await steeringOutcomes(w))[0] === 'injected', `${harness}: answered ${JSON.stringify(await steeringOutcomes(w))}`)
+    assert([...state.turns.values()].length === 1, `${harness}: ${String(state.turns.size)} turns`)
+    // Nothing said after its answer, 20 s on.
+    await sleep(20_000)
+    const late = (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' && BigInt(x.position) > BigInt(answer.position) && ['agent_message_chunk', 'tool_call'].includes(String((x.content.params as Json)?.update?.sessionUpdate)))
+    const said = await w.said()
+    await w.stop()
+    assert(late.length === 0, `${harness}: ${String(late.length)} lines after its answer`)
+    assert(said.includes(`${word}-SAID`), `${harness}: the word not said: "${said.slice(-160)}"`)
+    seen.push(`${harness}: the steering line ${String(BigInt(line.position) - BigInt(closes[0]!.position))} positions after the command closed, injected, the word said in the turn, nothing after`)
   }
   return seen.join(' | ')
 })
