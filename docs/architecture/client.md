@@ -83,9 +83,10 @@ them. A notice becomes a line of its own between turns: a Session that starts or
 connection lost, a request that failed, an execution that ends.
 
 The Workstream view's state decides what the composer offers: writing when the execution is
-ready and no turn holds it; a reason when it is not; and with no execution running, starting one
-with the message. An uncertain turn keeps its note until the log proves how it ended; its banner
-offers to cancel it or stop the execution, never to send it again.
+ready, a turn running or not; a reason when it is not; and with no execution running, starting one
+with the message. A message written during a turn waits in the log, listed above the composer, until
+it goes into the turn or after it. An uncertain turn keeps its note until the log proves how it
+ended; its banner offers to cancel it or stop the execution, never to send it again.
 
 The screen follows assistant-ui's base skin, with the first Agora's colours and mark. A
 response's steps — reasoning, tools, the plan — are one line each, opened on demand; a permission

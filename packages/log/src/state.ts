@@ -6,6 +6,8 @@ import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, n
 import { DELEGATION_META, REPORT_META } from './marks.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
+/** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
+export const STEERING = '_session/steering'
 
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
 export interface Turn {
@@ -49,6 +51,8 @@ export interface Execution {
   profiles: string[]
   /** What its agent accepts in a prompt beyond text and resource links, once it has answered `initialize`. */
   promptCapabilities: PromptCapabilities | null
+  /** Its agent takes a message into a running turn: its `initialize` answer's `_meta.steering.supported`. */
+  steering: boolean
 }
 export interface PromptCapabilities {
   image: boolean
@@ -98,6 +102,16 @@ export interface State {
   question: Entry | null
   /** Each approval's wait (docs/specs/delegation.md, "Approval"): from its Ask to its end, open while pending. */
   waits: { from: string; to: string | null }[]
+  /** The messages waiting, oldest first: their Writes (docs/specs/log.md, "Messages during a turn"). */
+  waiting: Entry[]
+  /** The position of the `_session/steering` line unanswered, or null. */
+  steering: string | null
+  /** The running turn takes no more messages: a `session/cancel` was written, or a `_session/steering` did not end `injected`. */
+  unsteerable: boolean
+  /** A `session/cancel` was written, and no Write has been accepted since: the messages waiting stay. */
+  held: boolean
+  /** The tool calls of the running turn still open. */
+  tools: Set<string>
 }
 
 /** Whether a question's Ask is one of Agora's approvals (docs/specs/delegation.md, "Approval"). */
@@ -147,6 +161,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     permissions: new Map(),
     question: null,
     waits: [],
+    waiting: [],
+    steering: null,
+    unsteerable: false,
+    held: false,
+    tools: new Set(),
   }
   const turnsByRequest = new Map<string, Turn>([...state.turns.values()].map((turn) => [turn.requestPosition, turn]))
   for (const entry of entries) {
@@ -169,6 +188,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         usage: null,
         profiles: profilesIn(content.body),
         promptCapabilities: null,
+        steering: false,
       }
       state.executions.set(execution.id, execution)
       state.current = execution
@@ -190,6 +210,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       }
       state.question = null
     }
+    if (entry.kind === 'command' && content.kind === 'Write') {
+      state.held = false
+      if (content.waits === true) state.waiting.push(entry)
+    }
+    if (entry.kind === 'command' && content.kind === 'Retract') state.waiting = state.waiting.filter((w) => w.position !== String(object(content.target)?.message))
     if (entry.kind === 'command' && content.kind === 'Stop' && execution) execution.stopped = true
     if (entry.kind === 'command' && content.kind === 'Scope' && execution) execution.profiles = profilesIn(content.body)
     if (entry.kind === 'execution.obtained' && execution) execution.uid = String(content.uid)
@@ -222,6 +247,8 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       execution.connection = undefined
       for (const turn of state.turns.values())
         if (turn.execution === execution.id && !turn.answered) turn.status = 'failed'
+      if (state.steering !== null && state.requestPositions.get(state.steering)?.execution === execution.id) state.steering = null
+      state.tools.clear()
     }
     if (
       entry.kind === 'session.ended' ||
@@ -264,7 +291,12 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
           state.turns.set(turn.id, turn)
           turnsByRequest.set(entry.position, turn)
+          // A message that waited has gone; the new turn takes messages, its tools to come.
+          state.waiting = state.waiting.filter((w) => w.command !== entry.command)
+          state.unsteerable = false
+          state.tools.clear()
         }
+        if (entry.method === STEERING && entry.direction === 'out') state.steering = entry.position
       } else if (entry.rpc_kind === 'response' || entry.rpc_kind === 'error') {
         const requestKey = `${entry.direction === 'in' ? 'out' : 'in'}:${idKey(entry.rpc_id)}`
         const request = entry.request_position
@@ -278,6 +310,12 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           if (request.method === 'initialize' && entry.rpc_kind === 'response' && execution) {
             execution.initialized = true
             execution.promptCapabilities = promptCapabilitiesOf(content.result)
+            execution.steering = object(object(object(content.result)?._meta)?.steering)?.supported === true
+          }
+          if (request.method === STEERING) {
+            if (state.steering === request.position) state.steering = null
+            if (entry.rpc_kind === 'response' && object(content.result)?.outcome === 'injected') state.waiting = state.waiting.filter((w) => w.command !== request.command)
+            else state.unsteerable = true
           }
           // A Session's settings: those its opening answer gives, then each answer to a change.
           if (entry.rpc_kind === 'response' && execution && entry.session) {
@@ -299,8 +337,13 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             else delete turn.failure
             turn.status =
               entry.rpc_kind === 'error' ? 'failed' : result?.stopReason === 'cancelled' ? 'cancelled' : 'done'
+            state.tools.clear()
           }
         }
+      }
+      if (entry.method === 'session/cancel' && entry.direction === 'out') {
+        state.unsteerable = true
+        state.held = true
       }
     }
     if (entry.kind === 'acp' && entry.direction === 'in' && entry.method === 'session/update' && execution && entry.session === execution.session) {
@@ -312,6 +355,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           size = schemaValue(update.size)
         if (typeof used === 'number' && typeof size === 'number' && Number.isFinite(used) && used >= 0 && Number.isFinite(size) && size > 0)
           execution.usage = { used, size }
+      }
+      if ((update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') && typeof update.toolCallId === 'string') {
+        if (update.status === 'completed' || update.status === 'failed') state.tools.delete(update.toolCallId)
+        else if (update.sessionUpdate === 'tool_call' || update.status === 'pending' || update.status === 'in_progress') state.tools.add(update.toolCallId)
       }
     }
     if (entry.kind === 'acp.dispatching') {
@@ -335,6 +382,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       state.failures.add(position)
       if (content.reason === 'response_timeout') state.timedOut.add(position)
       state.outbox.delete(position)
+      if (state.steering === position) {
+        state.steering = null
+        state.unsteerable = true
+      }
       const turn = turnsByRequest.get(position)
       if (turn && !turn.answered) {
         turn.failure = content.reason
@@ -364,6 +415,8 @@ export class CoreProjection {
   private readonly ranks = new Map<string, number>()
   private readonly runs = new Map<string, { discriminator: string; id: string }>()
   private readonly turnCodes = new Map<string, string>()
+  /** Each waiting message's element, by its Write's command (docs/specs/log.md, "Elements"). */
+  private readonly waitingElements = new Map<string, string>()
   /** The Workstream view's title sources (docs/specs/log.md, "The Workstream view"). */
   private firstWrite: string | null = null
   /** The approval pending, as an element's id: what a Write refuses (docs/specs/delegation.md, "Approval"). */
@@ -396,6 +449,11 @@ export class CoreProjection {
       })
       changed.add(id)
     }
+    /** A message no longer waits: its element keeps its position and its status, not its blocks. */
+    const left = (id: string | undefined, status: 'sent' | 'retracted', position: string) => {
+      const previous = id === undefined ? undefined : objects.get(id)
+      if (id !== undefined && previous?.object.status === 'waiting') put('element', id, { type: 'waiting', position: previous.object.position, status }, position)
+    }
     for (const entry of entries) {
       const state = fold([entry], this.folded),
         active = state.active
@@ -416,6 +474,14 @@ export class CoreProjection {
         const line = text?.split('\n').map((l) => l.trim()).find((l) => l !== '')
         if (line) this.firstWrite = line.slice(0, 80)
       }
+      // A message that waits (docs/specs/log.md, "Messages during a turn"): its Write, then its line's or its Retract.
+      if (entry.kind === 'command' && entry.content.kind === 'Write' && entry.content.waits === true) {
+        const id = identity(entry.workstream, entry.position, 'waiting')
+        this.waitingElements.set(String(entry.command), id)
+        put('element', id, { type: 'waiting', position: entry.position, status: 'waiting', content: object(entry.content.body)?.prompt }, entry.position)
+      }
+      if (entry.kind === 'command' && entry.content.kind === 'Retract')
+        left(identity(entry.workstream, String(object(entry.content.target)?.message), 'waiting'), 'retracted', entry.position)
       // A question to the person (docs/specs/log.md, "Elements"): its Ask, then its Answer.
       if (entry.kind === 'command' && entry.content.kind === 'Ask') {
         const body = object(entry.content.body) ?? {}
@@ -580,6 +646,7 @@ export class CoreProjection {
         update = object(params?.update)
       const type = update?.sessionUpdate
       if (entry.method === 'session/prompt' && entry.direction === 'out') {
+        left(this.waitingElements.get(String(entry.command)), 'sent', entry.position)
         // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
         const blocks = Array.isArray(params?.prompt) ? (params.prompt as unknown[]) : null
         const catchUp = blocks?.map((b) => object(object(b)?._meta)?.[CATCH_UP_META]).find((m) => m !== undefined)
@@ -687,6 +754,18 @@ export class CoreProjection {
           { ...objects.get(id)?.object, status: 'answered', answer: entry.content.result ?? entry.content.error },
           entry.position,
         )
+      } else if ((entry.method ?? entry.correlated_method) === STEERING) {
+        // No element of its own. An `injected` answer sets the message in its turn, where the agent's text goes on after it.
+        if (entry.direction === 'in' && entry.rpc_kind === 'response' && request && state.answeredBy.get(request.position) === entry.position && object(entry.content.result)?.outcome === 'injected') {
+          left(this.waitingElements.get(String(request.command)), 'sent', entry.position)
+          put(
+            'element',
+            identity(request.session ?? entry.execution!, request.position, 'prompt'),
+            { type: 'user', steered: true, turn: turn?.id, session: request.session, content: object(request.content.params)?.prompt },
+            entry.position,
+          )
+          if (turn) runs.delete(turn.id)
+        }
       } else if (
         !['initialize', 'session/prompt', 'session/new', 'session/resume', 'session/load', 'session/cancel'].includes(
           entry.method ?? entry.correlated_method ?? '',

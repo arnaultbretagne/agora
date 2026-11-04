@@ -5,7 +5,7 @@
 // Sending with no execution running starts one first (docs/specs/assistant-ui.md, "Sending"): a new
 // Workstream is created on its first message, never before; the message waits, shown, until its
 // Session is open, then is written.
-import { AssistantRuntimeProvider, useExternalStoreRuntime, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
+import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
@@ -24,6 +24,7 @@ import {
   poolSettings,
   startBody,
   TEAM,
+  waitingOf,
   withAccess,
   workstreamOf,
   type AccessEntry,
@@ -32,6 +33,7 @@ import {
   type Composer,
   type Setting,
   type ListRow,
+  type Waiting,
   type WorkstreamView,
 } from './view.ts'
 
@@ -104,6 +106,8 @@ export interface Agora {
   readonly delegates: readonly ListRow[]
   /** The messages handed to assistant-ui, which shows them a render later. */
   readonly messages: readonly ThreadMessageLike[]
+  /** The messages waiting, oldest first (docs/specs/assistant-ui.md, "Messages during a turn"). */
+  readonly waiting: readonly Waiting[]
 }
 
 const AgoraContext = createContext<Agora | null>(null)
@@ -132,6 +136,7 @@ const REFUSALS: Record<string, string> = {
   team_refused: 'The team could not be started.',
   invalid_goal: 'Describe the goal in a message of at most 4,000 characters.',
   prompt_unsupported: 'The agent does not take these attachments.',
+  stale_message: 'This message has already gone.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
@@ -182,7 +187,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // A draft has no thread to wait for: sending is offered at once, and starts everything. A team just
   // launched waits for its lead's first turn.
   const composer = useMemo<Composer>(() => {
-    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false }
+    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false, held: false }
     const own = composerOf(state, view)
     const starting = launched.has(id) && state.complete && ![...state.objects.values()].some((o) => o.kind === 'turn')
     return starting ? { ...own, open: false, create: false, reason: 'The team is starting…' } : own
@@ -358,10 +363,14 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       return
     }
     writing.current = true
-    void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt] }).finally(() => {
-      writing.current = false
-      setPending(null)
-    })
+    void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt], mayWait: true })
+      .then((written) => {
+        if (!written.accepted) setReturned({ text: pending.text, attachments: pending.attachments })
+      })
+      .finally(() => {
+        writing.current = false
+        setPending(null)
+      })
   }, [pending, id, state.complete, view, send])
 
   const messages = useMemo(() => {
@@ -375,20 +384,51 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     ] satisfies ThreadMessageLike[]
   }, [state, pending, id])
 
+  const onNew = useCallback(
+    async (message: AppendMessage) => {
+      const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+      const draft = { text, attachments: message.attachments ?? [] }
+      const prompt = promptOf(text, draft.attachments)
+      attachments?.sent()
+      if (composer.create) return start(draft, prompt)
+      // During a turn it waits; refused, it comes back to the composer.
+      const written = await send('Write', { execution: view.execution, session: view.session }, { prompt, mayWait: true })
+      if (!written.accepted) setReturned(draft)
+    },
+    [attachments, composer.create, start, send, view.execution, view.session],
+  )
+
+  const waiting = useMemo(() => waitingOf(state), [state])
+  // The log holds the messages (docs/specs/assistant-ui.md, "The connection point"): this lists them, sends and takes one back.
+  const queue = useMemo(
+    () => ({
+      items: waiting.map((w) => ({ id: w.id, prompt: w.text, parts: [{ type: 'text' as const, text: w.text }] })),
+      steerItems: [],
+      enqueue: (message: AppendMessage) => void onNew(message),
+      steer: (message: AppendMessage) => {
+        void onNew(message)
+        // assistant-ui keeps a message with attachments as a row of the thread until the thread shows it, or its send
+        // rejects. Waiting, it has its place in the list: this takes it out of the thread.
+        if (message.attachments?.length) throw new Error('waiting')
+      },
+      move: () => {},
+      edit: () => {},
+      remove: (item: string) => {
+        const message = waiting.find((w) => w.id === item)
+        if (message) void send('Retract', { message: message.position }, {})
+      },
+    }),
+    [waiting, onNew, send],
+  )
+
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages,
     convertMessage: (message) => message,
     // While an approval waits, Send in place of Cancel: what is sent refuses it.
     isRunning: (composer.running && !composer.refuses) || (pending !== null && pending.workstream === id),
     isSendDisabled: !composer.open || (pending !== null && pending.workstream === id),
-    onNew: async (message) => {
-      const text = message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
-      const draft = { text, attachments: message.attachments ?? [] }
-      const prompt = promptOf(text, draft.attachments)
-      attachments?.sent()
-      if (composer.create) return start(draft, prompt)
-      await send('Write', { execution: view.execution, session: view.session }, { prompt })
-    },
+    onNew,
+    queue,
     adapters: { attachments },
     onCancel: async () => {
       if (composer.cancellable) await send('Cancel', { execution: view.execution, turn: composer.cancellable.id }, {})
@@ -438,6 +478,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     line,
     delegates: delegates.rows,
     messages,
+    waiting,
   }
   return (
     <AgoraContext.Provider value={agora}>

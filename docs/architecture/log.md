@@ -103,8 +103,11 @@ recorded evidence permits.
 
 ## Commands and recovery
 
-A single turn at a time per Workstream: a Write is refused while a turn is saved, in progress or
-uncertain, because adapters disagree on a second prompt. Commands and their dispatch share one
+A single turn at a time per Workstream, because adapters disagree on a second prompt. A message
+written meanwhile can wait: it stays in the log, with no line, then goes into the running turn when
+the adapter offers steering and no tool is running, or as the next turn otherwise. Without saying it
+may wait, a Write is refused while a turn is saved, in progress or uncertain, so that a caller waiting
+for a turn of its own, as a flow is, gets one. Commands and their dispatch share one
 ordering, including Stop and any future configuration changes. Cancellation rechecks its target
 immediately before sending; a late cancellation must not hit the next turn.
 

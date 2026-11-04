@@ -32,6 +32,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R24 | 2026-11-01 | `bd2f569` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the tree's cases on the lists' bench (`packages/log/test/lists.ts`), entries a second apart, with and without the proxy's header. Beside it, the one-off mapping script on a throwaway database shaped as production: the dry run changed nothing, applied it moved the 33, run again it refused. |
 | R25 | 2026-11-02 | `71a5cdb` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; the thread read from the objects, real bridges and the mock agent on FakeKube. A first run that day failed L19 alone: the restarted lab's port was taken meanwhile (`EADDRINUSE`) while a restore ran on the same server; L19 alone then passed three times. Beside it, the schema applied to a copy of production's database, dumped that day: 121,438 thread rows, 88,556 objects, 168 anchors. |
 | R26 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; L99 on a real delegation in the lab. Beside it, `001.sql` of main then this commit's, twice, on a database with an entry: the entries' kinds widened in 72 ms, not checked again, the same constraint the second time, the entry kept, `delegation.started` accepted, an unknown kind refused. |
+| R27 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, taking `_session/steering` as the adapters do, or, with `AGORA_MOCK_NO_STEERING=1`, not saying it can. Each guard of a message's going was also removed in turn, and its case failed. |
 
 ## Cases
 
@@ -166,6 +167,27 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L98 | simulated: forced-state, the `thread` table and its rows written as the schema before left them | local | R25 | proven | Objects at 5 and 6, the reset at 3, `thread` gone, 2 anchors left; read from 2, the reset then both; from 5, the one changed since; applied again, unchanged. |
 | L98 | — | local | R25 | proven | On the copy of production: all 88,556 objects at their last change, none at zero; the 42 last resets; `thread` gone; 94 anchors left, exactly the last per Workstream and harness; 770 MB, then 588 MB, 421 MB once compacted. |
 | L99 | — | local | R26 | proven | The delegate's view and its row: `working`, then `completed`, then after `to` `working` and `completed` again; the caller's view and row: no `delegation`. |
+| L105 | — | local | R27 | proven | Answered `waiting` true; no line, no steering line; the element `waiting` with its blocks. The turn answered: its `session/prompt` under the Write's command, after that answer; the element `sent`, without its blocks; the turn's one `user` element, not `steered`. |
+| L106 | — | local | R27 | proven | Behind a message held by a Cancel, a Write without `mayWait` refused `turn_active`, nothing written. That message retracted: a Write with `mayWait` accepted with no `waiting`, its line written. |
+| L107 | — | local | R27 | proven | The second `retracted`, without its blocks; `one`, then `three`, each its own turn, the second's line after the first's answer; `stale_message` for the one sent and for position 999999. |
+| L108 | — | local | R27 | proven | One line, its prompt the blocks, `_meta` `idleBehavior` `promptRequired`, under the Write's command; the element `sent`; the turn's elements in position order `user`, `agent_message_chunk`, `user` `steered`, `agent_message_chunk`, the second text holding `Heard: also this`; one prompt, one answer; no `acp` element of it. |
+| L109 | — | local | R27 | proven | The mock answering 2.5 s later: the second line not written 500 ms after its Write, then after the first's answer; `one`, then `two`, both `injected`; one prompt. |
+| L110 | — | local | R27 | proven | Through `pending` and `in_progress`, 500 ms watched: no line. Closed `completed`, closed `failed`: its line, no received line between the close and it; one prompt; the element `sent`. |
+| L111 | — | local | R27 | proven | Each of `promptRequired`, `failed` and an error: the message and its element still waiting, no `steered` element; one line 300 ms on; then its own turn, and still one line. |
+| L112 | real: the agent never answers (mock `/steering silent`) | local | R27 | proven | A timeout of 1.5 s: a Retract before it `stale_message`; `request.failed` `response_timeout`; the execution not failed; the message waiting, one prompt; its own turn once the turn is answered. |
+| L113 | — | local | R27 | proven | The turn `cancelled`: 500 ms on, no steering line, one prompt, the message and its element waiting. A next Write `waiting` true; then `held`, then `next`, each its own turn. |
+| L114 | — | local | R27 | proven | The tool closed, the permission pending: no line, 500 ms watched; answered: its line, one prompt. The same with a question and its Answer. |
+| L115 | — | local | R27 | proven | No steering line before the second's turn. `/recall` first, alone, read as a command (`You told me…`); then the catch-up, the text and the image, three blocks; then `plain`, alone, without the catch-up. |
+| L116 | real: Agora ended on the spot in its process (`restart`, `halt`) | local | R27 | proven | With a message waiting: sent after the restart, one marker, the second of two prompts. Its steering line sent, the mock answering 2.5 s later: one line, one marker, the answer applied, the element `sent`, one prompt. |
+| L116 | simulated: fault-point, the dispatcher held at the steering line's `after_marker`, then Agora ended on the spot | local | R27 | proven | One line, one marker, no `acp.sent`; `request.failed` `response_timeout` after the 1.5 s timeout; then the message's own turn. |
+| L117 | real: the adapter exits during the turn (mock `/die`, code 3) | local | R27 | proven | The message waiting through `execution.lost` and `execution.ended`, two prompts. A Create and no Write: its prompt, two text blocks, the catch-up holding the first exchange, then the message; the element `sent`. |
+| L118 | — | local | R27 | proven | Stop during a turn: 500 ms after `cancelled`, one prompt, the message waiting; the next execution open, still one prompt; a next Write: the message's turn, then its own goes. A turn the agent ends `end_turn` after the Stop (mock `/stubborn`): one prompt, the message waiting. |
+| L119 | — | local | R27 | proven | The exchange's user `/sleep 2`; `[the user, during this turn: also this]` after `… second 1/2` and before `Slept`; the same in the catch-up's text. |
+| L120 | — | local | R27 | proven | The turn's elements `user`, `agent_message_chunk`, `tool`, `agent_message_chunk`, the last two after its answer; the turn `done`; `Said after the answer.` in its exchange; a Write accepted, its turn done. |
+| L121 | — | live | — | not verified | Asserted by `live-cases.ts`; no run on these images yet. |
+| L122 | — | live | — | not verified | Asserted by `live-cases.ts`; no run on these images yet. |
+| L123 | — | local | R27 | proven | `invalid_body` for a prompt that is a string; `line_too_large` for 17 MiB of text; no command written, nothing waiting; the turn done, one prompt. |
+| L124 | — | local | R27 | proven | A Cancel, then a Write `waiting` true, the agent answering `end_turn`: its own turn. A Cancel with a message waiting and no Write after it, the same answer: 500 ms on, one prompt, the message and its element waiting. |
 
 ## Not covered
 
@@ -174,3 +196,6 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | What the real harnesses accept, in the cluster's catalogue, and the blocks they are given (L67 and L68 run with the mock agent) | #147 |
 | A long streamed message: each chunk rewrites its whole element, quadratic in its length | #113 |
 | A failed restore — `anchor_missing`, `restore_failed` — and a Session opening left unanswered | #109 |
+| A message an agent accepts as its turn ends: `injected`, and nothing said of it | #167 |
+| A steer reaching Claude Code in the milliseconds a tool starts, before Agora sees its line: the tool moved to the background | #167 |
+| A message that crosses to a harness that does not take its attachments: its turn fails at the agent, or its execution is lost | #167 |
