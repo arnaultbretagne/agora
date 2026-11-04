@@ -1,12 +1,13 @@
 // The composer (docs/specs/assistant-ui.md, "Sending"), in assistant-ui's base skin: one bordered
 // field, the harness, model and access pickers inside it where their model picker sits, Send on the
-// right, or Cancel while the agent works. Above it, what the user must know before sending: a
-// refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits.
+// right, Cancel beside it while the agent works. Above it, what the user must know before sending: a
+// refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits,
+// the messages waiting.
 // Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
 // "On a phone"): the harness's, the effort's bars, the key. Before them, the paperclip, when the agent
 // takes images or files; what is attached shows above the text ("Attachments").
-import { AuiIf, ComposerPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon } from 'lucide-react'
+import { AuiIf, ComposerPrimitive, QueueItemPrimitive, useAui, useAuiState } from '@assistant-ui/react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, XIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
@@ -102,7 +103,7 @@ const ModelPicker: FC = () => {
   const rank = choice.efforts.findIndex((o) => o.value === choice.current.effort)
   const Bars = EFFORT_BARS[choice.efforts.length < 2 ? 3 : Math.round((3 * rank) / (choice.efforts.length - 1))]
   const changing = !composer.create && view.configuring === true
-  const closed = !composer.create && (!composer.open || changing)
+  const closed = !composer.create && (!composer.open || composer.running || changing)
   const item = (setting: string, value: string, label: string, current: string | null) => (
     <DropdownMenu.Item key={`${setting}:${value}`} className={menuItemClass} onSelect={() => chooseSetting(setting, value)}>
       <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', value === current ? 'opacity-100' : 'opacity-0')} />
@@ -306,6 +307,37 @@ const Notes: FC = () => {
   )
 }
 
+/** The messages waiting, oldest first, each with its cross (docs/specs/assistant-ui.md, "Messages during a turn"). */
+const WaitingMessages: FC = () => {
+  const { waiting, composer } = useAgora()
+  if (waiting.length === 0) return null
+  return (
+    <div role="list" aria-label="Messages waiting" className="border-foreground/10 rounded-surface -mb-1 flex flex-col border p-1">
+      {composer.held && <p className="text-muted-foreground px-2 py-1 text-[12px]">These go with your next message.</p>}
+      <ComposerPrimitive.Queue>
+        {({ queueItem }) => {
+          const attached = waiting.find((w) => w.id === queueItem.id)?.attachments ?? 0
+          return (
+            <div role="listitem" className="flex items-center gap-2 rounded-sm px-2 text-[13px]">
+              <ClockIcon aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
+              <QueueItemPrimitive.Text className="min-w-0 flex-1 truncate" />
+              {attached > 0 && (
+                <span title={`${String(attached)} attached`} className="text-muted-foreground flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums">
+                  <PaperclipIcon aria-hidden className="size-3" />
+                  {attached}
+                </span>
+              )}
+              <QueueItemPrimitive.Remove aria-label="Take back" title="Take back" className={cn(quietButton, 'grid w-7 shrink-0 place-items-center px-0 pointer-coarse:w-9')}>
+                <XIcon className="size-3.5" />
+              </QueueItemPrimitive.Remove>
+            </div>
+          )
+        }}
+      </ComposerPrimitive.Queue>
+    </div>
+  )
+}
+
 export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
   const { returned, takeReturned, pending, composer, commands, promptCapabilities, pool } = useAgora()
@@ -313,6 +345,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
   const text = useAuiState((s) => s.composer.text)
+  const empty = useAuiState((s) => s.composer.isEmpty)
   const [highlighted, setHighlighted] = useState(0)
   const [dismissed, setDismissed] = useState<string | null>(null)
   const matches = dismissed === text ? [] : commandsMatching(commands, text)
@@ -364,6 +397,7 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
           ))}
         </div>
       )}
+      <WaitingMessages />
       <ComposerPrimitive.Root className="border-foreground/10 bg-muted/30 focus-within:border-foreground/25 rounded-thread @container flex w-full flex-col border transition-colors">
         <ComposerAttachments />
         <ComposerPrimitive.Input
@@ -396,18 +430,22 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
               </span>
             ) : (
               <>
-                <AuiIf condition={(s) => !s.thread.isRunning}>
+                <AuiIf condition={(s) => s.thread.isRunning}>
+                  {/* Quiet once Send stands beside it. */}
+                  <ComposerPrimitive.Cancel
+                    aria-label="Cancel the turn"
+                    className={cn('rounded-control grid size-7 place-items-center pointer-coarse:size-9', empty ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground')}
+                  >
+                    <SquareIcon className="size-3 fill-current" />
+                  </ComposerPrimitive.Cancel>
+                </AuiIf>
+                <AuiIf condition={(s) => !s.thread.isRunning || !s.composer.isEmpty}>
                   <ComposerPrimitive.Send
                     aria-label="Send"
                     className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center transition-opacity disabled:opacity-40 pointer-coarse:size-9"
                   >
                     <ArrowUpIcon className="size-4" />
                   </ComposerPrimitive.Send>
-                </AuiIf>
-                <AuiIf condition={(s) => s.thread.isRunning}>
-                  <ComposerPrimitive.Cancel aria-label="Cancel the turn" className="bg-primary text-primary-foreground rounded-control grid size-7 place-items-center pointer-coarse:size-9">
-                    <SquareIcon className="size-3 fill-current" />
-                  </ComposerPrimitive.Cancel>
                 </AuiIf>
               </>
             )}

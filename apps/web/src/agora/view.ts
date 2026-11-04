@@ -136,6 +136,8 @@ export interface Composer {
   readonly pendingPermission: ViewObject | null
   /** What is sent refuses the pending approval (docs/specs/delegation.md, "Approval"). */
   readonly refuses: boolean
+  /** Messages wait for the next one: nothing else sends them (docs/specs/assistant-ui.md, "Messages during a turn"). */
+  readonly held: boolean
 }
 
 const STATE_REASON: Record<WorkstreamState, string | null> = {
@@ -166,7 +168,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
   const settling = view.state === 'ready' && view.configuring === true
   // A pending approval leaves sending open, a turn running included: what is sent refuses it (docs/specs/assistant-ui.md).
-  if (state.complete && pending(true)) return { open: true, create: false, reason: null, running, cancellable, uncertain, pendingPermission, refuses: true }
+  if (state.complete && pending(true)) return { open: true, create: false, reason: null, running, cancellable, uncertain, pendingPermission, refuses: true, held: false }
   const reason = !state.complete
     ? 'Loading…'
     : pendingQuestion
@@ -181,8 +183,36 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
             : null)
   // A question holds sending back in every state, a first message included (docs/specs/assistant-ui.md).
   const create = state.complete && IDLE.includes(view.state) && !pendingQuestion
-  const open = create || (state.complete && view.state === 'ready' && active === null && pendingPermission === null && !pendingQuestion && !settling)
-  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false }
+  // A turn running leaves sending open: what is sent waits (docs/specs/assistant-ui.md, "Messages during a turn").
+  const open = create || (state.complete && view.state === 'ready' && uncertain === null && pendingPermission === null && !pendingQuestion && !settling)
+  const held = waitingOf(state).length > 0 && (IDLE.includes(view.state) || (last !== undefined && status(last) === 'cancelled'))
+  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false, held }
+}
+
+/** A message that waits, as the list above the composer shows it (docs/specs/assistant-ui.md, "Messages during a turn"). */
+export interface Waiting {
+  readonly id: string
+  /** Its Write's position: what a Retract names. */
+  readonly position: string
+  readonly text: string
+  /** Its blocks that are not text. */
+  readonly attachments: number
+}
+
+/** The messages waiting, oldest first. */
+export function waitingOf(state: ThreadState): Waiting[] {
+  return ofKind(state, 'element')
+    .filter((e) => e.object.type === 'waiting' && e.object.status === 'waiting')
+    .sort(byPosition)
+    .map((e) => {
+      const blocks = list(e.object.content).map((b) => json(b))
+      return {
+        id: e.id,
+        position: text(e.object.position),
+        text: blocks.filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n'),
+        attachments: blocks.filter((b) => b?.type !== 'text').length,
+      }
+    })
 }
 
 // ---------------------------------------------------------------- notices
@@ -817,6 +847,10 @@ export function excerpt(line: string, text: string, lead = 16): Excerpt {
 
 // ---------------------------------------------------------------- messages
 
+/** A `user` element's text blocks. */
+const textOf = (user: ViewObject | undefined): string =>
+  list(user?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n')
+
 export function messagesOf(state: ThreadState): ThreadMessageLike[] {
   const elements = ofKind(state, 'element').sort(byPosition)
   const placed: { position: string; messages: ThreadMessageLike[] }[] = []
@@ -825,12 +859,18 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
   const gates = new Map(elements.filter((e) => isGate(e) && tools.has(text(e.object.toolCallId))).map((e) => [text(e.object.toolCallId), e]))
   for (const turn of turnsOf(state)) {
     const own = elements.filter((e) => e.object.turn === turn.id)
-    const prompt = own.find((e) => e.object.type === 'user')
+    const prompt = own.find((e) => e.object.type === 'user' && e.object.steered !== true)
     // A report of Agora's in place of the person's message (docs/specs/delegation.md, "Reports").
     const report = own.find((e) => e.object.type === 'report')
     const from = text(prompt?.object.from)
     const custom = { turnStatus: status(turn), turn: turn.id }
     const pending = own.some((e) => e.object.type === 'permission' && e.object.status === 'pending')
+    // The response, cut at each message sent into the turn (docs/specs/assistant-ui.md, "Messages").
+    const responses: { said: ViewObject | null; parts: ViewObject[] }[] = [{ said: null, parts: [] }]
+    for (const e of own) {
+      if (e.object.steered === true) responses.push({ said: e, parts: [] })
+      else if (e.object.type !== 'user' && e.object.type !== 'report') responses.at(-1)!.parts.push(e)
+    }
     placed.push({
       position: text(turn.object.requestPosition),
       messages: [
@@ -844,21 +884,39 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
           : {
               id: `${turn.id}:user`,
               role: 'user',
-              content: [{ type: 'text', text: list(prompt?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n') }],
+              content: [{ type: 'text', text: textOf(prompt) }],
               attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
               // A delegate's message from its caller is the caller's, not the person's.
               metadata: { custom: from ? { ...custom, from } : custom },
             },
-        {
-          id: `${turn.id}:assistant`,
-          role: 'assistant',
-          content: partsOf(
-            own.filter((e) => e.object.type !== 'user' && e.object.type !== 'report'),
-            gates,
-          ),
-          status: assistantStatus(turn, pending),
-          metadata: { custom },
-        },
+        ...responses.flatMap(({ said, parts }, i): ThreadMessageLike[] => {
+          const at = said ? `:${text(said.object.firstPosition)}` : ''
+          const last = i === responses.length - 1
+          return [
+            ...(said
+              ? [
+                  {
+                    id: `${turn.id}:user${at}`,
+                    role: 'user' as const,
+                    content: [{ type: 'text' as const, text: textOf(said) }],
+                    attachments: attachmentsOf(list(said.object.content), said.object),
+                    metadata: { custom: { turn: turn.id, steered: true } },
+                  },
+                ]
+              : []),
+            ...(last || parts.length > 0
+              ? [
+                  {
+                    id: `${turn.id}:assistant${at}`,
+                    role: 'assistant' as const,
+                    content: partsOf(parts, gates),
+                    status: last ? assistantStatus(turn, pending) : ({ type: 'complete', reason: 'stop' } as const),
+                    metadata: { custom },
+                  },
+                ]
+              : []),
+          ]
+        }),
       ],
     })
   }

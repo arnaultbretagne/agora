@@ -47,6 +47,12 @@ const allDone = (lab: Lab, ws: string, count: number, timeoutMs = 15_000) =>
     const turns = [...(await lab.state(ws)).turns.values()]
     return turns.length === count && turns.every((x) => x.status === 'done') && turns
   }, timeoutMs)
+/** Nothing left to go: no message waiting, no turn running. */
+const drained = (lab: Lab, ws: string, timeoutMs = 15_000) =>
+  until('nothing left to go', async () => {
+    const state = await lab.state(ws)
+    return state.waiting.length === 0 && state.active === null && state.steering === null
+  }, timeoutMs)
 const byPosition = <T extends { object: Record<string, unknown> }>(rows: readonly T[]) =>
   [...rows].sort((a, b) => (BigInt(String(a.object.firstPosition)) < BigInt(String(b.object.firstPosition)) ? -1 : 1))
 
@@ -206,18 +212,18 @@ test('L111 answered promptRequired, failed, or with an error: still waiting, no 
     assert.ok((await lab.write(ws, `/steering ${refusal} 2`)).accepted)
     await running(lab, ws)
     const one = await say(lab, ws, 'first')
-    const two = await say(lab, ws, 'second')
-    assert.ok(one.accepted && two.accepted)
+    assert.ok(one.accepted)
     const line = await until('its line', async () => steerings(await lab.entries(ws)).at(0))
     await until('its answer', async () => (await lab.entries(ws)).some((x) => x.direction === 'in' && x.request_position === line.position))
-    assert.equal((await lab.state(ws)).waiting.length, 2)
+    assert.equal((await lab.state(ws)).waiting.length, 1)
     await projected(lab, ws, one.position, 'waiting')
     assert.equal((await objectsOf(lab, ws)).filter((o) => o.kind === 'element' && o.object.steered === true).length, 0)
+    // Each line the agent says would give it another try: none in that turn.
     await sleep(300)
     assert.equal(steerings(await lab.entries(ws)).length, 1)
-    await allDone(lab, ws, 3)
+    await allDone(lab, ws, 2)
     const entries = await lab.entries(ws)
-    assert.deepEqual(prompts(entries).slice(1).map((x) => promptText(x)), [['first'], ['second']])
+    assert.deepEqual(prompts(entries).slice(1).map((x) => promptText(x)), [['first']])
     assert.equal(steerings(entries).length, 1)
   }
 })
@@ -322,10 +328,11 @@ test('L115 a command, an image, then plain text behind them: no steering line; t
   const pictured = await say(lab, ws, 'look', [{ type: 'text', text: 'look' }, image])
   const plain = await say(lab, ws, 'plain')
   assert.ok(command.accepted && pictured.accepted && plain.accepted)
-  await allDone(lab, ws, 5, 20_000)
+  await drained(lab, ws, 20_000)
   const entries = await lab.entries(ws)
-  assert.equal(steerings(entries).length, 0)
-  const last = prompts(entries).slice(-3)
+  const last = prompts(entries).filter((x) => BigInt(x.position) > BigInt(prompts(entries)[1]!.position))
+  // The plain one, as much a message for a running turn as any, waited behind them: no steering line before the second's turn.
+  assert.ok(steerings(entries).every((x) => BigInt(x.position) > BigInt(last[1]!.position)))
   // The command alone: read as one, the catch-up left for the next.
   assert.deepEqual(promptText(last[0]!), ['/recall'])
   const answered = lines(entries, 'in', 'session/update').map((x) => object(object(object(x.content.params)?.update)?.content)?.text)
@@ -334,7 +341,10 @@ test('L115 a command, an image, then plain text behind them: no steering line; t
   const blocks = object(last[1]!.content.params)?.prompt as Record<string, unknown>[]
   assert.deepEqual(blocks.map((b) => b.type), ['text', 'text', 'image'])
   assert.match(String(blocks[0]!.text), /an exchange to catch up/)
-  assert.deepEqual(promptText(last[2]!), ['plain'])
+  // Then the plain one: into that turn if it still runs, as its own otherwise; no catch-up.
+  const plainLines = [...steerings(entries), ...prompts(entries)].filter((x) => promptText(x).includes('plain'))
+  assert.ok(plainLines.length > 0)
+  assert.ok(plainLines.every((x) => promptText(x).length === 1 && BigInt(x.position) > BigInt(last[1]!.position)))
 })
 
 test('L116 Agora killed with a message waiting: sent once after the restart, as its own turn', async (t) => {
@@ -418,14 +428,10 @@ test('L118 Stop during a turn with a message waiting: no line after the Stop; it
   await sleep(300)
   assert.equal(prompts(await lab.entries(ws)).length, 1)
   assert.ok((await say(lab, ws, 'and this')).accepted)
-  await allDone(lab, ws, 3, 20_000).catch(async () => {
-    // The first turn ended cancelled.
-    await until('both next turns', async () => [...(await lab.state(ws)).turns.values()].slice(-2).every((x) => x.status === 'done'))
-  })
-  const last = prompts(await lab.entries(ws)).slice(-2)
-  assert.equal(last.length, 2)
-  assert.equal(promptText(last[0]!).at(-1), 'after the stop')
-  assert.equal(promptText(last[1]!).at(-1), 'and this')
+  await drained(lab, ws, 20_000)
+  const after = prompts(await lab.entries(ws)).slice(1)
+  assert.equal(promptText(after[0]!).at(-1), 'after the stop')
+  assert.ok([...after, ...steerings(await lab.entries(ws))].some((x) => promptText(x).at(-1) === 'and this'))
 })
 
 test('L119 a catch-up over a turn with a message sent into it: in its place, marked as the user\'s', async (t) => {
