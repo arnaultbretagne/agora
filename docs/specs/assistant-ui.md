@@ -95,8 +95,9 @@ in the header, after the harness.
 | `failed` | failed | Open: sending starts a new execution. |
 | `ended` | ended | Open: sending starts a new execution, which continues the Workstream. |
 
-In `ready`, sending is open when the snapshot is complete, no turn is saved, in progress or
-uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
+In `ready`, sending is open when the snapshot is complete, no turn is uncertain, no permission is
+pending, and no setting is being changed; during a turn saved or in progress, what is sent waits
+("Messages waiting"). Otherwise the reason shows
 above the composer: the state's, then "Answer the permission request above.", then "Applying the
 settings…", then the uncertain turn's banner. A pending question closes sending in every state,
 starting an execution included, before any other reason: "Answer the question above." A pending
@@ -116,6 +117,19 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | Create | `pool`; `settings`: the model and effort picked, if any; `profiles`: the access picked, if any ("Access"). |
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
+
+### Messages waiting
+
+What is sent during a turn waits (`log.md`, "Messages waiting"), through assistant-ui's queue adapter
+(`queue`), its items the Workstream's `waiting` elements with status `waiting`.
+
+| Element | Rule |
+| --- | --- |
+| Sending | `enqueue` sends a **Write**; Send stays beside Cancel while a turn runs. |
+| The queue | Above the composer, oldest first: each message's text and, when it is not the person's, who wrote it; a button removing it. |
+| Removing | `remove` sends **Retract**: gone at once, back if refused. |
+| Once sent | It leaves the queue for its place in the thread. |
+| Not offered | Editing a waiting message, moving it, `steer`. |
 
 ## Settings and commands
 
@@ -213,7 +227,7 @@ The Workstream list and the permission card are the client's own: they call the 
 the runtime (**RespondPermission** with the option chosen).
 
 Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `setMessages`,
-`queue`, `suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
+`suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
 
 ## Messages
 
@@ -221,11 +235,12 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
-| A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes — "a reminder" for one to a delegate —, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
+| A message of Agora's | A `user` element `as` `agora`, or an earlier delegation's `report` element, in place of its turn's `user` message: a `system` message, id `{turn}:report`, one line, "From Agora", opening on its text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
-Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown. A `user`
-element with `from` is shown as its caller's, named by the caller's title, not as the person's.
+Elements with no turn, `user_message_chunk` elements, `waiting` elements and `acp` elements are not
+shown among the messages. A `user` element with `from` is shown as its writer's, not as the person's:
+named by that Workstream's title, a link to it, its text as Markdown, whole.
 
 ### A turn's states
 
@@ -278,7 +293,7 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | Tone | Running (`pending`, `in_progress`): shimmer, coral marker. A permission pending: attention. `failed`: red. |
 | Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"); else "failed"; else, for a change, the lines added and removed. |
 | Open | At first only while a permission is pending. |
-| `delegate`'s | Its label the delegate's title and harness, a link to its Workstream; its note the delegation's state, read from the delegate's row: "waiting for you", "working", "done", "failed", "stopped". |
+| `delegate`'s | Its label the delegate's title and harness, a link to its Workstream; its note the delegation's state, read from the delegate's row: "waiting for you", "working", "idle", "failed", "stopped". |
 | An approval's | On the `delegate` line it gates, open: the proposal — harness, model, the rights beyond the caller's, the instructions — and one button, Approve; once settled, "Approved", "Refused" and the words, or "Expired before a decision". Matched to no line, the same box at the approval's position. |
 | A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 
@@ -455,11 +470,12 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U57 | A sub-stream under a folded root asks a question, from another client | The root moves to the top and shows "waiting for you", without a reload. |
 | U58 | A sub-stream two levels down opened by its address | Its line unfolds in the list; the header shows its two parents before its title, each opening its Workstream. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
-| U60 | In a browser, an agent's `delegate` within its rights, its delegate working, then done | The line names the delegate and links to its Workstream; "working", then "done"; a report line, "From Agora", opening on its text, then the agent's answer. |
 | U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
 | U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |
 | U63 | An approval left unanswered | "Expired before a decision" on its line. |
-| U64 | A delegate's Workstream opened | Its first message shown as from its caller, by the caller's title, not as the person's. |
+| U64 | A delegate's Workstream opened | Its first message shown as from its delegator, by its title, not as the person's. |
+| U65 | In a browser, an agent's `delegate` within its rights, its delegate working, then submitting a message of 10,000 characters | The line names the delegate and links to its Workstream; "working", then "idle"; the message shown as the delegate's, whole, by its title, then the agent's answer. |
+| U66 | In a browser, a message written during a turn; another, removed | Send beside Cancel; each shown waiting above the composer; the removed one gone, **Retract** sent, never sent to the agent; the other sent once the turn ends, in the thread, a turn of its own. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

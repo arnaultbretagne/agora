@@ -1,7 +1,7 @@
 # ADR 000n — Delegation
 
-- **Status:** accepted
-- **Date:** 2026-11-03
+- **Status:** proposed
+- **Date:** 2026-11-04
 
 ## Context
 
@@ -15,57 +15,66 @@
   5 minutes without progress; opencode keeps a call open while progress comes (code read on
   2026-10-30: Claude Code 2.1.312, codex 0.165.0, opencode 1.19.5). Without progress, opencode's
   limit is its MCP client's: the SDK's default is 60 s; opencode's own setting is not verified.
-- Claude Code runs an MCP tool not marked read-only one call at a time (same reading).
+- Harnesses list their tools when they choose: Codex once, as its Session opens, before any message
+  (measured live on 2026-11-03: a Codex delegate answered "No `submit` tool is available").
 
 ## Decision
 
-1. One tool, `delegate`, on Agora's MCP server (ADR MCP), asynchronous: it answers once the delegate
-   has started; each outcome comes back later as a turn Agora writes to the caller, once the caller
-   is free.
-2. A delegate is a sub-stream of its caller's Workstream: three levels deep at most, three at once
-   per caller. A delegate may delegate in turn.
-3. Rights within the caller's own: the delegate starts at once. Beyond them: the call itself waits
-   for the person, at most 4 min 30 s — one button, Approve; writing refuses, and the words are the
-   call's answer. An approval holds for that call alone.
-4. A typed result is a tool Agora lists to the delegate, `submit`, its input the schema the caller
-   gave.
+1. Delegation is asynchronous: a call on Agora's MCP server (ADR MCP) answers as soon as its message
+   is accepted.
+2. A delegate is a sub-stream of its delegator's Workstream: three levels deep at most, three at once
+   per delegator. A delegate may delegate in turn.
+3. One gesture, both ways: a message written in the other's Workstream. `delegate` writes in the
+   delegate's, `submit` in the delegator's. A message opens a turn like any other, and waits in the
+   log while its Workstream cannot take it (ADR Log).
+4. Agora carries the words, whole, and decides nothing about them: no outcome, no report, no verdict.
+   The delegator reads, and writes again if it wants more.
+5. Rights beyond the delegator's: the call itself waits for the person, at most 4 min 30 s — one
+   button, Approve; writing refuses, and the words are the call's answer. An approval holds for that
+   call alone.
 
 ## Why
 
-- **The caller keeps working.** It can delegate more, or answer the person, while its delegates
-  work; several delegations run side by side in Agora instead of one after the other in Claude
-  Code.
+- **The delegator keeps working.** It can delegate more, or answer the person, while its delegates
+  work; several delegations run side by side in Agora instead of one after the other in Claude Code.
 - **Nothing waits, nothing polls.** Waiting for the work would hold a turn and outlast every
-  harness's patience; polling would spend turns. Agora writes the outcome when the caller can take
-  it, which is the one way to speak to an agent.
-- **The person decides on the call.** Nothing starts before the approval; the agent learns the
-  outcome as its own call's result, inside its turn, on every harness — the refusal included, with
-  the person's words, so it can propose again. 4 min 30 s stays under Codex's 300 s, and progress
-  every 30 s keeps the others from cutting.
-- **A shape the model can keep.** Models fill a tool's arguments to its schema; a result written as
-  JSON in prose drifts and mixes with the text around it.
+  harness's patience; polling would spend turns. A message is the one way to speak to an agent.
+- **The delegator judges.** It knows what it asked. Agora does not, and every outcome it computed was
+  a guess about a conversation it does not understand.
+- **One primitive is enough.** A result, a question, a correction, a failure are all a message from
+  someone. There is no state to keep in step with the log but the log's own.
+- **A shape the model can keep.** Models fill a tool's arguments to its schema, so `result` stays, for
+  a delegator that will act on its fields; `submit` is listed to every delegate, its schema checked by
+  Agora, because a harness may never list another tool.
 
 ## What we tried
 
-| Option | Why not |
+| Option | What we found |
 | --- | --- |
-| A synchronous `delegate`, answering with the outcome | The call outlasts the harnesses' limits; the caller cannot answer the person meanwhile; Claude Code would run several delegations one after the other. |
+| Reports written by Agora when a delegate's turn ended: an outcome, a result if submitted, else the last message cut at 2,000 characters, "Read `<id>` for the rest" | Built, then used once, on 2026-11-03: a caller given no `read` could not fetch the rest of an 8-minute research. It asked for it through `submit`, unavailable to its Codex delegate, then page by page: 28 `to`, 29 reports, 15 minutes; the delegate went on writing in 1,500-character parts when the person spoke to it directly hours later. |
+| `to` refused while a delegate's turn runs (`delegate_busy`) | The same run: the person's correction, a minute after the start, could not reach the delegate. |
+| A2A (v1.0.1, read on 2026-11-04): tasks, states, artifacts, its own wire protocol | No coding harness speaks it (read on 2026-10-29): an MCP tool would stand in front of it all the same, and Agora would still decide how words reach an agent. Its separation of a deliverable from messages was the right diagnosis of the reports; a message carried whole answers it with one primitive. |
+| MCP Tasks | Only Claude Code implements it, in beta (read on 2026-10-29). |
+| A synchronous `delegate`, answering with the result | The call outlasts the harnesses' limits; the delegator cannot answer the person meanwhile; Claude Code would run several delegations one after the other. |
 | A `wait` tool, or polling | Waiting holds a turn; polling spends turns. |
 | Rights narrowing at each level, with no way beyond | A lead could never hand a delegate more than it holds itself; an approval covers that case, once, by the person. |
 | An approval for the rest of the conversation | Decided against: the person sees each grant; one approval for a chain of runs comes with teams built of delegations. |
 | An envelope approved once, the Prefect team flow | A fixed plan; delegations compose instead, each call under its own rule. |
-| JSON at the end of the delegate's answer | Fragile, mixed with prose, asked again on each mismatch. |
 | MCP's `outputSchema` | It types a tool's own answer; `delegate` answers before the work is done. |
 | MCP elicitation | It asks the person, not the model. |
 
 ## Consequences
 
-- The log gains the delegation's facts, report turns marked as Agora's, approvals with an expiry,
-  and a Write that refuses an approval instead of prompting.
+- The log gains a mark saying who wrote a message, and a Write that waits; earlier reports and
+  facts stay in the log, read as they were.
+- A delegate's turn no person started and that ends with no `submit` still sends its last message,
+  whole: a delegator must not wait for words that will never come. Failures reach it the same way.
+- A long deliverable is written twice when a delegate first writes it for itself: once as its text,
+  once in `submit`. A delegate told of `submit` writes it there.
+- What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
-- A delegate's view and its row in the list carry its state, which its caller's `delegate` line shows.
+- A delegate's view and its row in the list carry its state, which its delegator's `delegate` line
+  shows.
 - A call Agora holds answers in an SSE stream; every other message stays one JSON answer.
 - The Prefect lead flow becomes one composition among others, to retire once teams are built of
   delegations.
-- Messages during a turn stay refused, but an approval's refusal: queueing and steering are their
-  own subject (issue #167).
