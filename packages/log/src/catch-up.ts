@@ -2,7 +2,7 @@
 // exchanges that anchor does not hold, given to the agent as text with the execution's first prompt.
 // Pure: it reads the fold and the entries, nothing else.
 import { object } from './json.ts'
-import type { Execution, State } from './state.ts'
+import { STEERING, type Execution, type State } from './state.ts'
 import type { Entry } from './store.ts'
 
 /** The `_meta` key that marks Agora's catch-up block in a prompt. */
@@ -136,10 +136,23 @@ const cut = (text: string): string => (text.length > FIELD_MAX ? `${text.slice(0
  */
 export function exchangesOf(entries: readonly Entry[], positions: readonly string[]): Exchange[] {
   const wanted = new Set(positions)
-  type Part = { tool?: string; text: string }
+  type Part = { tool?: string; said?: boolean; text: string }
   const turns = new Map<string, { user: string; parts: Part[]; tools: Map<string, Part> }>()
   const latest = new Map<string, string>()
+  // The `_session/steering` lines whose answer has not come yet, by their positions.
+  const steering = new Map<string, Entry>()
   for (const e of entries) {
+    if (e.kind === 'acp' && e.direction === 'out' && e.method === STEERING) steering.set(e.position, e)
+    // A message sent into the turn, in its place (docs/specs/log.md, "Continuing", "An exchange").
+    if (e.kind === 'acp' && e.direction === 'in' && e.correlated_method === STEERING && e.request_position && e.session) {
+      const line = steering.get(e.request_position)
+      steering.delete(e.request_position)
+      const turn = turns.get(latest.get(e.session) ?? '')
+      if (line && turn && e.rpc_kind === 'response' && object(e.content.result)?.outcome === 'injected') {
+        const blocks = object(line.content.params)?.prompt
+        turn.parts.push({ said: true, text: (Array.isArray(blocks) ? blocks : []).map(blockText).filter((t) => t !== '').join('\n') })
+      }
+    }
     if (e.kind === 'acp' && e.direction === 'out' && e.rpc_kind === 'request' && e.method === 'session/prompt' && e.session) {
       latest.set(e.session, e.position)
       if (!wanted.has(e.position)) continue
@@ -155,7 +168,7 @@ export function exchangesOf(entries: readonly Entry[], positions: readonly strin
         const content = object(update.content)
         if (content?.type !== 'text' || typeof content.text !== 'string') continue
         const last = turn.parts.at(-1)
-        if (last && last.tool === undefined) last.text += content.text
+        if (last && last.tool === undefined && !last.said) last.text += content.text
         else turn.parts.push({ text: content.text })
       }
       if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && typeof update.toolCallId === 'string') {
@@ -174,7 +187,7 @@ export function exchangesOf(entries: readonly Entry[], positions: readonly strin
     position,
     user: t.user,
     agent: t.parts
-      .map((p) => (p.tool === undefined ? p.text.trim() : `[tool: ${p.tool || 'unnamed'}${p.text === 'failed' ? ' — failed' : ''}]`))
+      .map((p) => (p.said ? `[the user, during this turn: ${p.text}]` : p.tool === undefined ? p.text.trim() : `[tool: ${p.tool || 'unnamed'}${p.text === 'failed' ? ' — failed' : ''}]`))
       .filter((p) => p !== '')
       .join('\n'),
   }))

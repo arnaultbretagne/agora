@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U64: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U64, U67, U69–U75: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -10,6 +10,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
+import { mockBridge } from '@agora/testkit'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
 import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
@@ -52,7 +53,7 @@ before(async () => {
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -1208,4 +1209,183 @@ test('U64 a delegate’s Workstream opened: its first message shown as from its 
   await shot(page, 'u64-delegate')
   await first.getByRole('link').click()
   await page.waitForURL(`${server.url}/w/${caller}`)
+})
+
+const waitingList = (page: Page) => page.getByRole('list', { name: 'Messages waiting' }).getByRole('listitem')
+const cancelButton = (page: Page) => page.getByRole('button', { name: 'Cancel the turn' })
+const sendButton = (page: Page) => page.getByRole('button', { name: 'Send' })
+
+test('U67 a turn running: sending open, the model and access pickers closed; once it ends, open again', async () => {
+  const page = await fresh()
+  await started(page, 'before the pickers')
+  await send(page, '/sleep 3')
+  await cancelButton(page).waitFor()
+  assert.equal(await composerInput(page).isEnabled(), true)
+  assert.equal(await modelPicker(page).isDisabled(), true)
+  assert.equal(await accessPicker(page).isDisabled(), true)
+  await thread(page).getByText('Slept 3 s.').waitFor()
+  await until('the pickers open', () => modelPicker(page).isEnabled())
+  assert.equal(await accessPicker(page).isEnabled(), true)
+})
+
+test('U70 an agent taking messages into its turn: Send beside Cancel once typed; sent with Enter, in the thread above the rest of the response', async () => {
+  const page = await fresh()
+  await started(page, 'before the message')
+  await send(page, '/sleep 6')
+  await cancelButton(page).waitFor()
+  assert.equal(await sendButton(page).count(), 0)
+  await shot(page, 'u70-cancel-alone')
+  await composerInput(page).fill('also this')
+  await sendButton(page).waitFor()
+  assert.equal(await cancelButton(page).isVisible(), true)
+  await shot(page, 'u70-send-beside-cancel')
+  await composerInput(page).press('Enter')
+  await thread(page).getByText('Heard: also this.').waitFor()
+  await shot(page, 'u70-in-the-thread')
+  const said = await page.locator('main [data-role="user"]').allInnerTexts()
+  assert.equal(said.at(-1)!.trim(), 'also this')
+  // Above the rest of the response: the agent's last message holds what it heard.
+  assert.match((await page.locator('main [data-role="assistant"]').last().innerText()), /^Heard: also this\./)
+  assert.equal(await waitingList(page).count(), 0)
+  assert.equal(await cancelButton(page).isVisible(), true)
+  assert.equal(await composerInput(page).inputValue(), '')
+  await thread(page).getByText('Slept 6 s.').waitFor()
+  await cancelButton(page).waitFor({ state: 'detached' })
+  await sendButton(page).waitFor()
+})
+
+test('U71 an agent that does not: both above the composer, oldest first; the cross takes the first away, never sent; at the turn\'s end the second\'s turn', async () => {
+  const page = await fresh()
+  // As opencode: it does not say `_meta.steering.supported`.
+  const factory = c.kube.bridgeFactory
+  c.kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { noSteering: true })
+  await started(page, 'before the messages').finally(() => (c.kube.bridgeFactory = factory))
+  await send(page, '/sleep 6')
+  await cancelButton(page).waitFor()
+  await composerInput(page).fill('the first waiting')
+  await composerInput(page).press('Enter')
+  await waitingList(page).first().waitFor()
+  await composerInput(page).fill('the second waiting')
+  await composerInput(page).press('Enter')
+  await until('both listed', async () => (await waitingList(page).count()) === 2)
+  assert.deepEqual((await waitingList(page).allInnerTexts()).map((t) => t.trim()), ['the first waiting', 'the second waiting'])
+  await shot(page, 'u71-waiting')
+  await waitingList(page).first().getByRole('button', { name: 'Take back' }).click()
+  await until('one left', async () => (await waitingList(page).count()) === 1)
+  assert.equal((await waitingList(page).first().innerText()).trim(), 'the second waiting')
+  await thread(page).getByText('Slept 6 s.').waitFor()
+  await thread(page).getByText(/Echo #\d+: the second waiting\./).waitFor()
+  assert.equal(await waitingList(page).count(), 0)
+  assert.equal(await thread(page).getByText('the first waiting').count(), 0)
+})
+
+test('U69 the queue\'s commands: each message a Write that may wait; the cross a Retract of its position', async () => {
+  const page = await fresh()
+  const id = await started(page, 'before the commands')
+  await send(page, '/steering promptRequired 3')
+  await cancelButton(page).waitFor()
+  await composerInput(page).fill('taken back')
+  await composerInput(page).press('Enter')
+  await waitingList(page).first().waitFor()
+  await waitingList(page).first().getByRole('button', { name: 'Take back' }).click()
+  await waitingList(page).first().waitFor({ state: 'detached' })
+  const entries = (await entriesOf(id)) as unknown as { kind: string; position: string; content: { kind?: string; waits?: boolean; target?: { message?: string }; body?: { mayWait?: boolean; prompt?: { text?: string }[] } } }[]
+  const commands = entries.filter((e) => e.kind === 'command')
+  for (const write of commands.filter((e) => e.content.kind === 'Write')) assert.equal(write.content.body?.mayWait, true)
+  const waited = commands.find((e) => e.content.kind === 'Write' && e.content.body?.prompt?.[0]?.text === 'taken back')!
+  assert.equal(waited.content.waits, true)
+  assert.equal(commands.find((e) => e.content.kind === 'Retract')?.content.target?.message, waited.position)
+})
+
+test('U72 a message waiting, then Cancel: what it says, nothing goes; a next message: the first\'s turn, then its own', async () => {
+  const page = await fresh()
+  await started(page, 'before the cancel')
+  await send(page, '/tool-open 30')
+  await cancelButton(page).waitFor()
+  await thread(page).getByText('A long command').waitFor()
+  await composerInput(page).fill('held back')
+  await composerInput(page).press('Enter')
+  await waitingList(page).first().waitFor()
+  await page.getByText('These go with your next message.').waitFor({ state: 'detached' })
+  await cancelButton(page).click()
+  await page.getByText('These go with your next message.').waitFor()
+  await shot(page, 'u72-held')
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  assert.equal(await thread(page).getByText(/Echo #\d+: held back\./).count(), 0)
+  assert.equal(await waitingList(page).count(), 1)
+  await send(page, 'and this')
+  await thread(page).getByText(/Echo #\d+: held back\./).waitFor()
+  await thread(page).getByText(/Echo #\d+: and this\./).waitFor()
+  assert.equal(await waitingList(page).count(), 0)
+})
+
+test('U73 a Write refused during a turn: its reason above the composer, the text back in it', async () => {
+  const page = await fresh()
+  await started(page, 'before the refusal')
+  await send(page, '/sleep 4')
+  await cancelButton(page).waitFor()
+  // Simulated: the server's refusal, the composer still open as the agent asks for a permission.
+  await page.route('**/commands', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'permission_pending' }) }))
+  await composerInput(page).fill('words kept')
+  await composerInput(page).press('Enter')
+  await page.getByRole('alert').getByText('Answer the permission request first.').waitFor()
+  await until('the text back', async () => (await composerInput(page).inputValue()) === 'words kept')
+  await page.unroute('**/commands')
+})
+
+test('U73 a first message refused: its reason above the composer, the text back in it', async () => {
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  // Simulated: the server's refusal of the Write alone, once its execution is ready.
+  await page.route('**/commands', (route) =>
+    route.request().postDataJSON().kind === 'Write' ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'permission_pending' }) }) : route.continue(),
+  )
+  await send(page, 'first words kept')
+  await page.getByRole('alert').getByText('Answer the permission request first.').waitFor()
+  await until('the text back', async () => (await composerInput(page).inputValue()) === 'first words kept')
+  await page.unroute('**/commands')
+})
+
+test('U74 a turn running: / typed, Escape: the commands hidden, the turn going on; Escape again: the turn cancelled', async () => {
+  const page = await fresh()
+  const id = await started(page, 'before the escape')
+  await send(page, '/sleep 20')
+  await cancelButton(page).waitFor()
+  await composerInput(page).fill('/')
+  const commands = page.getByRole('listbox', { name: 'Commands' })
+  await commands.waitFor()
+  await composerInput(page).press('Escape')
+  await commands.waitFor({ state: 'detached' })
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal(await cancelButton(page).isVisible(), true)
+  assert.equal((await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Cancel').length, 0)
+  await composerInput(page).press('Escape')
+  await cancelButton(page).waitFor({ state: 'detached' })
+  await thread(page).getByText('cancelled', { exact: true }).waitFor()
+  assert.equal((await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Cancel').length, 1)
+})
+
+test('U75 a message with an attachment sent during a turn: one line, counted, no message of it in the thread; taken back, gone and never sent', async () => {
+  const page = await fresh()
+  const id = await started(page, 'before the attachment')
+  await send(page, '/sleep 7')
+  await cancelButton(page).waitFor()
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Attach files' }).click()])
+  await chooser.setFiles({ name: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('# Notes\n') })
+  await page.getByText('notes.md').first().waitFor()
+  await composerInput(page).fill('with a file')
+  await composerInput(page).press('Enter')
+  await waitingList(page).first().waitFor()
+  assert.deepEqual((await waitingList(page).first().innerText()).split(/\s+/), ['with', 'a', 'file', '1'])
+  const bubble = page.locator('main [data-role="user"]').filter({ hasText: 'with a file' })
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(await bubble.count(), 0)
+  await shot(page, 'u75-attachment-waiting')
+  await waitingList(page).first().getByRole('button', { name: 'Take back' }).click()
+  await waitingList(page).first().waitFor({ state: 'detached' })
+  await thread(page).getByText('Slept 7 s.').waitFor()
+  assert.equal(await bubble.count(), 0)
+  const prompts = (await entriesOf(id)).filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt')
+  assert.equal(JSON.stringify(prompts).includes('with a file'), false)
 })

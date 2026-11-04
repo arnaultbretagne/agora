@@ -5,9 +5,10 @@ delegate is a sub-stream of its delegator's Workstream, and the two speak by one
 written in the other's Workstream. `delegate` writes in the delegate's; `submit` in the delegator's,
 and a turn ended with no `submit` submits the delegate's last message.
 
-**Nobody waits: a call answers as soon as its message is accepted, and the message waits until its
-Workstream can take it (`log.md`, "Messages waiting"). Agora carries the words, whole, and decides
-nothing about them: the delegator reads them, and writes again if it wants more.**
+**Nobody waits: a call answers as soon as its message is accepted, and the message goes as any message
+written in that Workstream goes, the person's included: into the running turn when its agent can take
+it there, as the next turn otherwise (`log.md`, "Messages during a turn"). Agora carries the words, whole,
+and decides nothing about them: the delegator reads them, and writes again if it wants more.**
 
 ```mermaid
 sequenceDiagram
@@ -23,9 +24,9 @@ sequenceDiagram
   A->>D: the Workstream, its execution, its first message
   A-->>C: started, its id — or refused with the words, or expired
   D->>A: submit(message), or its turn ends with its last message
-  A->>C: the message, a turn of the delegator's
+  A->>C: the message, into its running turn or as its next
   C->>A: delegate(to, instructions)
-  A->>D: the next message, a turn of the delegate's
+  A->>D: the next message, into its running turn or as its next
 ```
 
 ## A delegation
@@ -47,10 +48,10 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | From the delegator | `delegate`: `instructions` is the delegate's first message; answered `started <id> · <title>`. With `to`, one of its delegates — then only `instructions` and `output_schema` —: its next message, whatever it is doing; answered `sent <id> · <title>`. `not_a_delegate`: a Workstream that is not one of its delegates. `delegate_stopped`: one the person stopped. |
-| From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. A turn no person started, done with no `submit` in it, submits its last message: the same message, whole. |
-| A message | A Write of Agora's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora` —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). It opens a turn of that Workstream's agent, as any message does. |
+| From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. A turn holding a message that is not the person's, done with no `submit` in it, submits its last message: the same message, whole. |
+| A message | A Write of Agora's, with `mayWait` as the client's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora` —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). |
 | Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
-| Its way | It waits while its Workstream cannot take it, in order, one turn each (`log.md`, "Messages waiting"). A Workstream whose execution has ended is continued first, unless the person stopped it. |
+| Its way | That of any message (`log.md`, "Messages during a turn"): in order, into the running turn or as the next, the person able to retract it while it waits. Nothing refuses it: it waits while its Workstream cannot take it, and a Workstream whose execution has ended is continued first, unless the person stopped it. |
 | What it is worth | Agora keeps no verdict and no outcome. The delegator reads, and answers with `to` when it wants something else. |
 
 ## What Agora writes
@@ -103,21 +104,21 @@ Each, and a last message submitted, is written once, a restart included.
 | D17 | A restart while an approval waits, in a delegator with no delegate yet | The approval marked `expired` at start. |
 | D18 | A delegate's `submit`, its delegator free | `sent`; a turn of the delegator's, its prompt Agora's line then the words; its `user` element `from` the delegate, `as` `delegate`, without the line. |
 | D19 | A `submit` of 100,000 characters | The delegator's prompt holds them all. |
-| D20 | Two delegates' `submit`, then another from the first, while the delegator's turn runs | `sent` each time; no turn until that one ends; then three turns, one each, in the order sent. |
-| D21 | `to` a delegate whose turn runs; whose last turn is done; whose execution has ended | `sent` each time; written once that turn ends, a turn of its own; written at once; its execution continued, then written. |
+| D20 | Two delegates' `submit`, then another from the first, while the delegator's turn runs, its agent taking messages into a turn | `sent` each time; one `_session/steering` each, in the order sent; three `steered` `user` elements in that turn, each `from` its delegate; no second turn. |
+| D30 | The same, its agent not taking them | `sent` each time; no turn until that one ends; then three turns, one each, in the order sent. |
+| D21 | `to` a delegate whose turn runs; whose last turn is done; whose execution has ended | `sent` each time; into that turn, as any message; written at once; its execution continued, then written. |
 | D22 | A `submit` to a delegator whose execution has ended; whom the person stopped | Continued, then a turn; waiting, no Create, until the person's next one. |
 | D23 | `to` a delegate the person stopped; a Workstream that is not the delegator's delegate | `delegate_stopped`; `not_a_delegate`. |
 | D24 | `output_schema` with `delegate`; `submit` a mismatch, then a fit | The delegate's first prompt recalls the schema; a tool error naming the mismatch, nothing written; then `sent`, the delegator's prompt holding the result as JSON. |
 | D25 | `output_schema` first given with `to` | `submit`, listed since the delegate's Session opened, checks `result` against it. |
-| D26 | A delegate's turn its delegator started ends with no `submit`; one with `submit`; one the person started; one with no `submit` and no message | Its last message whole in the delegator's Workstream, `as` `delegate`, as a `submit` gives it; nothing more; nothing; a message `as` `agora` saying so. |
+| D26 | A delegate's turn its delegator started ends with no `submit`; one with `submit`; one the person started; one the person started, a `to` sent into it; one with no `submit` and no message | Its last message whole in the delegator's Workstream, `as` `delegate`, as a `submit` gives it; nothing more; nothing; its last message, as the first; a message `as` `agora` saying so. |
 | D27 | A delegate's turn fails; its Session does not open; its execution is lost; the person stops it | Each time one message `as` `agora` in the delegator's Workstream, naming the delegate and what happened. |
 | D28 | A restart once a delegate's turn is done, before its last message was submitted | Submitted after the restart, once. |
 | D29 | Live, each harness, a delegate asked for a report of at least 30,000 characters | The delegator's prompt holds it whole, its agent sending no further `to` for the rest. |
+| D31 | Live, Claude Code and Codex, a delegator running a long command as its delegate submits a word | The message waits for the command; `injected` in that turn; the delegator's answer holds the word. |
 
 ## To be specified
 
-- A message reaching a turn already running, where the adapter can (issue #167): it waits for the
-  turn's end.
 - Files between agents: a message carries text; a file has no way from one sandbox to another, and
   Agora has no persistent store for it.
 - A team as a composition of delegations: one approval for a chain of runs.

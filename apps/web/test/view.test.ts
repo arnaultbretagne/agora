@@ -34,6 +34,7 @@ import {
   sections,
   startBody,
   startedDelegate,
+  waitingOf,
   windowName,
   withAccess,
   workstreamOf,
@@ -646,4 +647,78 @@ test('U63 an approval matched to no line: its box at its position, pending; then
   assert.equal(gate(settled.answered).status, 'answered')
   assert.deepEqual([gate(settled.refused).status, gate(settled.refused).words], ['refused', 'use the read-only rights'])
   assert.equal(gate(settled.expired).status, 'expired')
+})
+
+// docs/specs/assistant-ui.md, "Messages during a turn": objects as the log projects them, crafted.
+const MESSAGES_WS = '0c9e5a3e-0000-4000-8000-00000000d00d'
+const crafted = (objects: readonly { kind: string; id: string; object: Record<string, unknown> }[]): ThreadState => {
+  let state = empty
+  const all = [{ kind: 'workstream', id: MESSAGES_WS, object: { state: 'ready', execution: 'e', session: 's' } }, ...objects]
+  for (const o of all) state = apply(state, { type: 'snapshot', position: '1', operation: 'upsert', kind: o.kind as 'element', id: o.id, object: o.object })
+  return apply(state, { type: 'snapshot-end', position: '1' })
+}
+const turnObject = (status: string) => ({ kind: 'turn', id: 't', object: { status, requestPosition: '1', session: 's' } })
+const said = (position: number, words: string, steered = false) => ({
+  kind: 'element',
+  id: `said-${String(position)}`,
+  object: { type: 'user', turn: 't', session: 's', firstPosition: String(position), content: [{ type: 'text', text: words }], ...(steered ? { steered: true } : {}) },
+})
+const chunk = (position: number, words: string) => ({ kind: 'element', id: `chunk-${String(position)}`, object: { type: 'agent_message_chunk', turn: 't', session: 's', firstPosition: String(position), text: words } })
+
+test('U67 a turn saved, then in progress: sending open, the turn running; uncertain, or a permission pending: closed', () => {
+  for (const status of ['saved', 'in_progress']) {
+    const state = crafted([turnObject(status)])
+    const composer = composerOf(state, workstreamOf(state, MESSAGES_WS))
+    assert.deepEqual([composer.open, composer.create, composer.running, composer.reason], [true, false, true, null])
+  }
+  const uncertain = crafted([turnObject('uncertain')])
+  assert.deepEqual([composerOf(uncertain, workstreamOf(uncertain, MESSAGES_WS)).open, composerOf(uncertain, workstreamOf(uncertain, MESSAGES_WS)).running], [false, false])
+  const asking = crafted([turnObject('in_progress'), { kind: 'element', id: 'p', object: { type: 'permission', turn: 't', session: 's', status: 'pending', params: {} } }])
+  const closed = composerOf(asking, workstreamOf(asking, MESSAGES_WS))
+  assert.deepEqual([closed.open, closed.reason], [false, 'Answer the permission request above.'])
+})
+
+test('U68 a message sent into a turn: the response split around it, ids and statuses; before any text, no empty response', () => {
+  const messages = messagesOf(crafted([turnObject('in_progress'), said(1, 'first'), chunk(2, 'before'), said(3, 'also this', true), chunk(4, 'after')]))
+  assert.deepEqual(messages.map((m) => [m.id, m.role]), [
+    ['t:user', 'user'],
+    ['t:assistant', 'assistant'],
+    ['t:user:3', 'user'],
+    ['t:assistant:3', 'assistant'],
+  ])
+  assert.deepEqual(messages[1]!.content, [{ type: 'text', text: 'before' }])
+  assert.deepEqual(messages[1]!.status, { type: 'complete', reason: 'stop' })
+  assert.deepEqual(messages[2]!.content, [{ type: 'text', text: 'also this' }])
+  assert.equal(turnStatus(messages[2]!), undefined)
+  assert.equal(turnStatus(messages[0]!), 'in_progress')
+  assert.deepEqual(messages[3]!.content, [{ type: 'text', text: 'after' }])
+  assert.deepEqual(messages[3]!.status, { type: 'running' })
+  // The turn over: the last part has its status.
+  const over = messagesOf(crafted([turnObject('cancelled'), said(1, 'first'), chunk(2, 'before'), said(3, 'also this', true)]))
+  assert.deepEqual(over.at(-1)!.status, { type: 'incomplete', reason: 'cancelled' })
+  // Nothing said before it: no empty message before it; the last part is there, empty, to say the agent works.
+  const early = messagesOf(crafted([turnObject('in_progress'), said(1, 'first'), said(2, 'at once', true)]))
+  assert.deepEqual(early.map((m) => m.id), ['t:user', 't:user:2', 't:assistant:2'])
+  assert.deepEqual([early[2]!.content, early[2]!.status], [[], { type: 'running' }])
+})
+
+test('U69 waiting elements: those waiting, in position order, with their text and attachments counted', () => {
+  const element = (position: number, status: string, content?: unknown[]) => ({ kind: 'element', id: `w-${String(position)}`, object: { type: 'waiting', position: String(position), firstPosition: String(position), status, ...(content ? { content } : {}) } })
+  const state = crafted([
+    element(9, 'waiting', [{ type: 'text', text: 'the second' }, { type: 'image', uri: 'a.png' }]),
+    element(5, 'waiting', [{ type: 'text', text: 'the first' }]),
+    element(3, 'sent'),
+    element(4, 'retracted'),
+  ])
+  assert.deepEqual(waitingOf(state), [
+    { id: 'w-5', position: '5', text: 'the first', attachments: 0 },
+    { id: 'w-9', position: '9', text: 'the second', attachments: 1 },
+  ])
+  // Not messages of the thread.
+  assert.deepEqual(messagesOf(state), [])
+  // Held with no turn running; not during a turn.
+  const during = crafted([turnObject('in_progress'), element(5, 'waiting', [{ type: 'text', text: 'the first' }])])
+  assert.equal(composerOf(during, workstreamOf(during, MESSAGES_WS)).held, false)
+  const cancelled = crafted([turnObject('cancelled'), element(5, 'waiting', [{ type: 'text', text: 'the first' }])])
+  assert.equal(composerOf(cancelled, workstreamOf(cancelled, MESSAGES_WS)).held, true)
 })

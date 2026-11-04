@@ -118,6 +118,7 @@ lost, failed or ended.
 | --- | --- |
 | `initialize`, Session opening | 60 s after `acp.sent` without a valid answer — an invalid one does not stop the clock: `request.failed` (`response_timeout`), then `execution.failed`, in one transaction. Never resent. |
 | `session/prompt` | None: the turn ends with its answer, its execution, or the turn's maximum duration. |
+| `_session/steering` | 60 s after its `acp.sent`, or after its entry without one, with no valid answer and no earlier `request.failed`: `request.failed` (`response_timeout`). The execution goes on ("Messages during a turn"). |
 
 ### Backpressure and shutdown
 
@@ -163,7 +164,7 @@ saved, and the rest of the conversation as text, from the log.
 | Rule | Detail |
 | --- | --- |
 | The anchor | The Create's `anchor` when it names one; otherwise the Workstream's last anchor of the pool's harness, whatever the pool's name: that of the execution created last among those that opened a Session and left one naming an ACP session. Never an anchor an execution failed to restore — `restore_failed`, `anchor_missing`, or an error answering its `session/resume` or `session/load`. None: a new ACP session. |
-| An exchange | A turn whose `session/prompt` was dispatched: the user's blocks, but an earlier catch-up; then the agent's `agent_message_chunk` text and the title of each tool it called, a failed one marked, in their order. No reasoning, tool content, plan or permission. |
+| An exchange | A turn whose `session/prompt` was dispatched: the user's blocks, but an earlier catch-up; then the agent's `agent_message_chunk` text, the title of each tool it called, a failed one marked, and each message sent into the turn, marked as the user's, in their order. No reasoning, tool content, plan or permission. |
 | What an anchor holds | Its execution's exchanges; those its execution was given, once a prompt carrying them was dispatched; and what the anchor it restored held. Nothing for an anchor of another Workstream. |
 | Which exchanges | Every exchange of the Workstream the anchor does not hold — all of them without an anchor —, oldest first. |
 | Chosen | At the Create, recorded in its body as `catchUp`: the positions of the prompts of the exchanges to give, and how many were left out. `session.opened` gives their two counts. |
@@ -177,18 +178,18 @@ ends without its anchor is an incident — the node dying, Agora unreachable dur
 
 ## Commands
 
-The commands are the interface's: Create, Write, Cancel, Respond to a permission, Configure, Scope,
-Stop (`assistant-ui.md`); and a question's, Ask and Answer: whoever drives the Workstream — a flow —
-asks the person, and the interface answers.
+The commands are the interface's: Create, Write, Retract, Cancel, Respond to a permission, Configure,
+Scope, Stop (`assistant-ui.md`); and a question's, Ask and Answer: whoever drives the Workstream — a
+flow — asks the person, and the interface answers.
 
 | Rule | Detail |
 | --- | --- |
 | Identity | Each command carries an id chosen by the interface, unique in its Workstream. Kind, target and body are compared through a canonical encoding: the same id and request return the first answer and write nothing; a different request is refused (`command_conflict`). |
 | Accepted | The command, its answer and its deduplication record commit together, before any effect; for a Write that does not wait, a Cancel and a response to a permission, the outgoing line too. A refused command is answered with its reason and written nowhere. A later failure is read in the thread; the answer never changes. |
 | Create | Carries the pool, the limits (lease, turn duration), the Session's settings (`settings`: a setting's id to a value, both strings), the profiles to grant and the anchor to restore, if any; without one, the log finds it ("Continuing"). The pool is checked against the catalogue before the transaction. The acceptance binds a new execution id, the claim name and the initial deadline, and resolves the opening settings: the pool's (`executions.md`, "The API"), each replaced by the Create's own of the same id, then the Create's others, recorded with the command. Refused while the Workstream's execution exists (`execution_active`), until its claim has disappeared. |
-| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is uncertain (`turn_uncertain`), no permission is pending (`permission_pending`), no question is pending (`question_pending`), and no setting is being changed (`settings_pending`). Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). During a turn saved or in progress, or behind another message, it waits ("Messages waiting"); otherwise its line commits with it, carrying the catch-up when it is due ("Continuing"). A Write of Agora's (`delegation.md`, "Messages") is refused none of these: it waits until the Workstream can take it. While an approval is pending, a Write of the person's is that approval's refusal instead (`delegation.md`, "Approval"): accepted whatever the turn, no line goes to any agent. |
-| Retract | Carries a waiting Write's position (`message`). Accepted while it waits: it is never sent, and no line goes to any agent. |
-| Configure | Carries the Session, a setting's id and a value. Accepted only if the execution is connected with its Session open, its opening settings settled, no turn is saved, in progress or uncertain, no permission or question is pending, no other setting is being changed, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
+| Write | Accepted only if the execution is connected with its Session open, its opening settings settled, sending is open, no turn is saved, in progress or uncertain (`turn_active`, `turn_uncertain`), no message waits (`turn_active`), no permission is pending (`permission_pending`), no question is pending (`question_pending`), and no setting is being changed (`settings_pending`). With `mayWait` true in its body, a turn saved or in progress, or a message waiting, does not refuse it: it waits ("Messages during a turn"), its answer saying `waiting` true, once its `session/prompt` is checked as if written (`invalid_body`, `line_too_large`). A Write of Agora's (`delegation.md`, "Messages") says `mayWait`, and only those checks refuse it: whatever holds the Workstream, it waits. Its prompt holds only blocks the agent accepts: text and resource links always; images, audio and embedded resources when its `initialize` answer's `promptCapabilities` says `image`, `audio` and `embeddedContext` (`prompt_unsupported`). Its line carries the catch-up when it is due ("Continuing"). While an approval is pending, a Write of the person's is that approval's refusal instead (`delegation.md`, "Approval"): accepted whatever the turn, no line goes to any agent. |
+| Retract | Carries a waiting message's position (`message`). Accepted while it waits and no `_session/steering` line of it is unanswered: it is never sent; no line goes to any agent. |
+| Configure | Carries the Session, a setting's id and a value. Accepted on the conditions of a Write without `mayWait`, a message waiting aside, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
@@ -215,24 +216,13 @@ asks the person, and the interface answers.
 | `disconnected`, `execution_ending` | Write: no connection to the bridge; the claim being deleted or its deadline passed. |
 | `stale_session`, `opening_session`, `permission_pending` | Write: another Session; the Session still opening; a permission pending. |
 | `prompt_unsupported` | Write: a block of a type the agent's `promptCapabilities` does not accept. |
-| `turn_active` | Configure or Scope: a turn saved or in progress. |
-| `turn_uncertain` | Write, Configure or Scope: a turn uncertain. |
-| `stale_message` | Retract: not a waiting Write. |
+| `turn_active`, `turn_uncertain` | Configure, Scope or a Write without `mayWait`: a turn saved or in progress; that Write also behind a message waiting. Write, Configure or Scope: a turn uncertain. |
+| `stale_message` | Retract: not a waiting message, or one with a `_session/steering` line unanswered. |
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
 | `invalid_question` | Ask: a body outside its bounds. |
 | `question_pending` | Ask, Write or Configure while a question is pending. |
 | `stale_question`, `invalid_question_option`, `invalid_answer` | Answer: not the pending question; an option it did not offer; a note it does not allow, or one that is not a string within bounds. |
-
-### Messages waiting
-
-| Rule | Detail |
-| --- | --- |
-| Waiting | A Write accepted and not sent: its command and answer committed, no line. Its element `waiting` shows it. |
-| In order | The Workstream's oldest waiting message goes first, alone: one message, one turn. |
-| Sent | As soon as the Workstream can take a message: its execution connected with its Session open and its opening settings settled, not ending, no turn saved, in progress or uncertain, no permission, question or approval pending, no setting being changed. The dispatcher commits its line, with the catch-up when it is due; the Write's answer does not change. |
-| No execution | A message waits through its execution's end. Once it has ended, Agora continues the Workstream by a Create of its own: the last execution's pool, or, gone with an older image, one of its harness; its settings, profiles and limits. Refused (`quota`), it is tried again. After a Stop, nothing goes until the person's next Create. |
-| A restart | Waiting messages are read back from the log; each line commits once. |
 
 ### A turn's states
 
@@ -247,6 +237,23 @@ asks the person, and the interface answers.
 
 An uncertain turn is never resent. It changes only on proof: its valid answer — `cancelled` once a
 Cancel reaches a turn still running — or the end of its execution.
+
+### Messages during a turn
+
+A message written during a turn waits in the log. It goes into the running turn when the agent can
+take it there, and as the next turn otherwise. A Workstream still has one turn at a time.
+
+| Rule | Detail |
+| --- | --- |
+| Waiting | A Write accepted with no line: its command and its answer, committed. Its element `waiting` shows it. |
+| In order | Only the Workstream's oldest waiting message can go, and one at a time. |
+| Into the turn | Its `_session/steering` line, once all of these hold: the execution's `initialize` answer says `_meta.steering.supported` true; its turn is in progress; no `session/cancel` was written for that turn, and no earlier `_session/steering` of that turn failed or had any answer but `injected`; none of that turn's `tool_call` is open — its last `status` neither `completed` nor `failed`; no permission or question is pending; every block of the message is text, its first not starting with `/`. The line's params: `sessionId`, `prompt` the message's blocks, `_meta.steering.idleBehavior` `promptRequired`. |
+| Its answer | `outcome` `injected`: the message is sent, a `user` element of that turn at the answer's position, marked `steered`; the agent's text goes on in a new element. Any other answer, an error, or a `request.failed`: the message keeps waiting, for the next turn. |
+| As the next turn | Its `session/prompt` line, carrying the catch-up when it is due, once all of these hold: no turn is saved, in progress or uncertain; no `_session/steering` is unanswered; the execution is connected with its Session open and its opening settings settled, not stopped, its claim not ending; no permission or question is pending; no setting is being changed. A turn of its own; the Write's answer does not change. |
+| After a Cancel | From a `session/cancel` written, messages keep waiting until the next Write is accepted, which waits behind them when any is there. |
+| Its execution's end | A message keeps waiting. It goes as the next turn of the Workstream's next execution. |
+| A Write of Agora's | Goes by these same rules. Its Workstream's last execution ended and not stopped, Agora continues it by a Create of its own: that execution's pool, or, gone with an older image, one of its harness; its settings, profiles and limits. Refused (`quota`), it is tried again. After a Stop, nothing goes until the person's next Create. |
+| A restart | Waiting messages are read back from the log; a line of theirs is written once, and a `_session/steering` dispatched is never resent. |
 
 ## Sub-streams
 
@@ -274,6 +281,8 @@ the client shows them is `assistant-ui.md`.
 | Tool | The Session and the tool call id. |
 | Permission | The Session and the request's position. |
 | Question | The Workstream and the Ask's position. |
+| Waiting message | The Workstream and the Write's position. |
+| A message sent into a turn | The Session and its `_session/steering` line's position. |
 | Text, reasoning | The turn and the rank of the run of consecutive chunks. |
 | Plan | The turn. |
 | Workstream | The Workstream's id. |
@@ -291,15 +300,18 @@ the client shows them is `assistant-ui.md`.
 
 | `type` | Folded from | Fields |
 | --- | --- | --- |
-| `user` | Agora's `session/prompt` | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one; `from` and `as`: who wrote it, when its first block is marked `_meta` `agora.bretagne.dev/from` (`delegation.md`, "Messages"), that block left out of `content`; a block marked `agora.bretagne.dev/delegation`, as earlier delegations wrote it, reads as `as` `delegator` |
-| `waiting` | A Write that waits, then its line or its Retract | `position`: the Write's; `content`, `from`, `as`, as the `user` element's; `status` (`waiting`, `sent`, `retracted`) |
+| `user` | Agora's `session/prompt`; or a `_session/steering` answered `injected`, at its answer's position, marked `steered` true | `turn`, `session`, `content`: the prompt's blocks but Agora's catch-up; `catchUp`: its counts, when the prompt carried one; `from` and `as`: who wrote it, when its first block is marked `_meta` `agora.bretagne.dev/from` (`delegation.md`, "Messages"), that block left out of `content`; a block marked `agora.bretagne.dev/delegation`, as earlier delegations wrote it, reads as `as` `delegator` |
+| `waiting` | A Write that waits, then its `session/prompt`, its `injected` answer or its Retract | `position`: the Write's; `status` (`waiting`, `sent`, `retracted`); while it waits, `content`, `from` and `as`, as the `user` element's |
 | `report` | A `session/prompt` of an earlier delegation, its block marked `_meta` `agora.bretagne.dev/report`, in place of `user`. Not written any more; those in the log stay. | `turn`, `session`, `text`, `delegates` |
 | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
 | `question` | An Ask, then its Answer, a refusing Write or its expiry | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text |
-| `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel` | `turn`, `session`, `line`: the line whole |
+| `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel`, `_session/steering` and their answers | `turn`, `session`, `line`: the line whole |
+
+A line received with no turn running belongs to its Session's last turn: what an agent says after its
+turn's answer is an element of that turn.
 
 A pending permission becomes `cancelled` when its Session ends, or its execution is lost, fails or
 ends.
@@ -412,6 +424,7 @@ failure is 503; no answer carries an exception message.
 | Claim name, pool, settings, initial deadline, anchor to restore, catch-up | The Create, and `execution.obtained` for the UID. |
 | Bridge instance | The last `execution.connected`. |
 | The agent's capabilities | The answer to Agora's `initialize`, or its pending request. |
+| Messages waiting | The Writes that wait, their lines and answers, their Retracts. |
 | Session | The last `session.opened` not ended. |
 | Turn, its delivery and its start | The unresolved `session/prompt`, its markers, failures and breaks; its entry time bounds the turn. |
 | Stop | The Stop command. |
@@ -480,8 +493,8 @@ exception message.
 | L6 | The insert of a Write's line fails | Answered 503; no command and no entry written; no `acp.dispatching`; nothing reaches the bridge. |
 | L7 | A capture connection is terminated during a turn | The line is retried and committed once, in order; the turn goes on to its answer. |
 | L8 | The ownership connection is terminated | The process exits with a non-zero status. On restart: an unclean break, the dispatched turn uncertain, never resent. |
-| L9 | Write during an uncertain turn | Refused `turn_uncertain`; nothing written. |
-| L10 | A command replayed with the same id and request; then a different request; then two Writes at once | The first answer, one command entry; then `command_conflict`; then both accepted, one line, the other waiting. |
+| L9 | Write during a turn, then during an uncertain turn | Refused `turn_active`, then `turn_uncertain`; nothing written. |
+| L10 | A command replayed with the same id and request; then a different request; then two Writes at once | The first answer, one command entry; then `command_conflict`; then exactly one Write accepted. |
 | L11 | The bridge side closes the connection during a turn | An unclean break; the turn uncertain; its answer after reconnection closes it; the prompt is never resent. |
 | L12 | Cancel on an uncertain turn still running | One `session/cancel` sent; the turn `cancelled`; Write accepted again. |
 | L13 | A Cancel whose turn has ended before its dispatch | `request.failed` (`stopped`), no `session/cancel` sent; the next turn unaffected. |
@@ -571,11 +584,29 @@ exception message.
 | L97 | Anchors stored for a Workstream: two of one harness, one of another, one of another Workstream; then the last stored again | The earlier anchor of that harness removed; the other harness's, the other Workstream's and the last kept; storing the last again removes nothing. |
 | L98 | The schema applied to a database that kept every change of the thread in a table of its own, a reset among them, and two anchors of one harness | Each object at the position of its last change, the last reset kept, the table gone; a read from before the reset gives it then the complete state, one from after it what changed since; that harness's last anchor kept, the other removed; applied again, nothing changes. |
 | L99 | A delegate through its turn, then given another message with `to`; its delegator | Its view's and its row's `delegation` `working`, then `idle`, then `working` and `idle` again; none in its delegator's view or row. |
-| L100 | A Write during a turn | Accepted, no line; the element `waiting`; the turn ended, its line, a turn of its own, the element `sent`. |
-| L101 | Three Writes during a turn, the second retracted; then a Retract of the first, already sent | The element `retracted`, never sent; the others sent in order, one turn each; `stale_message`. |
-| L102 | A restart with a message waiting | Sent after the restart, once. |
-| L103 | A Write of Agora's before the Session opens; with the execution ended; with its pool gone; after a Stop | Sent once it is open; a Create with the last execution's pool, settings, profiles and limits, then sent; with a pool of its harness; waiting, no Create, until the person's next one. |
-| L104 | A Write of Agora's while an approval, a question or a permission is pending | Waiting, the approval not refused; sent once it is settled. |
+| L105 | A Write with `mayWait` during a turn, to an agent that does not say `_meta.steering.supported` | Accepted, `waiting` true, no line; the element `waiting` with its position and blocks. The turn answered: its `session/prompt`, a turn of its own; the element `sent`, without its blocks; the turn's `user` element. |
+| L106 | A message waiting behind a cancelled turn; then a Write without `mayWait`; a Write with `mayWait` and no turn running or message waiting | `turn_active`, nothing written; the second accepted with its line, no `waiting`. |
+| L107 | Three Writes with `mayWait` during a turn, the second retracted; then a Retract of the first once sent, of an unknown position | The second `retracted`, never sent; the first and third one turn each, in order; `stale_message` twice. |
+| L108 | A Write with `mayWait` during a turn with no tool open, to an agent that says it | One `_session/steering`: its prompt the blocks, `idleBehavior` `promptRequired`. Answered `injected`: the element `sent`; a `user` element of that turn, `steered`, placed after what the agent said and before what it says next, in two elements; no `acp` element; no second turn, one answer. |
+| L109 | Two such Writes in a row | The second's `_session/steering` written only once the first is answered; both `injected`, in order. |
+| L110 | Such a Write while a tool is open, `pending` then `in_progress`; then it closes | No `_session/steering` while open; one as soon as it closes `completed`; likewise `failed`. |
+| L111 | Such a Write answered `promptRequired`; `failed`; with an error; then, at the turn's end | The message still waiting, its element too, no `user` element; no second `_session/steering` in that turn; its `session/prompt` once the turn is answered. |
+| L112 | Such a Write never answered | `request.failed` (`response_timeout`) after the timeout, the execution going on; a Retract before it refused `stale_message`; the message's `session/prompt` once the turn is answered, none before the timeout. |
+| L113 | A Cancel while a message waits behind an open tool; the turn answered `cancelled` | No `_session/steering` after the `session/cancel`; no `session/prompt`, the message still waiting; a next Write accepted, waiting; then the first's turn, then the second's. |
+| L114 | A message waiting behind an open tool, then a permission asked, then answered; likewise a question | No line while pending; its `_session/steering` once settled and the tool closed. |
+| L115 | Such a Write starting with `/`; one holding an image; then a plain one behind them | No `_session/steering` during the turn; at its end the first's turn, then the second's, then the third goes; the command read as one, the catch-up left out and given with the second. |
+| L116 | Agora killed with a message waiting; with its `_session/steering` dispatched and unanswered; between that line's `acp.dispatching` and its write | After the restart: sent once, its turn of its own; the `_session/steering` never resent, its answer applied; never resent, `request.failed` (`response_timeout`) after the timeout, then its turn of its own. |
+| L117 | The execution lost with a message waiting; then a Create, with no Write | The message keeps waiting; once the Session opens and is settled, its `session/prompt`, with the catch-up. |
+| L118 | Stop during a turn with a message waiting | No line for it after the Stop; still waiting; it goes in the next execution. |
+| L119 | A catch-up over a turn with a message sent into it | That exchange: the agent's text, the message marked as the user's, the agent's next text, in order. |
+| L120 | The agent speaks and calls a tool after its turn's answer | Elements of that turn, after its others; in its exchange; the turn still `done`; a Write accepted as usual. |
+| L123 | A Write with `mayWait`, during a turn, whose prompt is not valid ACP; one beyond the line's maximum | `invalid_body`; `line_too_large`; nothing written; the turn goes on. |
+| L124 | A Write with `mayWait` after a Cancel, before the turn's answer; a Cancel the agent answers `end_turn`, a message waiting and no Write after it | Its turn once the turn is answered; no line, still waiting. |
+| L125 | A Write of Agora's before the Session opens; with the execution ended; with its pool gone; after a Stop | Accepted, `waiting` true each time. Sent once it is open; a Create with the last execution's pool, settings, profiles and limits, then sent; with a pool of its harness; waiting, no Create, until the person's next one. |
+| L126 | A Write of Agora's while an approval, a question or a permission is pending | Waiting, the approval not refused; sent once it is settled. |
+| L127 | A Write of Agora's during a turn, to an agent that says it | One `_session/steering`, its first block Agora's line; the `user` element `steered`, with `from` and `as`, without that line; in the catch-up, with that line. |
+| L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
+| L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 
 **To be specified:** releasing an uncertain turn without an answer or the end of its execution;
 the applied model and effort as a view; retention and deleting a Workstream; who may read and

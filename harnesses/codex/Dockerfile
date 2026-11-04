@@ -1,7 +1,7 @@
 # Harness image: the bridge in front of codex's ACP adapter (codex-acp, which runs `codex app-server`),
 # launched by Agent Sandbox in its pools. Built from the repository root:
 #   docker build -f harnesses/codex/Dockerfile .
-# codex-acp 2.1.1 and codex 0.159.3 (package.json), on the operator's ChatGPT subscription through the
+# codex-acp 2.5.0 and codex 0.165.0 (package.json), on the operator's ChatGPT subscription through the
 # gateway. No credential: the auth.json written at start is a placeholder (placeholder-auth.mjs).
 FROM node:24-bookworm-slim
 # git, for the agent's repositories: it reaches GitHub through the gateway, whose root it trusts by
@@ -19,7 +19,7 @@ WORKDIR /opt/codex
 COPY harnesses/codex/package.json ./
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force \
     && test -x node_modules/.bin/codex-acp \
-    && test "$(node -p "require('/opt/codex/node_modules/@openai/codex/package.json').version")" = 0.159.3
+    && test "$(node -p "require('/opt/codex/node_modules/@openai/codex/package.json').version")" = 0.165.0
 COPY harnesses/codex/config.toml harnesses/codex/placeholder-auth.mjs harnesses/codex/start.sh /etc/agora/codex/
 WORKDIR /app
 COPY package.json package-lock.json ./

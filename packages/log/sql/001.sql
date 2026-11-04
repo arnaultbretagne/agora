@@ -132,21 +132,27 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
       row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange,
       -- Who wrote its prompt (docs/specs/search.md, "Who wrote"): a report is Agora's, a marked message a caller's.
       (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
-        WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text LIMIT 1) AS author
+        WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text AND NOT p.object ? 'steered' LIMIT 1) AS author
     FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
   ), parts AS (
-    SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 'header' AS kind,
+    SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 0 AS part, 'header' AS kind,
       '## ' || t.exchange || coalesce(' · ' || to_char(t.started::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') || ' · ' || coalesce(t.author, 'you') AS text
     FROM turns t
     UNION ALL
-    SELECT t.workstream, t.exchange, 2, 0, 'header', '## ' || t.exchange || ' · agent' FROM turns t
+    SELECT t.workstream, t.exchange, 2, 0, 0, 'header', '## ' || t.exchange || ' · agent' FROM turns t
     UNION ALL
-    SELECT t.workstream, t.exchange, CASE WHEN e.type IN ('user', 'report') THEN 1 ELSE 3 END, e.first_position,
+    SELECT t.workstream, t.exchange, CASE WHEN e.type IN ('user', 'report') AND NOT e.object ? 'steered' THEN 1 ELSE 3 END, e.first_position, 1,
       CASE e.type WHEN 'user' THEN 'user' WHEN 'tool' THEN 'tool' WHEN 'report' THEN 'agora' ELSE 'agent' END, transcript_text(e.type, e.object)
     FROM objects e JOIN turns t ON t.workstream = e.workstream AND t.turn::text = e.object->>'turn'
     WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type IN ('user', 'agent_message_chunk', 'tool', 'report')
+    -- A message sent into the turn (docs/specs/search.md, "A message sent into a turn"): a header before it, the agent's after it.
+    UNION ALL
+    SELECT t.workstream, t.exchange, 3, e.first_position, h.part, 'header', '## ' || t.exchange || h.who
+    FROM objects e JOIN turns t ON t.workstream = e.workstream AND t.turn::text = e.object->>'turn'
+      CROSS JOIN (VALUES (0, ' · you, during the turn'), (2, ' · agent')) AS h(part, who)
+    WHERE e.workstream = ANY(of_workstreams) AND e.kind = 'element' AND e.type = 'user' AND e.object ? 'steered'
   )
-  SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, l.ord), p.exchange, p.kind, l.text
+  SELECT p.workstream, row_number() OVER (PARTITION BY p.workstream ORDER BY p.exchange, p.slot, p.place, p.part, l.ord), p.exchange, p.kind, l.text
   FROM parts p CROSS JOIN LATERAL regexp_split_to_table(nullif(p.text, ''), E'\n') WITH ORDINALITY AS l(text, ord)
 $$;
 -- Search's index (docs/specs/search.md, "Search"): the trigrams of each message's and tool's text, so that a

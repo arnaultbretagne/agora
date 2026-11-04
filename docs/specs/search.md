@@ -22,6 +22,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | Numbers | From 1, across the Workstream, in that order. An exchange's numbers never change: only the last element of the exchange in progress grows, and nothing follows it; a rebuild gives the same lines. |
 | Kinds | `header`, `user`, `agent`, `tool`, `agora`. |
 | Who wrote | A header names who wrote the exchange's prompt: `you`; `delegator`, `delegate` or `agora` for a message of another Workstream's or of Agora's (`delegation.md`, "Messages"). Their lines are `user` lines, Agora's own line left out. An earlier delegation's headers stay: `caller` for its messages; `agora` for its reports, whose lines are `agora` lines, read, never searched. |
+| A message sent into a turn | Among the agent's lines, at its first position: `## <n> · <who wrote>, during the turn`, its text as a `user` element's, then `## <n> · agent` again. |
 | Left out | Reasoning, tool content, plans, permissions, questions to the person, and what a resumed Session replays outside any turn. |
 
 ## Search
@@ -52,6 +53,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 
 | ID | Case | Expected |
 | --- | --- | --- |
+| S14 | An exchange with a message sent into its turn, between the agent's two texts; then searched for that message's words | The agent's first lines, `## <n> · you, during the turn`, the message's lines of kind `user`, `## <n> · agent`, the agent's next lines; the same numbers once its views are rebuilt; found as a user's line. |
 | S1 | A Workstream of two exchanges, the second calling a tool that succeeds and one that fails; its transcript read whole | Its two headers per exchange, the user's lines, the agent's, `[tool: …]` and `[tool: … — failed]`, numbered from 1 in that order. |
 | S2 | The same transcript after a third exchange, then after its views are rebuilt | The first two exchanges' lines at the same numbers, with the same text. |
 | S3 | An exchange in progress, its answer streaming | Its last lines grow; no line before them moves. |
@@ -63,4 +65,4 @@ lines, read from its view's objects — its turns and their elements — and nev
 | S9 | A read from an offset with a limit; from beyond the end; a window that reaches 50 KB first; a line of 3,000 characters | The window, numbered, the next `offset` and the total; none, the total; cut at 50 KB, the next `offset`; the line cut and marked. |
 | S10 | A resumed Session replaying its history outside any turn; reasoning; a question to the person | In no line. |
 | S11 | `kube`; a pattern opening with its own options, `(?i)KUBE`, then `(?i)^A KUBE`; a literal, `***=k.be` — on `the Kube cluster`, `a kube node`, `k.be written as such` | 1 line; case ignored, 2 lines, then 1, `^` at each line's start; the literal's line alone. |
-| S13 | A delegate's transcript, its delegator's message first; its delegator's, holding its `submit` | `## 1 · <started> · delegator` in the delegate's, `## <n> · <started> · delegate` in the delegator's, Agora's line in neither; their lines of kind `user`, found as the person's are. |
+| S13 | A delegate's transcript, its delegator's message first; its delegator's, holding its `submit`, one as its own turn, one sent into a turn | `## 1 · <started> · delegator` in the delegate's; `## <n> · <started> · delegate` and `## <n> · delegate, during the turn` in the delegator's; Agora's line in none; their lines of kind `user`, found as the person's are. |

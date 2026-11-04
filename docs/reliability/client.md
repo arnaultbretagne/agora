@@ -34,6 +34,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R26 | 2026-11-02 | `baf9ad3` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; for U59 a browser identity of its own, two Workstreams talking with the mock agent, the word in their second message, and 55 more recent ones. U55 and U59 find a title exactly: a matching line under it may hold it too, the mock's answers repeating what was said before. |
 | R27 | 2026-11-02 | `cecb6ff` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; U59 as R26, the sub-stream's second message now a long one, the word 223 characters into it. |
 | R28 | 2026-11-03 | `c904f8c` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent's `/delegate` calling the server's MCP port as a harness does, approvals of 12 s. |
+| R29 | 2026-11-04 | `8ed0819` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent taking `_session/steering`, or, for U71, not saying it can; a refusal stubbed in the browser for U73. |
 
 ## Cases
 
@@ -141,6 +142,17 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U63 | — | unit | R28 | proven | An approval matched to no line: its box at its position, `pending`; then `answered`, `refused` with the words, `expired`. |
 | U63 | real: the approval's time ran out | local | R28 | proven | `Expired before a decision` on the line, about 12 s on; the agent's `Delegated: expired`. |
 | U64 | — | local | R28 | proven | The delegate's first message `hello delegate`, `data-from` the caller's id, `From the caller` linking back to it, opened by it. |
+| U67 | — | unit | R29 | proven | Saved and in progress: sending open, not starting an execution, the turn running, no reason. Uncertain: closed, not running. A permission pending: closed, "Answer the permission request above." |
+| U67 | — | local | R29 | proven | During `/sleep 3`: the input enabled, the model and access pickers disabled; enabled again once it ends. |
+| U68 | — | unit | R29 | proven | `t:user`, `t:assistant` `complete`, `t:user:3` with no turn's note, `t:assistant:3` `running`. Cancelled: the last `incomplete`, `cancelled`. Sent before any text: `t:user`, `t:user:2`, `t:assistant:2`, empty, `running`. |
+| U69 | — | unit | R29 | proven | Two items, positions 5 then 9, their text, 0 and 1 attachment; sent and retracted left out; none a message. `held` false during a turn, true with none running. |
+| U69 | — | local | R29 | proven | Every Write `mayWait` true; the one that waited `waits` true; the cross a Retract of its position. |
+| U70 | — | local | R29 | proven | **Cancel** alone; **Send** beside it once typed; Enter: the last `user` message `also this`, the last `assistant` message opening `Heard: also this.`; nothing waiting, the field empty, **Cancel** there; `Slept 6 s.`, then **Send** alone. |
+| U71 | — | local | R29 | proven | The mock not saying it can: both listed, `the first waiting` then `the second waiting`; the cross: one left; `Slept 6 s.`, then the second's echo; the first nowhere in the thread. |
+| U72 | — | local | R29 | proven | "These go with your next message." once cancelled; 800 ms on, no echo, one waiting; a next message: both echoed, nothing waiting. |
+| U73 | simulated: stub, the refusal fulfilled in the browser | local | R29 | proven | During a turn and for a first message: "Answer the permission request first." in an alert; the words back in the field. |
+| U74 | — | local | R29 | proven | `/` lists the commands; Escape: hidden, no Cancel command, **Cancel** there 500 ms on; Escape again: one Cancel command, the note `cancelled`. |
+| U75 | — | local | R29 | proven | One line `with a file 1`; no `user` message holding it, 300 ms on and after the turn; the cross: gone; no prompt holding it. |
 
 ## Not covered
 

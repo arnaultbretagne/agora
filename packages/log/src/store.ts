@@ -46,11 +46,11 @@ export interface Append {
   receive_ordinal?: string
 }
 export type Answer =
-  | { accepted: true; command: string; position: string; execution?: string; requestId?: string; session?: string }
+  | { accepted: true; command: string; position: string; execution?: string; requestId?: string; session?: string; waiting?: true }
   | { accepted: false; reason: string }
 export interface Command {
   id: string
-  kind: 'Create' | 'Write' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Ask' | 'Answer'
+  kind: 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Ask' | 'Answer'
   target: Record<string, unknown>
   body: Record<string, unknown>
 }
@@ -60,6 +60,8 @@ export interface AcceptedEffect {
   line?: { method?: string; params?: unknown; id?: unknown; result?: unknown }
   session?: string
   body?: Record<string, unknown>
+  /** A Write with no line: it waits (docs/specs/log.md, "Messages during a turn"). */
+  waits?: boolean
 }
 
 const COLUMNS =
@@ -388,6 +390,7 @@ export class LogStore {
             body: effect.body ?? command.body,
             ...(effect.execution ? { execution: effect.execution } : {}),
             ...(effect.claimName ? { claimName: effect.claimName } : {}),
+            ...(effect.waits ? { waits: true } : {}),
           },
           command: command.id,
           ...(effect.execution ? { execution: effect.execution } : {}),
@@ -405,6 +408,7 @@ export class LogStore {
           ...(effect.execution ? { execution: effect.execution } : {}),
           ...(effect.session ? { session: effect.session } : {}),
           ...(requestId ? { requestId } : {}),
+          ...(effect.waits ? { waiting: true as const } : {}),
         }
         await tx.client.query(
           'INSERT INTO commands(workstream,id,kind,target,fingerprint,answer,position,execution,claim_name) VALUES($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7,$8,$9)',

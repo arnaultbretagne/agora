@@ -56,6 +56,37 @@ test('S1 two exchanges, a tool that succeeds and one that fails: headers, the us
   assert.match(read.lines[0]!.text, /^## 1 · \d{4}-\d\d-\d\d \d\d:\d\d · you$/)
 })
 
+test('S14 a message sent into a turn: among the agent\'s lines, under a header of its own; the same numbers rebuilt; found as a user\'s line', async (t) => {
+  const { db, lab, ws, e } = await opened(t)
+  assert.ok((await lab.write(ws, '/sleep 2')).accepted)
+  await until('a first chunk', async () => (await readOf(lab.url, ws)).lines.at(-1)?.kind === 'agent')
+  assert.ok((await lab.command(ws, 'Write', { execution: e.id, session: e.session }, { prompt: [{ type: 'text', text: 'also a needle' }], mayWait: true })).accepted)
+  await lab.turn(ws, 'done')
+  const read = await until('the whole exchange', async () => {
+    const r = await readOf(lab.url, ws)
+    return r.lines.at(-1)?.text === 'Slept 2 s.' ? r : null
+  })
+  assert.deepEqual(shown(read.lines), [
+    [1, 'header', '## 1 · you'],
+    [2, 'user', '/sleep 2'],
+    [3, 'header', '## 1 · agent'],
+    [4, 'agent', '… second 1/2'],
+    [5, 'header', '## 1 · you, during the turn'],
+    [6, 'user', 'also a needle'],
+    [7, 'header', '## 1 · agent'],
+    [8, 'agent', 'Heard: also a needle.'],
+    [9, 'agent', '… second 2/2'],
+    [10, 'agent', 'Slept 2 s.'],
+  ])
+  await lab.workstreams.projections.run(ws, core, true)
+  assert.deepEqual((await readOf(lab.url, ws)).lines, read.lines)
+  const content = (await searchOf(lab.url, await ownerOf(db, ws), 'pattern=a%20needle&output_mode=content&workstream=' + ws)).body.results as { line: number; text: string }[]
+  assert.deepEqual(content.map((r) => [r.line, r.text]), [
+    [6, 'also a needle'],
+    [8, 'Heard: also a needle.'],
+  ])
+})
+
 test('S2 a third exchange, then a rebuild: the first two exchanges\' lines at the same numbers, with the same text', async (t) => {
   const { lab, ws } = await opened(t)
   for (const text of ['first', 'second']) {
