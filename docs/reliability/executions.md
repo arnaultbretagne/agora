@@ -18,6 +18,7 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R10 | 2026-10-06 | `25bc00a` | live | g4 under Kata. The server `agora-server@sha256:2547a1f5…` and the pools claude-code `0345a542…`, opencode `44f3d8c2…` and codex `e88bc2bb…`, built from `4e33168` (infra-k8s #212), each in the mode, model and effort its pool declares: `bypassPermissions`, `opus`, `high`; `build`, `zai-coding-plan/glm-5.3`, `high`; `agent-full-access`, `gpt-6.1-sol`, `high`. `apps/server/scripts/live-cases.ts` from that commit, through `kubectl port-forward`. Billed: two short turns per harness. |
 | R11 | 2026-10-06 | `b4efc8e` | cluster, live | As R15 of `credentials.md`: the server signing each token with its Pod's address, the gateway checking it on every route. One case per run. E22, E30 and E31 billed. |
 | R12 | 2026-10-31 | `3bbe489` | cluster | g4 under Kata, Agent Sandbox v1.0.3. The server `agora-server@sha256:774ba830…` and the pool `mock-8315d36582ec`, built from that commit (infra-k8s #313); the template at 1 CPU and 4 GiB (infra-k8s #312). `apps/server/scripts/live-cases.ts` from that commit, on the server Pod's address. |
+| R13 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. E31 and E33, on the new adapters. |
 
 ## Cases
 
@@ -104,8 +105,10 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E31 | — | live | R7 | proven | Ready in 543 ms on a warm Pod, codex-acp 2.1.1; "Paris" in 5.2 s; tunnels only to `chatgpt.com:443` (4), none refused once the execution's token was in place; the anchor restored in 1,120 ms with no restart, the agent recalls "mirabelle". A first run counted 7 refusals in the pool, before the Pod's warm token: codex calls ChatGPT as soon as it starts. |
 | E31 | — | live | R8 | proven | Ready in 533 ms on a warm Pod, codex-acp 2.1.1; "Paris" in 3.4 s; tunnels only to `chatgpt.com:443` (10), none refused after the warm token; restored in 800 ms, recalls "mirabelle". |
 | E31 | — | live | R11 | proven | Under the address binding: ready in 560 ms on a warm Pod, codex-acp 2.1.1; "Paris" in 3.7 s; `chatgpt.com:443` ×29, none refused; restored in 1,397 ms, recalls "mirabelle". |
+| E31 | — | live | R13 | proven | Ready in 564 ms on a warm Pod, codex-acp 2.5.0; "Paris" in 7.2 s; `chatgpt.com:443` ×5, none refused after the warm token; restored in 813 ms, recalls "mirabelle". |
 | E32 | — | local | R9 | proven | Every assertion held. |
 | E33 | — | live | R10 | proven | claude-code "`/home/harness/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each, and each answer held `agora <execution>` — codex's after a preface, "I’ll read the file and return only its `sub` claim". opencode first asked permission to read outside its workspace, answered allow once; claude-code and codex asked none. |
+| E33 | — | live | R13 | proven | claude-code "`~/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each, and each answer held `agora <execution>`. |
 
 The partial verdicts are tracked in #107.
 

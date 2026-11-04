@@ -33,6 +33,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R23 | 2026-10-27 | `74fc848` | unit, local | The `check` job of pull request #155 (GitHub Actions job 122169448411), all green: ubuntu-24.04, Node 24.21.0. For C56–C60, agentgateway 1.6.0 (`agentgateway-linux-amd64`, sha256 `496ed27e…079d`) and oauth2-proxy 7.15.5 (`oauth2-proxy-v7.15.5.linux-amd64.tar.gz`, sha256 `f63f94bf…a1fd`), the release binaries checked; the gateway on `packages/credentials/test/fixtures/previews-gateway.yaml` — the listener infra-k8s deploys and the `previews` route of the spec, its backend the gateway gate itself in place of Traefik; the gateway gate with the spec's settings, its identities in a directory swapped as the kubelet swaps a ConfigMap's; the browser gate with the settings of infra-k8s's template; a stand-in for Pocket-ID — discovery and RS256 keys — signing tokens shaped as its client-credentials tokens; a stand-in app; tokens from Agora's `GrantSigner` with a key of its own, bound to `127.0.0.1`; the bridge's outbound proxy in the test's process. No Traefik, no Pocket-ID, no cluster. |
 | R24 | 2026-11-02 | `231b28c` | unit | `npm run check`, all green: Node 24.20.0. |
 | R25 | 2026-11-03 | `c904f8c` | unit, local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C64's grants compiled, its `session/new` and C65 in the lab with a signer of its own and the mock harness. |
+| R26 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. C3, on the new adapter. |
 
 ## Cases
 
@@ -50,6 +51,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C3 | — | live | R1 | proven | "Paris." in 2.0 s, `end_turn`; seven tunnels to `api.anthropic.com:443`, last `CONNECT` response 200. |
 | C3 | — | live | R2 | proven | "Paris." in 2.2 s; three tunnels to `api.anthropic.com:443`, last 200. |
 | C3 | — | live | R7 | proven | "Paris." in 2.4 s; seven tunnels to `api.anthropic.com:443`, last 200. |
+| C3 | — | live | R26 | proven | "Paris" in 1.1 s on Haiku; seven tunnels to `api.anthropic.com:443`, 200. |
 | C4 | — | cluster | R0 | partial: the gateway's decisions are asserted; GitHub's answers are observed | A read 200, write 201, push 200; B read 200, fetch 200; B write, B push, C and GraphQL 403 from the gateway. The created file exists on A only, checked in GitHub. |
 | C4 | — | cluster | R1 | partial: the gateway's decisions are asserted; with stand-ins, no write can succeed | Permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
 | C4 | — | cluster | R2 | partial: the gateway's decisions are asserted; with stand-ins, no write can succeed | Permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
