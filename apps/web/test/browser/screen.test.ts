@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U64, U67, U69–U75: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -1130,21 +1130,25 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and far in
   await page.context().close()
 })
 
-test('U60 an agent’s delegate within its rights, its delegate working, then done: the line names and links to it; working, then done; a report line opening on its text, then the agent’s answer', async () => {
+test('U65 an agent’s delegate within its rights, then its last message of 10,000 characters: the line names and links to it; working, then idle; the message shown as the delegate’s, whole, by its title, then the agent’s answer', async () => {
   const page = await fresh()
   await delegating(page, 'before delegating')
   await send(page, delegateCall({ instructions: '/sleep 3', harness: 'mock' }))
   const line = delegateLine(page, '/sleep 3 · Mock agent')
   await line.getByText('working', { exact: true }).waitFor()
-  await shot(page, 'u60-working')
+  await shot(page, 'u65-working')
   assert.match(String(await line.getByRole('link', { name: '/sleep 3 · Mock agent' }).getAttribute('href')), /^\/w\/[0-9a-f-]{36}$/)
-  await line.getByText('done', { exact: true }).waitFor()
-  const report = thread(page).locator('[data-report]')
-  await report.getByText('From Agora', { exact: true }).click()
-  await report.getByText(/^From Agora, not the person:/).waitFor()
-  await shot(page, 'u60-report')
-  assert.match(await report.innerText(), /completed, its last message:[\s\S]*Slept 3 s\./)
-  await thread(page).getByText(/Echo #\d+: From Agora, not the person:/).waitFor()
+  await line.getByText('idle', { exact: true }).waitFor()
+  const said = thread(page).locator('[data-from]').last()
+  await said.getByText(/Slept 3 s\./).waitFor()
+  await shot(page, 'u65-idle')
+  assert.equal(await said.getByRole('link').innerText(), 'From /sleep 3')
+  await thread(page).getByText(/Echo #\d+: Slept 3 s\./).waitFor()
+  // Whole, however long.
+  await send(page, delegateCall({ instructions: '/words 10000', harness: 'mock' }))
+  const long = thread(page).locator('[data-from]').filter({ hasText: 'word word' })
+  await long.waitFor()
+  assert.ok((await long.innerText()).length >= 9_900, String((await long.innerText()).length))
 })
 
 test('U61 an approval pending on that line; Approve: the proposal and one button, the row waiting for you; after Approve, Approved and the delegate working', async () => {
@@ -1196,7 +1200,7 @@ test('U63 an approval left unanswered: “Expired before a decision” on its li
   await shot(page, 'u63-expired')
 })
 
-test('U64 a delegate’s Workstream opened: its first message shown as from its caller, by the caller’s title, not as the person’s', async () => {
+test('U64 a delegate’s Workstream opened: its first message shown as from its delegator, by its title, not as the person’s', async () => {
   const page = await fresh()
   const caller = await delegating(page, 'the caller')
   await send(page, delegateCall({ instructions: 'hello delegate', harness: 'mock' }))
@@ -1209,6 +1213,33 @@ test('U64 a delegate’s Workstream opened: its first message shown as from its 
   await shot(page, 'u64-delegate')
   await first.getByRole('link').click()
   await page.waitForURL(`${server.url}/w/${caller}`)
+})
+
+test('U76 a delegate’s message while its delegator runs a command: waiting, saying who wrote it; then in the thread at its place, as the delegate’s; one of Agora’s, a line opening on its text', async () => {
+  const page = await fresh()
+  await delegating(page, 'before the message')
+  await send(page, delegateCall({ instructions: 'a short task', harness: 'mock' }))
+  await delegateLine(page, 'a short task · Mock agent').getByText('idle', { exact: true }).waitFor()
+  await thread(page).getByText(/Echo #\d+: Echo #1: a short task\./).waitFor()
+  // A second delegate, whose turn ends while the delegator's command runs.
+  await send(page, delegateCall({ instructions: '/sleep 2', harness: 'mock' }))
+  await delegateLine(page, '/sleep 2 · Mock agent').waitFor()
+  await send(page, '/tool-open 6')
+  await cancelButton(page).waitFor()
+  await waitingList(page).first().getByText('From /sleep 2').waitFor({ timeout: 15_000 })
+  await shot(page, 'u76-waiting')
+  await waitingList(page).first().waitFor({ state: 'detached', timeout: 20_000 })
+  const said = thread(page).locator('[data-from]').filter({ hasText: 'Slept 2 s.' })
+  await said.waitFor()
+  await thread(page).getByText('Heard: Slept 2 s.').waitFor()
+  await shot(page, 'u76-in-the-thread')
+  // One of Agora's.
+  await cancelButton(page).waitFor({ state: 'detached', timeout: 20_000 })
+  await send(page, delegateCall({ instructions: '/turn-error', harness: 'mock' }))
+  const agora = thread(page).locator('[data-agora]').last()
+  await agora.getByText('From Agora', { exact: true }).click()
+  await agora.getByText(/Its turn failed/).waitFor()
+  await shot(page, 'u76-agora')
 })
 
 const waitingList = (page: Page) => page.getByRole('list', { name: 'Messages waiting' }).getByRole('listitem')

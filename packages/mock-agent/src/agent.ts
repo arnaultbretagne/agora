@@ -402,6 +402,11 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, 'Tool done.')
       return 'end_turn'
     }
+    // The prompt answered with an error of the agent's, its process going on (docs/specs/delegation.md, D27).
+    case '/turn-error': {
+      fail(promptId, -32000, 'the model refused')
+      return 'end_turn'
+    }
     // One message of N characters (docs/specs/delegation.md, D19, U65).
     case '/words': {
       say(session.id, 'word '.repeat(Math.ceil(Number(argument) / 5)).slice(0, Number(argument)))

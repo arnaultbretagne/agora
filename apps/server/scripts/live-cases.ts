@@ -1029,8 +1029,8 @@ await check('M9', 'MCP, each real harness: search, then read, a past conversatio
 })
 
 // docs/specs/delegation.md, D15: each real harness, given agora:delegate, delegates a typed task within its rights; the
-// delegate — on the caller's harness — submits its result; Agora reports it once the caller is free; the caller answers
-// with it. The product is in no prompt of the caller's after its first: only the report can give it. Billed.
+// delegate — on the caller's harness — submits its result; its message reaches the caller; the caller answers with it.
+// The product is in no prompt of the caller's after its first: only the delegate's message can give it. Billed.
 const delegatedTo = async (w: Workstream): Promise<string | null> => {
   for (const x of await w.entries()) {
     const update = x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' ? (x.content.params as Json)?.update : null
@@ -1046,7 +1046,11 @@ const toolLines = async (w: Workstream) =>
     .filter((u) => u?.sessionUpdate === 'tool_call')
     .map((u) => ({ id: String(u.toolCallId), title: String(u.title ?? '') }))
 
-await check('D15', 'Delegation, each real harness: a typed task, submitted, reported, used', async () => {
+/** The first message of a delegate's that reached its delegator: a prompt, or a steering line, marked as it. */
+const messageFrom = async (w: Workstream, delegate: string) =>
+  (await w.entries()).find((e) => e.kind === 'acp' && e.direction === 'out' && ['session/prompt', '_session/steering'].includes(String(e.method)) && JSON.stringify(e.content).includes(`From your delegate ${delegate}`))
+
+await check('D15', 'Delegation, each real harness: a typed task, submitted, its message used', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
     assert(pool !== undefined, `no ${harness} pool`)
@@ -1055,28 +1059,17 @@ await check('D15', 'Delegation, each real harness: a typed task, submitted, repo
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
       `With the delegate tool of the agora MCP server, ask a delegate to compute ${String(x)} times ${String(y)}, with an output_schema ` +
-      'asking for an object whose number "product" is required. Once it has started, end your turn. When its report comes back, ' +
+      'asking for an object whose number "product" is required. Once it has started, end your turn. When its message comes back, ' +
       'answer with the product it gave, as a number alone.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
-    const first = await w.turn(['done', 'failed'], 300_000)
-    assert(first.status === 'done', `${harness}: the caller's first turn ${first.status}`)
-    // What it says from here on answers the report alone.
-    const before = (await w.said()).length
-    const delegate = await delegatedTo(w)
-    assert(delegate !== null, `${harness}: no delegate started; tools ${JSON.stringify(await toolLines(w))}`)
-    const d = { id: delegate, entries: async () => ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]) ?? [] }
-    const result = await until('the result', async () => (await d.entries()).find((e) => e.kind === 'delegation.result'), 600_000)
-    const product = (result.content.result as Json)?.product
-    assert(product === x * y, `${harness}: the delegate submitted ${JSON.stringify(result.content.result)}`)
-    const report = await until('the report', async () => (await w.entries()).find((e) => e.kind === 'command' && JSON.stringify(e.content).includes('agora.bretagne.dev/report')), 600_000)
-    await until('the answer', async () => {
-      const turns = [...(await w.state()).turns.values()]
-      return turns.length >= 2 && ['done', 'failed'].includes(turns.at(-1)!.status) ? true : null
-    }, 300_000)
-    const answer = (await w.said()).slice(before)
+    const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
+    const message = await until('its message', () => messageFrom(w, delegate), 600_000)
+    assert(JSON.stringify(message.content).includes(String(x * y)), `${harness}: its message: ${JSON.stringify(message.content).slice(0, 400)}`)
+    const state = await drained(w, 300_000)
+    const said = await w.said()
     await w.stop()
-    assert(answer.includes(String(x * y)), `${harness}: after the report, "${answer.trim().slice(0, 160)}"`)
-    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, submitted { product: ${String(product)} }, report at ${report.position}, answered "${answer.trim().slice(0, 30)}"`)
+    assert(said.includes(String(x * y)), `${harness}: after its message, "${said.trim().slice(-160)}"`)
+    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, its message at ${message.position} by ${String(message.method)}, ${String(state.turns.size)} turn(s), the product said`)
   }
   return seen.join(' | ')
 })
@@ -1182,6 +1175,56 @@ await check('L122', 'A message during a long shell command, Claude Code and Code
     assert(late.length === 0, `${harness}: ${String(late.length)} lines after its answer`)
     assert(said.includes(`${word}-SAID`), `${harness}: the word not said: "${said.slice(-160)}"`)
     seen.push(`${harness}: the steering line ${String(BigInt(line.position) - BigInt(closes[0]!.position))} positions after the command closed, injected, the word said in the turn, nothing after`)
+  }
+  return seen.join(' | ')
+})
+
+// D29: a delegate asked for a long report: all of it reaches its delegator, which asks for no more.
+await check('D29', 'Delegation, each real harness: a report of 30,000 characters, whole', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      'With the delegate tool of the agora MCP server, ask a delegate to write, as its final message, at least 30,000 characters: the numbers from 1 upwards, ' +
+      'spelled in English words, one per line, ending with the line THE END. Once it has started, end your turn. When its message comes back, say how its last line reads, and nothing else.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
+    const message = await until('its message', () => messageFrom(w, delegate), 1_200_000)
+    const size = JSON.stringify(message.content).length
+    assert(size >= 30_000, `${harness}: ${String(size)} characters in its message`)
+    assert(JSON.stringify(message.content).includes('THE END'), `${harness}: its last line missing`)
+    await drained(w, 300_000)
+    const writes = (await toolLines(w)).filter((l) => /delegate/i.test(l.title)).length
+    await w.stop()
+    assert(writes === 1, `${harness}: ${String(writes)} delegate calls`)
+    seen.push(`${harness}: ${String(size)} characters at ${message.position}, one delegate call`)
+  }
+  return seen.join(' | ')
+})
+
+// D31: a delegate's message reaching its delegator during a long command: it waits for the command, then goes into that turn.
+await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message during its delegator’s long command goes into that turn', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const word = aWord()
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      `First, with the delegate tool of the agora MCP server, ask a delegate to reply with the word ${word} and nothing else. ` +
+      'Then, without waiting, run exactly this shell command in the foreground: node -e "setTimeout(()=>console.log(\'FINISHED\'),60000)". ' +
+      'When it is done, tell me the word your delegate sent you.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
+    const message = await until('its message', () => messageFrom(w, delegate), 600_000)
+    const state = await drained(w, 300_000)
+    const said = await w.said()
+    const outcomes = await steeringOutcomes(w)
+    await w.stop()
+    assert(said.includes(word), `${harness}: the word not said: "${said.slice(-160)}"`)
+    seen.push(`${harness}: by ${String(message.method)}, steering ${JSON.stringify(outcomes)}, ${String(state.turns.size)} turn(s), the word said`)
   }
   return seen.join(' | ')
 })
