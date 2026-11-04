@@ -2,7 +2,8 @@
 
 Contract to implement: an agent hands work to another agent through Agora's MCP server (`mcp.md`). A
 delegate is a sub-stream of its delegator's Workstream, and the two speak by one gesture: a message
-written in the other's Workstream. `delegate` writes in the delegate's; `submit`, in the delegator's.
+written in the other's Workstream. `delegate` writes in the delegate's; `submit` in the delegator's,
+and a turn ended with no `submit` submits the delegate's last message.
 
 **Nobody waits: a call answers as soon as its message is accepted, and the message waits until its
 Workstream can take it (`log.md`, "Messages waiting"). Agora carries the words, whole, and decides
@@ -21,7 +22,7 @@ sequenceDiagram
   end
   A->>D: the Workstream, its execution, its first message
   A-->>C: started, its id — or refused with the words, or expired
-  D->>A: submit(message)
+  D->>A: submit(message), or its turn ends with its last message
   A->>C: the message, a turn of the delegator's
   C->>A: delegate(to, instructions)
   A->>D: the next message, a turn of the delegate's
@@ -46,30 +47,31 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | From the delegator | `delegate`: `instructions` is the delegate's first message; answered `started <id> · <title>`. With `to`, one of its delegates — then only `instructions` and `output_schema` —: its next message, whatever it is doing; answered `sent <id> · <title>`. `not_a_delegate`: a Workstream that is not one of its delegates. `delegate_stopped`: one the person stopped. |
-| From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. |
+| From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. A turn no person started, done with no `submit` in it, submits its last message: the same message, whole. |
 | A message | A Write of Agora's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora` —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). It opens a turn of that Workstream's agent, as any message does. |
-| Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. Answer with submit:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
+| Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
 | Its way | It waits while its Workstream cannot take it, in order, one turn each (`log.md`, "Messages waiting"). A Workstream whose execution has ended is continued first, unless the person stopped it. |
 | What it is worth | Agora keeps no verdict and no outcome. The delegator reads, and answers with `to` when it wants something else. |
 
 ## What Agora writes
 
-A delegator is told what its delegate cannot tell it, by the same gesture: a message in its Workstream.
+A delegator is told what its delegate cannot tell it, by the same gesture: a message in its Workstream,
+`as` `agora`: `From Agora, not the person: your delegate <id> "<title>"`, then what happened.
 
-| When | The message |
+| When | The message says |
 | --- | --- |
-| A delegate's turn no person started is done, with no `submit` in it | `as` `delegate`, the line saying `its turn ended without submit`, then its last message, whole. |
-| A delegate's turn fails, its Session does not open, or its execution is lost | `as` `agora`: `From Agora, not the person: your delegate <id> "<title>"`, then what happened. |
-| The person stops a delegate, or cancels its turn | The same, saying so. |
+| A delegate's turn no person started is done with no `submit` and no message | It ended its turn with nothing to say. |
+| A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
+| The person stops a delegate, or cancels its turn | That the person did. |
 
-Each is written once, a restart included.
+Each, and a last message submitted, is written once, a restart included.
 
 ## Typed results
 
 | Element | Rule |
 | --- | --- |
 | `output_schema` | Optional, with `delegate` or `to`. A JSON Schema whose root is an object, using only `type`, `properties`, `required`, `items`, `enum`, `description`, `additionalProperties`: anything else is refused, `invalid_schema`. Agora's line recalls it: `Give submit a result of this shape:`, then the schema. The mark carries it too. |
-| `submit` | Listed to every delegate from its start: `message`, and `result`, an object. When its delegator's last message gave a schema, `result` is required and checked: a call that does not fit is a tool error naming the mismatch, and nothing is written. A `result` is written in the message as JSON. |
+| `submit` | Listed to every delegate from its start: `message`, and `result`, an object. When its delegator's last message gave a schema, `result` is required and checked: a call that does not fit is a tool error naming the mismatch, and nothing is written. A `result` is written in the message as JSON. A turn with no `submit` submits its last message all the same: its delegator reads it. |
 
 ## Approval
 
@@ -107,9 +109,9 @@ Each is written once, a restart included.
 | D23 | `to` a delegate the person stopped; a Workstream that is not the delegator's delegate | `delegate_stopped`; `not_a_delegate`. |
 | D24 | `output_schema` with `delegate`; `submit` a mismatch, then a fit | The delegate's first prompt recalls the schema; a tool error naming the mismatch, nothing written; then `sent`, the delegator's prompt holding the result as JSON. |
 | D25 | `output_schema` first given with `to` | `submit`, listed since the delegate's Session opened, checks `result` against it. |
-| D26 | A delegate's turn its delegator started ends with no `submit`; one with `submit`; one the person started | Its last message whole in the delegator's Workstream, `as` `delegate`, the line saying so; nothing more; nothing. |
+| D26 | A delegate's turn its delegator started ends with no `submit`; one with `submit`; one the person started; one with no `submit` and no message | Its last message whole in the delegator's Workstream, `as` `delegate`, as a `submit` gives it; nothing more; nothing; a message `as` `agora` saying so. |
 | D27 | A delegate's turn fails; its Session does not open; its execution is lost; the person stops it | Each time one message `as` `agora` in the delegator's Workstream, naming the delegate and what happened. |
-| D28 | A restart once a delegate's turn is done, before Agora wrote its last message | Written after the restart, once. |
+| D28 | A restart once a delegate's turn is done, before its last message was submitted | Submitted after the restart, once. |
 | D29 | Live, each harness, a delegate asked for a report of at least 30,000 characters | The delegator's prompt holds it whole, its agent sending no further `to` for the rest. |
 
 ## To be specified

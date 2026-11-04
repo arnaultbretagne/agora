@@ -25,8 +25,9 @@
 2. A delegate is a sub-stream of its delegator's Workstream: three levels deep at most, three at once
    per delegator. A delegate may delegate in turn.
 3. One gesture, both ways: a message written in the other's Workstream. `delegate` writes in the
-   delegate's, `submit` in the delegator's. A message opens a turn like any other, and waits in the
-   log while its Workstream cannot take it (ADR Log).
+   delegate's; `submit` in the delegator's, and a turn ended with no `submit` submits the delegate's
+   last message. A message opens a turn like any other, and waits in the log while its Workstream
+   cannot take it (ADR Log).
 4. Agora carries the words, whole, and decides nothing about them: no outcome, no report, no verdict.
    The delegator reads, and writes again if it wants more.
 5. Rights beyond the delegator's: the call itself waits for the person, at most 4 min 30 s — one
@@ -67,10 +68,8 @@
 
 - The log gains a mark saying who wrote a message, and a Write that waits; earlier reports and
   facts stay in the log, read as they were.
-- A delegate's turn no person started and that ends with no `submit` still sends its last message,
-  whole: a delegator must not wait for words that will never come. Failures reach it the same way.
-- A long deliverable is written twice when a delegate first writes it for itself: once as its text,
-  once in `submit`. A delegate told of `submit` writes it there.
+- A delegator never waits for words that will not come: a turn with no `submit` submits its last
+  message, whole, so a long deliverable is not written twice; failures reach it the same way.
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
 - A delegate's view and its row in the list carry its state, which its delegator's `delegate` line
