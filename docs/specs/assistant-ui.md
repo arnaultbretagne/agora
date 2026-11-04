@@ -71,9 +71,10 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 | Command | Target | Body | Offered |
 | --- | --- | --- | --- |
 | Create | — | `pool`, from the catalogue; `settings`, the model and effort picked; `profiles`, the access picked. Never an anchor: the server finds the one it continues from (`log.md`, "Continuing"). | With a message sent while no execution runs ("Sending"). |
-| Configure | `execution`, `session` | `configId`, `value` | When sending is open, from the model picker ("Settings and commands"). |
+| Configure | `execution`, `session` | `configId`, `value` | When sending is open and no turn runs, from the model picker ("Settings and commands"). |
 | Scope | `execution` | `profiles`: the whole access picked | When no turn runs, from the access picker ("Access"). |
-| Write | `execution`, `session` | `prompt`: one `text` block | When sending is open (below). |
+| Write | `execution`, `session` | `prompt`: one `text` block; `mayWait`: true | When sending is open (below). |
+| Retract | `message`: the waiting message's position | — | For a message waiting ("Messages during a turn"). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
 | RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
 | Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question, from its card. |
@@ -95,8 +96,8 @@ in the header, after the harness.
 | `failed` | failed | Open: sending starts a new execution. |
 | `ended` | ended | Open: sending starts a new execution, which continues the Workstream. |
 
-In `ready`, sending is open when the snapshot is complete, no turn is saved, in progress or
-uncertain, no permission is pending, and no setting is being changed. Otherwise the reason shows
+In `ready`, sending is open when the snapshot is complete, no turn is uncertain, no permission is
+pending, and no setting is being changed. Otherwise the reason shows
 above the composer: the state's, then "Answer the permission request above.", then "Applying the
 settings…", then the uncertain turn's banner. A pending question closes sending in every state,
 starting an execution included, before any other reason: "Answer the question above." A pending
@@ -117,6 +118,19 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
 
+## Messages during a turn
+
+Sending stays open while a turn runs: one gesture, and Agora decides whether the message goes into
+the turn or after it (`log.md`, "Messages during a turn").
+
+| Element | Rule |
+| --- | --- |
+| Send | **Cancel** while a turn runs; **Send** beside it once the composer holds something. Enter sends, as between turns. |
+| Waiting | Above the composer, oldest first, each message that waits as the thread gives it: its text on one line, cut, then its attachments counted; a cross sends **Retract**. Gone once sent or retracted. |
+| Sent into the turn | In the thread at its place, as a user's message; the agent's response goes on under it. |
+| Held | After a Cancel, or with no execution running, above them: "These go with your next message." |
+| Refused | The reason above the composer, the text and attachments back in it. |
+
 ## Settings and commands
 
 What an agent offers to change, and the commands it runs, come from its Session (`log.md`, "The
@@ -125,7 +139,7 @@ Session gave (`GET /api/pools`).
 
 | Element | Rule |
 | --- | --- |
-| The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their full names as the agent gives them ("Opus 5.5"), nothing more; the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, choosing one sends **Configure**; sending waits for its answer. |
+| The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their full names as the agent gives them ("Opus 5.5"), nothing more; the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, between turns, choosing one sends **Configure**; sending waits for its answer. |
 | The effort | In the same picker, under the model: the options of the setting in category `thought_level`, without `default`. Chosen like the model. |
 | The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access. |
 | Commands | `/` at the start of the composer lists the commands — name, description, its input's hint — filtered by what follows it; arrows move, Enter or Tab chooses, Escape hides. Choosing one puts `/{name} ` in the composer. Sent as the prompt's text: that is how ACP runs a command. |
@@ -206,6 +220,7 @@ The only point of contact between Agora's objects and assistant-ui.
 | `isRunning` | The last turn is saved or in progress, or a first message waits. |
 | `isSendDisabled` | Sending is not open, or a first message waits. |
 | `onNew` | **Write**, with the composer's text and attachments ("Attachments"); with no execution running, the steps of "Sending". |
+| `queue` | `items`: the `waiting` elements still waiting, in position order, each by its id with its text blocks as `parts`; `steerItems`: none; `enqueue` and `steer`: as `onNew`; `remove`: **Retract**; `move` and `edit`: nothing. |
 | `adapters.attachments` | Agora's: what the agent accepts, prepared in the browser ("Attachments"). |
 | `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
 
@@ -213,18 +228,20 @@ The Workstream list and the permission card are the client's own: they call the 
 the runtime (**RespondPermission** with the option chosen).
 
 Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `setMessages`,
-`queue`, `suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
+`suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
 
 ## Messages
 
 | From | Message | Placed at |
 | --- | --- | --- |
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
+| A message sent into a turn | Its `steered` `user` element: a `user` message, id `{turn}:user:{position}`, its `firstPosition`, with no turn's note, among its turn's messages; the `assistant` message split around it, the part after it id `{turn}:assistant:{position}`. A part with nothing to show is left out; each part `complete`, but the last, which has the turn's `status`. | Within its turn. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
 | A report | In place of its turn's `user` message, a `system` message, id `{turn}:report`: one line, "From Agora", the number of outcomes — "a reminder" for one to a delegate —, opening on the report's text; its `assistant` message as any turn's. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
-Elements with no turn, `user_message_chunk` elements and `acp` elements are not shown. A `user`
+Elements with no turn, `waiting` elements, `user_message_chunk` elements and `acp` elements are not
+shown as messages. What an agent says after its turn's answer shows in that turn's response. A `user`
 element with `from` is shown as its caller's, named by the caller's title, not as the person's.
 
 ### A turn's states
@@ -331,6 +348,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts`, the turn's failure under it, Copy on hover | `MessagePrimitive` (**ours**) |
 | Thread | Notice, for `system` messages | **ours** |
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
+| Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
 | Composer | The paperclip, and the attachments' tiles above the text | `Attachment` (registry), adapted |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
@@ -460,6 +478,13 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |
 | U63 | An approval left unanswered | "Expired before a decision" on its line. |
 | U64 | A delegate's Workstream opened | Its first message shown as from its caller, by the caller's title, not as the person's. |
+| U67 | A turn saved, then in progress; then uncertain; a permission pending | Sending open and the turn running, the model and access pickers closed; then sending closed, as U3 and U4. |
+| U68 | A turn with a `steered` `user` element between an agent's text and its next; one with that element before any text | `user`, `assistant`, `user`, `assistant`, by their ids, the first `assistant` `complete`, the last with the turn's status, no note under the second `user`; the other: no empty `assistant` before it. |
+| U69 | `waiting` elements: two waiting, one sent, one retracted | Two queue items, in position order, with their text; removing one sends **Retract** with its position; `enqueue` and `steer` send **Write** with `mayWait`. |
+| U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
+| U71 | In a browser, an agent that does not, a turn running: two messages sent, the first retracted | Both above the composer, oldest first; the cross takes the first away, never sent; at the turn's end the second's turn. |
+| U72 | In a browser, a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
+| U73 | In a browser, a Write refused during a turn | Its reason above the composer; the text back in the composer. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

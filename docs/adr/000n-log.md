@@ -27,8 +27,9 @@
    with the bridge are written too.
 4. **What the client shows is a projection** of the log: deterministic, versioned, rebuilt from
    the log. History is never edited.
-5. **One turn at a time per Workstream.** A second prompt is refused while a turn is saved, in
-   progress or uncertain. A local failure does not prove that the harness finished.
+5. **One turn at a time per Workstream.** A second prompt never reaches the adapter during a turn:
+   a message written meanwhile waits in the log, or goes through the adapter's steering (ADR
+   Steering). A local failure does not prove that the harness finished.
 6. **PostgreSQL** holds the log, the projections and the anchors.
 7. **A new execution continues its Workstream.** It restores the last anchor of its harness, and
    its first prompt gives the agent, as text, the exchanges that anchor does not hold — all of them

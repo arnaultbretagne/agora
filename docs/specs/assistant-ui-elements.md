@@ -58,7 +58,7 @@ the data; the interface hides the rest.
 | speaker-identity | **Agora** | attribution of exchanges to Sessions | — |
 | connection-state, agent-status, loading-state | **Agora** | connection and turn state | — |
 | message-timing | **Agora** | frame timestamps | Approximate token throughput. |
-| message-queue | **Agora** | client-side queue | To be reconciled with the single-active-turn rule. |
+| message-queue | **Agora** | the `queue` adapter, on `waiting` elements | The log holds the messages; the client lists them and retracts one (`assistant-ui.md`, "Messages during a turn"). |
 | feedback-dialog | **Agora** | stored by Agora | Nothing goes back to the agent. |
 | quote-reply, draft-restore | **Agora** | composer | — |
 | directive-text | **Agora** | rendering of commands and mentions in the message | — |

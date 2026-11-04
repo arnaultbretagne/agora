@@ -22,6 +22,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | Numbers | From 1, across the Workstream, in that order. An exchange's numbers never change: only the last element of the exchange in progress grows, and nothing follows it; a rebuild gives the same lines. |
 | Kinds | `header`, `user`, `agent`, `tool`, `agora`. |
 | Who wrote | A header names who wrote the exchange's prompt: `you`; `agora` for a report (`delegation.md`, "Reports"); `caller` for a delegate's message from its caller. A caller's lines are `user` lines; a report's are `agora` lines, read, never searched: the delegates' own Workstreams hold what they say. |
+| A message sent into a turn | Among the agent's lines, at its first position: `## <n> · you, during the turn`, then its text as a `user` element's. |
 | Left out | Reasoning, tool content, plans, permissions, questions to the person, and what a resumed Session replays outside any turn. |
 
 ## Search
@@ -52,6 +53,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 
 | ID | Case | Expected |
 | --- | --- | --- |
+| S14 | An exchange with a message sent into its turn, between the agent's two texts; then searched for that message's words | The agent's first lines, `## <n> · you, during the turn`, the message's lines of kind `user`, the agent's next lines; the same numbers once its views are rebuilt; found as a user's line. |
 | S1 | A Workstream of two exchanges, the second calling a tool that succeeds and one that fails; its transcript read whole | Its two headers per exchange, the user's lines, the agent's, `[tool: …]` and `[tool: … — failed]`, numbered from 1 in that order. |
 | S2 | The same transcript after a third exchange, then after its views are rebuilt | The first two exchanges' lines at the same numbers, with the same text. |
 | S3 | An exchange in progress, its answer streaming | Its last lines grow; no line before them moves. |
