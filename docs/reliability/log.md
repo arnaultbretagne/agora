@@ -34,6 +34,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R26 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; L99 on a real delegation in the lab. Beside it, `001.sql` of main then this commit's, twice, on a database with an entry: the entries' kinds widened in 72 ms, not checked again, the same constraint the second time, the entry kept, `delegation.started` accepted, an unknown kind refused. |
 | R27 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, taking `_session/steering` as the adapters do, or, with `AGORA_MOCK_NO_STEERING=1`, not saying it can. Each guard of a message's going was also removed in turn, and its case failed. |
 | R28 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. Cases L121 and L122. |
+| R29 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; L99 and L125–L127 on real delegations in the lab, the mock agent taking `_session/steering`. |
 
 ## Cases
 
@@ -189,6 +190,10 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L122 | — | live | R28 | proven | A command of 40 s, Claude Code and Codex: no steering line 5 s into it; its line one position after the command closed, `injected`; on Claude Code, `FINISHED-…` in the tool line, not moved to the background; one turn; the word said; nothing said in the 20 s after its answer. |
 | L123 | — | local | R27 | proven | `invalid_body` for a prompt that is a string; `line_too_large` for 17 MiB of text; no command written, nothing waiting; the turn done, one prompt. |
 | L124 | — | local | R27 | proven | A Cancel, then a Write `waiting` true, the agent answering `end_turn`: its own turn. A Cancel with a message waiting and no Write after it, the same answer: 500 ms on, one prompt, the message and its element waiting. |
+| L99 | — | local | R29 | proven | The delegate's view and its row: `working`, then `idle`, after a `to` `working` and `idle` again; none in its delegator's view or row. Its Pod starting for a next Create: `working`. |
+| L125 | — | local | R29 | proven | Before the Session opens: `waiting` true, then its prompt. Ended: `waiting` true; a Create with the last execution's pool, settings, profiles and limits, 600 s among them, then its prompt. Its pool gone: `waiting` true; `mock-test` in place of `mock-older`, the same profiles and limits. `quota`: `waiting` true, one execution 1.5 s on; a place freed: two, then its prompt. After a Stop: `waiting` true, one execution and no prompt 1.5 s on; the person's Create: its prompt. |
+| L126 | — | local | R29 | proven | An approval pending: `sent`, 500 ms on the same question, one waiting, no prompt, the element `pending`; answered: its prompt `not a refusal`. A question: no prompt 300 ms on; answered: its prompt. A permission: no steering line 300 ms on; answered: the prompt `behind the permission`. |
+| L127 | — | local | R29 | proven | During `/sleep 3`: one steering line, its first block `From your delegate <id> …`, its second `into the turn`; the `user` element `steered`, `from` the delegate, `as` `delegate`, the words alone; in the exchange, `[during this turn: From your delegate <id> … into the turn]`. |
 
 ## Not covered
 
