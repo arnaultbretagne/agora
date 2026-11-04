@@ -478,7 +478,9 @@ export class Delegations {
     const e = state.executions.get(turn.execution)
     const entries = await this.store.entries(delegate)
     if (turn.status === 'failed') {
-      if (!e?.lost && !e?.failed && !e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${turn.failure ? `: ${JSON.stringify(turn.failure).slice(0, 300)}` : ''}.`)
+      // The agent's error message, or the closed reason of a failure of Agora's.
+      const why = object(turn.failure)?.message ?? turn.failure
+      if (!e?.lost && !e?.failed && !e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
       return
     }
     if (turn.status === 'cancelled') {

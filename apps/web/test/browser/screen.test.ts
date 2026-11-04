@@ -1143,7 +1143,7 @@ test('U65 an agent’s delegate within its rights, then its last message of 10,0
   await said.getByText(/Slept 3 s\./).waitFor()
   await shot(page, 'u65-idle')
   assert.equal(await said.getByRole('link').innerText(), 'From /sleep 3')
-  await thread(page).getByText(/Echo #\d+: Slept 3 s\./).waitFor()
+  await thread(page).getByText(/Echo #\d+: … second 1\/3/).waitFor()
   // Whole, however long.
   await send(page, delegateCall({ instructions: '/words 10000', harness: 'mock' }))
   const long = thread(page).locator('[data-from]').filter({ hasText: 'word word' })
@@ -1231,7 +1231,7 @@ test('U76 a delegate’s message while its delegator runs a command: waiting, sa
   await waitingList(page).first().waitFor({ state: 'detached', timeout: 20_000 })
   const said = thread(page).locator('[data-from]').filter({ hasText: 'Slept 2 s.' })
   await said.waitFor()
-  await thread(page).getByText('Heard: Slept 2 s.').waitFor()
+  await thread(page).getByText(/Heard: … second 1\/2/).waitFor()
   await shot(page, 'u76-in-the-thread')
   // One of Agora's.
   await cancelButton(page).waitFor({ state: 'detached', timeout: 20_000 })

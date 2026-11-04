@@ -399,7 +399,7 @@ test('D27 a delegate’s turn fails: one message of Agora’s in its delegator�
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: '/turn-error', harness: 'mock' } })))
   const [notice] = await manyFromOthers(lab, ws, 1)
   assert.deepEqual([notice?.from, notice?.as], [delegate, 'agora'])
-  assert.match(wordsOf(notice!), /^Its turn failed: .*the model refused/)
+  assert.equal(wordsOf(notice!), 'Its turn failed: the model refused.')
   assert.match(blocksOf((await prompts(lab, ws))[0]!)[0]!.text, new RegExp(`^From Agora, not the person: your delegate ${delegate} `))
   await sleep(600)
   assert.equal((await fromOthers(lab, ws)).length, 1)
