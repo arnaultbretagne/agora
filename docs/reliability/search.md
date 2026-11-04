@@ -10,6 +10,7 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | R2 | 2026-11-02 | `4510577` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own, as R1. The transcript now inlines an element's text and computes it once; the tests are R1's, unchanged. |
 | R3 | 2026-11-02 | `15b6b66` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6, each test on a database of its own. The search's first step reads `objects_text`; S1–S10 are R2's tests, unchanged. |
 | R4 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; S12 on a real delegation in the lab — the caller's MCP calls, the delegate on the mock agent, Agora's report —, read and searched through the MCP server. |
+| R5 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; a real message into a running turn, through the mock agent. |
 
 ## Cases
 
@@ -47,3 +48,4 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | S10 | — | local | R3 | proven | As R2. |
 | S11 | — | local | R3 | proven | On `the Kube cluster`, `a kube node`, `k.be written as such`: `kube` 1 line; `(?i)KUBE` 2; `(?i)^A KUBE` 1; `***=k.be` 1; each answered 200. |
 | S12 | — | local | R4 | proven | The delegate's line 1 `## 1 · <started> · caller`, line 2 its instructions; the caller's `## <n> · <started> · agora`, then lines all of kind `agora`, the first `From Agora, not the person:`; the word found on the delegate's line 2, never on a line of the report. |
+| S14 | — | local | R5 | proven | Lines 1 to 10: `## 1 · you`, `/sleep 2`, `## 1 · agent`, `… second 1/2`, `## 1 · you, during the turn`, `also a needle` of kind `user`, `## 1 · agent`, `Heard: also a needle.`, `… second 2/2`, `Slept 2 s.`; the same once rebuilt; `a needle` found at 6 and 8. |
