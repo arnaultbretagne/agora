@@ -53,7 +53,7 @@ before(async () => {
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '40', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
