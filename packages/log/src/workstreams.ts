@@ -160,6 +160,8 @@ export class Workstreams implements Handler {
     }
     this.owner = owner
     this.stopped = false
+    // Before the mechanics write what ended while Agora was down: the delegates it ended for still have something to say.
+    await this.delegations?.recover()
     for (const row of (await this.store.writer.query("SELECT workstream,execution FROM commands WHERE kind='Create'")).rows)
       this.owners.set(row.execution as string, row.workstream as string)
     // Only what is followed is read back: an execution not ended, an anchor without its entry.
@@ -286,7 +288,7 @@ export class Workstreams implements Handler {
           const own = ownSettings(command.body.settings)
           if (own === null) return 'invalid_create'
           const settings = resolveSettings(pool.sessionConfig, own)
-          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles, origin)
+          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles, origin, current?.profiles)
           if (profiles === 'invalid') return 'invalid_create'
           if (typeof profiles === 'string') return profiles
           // docs/specs/log.md, "Continuing": the anchor given, else the Workstream's last of this harness;
@@ -398,7 +400,7 @@ export class Workstreams implements Handler {
         if (command.kind === 'Scope') {
           // docs/specs/log.md, "Commands": between turns; the token follows once accepted.
           if (state.active) return state.active.status === 'uncertain' ? 'turn_uncertain' : 'turn_active'
-          const profiles = this.checkProfiles(command.body.profiles, origin)
+          const profiles = this.checkProfiles(command.body.profiles, origin, current.profiles)
           if (profiles === 'invalid') return 'invalid_scope'
           if (typeof profiles === 'string') return profiles
           return { execution: current.id, body: { profiles } }
@@ -438,6 +440,7 @@ export class Workstreams implements Handler {
           // A replayed Create answers as the first did; an execution that has ended is not run again.
           const e = (await this.store.state(workstream)).executions.get(answer.execution)
           if (e && !e.ended) await this.follow(workstream, e)
+          await this.delegations?.created(workstream).catch(() => this.report({ operation: 'delegation', outcome: 'blocked', workstream, errorClass: 'database' }))
         }
         if (command.kind === 'Scope') await this.rescope(workstream)
         // Acceptance stands whatever the effects do next; their failures are read in the thread.
@@ -469,11 +472,11 @@ export class Workstreams implements Handler {
   }
 
   /** A Create's or a Scope's profiles, checked (docs/specs/credentials.md, "Offered profiles"): each once, or the refusal. */
-  private checkProfiles(value: unknown, origin: 'person' | 'agora' = 'person'): string[] | 'invalid' | 'unknown_profile' | 'profile_not_offered' {
+  private checkProfiles(value: unknown, origin: 'person' | 'agora' = 'person', held: readonly string[] = []): string[] | 'invalid' | 'unknown_profile' | 'profile_not_offered' {
     if (!Array.isArray(value) || value.some((p) => typeof p !== 'string')) return 'invalid'
     const profiles = [...new Set(value as string[])]
-    // Agora's own profiles are given by Agora alone (docs/specs/credentials.md, "Profiles and grants").
-    if (profiles.some((p) => AGORA_OWN_PROFILES.has(p))) {
+    // Agora's own profiles are given by Agora alone (docs/specs/credentials.md, "Profiles and grants"): the person only keeps what the Workstream holds.
+    if (profiles.some((p) => AGORA_OWN_PROFILES.has(p) && !held.includes(p))) {
       if (origin !== 'agora') return 'unknown_profile'
     }
     try {
@@ -497,6 +500,11 @@ export class Workstreams implements Handler {
       const last = latest.pools.get(p.name) ?? latest.harnesses.get(p.harness)
       return { ...p, settings: last?.settings ?? null, commands: last?.commands ?? [], promptCapabilities: last?.promptCapabilities ?? null }
     })
+  }
+
+  /** The pools as they are, without what their Sessions gave. */
+  pools(): ReturnType<ExecutionManager['pools']> {
+    return this.executions.pools()
   }
 
   /** The lab's configuration line (docs/specs/log.md, "HTTP"): one allowed method, between turns. */

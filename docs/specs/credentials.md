@@ -58,7 +58,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
 | `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). |
 | `agora:delegate` | The same grant as `agora:read`; Agora opens `delegate` to it (`delegation.md`). |
-| `agora:submit` | The same grant as `agora:read`; Agora opens `submit` to it. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`). |
+| `agora:submit` | The same grant as `agora:read`; Agora opens `submit` to it. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`) but one keeping what its Workstream's last execution holds. |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile.
 
@@ -598,6 +598,7 @@ call. The test page does it itself when the agent offers the option.
 | C63 | The grant of `agora:read`; a pool declaring it; `agora`, `agora:write` | Only `mcp.agora.internal`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host refused; never the Internet's grant, which opens nothing of it; not a base profile; the others unknown. |
 | C64 | The grants of `agora:delegate` and `agora:submit`; an execution with either | `agora:read`'s grant each; `session/new` names the server `agora` once, with them both or with `agora:read` too. |
 | C65 | A Create, then a Scope, naming `agora:submit`; a delegate | `unknown_profile` both times; the delegate's execution holds `agora:submit`, given by Agora. |
+| C66 | The person, in a delegate: a Scope, then once its execution ended a Create, each keeping the `agora:submit` it holds | Both accepted, the profile kept. |
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.

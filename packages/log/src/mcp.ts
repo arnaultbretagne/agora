@@ -6,6 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode, type ReadAnswer, type SearchAnswer } from './search.ts'
+import { MAX_LINE } from './acp.ts'
 import { object } from './json.ts'
 import type { Workstreams } from './workstreams.ts'
 import { Refused as DelegationRefused } from './delegation.ts'
@@ -14,8 +15,8 @@ import { Refused as DelegationRefused } from './delegation.ts'
 export const CALLER_HEADER = 'x-agora-execution'
 const SUBJECT = /^agora ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** A message larger than this is no tool call of ours. */
-const MAX_BODY = 1024 * 1024
+/** A message larger than this is no tool call of ours: `submit` carries what a line of a prompt can hold. */
+const MAX_BODY = MAX_LINE
 
 const SEARCH: Tool = {
   name: 'search',
@@ -97,7 +98,7 @@ const SUBMIT: Tool = {
   name: 'submit',
   description:
     'Send a message to the agent that delegated to you: a result, a question, news, as many times as you have something to say. ' +
-    'A turn with no `submit` sends your last message for you. Give `result` when it asked for a shape.',
+    'A turn with no `submit` sends your last message for you; with one, nothing more goes by itself. Give `result` when it asked for a shape.',
   inputSchema: {
     type: 'object',
     properties: {

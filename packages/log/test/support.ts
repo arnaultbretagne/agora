@@ -16,7 +16,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
-import { LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
+import { Delegations, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
 
 export const POOL = 'mock-test'
 let counter = 0
@@ -210,6 +210,8 @@ export interface LabOptions {
   readonly credentials?: CredentialSource
   readonly workstreams?: Partial<WorkstreamsOptions>
   readonly executions?: Partial<ManagerOptions>
+  /** The delegations' engine, as the server attaches it: through its start, and each restart's. */
+  readonly delegations?: ConstructorParameters<typeof Delegations>[1]
 }
 
 /** Agora in this process, on a FakeKube whose Pods run real bridges with the mock agent. */
@@ -269,6 +271,7 @@ export class Lab {
       ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
       ...options.workstreams,
     })
+    if (options.delegations) new Delegations(this.workstreams, options.delegations)
   }
 
   static async start(options: LabOptions): Promise<Lab> {

@@ -51,17 +51,17 @@ sequenceDiagram
 | From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. A turn holding a message that is not the person's, done with no `submit` in it, submits its last message: the same message, whole. |
 | A message | A Write of Agora's, with `mayWait` as the client's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora`, with the `output_schema` a delegator gave and the `turn` a delegate wrote in —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). |
 | Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
-| Its way | That of any message (`log.md`, "Messages during a turn"): in order, into the running turn or as the next, the person able to retract it while it waits. Nothing refuses it: it waits while its Workstream cannot take it, and a Workstream whose execution has ended is continued first, unless the person stopped it. |
+| Its way | That of any message (`log.md`, "Messages during a turn"): in order, into the running turn or as the next, the person able to retract it while it waits. Nothing refuses it: it waits while its Workstream cannot take it, and a Workstream whose execution has ended is continued first (`log.md`, same place). |
 | What it is worth | Agora keeps no verdict and no outcome. The delegator reads, and answers with `to` when it wants something else. |
 
 ## What Agora writes
 
 A delegator is told what its delegate cannot tell it, by the same gesture: a message in its Workstream,
-`as` `agora`: `From Agora, not the person: your delegate <id> "<title>"`, then what happened.
+`as` `agora`: Agora's line `From Agora, not the person:`, then `Your delegate <id> "<title>":` and what happened.
 
 | When | The message says |
 | --- | --- |
-| A delegate's turn no person started is done with no `submit` and no message | It ended its turn with nothing to say. |
+| A delegate's turn holding a message that is not the person's is done with no `submit` and no message | It ended its turn with nothing to say. |
 | A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
 | The person stops a delegate, or cancels its turn | That the person did. |
 
@@ -115,7 +115,15 @@ Each, and a last message submitted, is written once, a restart included.
 | D27 | A delegate's turn fails; its Session does not open; its execution is lost; the person stops it | Each time one message `as` `agora` in the delegator's Workstream, naming the delegate and what happened. |
 | D28 | A restart once a delegate's turn is done, before its last message was submitted | Submitted after the restart, once. |
 | D29 | Live, each harness, a delegate asked for a report of at least 30,000 characters | The delegator's prompt holds it whole, its agent sending no further `to` for the rest. |
-| D31 | Live, Claude Code and Codex, a delegator running a long command as its delegate submits a word | The message waits for the command; `injected` in that turn; the delegator's answer holds the word. |
+| D31 | Live, Claude Code and Codex, a delegator running a long command as its delegate submits a value only the delegate can know | The message waits for the command; its `_session/steering` after the command closed, `injected`; one turn; the delegator's answer holds the value. |
+| D32 | An agent titling itself with Agora's line | The Workstream's title stays the first line of its instructions, or its agent's last other title. |
+| D33 | A delegate that delegates: its own delegate's last message, with its own execution running; with its own execution ended | A turn of the middle one, its last message then in the top one's Workstream; the same once it is continued, its last message going up all the same. |
+| D34 | A restart with a message of Agora's waiting and its Workstream's execution ended | Continued after the restart; the message sent once. |
+| D35 | A delegate's execution ending while Agora is down | After the restart, one message `as` `agora` in its delegator's Workstream. |
+| D36 | A delegate of an earlier delegation, its turns and its execution as that engine left them, at start | Nothing written to its delegator; a later `to` followed as any. |
+| D37 | A delegate that cannot start | One message `as` `agora`; no further Create by itself, its Workstream `failed`; a `to`: one more Create. |
+| D38 | A Cancel with a message of Agora's waiting, then its execution's end | No Create; the next message: a Create, then both, in order. |
+| D39 | A delegate continued with a catch-up, its anchor lost | Its last message in its delegator's Workstream, as any. |
 
 ## To be specified
 

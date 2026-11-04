@@ -132,7 +132,7 @@ export function delegationOf(state: State): 'working' | 'idle' | 'failed' | 'can
   if (e?.stopped) return 'cancelled'
   if (state.active || state.waiting.length > 0) return 'working'
   const turn = [...state.turns.values()].at(-1)
-  if (!turn) return 'working'
+  if (!turn) return e?.ended || (e?.session && settled(state, e)) ? 'idle' : 'working'
   return turn.status === 'done' ? 'idle' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
 }
 
@@ -542,7 +542,8 @@ export class CoreProjection {
       }
       if (entry.kind === 'acp' && entry.method === 'session/update') {
         const update = object(object(entry.content.params)?.update)
-        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title')) {
+        // An agent titling itself with the first thing it read: Agora's line is not what it works on.
+        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title') && !(typeof update.title === 'string' && /^\s*From (your delegator|your delegate|Agora)\b/.test(update.title))) {
           this.agentTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
           titled = true
         }

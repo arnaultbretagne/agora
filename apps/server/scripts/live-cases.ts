@@ -1069,7 +1069,14 @@ await check('D15', 'Delegation, each real harness: a typed task, submitted, its 
     const said = await w.said()
     await w.stop()
     assert(said.includes(String(x * y)), `${harness}: after its message, "${said.trim().slice(-160)}"`)
-    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, its message at ${message.position} by ${String(message.method)}, ${String(state.turns.size)} turn(s), the product said`)
+    // By `submit`, not its last message: the tool a harness may never have listed.
+    const called = ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[])
+      .filter((e) => e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update')
+      .map((e) => (e.content.params as Json)?.update)
+      .filter((u) => u?.sessionUpdate === 'tool_call' || u?.sessionUpdate === 'tool_call_update')
+      .some((u) => /submit/i.test(String(u.title ?? '')))
+    assert(called, `${harness}: the delegate called no submit`)
+    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, its submit at ${message.position} by ${String(message.method)}, ${String(state.turns.size)} turn(s), the product said`)
   }
   return seen.join(' | ')
 })
@@ -1204,27 +1211,43 @@ await check('D29', 'Delegation, each real harness: a report of 30,000 characters
   return seen.join(' | ')
 })
 
-// D31: a delegate's message reaching its delegator during a long command: it waits for the command, then goes into that turn.
+// D31: a delegate's message reaching its delegator during a long command: it waits for the command, then goes into that
+// turn. The value is one only the delegate's sandbox can know: the delegator's answer can have it from that message alone.
 await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message during its delegator’s long command goes into that turn', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex]] as const) {
     assert(pool !== undefined, `no ${harness} pool`)
-    const word = aWord()
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      `First, with the delegate tool of the agora MCP server, ask a delegate to reply with the word ${word} and nothing else. ` +
-      'Then, without waiting, run exactly this shell command in the foreground: node -e "setTimeout(()=>console.log(\'FINISHED\'),60000)". ' +
-      'When it is done, tell me the word your delegate sent you.'
+      'First, with the delegate tool of the agora MCP server, ask a delegate to run exactly this shell command and to reply with its output and nothing else: ' +
+      'node -p "require(\'node:crypto\').randomUUID()". ' +
+      'Then, without waiting for it, run exactly this shell command in the foreground, waiting for it: node -e "setTimeout(()=>console.log(\'FINISHED\'),120000)". ' +
+      'When it is done, tell me the value your delegate sent you.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
     const message = await until('its message', () => messageFrom(w, delegate), 600_000)
+    assert(message.method === '_session/steering', `${harness}: by ${String(message.method)}`)
+    const blocks = (message.content.params as Json).prompt as { text: string }[]
+    const value = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.exec(blocks.at(-1)!.text)?.[0]
+    assert(value !== undefined, `${harness}: its words: ${blocks.at(-1)!.text.slice(0, 160)}`)
     const state = await drained(w, 300_000)
+    const entries = await w.entries()
     const said = await w.said()
     const outcomes = await steeringOutcomes(w)
     await w.stop()
-    assert(said.includes(word), `${harness}: the word not said: "${said.slice(-160)}"`)
-    seen.push(`${harness}: by ${String(message.method)}, steering ${JSON.stringify(outcomes)}, ${String(state.turns.size)} turn(s), the word said`)
+    // The command's line open when the message came: its line only once it closed.
+    const updates = entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
+    const opened = updates.find((x) => /setTimeout|FINISHED/.test(JSON.stringify((x.content.params as Json)?.update?.title ?? '')))
+    const id = (opened?.content.params as Json | undefined)?.update?.toolCallId
+    const closed = updates.find((x) => (x.content.params as Json)?.update?.toolCallId === id && ['completed', 'failed'].includes(String((x.content.params as Json)?.update?.status)))
+    assert(opened !== undefined && closed !== undefined, `${harness}: the command's line not seen`)
+    assert(BigInt(message.position) > BigInt(closed.position), `${harness}: the steering line at ${message.position}, the command closed at ${closed.position}`)
+    assert(!JSON.stringify(closed.content).includes('moved to the background'), `${harness}: the command moved to the background`)
+    assert(outcomes.includes('injected'), `${harness}: answered ${JSON.stringify(outcomes)}`)
+    assert(state.turns.size === 1, `${harness}: ${String(state.turns.size)} turns`)
+    assert(said.includes(value), `${harness}: the value not said: "${said.slice(-160)}"`)
+    seen.push(`${harness}: its message at ${message.position}, the command closed at ${closed.position}, injected, one turn, the value said`)
   }
   return seen.join(' | ')
 })

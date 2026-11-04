@@ -5,9 +5,10 @@
 import { randomUUID } from 'node:crypto'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { offers } from '@agora/credentials'
-import { canonical, identity, object } from './json.ts'
+import { isCatchUp } from './catch-up.ts'
+import { canonical, identity, object, schemaValue, UUID } from './json.ts'
 import { FROM_META } from './marks.ts'
-import { delegationOf, STEERING, type State, type Turn } from './state.ts'
+import { delegationOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
 import type { Workstreams } from './workstreams.ts'
 
@@ -71,8 +72,9 @@ export function schemaRefusal(schema: unknown): string | null {
 
 const line = (text: string): string => text.split('\n').map((l) => l.trim()).find((l) => l !== '')?.slice(0, 80) ?? 'Delegate'
 
-/** A prompt's mark, on its first block: who wrote it. */
-const markOf = (prompt: unknown): Record<string, unknown> | null => object(object(object(Array.isArray(prompt) ? prompt[0] : null)?._meta)?.[FROM_META])
+/** A prompt's mark, on its first block, a catch-up aside: who wrote it. */
+const markOf = (prompt: unknown): Record<string, unknown> | null =>
+  object(object(object(Array.isArray(prompt) ? (prompt as unknown[]).find((b) => !isCatchUp(b)) : null)?._meta)?.[FROM_META])
 
 /** What a turn says last: its text since its last tool or its reasoning, whole (docs/specs/delegation.md, "Messages"). */
 function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined): string {
@@ -96,6 +98,12 @@ function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undef
   }
   return words.trim()
 }
+
+/** What the end of an execution says to its delegate's delegator, when it says something. */
+const endOf = (e: Execution): string | null => (e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed ? 'Its execution could not start.' : null)
+
+/** A message that needs no writing again: written, by now or a run before — its title may have changed since (`command_conflict`) — or nothing to write. */
+const written = (answer: Answer | null): boolean => answer === null || answer.accepted || answer.reason === 'command_conflict'
 
 export class Delegations {
   private readonly workstreams: Workstreams
@@ -129,14 +137,23 @@ export class Delegations {
 
   // ---------------------------------------------------------------- start and the clock
 
-  /** At start, from the log: the delegates still running; the messages of Agora's still waiting; the approvals no call holds any more expire. */
-  async start(): Promise<void> {
+  /**
+   * At start, before the mechanics say what ended while Agora was down: the delegates still running, what was seen of them
+   * kept from the log by each message's id. One of an earlier delegation has been reported on already: nothing of its past is said.
+   */
+  async recover(): Promise<void> {
     const running = await this.store.writer.query(
-      `SELECT DISTINCT d.workstream, w.parent FROM entries d JOIN workstreams w ON w.id = d.workstream WHERE d.kind = 'delegation.started' AND EXISTS (
+      `SELECT DISTINCT d.workstream, w.parent, d.content ? 'caller' AS earlier FROM entries d JOIN workstreams w ON w.id = d.workstream WHERE d.kind = 'delegation.started' AND EXISTS (
          SELECT 1 FROM commands c WHERE c.workstream = d.workstream AND c.kind = 'Create' AND NOT EXISTS (
            SELECT 1 FROM entries e WHERE e.workstream = c.workstream AND e.execution = c.execution AND e.kind = 'execution.ended'))`,
     )
-    for (const row of running.rows as { workstream: string; parent: string | null }[]) if (row.parent !== null) this.followed.set(row.workstream, { delegator: row.parent, seen: new Set() })
+    for (const row of running.rows as { workstream: string; parent: string | null; earlier: boolean }[]) {
+      if (row.parent !== null) this.followed.set(row.workstream, { delegator: row.parent, seen: row.earlier ? await this.past(row.workstream) : new Set() })
+    }
+  }
+
+  /** At start: the messages of Agora's still waiting; the approvals no call holds any more expire. */
+  async start(): Promise<void> {
     const waiting = await this.store.writer.query(
       `SELECT DISTINCT e.workstream FROM entries e WHERE e.kind = 'command' AND e.content->>'kind' = 'Write' AND e.content->>'waits' = 'true'
          AND e.content->'body'->'prompt'->0->'_meta' ? '${FROM_META}'
@@ -171,23 +188,48 @@ export class Delegations {
       { id, kind: 'Write', target: {}, body: { prompt: [{ type: 'text', text: agoraLine, _meta: { [FROM_META]: mark } }, { type: 'text', text: words }], mayWait: true } },
       'agora',
     )
-    if (answer.accepted) await this.continueIt(to)
+    // Whatever a continuation does, the message stands; `continuing` comes back to it.
+    if (answer.accepted) await this.continueIt(to, true).catch(() => this.continuing.add(to))
     return answer
   }
 
-  /** docs/specs/log.md, "Messages during a turn": a message of Agora's waiting, the last execution ended and not stopped: a Create of Agora's own. */
-  private async continueIt(workstream: string): Promise<void> {
+  /** docs/specs/delegation.md: a new execution of a delegate, whoever asked for it, is followed from here on. */
+  async created(workstream: string): Promise<void> {
+    if (this.followed.has(workstream)) return
+    const parent = (await this.store.writer.query('SELECT parent FROM workstreams WHERE id=$1', [workstream])).rows[0]?.parent as string | null | undefined
+    if (!parent || !(await this.store.entries(workstream)).some((e) => e.kind === 'delegation.started')) return
+    this.followed.set(workstream, { delegator: parent, seen: await this.past(workstream) })
+  }
+
+  /** What is already over in a delegate: nothing more to say of it. */
+  private async past(delegate: string): Promise<Set<string>> {
+    const state = await this.store.state(delegate)
+    return new Set([
+      ...[...state.turns.values()].filter((t) => !['saved', 'in_progress', 'uncertain'].includes(t.status)).map((t) => t.id),
+      ...[...state.executions.values()].filter((e) => endOf(e) !== null).map((e) => identity(delegate, e.id, 'its end')),
+    ])
+  }
+
+  /**
+   * docs/specs/log.md, "Messages during a turn": a message of Agora's waiting, the last execution ended and not stopped: a
+   * Create of Agora's own. `written`: a message has just come; only that tries again what never opened a Session.
+   */
+  private async continueIt(workstream: string, written = false): Promise<void> {
     const state = await this.store.state(workstream)
     const last = [...state.executions.values()].at(-1)
-    // Nothing of ours waits: nothing to do. A Stop leaves it for the person's next Create.
-    if (!last || last.stopped || !state.waiting.some((w) => markOf(object(w.content.body)?.prompt) !== null)) {
+    // Nothing of ours waits: nothing to do. A Stop leaves it for the person's next Create, a Cancel for the next message.
+    if (!last || last.stopped || state.held || !state.waiting.some((w) => markOf(object(w.content.body)?.prompt) !== null)) {
       this.continuing.delete(workstream)
       return
     }
-    // Kept until it has gone: the execution running now may end first.
+    // Kept until it has gone: the execution running now may end first; a question holds it back as long as it waits.
     this.continuing.add(workstream)
-    if (!last.ended) return
-    const pools = await this.workstreams.catalogue()
+    if (!last.ended || state.question) return
+    if (!written && !last.session) {
+      this.continuing.delete(workstream)
+      return
+    }
+    const pools = await this.workstreams.pools()
     // Its pool, or, gone with an older image, one of its harness.
     const pool = pools.find((p) => p.name === last.body.pool) ?? pools.find((p) => p.harness === last.body.harness)
     if (!pool) return
@@ -281,13 +323,14 @@ export class Delegations {
   /** `to`: a message to one of the caller's delegates, whatever it is doing (docs/specs/delegation.md, "Messages"). */
   private async writeTo(caller: Caller, to: string, instructions: string, schema: Record<string, unknown> | null, args: Readonly<Record<string, unknown>>): Promise<string> {
     for (const key of ['harness', 'model', 'effort', 'rights']) if (args[key] !== undefined && args[key] !== null) throw new Refused(`invalid_query: ${key}`)
+    if (!UUID.test(to)) throw new Refused('not_a_delegate')
     const delegate = await this.store.writer.query(
       "SELECT 1 FROM workstreams w WHERE w.id = $1 AND w.parent = $2 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
       [to, caller.workstream],
     )
     if (delegate.rowCount === 0) throw new Refused('not_a_delegate')
     if ((await this.store.state(to)).current?.stopped) throw new Refused('delegate_stopped')
-    if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: new Set(await this.endedTurns(to)) })
+    if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: await this.past(to) })
     const written = await this.fromDelegator(caller.workstream, to, instructions, schema)
     if (!written.accepted) throw new Refused(written.reason)
     return `sent ${to} · ${await this.titleOf(to, line(instructions))}`
@@ -408,14 +451,17 @@ export class Delegations {
 
   // ---------------------------------------------------------------- submit
 
-  /** The schema its delegator's last message gave, or null (docs/specs/delegation.md, "Typed results"). */
+  /** The schema the last message of its delegator's it was given holds, or null (docs/specs/delegation.md, "Typed results"). */
   private async schemaOf(delegate: string): Promise<Record<string, unknown> | null> {
     const entries = await this.store.entries(delegate)
+    const waiting = new Set((await this.store.state(delegate)).waiting.map((w) => w.position))
+    const retracted = new Set(entries.filter((e) => e.kind === 'command' && e.content.kind === 'Retract').map((e) => String(object(e.content.target)?.message)))
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
-      if (e.kind !== 'command' || e.content.kind !== 'Write') continue
+      if (e.kind !== 'command' || e.content.kind !== 'Write' || waiting.has(e.position) || retracted.has(e.position)) continue
       const mark = markOf(object(e.content.body)?.prompt)
-      if (mark?.as === 'delegator') return object(mark.output_schema)
+      // Read back from the log, its numbers lossless: ajv needs ordinary ones.
+      if (mark?.as === 'delegator') return mark.output_schema === undefined ? null : object(schemaValue(mark.output_schema))
     }
     return null
   }
@@ -431,7 +477,7 @@ export class Delegations {
     const result = args.result
     if (schema !== null) {
       const check = ajv.compile(schema)
-      if (!check(result)) throw new Refused(`invalid_result: ${result === undefined ? 'a result is asked for' : (check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
+      if (!check(result)) throw new Refused(`invalid_result: ${result === undefined ? `a result of this shape is asked for: ${JSON.stringify(schema)}` : (check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
     }
     const words = result === undefined ? message : `${message}\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``
     const turn = (await this.store.state(caller.workstream)).active?.id ?? null
@@ -446,26 +492,19 @@ export class Delegations {
 
   // ---------------------------------------------------------------- what comes back by itself
 
-  /** The turns of a delegate over: nothing more to say of them. */
-  private async endedTurns(delegate: string): Promise<string[]> {
-    return [...(await this.store.state(delegate)).turns.values()].filter((t) => !['saved', 'in_progress', 'uncertain'].includes(t.status)).map((t) => t.id)
-  }
-
   /** One delegate, one beat: each turn seen to its end once, then what its execution became; forgotten once it has ended. */
   private async follow(delegate: string, known: { readonly delegator: string; readonly seen: Set<string> }): Promise<void> {
     const state = await this.store.state(delegate)
     const turns = [...state.turns.values()]
     for (const [i, turn] of turns.entries()) {
       if (known.seen.has(turn.id) || ['saved', 'in_progress', 'uncertain'].includes(turn.status)) continue
-      await this.turnEnded(delegate, known.delegator, state, turn, turns[i + 1])
-      known.seen.add(turn.id)
+      if (written(await this.turnEnded(delegate, known.delegator, state, turn, turns[i + 1]))) known.seen.add(turn.id)
     }
     for (const e of state.executions.values()) {
-      const what = e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed ? 'Its execution could not start.' : null
+      const what = endOf(e)
       const id = identity(delegate, e.id, 'its end')
       if (what === null || known.seen.has(id)) continue
-      await this.notice(known.delegator, delegate, id, what)
-      known.seen.add(id)
+      if (written(await this.notice(known.delegator, delegate, id, what))) known.seen.add(id)
     }
     if (state.current?.ended && !state.active && state.waiting.length === 0) this.followed.delete(delegate)
   }
@@ -474,25 +513,20 @@ export class Delegations {
    * docs/specs/delegation.md, "Messages" and "What Agora writes", each written once whatever a restart does: its command's
    * id comes from what it is about. The end of an execution says the end of its turn.
    */
-  private async turnEnded(delegate: string, delegator: string, state: State, turn: Turn, next: Turn | undefined): Promise<void> {
+  private async turnEnded(delegate: string, delegator: string, state: State, turn: Turn, next: Turn | undefined): Promise<Answer | null> {
     const e = state.executions.get(turn.execution)
     const entries = await this.store.entries(delegate)
     if (turn.status === 'failed') {
       // The agent's error message, or the closed reason of a failure of Agora's.
       const why = object(turn.failure)?.message ?? turn.failure
-      if (!e?.lost && !e?.failed && !e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
-      return
+      return e?.lost || e?.failed || e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
     }
-    if (turn.status === 'cancelled') {
-      if (!e?.stopped) await this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
-      return
-    }
-    if (!this.holdsAnothers(entries, turn, next)) return
-    if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return
+    if (turn.status === 'cancelled') return e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
+    if (!this.holdsAnothers(entries, turn, next)) return null
+    if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return null
     const words = lastMessageOf(entries, turn, next)
     const id = identity(delegate, turn.id, 'last message')
-    if (words === '') await this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.')
-    else await this.fromDelegate(delegator, delegate, id, words, turn.id)
+    return words === '' ? this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.') : this.fromDelegate(delegator, delegate, id, words, turn.id)
   }
 
   /** A turn holding a message that is not the person's: its prompt's, or one sent into it. */
@@ -509,7 +543,7 @@ export class Delegations {
   }
 
   /** A message `as` `agora`: what a delegate cannot tell its delegator (docs/specs/delegation.md, "What Agora writes"). */
-  private async notice(delegator: string, delegate: string, id: string, what: string): Promise<void> {
-    await this.write(delegator, id, { workstream: delegate, as: 'agora' }, `From Agora, not the person: your delegate ${delegate} "${await this.titleOf(delegate)}"`, what)
+  private async notice(delegator: string, delegate: string, id: string, what: string): Promise<Answer> {
+    return this.write(delegator, id, { workstream: delegate, as: 'agora' }, 'From Agora, not the person:', `Your delegate ${delegate} "${await this.titleOf(delegate)}": ${what}`)
   }
 }
