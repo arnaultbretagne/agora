@@ -409,7 +409,8 @@ test('L116 Agora killed between its steering line\'s marker and its write: never
   })
   assert.ok((await context.lab.write(context.ws, '/sleep 3')).accepted)
   await running(context.lab, context.ws)
-  assert.ok((await say(context.lab, context.ws, 'never written')).accepted)
+  // Its answer never comes, as to a request whose server died.
+  void say(context.lab, context.ws, 'never written')
   await dying
   context.lab = await context.lab.restart('halt', { workstreams: { responseTimeoutMs: 1500 } })
   const { lab, ws } = context
