@@ -1221,8 +1221,8 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
       'First, with the delegate tool of the agora MCP server, ask a delegate to run exactly this shell command and to reply with its output and nothing else: ' +
-      'node -p "require(\'node:crypto\').randomUUID()". ' +
-      'Then, without waiting for it, run exactly this shell command in the foreground, waiting for it: node -e "setTimeout(()=>console.log(\'FINISHED\'),120000)". ' +
+      'node -e "setTimeout(()=>console.log(require(\'node:crypto\').randomUUID()),30000)". ' +
+      'Then, without waiting for it, run exactly this shell command in the foreground, waiting for it: node -e "setTimeout(()=>console.log(\'FINISHED\'),90000)". ' +
       'When it is done, tell me the value your delegate sent you.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
@@ -1238,7 +1238,7 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
     await w.stop()
     // The command's line open when the message came: its line only once it closed.
     const updates = entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
-    const opened = updates.find((x) => /setTimeout|FINISHED/.test(JSON.stringify((x.content.params as Json)?.update?.title ?? '')))
+    const opened = updates.find((x) => /FINISHED/.test(JSON.stringify((x.content.params as Json)?.update ?? {})) && String((x.content.params as Json)?.update?.sessionUpdate).startsWith('tool_call'))
     const id = (opened?.content.params as Json | undefined)?.update?.toolCallId
     const closed = updates.find((x) => (x.content.params as Json)?.update?.toolCallId === id && ['completed', 'failed'].includes(String((x.content.params as Json)?.update?.status)))
     assert(opened !== undefined && closed !== undefined, `${harness}: the command's line not seen`)

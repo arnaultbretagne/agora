@@ -601,6 +601,8 @@ async function handle(message: Message): Promise<void> {
       const setting = SETTINGS.find((s) => s.id === params.configId)
       if (setting === undefined || typeof params.value !== 'string' || !setting.values.includes(params.value))
         return fail(message.id, -32602, `invalid setting: ${String(params.configId)}=${String(params.value)}`)
+      // AGORA_MOCK_SILENT_SETTINGS=1: an agent that never answers a change of setting.
+      if (process.env.AGORA_MOCK_SILENT_SETTINGS === '1') return
       // Answered after a while, as an agent that reloads its model does: the change can be seen pending.
       await new Promise((resolve) => setTimeout(resolve, 400))
       if (params.value === 'mock-broken') return fail(message.id, -32603, 'this model cannot be used')

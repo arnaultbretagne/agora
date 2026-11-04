@@ -130,7 +130,8 @@ export function delegationOf(state: State): 'working' | 'idle' | 'failed' | 'can
   const e = state.current
   if (e?.failed || e?.lost) return 'failed'
   if (e?.stopped) return 'cancelled'
-  if (state.active || state.waiting.length > 0) return 'working'
+  if (e?.ended && !e.session) return 'failed'
+  if (state.active || (state.waiting.length > 0 && !state.held) || (e && !e.ended && !e.session)) return 'working'
   const turn = [...state.turns.values()].at(-1)
   if (!turn) return e?.ended || (e?.session && settled(state, e)) ? 'idle' : 'working'
   return turn.status === 'done' ? 'idle' : turn.status === 'cancelled' ? 'cancelled' : 'failed'
@@ -543,7 +544,7 @@ export class CoreProjection {
       if (entry.kind === 'acp' && entry.method === 'session/update') {
         const update = object(object(entry.content.params)?.update)
         // An agent titling itself with the first thing it read: Agora's line is not what it works on.
-        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title') && !(typeof update.title === 'string' && /^\s*From (your delegator|your delegate|Agora)\b/.test(update.title))) {
+        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title') && !(typeof update.title === 'string' && /^\s*From (your delegator\b|your delegate\b|Agora,)/.test(update.title))) {
           this.agentTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
           titled = true
         }

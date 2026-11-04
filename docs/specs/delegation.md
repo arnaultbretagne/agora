@@ -39,7 +39,7 @@ sequenceDiagram
 | Depth | A delegate sits at most three levels below the person's Workstream: a delegator at depth 3 is refused, `depth_exceeded`. |
 | At once | At most three of a delegator's delegates awaiting approval or working: another is refused, `too_many_delegates`. |
 | Rights | Each right given must be offered (`credentials.md`, "Offered profiles"; `profile_not_offered`). When every one is covered by one of the delegator execution's own profiles — as an offered profile covers a narrower one —, the delegate starts at once; otherwise the call waits for the person ("Approval"). |
-| States | `awaiting approval`; `working`: its Session opening, a turn running or a message waiting; `idle`: its last turn done; `failed`: its last turn failed, or its execution failed or was lost; `cancelled`: its last turn cancelled, or the person stopped it. A call refused or expired starts no delegate. |
+| States | `awaiting approval`; `working`: its Session opening, a turn running or a message waiting; `idle`: its last turn done; `failed`: its last turn failed, or its execution failed, was lost or ended with no Session; `cancelled`: its last turn cancelled, or the person stopped it. A call refused or expired starts no delegate. |
 | The handle | The delegate's Workstream id: what `to`, `read` and `search` take. |
 | Who stops one | The person, from the delegate's own Workstream (Stop). An agent has no tool for it. |
 
@@ -94,7 +94,7 @@ Each, and a last message submitted, is written once, a restart included.
 | ID | Case | Expected |
 | --- | --- | --- |
 | D1 | `delegate` within the delegator's rights | `started` and the id at once; a sub-stream one level below the delegator's Workstream, on the pool named; the instructions its first message, marked as its delegator's. |
-| D5 | A delegator at depth 3; a delegator with three delegates working | `depth_exceeded`; `too_many_delegates`; no Workstream created. |
+| D5 | A delegator at depth 3; a delegator with three delegates working; four calls at once | `depth_exceeded`; `too_many_delegates`; no Workstream created; three started, one `too_many_delegates`. |
 | D6 | Rights beyond the delegator's; Approve | The call held; an approval in the delegator's Workstream, one option; after Approve, `started`. |
 | D7 | The person writes while the approval waits | The call answers `refused` with the words; no prompt sent; no delegate. |
 | D8 | No answer | `expired` at 4 min 30 s; a progress notification every 30 s before; the delegator's turn deadline pushed back by the wait. |
@@ -121,9 +121,14 @@ Each, and a last message submitted, is written once, a restart included.
 | D34 | A restart with a message of Agora's waiting and its Workstream's execution ended | Continued after the restart; the message sent once. |
 | D35 | A delegate's execution ending while Agora is down | After the restart, one message `as` `agora` in its delegator's Workstream. |
 | D36 | A delegate of an earlier delegation, its turns and its execution as that engine left them, at start | Nothing written to its delegator; a later `to` followed as any. |
-| D37 | A delegate that cannot start | One message `as` `agora`; no further Create by itself, its Workstream `failed`; a `to`: one more Create. |
+| D37 | A delegate that cannot start; a `to` once its execution ended; a `to` while it still holds its claim | One message `as` `agora`; no further Create by itself, its Workstream `failed`; one more Create; one more Create once it ends. |
 | D38 | A Cancel with a message of Agora's waiting, then its execution's end | No Create; the next message: a Create, then both, in order. |
 | D39 | A delegate continued with a catch-up, its anchor lost | Its last message in its delegator's Workstream, as any. |
+| D40 | A delegate whose Pod never starts, its execution ending with no failure recorded | One message `as` `agora`; `failed`; no Create. |
+| D41 | The person cancels a delegate's turn, a `to` waiting | `cancelled`; it counts no more among the three at once. |
+| D42 | `to` naming a delegate in capitals | `sent`; its last message written once. |
+| D43 | A delegate whose Session opens and never takes its message, an opening setting never answered | No further Create by itself; a `to`: one more. |
+| D44 | A message of Agora's saying a delegate's end, refused for a moment | Written at the next beat, once. |
 
 ## To be specified
 

@@ -1,6 +1,6 @@
 # ADR 000n — Delegation
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 
 ## Context
@@ -76,6 +76,15 @@
   the person wants silent is one they stop.
 - A delegator never waits for words that will not come: a turn with no `submit` submits its last
   message, whole, so a long deliverable is not written twice; failures reach it the same way.
+- A turn with a `submit` sends nothing more by itself: a delegate that gives news, then finishes with
+  no second `submit`, does not send its last message. Agora cannot tell news from a result, and sending
+  both would write a deliverable twice; the tool's description says so.
+- An execution that took no prompt is not continued by itself, or a delegate that cannot start would
+  make Pods without end: a message coming once it was over tries once more, as the person's Create does.
+  There are never more Creates of Agora's than messages.
+- A message the person retracts reaches nobody, and Agora tells nobody: the person did it, and can say so.
+- Nothing caps two agents that answer each other with `to` and `submit`: each message is one more turn,
+  under no budget but the person's Stop.
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
 - A delegate's view and its row in the list carry its state, which its delegator's `delegate` line

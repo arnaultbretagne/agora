@@ -22,6 +22,15 @@ const MAX_DEPTH = 3
 const AT_ONCE = 3
 const KEYWORDS = new Set(['type', 'properties', 'required', 'items', 'enum', 'description', 'additionalProperties'])
 const ajv = new Ajv2020({ strict: false, allErrors: true })
+/** What says an execution can take no prompt any more, the first of them. */
+const OVER = ['execution.failed', 'execution.lost', 'execution.ended']
+
+/** A schema's check: each call brings a new object, which ajv would keep for good. */
+const checkOf = (schema: Record<string, unknown>) => {
+  const check = ajv.compile(schema)
+  ajv.removeSchema(schema)
+  return check
+}
 
 /** What a tool answers instead of its result: the reason (docs/specs/delegation.md). */
 export class Refused extends Error {}
@@ -63,7 +72,7 @@ export function schemaRefusal(schema: unknown): string | null {
   }
   if (!walk(root)) return 'invalid_schema'
   try {
-    ajv.compile(root)
+    checkOf(root)
   } catch {
     return 'invalid_schema'
   }
@@ -100,7 +109,8 @@ function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undef
 }
 
 /** What the end of an execution says to its delegate's delegator, when it says something. */
-const endOf = (e: Execution): string | null => (e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed ? 'Its execution could not start.' : null)
+const endOf = (e: Execution): string | null =>
+  e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
 
 /** A message that needs no writing again: written, by now or a run before — its title may have changed since (`command_conflict`) — or nothing to write. */
 const written = (answer: Answer | null): boolean => answer === null || answer.accepted || answer.reason === 'command_conflict'
@@ -189,7 +199,7 @@ export class Delegations {
       'agora',
     )
     // Whatever a continuation does, the message stands; `continuing` comes back to it.
-    if (answer.accepted) await this.continueIt(to, true).catch(() => this.continuing.add(to))
+    if (answer.accepted) await this.continueIt(to).catch(() => this.continuing.add(to))
     return answer
   }
 
@@ -212,22 +222,26 @@ export class Delegations {
 
   /**
    * docs/specs/log.md, "Messages during a turn": a message of Agora's waiting, the last execution ended and not stopped: a
-   * Create of Agora's own. `written`: a message has just come; only that tries again what never opened a Session.
+   * Create of Agora's own. One that took no prompt could not take this one either: only a message coming once it was over tries again.
    */
-  private async continueIt(workstream: string, written = false): Promise<void> {
+  private async continueIt(workstream: string): Promise<void> {
     const state = await this.store.state(workstream)
     const last = [...state.executions.values()].at(-1)
+    const ours = state.waiting.filter((w) => markOf(object(w.content.body)?.prompt) !== null)
     // Nothing of ours waits: nothing to do. A Stop leaves it for the person's next Create, a Cancel for the next message.
-    if (!last || last.stopped || state.held || !state.waiting.some((w) => markOf(object(w.content.body)?.prompt) !== null)) {
+    if (!last || last.stopped || state.held || ours.length === 0) {
       this.continuing.delete(workstream)
       return
     }
     // Kept until it has gone: the execution running now may end first; a question holds it back as long as it waits.
     this.continuing.add(workstream)
     if (!last.ended || state.question) return
-    if (!written && !last.session) {
-      this.continuing.delete(workstream)
-      return
+    if (![...state.turns.values()].some((t) => t.execution === last.id)) {
+      const over = (await this.store.entries(workstream)).find((e) => e.execution === last.id && OVER.includes(e.kind))!
+      if (!ours.some((w) => BigInt(w.position) > BigInt(over.position))) {
+        this.continuing.delete(workstream)
+        return
+      }
     }
     const pools = await this.workstreams.pools()
     // Its pool, or, gone with an older image, one of its harness.
@@ -266,11 +280,30 @@ export class Delegations {
       const refusal = schemaRefusal(schema)
       if (refusal !== null) throw new Refused(refusal)
     }
-    if (args.to !== undefined && args.to !== null) return this.writeTo(caller, String(args.to), instructions, schema, args)
+    if (args.to !== undefined && args.to !== null) return this.writeTo(caller, String(args.to).toLowerCase(), instructions, schema, args)
     const found = await this.store.writer.query('SELECT depth, owner FROM workstreams WHERE id=$1', [caller.workstream])
     const depth = Number(found.rows[0]?.depth ?? 0)
     if (depth >= MAX_DEPTH) throw new Refused('depth_exceeded')
     if ((await this.working(caller.workstream)) >= AT_ONCE) throw new Refused('too_many_delegates')
+    // Its place among the three, taken at once: a harness may make several calls together. An approval holds it too.
+    const delegate = randomUUID()
+    this.followed.set(delegate, { delegator: caller.workstream, seen: new Set() })
+    try {
+      return await this.started(delegate, caller, args, instructions, schema, hold)
+    } catch (error) {
+      this.followed.delete(delegate)
+      throw error
+    }
+  }
+
+  private async started(
+    delegate: string,
+    caller: Caller,
+    args: Readonly<Record<string, unknown>>,
+    instructions: string,
+    schema: Record<string, unknown> | null,
+    hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
+  ): Promise<string> {
     const pools = await this.workstreams.catalogue()
     const callerState = await this.store.state(caller.workstream)
     const callerExecution = callerState.executions.get(caller.execution)
@@ -290,7 +323,6 @@ export class Delegations {
       if (settled.outcome === 'expired') throw new Refused('expired')
       approval = position
     }
-    const delegate = randomUUID()
     await this.store.create(delegate, null, caller.workstream)
     const limits = object(callerExecution?.body.limits) ?? {}
     const created = await this.workstreams.command(
@@ -314,7 +346,6 @@ export class Delegations {
       kind: 'delegation.started',
       content: { delegator: caller.workstream, delegatorExecution: caller.execution, harness: pool.harness, pool: pool.name, settings, rights, ...(approval !== null ? { approval } : {}) },
     })
-    this.followed.set(delegate, { delegator: caller.workstream, seen: new Set() })
     const written = await this.fromDelegator(caller.workstream, delegate, instructions, schema)
     if (!written.accepted) throw new Refused(written.reason)
     return `started ${delegate} · ${line(instructions)}`
@@ -349,7 +380,7 @@ export class Delegations {
 
   /** The caller's delegates awaiting approval or working (docs/specs/delegation.md, "A delegation"). */
   private async working(caller: string): Promise<number> {
-    let count = this.held.has(caller) ? 1 : 0
+    let count = 0
     for (const [delegate, known] of this.followed) {
       if (known.delegator !== caller) continue
       if (delegationOf(await this.store.state(delegate)) === 'working') count++
@@ -476,7 +507,7 @@ export class Delegations {
     const schema = await this.schemaOf(caller.workstream)
     const result = args.result
     if (schema !== null) {
-      const check = ajv.compile(schema)
+      const check = checkOf(schema)
       if (!check(result)) throw new Refused(`invalid_result: ${result === undefined ? `a result of this shape is asked for: ${JSON.stringify(schema)}` : (check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
     }
     const words = result === undefined ? message : `${message}\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``
@@ -492,21 +523,25 @@ export class Delegations {
 
   // ---------------------------------------------------------------- what comes back by itself
 
-  /** One delegate, one beat: each turn seen to its end once, then what its execution became; forgotten once it has ended. */
+  /** One delegate, one beat: each turn seen to its end once, then what its execution became; forgotten once it has ended and all is said. */
   private async follow(delegate: string, known: { readonly delegator: string; readonly seen: Set<string> }): Promise<void> {
     const state = await this.store.state(delegate)
     const turns = [...state.turns.values()]
+    let said = true
     for (const [i, turn] of turns.entries()) {
       if (known.seen.has(turn.id) || ['saved', 'in_progress', 'uncertain'].includes(turn.status)) continue
       if (written(await this.turnEnded(delegate, known.delegator, state, turn, turns[i + 1]))) known.seen.add(turn.id)
+      else said = false
     }
     for (const e of state.executions.values()) {
       const what = endOf(e)
       const id = identity(delegate, e.id, 'its end')
       if (what === null || known.seen.has(id)) continue
       if (written(await this.notice(known.delegator, delegate, id, what))) known.seen.add(id)
+      else said = false
     }
-    if (state.current?.ended && !state.active && state.waiting.length === 0) this.followed.delete(delegate)
+    // A next execution, whoever asks for it, is followed again.
+    if (said && state.current?.ended && !state.active) this.followed.delete(delegate)
   }
 
   /**
