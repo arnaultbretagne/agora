@@ -12,6 +12,7 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/tool` | A tool call with a diff. |
 | `/tool-open N [failed] [M]` | A tool call `pending`, then `in_progress` for N seconds, then closed, then the turn goes on M seconds (1 by default). |
 | `/tool-permission` | A tool call open, a permission asked, the tool closing while it is pending; the turn goes on 2 s once answered. |
+| `/tool-run N` | Tools in a row: two, a text, two more, one asking a permission, one running N seconds once it is answered, a text. |
 | `/steering ANSWER N` | A turn of N seconds answering `_session/steering` with ANSWER: `promptRequired`, `failed`, `error`, `silent` (no answer), `late` (`injected`, 2.5 s later). |
 | `/late` | Answers the prompt, then speaks and calls a tool half a second after, as an agent whose background task ended. |
 | `/stubborn N` | A turn of N seconds that ends `end_turn`, cancelled or not. |

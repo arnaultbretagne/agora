@@ -1,16 +1,17 @@
 // The messages (docs/specs/assistant-ui.md, "Messages" and "The screen"), in assistant-ui's base skin:
 // the user's in a bubble on the right, the agent's bare on the page, its steps as trace lines, and the
 // notices between them as quiet lines; a message of Agora's as a line opening on its text.
-import { ActionBarPrimitive, AuiIf, MessagePrimitive, groupPartByType, useAuiState } from '@assistant-ui/react'
+import { ActionBarPrimitive, AuiIf, MessagePrimitive, useAuiState, type PartState } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, CopyIcon, LoaderCircleIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { UserMessageAttachments } from '@/components/assistant-ui/elements/attachment'
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
+import { foldable } from '../agora/tools.ts'
 import { harnessName, planItems } from '../agora/view.ts'
 import { Markdown } from './markdown.tsx'
-import { ToolCall } from './tool.tsx'
+import { ToolCall, ToolFold } from './tool.tsx'
 import { TraceDisclosure, TraceLine } from './trace.tsx'
 
 const custom = (s: { message: { metadata: { custom: Record<string, unknown> } } }) => s.message.metadata.custom
@@ -73,7 +74,11 @@ export const UserMessage: FC = () => {
   )
 }
 
-const groupParts = groupPartByType({ reasoning: ['group-reasoning'] })
+/** Tools in a row and the reasoning between them fold together (docs/specs/assistant-ui.md, "Folded tools"). */
+const groupParts = (part: PartState): readonly ('group-fold' | 'group-reasoning')[] => {
+  if (part.type === 'reasoning') return ['group-fold', 'group-reasoning']
+  return part.type === 'tool-call' && foldable(part) ? ['group-fold'] : []
+}
 
 const Plan: FC<{ entries: unknown[] }> = ({ entries }) => {
   const items = planItems(entries)
@@ -131,6 +136,8 @@ export const AssistantMessage: FC = () => {
         <MessagePrimitive.GroupedParts groupBy={groupParts}>
           {({ part, children }) => {
             switch (part.type) {
+              case 'group-fold':
+                return <ToolFold indices={part.indices}>{children}</ToolFold>
               case 'group-reasoning': {
                 const live = part.status.type === 'running'
                 return (

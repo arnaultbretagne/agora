@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { createServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
-import { chromium, type Browser, type Page } from 'playwright'
+import { chromium, type Browser, type Locator, type Page } from 'playwright'
 import { mockBridge } from '@agora/testkit'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
@@ -1420,4 +1420,45 @@ test('U75 a message with an attachment sent during a turn: one line, counted, no
   assert.equal(await bubble.count(), 0)
   const prompts = (await entriesOf(id)).filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt')
   assert.equal(JSON.stringify(prompts).includes('with a file'), false)
+})
+
+test('U78 tools in a row folded, closed, a text between them, what waits for the person outside; a tool alone on its line', async () => {
+  const page = await fresh()
+  await started(page, 'before the tools')
+  await send(page, '/tool-run 3')
+  const folds = thread(page).locator('[data-tool-fold]')
+  const words = async (fold: Locator) => (await fold.innerText()).split('\n').filter((l) => l !== '>')
+  const allow = page.getByRole('button', { name: 'Allow', exact: true })
+  await allow.waitFor()
+  assert.equal(await folds.count(), 2)
+  assert.deepEqual(await words(folds.nth(0)), ['1 read, 1 command', '1 failed'])
+  assert.deepEqual(await words(folds.nth(1)), ['1 edit, 1 search', '+1 −1'])
+  assert.equal(await thread(page).getByText('Read demo.txt').count(), 0, 'closed')
+  const said = await thread(page).locator('[data-role="assistant"]').last().innerText()
+  const places = ['Looking first.', '1 read', 'Now the change.', '1 edit', 'Write demo.txt'].map((text) => said.indexOf(text))
+  assert.ok(places.every((place, i) => place >= 0 && (i === 0 || places[i - 1]! < place)), said)
+  await thread(page).getByRole('button', { name: /Write demo\.txt/ }).waitFor()
+  assert.equal(await folds.getByRole('button', { name: /Write demo\.txt/ }).count(), 0, 'outside its fold')
+  await shot(page, 'u78-permission')
+  await allow.click()
+  await folds.nth(1).getByText('A long command').waitFor()
+  assert.deepEqual(await words(folds.nth(1)), ['A long command', '4 tools'], 'closed, saying its running tool')
+  assert.equal(await allow.count(), 0)
+  await shot(page, 'u78-running')
+  await thread(page).getByText('All done.').waitFor()
+  await folds.nth(1).getByText('2 edits, 1 search, 1 command').waitFor()
+  assert.deepEqual(await words(folds.nth(1)), ['2 edits, 1 search, 1 command', '+2 −2'], 'closed once done')
+  await shot(page, 'u78-done')
+  await folds.nth(1).getByRole('button', { name: /2 edits/ }).click()
+  await folds.nth(1).getByText('A long command').waitFor()
+  const lines = (await folds.nth(1).innerText()).split('\n').filter((l) => l !== '>')
+  assert.deepEqual(lines, ['2 edits, 1 search, 1 command', '+2 −2', 'Edit demo.txt', '+1 −1', 'Search demo', 'Write demo.txt', '+1 −1', 'A long command'])
+  await folds.nth(1).getByRole('button', { name: /Edit demo\.txt/ }).click()
+  await folds.nth(1).locator('.aui-diff-viewer').getByText('after').first().waitFor()
+  await shot(page, 'u78-open')
+  await send(page, '/tool')
+  await thread(page).getByText('Tool done.').waitFor()
+  const alone = thread(page).locator('[data-role="assistant"]').last()
+  await alone.getByRole('button', { name: /Edit demo\.txt/ }).waitFor()
+  assert.equal(await alone.locator('[data-tool-fold]').count(), 0, 'a tool alone')
 })
