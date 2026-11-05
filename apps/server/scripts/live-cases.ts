@@ -1050,6 +1050,12 @@ const toolLines = async (w: Workstream) =>
 const messageFrom = async (w: Workstream, delegate: string) =>
   (await w.entries()).find((e) => e.kind === 'acp' && e.direction === 'out' && ['session/prompt', '_session/steering'].includes(String(e.method)) && JSON.stringify(e.content).includes(`From your delegate ${delegate}`))
 
+const drained = (w: Workstream, timeoutMs: number) =>
+  until('nothing left to go', async () => {
+    const state = await w.state()
+    return state.waiting.length === 0 && state.active === null && state.steering === null ? state : null
+  }, timeoutMs)
+
 await check('D15', 'Delegation, each real harness: a typed task, submitted, its message used', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
@@ -1058,7 +1064,7 @@ await check('D15', 'Delegation, each real harness: a typed task, submitted, its 
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      `With the delegate tool of the agora MCP server, ask a delegate to compute ${String(x)} times ${String(y)}, with an output_schema ` +
+      `With the delegate tool of the agora MCP server, ask a delegate to compute ${String(x)} times ${String(y)} and to hand the result with its submit tool, with an output_schema ` +
       'asking for an object whose number "product" is required. Once it has started, end your turn. When its message comes back, ' +
       'answer with the product it gave, as a number alone.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
@@ -1113,11 +1119,6 @@ const mayWrite = (w: Workstream, text: string) => w.command('Write', { execution
 const steeringLines = async (w: Workstream) => (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'out' && x.method === '_session/steering')
 const steeringOutcomes = async (w: Workstream) =>
   (await w.entries()).filter((x) => x.kind === 'acp' && x.direction === 'in' && x.correlated_method === '_session/steering').map((x) => (x.content.result as Json)?.outcome)
-const drained = (w: Workstream, timeoutMs: number) =>
-  until('nothing left to go', async () => {
-    const state = await w.state()
-    return state.waiting.length === 0 && state.active === null && state.steering === null ? state : null
-  }, timeoutMs)
 const aWord = () => `WORD${String(100_000 + Math.floor(Math.random() * 900_000))}`
 
 await check('L121', 'A message during a turn, each real harness: into the turn where it can, its own turn otherwise', async () => {
@@ -1187,6 +1188,11 @@ await check('L122', 'A message during a long shell command, Claude Code and Code
 })
 
 // D29: a delegate asked for a long report: all of it reaches its delegator, which asks for no more.
+const stopDelegate = async (delegate: string) => {
+  const current = fold((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]).current
+  if (current && !current.ended) await api('POST', `/api/workstreams/${delegate}/commands`, { id: randomUUID(), kind: 'Stop', target: { execution: current.id }, body: {} })
+}
+
 await check('D29', 'Delegation, each real harness: a report of 30,000 characters, whole', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
@@ -1194,11 +1200,12 @@ await check('D29', 'Delegation, each real harness: a report of 30,000 characters
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      'With the delegate tool of the agora MCP server, ask a delegate to write, as its final message, at least 30,000 characters: the numbers from 1 upwards, ' +
-      'spelled in English words, one per line, ending with the line THE END. Once it has started, end your turn. When its message comes back, say how its last line reads, and nothing else.'
+      'With the delegate tool of the agora MCP server, ask a delegate to write, as its final message, a logbook of at least 400 numbered entries, each two full sentences of its own ' +
+      'about a day in the life of a lighthouse keeper, ending with the line THE END. Once it has started, end your turn. When its message comes back, say how its last line reads, and nothing else.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
     const message = await until('its message', () => messageFrom(w, delegate), 1_200_000)
+    await stopDelegate(delegate)
     const size = JSON.stringify(message.content).length
     assert(size >= 30_000, `${harness}: ${String(size)} characters in its message`)
     assert(JSON.stringify(message.content).includes('THE END'), `${harness}: its last line missing`)
