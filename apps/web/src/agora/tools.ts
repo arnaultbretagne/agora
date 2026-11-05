@@ -1,5 +1,5 @@
 // What a tool call's line says (docs/specs/assistant-ui.md, "Parts"): the agent's title made readable,
-// and the size of its change. Pure, like view.ts.
+// and the size of its change; and what the line of a fold says. Pure, like view.ts.
 import type { Gate } from './view.ts'
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
@@ -62,4 +62,57 @@ export function diffStats(diffs: readonly Diff[]): { added: number; removed: num
     for (const n of left.values()) removed += n
   }
   return { added, removed }
+}
+
+/** A permission or a question still waiting for its answer. */
+export const unanswered = <A extends { optionId?: string; resolution?: string }>(approval: A | undefined): approval is A =>
+  approval !== undefined && approval.optionId === undefined && approval.resolution === undefined
+
+/** A tool call as a fold reads it (docs/specs/assistant-ui.md, "Folded tools"). */
+type FoldedTool = { toolName: string; artifact?: unknown; approval?: unknown; isError?: boolean | undefined }
+
+/** Whether a tool call goes in its fold: what waits for the person, a delegate and a question stay on the page. */
+export function foldable(tool: FoldedTool): boolean {
+  const a = (tool.artifact ?? {}) as Artifact
+  return tool.toolName !== 'question' && a.delegate === undefined && a.gate === undefined && !unanswered(tool.approval as { optionId?: string; resolution?: string } | undefined)
+}
+
+const NOUN: Record<string, readonly [string, string]> = {
+  read: ['read', 'reads'],
+  edit: ['edit', 'edits'],
+  delete: ['deletion', 'deletions'],
+  move: ['move', 'moves'],
+  search: ['search', 'searches'],
+  execute: ['command', 'commands'],
+  fetch: ['fetch', 'fetches'],
+  other: ['other tool', 'other tools'],
+}
+
+const isRunning = (a: Artifact): boolean => a.status === 'pending' || a.status === 'in_progress'
+
+/** What a fold's line says: its tools counted by kind in their order, how they ended, and the step it is at. */
+export function foldOf(tools: readonly FoldedTool[]): { count: number; summary: string; note: string | undefined; latest: string; running: boolean } {
+  const kinds = new Map<string, number>()
+  const diffs: Diff[] = []
+  let failed = 0
+  let latest = ''
+  let running = false
+  for (const tool of tools) {
+    const a = (tool.artifact ?? {}) as Artifact
+    const kind = a.kind !== undefined && a.kind in NOUN ? a.kind : 'other'
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1)
+    diffs.push(...(a.diffs ?? []))
+    if (tool.isError === true) failed++
+    if (isRunning(a)) running = true
+    if (isRunning(a) || !running) latest = labelOf(a, tool.toolName)
+  }
+  const stats = diffs.length > 0 ? diffStats(diffs) : null
+  const note = [failed > 0 ? `${String(failed)} failed` : '', stats ? `+${String(stats.added)} −${String(stats.removed)}` : ''].filter((n) => n !== '').join(' · ')
+  return {
+    count: tools.length,
+    summary: [...kinds].map(([kind, n]) => `${String(n)} ${NOUN[kind]![n === 1 ? 0 : 1]}`).join(', '),
+    note: note === '' ? undefined : note,
+    latest,
+    running,
+  }
 }

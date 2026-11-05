@@ -300,6 +300,19 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | An approval's | On the `delegate` line it gates, open: the proposal — harness, model, the rights beyond the caller's, the instructions — and one button, Approve; once settled, "Approved", "Refused" and the words, or "Expired before a decision". Matched to no line, the same box at the approval's position. |
 | A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 
+#### Folded tools
+
+Tool calls in a row fold under one trace line.
+
+| A fold | Rule |
+| --- | --- |
+| What it holds | Adjacent tool calls, with the reasoning between them; at least two tool calls, a tool call alone keeping its own line. A text or a plan ends it. |
+| What stays out | A tool call whose permission is pending, until it is answered; a `delegate` line; a question. |
+| Open | Closed at first; only the person opens or closes it, whatever its tools do. Opened: each tool's own line, in order. |
+| Label | Its tool calls counted by kind, in the order the kinds first appear: "3 commands, 2 reads". `read` read, `edit` edit, `delete` deletion, `move` move, `search` search, `execute` command, `fetch` fetch, any other "other tool". |
+| While it runs | A tool in it running, or its response running with nothing after it: shimmer, coral marker; its label the running tool's, or else its last tool's; its note its number of tool calls, "5 tools". |
+| Note | How many failed, then the lines added and removed: "1 failed · +12 −3"; nothing when there are neither. |
+
 | Plan entry `status` | Shown |
 | --- | --- |
 | `pending` | an empty circle |
@@ -346,7 +359,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
 | Thread | User message, on the right in a bubble, with its turn's note | `MessagePrimitive` (**ours**) |
 | Thread | A user message's attachments, above its bubble; an image opened whole | `Attachment` (registry), adapted: a Radix dialog, no avatar |
-| Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts`, the turn's failure under it, Copy on hover | `MessagePrimitive` (**ours**) |
+| Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts` — tools in a row folded, consecutive reasoning together —, the turn's failure under it, Copy on hover | `MessagePrimitive` (**ours**) |
 | Thread | Notice, for `system` messages | **ours** |
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
 | Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
@@ -489,6 +502,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U74 | In a browser, a turn running: `/` typed, Escape; then Escape again | The commands hidden, the turn going on; then the turn cancelled. |
 | U75 | In a browser, a message with an attachment sent during a turn, then taken back | One line above the composer, its attachment counted; no message of it in the thread; taken back, gone, and never sent. |
 | U76 | A delegate's message sent into its delegator's running turn; one of Agora's; one waiting | In the thread at its place, the first as the delegate's, by its title, the second a "From Agora" line, the response going on under them; the third above the composer, saying who wrote it. |
+| U77 | The real histories of the three harnesses; a permission pending, then answered; a `delegate` line, an approval, a question | Each run of tools between two texts, the reasoning in it, one fold, with its count, its label by kind and its note, its failures counted; the permission out of its fold until answered; the `delegate` line, the approval and the question out. |
+| U78 | In a browser, a turn with tools in a row, a text between them, one asking a permission, one running; then a tool alone | While the permission is pending: two folds, closed, each with its label and note, the texts between them, the tool that asks outside them with its card. Answered: in its fold; while the last tool runs, the fold says its label and "4 tools", closed. Once done: the label and note of the whole; opened, each tool's line in order, one opening onto its diff. The tool alone: its own line, no fold. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

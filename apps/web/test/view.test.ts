@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
-import { diffStats, labelOf, type Artifact } from '../src/agora/tools.ts'
+import { diffStats, foldable, foldOf, labelOf, type Artifact } from '../src/agora/tools.ts'
 import { acceptOf, blockOf, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
 import {
   accessDefault,
@@ -747,4 +747,49 @@ test('U76 a delegate’s message sent into a running turn; one of Agora’s; one
   assert.deepEqual(opening.map((m) => [m.id, m.role]), [['t:report', 'system'], ['t:assistant', 'assistant']])
   const waiting = crafted([turnObject('in_progress'), { kind: 'element', id: 'w', object: { type: 'waiting', position: '7', firstPosition: '7', status: 'waiting', content: [{ type: 'text', text: 'later' }], from: 'd', as: 'delegate' } }])
   assert.deepEqual(waitingOf(waiting), [{ id: 'w', position: '7', text: 'later', attachments: 0, from: 'd', as: 'delegate' }])
+})
+
+test('U77 tools in a row, the reasoning in them, one fold each; a pending permission, a delegate, an approval and a question out', async () => {
+  type Tool = { type: string; toolName: string; artifact?: unknown; approval?: unknown; isError?: boolean }
+  /** The folds of a response: what `messages.tsx` asks `GroupedParts` for, without React. */
+  const folds = (parts: readonly Tool[]) => {
+    const runs: Tool[][] = [[]]
+    for (const p of parts) {
+      if (p.type === 'tool-call' && foldable(p)) runs.at(-1)!.push(p)
+      else if (p.type !== 'reasoning') runs.push([])
+    }
+    return runs.filter((run) => run.length > 0).map((run) => {
+      const { count, summary, note } = foldOf(run)
+      return { count, summary, note }
+    })
+  }
+  const foldsOf = async (harness: string) => messagesOf((await real(harness)).state).flatMap((m) => (m.role === 'assistant' ? folds(m.content as unknown as Tool[]) : []))
+  assert.deepEqual(await foldsOf('claude-code'), [
+    { count: 3, summary: '2 edits, 1 command', note: '+22 −0' },
+    { count: 4, summary: '3 edits, 1 command', note: '+5 −5' },
+  ])
+  assert.deepEqual(await foldsOf('codex'), [
+    { count: 6, summary: '4 commands, 2 other tools', note: '3 failed' },
+    { count: 2, summary: '1 command, 1 other tool', note: undefined },
+  ])
+  // Its reasoning comes after the first six, before a text: in that fold, not a fold of its own.
+  assert.deepEqual(await foldsOf('opencode'), [
+    { count: 6, summary: '2 other tools, 2 edits, 2 commands', note: undefined },
+    { count: 3, summary: '1 edit, 1 command, 1 other tool', note: '+1 −1' },
+  ])
+  const tool = (over: Partial<Tool>): Tool => ({ type: 'tool-call', toolName: 'execute', artifact: { kind: 'execute', status: 'completed' }, ...over })
+  const pending = { id: 'p', options: [] }
+  assert.equal(foldable(tool({ approval: pending })), false, 'a permission pending')
+  assert.equal(foldable(tool({ approval: { ...pending, optionId: 'allow' } })), true, 'answered')
+  assert.equal(foldable(tool({ approval: { ...pending, resolution: 'cancelled' } })), true, 'its turn cancelled')
+  assert.equal(foldable(tool({ artifact: { delegate: { id: 'd', title: 'a task' } } })), false, 'a delegate line')
+  assert.equal(foldable(tool({ artifact: { gate: { id: 'g' } } })), false, 'an approval')
+  assert.equal(foldable(tool({ toolName: 'question' })), false, 'a question')
+  assert.deepEqual(folds([tool({}), tool({ approval: pending }), tool({}), tool({})]).map((f) => f.count), [1, 2], 'what stays out ends a fold')
+  // Running: the running tool's label, whatever came after it; else the last tool's.
+  const named = (title: string, status: string) => tool({ artifact: { title: `${title} now`, kind: 'execute', status } })
+  assert.equal(foldOf([named('a', 'completed'), named('b', 'in_progress'), named('c', 'completed')]).latest, 'b now')
+  assert.equal(foldOf([named('a', 'completed'), named('b', 'in_progress'), named('c', 'completed')]).running, true)
+  assert.equal(foldOf([named('a', 'completed'), named('b', 'completed')]).latest, 'b now')
+  assert.equal(foldOf([named('a', 'completed'), named('b', 'completed')]).running, false)
 })

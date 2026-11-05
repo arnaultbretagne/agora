@@ -1,14 +1,14 @@
 // A tool call, in the trace grammar (docs/specs/assistant-ui.md, "Parts"): one line with the agent's
 // own title, opening onto its diff, its output or its input; and, while the agent waits for it, the
 // permission it asks, with the options it offers. A `delegate` line names its delegate and its state, and holds
-// the approval it waits for.
-import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
+// the approval it waits for. Tools in a row fold under one line.
+import { useAuiState, type ToolCallMessagePartComponent } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, LoaderCircleIcon } from 'lucide-react'
-import { useState, type FC } from 'react'
+import { useMemo, useState, type FC, type ReactNode } from 'react'
 import { DiffViewer } from '@/components/ui/diff-viewer'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { diffStats, labelOf, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
+import { diffStats, foldOf, labelOf, unanswered, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
 import { harnessName, type Gate } from '../agora/view.ts'
 import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
@@ -168,7 +168,7 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
   if (a.delegate || a.gate)
     return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} />
   const ask = approval as Approval | undefined
-  const waiting = ask !== undefined && ask.optionId === undefined && ask.resolution === undefined
+  const waiting = unanswered(ask)
   const running = a.status === 'pending' || a.status === 'in_progress'
   const tone: Tone = waiting ? 'attention' : isError ? 'error' : running ? 'live' : 'quiet'
   const diffs = a.diffs ?? []
@@ -225,6 +225,25 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
         <TraceLine tone={tone} label={label} meta={meta} />
       )}
       {waiting && <PermissionCard approval={ask} question={question} withNote={question && a.note === true} />}
+    </div>
+  )
+}
+
+/**
+ * Tools in a row (docs/specs/assistant-ui.md, "Folded tools"): one line, closed until the person opens
+ * it, opening onto each tool's own line. A tool alone keeps its line.
+ */
+export const ToolFold: FC<{ indices: readonly number[]; children: ReactNode }> = ({ indices, children }) => {
+  const parts = useAuiState((s) => s.message.parts)
+  const atTheEnd = useAuiState((s) => s.message.status?.type === 'running' && indices.at(-1) === s.message.parts.length - 1)
+  const fold = useMemo(() => foldOf(indices.flatMap((i) => (parts[i]?.type === 'tool-call' ? [parts[i]] : []))), [parts, indices])
+  if (fold.count < 2) return <>{children}</>
+  const live = atTheEnd || fold.running
+  return (
+    <div data-tool-fold>
+      <TraceDisclosure lines tone={live ? 'live' : 'quiet'} label={live ? fold.latest : fold.summary} meta={live ? `${String(fold.count)} tools` : fold.note}>
+        {children}
+      </TraceDisclosure>
     </div>
   )
 }

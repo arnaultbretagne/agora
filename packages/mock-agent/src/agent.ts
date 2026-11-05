@@ -355,6 +355,37 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, 'Permission settled.')
       return 'end_turn'
     }
+    // Tools in a row (docs/specs/assistant-ui.md, "Folded tools"): two, a text, two more, one asking a
+    // permission, one running that many seconds, a text.
+    case '/tool-run': {
+      const tool = (title: string, kind: string, status: string, content?: unknown[]): string => {
+        const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+        update(session.id, { sessionUpdate: 'tool_call', toolCallId, title, kind, status, ...(content ? { content } : {}) })
+        return toolCallId
+      }
+      const change = [{ type: 'diff', path: `${session.cwd}/demo.txt`, oldText: 'before\n', newText: 'after\n' }]
+      say(session.id, 'Looking first.')
+      tool('Read demo.txt', 'read', 'completed')
+      tool('A failing command', 'execute', 'failed')
+      say(session.id, 'Now the change.')
+      tool('Edit demo.txt', 'edit', 'completed', change)
+      tool('Search demo', 'search', 'completed')
+      const write = tool('Write demo.txt', 'edit', 'pending', change)
+      const asked = request('session/request_permission', {
+        sessionId: session.id,
+        toolCall: { toolCallId: write, title: 'Write demo.txt', kind: 'edit', status: 'pending' },
+        options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }],
+      })
+      await Promise.race([asked, new Promise((resolve) => (turn.wake = () => resolve(null)))])
+      if (turn.cancelled) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId: write, status: 'completed' })
+      const long = tool('A long command', 'execute', 'in_progress')
+      if (await pause(turn, n * 1000)) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId: long, status: 'completed' })
+      remember(session, 'agent', 'All done.')
+      say(session.id, 'All done.')
+      return 'end_turn'
+    }
     // How `_session/steering` is answered during this turn (docs/specs/log.md, L111, L112, L116): `/steering <answer> <seconds>`.
     case '/steering': {
       const [answer, seconds] = text.trim().split(/\s+/).slice(1)

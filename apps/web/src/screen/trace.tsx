@@ -47,8 +47,10 @@ export const TraceDisclosure: FC<{
   open?: boolean
   onOpenChange?: (open: boolean) => void
   defaultOpen?: boolean
+  /** What it holds is trace lines, which keep their own rhythm. */
+  lines?: boolean
   children: ReactNode
-}> = ({ tone, label, meta, open, onOpenChange, defaultOpen, children }) => (
+}> = ({ tone, label, meta, open, onOpenChange, defaultOpen, lines = false, children }) => (
   <Collapsible
     {...(open === undefined ? {} : { open })}
     {...(onOpenChange === undefined ? {} : { onOpenChange })}
@@ -62,7 +64,7 @@ export const TraceDisclosure: FC<{
       <Meta>{meta}</Meta>
     </CollapsibleTrigger>
     <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-      <div className="border-foreground/10 ms-[5px] mb-2 flex flex-col gap-2 border-s ps-4 pt-1">{children}</div>
+      <div className={cn('border-foreground/10 ms-[5px] mb-2 flex flex-col border-s ps-4 pt-1', !lines && 'gap-2')}>{children}</div>
     </CollapsibleContent>
   </Collapsible>
 )
