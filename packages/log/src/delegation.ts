@@ -20,6 +20,8 @@ const MATCH_TRIES = 10,
   MATCH_EVERY_MS = 200
 const MAX_DEPTH = 3
 const AT_ONCE = 3
+/** How many `to` one delegate may be given since the person last wrote: every loop between two agents goes through it. */
+const MAX_EXCHANGES = 10
 const KEYWORDS = new Set(['type', 'properties', 'required', 'items', 'enum', 'description', 'additionalProperties'])
 const ajv = new Ajv2020({ strict: false, allErrors: true })
 /** What says an execution can take no prompt any more, the first of them. */
@@ -361,10 +363,19 @@ export class Delegations {
     )
     if (delegate.rowCount === 0) throw new Refused('not_a_delegate')
     if ((await this.store.state(to)).current?.stopped) throw new Refused('delegate_stopped')
+    if ((await this.exchanges(caller.workstream, to)) >= MAX_EXCHANGES) throw new Refused('too_many_exchanges: the person has to write first')
     if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: await this.past(to) })
     const written = await this.fromDelegator(caller.workstream, to, instructions, schema)
     if (!written.accepted) throw new Refused(written.reason)
     return `sent ${to} · ${await this.titleOf(to, line(instructions))}`
+  }
+
+  /** The `to` a delegate was given since the person last wrote, in its Workstream or its delegator's; its first message is not one. */
+  private async exchanges(delegator: string, delegate: string): Promise<number> {
+    const writes = async (workstream: string) => (await this.store.entries(workstream)).filter((e) => e.kind === 'command' && e.content.kind === 'Write')
+    const [ours, theirs] = [await writes(delegator), await writes(delegate)]
+    const since = [...ours, ...theirs].filter((e) => markOf(object(e.content.body)?.prompt) === null).reduce((latest, e) => Math.max(latest, Date.parse(e.time)), 0)
+    return theirs.slice(1).filter((e) => markOf(object(e.content.body)?.prompt)?.as === 'delegator' && Date.parse(e.time) > since).length
   }
 
   private fromDelegator(delegator: string, delegate: string, instructions: string, schema: Record<string, unknown> | null): Promise<Answer> {

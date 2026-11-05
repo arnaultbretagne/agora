@@ -45,7 +45,7 @@ read's (`search.md`, "HTTP"); they answer in text, as grep and Read answer.
 | A parameter out of its range, or of another type | A tool error, `invalid_query`, naming the parameter. |
 | A Workstream that is not the person's, or unknown | A tool error, `unknown_workstream`. |
 | A tool the execution's rights do not open | A protocol error, `not_allowed`. |
-| `delegate` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `profile_not_offered`, `unknown_harness`, `invalid_schema`, `not_a_delegate`, `delegate_stopped`; `refused` with the person's words; `expired`. |
+| `delegate` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `profile_not_offered`, `unknown_harness`, `invalid_schema`, `not_a_delegate`, `delegate_stopped`, `too_many_exchanges`; `refused` with the person's words; `expired`. |
 
 ## Acceptance cases
 

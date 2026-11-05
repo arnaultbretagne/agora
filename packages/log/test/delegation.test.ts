@@ -783,6 +783,32 @@ test('D44 a message of Agora’s saying a delegate’s end, refused for a moment
   assert.equal((await fromOthers(lab, ws)).length, 1)
 })
 
+test('D45 ten to to a delegate, then an eleventh: too_many_exchanges, nothing written; its submit still goes; the person writing in either Workstream: ten more', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'delegate', arguments: { instructions: 'first words', harness: 'mock' } })))
+  const e = await until('its Session', async () => ((await lab.state(delegate)).current?.session ? (await lab.state(delegate)).current : null))
+  const to = () => c.callTool({ name: 'delegate', arguments: { to: delegate, instructions: 'again' } }) as Promise<Text>
+  const written = async () => (await kinds(lab, delegate, 'command')).filter((x) => x.content.kind === 'Write').length
+  const tenThenRefused = async () => {
+    for (let n = 0; n < 10; n++) assert.match(text(await to()), /^sent /)
+    const before = await written()
+    const refused = await to()
+    assert.deepEqual([refused.isError, text(refused)], [true, 'too_many_exchanges: the person has to write first'])
+    assert.equal(await written(), before, 'nothing written')
+  }
+  const say = async (w: string) => {
+    const current = (await lab.state(w)).current!
+    assert.ok((await lab.command(w, 'Write', { execution: current.id, session: current.session }, { prompt: [{ type: 'text', text: 'go on' }], mayWait: true })).accepted)
+  }
+  await tenThenRefused()
+  assert.equal(text(await (await client(t, url, e.id)).callTool({ name: 'submit', arguments: { message: 'still heard' } })), 'sent')
+  await say(ws)
+  await tenThenRefused()
+  await say(delegate)
+  assert.match(text(await to()), /^sent /)
+})
+
 test('C66 the person, in a delegate: a Scope, then once its execution ended a Create, each keeping the agora:submit it holds: both accepted', async (t) => {
   const { lab, url, execution } = await started(t, ['agora:delegate'])
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'delegate', arguments: { instructions: 'short', harness: 'mock' } })))

@@ -47,7 +47,7 @@ sequenceDiagram
 
 | Element | Rule |
 | --- | --- |
-| From the delegator | `delegate`: `instructions` is the delegate's first message; answered `started <id> · <title>`. With `to`, one of its delegates — then only `instructions` and `output_schema` —: its next message, whatever it is doing; answered `sent <id> · <title>`. `not_a_delegate`: a Workstream that is not one of its delegates. `delegate_stopped`: one the person stopped. |
+| From the delegator | `delegate`: `instructions` is the delegate's first message; answered `started <id> · <title>`. With `to`, one of its delegates — then only `instructions` and `output_schema` —: its next message, whatever it is doing; answered `sent <id> · <title>`. `not_a_delegate`: a Workstream that is not one of its delegates. `delegate_stopped`: one the person stopped. `too_many_exchanges`: ten `to` to that delegate since the person last wrote, in its Workstream or its delegator's; the person's next message there opens ten more. |
 | From the delegate | `submit`: `message`, the words, written in its delegator's Workstream; answered `sent`. As many times as it has something to say: a result, a question, news. A turn holding a message that is not the person's, done with no `submit` in it, submits its last message: the same message, whole. |
 | A message | A Write of Agora's, with `mayWait` as the client's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora`, with the `output_schema` a delegator gave and the `turn` a delegate wrote in —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). |
 | Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
@@ -129,6 +129,7 @@ Each, and a last message submitted, is written once, a restart included.
 | D42 | `to` naming a delegate in capitals | `sent`; its last message written once. |
 | D43 | A delegate whose Session opens and never takes its message, an opening setting never answered | No further Create by itself; a `to`: one more. |
 | D44 | A message of Agora's saying a delegate's end, refused for a moment | Written at the next beat, once. |
+| D45 | Ten `to` to a delegate, then an eleventh; its `submit`; the person writing in the delegator's Workstream, then the same; the person writing in the delegate's | `sent` ten times, then `too_many_exchanges`, nothing written; `sent`; the same; `sent`. |
 
 ## To be specified
 

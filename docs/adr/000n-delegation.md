@@ -34,6 +34,8 @@
 5. Rights beyond the delegator's: the call itself waits for the person, at most 4 min 30 s — one
    button, Approve; writing refuses, and the words are the call's answer. An approval holds for that
    call alone.
+6. At most ten `to` to one delegate since the person last wrote, in either Workstream. Decided on
+   2026-11-05.
 
 ## Why
 
@@ -46,6 +48,9 @@
 - **One primitive is enough.** A result, a question, a correction, a failure are all a message from
   someone, on the path the person's take. There is no state to keep in step with the log but the log's
   own, and no second way for a message to reach an agent.
+- **One counter is enough for a loop.** A delegate only speaks after a message, and its delegator
+  can only answer it by `to`: every loop between two agents goes through that one call. Refusing there
+  loses no words, and the log already counts it.
 - **A shape the model can keep.** Models fill a tool's arguments to its schema, so `result` stays, for
   a delegator that will act on its fields; `submit` is listed to every delegate, its schema checked by
   Agora, because a harness may never list another tool.
@@ -83,8 +88,8 @@
   make Pods without end: a message coming once it was over tries once more, as the person's Create does.
   There are never more Creates of Agora's than messages.
 - A message the person retracts reaches nobody, and Agora tells nobody: the person did it, and can say so.
-- Nothing caps two agents that answer each other with `to` and `submit`: each message is one more turn,
-  under no budget but the person's Stop.
+- A chain of new delegates, each started once the last has answered, is under no cap but the person's
+  Stop: it is not a loop between two agents.
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
 - A delegate's view and its row in the list carry its state, which its delegator's `delegate` line
