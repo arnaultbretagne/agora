@@ -34,6 +34,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R24 | 2026-11-02 | `231b28c` | unit | `npm run check`, all green: Node 24.20.0. |
 | R25 | 2026-11-03 | `c904f8c` | unit, local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C64's grants compiled, its `session/new` and C65 in the lab with a signer of its own and the mock harness. |
 | R26 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. C3, on the new adapter. |
+| R27 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C65 and C66 on real delegations in the lab. |
 
 ## Cases
 
@@ -151,6 +152,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C64 | — | unit | R25 | proven | `agora:delegate` and `agora:submit` compile to `agora:read`'s grant each; neither is a base profile. |
 | C64 | — | local | R25 | proven | With `agora:delegate`; with `agora:submit` given by Agora; with both and `agora:read`: `session/new` names `[{ type: http, name: agora, url: https://mcp.agora.internal/mcp, headers: [] }]`, once. |
 | C65 | — | local | R25 | proven | A Create naming `agora:submit`: `unknown_profile`; a Scope naming it: `unknown_profile`; a delegate asked for a result: its execution's profiles `[agora:submit]`. |
+| C65 | — | local | R27 | proven | A Create naming `agora:submit`: `unknown_profile`; a Scope naming it: `unknown_profile`; a delegate's execution: `[agora:submit]`. |
+| C66 | — | local | R27 | proven | In a delegate, the person's Scope keeping `agora:submit`: accepted. Ended, their Create keeping it: accepted, its profiles `[agora:submit]`. |
 
 The partial verdicts are tracked in #107.
 

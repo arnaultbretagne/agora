@@ -618,9 +618,10 @@ const settled = {
   expired: [...pendingApproval, factEntry(2, 'question.expired', { question: '1' })],
 }
 
-test('U60 a `delegate` answer read as a harness gives it: the text alone, or inside its result’s JSON', () => {
+test('U65 a `delegate` answer read as a harness gives it: the text alone, or inside its result’s JSON; `to`’s too', () => {
   const id = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
   assert.deepEqual(startedDelegate(`started ${id} · Review the change`), { id, title: 'Review the change' })
+  assert.deepEqual(startedDelegate(`sent ${id} · Review the change`), { id, title: 'Review the change' })
   assert.deepEqual(startedDelegate(JSON.stringify({ content: [{ type: 'text', text: `started ${id} · Review the change` }] }, null, 2)), { id, title: 'Review the change' })
   assert.equal(startedDelegate('refused: use the read-only rights'), null)
 })
@@ -711,8 +712,8 @@ test('U69 waiting elements: those waiting, in position order, with their text an
     element(4, 'retracted'),
   ])
   assert.deepEqual(waitingOf(state), [
-    { id: 'w-5', position: '5', text: 'the first', attachments: 0 },
-    { id: 'w-9', position: '9', text: 'the second', attachments: 1 },
+    { id: 'w-5', position: '5', text: 'the first', attachments: 0, from: null, as: null },
+    { id: 'w-9', position: '9', text: 'the second', attachments: 1, from: null, as: null },
   ])
   // Not messages of the thread.
   assert.deepEqual(messagesOf(state), [])
@@ -721,4 +722,29 @@ test('U69 waiting elements: those waiting, in position order, with their text an
   assert.equal(composerOf(during, workstreamOf(during, MESSAGES_WS)).held, false)
   const cancelled = crafted([turnObject('cancelled'), element(5, 'waiting', [{ type: 'text', text: 'the first' }])])
   assert.equal(composerOf(cancelled, workstreamOf(cancelled, MESSAGES_WS)).held, true)
+})
+
+test('U76 a delegate’s message sent into a running turn; one of Agora’s; one waiting: at their place, the first as the delegate’s, the second a line of Agora’s; the third saying who wrote it', () => {
+  const another = (position: number, words: string, as: string) => ({
+    kind: 'element',
+    id: `said-${String(position)}`,
+    object: { type: 'user', turn: 't', session: 's', firstPosition: String(position), content: [{ type: 'text', text: words }], steered: true, from: 'd', as },
+  })
+  const messages = messagesOf(crafted([turnObject('in_progress'), said(1, 'first'), chunk(2, 'before'), another(3, 'the result', 'delegate'), chunk(4, 'between'), another(5, 'it failed', 'agora'), chunk(6, 'after')]))
+  assert.deepEqual(messages.map((m) => [m.id, m.role]), [
+    ['t:user', 'user'],
+    ['t:assistant', 'assistant'],
+    ['t:user:3', 'user'],
+    ['t:assistant:3', 'assistant'],
+    ['t:report:5', 'system'],
+    ['t:assistant:5', 'assistant'],
+  ])
+  assert.equal(messages[2]!.metadata?.custom?.from, 'd')
+  assert.deepEqual(messages[4]!.content, [{ type: 'text', text: 'it failed' }])
+  assert.equal(messages[4]!.metadata?.custom?.fromAgora, true)
+  // A message of Agora's opening its turn: its line, in place of the person's.
+  const opening = messagesOf(crafted([turnObject('done'), { kind: 'element', id: 'a', object: { type: 'user', turn: 't', session: 's', firstPosition: '1', content: [{ type: 'text', text: 'it failed' }], from: 'd', as: 'agora' } }]))
+  assert.deepEqual(opening.map((m) => [m.id, m.role]), [['t:report', 'system'], ['t:assistant', 'assistant']])
+  const waiting = crafted([turnObject('in_progress'), { kind: 'element', id: 'w', object: { type: 'waiting', position: '7', firstPosition: '7', status: 'waiting', content: [{ type: 'text', text: 'later' }], from: 'd', as: 'delegate' } }])
+  assert.deepEqual(waitingOf(waiting), [{ id: 'w', position: '7', text: 'later', attachments: 0, from: 'd', as: 'delegate' }])
 })

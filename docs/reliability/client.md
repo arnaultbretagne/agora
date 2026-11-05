@@ -35,6 +35,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R27 | 2026-11-02 | `cecb6ff` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; U59 as R26, the sub-stream's second message now a long one, the word 223 characters into it. |
 | R28 | 2026-11-03 | `c904f8c` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent's `/delegate` calling the server's MCP port as a harness does, approvals of 12 s. |
 | R29 | 2026-11-04 | `8ed0819` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent taking `_session/steering`, or, for U71, not saying it can; a refusal stubbed in the browser for U73. |
+| R30 | 2026-11-04 | `fd0c720` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent's `/delegate` calling the server's MCP port as a harness does. |
 
 ## Cases
 
@@ -136,8 +137,6 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U59 | — | local | R26 | proven | The older talk not among the 50; `QUOKKA` typed: two rows, `an older talk` and `a sub-stream`, under each the agent's answer that holds the word, `Echo #2: the quokka came by.` and `Echo #2: a quokka again.`; emptied: the 50 rows, the older talk not among them. |
 | U59 | — | unit | R27 | proven | The long line from `…round, then a `, `quokka` apart, then ` again.`; a line where the word is near its start whole before it; a text not in the line: the line whole, nothing apart; `(a+b)` matched as typed. |
 | U59 | — | local | R27 | proven | The older talk not among the 50; `QUOKKA` typed: two rows, under `an older talk` the line `Echo #2: the quokka came by. Before, you told me "an older talk".`, under `a sub-stream` the line `…round, then a quokka again. Before, you told me "a sub-stream".`; the marked words `quokka` and `quokka`; emptied, the 50 rows, the older talk not among them. |
-| U60 | — | unit | R28 | proven | `started <id> · Review the change` read alone or inside its result's JSON; `refused: …` not a start. |
-| U60 | — | local | R28 | proven | The line `/sleep 3 · Mock agent`, linking to `/w/<id>`; `working`, then `done`; `From Agora` opening on `From Agora, not the person:` and `completed, its last message: … Slept 3 s.`; then `Echo #3: From Agora, not the person: …`. |
 | U61 | — | local | R28 | proven | On the line `delegate · /sleep 5`: the proposal, `Rights beyond the caller's: github:owner/b:read`, one button, Approve; the Ask naming the mock agent's tool line (`outil-…`); the open row `waiting for you`; after Approve: `Approved`, the line `/sleep 5 · Mock agent`, `working`. |
 | U62 | — | unit | R28 | proven | An approval pending: sending open, no Create, `refuses`; refused: `refuses` false again. |
 | U62 | — | local | R28 | proven | The composer `Write to refuse, or to ask for a change`, Send enabled while the turn runs; sent: `Refused “use the read-only rights”` on the line, the agent's `Delegated: refused: use the read-only rights`; the `session/prompt` lines as many as before. |
@@ -155,6 +154,11 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U73 | simulated: stub, the refusal fulfilled in the browser | local | R29 | proven | During a turn and for a first message: "Answer the permission request first." in an alert; the words back in the field. |
 | U74 | — | local | R29 | proven | `/` lists the commands; Escape: hidden, no Cancel command, **Cancel** there 500 ms on; Escape again: one Cancel command, the note `cancelled`. |
 | U75 | — | local | R29 | proven | One line `with a file 1`; no `user` message holding it, 300 ms on and after the turn; the cross: gone; no prompt holding it. |
+| U64 | — | local | R30 | proven | The delegate's first message `hello delegate`, `data-from` its delegator's id, `From the caller` linking back to it, opened by it. |
+| U65 | — | unit | R30 | proven | `started <id> · Review the change`, `sent <id> · …`, and the first inside a result's JSON: the id and the title; `refused: …`: none. |
+| U65 | — | local | R30 | proven | The line `/sleep 3 · Mock agent`, its link `/w/<id>`, `working`, then `idle`; `Slept 3 s.` in a message `From /sleep 3`, then `Echo #n: … second 1/3`; `/words 10000`: 9,900 characters or more in its message. |
+| U76 | — | unit | R30 | proven | Crafted: `t:user`, `t:assistant`, `t:user:3` `from` the delegate, `t:assistant:3`, `t:report:5` of role `system`, `fromAgora`, `it failed`, `t:assistant:5`. Opening a turn: `t:report`, `t:assistant`. Waiting: `later`, `from` and `as`. |
+| U76 | — | local | R30 | proven | During `/tool-open 6`: `From /sleep 2` in the list above the composer; then gone, `Slept 2 s.` in the thread `From /sleep 2`, `Heard: … second 1/2` under it. `/turn-error`: a `From Agora` line opening on `Its turn failed`. |
 
 ## Not covered
 

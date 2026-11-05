@@ -2,6 +2,7 @@
 // exchanges that anchor does not hold, given to the agent as text with the execution's first prompt.
 // Pure: it reads the fold and the entries, nothing else.
 import { object } from './json.ts'
+import { FROM_META } from './marks.ts'
 import { STEERING, type Execution, type State } from './state.ts'
 import type { Entry } from './store.ts'
 
@@ -136,7 +137,7 @@ const cut = (text: string): string => (text.length > FIELD_MAX ? `${text.slice(0
  */
 export function exchangesOf(entries: readonly Entry[], positions: readonly string[]): Exchange[] {
   const wanted = new Set(positions)
-  type Part = { tool?: string; said?: boolean; text: string }
+  type Part = { tool?: string; said?: 'user' | 'agora'; text: string }
   const turns = new Map<string, { user: string; parts: Part[]; tools: Map<string, Part> }>()
   const latest = new Map<string, string>()
   // The `_session/steering` lines whose answer has not come yet, by their positions.
@@ -150,7 +151,8 @@ export function exchangesOf(entries: readonly Entry[], positions: readonly strin
       const turn = turns.get(latest.get(e.session) ?? '')
       if (line && turn && e.rpc_kind === 'response' && object(e.content.result)?.outcome === 'injected') {
         const blocks = object(line.content.params)?.prompt
-        turn.parts.push({ said: true, text: (Array.isArray(blocks) ? blocks : []).map(blockText).filter((t) => t !== '').join('\n') })
+        const list = Array.isArray(blocks) ? blocks : []
+        turn.parts.push({ said: object(object(object(list[0])?._meta)?.[FROM_META]) !== null ? 'agora' : 'user', text: list.map(blockText).filter((t) => t !== '').join('\n') })
       }
     }
     if (e.kind === 'acp' && e.direction === 'out' && e.rpc_kind === 'request' && e.method === 'session/prompt' && e.session) {
@@ -187,7 +189,15 @@ export function exchangesOf(entries: readonly Entry[], positions: readonly strin
     position,
     user: t.user,
     agent: t.parts
-      .map((p) => (p.said ? `[the user, during this turn: ${p.text}]` : p.tool === undefined ? p.text.trim() : `[tool: ${p.tool || 'unnamed'}${p.text === 'failed' ? ' — failed' : ''}]`))
+      .map((p) =>
+        p.said === 'user'
+          ? `[the user, during this turn: ${p.text}]`
+          : p.said === 'agora'
+            ? `[during this turn: ${p.text}]`
+            : p.tool === undefined
+              ? p.text.trim()
+              : `[tool: ${p.tool || 'unnamed'}${p.text === 'failed' ? ' — failed' : ''}]`,
+      )
       .filter((p) => p !== '')
       .join('\n'),
   }))

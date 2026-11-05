@@ -6,6 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode, type ReadAnswer, type SearchAnswer } from './search.ts'
+import { MAX_LINE } from './acp.ts'
 import { object } from './json.ts'
 import type { Workstreams } from './workstreams.ts'
 import { Refused as DelegationRefused } from './delegation.ts'
@@ -14,8 +15,8 @@ import { Refused as DelegationRefused } from './delegation.ts'
 export const CALLER_HEADER = 'x-agora-execution'
 const SUBJECT = /^agora ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** A message larger than this is no tool call of ours. */
-const MAX_BODY = 1024 * 1024
+/** A message larger than this is no tool call of ours: `submit` carries what a line of a prompt can hold. */
+const MAX_BODY = MAX_LINE
 
 const SEARCH: Tool = {
   name: 'search',
@@ -23,7 +24,7 @@ const SEARCH: Tool = {
     'Search the person’s Workstreams — their conversations with agents, yours included — the way `grep -n` searches files. ' +
     'Each Workstream is a transcript of numbered lines: for each exchange, a `## <n> · <time> · you` header, the person’s lines, ' +
     'a `## <n> · agent` header, then the agent’s lines, and its tools as `[tool: <title>]` lines when `tools` is true. ' +
-    'A delegate’s message from its caller has a `caller` header; a report of Agora’s, an `agora` header, its lines never searched. ' +
+    'A message not the person’s has a `delegator`, `delegate` or `agora` header, and one sent into a turn a `<who>, during the turn` header among the agent’s lines. ' +
     '`pattern` is a regular expression, PostgreSQL’s, `\\b` being a word’s edge as in ripgrep, matched line by line; case counts unless `ignore_case`. ' +
     'The most recently changed Workstreams come first. `output_mode`: `workstreams_with_matches` (each Workstream, its title, how many lines match, ' +
     'and its latest matching line), `content` (each matching line as `<workstream>:<line>:<text>`, with `before`, `after` or `context` lines around it ' +
@@ -52,7 +53,7 @@ const READ: Tool = {
   name: 'read',
   description:
     'Read one of the person’s Workstreams the way Read reads a file: its transcript in numbered lines, `<number>` and a tab then the text — ' +
-    'for each exchange a header naming who wrote — `you`, `caller` or `agora` —, their lines, an `agent` header, the agent’s lines and its tools — ' +
+    'for each exchange a header naming who wrote — `you`, `delegator`, `delegate` or `agora` —, their lines, an `agent` header, the agent’s lines and its tools — ' +
     'from `offset`, at most `limit` lines and 50 KB; ' +
     'a line longer than 2,000 characters is cut. The last line gives the next offset when more follow.',
   inputSchema: {
@@ -72,8 +73,8 @@ const DELEGATE: Tool = {
   name: 'delegate',
   description:
     'Hand work to another agent, which runs on its own as a sub-stream of your Workstream. The call answers once it has started; ' +
-    'its outcome comes back to you later as a message from Agora — do not wait or poll for it, carry on or end your turn. ' +
-    '`to` continues one of your delegates with a next message. `output_schema` asks for a result of that shape (a JSON Schema whose root is an object): ' +
+    'what it sends comes back to you later as a message, whole — do not wait or poll for it, carry on or end your turn. ' +
+    '`to` writes to one of your delegates again, whatever it is doing. `output_schema` asks for a result of that shape (a JSON Schema whose root is an object): ' +
     'give one when you will act on fields of the result — a verdict, findings, a number —, leave it out when you will read prose. ' +
     'Rights beyond your own wait for the person’s approval.',
   inputSchema: {
@@ -85,22 +86,32 @@ const DELEGATE: Tool = {
       effort: { type: 'string', description: 'An effort the harness offers; its default otherwise.' },
       rights: { type: 'array', items: { type: 'string' }, description: 'The delegate’s rights, as profiles — e.g. github:owner/repo:read; none by default.' },
       output_schema: { type: 'object', description: 'A JSON Schema, its root an object: the shape of the result to hand back with `submit`.' },
-      to: { type: 'string', format: 'uuid', description: 'One of your delegates, to continue.' },
+      to: { type: 'string', format: 'uuid', description: 'One of your delegates, to write to again.' },
     },
     required: ['instructions'],
     additionalProperties: false,
   },
 }
 
-/** `submit`, its input the schema the delegation asked for (docs/specs/delegation.md, "Typed results"). */
-const submitTool = (schema: Record<string, unknown>): Tool => ({
+/** Listed to every delegate from its start: a harness may list its tools once (docs/specs/delegation.md, "Typed results"). */
+const SUBMIT: Tool = {
   name: 'submit',
-  description: 'Hand your result to the agent that asked for it: once, when the work is done, in the shape it asked.',
-  inputSchema: schema as Tool['inputSchema'],
-})
+  description:
+    'Send a message to the agent that delegated to you: a result, a question, news, as many times as you have something to say. ' +
+    'A turn with no `submit` sends your last message for you; with one, nothing more goes by itself. Give `result` when it asked for a shape.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string', description: 'The words, whole.' },
+      result: { type: 'object', description: 'The object it asked for, in the shape it gave.' },
+    },
+    required: ['message'],
+    additionalProperties: false,
+  },
+}
 
-/** The tools each right opens (docs/specs/mcp.md, "The path"); `agora:submit`'s depends on the step. */
-const RIGHTS: Readonly<Record<string, readonly Tool[]>> = { 'agora:read': [SEARCH, READ], 'agora:delegate': [DELEGATE] }
+/** The tools each right opens (docs/specs/mcp.md, "The path"). */
+const RIGHTS: Readonly<Record<string, readonly Tool[]>> = { 'agora:read': [SEARCH, READ], 'agora:delegate': [DELEGATE], 'agora:submit': [SUBMIT] }
 
 /** What a tool answers instead of its result: the reason, as the HTTP API gives it. */
 class Refused extends Error {}
@@ -219,11 +230,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
     return reply(res, 400, 'invalid_message')
   }
   const delegations = workstreams.delegations
-  const tools = caller.profiles.flatMap((profile) => (delegations === null && profile === 'agora:delegate' ? [] : (RIGHTS[profile] ?? [])))
-  if (delegations !== null && caller.profiles.includes('agora:submit')) {
-    const schema = await delegations.schemaOf(caller.workstream)
-    if (schema !== null) tools.push(submitTool(schema))
-  }
+  const tools = caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? [])))
   const execution = subject![1]!
   const server = new Server({ name: 'agora', version: '1.0.0' }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...tools] }))

@@ -11,6 +11,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R3 | 2026-11-03 | `c904f8c` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 and M11 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client and plain `fetch`. |
 | R4 | 2026-11-03 | `0451c69` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 now lists the tools as the delegate's Session opens, before its instructions, the engine held: it fails on `5ff8da9`'s engine, passes on this one (agora #179). |
 | R5 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. M9, on the new adapters. |
+| R6 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 and M11 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client and plain `fetch`. |
 
 ## Cases
 
@@ -29,6 +30,8 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M10 | — | local | R3 | proven | With `agora:delegate`: `delegate` alone, not read-only, `instructions`, `harness`, `model`, `effort`, `rights`, `output_schema`, `to`; from a delegate asked for a result, with `agora:submit` alone: `submit` alone, its input the delegation's schema. |
 | M10 | — | local | R4 | proven | From a delegate asked for a result, as its Session opens, no turn yet: `submit` alone, its input the schema. |
 | M11 | — | local | R3 | proven | `tools/list`: `application/json`; a `delegate` call held by an approval of 1.5 s: `text/event-stream`, 3 progress notifications or more, then the answer to request 2; the approval `expired`. |
+| M10 | — | local | R6 | proven | With `agora:delegate`: `delegate` alone, not read-only, `instructions`, `harness`, `model`, `effort`, `rights`, `output_schema`, `to`. From a delegate asked for a result, as its Session opens: `submit` alone, `message` and `result`, `message` alone required. |
+| M11 | — | local | R6 | proven | `tools/list`: `application/json`. A `delegate` call held by an approval of 1.5 s: `text/event-stream`, 3 progress notifications or more, then its answer; the element `expired`. |
 
 ## Not covered
 
