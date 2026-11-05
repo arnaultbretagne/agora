@@ -197,7 +197,7 @@ const stored = async () => Number((await db.admin.query('SELECT count(*) AS n FR
 test('U16 New workstream from an open one: the draft, empty, at /; Back: the Workstream again', async () => {
   const page = await fresh()
   const id = await started(page, 'the first workstream')
-  await page.getByRole('button', { name: 'New workstream' }).click()
+  await page.getByRole('button', { name: 'New workstream', exact: true }).click()
   await page.waitForURL(`${server.url}/`)
   await page.getByText('What shall we work on?').waitFor()
   assert.equal(await thread(page).getByText('Echo #1: the first workstream.').count(), 0, 'no message of the previous Workstream')
@@ -343,7 +343,7 @@ test('U27 a model and an effort picked in the draft: carried by the Create, show
   const page = await fresh()
   // A Session in the pool first: the draft offers what it gave.
   await started(page, 'a session for the catalogue')
-  await page.getByRole('button', { name: 'New workstream' }).click()
+  await page.getByRole('button', { name: 'New workstream', exact: true }).click()
   await pickHarness(page, 'Mock agent')
   await modelPicker(page).click()
   assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['mock-small', 'mock-large', 'mock-broken', 'low', 'high'], 'no default offered')
