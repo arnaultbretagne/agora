@@ -11,6 +11,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R3 | 2026-11-03 | `651d122` | live | As R2, on the server `agora-server@sha256:2db145d0…`, with agora #179. Output: `✔ D15 … claude-code: delegate 61eadcc2, submitted { product: 1771 }, report at 60, answered "1771" \| codex: delegate a2c7e6ca, submitted { product: 804 }, report at 53, answered "804" \| opencode: delegate 76d3286e, submitted { product: 5360 }, report at 85, answered "5360" (82 s)`; `✔ D16 … claude-code: the approval names toolu_01GcShKfTyzzUPLUxUPmzbyc ("mcp__agora__delegate") \| codex: the approval names exec-c25e1693-d3a6-4346-b94a-2dcb678b24c4 ("mcp.agora.delegate") \| opencode: the approval names call_b1c2c7c220af44daba0ab225 ("agora_delegate") (49 s)`, `2/2 cases validated`. |
 | R4 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. D15 and D16, on the new adapters. |
 | R5 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, taking `_session/steering` as the adapters do, or not saying it can (D30); the delegators' and the delegates' MCP calls through the MCP TypeScript SDK 1.32.2's own client, their executions named as the gateway names them. An approval lives 3 s and its call hears progress every 500 ms (D8: 2 s and 400 ms), in place of 4 min 30 s and 30 s. Each guard these cases hold was also removed in turn: D5, D32, D37, D40–D44 and L99 each failed. |
+| R6 | 2026-11-05 | `bf49026` | local | `npm run check`, all green, as R5, on the commit that adds `too_many_exchanges`: every case of R5 ran again, its test unchanged; D45 new. Each clause of the cap was also removed in turn, and D45 failed. |
 
 ## Cases
 
@@ -67,6 +68,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D42 | — | local | R5 | proven | `to` in capitals: `sent <id> · …`, its id in small letters; its second turn over; two messages at the delegator, still two 1.5 s on. |
 | D43 | real: the mock agent never answers the setting | local | R5 | proven | Its Session open: no prompt, one waiting. Ended: 1.5 s on, one execution. A `to`: two; ended: 1.5 s on, still two. |
 | D44 | simulated: stub, `command` refused for one beat | local | R5 | proven | Its turn failed, its execution ended. The refused beat: no Write in the delegator's. The next: one message; still one after another beat. |
+| D45 | — | local | R6 | proven | `sent` ten times, then a tool error `too_many_exchanges: the person has to write first`, no Write added; the delegate's `submit`: `sent`. A Write of the person's in the delegator's Workstream: the same again. One in the delegate's: `sent`. |
 
 ## Not covered
 
@@ -74,7 +76,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | --- | --- |
 | A crash between a delegate's accepted Create and its `delegation.started`: a sub-stream that runs, never given its instructions, never reported | — |
 | A message of Agora's whose prompt fails before it is dispatched, a token or a deadline refused: gone from what waits, a failed turn in the thread, its agent never reading it | — |
-| Two agents answering each other with `to` and `submit`: each message one more turn, nothing capping them but the person's Stop | — |
+| A chain of new delegates, each started once the last has answered: nothing caps it but the person's Stop | — |
 | A delegate whose Session opens and takes no prompt (D43): nobody told, its state `working` | — |
 | A Create of Agora's refused for good, `profile_not_offered` or `unknown_profile`: tried again at each beat, the message waiting, nobody told | — |
 | A delegate's last message beyond a line's limit: tried again at each beat, nobody told | — |
