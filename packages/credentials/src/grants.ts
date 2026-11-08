@@ -114,8 +114,8 @@ export function compileProfile(profile: string): Grant[] {
     // git smart HTTP: a clone POSTs too (git-upload-pack); writing is git-receive-pack.
     const services = level === 'write' ? '(upload|receive)' : 'upload'
     const git = `^/${escape(owner)}/${escape(repo)}(\\.git)?/(info/refs\\?service=git-${services}-pack|git-${services}-pack)$`
-    // Review: every method on the REST API, as the reviewer's own App — its permissions, not the grant, keep it from
-    // writing code: contents read, pull requests write (docs/specs/credentials.md, "GitHub identities").
+    // Review: every method on the REST API and clone and fetch, as the reviewer's own App; GitHub's rules on main, not
+    // the grant, keep it from merging (docs/specs/credentials.md, "GitHub identities").
     if (level === 'review') return [{ host: 'api.github.com', path: rest, identity: 'reviewer' }, { host: 'github.com', path: git, identity: 'reviewer' }]
     return level === 'write'
       ? [{ host: 'api.github.com', path: rest, identity: 'contributor' }, { host: 'github.com', path: git, identity: 'contributor' }]

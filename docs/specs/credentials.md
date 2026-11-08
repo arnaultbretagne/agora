@@ -52,7 +52,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
-| `github:owner/repo:review` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` only. As the reviewer ("GitHub identities"): its App can read code and review, comment on and approve pull requests, never push or merge. |
+| `github:owner/repo:review` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` only. As the reviewer ("GitHub identities"): its approval is the review `main` requires; no git push, and no merge. |
 | `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
@@ -235,12 +235,14 @@ App's installation reaches; the App's permissions bound what it may do there.
 
 | Identity | App | Permissions | Profiles |
 | --- | --- | --- | --- |
-| `contributor` | `agora-contributor` | Contents and pull requests read and write; actions, checks, commit statuses read. No workflows, no administration. | `github:…:read`, `github:…:write` |
-| `reviewer` | `agora-reviewer` | Contents read; pull requests read and write; actions, checks, commit statuses read. | `github:…:review` |
+| `contributor` | `agora-contributor` | Contents, pull requests and issues read and write; actions, checks, commit statuses read. No workflows, no administration. | `github:…:read`, `github:…:write` |
+| `reviewer` | `agora-reviewer` | The same. Contents write is what makes its approval count: GitHub counts an approval only from an actor who may write. | `github:…:review` |
 
-- **Merging takes the person.** `main` requires an approving review by a code owner, the
-  operator, and none of the Apps may bypass the rules: the contributor opens and pushes, the
-  reviewer reviews and approves, neither approval merges. A push after an approval dismisses it.
+- **One writes, one reviews, the person merges.** `main` requires one approving review, from
+  someone other than the last pusher, and restricts its updates to the operator: the contributor
+  opens and pushes, the reviewer's approval is the review required, and neither App may merge. A
+  push after an approval dismisses it. GitHub lets the contributor approve a pull request it did not
+  write, the operator's: that approval counts too.
 - **One actor per App.** GitHub refuses an approval from a pull request's author: the review is
   another App's, and an App can be only one of them.
 - **Both on a repository: the contributor.** A request a grant of each covers goes as the
@@ -635,4 +637,4 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C67 | The grants of `github:A:review`, `github:A:read`, `github:A:write`; requests on A and elsewhere, with each and with two of them | Review: every REST method on A and its clone and fetch, as the reviewer, never a push; read and write as the contributor; write and review on A: the contributor; read and review: the reads as the contributor, a review as the reviewer; nothing elsewhere but through the public routes. |
 | C68 | `github:A:write` offered, then `github:A:review`; Creates naming A's review, read, write | Write offered: all three accepted; review offered: review and read, the write `profile_not_offered`. |
 | C69 | The gateway as deployed, a stand-in GitHub: write on A, review on B, `internet`, each request with forged `x-gateway-grant` values too | A's requests reach GitHub with the contributor's token, B's review with the reviewer's, a public read with the public token; a review grant never sends the contributor's token, nor a write grant the reviewer's; the forged header changes nothing; no request carries the operator's credential. |
-| C70 | In a real execution: `github:A:write`, a branch pushed and a pull request opened; another with `github:A:review` approving it; then the contributor merging | The commit and the pull request by `agora-contributor[bot]`, the approval by `agora-reviewer[bot]`; the merge refused by GitHub until the operator approves; then accepted. |
+| C70 | In a real execution: `github:A:write`, a branch pushed and a pull request opened; another with `github:A:review` approving it; then the contributor merging | The commit and the pull request by `agora-contributor[bot]`, the approval by `agora-reviewer[bot]`, which makes it mergeable; the merge refused by GitHub to both Apps; the operator's accepted. |

@@ -40,8 +40,8 @@
    without its profile.
 8. **On GitHub, Agora acts as GitHub Apps, one per identity.** The contributor writes, the
    reviewer reviews; each grant names its identity, and the gateway sets that App's installation
-   token. The operator's credential reaches no execution, and merging into `main` takes the
-   operator's approval.
+   token. The operator's credential reaches no execution; the reviewer's approval is the review
+   `main` requires, and only the operator merges.
 9. **On an MCP server, the grants name the tools.** Every call is a `POST` to one path: a grant
    carries the tools a call may name, and the server's route, an MCP backend of the gateway, checks
    the tool in the protocol before it sets the server's credential.
@@ -230,7 +230,8 @@ an execution with write could merge, or push to `main`, unreviewed (read through
 | GitHub's MCP server (`merge_pull_request`) | Puts the merge in the agent's hands; its host has no route, and GraphQL stays closed. |
 | One GitHub App for every role | An App is one actor: the judge would author what it approves, which GitHub refuses. |
 | Machine users | One free per person, long-lived PATs. |
-| One App per identity, contributor and reviewer (kept) | Each installed once, every repository, new ones included. No App may bypass the rules, so they bind agents: a code owner's approval merges, the operator's. The reviewer's permissions, contents read, keep it from pushing whatever its prompt says. Verified on 2026-11-08 through each App's API: the permissions asked, installed on all nine repositories, no webhook. |
+| One App per identity, contributor and reviewer (kept) | Each installed once, every repository, new ones included. GitHub's own rules on `main` do the rest: one approval required, from someone other than the last pusher, and updates restricted to the operator. Measured on 2026-11-08 on throwaway branches of `agora` with the same rules: the contributor's approval of its own pull request refused; the reviewer's made it mergeable; with updates restricted, both Apps' merges refused ("Cannot update this protected ref") and the operator's accepted; without, the contributor merged once the reviewer had approved. The reviewer has contents write: GitHub counts an approval only from an actor who may write (its documentation, for people). |
+| A code owner's review required (dropped) | The operator's rule: the reviewer's approval is enough, the merge is the operator's alone. |
 
 ### Read and write on one MCP server (2026-10-26)
 
