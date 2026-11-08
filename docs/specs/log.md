@@ -5,7 +5,8 @@ Contract to implement — PostgreSQL **17** (CloudNativePG), ACP protocol versio
 why, in the log ADR.
 
 **Every command and every ACP line is written whole, at its Workstream's next position, before
-Agora acts on it. The client only ever reads what is projected from it.**
+Agora acts on it — a file in it by reference (`files.md`). The client only ever reads what is
+projected from it.**
 
 ## Who does what
 
@@ -13,18 +14,18 @@ Agora acts on it. The client only ever reads what is projected from it.**
 | --- | --- |
 | `Workstreams` (`@agora/log`) | Accepts commands, writes entries, decides every dispatch, captures every received line, recovers after a restart, projects the views and serves the thread. |
 | `ExecutionManager` (`@agora/executions`) | The execution mechanics (`executions.md`): claims, bridge connections, deadlines, anchor authentication. It keeps no history, sends a line only when asked, and hands each received line over before reading the next. |
-| PostgreSQL | The log, the views, the thread and the anchors, behind three roles. |
+| PostgreSQL | The log, the views, the thread and the anchor records, behind four roles; the files' bytes are in R2 (`files.md`). |
 | The server (`apps/server`) | Mounts both with PostgreSQL, serves the client (`assistant-ui.md`) and the API. With its test routes open (`TEST_ROUTES` `true`), it also serves a page that plays every case. |
 
 ## Entries
 
 | Kind | Written when | Content |
 | --- | --- | --- |
-| `command` | A user command is accepted. | Its id, actor, kind, target and body. |
-| `acp` | An ACP line is about to be sent to the bridge, or has been received from it. | The line, whole. |
+| `command` | A user command is accepted. | Its id, actor, kind, target and body; a file in it by reference. |
+| `acp` | An ACP line is about to be sent to the bridge, or has been received from it. | The line, whole; a file in it by reference. |
 | `acp.dispatching` | The dispatcher commits to a line's first transport write. | The line's position and the connection. |
 | `acp.sent` | That write's callback succeeds. | The line's position and the connection. It proves a local write, not that the harness read the line. |
-| `request.failed` | A request of Agora's fails locally: an invalid answer, a transport error, a response timeout, a refused deadline, a Stop. | The request's position, a closed reason, and the diagnostic id when there is one. Never the invalid content or an exception message. |
+| `request.failed` | A request of Agora's fails locally: an invalid answer, a transport error, a response timeout, a refused deadline, a Stop, a file R2 does not give back. | The request's position, a closed reason, and the diagnostic id when there is one. Never the invalid content or an exception message. |
 | `execution.obtained` | The claim of an accepted Create is created or found. | Its name and UID. |
 | `execution.connected` | A connection to the bridge is open and its instance checked. | The connection, the bridge instance. |
 | `execution.break` | A connection to the bridge closes, after every line received on it is committed. | The connection, the close code when known, clean or not. |
@@ -408,8 +409,8 @@ changes instead of fetching every view again.
 | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows. |
 | `POST /api/workstreams/{id}/control` | Test only: one `session/set_config_option` for the current Session, between turns. |
 | `POST /api/workstreams/{id}/credentials` | Test only: hands a signed credential to the execution's bridge (`credentials.md`). |
-| `GET /api/workstreams/{id}/entries` | Test only: the entries, as stored. |
-| `GET /api/anchors`, `GET /api/anchors/{id}/content` | Test only: the stored anchors, and an anchor's native files. |
+| `GET /api/workstreams/{id}/entries` | Test only: the entries, as stored, files by reference. |
+| `GET /api/anchors`, `GET /api/anchors/{id}/content` | Test only: the stored anchors, and an anchor's native files, read from R2. |
 
 The test routes answer only while `TEST_ROUTES` is `true`; otherwise 404.
 
@@ -441,7 +442,7 @@ the unclean breaks, then joins Creates and claims:
 | Expiry, deletion in progress, adapter loss | Dispatch and renewal stop; the execution stays counted, and Create stays refused, until the claim has disappeared. |
 
 An anchor is matched to its execution through the Pod's claim, its labels and UID, and the Pod
-UID TokenReview returns, even with no connection open. It is stored by the anchor role, then
+UID TokenReview returns, even with no connection open. Its bytes are stored in R2 and its record by the anchor role (`files.md`), then
 `anchor.received` is appended; an anchor stored without its entry gets it at the next start.
 
 ## Storage
@@ -450,25 +451,27 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 | --- | --- | --- |
 | `workstreams` | id | Owner; parent, root — none for a root, its own — and depth; last entry position. |
 | `threads` | Workstream | The thread's last position and its last reset's; its row is the projector's lock. |
-| `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
+| `entries` | Workstream, position | Kind, execution, Session, content (`jsonb`), the files it references (`files`), the ACP columns, time. A received line has a unique (connection, receive ordinal). |
 | `commands` | Workstream, id | Kind, target, SHA-256 of the canonical request, the answer, its entry's position, the execution and claim name of a Create. |
 | `sessions` | id | Workstream, execution, ACP session id, the positions where it opened and ended. |
 | `diagnostics` | id | Execution, connection, receive ordinal, direction, reason, size, SHA-256, time. |
-| `anchors` | id | Workstream, execution, Session, metadata, content (`bytea`). A Workstream keeps its last anchor per harness: one stored removes the earlier ones of its harness. |
+| `anchors` | id | Workstream, execution, Session, metadata, the SHA-256 of its object in R2 (`file`). A Workstream keeps its last anchor per harness: one stored removes the earlier ones of its harness. |
 | `objects` | Workstream, kind, id | The view object, its projector, its first and last positions; the thread position of its last change; an element's `type`, in a column of its own, and its text's trigrams, in an index (`objects_text`, PostgreSQL's `pg_trgm`), for search (`search.md`). |
+| `files` | SHA-256 | Byte count, time stored: one row per object in R2 (`files.md`). |
 | `checkpoints` | Workstream, projector | Version, last position folded. |
 | `lists` | Owner | The list's last position; its owner is a person's identity or folder, or a Workstream for its sub-streams; its row is the lock that orders the list's rows. |
 | `listings` | Workstream | Its list's owner, position, `changedAt`, title, the row. |
 
 | Role | May | May not |
 | --- | --- | --- |
-| `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; read anchor bytes; write views, the thread's positions or checkpoints. |
+| `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics, `files` rows; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; delete `files` rows; write views, the thread's positions or checkpoints. |
 | `agora_projector` | Read Workstream ids, owners and lines, and entries; write views with their thread positions, checkpoints and the lists; update the thread's last position and last reset, and a list's last position. | Write entries, commands or Sessions; read anchors; delete the thread's row or a list's rows. |
-| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read, insert and delete anchors, bytes included. | Write entries, commands, Sessions, views; update an anchor. |
+| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read, insert and delete anchors; insert `files` rows. | Write entries, commands, Sessions, views; update an anchor. |
+| `agora_files` | Read entries' `files` and Workstream owners, anchors' `file`; read and delete `files` rows. | Write entries, commands, Sessions, views or anchors. |
 
 | Rule | Detail |
 | --- | --- |
-| Logins | The three roles are NOLOGIN. The server connects with one login per role; no login owns a table or inherits a migration or superuser privilege. The schema is applied by the database owner. |
+| Logins | The four roles are NOLOGIN. The server connects with one login per role; no login owns a table or inherits a migration or superuser privilege. The schema is applied by the database owner. |
 | Login creation | Tolerates a concurrent creation; the password is set from a SCRAM verifier, never plain text in a statement. |
 | `bigint` | Read as decimal strings, set once for every connection; position arithmetic uses JavaScript `bigint`. |
 | Tests | Run under the real logins, each in its own database. |
@@ -478,7 +481,7 @@ UID TokenReview returns, even with no connection open. It is stored by the ancho
 The operational logger takes a closed list of fields: actor, Workstream, Session, execution,
 connection, command, position, operation, outcome, error class, byte count, duration. Operations,
 outcomes and error classes come from closed lists. A value that is not a valid identifier is
-dropped. Never a prompt, tool content, credential, token, header, query string, anchor byte or
+dropped. Never a prompt, tool content, file byte, credential, token, header, query string, anchor byte or
 exception message.
 
 ## Acceptance cases

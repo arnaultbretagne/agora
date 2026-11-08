@@ -11,7 +11,8 @@ behaviour; the open questions close the document.
 | --- | --- |
 | The server | Writes each entry to the log before acting on it, projects the log into views, serves them to the client. |
 | The execution mechanics | Within the server: claims, bridge connections and deadlines, each effect on the server's request. They keep nothing. |
-| PostgreSQL | Holds the log, the views and the anchors. |
+| PostgreSQL | Holds the log, the views and the anchor records. |
+| R2 | Holds the files: anchors, attachments, files a tool returns; one object per content, which the log references. |
 | The bridge | Pipes ACP lines between the adapter and the server. It keeps nothing. |
 | The client | Reads a Workstream's thread from its last position and sends commands. |
 
