@@ -1,8 +1,8 @@
 # Files
 
 Contract to implement — Cloudflare R2 through its S3 API: PutObject with `If-None-Match` and
-`Content-MD5`, GetObject, ListObjectsV2, DeleteObjects (documentation read 2026-11-08);
-PostgreSQL **17**. Why: the files ADR. The log that holds the references: `log.md`.
+`x-amz-checksum-sha256`, GetObject, ListObjectsV2, DeleteObjects (each tried on `agora-files`,
+2026-11-08); PostgreSQL **17**. Why: the files ADR. The log that holds the references: `log.md`.
 
 **A file's bytes are stored once, in R2, under their SHA-256; entries, views and anchor records
 hold references. Only Agora writes to R2.**
@@ -30,7 +30,7 @@ Any other string stays in the entry as it is.
 | Step | Rule |
 | --- | --- |
 | Key | `sha256/` and the 64 lowercase hexadecimal digits of the SHA-256 of the bytes. |
-| Upload | Unless a `files` row names the key: PutObject with `If-None-Match: *`, the bytes' `Content-MD5`, type `application/octet-stream`. A `412` means the object is there: the file is stored. |
+| Upload | Unless a `files` row names the key: PutObject with `If-None-Match: *`, `x-amz-checksum-sha256` the bytes' SHA-256, type `application/octet-stream`. A `412` means the object is there: the file is stored; a `400 BadDigest`, that the bytes changed on the way: tried again. |
 | Record | A `files` row — SHA-256, byte count, time — inserted unless it exists, in the transaction that writes the entry or the anchor record naming it. |
 | Order | The bytes are stored before that transaction: a reference never names an object that is not stored. From its first look at `files` to that commit, the writer holds the files lock shared (a PostgreSQL advisory lock): no sweep runs in between. |
 | R2 failing | A received line is not taken: the bridge holds the adapter, and the line is tried again each second, then written in its order. A Write is answered 503 `files_unavailable`, with nothing written. An anchor's push is answered 503, with nothing stored. |

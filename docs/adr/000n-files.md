@@ -61,10 +61,11 @@ flowchart LR
   than they are today. Egress is free; storage is free up to 10 GB a month, then $0.015 per GB
   (Cloudflare's documentation, read 2026-11-08). No service runs in the cluster for it, and it
   outlives the node's disk.
-- **Agora writes, because R2 checks no SHA-256.** A PutObject is checked against `Content-MD5`;
-  R2's SHA-256 checksum is composite only (Cloudflare's documentation, read 2026-11-08). A sandbox
-  allowed to upload could put other bytes under a real file's key, and every Workstream naming it
-  would read them.
+- **Agora writes, because every file reaches it anyway.** A file comes in a line, a Write or an
+  anchor's push; a sandbox has no way out but the gateway, and the browser talks to Agora alone.
+  With one writer, each key is the hash of bytes Agora read itself. R2 checks it too: a PutObject
+  whose `x-amz-checksum-sha256` does not match its body is refused `400 BadDigest`, and one with
+  `If-None-Match: *` on an existing key `412` (measured on `agora-files`, 2026-11-08).
 - **Faithful still.** A reference stands for a value Agora gives back exactly: the log keeps what
   ADR Log asks of it, the line as exchanged, every member and number.
 
@@ -76,7 +77,7 @@ flowchart LR
 | One table of files in PostgreSQL | One copy, but in the WAL and in every base backup, read through the server's memory; no way to leave it out of the backups. A relational database is not where files belong. | Dropped. |
 | A volume of the cluster | Lost with the node's disk, unless a job copies it to R2: two stores for one need. | Dropped. |
 | An S3 server in the cluster (Garage, SeaweedFS) | One more stateful service on one node, which needs its own copy to R2. | Dropped. |
-| Uploads straight to R2 by signed URL, from the browser and the Pod | Spares the server the bytes; but R2 checks no SHA-256, so a sandbox could poison a key. | Dropped. |
+| Uploads straight to R2 by signed URL, from the browser and the Pod | Spares the server bytes it receives anyway; a sandbox would need a way out besides the gateway, and the browser a second origin. | Dropped. |
 | A key per Workstream | Deleting a Workstream would delete its prefix; but one content is stored once per Workstream, and a file handed to a delegate is copied. | Dropped: one object per content. |
 | No bytes kept for the files a tool returns | Nothing reads them back today; nothing could show them later either. | Dropped: a file lives in one place, whatever brought it. |
 
@@ -84,7 +85,8 @@ flowchart LR
 
 - R2 is a prerequisite: a bucket, a token for it alone, the server's way out to it.
 - A line with a file waits for R2, as every line waits for PostgreSQL. Without internet, such lines
-  wait; the models need internet anyway.
+  wait; the models need internet anyway. From the node, 30 MiB took 3.3 s to store and 1.1 s to read
+  back (2026-11-08).
 - A raw entry shows references, not base64; the line sent to a harness is the stored line,
   expanded.
 - The client fetches a file from Agora when it shows it.
