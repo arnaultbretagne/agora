@@ -37,6 +37,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R29 | 2026-11-04 | `8ed0819` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent taking `_session/steering`, or, for U71, not saying it can; a refusal stubbed in the browser for U73. |
 | R30 | 2026-11-04 | `fd0c720` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent's `/delegate` calling the server's MCP port as a harness does. |
 | R31 | 2026-11-05 | `7875149` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11. Screenshots taken in Chromium against the same server; and, a manual check and not evidence, three real threads of the deployed server read through `kubectl port-forward`, every request but a GET refused in the browser. |
+| R32 | 2026-11-08 | `d4bc539` | local | `npm run check`, all green: Node 24.20.0, Playwright's Chromium against the real server, its files in the testkit's S3 endpoint standing in for R2 (`specs/files.md`). |
 
 ## Cases
 
@@ -162,6 +163,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U76 | — | local | R30 | proven | During `/tool-open 6`: `From /sleep 2` in the list above the composer; then gone, `Slept 2 s.` in the thread `From /sleep 2`, `Heard: … second 1/2` under it. `/turn-error`: a `From Agora` line opening on `Its turn failed`. |
 | U77 | — | unit | R31 | proven | claude-code: `2 edits, 1 command` `+22 −0`, `3 edits, 1 command` `+5 −5`. codex: `4 commands, 2 other tools` `3 failed`, `1 command, 1 other tool`. opencode: `2 other tools, 2 edits, 2 commands` with its reasoning in it, `1 edit, 1 command, 1 other tool` `+1 −1`. A pending permission, a `delegate` line, an approval and a question out; answered, or its turn cancelled, in; what stays out ends a fold: 1, then 2. |
 | U78 | — | local | R31 | proven | `/tool-run 3`, the permission pending: `1 read, 1 command` `1 failed`, `1 edit, 1 search` `+1 −1`, both closed, `Looking first.` and `Now the change.` around them, `Write demo.txt` outside with Allow. Answered: `A long command` `4 tools`, closed. Done: `2 edits, 1 search, 1 command` `+2 −2`, closed; opened, `Edit demo.txt`, `Search demo`, `Write demo.txt`, `A long command`, the first opening onto its diff. `/tool`: its line, no fold. |
+| U79 | — | local | R32 | proven | A 200 × 120 PNG of noise written with a message: its tile `/api/files/fb4d4d58…?type=image%2Fpng&owner=…`, drawn; opened, 200 × 120 from the same address; the thread 6025 characters, the reference in it, none of the image's base64. |
 
 ## Not covered
 
