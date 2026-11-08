@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { Delegations, LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
+import { Delegations, Files, LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { teamFrom, teamHttp } from './team.ts'
@@ -57,7 +57,8 @@ const limits =
         profiles: async () => (await executions.pools()).flatMap((pool) => pool.baseProfiles),
         ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
       })
-const store = new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') })
+// docs/specs/files.md, "The server": the files' bucket; without it, the server does not start.
+const store = new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') }, 12, Files.fromEnv(process.env))
 const executions = new ExecutionManager({
   kube,
   signingKey: privateKeyFrom(readFileSync(required('SIGNING_KEY_FILE'), 'utf8')),

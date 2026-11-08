@@ -3,9 +3,9 @@
 // token, header, query string, anchor byte or exception message.
 import { UUID, cursor } from './json.ts'
 
-const operations = new Set(['admission', 'capture', 'dispatch', 'connect', 'recover', 'renew', 'anchor', 'project', 'shutdown'])
+const operations = new Set(['admission', 'capture', 'dispatch', 'connect', 'recover', 'renew', 'anchor', 'project', 'shutdown', 'sweep'])
 const outcomes = new Set(['accepted', 'refused', 'succeeded', 'failed', 'blocked', 'unclean'])
-const classes = new Set(['database', 'transport', 'validation', 'deadline', 'conflict', 'unknown'])
+const classes = new Set(['database', 'transport', 'validation', 'deadline', 'conflict', 'files', 'unknown'])
 const identifiers = ['actor', 'workstream', 'session', 'execution', 'connection', 'command'] as const
 
 export function telemetry(input: Record<string, unknown>, sink: (line: string) => void): void {

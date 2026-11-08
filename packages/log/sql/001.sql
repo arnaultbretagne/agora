@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS anchors (
  id uuid PRIMARY KEY, workstream uuid NOT NULL REFERENCES workstreams(id), execution uuid NOT NULL, session uuid,
  metadata jsonb NOT NULL, content bytea NOT NULL, time timestamptz NOT NULL DEFAULT now()
 );
+-- Files (docs/specs/files.md): one row per object in R2, named by the SHA-256 of its bytes.
+CREATE TABLE IF NOT EXISTS files (
+ sha256 text PRIMARY KEY CHECK(sha256 ~ '^[0-9a-f]{64}$'), size bigint NOT NULL CHECK(size >= 0), time timestamptz NOT NULL DEFAULT now()
+);
+-- Where an entry holds a file's reference ("References"): what tells who may read a file, and what the sweep keeps.
+ALTER TABLE entries ADD COLUMN IF NOT EXISTS files jsonb;
+CREATE INDEX IF NOT EXISTS entries_files ON entries USING gin (files jsonb_path_ops) WHERE files IS NOT NULL;
+-- An anchor's bytes are a file in R2, its record names it ("References"). A record stored before keeps its bytes
+-- in `content` until they move.
+ALTER TABLE anchors ADD COLUMN IF NOT EXISTS file text REFERENCES files(sha256);
+ALTER TABLE anchors ALTER COLUMN content DROP NOT NULL;
 -- A Workstream keeps its last anchor per harness (docs/specs/log.md, "Storage"): those stored before it go.
 DELETE FROM anchors a USING (
  SELECT id, row_number() OVER (PARTITION BY workstream, metadata->>'harness' ORDER BY time DESC, id DESC) AS rank FROM anchors
@@ -163,8 +174,8 @@ $$;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS objects_text ON objects USING gin (transcript_text(type, object) gin_trgm_ops)
  WHERE kind = 'element' AND type IN ('user', 'agent_message_chunk', 'tool');
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM PUBLIC;
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,objects,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings FROM PUBLIC;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;
 -- Only the log's roles connect, besides the owner applying this file.
 DO $$ BEGIN
@@ -173,8 +184,9 @@ DO $$ BEGIN
 END $$;
 GRANT USAGE ON SCHEMA public TO agora_writer,agora_projector,agora_anchors;
 GRANT SELECT(id,owner,last_position,parent,root,depth), INSERT(id,owner,parent,root,depth), UPDATE(last_position) ON workstreams TO agora_writer;
-GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal),
- INSERT(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_writer;
+GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files),
+ INSERT(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files) ON entries TO agora_writer;
+GRANT SELECT(sha256,size,time), INSERT(sha256,size) ON files TO agora_writer;
 GRANT SELECT(workstream,id,kind,target,fingerprint,answer,position,execution,claim_name), INSERT(workstream,id,kind,target,fingerprint,answer,position,execution,claim_name) ON commands TO agora_writer;
 GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position), INSERT(id,workstream,execution,acp_id,opened_position) ON sessions TO agora_writer;
 GRANT SELECT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256,time), INSERT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256) ON diagnostics TO agora_writer;
@@ -182,7 +194,7 @@ GRANT UPDATE(ended_position) ON sessions TO agora_writer;
 GRANT SELECT(id,workstream,execution,session,metadata,time) ON anchors TO agora_writer;
 GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
 GRANT SELECT(workstream,last_position,reset_position), INSERT(workstream), UPDATE(last_position,reset_position) ON threads TO agora_projector;
-GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal) ON entries TO agora_projector;
+GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files) ON entries TO agora_projector;
 GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type,position), INSERT(workstream,projector,kind,id,object,first_position,last_position,type,position), UPDATE(object,first_position,last_position,type,position) ON objects TO agora_projector;
 REVOKE ALL ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION transcript_user_text(jsonb), transcript_text(text, jsonb), transcript(uuid[]) TO agora_projector;
@@ -192,7 +204,9 @@ GRANT DELETE ON checkpoints TO agora_projector;
 GRANT SELECT(owner,last_position), INSERT(owner), UPDATE(last_position) ON lists TO agora_projector;
 GRANT SELECT(workstream,owner,position,changed_at,title,row), INSERT(workstream,owner,position,changed_at,title,row), UPDATE(position,changed_at,title,row) ON listings TO agora_projector;
 GRANT SELECT(id,owner) ON workstreams TO agora_anchors;
-GRANT SELECT(workstream,execution,session,kind,position) ON entries TO agora_anchors;
+GRANT SELECT(workstream,execution,session,kind,position,files) ON entries TO agora_anchors;
 GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position) ON sessions TO agora_anchors;
-GRANT SELECT(id,workstream,execution,session,metadata,content,time), INSERT(id,workstream,execution,session,metadata,content) ON anchors TO agora_anchors;
+GRANT SELECT(id,workstream,execution,session,metadata,content,file,time), INSERT(id,workstream,execution,session,metadata,content,file) ON anchors TO agora_anchors;
+-- The anchor role stores the anchors' files and sweeps (docs/specs/files.md, "The sweep").
+GRANT SELECT(sha256,size,time), INSERT(sha256,size), DELETE ON files TO agora_anchors;
 GRANT DELETE ON anchors TO agora_anchors;

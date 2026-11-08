@@ -13,12 +13,18 @@ import { Pool } from 'pg'
 import { createAnchorReceiver, ExecutionManager, type CredentialSource, type ManagerOptions } from '@agora/executions'
 import { GrantSigner } from '@agora/credentials'
 import { generateKeyPairSync } from 'node:crypto'
-import { keys } from '@agora/testkit'
+import { FakeS3, keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
-import { Delegations, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
+import { Delegations, Files, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
 
 export const POOL = 'mock-test'
+
+let shared: Promise<FakeS3> | null = null
+/** The bucket the tests of one file share (docs/specs/files.md): one object per content, so they do not collide. */
+export function bucket(): Promise<FakeS3> {
+  return (shared ??= new FakeS3().start())
+}
 let counter = 0
 
 export async function until<T>(what: string, find: () => Promise<T | undefined | null | false> | T | undefined | null | false, timeoutMs = 15_000): Promise<T> {
@@ -212,6 +218,8 @@ export interface LabOptions {
   readonly executions?: Partial<ManagerOptions>
   /** The delegations' engine, as the server attaches it: through its start, and each restart's. */
   readonly delegations?: ConstructorParameters<typeof Delegations>[1]
+  /** The files' bucket (docs/specs/files.md); the file's shared one by default. */
+  readonly s3?: FakeS3
 }
 
 /** Agora in this process, on a FakeKube whose Pods run real bridges with the mock agent. */
@@ -231,7 +239,10 @@ export class Lab {
   private api: HttpServer | null = null
   url = ''
 
-  private constructor(options: LabOptions, pg: PgRelay | null) {
+  readonly s3: FakeS3
+
+  private constructor(options: LabOptions, pg: PgRelay | null, s3: FakeS3) {
+    this.s3 = s3
     this.options = options
     this.pg = pg
     this.keys = options.keys ?? keys()
@@ -241,7 +252,7 @@ export class Lab {
       writer.hostname = '127.0.0.1'
       writer.port = String(pg.port)
     }
-    this.store = new LogStore({ ...options.db.urls, writer: writer.href })
+    this.store = new LogStore({ ...options.db.urls, writer: writer.href }, 12, new Files(s3.options()))
     const relayed = (service: string, pod: string): string => {
       const relay = this.relays.get(pod)
       return relay ? `127.0.0.1:${String(relay.port)}` : this.kube.address(service, pod)
@@ -277,7 +288,7 @@ export class Lab {
   static async start(options: LabOptions): Promise<Lab> {
     const target = new URL(options.db.urls.writer)
     const pg = options.pgRelay ? await new PgRelay({ host: target.hostname, port: Number(target.port || 5432) }).listen() : null
-    const lab = new Lab(options, pg)
+    const lab = new Lab(options, pg, options.s3 ?? (await bucket()))
     if (options.relay) {
       // A relay per Pod, in place before its claim is ready.
       const factory = lab.kube.bridgeFactory
@@ -409,7 +420,8 @@ export class Server {
     child.stderr?.on('data', (chunk: Buffer) => (this.output += chunk.toString()))
   }
 
-  static async start(options: { db: Db; api: FakeKubeApi; keys: { privateKey: KeyObject }; env?: Record<string, string> }): Promise<Server> {
+  static async start(options: { db: Db; api: FakeKubeApi; keys: { privateKey: KeyObject }; env?: Record<string, string>; s3?: FakeS3 }): Promise<Server> {
+    const s3 = options.s3 ?? (await bucket())
     const dir = mkdtempSync(join(tmpdir(), 'lab-'))
     writeFileSync(join(dir, 'signing.pem'), options.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }))
     writeFileSync(join(dir, 'token'), 'test')
@@ -430,6 +442,7 @@ export class Server {
         ANCHOR_PORT: String(anchorPort),
         MCP_PORT: String(mcpPort),
         TEST_ROUTES: 'true',
+        ...s3.env(),
         ...options.env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

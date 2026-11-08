@@ -14,7 +14,7 @@ projected from it.**
 | --- | --- |
 | `Workstreams` (`@agora/log`) | Accepts commands, writes entries, decides every dispatch, captures every received line, recovers after a restart, projects the views and serves the thread. |
 | `ExecutionManager` (`@agora/executions`) | The execution mechanics (`executions.md`): claims, bridge connections, deadlines, anchor authentication. It keeps no history, sends a line only when asked, and hands each received line over before reading the next. |
-| PostgreSQL | The log, the views, the thread and the anchor records, behind four roles; the files' bytes are in R2 (`files.md`). |
+| PostgreSQL | The log, the views, the thread and the anchor records, behind three roles; the files' bytes are in R2 (`files.md`). |
 | The server (`apps/server`) | Mounts both with PostgreSQL, serves the client (`assistant-ui.md`) and the API. With its test routes open (`TEST_ROUTES` `true`), it also serves a page that plays every case. |
 
 ## Entries
@@ -94,7 +94,7 @@ Closed reasons: `invalid_utf8`, `invalid_json`, `invalid_envelope`, `batch`, `wr
 `invalid_body`, `unsafe_id`, `line_too_large`, `unsupported_json_value`, `transport_error`,
 `response_timeout`, `deadline_refused`, `startup_failed`, `restore_failed`, `claim_conflict`,
 `claim_missing`, `adapter_exited`, `agent_failed`, `instance_changed`, `deadline_reached`, `stopped`, `replaced`,
-`anchor_missing`, `credentials_refused`. No parser, database or transport message becomes a reason.
+`anchor_missing`, `credentials_refused`, `files_unavailable`. No parser, database or transport message becomes a reason.
 
 ### Dispatch and recovery
 
@@ -466,12 +466,11 @@ UID TokenReview returns, even with no connection open. Its bytes are stored in R
 | --- | --- | --- |
 | `agora_writer` | Read and insert Workstreams, entries, commands, Sessions, diagnostics, `files` rows; read anchor metadata; update a Workstream's last entry position and a Session's end. | Update or delete an entry or a command; delete `files` rows; write views, the thread's positions or checkpoints. |
 | `agora_projector` | Read Workstream ids, owners and lines, and entries; write views with their thread positions, checkpoints and the lists; update the thread's last position and last reset, and a list's last position. | Write entries, commands or Sessions; read anchors; delete the thread's row or a list's rows. |
-| `agora_anchors` | Read Workstream ids and owners, and the execution and Session columns; read, insert and delete anchors; insert `files` rows. | Write entries, commands, Sessions, views; update an anchor. |
-| `agora_files` | Read entries' `files` and Workstream owners, anchors' `file`; read and delete `files` rows. | Write entries, commands, Sessions, views or anchors. |
+| `agora_anchors` | Read Workstream ids and owners, the execution and Session columns and entries' `files`; read, insert and delete anchors; read, insert and delete `files` rows, for the anchors' files and the sweep (`files.md`). | Write entries, commands, Sessions, views; update an anchor. |
 
 | Rule | Detail |
 | --- | --- |
-| Logins | The four roles are NOLOGIN. The server connects with one login per role; no login owns a table or inherits a migration or superuser privilege. The schema is applied by the database owner. |
+| Logins | The three roles are NOLOGIN. The server connects with one login per role; no login owns a table or inherits a migration or superuser privilege. The schema is applied by the database owner. |
 | Login creation | Tolerates a concurrent creation; the password is set from a SCRAM verifier, never plain text in a statement. |
 | `bigint` | Read as decimal strings, set once for every connection; position arithmetic uses JavaScript `bigint`. |
 | Tests | Run under the real logins, each in its own database. |

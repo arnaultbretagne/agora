@@ -20,6 +20,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `settings.test.ts` | A Session's settings and commands, Configure, the catalogue's: L47–L53. |
 | `scope.test.ts` | Scope and the token that follows it, across a restart: C17–C19, C21, L54, L55. |
 | `restore.test.ts` | An anchor placed before `initialize`, onto an adapter restarted to read it: E29. |
+| `files.test.ts` | Files in R2: references, the bucket failing, anchors, the route, the sweep, the move: B1–B10. |
 | `continuing.test.ts` | A Workstream continued: the anchor found by harness, the exchanges it lacks given with the first prompt, a command left alone, the length bound, a restore refused: L57–L64. |
 | `support.ts` | A database per test; Agora in this process (`Lab`) or as the real lab process (`Server`); relays that cut a bridge connection or lose a COMMIT's reply. |
 | `run.ts` | Provisions the template database and the three logins, runs the tests four files at once (`LOG_TEST_CONCURRENCY`, 1 for one by one), removes everything. |

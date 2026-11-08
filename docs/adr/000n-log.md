@@ -99,8 +99,8 @@ flowchart LR
 - Changing a projection bumps its version and rebuilds it.
 - Invalid content is never an ACP entry. Safe diagnostics and ordered correlated failures keep
   the incident visible and reconstructible without retaining that content.
-- Writing the journal, projecting it, recording anchors and sweeping files use separate database
-  roles.
+- Writing the journal, projecting it, and recording anchors with their files use three separate
+  database roles.
 - Agora never interprets the harness's files inside an anchor.
 - Exchanges given as text carry what was said, not the agent's state: no tool result, no file.
   They are bounded (200,000 characters, the most recent kept) and paid once, with the first
