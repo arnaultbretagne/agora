@@ -627,19 +627,15 @@ const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.
 
 /**
  * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), in the order offered:
- * each offered repository with None, Read and, when offered, Write; each offered service off or on.
+ * each offered repository with None, Read and, when offered, Review and Write; each offered service off or on.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
   return offered.map((profile) => {
-    const repo = /^github:([^:]+):(read|write)$/.exec(profile)
+    const repo = /^github:([^:]+):(read|review|write)$/.exec(profile)
     if (repo === null) return { key: profile, name: SERVICE_NAMES[profile] ?? profile, repository: false, choices: [{ label: 'Off', profile: null }, { label: 'On', profile }] }
-    const read = { label: 'Read', profile: `github:${repo[1]!}:read` }
-    return {
-      key: `github:${repo[1]!}`,
-      name: repo[1]!,
-      repository: true,
-      choices: [{ label: 'None', profile: null }, read, ...(repo[2] === 'write' ? [{ label: 'Write', profile }] : [])],
-    }
+    const level = (label: string) => ({ label, profile: `github:${repo[1]!}:${label.toLowerCase()}` })
+    const levels = repo[2] === 'write' ? ['Read', 'Review', 'Write'] : repo[2] === 'review' ? ['Read', 'Review'] : ['Read']
+    return { key: `github:${repo[1]!}`, name: repo[1]!, repository: true, choices: [{ label: 'None', profile: null }, ...levels.map(level)] }
   })
 }
 

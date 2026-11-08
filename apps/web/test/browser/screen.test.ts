@@ -401,7 +401,7 @@ test('U34 an access picked in the draft: carried by the Create, shown once the S
   assert.equal(await accessPicker(page).innerText(), 'Internet', 'on by default')
   await accessPicker(page).click()
   assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'true', 'a right among the others, on')
-  assert.deepEqual(await page.getByRole('group', { name: 'owner/a' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read', 'Write'])
+  assert.deepEqual(await page.getByRole('group', { name: 'owner/a' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read', 'Review', 'Write'])
   assert.deepEqual(await page.getByRole('group', { name: 'owner/b' }).getByRole('menuitemradio').allInnerTexts(), ['None', 'Read'])
   await accessChoice(page, 'owner/a', 'Write').click()
   // The menu, still open, hides the rest of the page from the accessibility tree.

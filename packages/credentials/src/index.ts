@@ -19,6 +19,7 @@ export {
   mcpServers,
   offeredProfiles,
   offers,
+  type GitHubIdentity,
   type Grant,
   type GrantSignerOptions,
   type McpServer,
