@@ -51,7 +51,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `chatgpt` | `chatgpt.com`, only `/backend-api/codex…` and `/backend-api/wham…`: what codex uses. The session reaches the whole ChatGPT account, conversations included. |
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
-| `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
+| `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. And Agora's MCP endpoint, as `agora:read`'s grant: Agora opens `propose_merge` to it (`merge.md`). |
 | `github:owner/repo:review` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` only. As the reviewer ("GitHub identities"): its approval is the review `main` requires; no git push, and no merge. |
 | `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
@@ -189,8 +189,8 @@ rule fails, the request stops at the gateway; otherwise the gateway sets the hos
 GitHub has three routes per host: one per identity for what a grant covers, one for the rest. On
 `api.github.com` and `github.com`, the listener sets `x-gateway-grant` before a route is picked —
 `contributor` when the rule above would let the request through with a grant of the contributor's,
-else `reviewer` when it would with one of the reviewer's, `none` otherwise — overwriting whatever
-the sandbox sent. A grant naming no identity is the contributor's. `github-api` and `github-git`
+else `reviewer` when it would with one of the reviewer's, else `operator` with Agora's own `merge`
+grant, `none` otherwise — overwriting whatever the sandbox sent. A grant naming no identity is the contributor's. `github-api` and `github-git`
 take `contributor`, `github-api-reviewer` and `github-git-reviewer` take `reviewer`: a route with a
 header match outranks the one without. `github-api-public` and `github-git-public` take the rest.
 The header only steers: each route checks the request again, against its own identity's grants, so
@@ -254,7 +254,11 @@ App's installation reaches; the App's permissions bound what it may do there.
 - **The commits.** git commits as the contributor ("What the template adds"), so a commit shows
   the actor that pushed it.
 
-The operator's own credential reaches no execution.
+The operator's own credential reaches no execution: only Agora's own `merge` grant, `identity` `operator`, reaches the route that sets it, `github-api-operator` — to merge from the card (`merge.md`).
+
+| Identity | Who holds it | Route | Credential |
+| --- | --- | --- | --- |
+| `operator` | The server alone, its `merge` grant ("Limits") | `github-api-operator`, `x-gateway-grant: operator` | The operator's PAT, as `Authorization: Bearer`. |
 
 ### Kubernetes
 
@@ -533,6 +537,7 @@ provider's credential.
 | Element | Rule |
 | --- | --- |
 | The `limits` profile | Agora's own: a `GET` on the exact path of each endpoint above, nothing else. The catalogue does not know it: a Create or a Scope naming it is refused, `unknown_profile`. |
+| The `merge` profile | Agora's own, for the merge card (`merge.md`), bound to the server's address like `limits`: on `api.github.com`, `GET` of a pull request and of its reviews, `PUT` of its merge, nothing else, as `identity` `operator` ("GitHub identities"). Unknown to the catalogue: `unknown_profile`. |
 | Which accounts | The base profiles of the catalogue's pools that have an endpoint. |
 | When | When the interface asks, at most once every 5 minutes, one read at a time; each account on its own, 10 seconds at most. |
 | A failed read | The windows before it, kept, `stale`, with why. An account never read: no window, `stale`, why. |

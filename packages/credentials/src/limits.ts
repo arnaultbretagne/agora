@@ -118,6 +118,10 @@ export interface GatewayGet {
   readonly timeoutMs: number
   /** The roots the gateway's certificates are checked against; the process's own when absent. */
   readonly ca?: string
+  /** `GET` when absent. */
+  readonly method?: string
+  /** A JSON body, for a method that carries one. */
+  readonly body?: string
 }
 
 const MAX_ANSWER = 1024 * 1024
@@ -146,8 +150,16 @@ export async function getThroughGateway(input: GatewayGet): Promise<{ status: nu
       {
         host: input.host,
         path: input.path,
-        method: 'GET',
-        headers: { host: input.host, accept: 'application/json', 'user-agent': 'agora', authorization: 'Bearer agora-placeholder', connection: 'close', ...input.headers },
+        method: input.method ?? 'GET',
+        headers: {
+          host: input.host,
+          accept: 'application/json',
+          'user-agent': 'agora',
+          authorization: 'Bearer agora-placeholder',
+          connection: 'close',
+          ...(input.body === undefined ? {} : { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(input.body)) }),
+          ...input.headers,
+        },
         // No agent: `agent: false` would make a fresh one, which dials the host itself and ignores this.
         createConnection: () => tlsConnect({ socket: tunnel, servername: input.host, ...(input.ca === undefined ? {} : { ca: input.ca }) }),
         signal,
@@ -165,7 +177,7 @@ export async function getThroughGateway(input: GatewayGet): Promise<{ status: nu
       },
     )
     req.once('error', reject)
-    req.end()
+    req.end(input.body)
   })
 }
 

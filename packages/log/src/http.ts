@@ -173,7 +173,7 @@ export async function logHttp(
       reply(200, { id })
       return true
     }
-    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials|row|read)$/.exec(url.pathname)
+    const route = /^\/api\/workstreams\/([^/]+)\/(commands|control|thread|entries|credentials|row|read|merge)$/.exec(url.pathname)
     if (!route) return reply(404, { reason: 'unknown_route' }), true
     const workstream = uuid(decodeURIComponent(route[1]!)),
       verb = route[2]
@@ -200,6 +200,12 @@ export async function logHttp(
       }
       const answer = await read(workstreams.projections.store.projector, workstream, value('offset', 1, 1, 1_000_000_000), value('limit', READ_LIMIT.lines, 1, READ_LIMIT.lines))
       return reply(200, answer), true
+    }
+    if (req.method === 'GET' && verb === 'merge') {
+      // docs/specs/merge.md, "The card": the pending card's state, read from GitHub.
+      if (!(await workstreams.projections.belongs(workstream, owned))) throw new Error('unknown_workstream')
+      const state = workstreams.merges === null ? null : await workstreams.merges.state(workstream)
+      return state === null ? reply(404, { reason: 'no_merge' }) : reply(200, state), true
     }
     if (req.method === 'GET' && verb === 'row') {
       // docs/specs/log.md, "HTTP": a Workstream's row, so that a client climbs its line.

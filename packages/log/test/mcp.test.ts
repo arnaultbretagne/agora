@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { keys } from '@agora/testkit'
-import { CALLER_HEADER, createMcpServer } from '../src/index.ts'
+import { CALLER_HEADER, createMcpServer, Merges } from '../src/index.ts'
 import { database, FakeKube, grants, Lab } from './support.ts'
 import { craft } from './transcripts.ts'
 
@@ -111,4 +111,22 @@ test('M7 search with the pattern `(`: invalid_pattern; with head_limit 500: inva
   assert.deepEqual([pattern.isError, text(pattern)], [true, 'invalid_pattern'])
   const limit = (await c.callTool({ name: 'search', arguments: { pattern: 'quokka', head_limit: 500 } })) as Text
   assert.deepEqual([limit.isError, text(limit)], [true, 'invalid_query: head_limit'])
+})
+
+test('G1 tools/list with a repository’s write: propose_merge, which proposes on that repository; with its read alone: none, not_allowed', async (t) => {
+  const pull = { number: 7, title: 'Add x', url: 'https://github.com/octo/app/pull/7', open: true, merged: false, draft: false, base: 'main', head: 'feat/x', sha: 'abc', author: 'agora-contributor[bot]', mergeableState: 'clean', mergeSha: '' }
+  const github = { pull: async () => pull, state: async () => ({ state: 'ready' as const, pull }), merge: async () => ({ merged: true as const, sha: 'def' }) }
+  const writer = await started(t, ['github:octo/app:write'])
+  new Merges(writer.lab.workstreams, { github })
+  const c = await client(t, writer.url, writer.execution)
+  const { tools } = await c.listTools()
+  assert.deepEqual(tools.map((tool) => [tool.name, Object.keys(tool.inputSchema.properties ?? {}), tool.inputSchema.required]), [['propose_merge', ['repo', 'number'], ['repo', 'number']]])
+  assert.match(text(await c.callTool({ name: 'propose_merge', arguments: { repo: 'octo/app', number: 7 } })), /^proposed octo\/app#7:/)
+  const other = await c.callTool({ name: 'propose_merge', arguments: { repo: 'octo/other', number: 7 } })
+  assert.deepEqual([text(other), other.isError], ['not_allowed', true])
+  const reader = await started(t, ['github:octo/app:read'])
+  new Merges(reader.lab.workstreams, { github })
+  const r = await client(t, reader.url, reader.execution)
+  assert.deepEqual((await r.listTools()).tools, [])
+  await assert.rejects(r.callTool({ name: 'propose_merge', arguments: { repo: 'octo/app', number: 7 } }), /not_allowed/)
 })

@@ -10,6 +10,8 @@ import { MAX_LINE } from './acp.ts'
 import { object } from './json.ts'
 import type { Workstreams } from './workstreams.ts'
 import { Refused as DelegationRefused } from './delegation.ts'
+import { Refused as MergeRefused } from './merges.ts'
+import { GITHUB_WRITE } from '@agora/credentials'
 
 /** The header the gateway sets from the token's subject, over whatever the sandbox sent. */
 export const CALLER_HEADER = 'x-agora-execution'
@@ -106,6 +108,24 @@ const SUBMIT: Tool = {
       result: { type: 'object', description: 'The object it asked for, in the shape it gave.' },
     },
     required: ['message'],
+    additionalProperties: false,
+  },
+}
+
+/** Listed to an execution holding a repository's write, for those repositories (docs/specs/merge.md). */
+const PROPOSE_MERGE: Tool = {
+  name: 'propose_merge',
+  description:
+    'Ask the person to merge a pull request you wrote: Agora shows them a card with its state as GitHub gives it, and they merge it from there. ' +
+    'Propose it once it is ready — reviewed, its checks green; the card waits for them and the call answers at once. ' +
+    'Do not wait or poll: what happens comes back to you as a message from Agora. Your repositories with write only.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      repo: { type: 'string', description: 'owner/name' },
+      number: { type: 'integer', minimum: 1, description: 'The pull request’s number.' },
+    },
+    required: ['repo', 'number'],
     additionalProperties: false,
   },
 }
@@ -230,7 +250,10 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
     return reply(res, 400, 'invalid_message')
   }
   const delegations = workstreams.delegations
-  const tools = caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? [])))
+  const tools = [
+    ...caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? []))),
+    ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p)) ? [PROPOSE_MERGE] : []),
+  ]
   const execution = subject![1]!
   const server = new Server({ name: 'agora', version: '1.0.0' }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...tools] }))
@@ -239,6 +262,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
     if (tool === undefined) throw new McpError(ErrorCode.InvalidParams, 'not_allowed')
     const args = request.params.arguments ?? {}
     try {
+      if (tool.name === 'propose_merge') return { content: [{ type: 'text', text: await workstreams.merges!.propose({ workstream: caller.workstream, execution, profiles: caller.profiles }, args) }] }
       if (tool.name === 'delegate' || tool.name === 'submit') {
         const who = { workstream: caller.workstream, execution, profiles: caller.profiles }
         if (tool.name === 'submit') return { content: [{ type: 'text', text: await delegations!.submit(who, args) }] }
@@ -257,7 +281,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
       return { content: [{ type: 'text', text: await call(workstreams, owner, tool.name, args) }] }
     } catch (error) {
       const reason =
-        error instanceof Refused || error instanceof DelegationRefused
+        error instanceof Refused || error instanceof DelegationRefused || error instanceof MergeRefused
           ? error.message
           : error instanceof Error && ['invalid_pattern', 'unknown_workstream'].includes(error.message)
             ? error.message

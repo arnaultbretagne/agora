@@ -24,6 +24,10 @@ let browser: Browser
 const prefectAsked: { parameters: Record<string, unknown>; idempotency_key: string }[] = []
 let prefect: HttpServer
 const PERSON = 'person@example.org'
+/** GitHub, standing in for the merge card (docs/specs/merge.md): each pull request's state, every merge asked. */
+const pulls = new Map<number, { mergeable_state: string; merged: boolean }>()
+const mergesAsked: { number: number; body: Record<string, unknown> }[] = []
+let github: HttpServer
 
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
@@ -50,10 +54,30 @@ before(async () => {
     })
   })
   await new Promise<void>((resolve) => prefect.listen(0, '127.0.0.1', resolve))
+  github = createServer((req, res) => {
+    const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    let text = ''
+    req.on('data', (chunk: Buffer) => (text += chunk.toString()))
+    req.on('end', () => {
+      const m = /^\/repos\/owner\/a\/pulls\/([0-9]+)(\/reviews|\/merge)?/.exec(req.url ?? '')
+      const pull = m ? pulls.get(Number(m[1])) : undefined
+      if (!m || !pull) return reply(404, { message: 'Not Found' })
+      const number = Number(m[1])
+      if (m[2] === '/reviews') return reply(200, [])
+      if (m[2] === '/merge') {
+        mergesAsked.push({ number, body: JSON.parse(text) as Record<string, unknown> })
+        pull.merged = true
+        return reply(200, { merged: true, sha: 'f00d1234567890', message: 'Pull Request successfully merged' })
+      }
+      reply(200, { number, title: `Add feature ${String(number)}`, html_url: `https://github.com/owner/a/pull/${String(number)}`, state: pull.merged ? 'closed' : 'open', merged: pull.merged, draft: false, base: { ref: 'main' }, head: { ref: `feat/${String(number)}`, sha: `head${String(number)}` }, user: { login: 'agora-contributor[bot]' }, mergeable_state: pull.mergeable_state, merge_commit_sha: pull.merged ? 'f00d1234567890' : null })
+    })
+  })
+  await new Promise<void>((resolve) => github.listen(0, '127.0.0.1', resolve))
+  const merge = { GITHUB_TEST_API: `http://127.0.0.1:${String((github.address() as AddressInfo).port)}`, POD_IP: '127.0.0.1' }
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -61,6 +85,7 @@ before(async () => {
 
 after(async () => {
   prefect?.close()
+  github?.close()
   await browser?.close()
   await server?.stop()
   await c?.close()
@@ -1461,4 +1486,48 @@ test('U78 tools in a row folded, closed, a text between them, what waits for the
   const alone = thread(page).locator('[data-role="assistant"]').last()
   await alone.getByRole('button', { name: /Edit demo\.txt/ }).waitFor()
   assert.equal(await alone.locator('[data-tool-fold]').count(), 0, 'a tool alone')
+})
+
+test('G8 a merge card: the pull request as a link, its state, Merge closed while it waits for a review, open once ready; merged, squash; a card a message cancels', async () => {
+  const page = await fresh()
+  pulls.set(7, { mergeable_state: 'blocked', merged: false })
+  pulls.set(8, { mergeable_state: 'clean', merged: false })
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await accessPicker(page).click()
+  await accessChoice(page, 'owner/a', 'Write').click()
+  await page.keyboard.press('Escape')
+  await send(page, `/propose_merge ${JSON.stringify({ repo: 'owner/a', number: 7 })}`)
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const card = thread(page).locator('[data-merge="pending"]')
+  await card.waitFor()
+  await card.locator('[data-merge-state="review"]').waitFor()
+  assert.equal(await card.getByRole('link', { name: 'Add feature 7' }).getAttribute('href'), 'https://github.com/owner/a/pull/7')
+  assert.match(await card.locator('[data-merge-state]').innerText(), /owner\/a#7 · Waiting for a review/)
+  assert.ok(await card.getByRole('button', { name: 'Merge' }).isDisabled())
+  await shot(page, 'merge-card-review')
+  // Approved meanwhile: the card reads GitHub again (its state stands 10 s on the server).
+  pulls.get(7)!.mergeable_state = 'clean'
+  await until('the card ready', async () => {
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    return (await card.locator('[data-merge-state="ready"]').count()) === 1
+  }, 30_000)
+  assert.ok(await card.getByRole('button', { name: 'Merge' }).isEnabled())
+  await shot(page, 'merge-card-ready')
+  await card.getByRole('button', { name: 'Merge' }).click()
+  const merged = thread(page).locator('[data-merge="merged"]')
+  await merged.waitFor()
+  assert.match(await merged.innerText(), /Merged · f00d123/)
+  assert.deepEqual(mergesAsked, [{ number: 7, body: { sha: 'head7', merge_method: 'squash' } }])
+  await thread(page).getByText('Pull request owner/a#7 merged (squash): f00d1234567890.').waitFor()
+  await shot(page, 'merge-card-merged')
+  // Another, cancelled by a message.
+  await until('the agent idle', async () => (await page.getByRole('textbox').count()) > 0)
+  await send(page, `/propose_merge ${JSON.stringify({ repo: 'owner/a', number: 8 })}`)
+  await thread(page).locator('[data-merge="pending"]').waitFor()
+  await send(page, 'not now, fix the tests first')
+  await thread(page).locator('[data-merge="cancelled"]').waitFor()
+  assert.equal(mergesAsked.length, 1)
+  await shot(page, 'merge-card-cancelled')
+  await page.context().close()
 })

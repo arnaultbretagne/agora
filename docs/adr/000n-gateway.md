@@ -232,6 +232,7 @@ an execution with write could merge, or push to `main`, unreviewed (read through
 | Machine users | One free per person, long-lived PATs. |
 | One App per identity, contributor and reviewer (kept) | Each installed once, every repository, new ones included. GitHub's own rules on `main` do the rest: one approval required, from someone other than the last pusher, and updates restricted to the operator. Measured on 2026-11-08 on throwaway branches of `agora` with the same rules: the contributor's approval of its own pull request refused; the reviewer's made it mergeable; with updates restricted, both Apps' merges refused ("Cannot update this protected ref") and the operator's accepted; without, the contributor merged once the reviewer had approved. The reviewer has contents write: GitHub counts an approval only from an actor who may write (its documentation, for people). |
 | A code owner's review required (dropped) | The operator's rule: the reviewer's approval is enough, the merge is the operator's alone. |
+| The merge card's click, as the operator (kept) | The operator's PAT on one route, `github-api-operator`, which only Agora's own `merge` grant reaches — a pull request and its reviews read, its merge —, signed for the server's address: no execution is ever given the identity. Agora merges only when GitHub says the pull request is mergeable without the operator's bypass, so the click cannot skip the reviewer. A third App able to bypass was not taken: the merge would no longer be the operator's. |
 
 ### Read and write on one MCP server (2026-10-26)
 
