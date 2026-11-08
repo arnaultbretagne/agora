@@ -515,6 +515,18 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, `Delegated: ${answer.text}`)
       return 'end_turn'
     }
+    case '/propose_merge': {
+      // /propose_merge {json}: a `propose_merge` call (docs/specs/merge.md), as `/delegate` makes its own.
+      const args = JSON.parse(text.trim().slice('/propose_merge'.length).trim() || '{}') as Record<string, unknown>
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'propose_merge', kind: 'other', status: 'in_progress', rawInput: args })
+      const answer = await callAgora('propose_merge', args, turn)
+      if (turn.cancelled) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: answer.isError ? 'failed' : 'completed', rawOutput: answer.text, content: [{ type: 'content', content: { type: 'text', text: answer.text } }] })
+      remember(session, 'agent', `Proposed: ${answer.text}`)
+      say(session.id, `Proposed: ${answer.text}`)
+      return 'end_turn'
+    }
     case '/recall': {
       const said = session.history.filter((entry) => entry.role === 'user').map((entry) => `"${entry.text}"`)
       const text = `You told me, in order: ${said.join(', ')}.`

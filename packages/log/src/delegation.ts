@@ -194,7 +194,7 @@ export class Delegations {
   // ---------------------------------------------------------------- a message
 
   /** A message of Agora's: its line, then the words, by the primitive the person uses; its Workstream continued if it must be. */
-  private async write(to: string, id: string, mark: Mark, agoraLine: string, words: string): Promise<Answer> {
+  async write(to: string, id: string, mark: Mark, agoraLine: string, words: string): Promise<Answer> {
     const answer = await this.workstreams.command(
       to,
       { id, kind: 'Write', target: {}, body: { prompt: [{ type: 'text', text: agoraLine, _meta: { [FROM_META]: mark } }, { type: 'text', text: words }], mayWait: true } },

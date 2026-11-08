@@ -12,7 +12,7 @@ import { join, relative } from 'node:path'
 function defined(text: string): Set<string> {
   const out = new Set<string>()
   for (const line of text.split('\n')) {
-    const m = /^\|\s*([CDEFLMSU]\d+)\s*\|/.exec(line)
+    const m = /^\|\s*([CDEFGLMSU]\d+)\s*\|/.exec(line)
     if (m) out.add(m[1]!)
   }
   return out

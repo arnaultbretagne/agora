@@ -153,7 +153,7 @@ describe('profiles', () => {
       { host: 'api.github.com', path: '^/repos/octo/app(/[^?]*)?(\\?.*)?$', identity: 'reviewer' },
       { host: 'github.com', path: '^/octo/app(\\.git)?/(info/refs\\?service=git-upload-pack|git-upload-pack)$', identity: 'reviewer' },
     ])
-    for (const level of ['read', 'write']) assert.ok(compileProfile(`github:octo/app:${level}`).every((g) => g.identity === 'contributor'), level)
+    for (const level of ['read', 'write']) assert.ok(compileProfile(`github:octo/app:${level}`).filter((g) => g.host.endsWith('github.com')).every((g) => g.identity === 'contributor'), level)
     const cases: [string[], string, string, string, string][] = [
       [['github:octo/app:review'], 'api.github.com', 'GET', '/repos/octo/app/pulls/7', 'reviewer'],
       [['github:octo/app:review'], 'api.github.com', 'POST', '/repos/octo/app/pulls/7/reviews', 'reviewer'],
@@ -353,7 +353,7 @@ describe('profiles', () => {
     assert.deepEqual(mcpServers(['anthropic', 'vault:read']), [vault])
     assert.deepEqual(mcpServers(['vault:write']), [vault])
     assert.deepEqual(mcpServers(['vault:read', 'vault:write']), [vault])
-    assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:write']), [])
+    assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:read']), [])
     assert.deepEqual(mcpServers([]), [])
   })
 

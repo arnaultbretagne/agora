@@ -24,11 +24,11 @@ CREATE TABLE IF NOT EXISTS entries (
  CHECK((connection IS NULL) = (receive_ordinal IS NULL) OR receive_ordinal IS NULL)
 );
 -- An entry's kinds, set here so that a log of an older schema gets the newer ones: the delegations' facts and an
--- approval's expiry (docs/specs/delegation.md). Its rows are not checked again — every kind it held still is one.
+-- approval's expiry (docs/specs/delegation.md), a merge card's cancellation and outcome (docs/specs/merge.md). Its rows are not checked again — every kind it held still is one.
 DO $$ BEGIN
- IF coalesce((SELECT pg_get_constraintdef(oid) NOT LIKE '%question.expired%' FROM pg_constraint WHERE conrelid = 'entries'::regclass AND conname = 'entries_kind_check'), true) THEN
+ IF coalesce((SELECT pg_get_constraintdef(oid) NOT LIKE '%merge.refused%' FROM pg_constraint WHERE conrelid = 'entries'::regclass AND conname = 'entries_kind_check'), true) THEN
   ALTER TABLE entries DROP CONSTRAINT IF EXISTS entries_kind_check;
-  ALTER TABLE entries ADD CONSTRAINT entries_kind_check CHECK(kind IN ('command','acp','acp.dispatching','acp.sent','request.failed','execution.obtained','execution.failed','anchor.received','session.opened','session.ended','execution.connected','execution.break','execution.lost','execution.ended','question.expired','delegation.started','delegation.continued','delegation.result','delegation.reported')) NOT VALID;
+  ALTER TABLE entries ADD CONSTRAINT entries_kind_check CHECK(kind IN ('command','acp','acp.dispatching','acp.sent','request.failed','execution.obtained','execution.failed','anchor.received','session.opened','session.ended','execution.connected','execution.break','execution.lost','execution.ended','question.expired','question.cancelled','merge.merged','merge.refused','delegation.started','delegation.continued','delegation.result','delegation.reported')) NOT VALID;
  END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS entries_execution ON entries(execution,position);

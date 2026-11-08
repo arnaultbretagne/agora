@@ -116,6 +116,8 @@ export interface State {
 
 /** Whether a question's Ask is one of Agora's approvals (docs/specs/delegation.md, "Approval"). */
 export const isApproval = (ask: Entry | null): boolean => ask !== null && object(ask.content.body)?.kind === 'approval'
+/** Whether a question's Ask is a merge card (docs/specs/merge.md). */
+export const isMerge = (ask: Entry | null): boolean => ask !== null && object(ask.content.body)?.kind === 'merge'
 
 /** How long the approvals asked since `since` waited, those still pending counted until `now` (ms). */
 export function waited(state: State, since: string, now: number): number {
@@ -215,7 +217,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     const settles =
       (entry.kind === 'command' && content.kind === 'Answer') ||
       (entry.kind === 'command' && content.kind === 'Write' && content.waits !== true && isApproval(state.question)) ||
-      (entry.kind === 'question.expired' && state.question !== null && String(object(content)?.question) === state.question.position)
+      (['question.expired', 'question.cancelled'].includes(entry.kind) && state.question !== null && String(object(content)?.question) === state.question.position)
     if (settles) {
       if (isApproval(state.question)) {
         const open = state.waits.at(-1)
@@ -500,6 +502,7 @@ export class CoreProjection {
       if (entry.kind === 'command' && entry.content.kind === 'Ask') {
         const body = object(entry.content.body) ?? {}
         const approval = body.kind === 'approval'
+        const merge = body.kind === 'merge'
         put(
           'element',
           identity(entry.workstream, entry.position, 'question'),
@@ -511,6 +514,7 @@ export class CoreProjection {
             options: body.options,
             note: body.note === true,
             ...(approval ? { kind: 'approval', toolCallId: body.toolCallId ?? null, expiresAt: body.expiresAt } : {}),
+            ...(merge ? { kind: 'merge', repo: body.repo, number: schemaValue(body.number), url: body.url } : {}),
             status: 'pending',
           },
           entry.position,
@@ -529,6 +533,16 @@ export class CoreProjection {
         const id = identity(entry.workstream, String(object(entry.content)?.question), 'question')
         if (objects.get(id)?.object.status === 'pending') put('element', id, { ...objects.get(id)?.object, status: 'expired' }, entry.position)
         this.pendingQuestion = null
+      }
+      // A merge card cancelled by the person's message, then its outcome (docs/specs/merge.md).
+      if (entry.kind === 'question.cancelled') {
+        const id = identity(entry.workstream, String(object(entry.content)?.question), 'question')
+        if (objects.get(id)?.object.status === 'pending') put('element', id, { ...objects.get(id)?.object, status: 'cancelled' }, entry.position)
+      }
+      if (entry.kind === 'merge.merged' || entry.kind === 'merge.refused') {
+        const id = identity(entry.workstream, String(object(entry.content)?.question), 'question')
+        const outcome = entry.kind === 'merge.merged' ? { merged: true, sha: String(object(entry.content)?.sha ?? '') } : { merged: false, reason: String(object(entry.content)?.reason ?? '') }
+        if (objects.has(id)) put('element', id, { ...objects.get(id)?.object, outcome }, entry.position)
       }
       if (entry.kind === 'command' && entry.content.kind === 'Answer') {
         const id = identity(entry.workstream, String(object(entry.content.target)?.question), 'question')

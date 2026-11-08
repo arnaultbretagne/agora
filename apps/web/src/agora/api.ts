@@ -118,6 +118,12 @@ export class Api {
     return status === 200 ? (body as unknown as ListRow) : null
   }
 
+  /** The pending merge card's state, read from GitHub (docs/specs/merge.md, "The card"); null without one. */
+  async merge(workstream: string): Promise<{ question: string; state: string; head: string } | null> {
+    const { status, body } = await this.read(`/api/workstreams/${encodeURIComponent(workstream)}/merge`)
+    return status === 200 ? { question: String(body.question), state: String(body.state), head: String(body.head) } : null
+  }
+
   /** Who the proxy says the caller is (docs/specs/log.md, "HTTP"). */
   async account(): Promise<Account> {
     const { body } = await this.read('/api/account')
