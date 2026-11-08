@@ -671,12 +671,10 @@ export class Workstreams implements Handler {
     const current = state.executions.get(e.id)!
     if (current.lost || current.failed) return
     // A message that cannot go stays where it is, retractable; it holds nothing else back.
-    await this.release(workstream, current).catch((error: unknown) => {
-      const files = error instanceof Error && error.message === 'files_unavailable'
-      this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: files ? 'files' : 'unknown' })
-      // docs/specs/files.md, "Storing": a message whose files R2 does not give back waits, and is tried again.
-      if (files) setTimeout(() => void this.serial(workstream, () => this.drive(workstream)).catch(() => {}), 1000).unref()
-    })
+    // A message whose files R2 does not give back waits too, tried again at the next tick (docs/specs/files.md).
+    await this.release(workstream, current).catch((error: unknown) =>
+      this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: error instanceof Error && error.message === 'files_unavailable' ? 'files' : 'unknown' }),
+    )
     state = await this.store.state(workstream)
     // Stop cancels the turn in progress, once; it never makes up its end.
     if (current.stopped && state.active && ['in_progress', 'uncertain'].includes(state.active.status)) {

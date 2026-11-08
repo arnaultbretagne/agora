@@ -2,7 +2,7 @@
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -829,12 +829,9 @@ function noisePng(width: number, height: number): Buffer {
   header.writeUInt32BE(width, 0)
   header.writeUInt32BE(height, 4)
   header.set([8, 2, 0, 0, 0], 8)
-  const rows = Buffer.alloc((width * 3 + 1) * height)
-  let x = 7
-  for (let i = 0; i < rows.length; i++) {
-    x = (x * 1103515245 + 12345) >>> 0
-    rows[i] = i % (width * 3 + 1) === 0 ? 0 : x >>> 24
-  }
+  // Each row: its filter byte, none, then random pixels.
+  const rows = randomBytes((width * 3 + 1) * height)
+  for (let y = 0; y < height; y++) rows[y * (width * 3 + 1)] = 0
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))])
 }
 

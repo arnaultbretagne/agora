@@ -60,6 +60,7 @@ test('B1 a received tool update carrying a 4 MiB image: one object, references w
   assert.equal(tool.rowCount, 1)
   assert.ok(String(tool.rows[0].o).includes(reference(digest)))
   assert.ok(String(tool.rows[0].o).length < 10_000, `the tool's view is ${String(String(tool.rows[0].o).length)} characters`)
+  t.diagnostic(`files ${JSON.stringify(entry.files)}; objects ${JSON.stringify([...s3.objects.keys()])}; PutObject ${String(s3.count('PutObject'))}; the tool's view ${String(String(tool.rows[0].o).length)} characters`)
 })
 
 test('B2 the same image in two Workstreams, then once its row is gone: one object, stored once, found again with a 412', async (t) => {
@@ -85,6 +86,7 @@ test('B2 the same image in two Workstreams, then once its row is gone: one objec
   const referencing = [...withFiles(await lab.entries(ws)), ...withFiles(await lab.entries(other))]
   assert.equal(referencing.length, 3)
   for (const e of referencing) assert.deepEqual(new Set(e.files!.map((f) => f.sha256)), new Set([digest]))
+  t.diagnostic(`PutObject: ${JSON.stringify(s3.requests.filter((r) => r.operation === 'PutObject').map((r) => r.status))}; objects ${String(s3.objects.size)}; rows ${String(rows.rowCount)}; referencing entries ${String(referencing.length)}`)
 })
 
 test('B3 base64 too short, base64 with line breaks, a reference written by a person: left as they are', async (t) => {
@@ -113,6 +115,7 @@ test('B3 base64 too short, base64 with line breaks, a reference written by a per
   assert.deepEqual((prompt.content.params as { prompt: unknown[] }).prompt, [{ type: 'text', text: looks }])
   const sent = (await lab.entries(ws)).find((x) => x.kind === 'acp.sent' && x.content.requestPosition === prompt.position)
   assert.ok(sent, 'the line went to the harness as written')
+  t.diagnostic(`files of the two long chunks: ${JSON.stringify(received.map((x) => x.files))}; the person's line: ${JSON.stringify((prompt.content.params as { prompt: unknown[] }).prompt)}, files ${JSON.stringify(prompt.files)}, sent at ${String(sent.position)}`)
   assert.equal(s3.count('PutObject'), 1)
 })
 
@@ -136,6 +139,7 @@ test('B4 a Write with a 500 KB JPEG: references in the command and the line, the
     .map((x) => String(object(object(object(x.content.params)?.update)?.content)?.text ?? ''))
     .join('')
   assert.match(said, new RegExp(`Received an image, image/jpeg, 512000 bytes, sha256 ${sha(bytes).slice(0, 12)}\\.`))
+  t.diagnostic(`command files ${JSON.stringify(command.files)}; line files ${JSON.stringify(prompt.files)}; the agent: ${said.split('\n')[0]}`)
   assert.equal(canonical(object((await lab.store.expand(prompt)).params)?.prompt), canonical([{ type: 'text', text: 'look' }, { type: 'image', mimeType: 'image/jpeg', data, uri: 'photo.jpg' }]))
 })
 
@@ -171,6 +175,7 @@ test('B5 R2 unreachable: a Write with a file refused, received lines held, then 
   assert.equal(new Set(ordinals.map(String)).size, ordinals.length, 'each line once')
   const diagnostics = await lab.store.writer.query('SELECT count(*)::int AS n FROM diagnostics WHERE workstream=$1', [ws])
   assert.equal(diagnostics.rows[0].n, 0)
+  t.diagnostic(`refused ${JSON.stringify(refused)}, over HTTP ${String(viaHttp.status)} ${String(viaHttp.body.reason)}; once R2 back: tool line at ${String(tool)}, 'File read.' at ${String(read)} of ${String(updates.length)} updates, ordinals ${ordinals.map(String).join(',')}`)
 })
 
 test('B6 a Pod pushes its anchor; a later Create restores it from R2', async (t) => {
@@ -207,6 +212,7 @@ test('B6 a Pod pushes its anchor; a later Create restores it from R2', async (t)
   assert.ok(third.accepted)
   const failed = await until('restore failed', async () => (await c.lab.entries(c.ws)).find((x) => x.kind === 'execution.failed' && x.execution === (third as { execution?: string }).execution))
   assert.equal(failed.content.reason, 'restore_failed')
+  t.diagnostic(`anchor ${anchor} → object ${file.slice(0, 12)}…, content null; restored and recalled 'groseille'; R2 stopped: ${String(failed.kind)} ${String(failed.content.reason)}`)
 })
 
 test('B7 GET /api/files: the owner gets the bytes, as an image only when asked for one; nobody else gets anything', async (t) => {
@@ -233,6 +239,7 @@ test('B7 GET /api/files: the owner gets the bytes, as an image only when asked f
   assert.equal(svg.headers.get('content-disposition'), 'attachment')
   assert.equal(svg.headers.get('x-content-type-options'), 'nosniff')
   await svg.arrayBuffer()
+  t.diagnostic(`owner 200 ${String(mine.headers.get('content-type'))}; another owner ${String(others.status)}; unknown ${String(unknown.status)}; svg asked: ${String(svg.headers.get('content-type'))}, ${String(svg.headers.get('content-disposition'))}`)
 })
 
 test('B8 the sweep: referenced or recent kept; unreferenced and older than a day deleted, with its row', async (t) => {
@@ -271,6 +278,7 @@ test('B8 the sweep: referenced or recent kept; unreferenced and older than a day
   const rows = (await db.admin.query('SELECT sha256 FROM files ORDER BY sha256')).rows.map((r) => r.sha256)
   assert.deepEqual(rows, [referenced, recent, sha(second)].sort())
   assert.ok(!s3.objects.has(key(old)) && !s3.objects.has(key(orphan)) && !s3.objects.has(key(sha(first))))
+  t.diagnostic(`swept ${JSON.stringify(swept)}; objects left ${String(s3.objects.size)}, rows left ${String(rows.length)}`)
 })
 
 test('B9 a log written with files inline, moved: each entry expands back, anchors become objects, one object per content', async (t) => {
@@ -315,6 +323,7 @@ test('B9 a log written with files inline, moved: each entry expands back, anchor
   assert.equal(Number((await db.admin.query('SELECT count(*) FROM files')).rows[0].count), 2)
   // A second run moves nothing more.
   assert.deepEqual(await moveFiles(db.admin, new Files(s3.options())), { entries: 0, objects: 0, anchors: 0, files: 0 })
+  t.diagnostic(`moved ${JSON.stringify(moved)}; then nothing more; objects ${String(s3.objects.size)}`)
 })
 
 test('B10 a line naming a stored file, written while a sweep that deletes it holds the lock: it waits, and stores it again', async (t) => {
@@ -327,21 +336,26 @@ test('B10 a line naming a stored file, written while a sweep that deletes it hol
   // The sweep holds the files lock exclusive while it deletes the row and the object (simulated: forced-state).
   const sweep = await db.admin.connect()
   await sweep.query('SELECT pg_advisory_lock($1)', [FILES_LOCK])
-  const written = lab.write(ws, '/file 100000 15').then(() => lab.turn(ws, 'done'))
-  await until('the writer waits for the lock', async () => {
-    const waiting = await db.admin.query("SELECT count(*)::int AS n FROM pg_locks WHERE locktype='advisory' AND NOT granted AND objid=$1", [FILES_LOCK])
-    return waiting.rows[0].n > 0
-  })
-  await sweep.query('DELETE FROM files WHERE sha256=$1', [digest])
-  s3.objects.delete(key(digest))
-  await sweep.query('SELECT pg_advisory_unlock($1)', [FILES_LOCK])
-  sweep.release()
+  let written: Promise<unknown>
+  try {
+    written = lab.write(ws, '/file 100000 15').then(() => lab.turn(ws, 'done'))
+    await until('the writer waits for the lock', async () => {
+      const waiting = await db.admin.query("SELECT count(*)::int AS n FROM pg_locks WHERE locktype='advisory' AND NOT granted AND objid=$1", [FILES_LOCK])
+      return waiting.rows[0].n > 0
+    })
+    await sweep.query('DELETE FROM files WHERE sha256=$1', [digest])
+    s3.objects.delete(key(digest))
+  } finally {
+    await sweep.query('SELECT pg_advisory_unlock($1)', [FILES_LOCK])
+    sweep.release()
+  }
   await written
   assert.ok(s3.objects.get(key(digest))?.bytes.equals(bytes), 'the object is there again')
   const [entry] = withFiles(await lab.entries(ws))
   assert.deepEqual(new Set(entry!.files!.map((f) => f.sha256)), new Set([digest]))
   const rows = await db.admin.query('SELECT sha256 FROM files')
   assert.deepEqual(rows.rows.map((r) => r.sha256), [digest])
+  t.diagnostic(`PutObject: ${JSON.stringify(s3.requests.filter((r) => r.operation === 'PutObject').map((r) => r.status))}; the entry's files ${JSON.stringify(entry!.files)}`)
 })
 
 test('B11 a message with a file written during a turn, R2 unreachable when it ends: the message waits, then goes with its bytes', async (t) => {
@@ -367,4 +381,5 @@ test('B11 a message with a file written during a turn, R2 unreachable when it en
     .map((x) => String(object(object(object(x.content.params)?.update)?.content)?.text ?? ''))
     .join('')
   assert.match(said, new RegExp(`Received an image, image/png, 300000 bytes, sha256 ${sha(bytes).slice(0, 12)}\\.`))
+  t.diagnostic(`held while R2 was unreachable, then sent: files ${JSON.stringify(sent.files)}; the agent: ${said.split('Received')[1]?.split('\n')[0] ?? ''}`)
 })
