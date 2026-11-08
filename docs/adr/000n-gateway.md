@@ -35,9 +35,14 @@
 6. **A token works only from its Pod.** It names the Pod's address, which Agora takes from the
    Sandbox; the gateway refuses it from any other address.
 7. **GitHub reads as the public sees it, with the Internet.** What no grant covers on GitHub takes
-   routes of its own, open to the Internet's grant, for reads only, with the same PAT: a public
-   repository can be cloned and read, never written to or pushed to without its profile.
-8. **On an MCP server, the grants name the tools.** Every call is a `POST` to one path: a grant
+   routes of its own, open to the Internet's grant, for reads only, with a token that reads public
+   repositories only: a public repository can be cloned and read, never written to or pushed to
+   without its profile.
+8. **On GitHub, Agora acts as GitHub Apps, one per identity.** The contributor writes, the
+   reviewer reviews; each grant names its identity, and the gateway sets that App's installation
+   token. The operator's credential reaches no execution, and merging into `main` takes the
+   operator's approval.
+9. **On an MCP server, the grants name the tools.** Every call is a `POST` to one path: a grant
    carries the tools a call may name, and the server's route, an MCP backend of the gateway, checks
    the tool in the protocol before it sets the server's credential.
 
@@ -199,7 +204,8 @@ left GitHub closed, public repositories included.
 | --- | --- |
 | No credential on the public routes | Kept out: 60 REST requests an hour, shared by every sandbox behind the operator's address, and GraphQL refused. |
 | A second PAT that reads public repositories only | GitHub would keep it to reads, GraphQL could open, and a private repository on the main PAT would stay hidden. Kept in reserve: one more secret, for limits that do not bind today. |
-| The same PAT, reads only (kept) | No new secret. The gateway refuses every write, as for a repository granted read; GraphQL stays closed, a `POST` whether it reads or writes. Holds while the PAT reaches no private repository. |
+| The same PAT, reads only (kept until 2026-11-08) | No new secret. The gateway refuses every write, as for a repository granted read; GraphQL stays closed, a `POST` whether it reads or writes. Holds while the PAT reaches no private repository. Replaced when the Apps took over ("Who acts on GitHub"): their installation reaches every repository, private ones included. |
+| A token that reads public repositories only (kept since 2026-11-08) | The contributor's App mints it narrowed to its public repositories, with read permissions: measured on 2026-11-08, it read `octocat/Hello-World` and `github/linguist` (200, 5,000 an hour) and cloned them, and the operator's private repositories answered 404 and "Repository not found". |
 | A list of the paths of the repositories not granted, refused | GitHub reads a repository through too many paths — search, `/repositories/{id}`, codeload — for a list to close it. |
 
 Measured with agentgateway 1.6.0 run locally on the configuration infra-k8s deploys, with the
@@ -209,6 +215,22 @@ a `DELETE`, GraphQL, a forged `x-gateway-grant: covered` with a write, a token f
 address: 403 from the gateway, and no branch on GitHub; what a grant covers through `github-api`
 and `github-git` as before; without `internet`, 403. The header, sent by the sandbox, reached
 an echo service overwritten, and not at all through a route that removes it.
+
+### Who acts on GitHub (2026-11-08)
+
+Until then every GitHub request left with the operator's PAT: every pull request an agent opened
+was the operator's, who could not approve it, and the PAT's admin role bypassed `main`'s rules —
+an execution with write could merge, or push to `main`, unreviewed (read through GitHub's API,
+2026-11-07: `current_user_can_bypass: always`, recent pull requests merged with no review).
+
+| Option | Why not, or why |
+| --- | --- |
+| The PAT, the merge left to convention | Nothing stops an agent with write from merging; the operator can approve nothing. |
+| The gateway refusing the merge paths | A `git push` to `main` still passes. |
+| GitHub's MCP server (`merge_pull_request`) | Puts the merge in the agent's hands; its host has no route, and GraphQL stays closed. |
+| One GitHub App for every role | An App is one actor: the judge would author what it approves, which GitHub refuses. |
+| Machine users | One free per person, long-lived PATs. |
+| One App per identity, contributor and reviewer (kept) | Each installed once, every repository, new ones included. No App may bypass the rules, so they bind agents: a code owner's approval merges, the operator's. The reviewer's permissions, contents read, keep it from pushing whatever its prompt says. Verified on 2026-11-08 through each App's API: the permissions asked, installed on all nine repositories, no webhook. |
 
 ### Read and write on one MCP server (2026-10-26)
 

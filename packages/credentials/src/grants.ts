@@ -25,7 +25,15 @@ export interface Grant {
    * resource of the server when absent; only these tools, and no prompt or resource, when present.
    */
   readonly tools?: readonly string[]
+  /**
+   * On GitHub, who acts (docs/specs/credentials.md, "GitHub identities"): the GitHub App whose token the gateway sets
+   * for what this grant covers. `contributor` when absent; `contributor` wins when grants of both cover a request.
+   */
+  readonly identity?: GitHubIdentity
 }
+
+/** GitHub's two actors for Agora: one writes (`agora-contributor[bot]`), one reviews (`agora-reviewer[bot]`). */
+export type GitHubIdentity = 'contributor' | 'reviewer'
 
 /** An MCP server a profile opens, as `session/new` names it: reached through the gateway like any host, with no secret. */
 export interface McpServer {
@@ -98,7 +106,7 @@ export function compileProfile(profile: string): Grant[] {
   // Agora's own MCP server: its endpoint only, as the vault's. No tools: Agora tells its tools apart itself, by
   // the rights it recorded (docs/specs/mcp.md).
   if (profile === 'agora:read' || profile === 'agora:delegate' || profile === 'agora:submit') return [{ host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
-  const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
+  const github = /^github:([^/:]+)\/([^/:]+):(read|review|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
     if (!NAME.test(owner) || !NAME.test(repo) || repo === '.' || repo === '..') throw new ProfileRefused(`invalid repo: ${owner}/${repo}`)
@@ -106,9 +114,12 @@ export function compileProfile(profile: string): Grant[] {
     // git smart HTTP: a clone POSTs too (git-upload-pack); writing is git-receive-pack.
     const services = level === 'write' ? '(upload|receive)' : 'upload'
     const git = `^/${escape(owner)}/${escape(repo)}(\\.git)?/(info/refs\\?service=git-${services}-pack|git-${services}-pack)$`
+    // Review: every method on the REST API, as the reviewer's own App — its permissions, not the grant, keep it from
+    // writing code: contents read, pull requests write (docs/specs/credentials.md, "GitHub identities").
+    if (level === 'review') return [{ host: 'api.github.com', path: rest, identity: 'reviewer' }, { host: 'github.com', path: git, identity: 'reviewer' }]
     return level === 'write'
-      ? [{ host: 'api.github.com', path: rest }, { host: 'github.com', path: git }]
-      : [{ host: 'api.github.com', path: rest, methods: [...READ] }, { host: 'github.com', path: git }]
+      ? [{ host: 'api.github.com', path: rest, identity: 'contributor' }, { host: 'github.com', path: git, identity: 'contributor' }]
+      : [{ host: 'api.github.com', path: rest, methods: [...READ], identity: 'contributor' }, { host: 'github.com', path: git, identity: 'contributor' }]
   }
   throw new ProfileRefused(`unknown profile: ${profile}`)
 }
@@ -157,11 +168,15 @@ export function offeredProfiles(value: string | undefined): string[] {
   return profiles
 }
 
-/** Whether a profile may be named, given those offered: itself, or the read of a repository or of the vault under its write. */
+/**
+ * Whether a profile may be named, given those offered: itself; the read or the review of a repository under its write,
+ * its read under its review; the vault's read under its write.
+ */
 export function offers(offered: readonly string[], profile: string): boolean {
   if (offered.includes(profile)) return true
-  const read = /^(github:[^:]+|vault):read$/.exec(profile)
-  return read !== null && offered.includes(`${read[1]!}:write`)
+  const github = /^(github:[^:]+):(read|review)$/.exec(profile)
+  if (github !== null) return offered.includes(`${github[1]!}:write`) || (github[2] === 'read' && offered.includes(`${github[1]!}:review`))
+  return profile === 'vault:read' && offered.includes('vault:write')
 }
 
 export interface GrantSignerOptions {
@@ -191,7 +206,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

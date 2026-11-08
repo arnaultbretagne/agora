@@ -35,7 +35,8 @@ a host, an anchored regular expression on the path and query, the methods.
 | Profile | You may |
 | --- | --- |
 | `github:OWNER/REPO:read` | `git clone` and `git fetch` `https://github.com/OWNER/REPO.git`; `GET` `https://api.github.com/repos/OWNER/REPO` and below. |
-| `github:OWNER/REPO:write` | The same, plus `git push`, and every method under `https://api.github.com/repos/OWNER/REPO` — a pull request is `POST /repos/OWNER/REPO/pulls`. |
+| `github:OWNER/REPO:write` | The same, plus `git push`, and every method under `https://api.github.com/repos/OWNER/REPO` — a pull request is `POST /repos/OWNER/REPO/pulls`. You act as `agora-contributor[bot]`. |
+| `github:OWNER/REPO:review` | Clone, fetch, and every method under `https://api.github.com/repos/OWNER/REPO`, as `agora-reviewer[bot]`: review, comment on and approve pull requests — a review is `POST /repos/OWNER/REPO/pulls/N/reviews`. Pushing and merging are refused. |
 | `internet` | Any other `https://` host on port 443, with no credential: what anyone on the Internet may do there. On GitHub, what anyone may read: `git clone` and `git fetch` a public repository, `GET` on the REST API. Never a write or a push without the repository's profile. |
 | `anthropic`, `zai`, `chatgpt` | Nothing for you to do: the model you run on. |
 
@@ -47,4 +48,5 @@ a way around.
 ## Your tools
 
 Node 24 and git, besides your own tools. No curl, Python or jq: use Node, whose `fetch` goes
-through the gateway. git already commits as `Agora <agent@agora.bretagne.dev>`.
+through the gateway. git already commits as `agora-contributor[bot]`. Merging a pull request into
+`main` takes the person's own approval: neither yours nor a reviewer's is enough.

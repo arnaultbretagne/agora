@@ -390,12 +390,12 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the rights: each offered repository with None, Read and, when offered, Write; a service off or on; the services first, the Internet first; the button', () => {
+test('U31 the rights: each offered repository with None, Read and, when offered, Review and Write; a service off or on; the services first, the Internet first; the button', () => {
   const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
   assert.deepEqual(
     entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
     [
-      ['o/a', ['None', 'Read', 'Write']],
+      ['o/a', ['None', 'Read', 'Review', 'Write']],
       ['o/b', ['None', 'Read']],
       ['z.ai', ['Off', 'On']],
       ['Internet', ['Off', 'On']],
@@ -411,6 +411,9 @@ test('U31 the rights: each offered repository with None, Read and, when offered,
   assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'zai'], entries), 'z.ai, a · Write, b · Read')
   assert.equal(accessTitle([], entries), 'No access')
   assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
+  assert.deepEqual(entries[0]!.choices.map((c) => c.profile), [null, 'github:o/a:read', 'github:o/a:review', 'github:o/a:write'])
+  assert.equal(accessTitle(['github:o/a:review'], entries), 'a · Review')
+  assert.deepEqual(accessEntries(['github:o/c:review'])[0]!.choices.map((c) => c.profile), [null, 'github:o/c:read', 'github:o/c:review'], 'a review offered: its read under it, never a write')
   assert.deepEqual(accessEntries([]), [])
 })
 

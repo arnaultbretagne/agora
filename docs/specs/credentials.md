@@ -52,6 +52,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. |
+| `github:owner/repo:review` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` only. As the reviewer ("GitHub identities"): its App can read code and review, comment on and approve pull requests, never push or merge. |
 | `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
@@ -60,7 +61,8 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `agora:delegate` | The same grant as `agora:read`; Agora opens `delegate` to it (`delegation.md`). |
 | `agora:submit` | The same grant as `agora:read`; Agora opens `submit` to it. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`) but one keeping what its Workstream's last execution holds. |
 
-Grants are additive. GraphQL (`/graphql`) is covered by no profile.
+Grants are additive. GraphQL (`/graphql`) is covered by no profile. A GitHub grant names who acts,
+`identity`: `contributor` for read and write, `reviewer` for review.
 
 A grant's `tools` lists the MCP tools a call may name. On an MCP server every message is a `POST` to
 the same path, so host, path and method cannot tell a read from a write: only a route whose backend
@@ -124,7 +126,8 @@ profile, or a narrower one of the same repository or of the vault.
 
 | Offered | May be named |
 | --- | --- |
-| `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:read` |
+| `github:owner/repo:write` | `github:owner/repo:write`, `github:owner/repo:review`, `github:owner/repo:read` |
+| `github:owner/repo:review` | `github:owner/repo:review`, `github:owner/repo:read` |
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
@@ -183,21 +186,23 @@ authorization rule: the request comes from the JWT's `ip`, the path contains no 
 `%2f`, and one of the JWT's grants covers the host, the path with the query, and the method. If the
 rule fails, the request stops at the gateway; otherwise the gateway sets the host's credential.
 
-GitHub has two routes per host: one for what a grant covers, one for the rest. On `api.github.com`
-and `github.com`, the listener sets `x-gateway-grant` before a route is picked — `covered` when the
-rule above would let the request through, `none` otherwise — overwriting whatever the sandbox sent.
-`github-api` and `github-git` take `covered`: a route with a header match outranks the one without.
-`github-api-public` and `github-git-public` take the rest. The header only steers: each route checks
-the request again, so a header the sandbox sets itself gains nothing, and each removes it before
-GitHub.
+GitHub has three routes per host: one per identity for what a grant covers, one for the rest. On
+`api.github.com` and `github.com`, the listener sets `x-gateway-grant` before a route is picked —
+`contributor` when the rule above would let the request through with a grant of the contributor's,
+else `reviewer` when it would with one of the reviewer's, `none` otherwise — overwriting whatever
+the sandbox sent. A grant naming no identity is the contributor's. `github-api` and `github-git`
+take `contributor`, `github-api-reviewer` and `github-git-reviewer` take `reviewer`: a route with a
+header match outranks the one without. `github-api-public` and `github-git-public` take the rest.
+The header only steers: each route checks the request again, against its own identity's grants, so
+a header the sandbox sets itself gains nothing, and each removes it before GitHub.
 
 The public routes' rule: the request comes from the JWT's `ip`, its path has none of the tricks
 above, one of the JWT's grants is on host `*`, and the request reads. On `api.github.com`, `GET` and
 `HEAD`. On `github.com`, `GET` and `HEAD` except `git-receive-pack`'s first request, and the `POST`
-of `git-upload-pack` that a clone or a fetch sends. They set the same PAT as the routes with a
-grant: a fine-grained PAT reads every public repository, so a repository given no grant reads as the
-public sees it, with the PAT's rate limit. GraphQL stays closed: it is always a `POST`, read or
-write.
+of `git-upload-pack` that a clone or a fetch sends. They set a token of the contributor's App that
+reads its public repositories only: it reads every public repository on GitHub, none of the
+operator's private ones, with an installation's rate limit. GraphQL stays closed: it is always a
+`POST`, read or write.
 
 The `internet` route names no host. agentgateway picks a route by the request's exact host, then
 by wildcard, and the route without hosts last: it takes every host the other routes do not name.
@@ -210,20 +215,44 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
 | `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
 | `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
-| `github-api` | `api.github.com`, `x-gateway-grant: covered` | `Authorization: Bearer` + the GitHub PAT. |
-| `github-git` | `github.com`, `x-gateway-grant: covered` | `Authorization: Basic` + `x-access-token:` and the PAT, in base64. |
-| `github-api-public` | `api.github.com`, the rest; reads, with `internet` | As `github-api`. |
-| `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`. |
+| `github-api` | `api.github.com`, `x-gateway-grant: contributor` | `Authorization: Bearer` + the contributor's installation token. |
+| `github-git` | `github.com`, `x-gateway-grant: contributor` | `Authorization: Basic` + `x-access-token:` and the contributor's token, in base64. |
+| `github-api-reviewer` | `api.github.com`, `x-gateway-grant: reviewer` | As `github-api`, with the reviewer's token. |
+| `github-git-reviewer` | `github.com`, `x-gateway-grant: reviewer` | As `github-git`, with the reviewer's token. |
+| `github-api-public` | `api.github.com`, the rest; reads, with `internet` | As `github-api`, with the token that reads public repositories only. |
+| `github-git-public` | `github.com`, the rest; clone and fetch, with `internet` | As `github-git`, with that token. |
 | `vault` | `vault.bretagne.dev`; an MCP backend, the tools the grants name ("The vault") | `Authorization: Bearer` + an access token of the Pocket-ID machine client `agora_gateway_vault`. |
 | `kubernetes` | `kubernetes.agora.internal`, to the cluster's API server ("Kubernetes") | `Authorization: Bearer` + the token of the gateway's own ServiceAccount, projected, read only by its RBAC. |
 | `previews` | `*.preview.bretagne.dev`, the hosts a grant's `hostPattern` covers ("Previews") | `Authorization: Bearer` + a token of the Pocket-ID client `agora_gateway_previews`; `x-agora-gate: gateway`. |
 | `agora` | `mcp.agora.internal`, to Agora's server, port 8082 ("Agora's MCP") | None; `x-agora-execution` set to the JWT's `sub`. |
 | `internet` | Any other | None. |
 
-The PAT must reach every repository offered, with the access offered: the grants only narrow it. It
-must reach no private repository: through the public routes, an execution with `internet` reads
-whatever the PAT reads. A private repository to offer calls for a second credential on the public
-routes, one that reads public repositories only.
+### GitHub identities
+
+Agora acts on GitHub as two GitHub Apps of the operator's, each installed once on the account with
+every repository: one actor each, `<app>[bot]`, never the operator. The grants narrow what each
+App's installation reaches; the App's permissions bound what it may do there.
+
+| Identity | App | Permissions | Profiles |
+| --- | --- | --- | --- |
+| `contributor` | `agora-contributor` | Contents and pull requests read and write; actions, checks, commit statuses read. No workflows, no administration. | `github:…:read`, `github:…:write` |
+| `reviewer` | `agora-reviewer` | Contents read; pull requests read and write; actions, checks, commit statuses read. | `github:…:review` |
+
+- **Merging takes the person.** `main` requires an approving review by a code owner, the
+  operator, and none of the Apps may bypass the rules: the contributor opens and pushes, the
+  reviewer reviews and approves, neither approval merges. A push after an approval dismisses it.
+- **One actor per App.** GitHub refuses an approval from a pull request's author: the review is
+  another App's, and an App can be only one of them.
+- **Both on a repository: the contributor.** A request a grant of each covers goes as the
+  contributor: review adds nothing to write.
+- **The tokens.** An installation token lives one hour. A refresher in the infrastructure mints
+  each App's every 15 minutes from its private key, and a third, the contributor's narrowed to its
+  public repositories with read permissions, for the public routes; the gateway watches the files,
+  with no restart.
+- **The commits.** git commits as the contributor ("What the template adds"), so a commit shows
+  the actor that pushed it.
+
+The operator's own credential reaches no execution.
 
 ### Kubernetes
 
@@ -518,6 +547,7 @@ windows are the whole account's: they count what the operator spends elsewhere t
 | --- | --- |
 | `NODE_EXTRA_CA_CERTS` | `/etc/agora/credential-proxy/ca.pem`, from the `credential-proxy-ca` ConfigMap: "Agora gateway CA", valid until 2028. |
 | `GIT_SSL_CAINFO` | The same file, for git, whose libcurl does not read `NODE_EXTRA_CA_CERTS`. The gateway's root alone: everything goes through it. |
+| git identity | `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` `agora-contributor[bot]`, `GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_EMAIL` the App's noreply address, `<bot id>+agora-contributor[bot]@users.noreply.github.com`: GitHub shows the commit as the App's. |
 | Network egress | DNS, and `gateway.agora-gateway` on port 3000. Nothing else: the Internet, when granted, is reached through the gateway. |
 
 On the other side, the gateway accepts only the sandboxes and goes out only to public addresses,
@@ -570,7 +600,7 @@ call. The test page does it itself when the agent offers the option.
 | C35 | A read failing after one that succeeded; an account never read; a window whose reset has passed | The earlier windows, `stale`, the reason; no window, `stale`, the reason; that window at 0 % with no reset. |
 | C36 | Each provider's answer, as given on 2026-10-07; an answer of another shape | Their 5-hour and weekly windows in percent with their resets, and the plan; z.ai's 5-hour without a reset, its MCP limit left out; no window. |
 | C37 | A read through a gateway, the tunnel accepted, then refused | `CONNECT` with the grant as `Proxy-Authorization`, TLS to the host, the placeholder `Authorization` and the endpoint's headers; the answer read. Refused: an error naming the status. |
-| C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit the PAT's; the write and the push: 403 from the gateway; without `internet`: 403. |
+| C38 | Public GitHub: `internet` alone, the mock's `/fetch` of `api.github.com/repos/A`, of `/rate_limit`, of git's refs and `git-upload-pack` on A; then a `PATCH` of A and the first request of a push; then the same read with `anthropic` alone | GitHub answers each read, the gateway logging `github-api-public` or `github-git-public`, the rate limit an installation's; the write and the push: 403 from the gateway; without `internet`: 403. |
 | C39 | `x-gateway-grant: covered` sent by the sandbox with `internet` alone: a read of a public repository, a write on an offered one | The read through `github-api-public`; the write: 403 from the gateway. |
 | C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
 | C41 | The grants of `vault:read` and `vault:write`; a pool declaring either; `vault`, `vault:admin` | Only `vault.bretagne.dev`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host not covered, no grant on `*`; neither a base profile, the pool refused; the others `unknown_profile`. |
@@ -602,3 +632,7 @@ call. The test page does it itself when the agent offers the option.
 
 **To be specified:** a harness initializing in the pool (claude-code's SDK); count the responses
 to `CONNECT` by status, not just the last one; read access to GraphQL.
+| C67 | The grants of `github:A:review`, `github:A:read`, `github:A:write`; requests on A and elsewhere, with each and with two of them | Review: every REST method on A and its clone and fetch, as the reviewer, never a push; read and write as the contributor; write and review on A: the contributor; read and review: the reads as the contributor, a review as the reviewer; nothing elsewhere but through the public routes. |
+| C68 | `github:A:write` offered, then `github:A:review`; Creates naming A's review, read, write | Write offered: all three accepted; review offered: review and read, the write `profile_not_offered`. |
+| C69 | The gateway as deployed, a stand-in GitHub: write on A, review on B, `internet`, each request with forged `x-gateway-grant` values too | A's requests reach GitHub with the contributor's token, B's review with the reviewer's, a public read with the public token; a review grant never sends the contributor's token, nor a write grant the reviewer's; the forged header changes nothing; no request carries the operator's credential. |
+| C70 | In a real execution: `github:A:write`, a branch pushed and a pull request opened; another with `github:A:review` approving it; then the contributor merging | The commit and the pull request by `agora-contributor[bot]`, the approval by `agora-reviewer[bot]`; the merge refused by GitHub until the operator approves; then accepted. |

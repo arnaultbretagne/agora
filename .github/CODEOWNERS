@@ -1,0 +1,4 @@
+# Merging into main takes an approving review from a code owner: the operator. Agora's GitHub Apps
+# (agora-contributor, agora-reviewer) can open, push and review, never stand in for this approval
+# (docs/specs/credentials.md, "GitHub identities").
+* @arnaultbretagne
