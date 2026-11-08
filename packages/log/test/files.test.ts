@@ -292,18 +292,22 @@ test('B9 a log written with files inline, moved: each entry expands back, anchor
   // A number beyond 2^53, as a line carries it: kept exact through the move.
   const raw = encode(line).replace('"_meta":{"n":1}', '"_meta":{"n":9007199254740993}')
   const command = { id: randomUUID(), kind: 'Write', target: {}, body: { prompt: [{ type: 'image', mimeType: 'image/png', data: image, uri: 'x.png' }] } }
-  await db.admin.query("INSERT INTO entries(workstream,position,kind,content) VALUES($1,1,'command',$2::jsonb),($1,2,'acp',$3::jsonb),($1,3,'acp',$4::jsonb)", [
+  // A file of zeros: its base64 compresses to almost nothing as PostgreSQL stores it, and is a file all the same.
+  const blank = Buffer.alloc(60_000).toString('base64')
+  await db.admin.query("UPDATE workstreams SET last_position = 4 WHERE id = $1", [ws])
+  await db.admin.query("INSERT INTO entries(workstream,position,kind,content) VALUES($1,1,'command',$2::jsonb),($1,2,'acp',$3::jsonb),($1,3,'acp',$4::jsonb),($1,4,'acp',$5::jsonb)", [
     ws,
     encode(command),
     raw,
     encode({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'small' } } } }),
+    encode({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: { sessionUpdate: 'tool_call_update', toolCallId: 'b', content: [{ type: 'content', content: { type: 'image', mimeType: 'image/bmp', data: blank } }] } } }),
   ])
   await db.admin.query("INSERT INTO objects(workstream,projector,kind,id,object,first_position,last_position) VALUES($1,'core','element',$2,$3::jsonb,2,2)", [ws, randomUUID(), encode({ type: 'tool', content: [{ type: 'content', content: { type: 'image', data: image } }] })])
   const anchorBytes = Buffer.from('an anchor of before')
   await db.admin.query("INSERT INTO anchors(id,workstream,execution,metadata,content) VALUES($1,$2,$3,'{}'::jsonb,$4)", [randomUUID(), ws, randomUUID(), anchorBytes])
   const before = (await db.admin.query('SELECT position, content::text AS c FROM entries WHERE workstream=$1 ORDER BY position', [ws])).rows.map((r) => decode(r.c as string))
   const moved = await moveFiles(db.admin, new Files(s3.options()))
-  assert.deepEqual(moved, { entries: 2, objects: 1, anchors: 1, files: 2 })
+  assert.deepEqual(moved, { entries: 3, objects: 1, anchors: 1, files: 3 })
   const after = await db.admin.query('SELECT position, content::text AS c, files FROM entries WHERE workstream=$1 ORDER BY position', [ws])
   const bytes = new Map([...s3.objects].map(([k, o]) => [k.slice('sha256/'.length), o.bytes]))
   for (const [i, r] of after.rows.entries()) {
@@ -319,8 +323,8 @@ test('B9 a log written with files inline, moved: each entry expands back, anchor
   const anchor = (await db.admin.query('SELECT file, content FROM anchors')).rows[0]
   assert.equal(anchor.content, null)
   assert.ok(s3.objects.get(key(String(anchor.file)))!.bytes.equals(anchorBytes))
-  assert.equal(s3.objects.size, 2, 'one object per distinct SHA-256: the image and the anchor')
-  assert.equal(Number((await db.admin.query('SELECT count(*) FROM files')).rows[0].count), 2)
+  assert.equal(s3.objects.size, 3, 'one object per distinct SHA-256: the image, the zeros and the anchor')
+  assert.equal(Number((await db.admin.query('SELECT count(*) FROM files')).rows[0].count), 3)
   // A second run moves nothing more.
   assert.deepEqual(await moveFiles(db.admin, new Files(s3.options())), { entries: 0, objects: 0, anchors: 0, files: 0 })
   t.diagnostic(`moved ${JSON.stringify(moved)}; then nothing more; objects ${String(s3.objects.size)}`)
@@ -382,4 +386,31 @@ test('B11 a message with a file written during a turn, R2 unreachable when it en
     .join('')
   assert.match(said, new RegExp(`Received an image, image/png, 300000 bytes, sha256 ${sha(bytes).slice(0, 12)}\\.`))
   t.diagnostic(`held while R2 was unreachable, then sent: files ${JSON.stringify(sent.files)}; the agent: ${said.split('Received')[1]?.split('\n')[0] ?? ''}`)
+})
+
+test('B12 a sweep while a file is being stored does not run, nothing deleted; once it is stored, the next one does', async (t) => {
+  const s3 = await fresh(t)
+  const { db, lab } = await opened(t, { s3 })
+  const bytes = mockFile(70_000, 17)
+  const digest = sha(bytes)
+  await lab.store.files!.put(digest, bytes)
+  s3.age(digest, 2 * 86400_000)
+  // A writer storing a file holds the files lock shared until its transaction ends.
+  const writer = await db.admin.connect()
+  await writer.query('BEGIN')
+  await writer.query('SELECT pg_advisory_xact_lock_shared($1)', [FILES_LOCK])
+  let during: unknown
+  try {
+    during = await lab.store.sweep()
+    assert.equal(during, null)
+    assert.ok(s3.objects.has(key(digest)), 'nothing deleted')
+    assert.equal(s3.count('DeleteObjects'), 0)
+  } finally {
+    await writer.query('COMMIT')
+    writer.release()
+  }
+  const next = await lab.store.sweep()
+  assert.deepEqual(next, { rows: 0, orphans: 1 })
+  assert.ok(!s3.objects.has(key(digest)))
+  t.diagnostic(`while storing: ${JSON.stringify(during)}; after: ${JSON.stringify(next)}`)
 })

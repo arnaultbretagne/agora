@@ -58,19 +58,23 @@ const untoken = (part: string): string => part.replaceAll('~1', '/').replaceAll(
 export function findFiles(value: unknown): Found | null {
   const refs: FileRef[] = []
   const bytes = new Map<string, Buffer>()
-  const walk = (node: unknown, path: string): unknown => {
+  // The path is kept as its keys, and written as a pointer only for a file: a line without one costs a walk.
+  const keys: (string | number)[] = []
+  const walk = (node: unknown): unknown => {
     if (typeof node === 'string') {
       const found = fileBytes(node)
       if (found === null) return node
       const sha256 = digest(found)
       bytes.set(sha256, found)
-      refs.push({ path, sha256, size: found.byteLength })
+      refs.push({ path: keys.map((k) => `/${token(k)}`).join(''), sha256, size: found.byteLength })
       return reference(sha256)
     }
     if (Array.isArray(node)) {
       let copy: unknown[] | null = null
       node.forEach((item, i) => {
-        const next = walk(item, `${path}/${String(i)}`)
+        keys.push(i)
+        const next = walk(item)
+        keys.pop()
         if (next !== item) (copy ??= [...node])[i] = next
       })
       return copy ?? node
@@ -78,14 +82,16 @@ export function findFiles(value: unknown): Found | null {
     if (node !== null && typeof node === 'object' && !isLosslessNumber(node)) {
       let copy: Record<string, unknown> | null = null
       for (const [key, item] of Object.entries(node)) {
-        const next = walk(item, `${path}/${token(key)}`)
+        keys.push(key)
+        const next = walk(item)
+        keys.pop()
         if (next !== item) (copy ??= { ...(node as Record<string, unknown>) })[key] = next
       }
       return copy ?? node
     }
     return node
   }
-  const out = walk(value, '')
+  const out = walk(value)
   return refs.length === 0 ? null : { value: out, refs, bytes }
 }
 
@@ -139,6 +145,9 @@ export class Files {
       // The SHA-256 is given with each upload; nothing else is computed or checked by the client.
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
+      // A request runs under a Workstream's lock: it gives up rather than hang ("Storing", "R2 failing").
+      maxAttempts: 2,
+      requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 },
     })
   }
 
@@ -236,7 +245,8 @@ export class Files {
    */
   async keep(client: PoolClient, bytes: ReadonlyMap<string, Buffer>): Promise<void> {
     await client.query('SELECT pg_advisory_xact_lock_shared($1)', [FILES_LOCK])
-    const sha256s = [...bytes.keys()]
+    // In one order for every writer: two inserting the same new rows never wait on each other in a cycle.
+    const sha256s = [...bytes.keys()].sort()
     const known = new Set((await client.query('SELECT sha256 FROM files WHERE sha256 = ANY($1)', [sha256s])).rows.map((r) => r.sha256 as string))
     for (const sha256 of sha256s) if (!known.has(sha256)) await this.put(sha256, bytes.get(sha256)!)
     await client.query('INSERT INTO files(sha256,size) SELECT * FROM unnest($1::text[], $2::bigint[]) ON CONFLICT DO NOTHING', [
@@ -246,17 +256,20 @@ export class Files {
   }
 
   /**
-   * The sweep ("The sweep"), holding the files lock exclusive: the rows nothing references and their
-   * objects, then the objects with no row; both once older than `ageMs`.
+   * The sweep ("The sweep"): the bucket listed first, then, holding the files lock exclusive, the rows nothing
+   * references and their objects, and the listed objects with no row; all once older than `ageMs`. While a
+   * file is being stored, the lock is not free: the sweep waits for its next run, never queuing writers behind it.
    */
-  async sweep(pool: Pool, ageMs = SWEEP_AGE_MS): Promise<{ rows: number; orphans: number }> {
+  async sweep(pool: Pool, ageMs = SWEEP_AGE_MS): Promise<{ rows: number; orphans: number } | null> {
+    const before = new Date(Date.now() - ageMs)
+    const old: string[] = []
+    for await (const o of this.objects()) if (o.modified < before.getTime()) old.push(o.sha256)
     const client = await pool.connect()
     let held = false
     try {
-      await client.query('SELECT pg_advisory_lock($1)', [FILES_LOCK])
-      held = true
+      held = (await client.query('SELECT pg_try_advisory_lock($1) AS held', [FILES_LOCK])).rows[0]?.held === true
+      if (!held) return null
       try {
-        const before = new Date(Date.now() - ageMs)
         const gone = await client.query(
           `DELETE FROM files f WHERE f.time < $1
              AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.files IS NOT NULL AND e.files @> jsonb_build_array(jsonb_build_object('sha256', f.sha256)))
@@ -266,10 +279,8 @@ export class Files {
         )
         const rows = gone.rows.map((r) => r.sha256 as string)
         await this.remove(rows)
-        const old: string[] = []
-        for await (const o of this.objects()) if (o.modified < before.getTime()) old.push(o.sha256)
         const kept = new Set((await client.query('SELECT sha256 FROM files WHERE sha256 = ANY($1)', [old])).rows.map((r) => r.sha256 as string))
-        const orphans = old.filter((s) => !kept.has(s))
+        const orphans = old.filter((s) => !kept.has(s) && !rows.includes(s))
         await this.remove(orphans)
         return { rows: rows.length, orphans: orphans.length }
       } finally {

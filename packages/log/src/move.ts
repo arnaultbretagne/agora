@@ -5,10 +5,8 @@
 // they were, and a second run moves only what is left.
 import type { Pool, PoolClient } from 'pg'
 import { canonical, decode, encode } from './json.ts'
-import { digest, expandFiles, FILES_LOCK, findFiles, type Files } from './files.ts'
+import { digest, expandFiles, FILE_MIN, FILES_LOCK, findFiles, type Files } from './files.ts'
 
-/** Rows smaller than this, compressed as PostgreSQL stores them, cannot hold a file. */
-const SMALLEST = 32 * 1024
 const PAGE = 20
 
 export interface Moved {
@@ -19,7 +17,7 @@ export interface Moved {
 }
 
 async function kept(client: PoolClient, files: Files, bytes: ReadonlyMap<string, Buffer>, moved: Moved): Promise<void> {
-  const sha256s = [...bytes.keys()]
+  const sha256s = [...bytes.keys()].sort()
   const known = new Set((await client.query('SELECT sha256 FROM files WHERE sha256 = ANY($1)', [sha256s])).rows.map((r) => r.sha256 as string))
   for (const sha256 of sha256s)
     if (!known.has(sha256)) {
@@ -53,9 +51,9 @@ export async function moveFiles(owner: Pool, files: Files, log: (line: string) =
     for (;;) {
       const page = await client.query(
         `SELECT workstream, position, content::text AS content FROM entries
-         WHERE (workstream, position) > ($1::uuid, $2::bigint) AND files IS NULL AND kind IN ('command','acp') AND pg_column_size(content) > $3
+         WHERE (workstream, position) > ($1::uuid, $2::bigint) AND files IS NULL AND kind IN ('command','acp') AND length(content::text) >= $3
          ORDER BY workstream, position LIMIT ${String(PAGE)}`,
-        [after[0], after[1], SMALLEST],
+        [after[0], after[1], FILE_MIN],
       )
       if (page.rowCount === 0) break
       for (const row of page.rows) {
@@ -71,9 +69,11 @@ export async function moveFiles(owner: Pool, files: Files, log: (line: string) =
             encode(found.value),
             JSON.stringify(found.refs),
           ])
-          // Checked as stored: expanded, the entry is what it was, every member, number and string.
+          // Checked as stored, with the bytes R2 gives back: expanded, the entry is what it was, every member, number and string.
           const stored = await client.query('SELECT content::text AS content, files FROM entries WHERE workstream = $1 AND position = $2', [row.workstream, row.position])
-          const expanded = expandFiles(decode(stored.rows[0].content as string), stored.rows[0].files, found.bytes)
+          const back = new Map<string, Buffer>()
+          for (const sha256 of found.bytes.keys()) back.set(sha256, await files.get(sha256))
+          const expanded = expandFiles(decode(stored.rows[0].content as string), stored.rows[0].files, back)
           if (canonical(expanded) !== canonical(before)) throw new Error(`entry ${String(row.workstream)}/${String(row.position)} does not expand back`)
         })
         moved.entries++
@@ -85,9 +85,9 @@ export async function moveFiles(owner: Pool, files: Files, log: (line: string) =
     for (;;) {
       const page = await client.query(
         `SELECT workstream, kind, id, object::text AS object FROM objects
-         WHERE (workstream, kind, id) > ($1::uuid, $2, $3::uuid) AND pg_column_size(object) > $4
+         WHERE (workstream, kind, id) > ($1::uuid, $2, $3::uuid) AND length(object::text) >= $4
          ORDER BY workstream, kind, id LIMIT ${String(PAGE)}`,
-        [next[0], next[1], next[2], SMALLEST],
+        [next[0], next[1], next[2], FILE_MIN],
       )
       if (page.rowCount === 0) break
       for (const row of page.rows) {

@@ -32,8 +32,8 @@ Any other string stays in the entry as it is.
 | Key | `sha256/` and the 64 lowercase hexadecimal digits of the SHA-256 of the bytes. |
 | Upload | Unless a `files` row names the key: PutObject with `If-None-Match: *`, `x-amz-checksum-sha256` the bytes' SHA-256, type `application/octet-stream`. A `412` means the object is there: the file is stored; a `400 BadDigest`, that the bytes changed on the way: tried again. |
 | Record | A `files` row — SHA-256, byte count, time — inserted unless it exists, in the transaction that writes the entry or the anchor record naming it. |
-| Order | The bytes are stored before that transaction: a reference never names an object that is not stored. From its first look at `files` to that commit, the writer holds the files lock shared (a PostgreSQL advisory lock): no sweep runs in between. |
-| R2 failing | A received line is not taken: the bridge holds the adapter, and the line is tried again as when PostgreSQL fails (`log.md`, "Backpressure and shutdown"), then written in its order. A Write is answered 503 `files_unavailable`, with nothing written. An anchor's push is answered 503, with nothing stored. |
+| Order | The bytes are stored in that transaction, before the entry or the record: a reference never names an object that is not stored. From its first look at `files` to the commit, the writer holds the files lock shared (a PostgreSQL advisory lock): no sweep runs in between. Rows are inserted in the order of their SHA-256. |
+| R2 failing | A request gives up after 5 s without a connection or 30 s without progress, tried twice. A received line is not taken: the bridge holds the adapter, and the line is tried again as when PostgreSQL fails (`log.md`, "Backpressure and shutdown"), then written in its order. A Write is answered 503 `files_unavailable`, with nothing written. An anchor's push is answered 503, with nothing stored. |
 
 ## References
 
@@ -55,8 +55,8 @@ Any other string stays in the entry as it is.
 
 | Rule | Detail |
 | --- | --- |
-| When | Once an hour, in the server, with the anchor role, holding the files lock exclusive: no file is being stored meanwhile. |
-| What | Each `files` row more than 24 hours old that no entry's `files` and no anchor's `file` names is deleted, then its object (DeleteObjects). Then each object of the bucket with no row (ListObjectsV2), last modified more than 24 hours ago, is deleted. |
+| When | Once an hour, in the server, with the anchor role. It lists the bucket, then takes the files lock exclusive if it is free: while a file is being stored, it does not run, and waits for the next hour. |
+| What | Under the lock: each `files` row more than 24 hours old that no entry's `files` and no anchor's `file` names is deleted, then its object (DeleteObjects); then each object listed (ListObjectsV2), last modified more than 24 hours ago, that has no row. |
 | Nothing else | No other path deletes an object: deleting a Workstream or replacing an anchor removes references only. |
 
 ## The server
@@ -83,7 +83,8 @@ Without them, the server does not start. The sandboxes never reach the endpoint.
 | B8 | The sweep, with an object referenced; one unreferenced, stored an hour ago; one unreferenced, stored two days ago; the object of an anchor since replaced, and the current anchor's, both stored two days ago; an object with no row, two days old | Kept; kept; deleted with its `files` row; the replaced anchor's deleted, the current one's kept; deleted. |
 | B10 | A line referencing a file already stored, written while a sweep that would delete it holds the files lock | The writer waits for the sweep; the object is stored again, and the entry's reference names an object that exists. |
 | B11 | A message with a file written during a turn, R2 unreachable when the turn ends; then R2 back | The message waits, nothing sent while R2 is unreachable; then it goes as the next turn, its line listing the file, the agent given those bytes. |
-| B9 | A log written with files inline, moved to R2 | Each entry expanded equals its former content; each anchor's object equals its former bytes; no base64 string of 64 KiB or more left in `entries` or `objects`; one object per distinct SHA-256. |
+| B12 | A sweep while a file is being stored; then another once it is stored | The first does not run: nothing deleted, no DeleteObjects. The second deletes the object nothing references. |
+| B9 | A log written with files inline — an image in a command, a line and a view, base64 of zeros that PostgreSQL compresses to almost nothing, an anchor — moved to R2; then moved again | Each entry expanded, with the bytes R2 gives back, equals its former content, a number beyond 2^53 included; each anchor's object equals its former bytes; no base64 string of 64 KiB or more left in `entries` or `objects`; one object per distinct SHA-256. The second move moves nothing. |
 
 ## To be specified
 

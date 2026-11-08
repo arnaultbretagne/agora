@@ -362,7 +362,8 @@ export class LogStore {
     const client = await this.writer.connect()
     let broken = false
     try {
-      await client.query('BEGIN')
+      // Each statement sees what committed before it: a file's row deleted by a sweep is seen gone (docs/specs/files.md).
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
       // docs/specs/log.md, "Entries": the next position is the Workstream's, read under its lock.
       const locked = await client.query('SELECT last_position FROM workstreams WHERE id=$1 FOR UPDATE', [uuid(workstream)])
       if (locked.rowCount !== 1) throw new Error('unknown_workstream')
@@ -634,7 +635,7 @@ export class LogStore {
     const client = await this.anchors.connect()
     let broken = false
     try {
-      await client.query('BEGIN')
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
       await this.files.keep(client, new Map([[file, bytes]]))
       await client.query(
         `WITH stored AS (
@@ -702,7 +703,7 @@ export class LogStore {
     return result.rowCount === 1
   }
   /** The sweep (docs/specs/files.md, "The sweep"), with the anchor role. */
-  async sweep(ageMs?: number): Promise<{ rows: number; orphans: number }> {
+  async sweep(ageMs?: number): Promise<{ rows: number; orphans: number } | null> {
     if (!this.files) throw new Error('files_unavailable')
     return this.files.sweep(this.anchors, ageMs)
   }

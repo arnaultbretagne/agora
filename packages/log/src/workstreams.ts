@@ -190,7 +190,7 @@ export class Workstreams implements Handler {
   /** docs/specs/files.md, "The sweep": what nothing references any more leaves R2. */
   private async sweep(): Promise<void> {
     await this.store.sweep().then(
-      () => this.report({ operation: 'sweep', outcome: 'succeeded' }),
+      (done) => this.report({ operation: 'sweep', outcome: done === null ? 'refused' : 'succeeded' }),
       () => this.report({ operation: 'sweep', outcome: 'failed', errorClass: 'files' }),
     )
   }
@@ -824,7 +824,10 @@ export class Workstreams implements Handler {
       // Then the anchor, before the adapter speaks: one that opens its files at start is restarted to read them.
       if (e.body.anchor) {
         // docs/specs/executions.md, "Restoring": an anchor R2 does not give back fails the restore.
-        const anchor = await this.store.anchorBytes(String(e.body.anchor)).catch(() => 'unreadable' as const)
+        const anchor = await this.store.anchorBytes(String(e.body.anchor)).catch((error: unknown) => {
+          if (error instanceof Error && error.message === 'files_unavailable') return 'unreadable' as const
+          throw error
+        })
         if (anchor === 'unreadable') return this.failSetup(workstream, e, 'restore_failed')
         if (!anchor) return this.failSetup(workstream, e, 'anchor_missing')
         try {
