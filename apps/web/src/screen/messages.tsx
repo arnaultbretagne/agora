@@ -123,7 +123,7 @@ export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-role="assistant"
-      className="group/message animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-(--thread-max-width) duration-150"
+      className="group/message relative animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-(--thread-max-width) duration-150"
     >
       <div
         data-question={question ? (waiting ? 'pending' : 'answered') : undefined}
@@ -162,7 +162,13 @@ export const AssistantMessage: FC = () => {
         {running && empty && <TraceLine tone="live" label={pending ? `starting ${harnessName(harness)}` : 'working'} />}
         <Failure />
       </div>
-      <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="mt-2 flex items-center gap-1.5 empty:hidden">
+      {/* Shown on hover over an earlier message, it floats in the gap below it: the thread does not move. */}
+      <ActionBarPrimitive.Root
+        hideWhenRunning
+        autohide="not-last"
+        autohideFloat="always"
+        className="mt-2 flex items-center gap-1.5 empty:hidden data-floating:absolute data-floating:top-full data-floating:left-0 data-floating:z-10 data-floating:mt-0"
+      >
         <ActionBarPrimitive.Copy aria-label="Copy" className="text-muted-foreground/70 hover:text-foreground p-1 transition-colors">
           <AuiIf condition={(s) => s.message.isCopied}>
             <CheckIcon className="size-4" />

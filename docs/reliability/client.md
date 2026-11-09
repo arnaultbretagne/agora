@@ -164,6 +164,9 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U77 | — | unit | R31 | proven | claude-code: `2 edits, 1 command` `+22 −0`, `3 edits, 1 command` `+5 −5`. codex: `4 commands, 2 other tools` `3 failed`, `1 command, 1 other tool`. opencode: `2 other tools, 2 edits, 2 commands` with its reasoning in it, `1 edit, 1 command, 1 other tool` `+1 −1`. A pending permission, a `delegate` line, an approval and a question out; answered, or its turn cancelled, in; what stays out ends a fold: 1, then 2. |
 | U78 | — | local | R31 | proven | `/tool-run 3`, the permission pending: `1 read, 1 command` `1 failed`, `1 edit, 1 search` `+1 −1`, both closed, `Looking first.` and `Now the change.` around them, `Write demo.txt` outside with Allow. Answered: `A long command` `4 tools`, closed. Done: `2 edits, 1 search, 1 command` `+2 −2`, closed; opened, `Edit demo.txt`, `Search demo`, `Write demo.txt`, `A long command`, the first opening onto its diff. `/tool`: its line, no fold. |
 | U79 | — | local | R32 | proven | A 200 × 120 PNG of noise written with a message: its tile `/api/files/fb4d4d58…?type=image%2Fpng&owner=…`, drawn; opened, 200 × 120 from the same address; the thread 6025 characters, the reference in it, none of the image's base64. |
+| U80 | — | local | — | not verified | — |
+| U81 | — | local | — | not verified | — |
+| U82 | — | local | — | not verified | — |
 
 ## Not covered
 
