@@ -9,7 +9,7 @@
 import { AuiIf, ComposerPrimitive, QueueItemPrimitive, useAui, useAuiState } from '@assistant-ui/react'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, XIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
-import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
+import { Fragment, useState, type FC, type KeyboardEvent } from 'react'
 import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
@@ -348,7 +348,7 @@ const WaitingMessages: FC = () => {
 
 export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { returned, takeReturned, pending, composer, commands, promptCapabilities, pool } = useAgora()
+  const { pending, composer, commands, promptCapabilities, pool } = useAgora()
   const team = composer.create && pool === TEAM
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
@@ -375,13 +375,6 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
       setDismissed(text)
     }
   }
-  // A message whose execution failed to start comes back here, its attachments with it, to be sent again.
-  useEffect(() => {
-    if (returned === null) return
-    aui.composer().setText(returned.text)
-    for (const a of returned.attachments) void aui.composer().addAttachment({ id: a.id, type: a.type, name: a.name, contentType: a.contentType, content: a.content }).catch(() => {})
-    takeReturned()
-  }, [returned, aui, takeReturned])
   return (
     <div className="flex w-full flex-col gap-3">
       <Notes />
