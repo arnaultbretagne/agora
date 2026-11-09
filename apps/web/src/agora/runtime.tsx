@@ -444,7 +444,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
   // (docs/specs/assistant-ui.md, "Sending"): the composer is one for all of them, so moving puts this
   // one's away and shows the other's. Its text at once, before the screen is painted; its attachments
-  // once the runtime has the Workstream's adapter, through which they are added again.
+  // once the runtime has the Workstream's adapter — known with its view —, through which they are added
+  // again; still waiting when the person moves on, they stay with it.
   const drafts = useRef(new Map<string | null, { text: string; attachments: readonly Attachment[] }>())
   const shownFor = useRef(id)
   const toRestore = useRef<readonly Attachment[]>([])
@@ -452,7 +453,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     if (shownFor.current === id) return
     const input = runtime.thread.composer
     const { text, attachments: held } = input.getState()
-    drafts.current.set(shownFor.current, { text, attachments: held })
+    drafts.current.set(shownFor.current, { text, attachments: [...held, ...toRestore.current] })
     shownFor.current = id
     const kept = drafts.current.get(id)
     drafts.current.delete(id)
@@ -463,12 +464,12 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [id, runtime])
   useEffect(() => {
     const restoring = toRestore.current
-    if (restoring.length === 0) return
+    if (restoring.length === 0 || attachments === undefined) return
     toRestore.current = []
     const input = runtime.thread.composer
     for (const a of restoring)
       void input.addAttachment(complete(a) ? { id: a.id, type: a.type, name: a.name, contentType: a.contentType, content: a.content } : a.file).catch(() => {})
-  }, [id, runtime])
+  }, [id, runtime, attachments])
   // A message given back: into its Workstream's composer, once that one is shown.
   useEffect(() => {
     if (returned === null || returned.for !== id) return
