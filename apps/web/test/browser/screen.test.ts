@@ -1628,7 +1628,7 @@ test('U81 Copy shown on hover over an earlier response: the thread under it does
   assert.equal((await next.boundingBox())!.y, before.y)
 })
 
-test('U82 a text typed and not sent, and its attachment: each Workstream and the draft keep their own, moving between them and New workstream; not after a reload', async () => {
+test('U82 a text typed and not sent, and its attachment: each Workstream and the draft keep their own, moving between them and New workstream; the attachment sent; not after a reload', async () => {
   const page = await fresh()
   const alpha = await started(page, 'alpha draft task')
   const beta = await started(page, 'beta draft task')
@@ -1648,6 +1648,7 @@ test('U82 a text typed and not sent, and its attachment: each Workstream and the
   await page.waitForURL(`${server.url}/`)
   await page.getByText('What shall we work on?').waitFor()
   assert.equal(await composerInput(page).inputValue(), '', 'not the text of alpha')
+  assert.equal(await tile.count(), 0, 'not the attachment of beta')
   await composerInput(page).fill('for the draft')
   await list.getByText('beta draft task').click()
   await page.waitForURL(`${server.url}/w/${beta}`)
@@ -1658,6 +1659,9 @@ test('U82 a text typed and not sent, and its attachment: each Workstream and the
   await list.getByText('alpha draft task').click()
   await page.waitForURL(`${server.url}/w/${alpha}`)
   assert.equal(await composerInput(page).inputValue(), 'for alpha')
+  // Once alpha's view, and so its adapter, is known: still none of beta's.
+  await thread(page).getByText('Echo #1: alpha draft task.').waitFor()
+  await page.waitForTimeout(300)
   assert.equal(await tile.count(), 0)
   await page.getByRole('button', { name: 'New workstream', exact: true }).click()
   await page.waitForURL(`${server.url}/`)
@@ -1671,21 +1675,35 @@ test('U82 a text typed and not sent, and its attachment: each Workstream and the
   await page.getByRole('button', { name: 'New workstream', exact: true }).click()
   await page.waitForURL(`${server.url}/`)
   assert.equal(await composerInput(page).inputValue(), '')
-  // Kept in the page only: beta's text is gone after a reload.
-  await page.goto(`${server.url}/w/${beta}`)
-  await thread(page).getByText('Echo #1: beta draft task.').waitFor()
+  // Beta's attachment, added again, is sent with its text.
+  await list.getByText('beta draft task').click()
+  await page.waitForURL(`${server.url}/w/${beta}`)
+  await tile.waitFor()
+  assert.equal(await composerInput(page).inputValue(), 'for beta')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await thread(page).getByText('Echo #2: for beta.').waitFor()
+  const prompts = (await entriesOf(beta)).filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt').map((e) => JSON.stringify(e))
+  assert.ok(prompts.some((p) => p.includes('for beta') && p.includes('notes.md') && p.includes('# Notes')), 'the prompt holds the file')
+  // Kept in the page only: alpha's text, still kept, is gone after a reload.
+  await list.getByText('alpha draft task').click()
+  await page.waitForURL(`${server.url}/w/${alpha}`)
+  assert.equal(await composerInput(page).inputValue(), 'for alpha')
+  await page.reload()
+  await thread(page).getByText('Echo #1: alpha draft task.').waitFor()
   assert.equal(await composerInput(page).inputValue(), '')
   assert.equal(await tile.count(), 0)
 })
 
-test('U83 a Write refused once the person has moved to another Workstream: not in that one\'s composer; back in its own', async () => {
+test('U83 a Write refused once the person has moved to another Workstream: neither its text nor its reason there; both back in its own', async () => {
   const page = await fresh()
   const alpha = await started(page, 'alpha refused task')
   const beta = await started(page, 'beta refused task')
   const list = page.getByRole('navigation', { name: 'Workstreams' })
-  // Simulated: the server's refusal, answered once the person has moved.
+  // Simulated: the server's refusal, held until the person has moved.
+  let release = () => {}
+  const moved = new Promise<void>((resolve) => (release = resolve))
   await page.route('**/commands', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await moved
     await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'permission_pending' }) })
   })
   const answered = page.waitForResponse('**/commands')
@@ -1695,13 +1713,16 @@ test('U83 a Write refused once the person has moved to another Workstream: not i
   await list.getByText('alpha refused task').click()
   await page.waitForURL(`${server.url}/w/${alpha}`)
   await thread(page).getByText('Echo #1: alpha refused task.').waitFor()
+  release()
   assert.equal((await answered).status(), 409)
   await page.waitForTimeout(300)
   assert.equal(await composerInput(page).inputValue(), '', 'not in the other Workstream')
+  assert.equal(await page.getByRole('alert').getByText('Answer the permission request first.').count(), 0, 'its reason not said there')
   await page.unroute('**/commands')
   await list.getByText('beta refused task').click()
   await page.waitForURL(`${server.url}/w/${beta}`)
   await until('the text back in its own', async () => (await composerInput(page).inputValue()) === 'sent from beta')
+  await page.getByRole('alert').getByText('Answer the permission request first.').waitFor()
 })
 
 test('G8 a merge card: the pull request as a link, its state, Merge closed while it waits for a review, open once ready; merged, squash; a card a message cancels', async () => {
