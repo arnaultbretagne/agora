@@ -423,11 +423,12 @@ test('L36 a storage outage lasting past the deadline: the interruption shown, no
   // ownership connection.
   await db.connections(false)
   for (const role of ['writer', 'projector', 'anchors'] as const) await terminate(db, role, role === 'writer' ? 'others' : 'all')
-  // While a received line waits for its commit, no command is admitted.
+  // While a received line waits for its commit, no command is admitted. That line's report carries its bytes; the
+  // one of a line captured before the outage and handled during it does not, and blocks nothing.
   await until('a capture blocked', () =>
     lab.logs.some((l) => {
       const line = JSON.parse(l) as Record<string, unknown>
-      return line.operation === 'capture' && line.outcome === 'blocked'
+      return line.operation === 'capture' && line.outcome === 'blocked' && typeof line.bytes === 'number'
     }),
   )
   const refused = await lab.workstreams.command(ws, { id: randomUUID(), kind: 'Write', target: { execution: e.id, session: e.session }, body: { prompt: [{ type: 'text', text: 'during the outage' }] } })

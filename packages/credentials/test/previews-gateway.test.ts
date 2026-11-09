@@ -20,6 +20,7 @@ import { connect as tlsConnect } from 'node:tls'
 import { after, before, describe, it } from 'node:test'
 import { startOutbound, type Outbound } from '@agora/harness-bridge/outbound'
 import { GrantSigner } from '../src/index.ts'
+import { fetchRelease } from './release.ts'
 
 const BINARIES = {
   agentgateway: { url: 'https://github.com/agentgateway/agentgateway/releases/download/v1.6.0/agentgateway-linux-amd64', sha256: '496ed27e6a96b55a9ad7cabe5c2be7172511f44a3cb113e533d22bf93a7f079d', member: null },
@@ -60,8 +61,7 @@ async function binary(name: keyof typeof BINARIES): Promise<string> {
   const download = join(dir, member === null ? name : 'release.tar.gz')
   if (!existsSync(download)) {
     mkdirSync(dir, { recursive: true })
-    const response = await fetch(url)
-    assert.equal(response.status, 200, `download ${url}`)
+    const response = await fetchRelease(url)
     const partial = `${download}.${randomUUID()}`
     await pipeline(Readable.fromWeb(response.body as ReadableStream), createWriteStream(partial))
     renameSync(partial, download)

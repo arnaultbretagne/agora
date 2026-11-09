@@ -207,7 +207,11 @@ test('L43 a Workstream through Create, a Session, a break, Stop and its end: the
     [...new Set(seen.map((v) => v.title))],
     ['New workstream', 'Fix the login page', 'The agent names it'],
   )
-  const last = (await view(lab.url, ws))!
+  // The view is projected after the entry: read it once it has caught up with execution.ended.
+  const last = await until('the view ended', async () => {
+    const v = await view(lab.url, ws)
+    return v?.state === 'ended' ? v : undefined
+  })
   assert.deepEqual(
     [last.state, last.pool, last.harness, last.execution, last.session, last.anchor, last.title],
     ['ended', 'mock-test', 'mock', e.id, null, ended.content.anchor, 'The agent names it'],

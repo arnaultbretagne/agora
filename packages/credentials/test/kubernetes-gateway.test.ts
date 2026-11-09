@@ -17,6 +17,7 @@ import type { ReadableStream } from 'node:stream/web'
 import { after, before, describe, it } from 'node:test'
 import { startOutbound, type Outbound } from '@agora/harness-bridge/outbound'
 import { GrantSigner } from '../src/index.ts'
+import { fetchRelease } from './release.ts'
 
 const BINARIES = {
   agentgateway: { url: 'https://github.com/agentgateway/agentgateway/releases/download/v1.6.0/agentgateway-linux-amd64', sha256: '496ed27e6a96b55a9ad7cabe5c2be7172511f44a3cb113e533d22bf93a7f079d' },
@@ -48,8 +49,7 @@ async function binary(name: keyof typeof BINARIES): Promise<string> {
   const file = join(dir, name)
   if (!existsSync(file)) {
     mkdirSync(dir, { recursive: true })
-    const response = await fetch(url)
-    assert.equal(response.status, 200, `download ${url}`)
+    const response = await fetchRelease(url)
     const partial = `${file}.${randomUUID()}`
     await pipeline(Readable.fromWeb(response.body as ReadableStream), createWriteStream(partial))
     renameSync(partial, file)

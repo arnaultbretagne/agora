@@ -18,6 +18,7 @@ import { connect as tlsConnect } from 'node:tls'
 import { after, before, describe, it } from 'node:test'
 import { startOutbound, type Outbound } from '@agora/harness-bridge/outbound'
 import { GrantSigner, mcpServers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type McpServer } from '../src/index.ts'
+import { fetchRelease } from './release.ts'
 
 const RELEASE = 'https://github.com/agentgateway/agentgateway/releases/download/v1.6.0/agentgateway-linux-amd64'
 const SHA256 = '496ed27e6a96b55a9ad7cabe5c2be7172511f44a3cb113e533d22bf93a7f079d'
@@ -46,8 +47,7 @@ async function agentgateway(): Promise<string> {
   const file = join(dir, 'agentgateway')
   if (!existsSync(file)) {
     mkdirSync(dir, { recursive: true })
-    const response = await fetch(RELEASE)
-    assert.equal(response.status, 200, `download ${RELEASE}`)
+    const response = await fetchRelease(RELEASE)
     const partial = `${file}.${randomUUID()}`
     await pipeline(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream), createWriteStream(partial))
     renameSync(partial, file)
