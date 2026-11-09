@@ -3,6 +3,7 @@
 // Pure but `prepare`, which reads the file and draws an image to re-encode it.
 import type { AttachmentAdapter, CompleteAttachment, PendingAttachment, ThreadMessageLike } from '@assistant-ui/react'
 import type { Json } from './objects.ts'
+import { NOBODY } from './api.ts'
 
 /** What the agent accepts in a prompt beyond text and links (docs/specs/log.md, "The Workstream view"). */
 export interface PromptCapabilities {
@@ -28,6 +29,17 @@ type Attachment = NonNullable<ThreadMessageLike['attachments']>[number]
 
 const json = (value: unknown): Json | undefined => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Json) : undefined)
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+const REFERENCE = /^agora-file:sha256:([0-9a-f]{64})$/
+
+/**
+ * An image block's address: its bytes, or, when the log keeps them in R2 and the block a reference to them,
+ * the file read from Agora (docs/specs/files.md, "Reading a file"); the owner only counts without the proxy.
+ */
+export function imageOf(block: Json): string {
+  const sha256 = REFERENCE.exec(text(block.data))?.[1]
+  if (sha256 === undefined) return `data:${text(block.mimeType)};base64,${text(block.data)}`
+  return `/api/files/${sha256}?${new URLSearchParams({ type: text(block.mimeType), owner: NOBODY }).toString()}`
+}
 
 export function promptCapabilitiesOf(value: unknown): PromptCapabilities | null {
   const v = json(value)
@@ -105,7 +117,7 @@ export function attachmentsOf(blocks: readonly unknown[], key?: object): Attachm
     if (!b || b.type === 'text') return []
     const base = { id: `block-${String(i)}`, status: { type: 'complete' as const } }
     if (b.type === 'image' && text(b.data) !== '')
-      return [{ ...base, type: 'image', name: text(b.uri) || 'image', contentType: text(b.mimeType), content: [{ type: 'image', image: `data:${text(b.mimeType)};base64,${text(b.data)}` }] }]
+      return [{ ...base, type: 'image', name: text(b.uri) || 'image', contentType: text(b.mimeType), content: [{ type: 'image', image: imageOf(b) }] }]
     const resource = json(b.resource)
     if (b.type === 'resource') return [{ ...base, type: 'document', name: text(resource?.uri) || 'resource', contentType: text(resource?.mimeType), content: [] }]
     if (b.type === 'resource_link') return [{ ...base, type: 'document', name: text(b.uri) || text(b.name) || 'link', content: [] }]

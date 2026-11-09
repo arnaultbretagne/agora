@@ -223,7 +223,7 @@ test('L68 a Write with a block the agent does not accept: refused, nothing writt
     .map((u) => String(object(u!.content)?.text ?? ''))
     .join('')
   t.diagnostic(`the agent: ${said}`)
-  assert.match(said, /Received an image, image\/png, 1 × 1, 70 bytes; notes\.md, text\/markdown, 8 characters\./)
+  assert.match(said, /Received an image, image\/png, 1 × 1, 70 bytes, sha256 [0-9a-f]{12}; notes\.md, text\/markdown, 8 characters\./)
 })
 
 test('L52 GET /api/pools after a Session in a pool: its settings and commands; a pool kept for the tests marked', async (t) => {

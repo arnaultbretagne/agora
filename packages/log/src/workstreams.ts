@@ -54,6 +54,8 @@ export interface WorkstreamsOptions {
   readonly maxActive: number
   readonly renewSeconds: number
   readonly tickMs?: number
+  /** How often the files' sweep runs (docs/specs/files.md, "The sweep"): once an hour by default. */
+  readonly sweepMs?: number
   readonly responseTimeoutMs?: number
   readonly shutdownMs?: number
   readonly sink?: (line: string) => void
@@ -104,6 +106,7 @@ export class Workstreams implements Handler {
   private stopped = true
   private halted = false
   private timer: NodeJS.Timeout | null = null
+  private sweeper: NodeJS.Timeout | null = null
   private ticking = false
   /** The delegations' engine (docs/specs/delegation.md), attached by the server. */
   delegations: Delegations | null = null
@@ -185,6 +188,15 @@ export class Workstreams implements Handler {
     await this.delegations?.start()
     await this.merges?.start()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
+    if (this.store.files) this.sweeper = setInterval(() => void this.sweep(), this.options.sweepMs ?? 3_600_000)
+  }
+
+  /** docs/specs/files.md, "The sweep": what nothing references any more leaves R2. */
+  private async sweep(): Promise<void> {
+    await this.store.sweep().then(
+      (done) => this.report({ operation: 'sweep', outcome: done === null ? 'refused' : 'succeeded' }),
+      () => this.report({ operation: 'sweep', outcome: 'failed', errorClass: 'files' }),
+    )
   }
 
   /** A clean stop: no new dispatch, connections drained, breaks written, then the lock released. */
@@ -192,6 +204,7 @@ export class Workstreams implements Handler {
     if (this.stopped) return
     this.stopped = true
     if (this.timer !== null) clearInterval(this.timer)
+    if (this.sweeper !== null) clearInterval(this.sweeper)
     for (const timer of this.projecting.values()) clearTimeout(timer)
     this.projecting.clear()
     await this.executions.drain(this.options.shutdownMs ?? 5000)
@@ -209,6 +222,7 @@ export class Workstreams implements Handler {
     this.halted = true
     this.stopped = true
     if (this.timer !== null) clearInterval(this.timer)
+    if (this.sweeper !== null) clearInterval(this.sweeper)
     for (const timer of this.projecting.values()) clearTimeout(timer)
     this.projecting.clear()
     void this.executions.stop()
@@ -671,7 +685,10 @@ export class Workstreams implements Handler {
     const current = state.executions.get(e.id)!
     if (current.lost || current.failed) return
     // A message that cannot go stays where it is, retractable; it holds nothing else back.
-    await this.release(workstream, current).catch(() => this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: 'unknown' }))
+    // A message whose files R2 does not give back waits too, tried again at the next tick (docs/specs/files.md).
+    await this.release(workstream, current).catch((error: unknown) =>
+      this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: error instanceof Error && error.message === 'files_unavailable' ? 'files' : 'unknown' }),
+    )
     state = await this.store.state(workstream)
     // Stop cancels the turn in progress, once; it never makes up its end.
     if (current.stopped && state.active && ['in_progress', 'uncertain'].includes(state.active.status)) {
@@ -730,13 +747,15 @@ export class Workstreams implements Handler {
     const session = e.session
     if (state.active) {
       if (state.active.status !== 'in_progress' || !e.steering || state.unsteerable || state.tools.size > 0 || !steerable(blocks)) return
-      const params = { sessionId: e.acpId, prompt: blocks, _meta: { steering: { idleBehavior: 'promptRequired' } } }
+      // docs/specs/files.md, "References": a message's files are given back before it becomes a line of its own.
+      const params = { sessionId: e.acpId, prompt: object((await this.store.expand(message)).body)?.prompt, _meta: { steering: { idleBehavior: 'promptRequired' } } }
       await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: STEERING, params }, session, message.command ?? undefined))
       return
     }
     if (state.held) return
     const catchUp = this.catchUpFor(await this.store.entries(workstream), state, e, blocks)
-    const prompt = catchUp ? [catchUpBlock(catchUp), ...(blocks as unknown[])] : blocks
+    const given = object((await this.store.expand(message)).body)?.prompt
+    const prompt = catchUp ? [catchUpBlock(catchUp), ...(given as unknown[])] : given
     await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: 'session/prompt', params: { sessionId: e.acpId, prompt } }, session, message.command ?? undefined))
   }
 
@@ -818,7 +837,12 @@ export class Workstreams implements Handler {
       if (!(await this.handToken(e))) return
       // Then the anchor, before the adapter speaks: one that opens its files at start is restarted to read them.
       if (e.body.anchor) {
-        const anchor = await this.store.anchorBytes(String(e.body.anchor))
+        // docs/specs/executions.md, "Restoring": an anchor R2 does not give back fails the restore.
+        const anchor = await this.store.anchorBytes(String(e.body.anchor)).catch((error: unknown) => {
+          if (error instanceof Error && error.message === 'files_unavailable') return 'unreadable' as const
+          throw error
+        })
+        if (anchor === 'unreadable') return this.failSetup(workstream, e, 'restore_failed')
         if (!anchor) return this.failSetup(workstream, e, 'anchor_missing')
         try {
           await this.executions.putAnchor(e.id, anchor.content)
@@ -854,7 +878,7 @@ export class Workstreams implements Handler {
     // The MCP servers its profiles open (docs/specs/credentials.md, "MCP servers"): the gateway sets their credential.
     let params: Record<string, unknown> = { cwd: info.workspace, mcpServers: mcpServers(await this.profilesOf(e)) }
     if (e.body.anchor) {
-      const anchor = await this.store.anchorBytes(String(e.body.anchor))
+      const anchor = await this.store.anchorMetadata(String(e.body.anchor))
       const initialize = (await this.store.entries(workstream)).find(
         (x) => x.execution === e.id && x.correlated_method === 'initialize' && x.rpc_kind === 'response',
       )
@@ -862,7 +886,7 @@ export class Workstreams implements Handler {
       method = object(caps?.sessionCapabilities)?.resume != null ? 'session/resume' : 'session/load'
       if (!anchor) return this.failSetup(workstream, e, 'anchor_missing')
       if (method === 'session/load' && caps?.loadSession !== true) return this.failSetup(workstream, e, 'restore_failed')
-      params = { ...params, sessionId: anchor.metadata.sessionId }
+      params = { ...params, sessionId: anchor.sessionId }
     }
     await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method, params }))
   }
@@ -878,7 +902,14 @@ export class Workstreams implements Handler {
    */
   private async dispatch(workstream: string, entry: Entry, connection: string): Promise<boolean> {
     await this.options.fault?.('before_marker', { position: entry.position, method: entry.method })
+    // docs/specs/files.md, "References": the line goes with its files given back. One R2 does not give back
+    // fails the request here, before its marker, so nothing after the marker can refuse the write.
+    const content = entry.files?.length ? await this.store.expand(entry).catch(() => null) : entry.content
     const marked = await this.store.transaction(workstream, async (tx) => {
+      if (content === null) {
+        await tx.append({ kind: 'request.failed', execution: entry.execution, session: entry.session, content: { requestPosition: entry.position, reason: 'files_unavailable' } })
+        return false
+      }
       const state = tx.state
       const command = tx.entries.find((x) => x.kind === 'command' && x.command === entry.command)
       const staleCancel =
@@ -915,7 +946,7 @@ export class Workstreams implements Handler {
     if (!marked) return false
     await this.options.fault?.('after_marker', { position: entry.position, method: entry.method })
     try {
-      await this.executions.send(entry.execution!, connection, encode(entry.content))
+      await this.executions.send(entry.execution!, connection, encode(content))
     } catch {
       await this.fail(workstream, entry, 'transport_error')
       return false
@@ -977,9 +1008,11 @@ export class Workstreams implements Handler {
       try {
         captured = await this.store.incoming(workstream, execution, connection, String(ordinal), bytes)
         break
-      } catch {
+      } catch (error) {
         this.blocked.add(workstream)
-        this.report({ operation: 'capture', outcome: 'blocked', workstream, execution, connection, errorClass: 'database', bytes: bytes.byteLength })
+        // docs/specs/files.md, "Storing": R2 failing holds the line as PostgreSQL failing does.
+        const errorClass = error instanceof Error && error.message === 'files_unavailable' ? 'files' : 'database'
+        this.report({ operation: 'capture', outcome: 'blocked', workstream, execution, connection, errorClass, bytes: bytes.byteLength })
         const claim = this.executions.claimOf(execution)
         if (this.stopped || Date.parse(claim?.spec?.lifecycle?.shutdownTime ?? '0') <= Date.now()) {
           // Given up: the connection fails, and the Workstream admits commands again.

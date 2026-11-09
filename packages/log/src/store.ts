@@ -7,6 +7,7 @@ import { Pool, types, type PoolClient } from 'pg'
 import { validate, idKey, requestMethod, type Direction, type Reason, type Envelope } from './acp.ts'
 import { decode, encode, hash, object, uuid, supported } from './json.ts'
 import { fold, type State } from './state.ts'
+import { digest, expandFiles, findFiles, type FileRef, type Files } from './files.ts'
 
 // docs/specs/log.md, "Storage": bigint stays a decimal string; arithmetic uses JavaScript bigint.
 types.setTypeParser(20, (value) => value)
@@ -28,6 +29,8 @@ export interface Entry {
   command: string | null
   connection: string | null
   receive_ordinal: string | null
+  /** Where the content holds a file's reference (docs/specs/files.md, "References"); null when it holds none. */
+  files: FileRef[] | null
 }
 export interface Append {
   kind: string
@@ -65,7 +68,7 @@ export interface AcceptedEffect {
 }
 
 const COLUMNS =
-  'workstream,position,time::text,kind,execution,session,content::text,direction,rpc_kind,method,correlated_method,request_position,rpc_id::text,command,connection,receive_ordinal'
+  'workstream,position,time::text,kind,execution,session,content::text,direction,rpc_kind,method,correlated_method,request_position,rpc_id::text,command,connection,receive_ordinal,files'
 
 function row(r: Record<string, unknown>): Entry {
   return {
@@ -73,6 +76,7 @@ function row(r: Record<string, unknown>): Entry {
     time: new Date(String(r.time)).toISOString(),
     content: decode(String(r.content)) as Record<string, unknown>,
     rpc_id: r.rpc_id === null ? null : decode(String(r.rpc_id)),
+    files: (r.files as FileRef[] | null) ?? null,
   }
 }
 
@@ -97,25 +101,39 @@ export class Transaction {
   readonly state: State
   readonly entries: readonly Entry[]
   position: bigint
-  constructor(client: PoolClient, workstream: string, cached: Cached, position: bigint) {
+  private readonly files: Files | undefined
+  constructor(client: PoolClient, workstream: string, cached: Cached, position: bigint, files?: Files) {
     this.client = client
     this.workstream = workstream
     this.state = cached.state
     this.entries = cached.entries
     this.position = position
+    this.files = files
   }
   async append(input: Append): Promise<string> {
+    // docs/specs/files.md, "A file": a command's or an ACP line's files go to R2 first, references in their place.
+    let content = input.raw ?? encode(input.content)
+    let refs: FileRef[] | null = null
+    if (input.kind === 'command' || input.kind === 'acp') {
+      const found = findFiles(input.content)
+      if (found) {
+        if (!this.files) throw new Error('files_unavailable')
+        await this.files.keep(this.client, found.bytes)
+        content = encode(found.value)
+        refs = found.refs
+      }
+    }
     const position = String(++this.position)
     await this.client.query(
-      `INSERT INTO entries(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal)
-      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15)`,
+      `INSERT INTO entries(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16::jsonb)`,
       [
         this.workstream,
         position,
         input.kind,
         input.execution ?? null,
         input.session ?? null,
-        input.raw ?? encode(input.content),
+        content,
         input.direction ?? null,
         input.rpc_kind ?? null,
         input.method ?? null,
@@ -125,6 +143,7 @@ export class Transaction {
         input.command ?? null,
         input.connection ?? null,
         input.receive_ordinal ?? null,
+        refs === null ? null : JSON.stringify(refs),
       ],
     )
     await this.client.query('UPDATE workstreams SET last_position=$2 WHERE id=$1', [this.workstream, position])
@@ -212,8 +231,11 @@ export class LogStore {
   readonly anchors: Pool
   private readonly cache = new Map<string, Cached>()
   readonly urls: { readonly writer: string; readonly projector: string; readonly anchors: string }
-  constructor(urls: { writer: string; projector: string; anchors: string }, max = 12) {
+  /** The bucket (docs/specs/files.md); without it, an entry with a file or an anchor is refused `files_unavailable`. */
+  readonly files: Files | undefined
+  constructor(urls: { writer: string; projector: string; anchors: string }, max = 12, files?: Files) {
     this.urls = urls
+    this.files = files
     this.writer = new Pool({ connectionString: urls.writer, max })
     this.projector = new Pool({ connectionString: urls.projector, max })
     this.anchors = new Pool({ connectionString: urls.anchors, max })
@@ -237,7 +259,7 @@ export class LogStore {
         EXISTS(SELECT 1 FROM pg_roles b WHERE b.rolname=$1 AND (b.rolcanlogin OR b.rolsuper OR b.rolcreaterole OR b.rolcreatedb OR b.rolbypassrls)) AS boundary_bad,
         EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolsuper OR p.rolcreaterole OR p.rolcreatedb OR p.rolbypassrls) AND pg_has_role(current_user,p.oid,'MEMBER')) AS privileged,
         EXISTS(SELECT 1 FROM pg_roles p WHERE (p.rolname=ANY($2) OR p.rolname IN ('pg_read_all_data','pg_write_all_data')) AND pg_has_role(current_user,p.oid,'MEMBER')) AS other,
-        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','threads','entries','commands','sessions','diagnostics','anchors','objects','checkpoints','lists','listings') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
+        EXISTS(SELECT 1 FROM pg_class c WHERE c.relname IN ('workstreams','threads','entries','commands','sessions','diagnostics','anchors','files','objects','checkpoints','lists','listings') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
         FROM pg_roles r WHERE r.rolname=current_user`,
         [`agora_${role}`, ['writer', 'projector', 'anchors'].filter((r) => r !== role).map((r) => `agora_${r}`)],
       )
@@ -340,12 +362,13 @@ export class LogStore {
     const client = await this.writer.connect()
     let broken = false
     try {
-      await client.query('BEGIN')
+      // Each statement sees what committed before it: a file's row deleted by a sweep is seen gone (docs/specs/files.md).
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
       // docs/specs/log.md, "Entries": the next position is the Workstream's, read under its lock.
       const locked = await client.query('SELECT last_position FROM workstreams WHERE id=$1 FOR UPDATE', [uuid(workstream)])
       if (locked.rowCount !== 1) throw new Error('unknown_workstream')
       const cached = await this.sync(client, workstream)
-      const result = await run(new Transaction(client, workstream, cached, BigInt(locked.rows[0].last_position)))
+      const result = await run(new Transaction(client, workstream, cached, BigInt(locked.rows[0].last_position), this.files))
       await client.query('COMMIT')
       return result
     } catch (error) {
@@ -428,6 +451,8 @@ export class LogStore {
       })
     } catch (error) {
       if ((error as { code?: string }).code === '23505') return { accepted: false, reason: 'execution_conflict' }
+      // docs/specs/files.md, "Storing": R2 failing refuses the command, and nothing is written.
+      if (error instanceof Error && error.message === 'files_unavailable') return { accepted: false, reason: 'files_unavailable' }
       if (
         error instanceof Error &&
         [
@@ -603,21 +628,30 @@ export class LogStore {
     metadata: unknown
     bytes: Uint8Array
   }): Promise<void> {
-    await this.anchors.query(
-      `WITH stored AS (
-         INSERT INTO anchors(id,workstream,execution,session,metadata,content) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT DO NOTHING
-         RETURNING id, workstream, metadata->>'harness' AS harness
-       )
-       DELETE FROM anchors a USING stored s WHERE a.workstream=s.workstream AND a.id<>s.id AND a.metadata->>'harness' IS NOT DISTINCT FROM s.harness`,
-      [
-        uuid(input.id),
-        input.workstream,
-        input.execution,
-        input.session,
-        encode(input.metadata),
-        Buffer.from(input.bytes),
-      ],
-    )
+    // docs/specs/files.md, "References": the anchor's bytes are a file in R2; its record names the object.
+    if (!this.files) throw new Error('files_unavailable')
+    const bytes = Buffer.from(input.bytes)
+    const file = digest(bytes)
+    const client = await this.anchors.connect()
+    let broken = false
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED')
+      await this.files.keep(client, new Map([[file, bytes]]))
+      await client.query(
+        `WITH stored AS (
+           INSERT INTO anchors(id,workstream,execution,session,metadata,file) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT DO NOTHING
+           RETURNING id, workstream, metadata->>'harness' AS harness
+         )
+         DELETE FROM anchors a USING stored s WHERE a.workstream=s.workstream AND a.id<>s.id AND a.metadata->>'harness' IS NOT DISTINCT FROM s.harness`,
+        [uuid(input.id), input.workstream, input.execution, input.session, encode(input.metadata), file],
+      )
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => (broken = true))
+      throw error
+    } finally {
+      client.release(broken)
+    }
   }
   /** Appends `anchor.received` for every stored anchor still without one (docs/specs/log.md). */
   async publishAnchors(workstream: string): Promise<void> {
@@ -637,10 +671,41 @@ export class LogStore {
           })
     })
   }
+  /** An anchor's metadata and bytes, read from R2 — or from its record, for one stored before its bytes moved. */
   async anchorBytes(id: string): Promise<{ metadata: Record<string, unknown>; content: Buffer } | null> {
-    const result = await this.anchors.query('SELECT metadata::text,content FROM anchors WHERE id=$1', [uuid(id)])
+    const result = await this.anchors.query('SELECT metadata::text,file,content FROM anchors WHERE id=$1', [uuid(id)])
     if (!result.rowCount) return null
-    return { metadata: object(decode(result.rows[0].metadata)) ?? {}, content: result.rows[0].content as Buffer }
+    const r = result.rows[0]
+    if (r.file === null) return { metadata: object(decode(r.metadata)) ?? {}, content: r.content as Buffer }
+    if (!this.files) throw new Error('files_unavailable')
+    return { metadata: object(decode(r.metadata)) ?? {}, content: await this.files.get(r.file as string) }
+  }
+  /** An anchor's metadata alone: what a resume names, without its bytes. */
+  async anchorMetadata(id: string): Promise<Record<string, unknown> | null> {
+    const result = await this.anchors.query('SELECT metadata::text FROM anchors WHERE id=$1', [uuid(id)])
+    return result.rowCount ? (object(decode(result.rows[0].metadata)) ?? {}) : null
+  }
+  /** An entry's content with its files given back (docs/specs/files.md, "References", "Expanding"). */
+  async expand(entry: Entry): Promise<Record<string, unknown>> {
+    if (!entry.files?.length) return entry.content
+    if (!this.files) throw new Error('files_unavailable')
+    const bytes = new Map<string, Buffer>()
+    for (const sha256 of new Set(entry.files.map((f) => f.sha256))) bytes.set(sha256, await this.files.get(sha256))
+    return expandFiles(entry.content, entry.files, bytes) as Record<string, unknown>
+  }
+  /** Whether an entry of a Workstream of one of these owners names the file (docs/specs/files.md, "Reading a file"). */
+  async readable(sha256: string, owners: readonly string[]): Promise<boolean> {
+    const result = await this.writer.query(
+      `SELECT 1 FROM entries e JOIN workstreams w ON w.id = e.workstream
+       WHERE e.files IS NOT NULL AND e.files @> jsonb_build_array(jsonb_build_object('sha256', $1::text)) AND w.owner = ANY($2::uuid[]) LIMIT 1`,
+      [sha256, owners],
+    )
+    return result.rowCount === 1
+  }
+  /** The sweep (docs/specs/files.md, "The sweep"), with the anchor role. */
+  async sweep(ageMs?: number): Promise<{ rows: number; orphans: number } | null> {
+    if (!this.files) throw new Error('files_unavailable')
+    return this.files.sweep(this.anchors, ageMs)
   }
   async anchorList(): Promise<{ id: string; workstream: string; execution: string; metadata: unknown }[]> {
     const result = await this.writer.query(

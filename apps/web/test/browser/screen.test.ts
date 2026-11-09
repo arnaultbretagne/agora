@@ -1,12 +1,13 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78, U79: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server as HttpServer } from 'node:http'
+import { crc32, deflateSync } from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Locator, type Page } from 'playwright'
@@ -811,7 +812,7 @@ test('U46 attachments: a photo and a Markdown file attached in a draft, a binary
   await send(page, 'what is in these?')
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
   const id = idOf(page)
-  const received = thread(page).getByText(/Received an image, image\/jpeg, 2048 × 1365, \d+ bytes; plan\.md, text\/markdown, 14 characters\./)
+  const received = thread(page).getByText(/Received an image, image\/jpeg, 2048 × 1365, \d+ bytes, sha256 [0-9a-f]{12}; plan\.md, text\/markdown, 14 characters\./)
   await received.waitFor()
   await thread(page).getByText('Echo #1: what is in these?.').waitFor()
   t.diagnostic(`the agent: ${(await received.innerText()).split('\n')[0]}`)
@@ -837,6 +838,79 @@ test('U46 attachments: a photo and a Markdown file attached in a draft, a binary
   t.diagnostic(`the image opened: ${size.join(' × ')}`)
   assert.deepEqual(size, [2048, 1365])
   await shot(page, 'U46-opened')
+})
+
+/** A PNG of noise, `width` × `height`: its bytes do not compress, so it weighs what it shows. */
+function noisePng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
+    const out = Buffer.alloc(12 + data.length)
+    out.writeUInt32BE(data.length, 0)
+    body.copy(out, 4)
+    out.writeUInt32BE(crc32(body), 8 + data.length)
+    return out
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header.set([8, 2, 0, 0, 0], 8)
+  // Each row: its filter byte, none, then random pixels.
+  const rows = randomBytes((width * 3 + 1) * height)
+  for (let y = 0; y < height; y++) rows[y * (width * 3 + 1)] = 0
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))])
+}
+
+test('U79 an image the log keeps in R2: its tile and the image opened read from /api/files, no base64 in the thread', async (t) => {
+  const page = await fresh()
+  const id = randomUUID()
+  assert.equal((await server.post('/api/workstreams', { id, owner: NOBODY })).status, 200)
+  assert.equal((await server.command(id, 'Create', {}, { pool: 'mock-test' })).status, 200)
+  const view = await until('ready', async () => {
+    const v = (await viewOf(server.url, id)) as { state: string; execution: string; session: string } | undefined
+    return v?.state === 'ready' ? v : undefined
+  })
+  const png = noisePng(200, 120)
+  const data = png.toString('base64')
+  assert.ok(data.length >= 65_536, 'a file by the contract')
+  const write = await server.command(id, 'Write', { execution: view.execution, session: view.session }, { prompt: [{ type: 'text', text: 'this one' }, { type: 'image', mimeType: 'image/png', data, uri: 'noise.png' }] })
+  assert.equal(write.status, 200)
+  await until('its answer', async () => (await entriesOf(id)).some((e) => (e as { direction?: string; correlated_method?: string }).direction === 'in' && (e as { correlated_method?: string }).correlated_method === 'session/prompt'))
+  const files: string[] = []
+  page.on('request', (r) => {
+    if (r.url().includes('/api/files/')) files.push(new URL(r.url()).pathname + new URL(r.url()).search)
+  })
+  await page.goto(`${server.url}/w/${id}`)
+  const user = thread(page).locator('[data-role="user"]').filter({ hasText: 'this one' })
+  const tile = user.locator('[title="noise.png"] img')
+  await tile.waitFor()
+  await until('the tile drawn', async () => ((await tile.evaluate((img) => (img as HTMLImageElement).naturalWidth)) > 0 ? true : undefined))
+  const src = await tile.getAttribute('src')
+  t.diagnostic(`the tile: ${String(src)}`)
+  assert.match(String(src), /^\/api\/files\/[0-9a-f]{64}\?type=image%2Fpng&owner=/)
+  await user.getByRole('button', { name: 'Preview noise.png' }).click()
+  const whole = page.getByRole('dialog').locator('img[alt="noise.png"]')
+  await whole.waitFor()
+  const size = await whole.evaluate((img) => [(img as HTMLImageElement).naturalWidth, (img as HTMLImageElement).naturalHeight])
+  t.diagnostic(`the image opened: ${size.join(' × ')}, from ${String(await whole.getAttribute('src'))}`)
+  assert.deepEqual(size, [200, 120])
+  assert.equal(await whole.getAttribute('src'), src)
+  assert.ok(files.length >= 1 && files.every((f) => f.startsWith('/api/files/')), 'the image read from Agora')
+  const received = await (async () => {
+    // The thread as the client received it: no base64 of the image in it.
+    const response = await fetch(`${server.url}/api/workstreams/${id}/thread?after=0`)
+    const reader = response.body!.getReader()
+    let text = ''
+    while (!text.includes('snapshot-end')) {
+      const { value, done } = await reader.read()
+      if (done) break
+      text += new TextDecoder().decode(value)
+    }
+    await reader.cancel()
+    return text
+  })()
+  t.diagnostic(`the thread: ${String(received.length)} characters`)
+  assert.ok(!received.includes(data.slice(0, 200)), 'no base64 of the image in the thread')
+  assert.match(received, /agora-file:sha256:[0-9a-f]{64}/)
 })
 
 test('U50 a question: one box, its text and options; waiting in the list; a note and an option chosen: Answer sent, the options gone, sending open', async () => {

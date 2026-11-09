@@ -35,11 +35,13 @@ flowchart TB
         DB[(PostgreSQL)]
         AS[Agent Sandbox]
         GW[Gateway]
+        R2[(R2)]
     end
     subgraph Sandbox
         Bridge --> Harness
     end
-    Server -- log, anchors --> DB
+    Server -- log, anchor records --> DB
+    Server -- files --> R2
     Server -- claim: pool, deadline --> AS
     AS -- allocates, destroys --> Sandbox
     Server -- ACP --> Bridge
@@ -53,7 +55,7 @@ flowchart TB
 | Component | Role | Holds |
 | --- | --- | --- |
 | **Client** | Runs in the browser. Displays a Workstream's thread with assistant-ui and turns the user's actions into commands. | The thread it received, in memory. |
-| **Server** | Records the commands and the ACP exchanges, projects them for the client. Obtains the executions, relays ACP, follows the turns, sets the deadlines, receives the anchors. Signs each execution's grants. | The log, the anchors, its signing keys, the database login. |
+| **Server** | Records the commands and the ACP exchanges, projects them for the client. Obtains the executions, relays ACP, follows the turns, sets the deadlines, receives the anchors. Signs each execution's grants. | The log, the anchors, its signing keys, the database login, the files' token. |
 | **Bridge** | In front of the harness, in the sandbox's image, and thin. Starts the harness's adapter and reports ready while it runs, pipes ACP lines between the server and the harness, gives the harness its only way out, puts back or pushes the anchor. | The execution's grants, in memory. |
 | **Harness** | A coding agent (claude-code, codex, …) behind its ACP adapter. | Its native files, in the sandbox only. |
 
@@ -72,7 +74,8 @@ steps is a Workstream it drives through the server's API, like the client does.
 | **Kubernetes** | Runs everything. Its API is how Agora requests executions and checks which Pod is calling. | — |
 | **Agent Sandbox**, with Kata | Warm pools per harness image, one sandbox per claim, destruction at the deadline; each Pod in its own VM. | executions ADR |
 | **The gateway** (agentgateway) | The sandboxes' only way out: checks the grants on every request and sets the services' credentials. | gateway ADR |
-| **PostgreSQL** | Agora's storage: the log, its views and the anchors. | log ADR |
+| **PostgreSQL** | Agora's storage: the log, its views and the anchor records. | log ADR |
+| **R2** (Cloudflare) | The files: anchors, attachments, files a tool returns, one object per content. | files ADR |
 
 infra-k8s deploys them, with the harness images' pools and the network rules. Agora configures
 them with allowed values and reimplements none of them: no Pod controller, no reaper, no
@@ -87,8 +90,8 @@ Each zone holds only what its role needs.
 | Zone | Holds | Never holds |
 | --- | --- | --- |
 | The browser | The thread it displays. | A token for the sandboxes, a credential. |
-| The server | The log, the anchors, the keys that sign its tokens and the grants, the database login. | The services' credentials. |
-| A sandbox | The harness, its files, short-lived tokens that expire on their own. | A credential, a database login, a way out other than the gateway. |
+| The server | The log, the anchors, the keys that sign its tokens and the grants, the database login, the files' token. | The services' credentials. |
+| A sandbox | The harness, its files, short-lived tokens that expire on their own. | A credential, a database login, the files' token, a way out other than the gateway. |
 | The gateway | The services' credentials, Agora's public key. | Agora's signing key: it checks grants, it cannot write them. |
 
 ## A message, end to end

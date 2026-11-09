@@ -208,7 +208,7 @@ not offered: the harnesses do not read them from a prompt alike.
 | Refused | Any other file, an image the browser cannot read, a text file over 256 KiB, a kind the agent does not accept, or attachments beyond 12 MiB in all: not attached; above the composer, "{name} can't be attached: {why}." until the next command. |
 | In the composer | Above the text, a tile for each attachment: an image's thumbnail, its name as its title; a file's icon and name; a cross to remove it. Sending is open with attachments and no text. |
 | Sent | **Write**'s prompt: a text block when there is text, then the attachments in the order they were added. A first message carries them through its execution's start, and gives them back to the composer with its text. |
-| In the thread | Above the user's bubble, a tile for each block of its prompt that is not text: an image's thumbnail, titled by its `uri`, which opens whole; an embedded resource or a link by its `uri`; another block by its type. A message of attachments alone has no bubble. |
+| In the thread | Above the user's bubble, a tile for each block of its prompt that is not text: an image's thumbnail, titled by its `uri`, which opens whole — read from `GET /api/files/{sha256}` with its `mimeType` when its `data` is a reference (`files.md`); an embedded resource or a link by its `uri`; another block by its type. A message of attachments alone has no bubble. |
 
 ## The connection point: `useExternalStoreRuntime`
 
@@ -505,6 +505,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U76 | A delegate's message sent into its delegator's running turn; one of Agora's; one waiting | In the thread at its place, the first as the delegate's, by its title, the second a "From Agora" line, the response going on under them; the third above the composer, saying who wrote it. |
 | U77 | The real histories of the three harnesses; a permission pending, then answered; a `delegate` line, an approval, a question | Each run of tools between two texts, the reasoning in it, one fold, with its count, its label by kind and its note, its failures counted; the permission out of its fold until answered; the `delegate` line, the approval and the question out. |
 | U78 | In a browser, a turn with tools in a row, a text between them, one asking a permission, one running; then a tool alone | While the permission is pending: two folds, closed, each with its label and note, the texts between them, the tool that asks outside them with its card. Answered: in its fold; while the last tool runs, the fold says its label and "4 tools", closed. Once done: the label and note of the whole; opened, each tool's line in order, one opening onto its diff. The tool alone: its own line, no fold. |
+| U79 | In a browser, a `user` element of text and a JPEG whose `data` is a file reference; the image opened | One tile, its image read from `/api/files/<sha256>?type=image/jpeg`; the same address opened whole; no base64 in the thread received. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

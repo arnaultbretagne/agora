@@ -5,8 +5,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { Pool } from 'pg'
-import { LogStore, Projections } from '../src/index.ts'
-import { database, provisioning, RUN } from './support.ts'
+import { Files, LogStore, Projections } from '../src/index.ts'
+import { bucket, database, provisioning, RUN } from './support.ts'
 
 test('L25 each role does what it may, then is denied each thing it may not', async (t) => {
   const db = await database()
@@ -148,7 +148,8 @@ test('L27 migrations run at once in two databases of one cluster: both succeed, 
 
 test('L97 anchors stored for a Workstream: the earlier one of a harness removed, the others kept; the last stored again removes nothing', async (t) => {
   const db = await database()
-  const store = new LogStore(db.urls)
+  // The anchors' bytes are files in R2 (docs/specs/files.md): the test's bucket.
+  const store = new LogStore(db.urls, 12, new Files((await bucket()).options()))
   t.after(async () => {
     await store.close()
     await db.drop()

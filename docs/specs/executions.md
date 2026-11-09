@@ -270,11 +270,11 @@ anchor received, if any.
 
 Agora has the projected token validated by the Kubernetes API (`TokenReview`, audience
 `agora-anchors`) and derives the namespace, the Pod and its UID. It finds that Pod's claim, checks
-its labels and its UID against the log, and the Pod's UID against the Pod's; the anchor is then
-stored in PostgreSQL by the anchor role, and `anchor.received` appended (`log.md`). A refused token:
-401; a Pod of another namespace: 403; a Pod without a claim: 404; a mismatch: 409; an anchor over 32
-MiB: 413; nothing is stored. With no push before the claim disappears, the execution ends without an
-anchor.
+its labels and its UID against the log, and the Pod's UID against the Pod's; the anchor's bytes are
+then stored in R2 and its record by the anchor role (`files.md`), and `anchor.received` appended
+(`log.md`). A refused token: 401; a Pod of another namespace: 403; a Pod without a claim: 404; a
+mismatch: 409; an anchor over 32 MiB: 413; R2 failing: 503; nothing is stored. With no push before
+the claim disappears, the execution ends without an anchor.
 
 ### What Agora writes on the claim
 
@@ -295,9 +295,9 @@ after a restart, is the log's (`log.md`, "An execution's memory").
 Create with an anchor, named or found by the log (`log.md`, "Continuing"). Once connected, Agora hands the execution's token, places the anchor
 (`PUT /anchor`), sends `initialize`, then `session/resume`, or `session/load` if the agent
 advertises only `loadSession`. The anchor goes before the adapter speaks, so an adapter restarted
-onto it is the one Agora initializes. A missing anchor, a refused placement or an agent that can
-neither resume nor load fails the execution (`anchor_missing`, `restore_failed`); so does an
-opening left unanswered.
+onto it is the one Agora initializes. A missing anchor, a refused placement, an anchor R2 does not
+give back or an agent that can neither resume nor load fails the execution (`anchor_missing`,
+`restore_failed`); so does an opening left unanswered.
 
 ### Permissions
 

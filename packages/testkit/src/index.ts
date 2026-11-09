@@ -7,6 +7,8 @@ import { WebSocket } from 'ws'
 import { startBridge, type Bridge } from '@agora/harness-bridge'
 import { sessionsDir } from '@agora/mock-agent/storage'
 
+export { FakeS3, type S3Object } from './s3.ts'
+
 export const MOCK_AGENT = fileURLToPath(import.meta.resolve('@agora/mock-agent/agent'))
 
 export function keys(): { privateKey: KeyObject; publicKey: KeyObject } {

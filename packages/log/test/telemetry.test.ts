@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { parseBundle } from '@agora/harness-bridge/anchor'
-import { LogStore, object, telemetry } from '../src/index.ts'
-import { base64, cluster, database, expire, hold, Server, until, waiting } from './support.ts'
+import { Files, LogStore, object, telemetry } from '../src/index.ts'
+import { base64, bucket, cluster, database, expire, hold, Server, until, waiting } from './support.ts'
 
 const secret = (what: string) => `${what}-${randomBytes(9).toString('base64url')}`
 
@@ -35,7 +35,8 @@ test('L28 the logger, fed secrets in every field and as keys, emits none of them
 test('L28 the lab process, carrying secrets through prompts, tools, tokens, headers, queries, anchors and failures, logs none of them', async (t) => {
   const db = await database()
   const c = await cluster()
-  const reader = new LogStore(db.urls)
+  // It reads the anchor the server stored, from the same bucket (docs/specs/files.md).
+  const reader = new LogStore(db.urls, 12, new Files((await bucket()).options()))
   const server = await Server.start({ db, api: c.api, keys: c.keys })
   c.kube.anchorUrl = server.anchorUrl
   t.after(async () => {

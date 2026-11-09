@@ -2,6 +2,7 @@
 // decided yet: the lab is behind its own authentication, and owners are what the client says.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
+import { pipeline } from 'node:stream/promises'
 import { createRequire } from 'node:module'
 import type { CredentialSource } from '@agora/executions'
 import { parseBundle } from '@agora/harness-bridge/anchor'
@@ -11,6 +12,10 @@ import type { ThreadRow } from './projection.ts'
 import { uuid, object, decode, encode, cursor, identity } from './json.ts'
 import { MAX_LINE } from './acp.ts'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode } from './search.ts'
+import { isDigest } from './files.ts'
+
+/** The types a file is served as (docs/specs/files.md, "Reading a file"); any other is an attachment. */
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
 const VALIDATION = new Set([
   'invalid_body',
@@ -54,7 +59,8 @@ export async function logHttp(
     return true
   }
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !['/api/pools', '/api/account', '/api/search'].includes(url.pathname)) return false
+  const file = /^\/api\/files\/([^/]+)$/.exec(url.pathname)
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !file && !['/api/pools', '/api/account', '/api/search'].includes(url.pathname)) return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -100,6 +106,26 @@ export async function logHttp(
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
     // What the caller owns: its own Workstreams and its agents' folder's; anything without the proxy.
     const owned = email === null ? null : [caller!, folderOwner('agents', email)]
+    if (file) {
+      // docs/specs/files.md, "Reading a file": a file an entry of the caller's Workstreams names, streamed from R2.
+      if (req.method !== 'GET') return reply(405, { reason: 'method_refused' }), true
+      const sha256 = file[1]!
+      const owners = owned ?? [uuid(url.searchParams.get('owner'))]
+      if (!isDigest(sha256) || !store.files || !(await store.readable(sha256, owners))) return reply(404, { reason: 'unknown_file' }), true
+      const object = await store.files.stream(sha256)
+      if (!object) return reply(404, { reason: 'unknown_file' }), true
+      const type = url.searchParams.get('type') ?? ''
+      const image = IMAGE_TYPES.has(type)
+      res.writeHead(200, {
+        'content-type': image ? type : 'application/octet-stream',
+        ...(image ? {} : { 'content-disposition': 'attachment' }),
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'private, max-age=31536000, immutable',
+        ...(object.size === undefined ? {} : { 'content-length': String(object.size) }),
+      })
+      await pipeline(object.body, res).catch(() => res.destroy())
+      return true
+    }
     if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
       // docs/specs/log.md, "The list": the caller's own, its agents' folder, or one of its Workstreams'
       // sub-streams; without the proxy, the owner or parent given.
@@ -184,7 +210,7 @@ export async function logHttp(
       if (!['Create', 'Write', 'Retract', 'Cancel', 'RespondPermission', 'Configure', 'Scope', 'Stop', 'Ask', 'Answer'].includes(String(input.kind)) || !target || !content)
         throw new Error('invalid_body')
       const answer = await workstreams.command(workstream, { id: uuid(input.id), kind: input.kind as Command['kind'], target, body: content })
-      reply(answer.accepted ? 200 : answer.reason === 'unavailable' ? 503 : 409, answer)
+      reply(answer.accepted ? 200 : answer.reason === 'unavailable' || answer.reason === 'files_unavailable' ? 503 : 409, answer)
       return true
     }
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)

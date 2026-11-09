@@ -4,7 +4,7 @@
 //
 // JSON-RPC 2.0 over newline-delimited stdio, the ACP transport. Method and field names are those of
 // the ACP 1.5.0 schema (@agentclientprotocol/sdk 1.5.0).
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import type { Socket } from 'node:net'
@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { connect as tlsConnect } from 'node:tls'
 import { sessionsDir } from './storage.ts'
+import { mockFile } from './file.ts'
 
 type Id = string | number
 interface Message {
@@ -217,7 +218,8 @@ function describe(block: Block): string | null {
   if (block.type === 'image') {
     const bytes = Buffer.from(block.data ?? '', 'base64')
     const size = dimensions(bytes)
-    return `an image, ${String(block.mimeType)}${size ? `, ${size}` : ''}, ${String(bytes.length)} bytes`
+    // The start of its SHA-256: what shows the bytes that reached the agent (Agora's docs/specs/files.md, B4).
+    return `an image, ${String(block.mimeType)}${size ? `, ${size}` : ''}, ${String(bytes.length)} bytes, sha256 ${createHash('sha256').update(bytes).digest('hex').slice(0, 12)}`
   }
   if (block.type === 'resource') return `${String(block.resource?.uri)}, ${String(block.resource?.mimeType)}, ${String(block.resource?.text?.length ?? 0)} characters`
   return block.type === 'text' ? null : `a ${String(block.type)} block`
@@ -431,6 +433,24 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' })
       remember(session, 'agent', 'Tool done.')
       say(session.id, 'Tool done.')
+      return 'end_turn'
+    }
+    // A file a tool returns, as Claude Code's `Read` gives an image: in the tool's content and in its raw
+    // output, `/file <bytes> <seed>` (Agora's docs/specs/files.md, B1).
+    case '/file': {
+      const [, size, seed] = text.trim().split(/\s+/)
+      const data = mockFile(Math.max(1, Math.min(6 * 1024 * 1024, Number(size) || 1)), Number(seed) || 0).toString('base64')
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'Read image.png', kind: 'read', status: 'pending' })
+      update(session.id, {
+        sessionUpdate: 'tool_call_update',
+        toolCallId,
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'image', mimeType: 'image/png', data } }],
+        rawOutput: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }],
+      })
+      remember(session, 'agent', 'File read.')
+      say(session.id, 'File read.')
       return 'end_turn'
     }
     // The prompt answered with an error of the agent's, its process going on (docs/specs/delegation.md, D27).

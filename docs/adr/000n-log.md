@@ -30,7 +30,8 @@
 5. **One turn at a time per Workstream.** A second prompt never reaches the adapter during a turn:
    a message written meanwhile waits in the log, or goes through the adapter's steering (ADR
    Steering). A local failure does not prove that the harness finished.
-6. **PostgreSQL** holds the log, the projections and the anchors.
+6. **PostgreSQL** holds the log, the projections and the anchor records; files, an anchor's
+   bytes among them, live in R2 (ADR Files).
 7. **A new execution continues its Workstream.** It restores the last anchor of its harness, and
    its first prompt gives the agent, as text, the exchanges that anchor does not hold — all of them
    when there is none.
@@ -98,7 +99,8 @@ flowchart LR
 - Changing a projection bumps its version and rebuilds it.
 - Invalid content is never an ACP entry. Safe diagnostics and ordered correlated failures keep
   the incident visible and reconstructible without retaining that content.
-- Writing the journal, projecting it and storing opaque anchor bytes use separate database roles.
+- Writing the journal, projecting it, and recording anchors with their files use three separate
+  database roles.
 - Agora never interprets the harness's files inside an anchor.
 - Exchanges given as text carry what was said, not the agent's state: no tool result, no file.
   They are bounded (200,000 characters, the most recent kept) and paid once, with the first
