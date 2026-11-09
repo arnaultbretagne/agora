@@ -3,13 +3,13 @@
 // permission it asks, with the options it offers. A `delegate` line names its delegate and its state, and holds
 // the approval it waits for. Tools in a row fold under one line.
 import { useAuiState, type ToolCallMessagePartComponent } from '@assistant-ui/react'
-import { CheckIcon, CircleIcon, LoaderCircleIcon } from 'lucide-react'
-import { useMemo, useState, type FC, type ReactNode } from 'react'
+import { CheckIcon, CircleIcon, GitMergeIcon, LoaderCircleIcon } from 'lucide-react'
+import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react'
 import { DiffViewer } from '@/components/ui/diff-viewer'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
 import { diffStats, foldOf, labelOf, unanswered, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
-import { harnessName, type Gate } from '../agora/view.ts'
+import { harnessName, type Gate, type MergeCard } from '../agora/view.ts'
 import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
 
@@ -128,6 +128,105 @@ const ApprovalBox: FC<{ gate: Gate }> = ({ gate }) => {
   )
 }
 
+/** What a merge card says of its pull request (docs/specs/merge.md, "The card"). */
+const MERGE_STATE: Record<string, string> = {
+  ready: 'Ready to merge',
+  review: 'Waiting for a review',
+  blocked: 'Blocked by the repository’s rules',
+  checks: 'Checks failing or running',
+  conflicts: 'Conflicts with the base',
+  behind: 'Behind its base',
+  draft: 'A draft',
+  computing: 'GitHub is computing…',
+  closed: 'Closed',
+  merged: 'Merged',
+}
+
+/**
+ * A merge card (docs/specs/merge.md): the pull request and what GitHub says of it, read again every 20 s while it
+ * waits; Merge at its foot, open only when GitHub would merge it. Then how it went.
+ */
+const MergeBox: FC<{ card: MergeCard }> = ({ card }) => {
+  const { api, id, answer } = useAgora()
+  const [state, setState] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (card.status !== 'pending' || id === null) return
+    let stopped = false
+    const read = () =>
+      void api
+        .merge(id)
+        .then((s) => {
+          if (!stopped && s !== null && s.question === card.position) setState(s.state)
+        })
+        .catch(() => undefined)
+    read()
+    const timer = setInterval(read, 20_000)
+    window.addEventListener('focus', read)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+      window.removeEventListener('focus', read)
+    }
+  }, [api, id, card.status, card.position])
+  const pr = `${card.repo}#${String(card.number)}`
+  const title = (
+    <a href={card.url} target="_blank" rel="noreferrer" className="hover:text-foreground font-medium underline-offset-2 hover:underline">
+      {card.title}
+    </a>
+  )
+  if (card.status !== 'pending') {
+    const said =
+      card.status === 'cancelled'
+        ? 'Cancelled'
+        : card.outcome === null
+          ? 'Merging…'
+          : card.outcome.merged
+            ? `Merged · ${card.outcome.sha.slice(0, 7)}`
+            : `Not merged — ${card.outcome.reason}`
+    return (
+      <div data-merge={card.status === 'cancelled' ? 'cancelled' : card.outcome === null ? 'merging' : card.outcome.merged ? 'merged' : 'refused'} className="border-foreground/10 my-2 flex flex-col gap-1 border-s ps-4 text-[13px]">
+        <span className="flex items-center gap-1.5">
+          <GitMergeIcon className="text-muted-foreground size-3.5 shrink-0" />
+          {title}
+          <span className="text-muted-foreground">{pr}</span>
+        </span>
+        <span className={cn('flex items-center gap-1.5', card.outcome?.merged === true ? 'text-foreground' : 'text-muted-foreground')}>
+          {card.outcome === null && card.status === 'answered' ? <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" /> : card.outcome?.merged === true ? <CheckIcon className="text-success size-3.5 shrink-0" /> : null}
+          {said}
+        </span>
+      </div>
+    )
+  }
+  const ready = state === 'ready'
+  return (
+    <div data-merge="pending" className="border-primary/40 bg-background rounded-surface my-2 flex flex-col gap-3 border p-3">
+      <div className="flex flex-col gap-1 text-[14px]">
+        <span className="flex items-center gap-1.5">
+          <GitMergeIcon className="text-primary size-4 shrink-0" />
+          {title}
+        </span>
+        <span data-merge-state={state ?? 'reading'} className="text-muted-foreground text-[13px]">
+          {pr} · {state === null ? 'Reading GitHub…' : (MERGE_STATE[state] ?? state)}
+        </span>
+      </div>
+      <div className="border-foreground/10 flex items-center justify-end gap-2 border-t pt-2.5">
+        <button
+          type="button"
+          disabled={!ready || busy}
+          onClick={() => {
+            setBusy(true)
+            void answer(card.id, 'merge').finally(() => setBusy(false))
+          }}
+          className="bg-primary text-primary-foreground rounded-control h-7 px-3 text-[13px] transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          Merge
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /** A `delegate` line: its delegate's title and harness, a link to it, the state its row gives; its approval. */
 const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isError: boolean; running: boolean }> = ({ artifact: a, args, isError, running }) => {
   const { delegates, open, view } = useAgora()
@@ -165,6 +264,7 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
 
 export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval }) => {
   const a = (artifact ?? {}) as Artifact
+  if (a.merge) return <MergeBox card={a.merge} />
   if (a.delegate || a.gate)
     return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} />
   const ask = approval as Approval | undefined

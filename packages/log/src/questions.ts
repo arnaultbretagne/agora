@@ -38,6 +38,22 @@ export function validApproval(body: Record<string, unknown>): boolean {
   return option !== null && within(option.optionId, 1, 64) && within(option.name, 1, 80) && option.kind === 'allow_once'
 }
 
+/** A repository as GitHub names it, `owner/name`. */
+export const REPO = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/
+
+/**
+ * Whether a merge card's Ask is within its bounds (docs/specs/merge.md, "The proposal"): Agora's own — a one-line title,
+ * Markdown, one option, `allow_once`, the pull request's `repo`, `number` and `url`; no expiry.
+ */
+export function validMerge(body: Record<string, unknown>): boolean {
+  if (!within(body.title, 1, 200) || /[\r\n]/.test(body.title) || !within(body.text, 0, 100_000)) return false
+  if (typeof body.repo !== 'string' || !REPO.test(body.repo) || !Number.isInteger(body.number) || (body.number as number) < 1 || !within(body.url, 1, 500)) return false
+  const options = body.options
+  if (!Array.isArray(options) || options.length !== 1) return false
+  const option = object(options[0])
+  return option !== null && within(option.optionId, 1, 64) && within(option.name, 1, 80) && option.kind === 'allow_once'
+}
+
 /** Why an Answer cannot be given to this pending question, or null when it can. */
 export function answerRefusal(question: Record<string, unknown>, body: Record<string, unknown>): string | null {
   const options = Array.isArray(question.options) ? question.options : []

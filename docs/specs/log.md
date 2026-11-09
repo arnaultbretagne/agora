@@ -38,6 +38,8 @@ projected from it.**
 | `delegation.started` | A delegate's Workstream is created by `delegate` (`delegation.md`), in that Workstream. | The delegator's Workstream and execution; the harness, model, effort and rights given; the approval's position in the delegator's Workstream, when one was asked. |
 | `delegation.continued`, `delegation.result`, `delegation.reported` | Not written any more; those in the log stay. | |
 | `question.expired` | An approval reaches its expiry unanswered, or the server starts while it waits (`delegation.md`, "Approval"). | The question's position. |
+| `question.cancelled` | A Write of the person's while a merge card waits (`merge.md`, "The card"). | The question's position. |
+| `merge.merged`, `merge.refused` | A merge card's Answer carried out (`merge.md`, "The merge"). | The question's position; the merge commit's `sha`, or the `reason`. |
 
 | Rule | Detail |
 | --- | --- |
@@ -194,7 +196,7 @@ flow — asks the person, and the interface answers.
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. |
 | Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
-| Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. An approval is an Ask of Agora's own, `kind` `approval` (`delegation.md`, "Approval"): one option, `allow_once`; the gated tool line's `toolCallId`, when matched; its `expiresAt`. |
+| Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. An approval is an Ask of Agora's own, `kind` `approval` (`delegation.md`, "Approval"): one option, `allow_once`; the gated tool line's `toolCallId`, when matched; its `expiresAt`. A merge card is an Ask of Agora's own, `kind` `merge` (`merge.md`): one option, `allow_once`; `repo`, `number`, `url`; no expiry. |
 | Answer | Carries the pending question's position (`question`). Its body: the `optionId` chosen and, when the question allows one, a `note` of at most 10,000 characters. Accepted while that question is pending. No line goes to any agent. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
 
@@ -222,7 +224,7 @@ flow — asks the person, and the interface answers.
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
 | `invalid_question` | Ask: a body outside its bounds. |
-| `question_pending` | Ask, Write or Configure while a question is pending. |
+| `question_pending` | Ask, Write or Configure while a question is pending — a Write of the person's while a merge card waits excepted (`merge.md`). |
 | `stale_question`, `invalid_question_option`, `invalid_answer` | Answer: not the pending question; an option it did not offer; a note it does not allow, or one that is not a string within bounds. |
 
 ### A turn's states
@@ -308,7 +310,7 @@ the client shows them is `assistant-ui.md`.
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
-| `question` | An Ask, then its Answer, a refusing Write or its expiry | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text |
+| `question` | An Ask, then its Answer, a refusing Write, its expiry or its cancellation | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`, for a merge card `kind` `merge`, `repo`, `number` and `url`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`, `cancelled`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text; for a merge card, `outcome`: `merged` and its `sha`, or `refused` and its `reason` |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel`, `_session/steering` and their answers | `turn`, `session`, `line`: the line whole |
 
 A line received with no turn running belongs to its Session's last turn: what an agent says after its
@@ -401,6 +403,7 @@ changes instead of fetching every view again.
 | `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list") — the owner its identity gives, as for a Create: `snapshot` rows, `snapshot-end`, then `live` rows. With `folder`, one of the caller's folders: `agents`, the Workstreams of the agents its runs staff, owned by the name-based UUID of its identity under `agents` rather than `owner` — the caller's folder alone, out of its own list; 400 `unknown_folder` for any other. With `parent`, a Workstream's list, its sub-streams: the caller's, 404 `unknown_workstream` otherwise. Without the proxy, the list of the `owner` or `parent` given; 400 `invalid_identifier` without either. A Workstream's whole view is read in its thread. |
 | `GET /api/workstreams/page?before=B&title=T` | JSON: `rows`, the caller's rows older than page cursor B — the most recent without one —, whose title holds T when given; `next`, the following page's cursor, or null. `folder`, `parent` and `owner` as for the list; 400 `invalid_cursor` for a malformed cursor. |
 | `GET /api/workstreams/{id}/row` | The Workstream's row ("The list"), the caller's: its parent and depth, so that a client climbs its line one row at a time. 404 `unknown_workstream` before its first entry or for another's. |
+| `GET /api/workstreams/{id}/merge` | The pending merge card's state, read from GitHub (`merge.md`, "The card"): `question`, its position; `state`; `head`, the head's sha. 404 `no_merge` without one; the caller's Workstreams only. |
 | `GET /api/account` | `email`: the identity the proxy passes, as it passes it, or null without one. |
 | `POST /api/workstreams` | Creates a Workstream: `id`, and `parent`, the Workstream it is started from, if any ("Sub-streams"). The owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one; with a parent, the parent's: 404 `unknown_parent` for a parent that does not exist or is not the caller's. 409 if the id belongs to another owner or has another parent. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |

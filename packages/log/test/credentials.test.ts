@@ -113,7 +113,7 @@ test('C43 an execution with vault:read, then one with vault:write: session/new n
 
 test('C43 control: an execution with other profiles and none of the vault, and one with no profile: session/new names no MCP server', async (t) => {
   const { lab, ws } = await started(t, { 'claude-test': 'anthropic' })
-  await lab.open(ws, { pool: 'claude-test', profiles: ['github:owner/repo:write', 'internet'] })
+  await lab.open(ws, { pool: 'claude-test', profiles: ['github:owner/repo:read', 'internet'] })
   assert.deepEqual(await opened(lab, ws), [])
   const bare = await lab.workstream()
   await lab.open(bare, { pool: 'mock-test' })

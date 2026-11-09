@@ -1,6 +1,6 @@
 // Moves the files already in the log's database to R2, once (docs/specs/files.md, B9): as the database owner
 // (LOG_MIGRATION_URL), with the files' bucket (FILES_ENDPOINT, FILES_BUCKET, FILES_ACCESS_KEY_ID,
-// FILES_SECRET_ACCESS_KEY), the server stopped and the schema applied (migrate.ts). Then VACUUM (FULL) gives
+// FILES_SECRET_ACCESS_KEY) and the schema applied (migrate.ts); the server may run. Then VACUUM (FULL) gives
 // the space back.
 import { Pool } from 'pg'
 import { Files } from '../src/files.ts'

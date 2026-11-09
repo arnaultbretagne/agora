@@ -162,7 +162,8 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const pendingPermission =
     ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending' && e.object.session === view.session) ?? null
   const pending = (approval: boolean) =>
-    ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending' && (e.object.kind === 'approval') === approval)
+    // A merge card waits for a click, not for an answer: sending stays open, and cancels it (docs/specs/merge.md).
+    ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending' && e.object.kind !== 'merge' && (e.object.kind === 'approval') === approval)
   const pendingQuestion = pending(false)
   const running = last !== undefined && ['saved', 'in_progress'].includes(status(last))
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
@@ -338,6 +339,57 @@ function gateOf(question: ViewObject): Gate {
 }
 
 const isGate = (e: ViewObject): boolean => e.object.type === 'question' && e.object.kind === 'approval'
+const isMergeCard = (e: ViewObject): boolean => e.object.type === 'question' && e.object.kind === 'merge'
+
+/** A merge card (docs/specs/merge.md, "The card"): the pull request, its status in the log, its outcome. */
+export interface MergeCard {
+  readonly id: string
+  /** The Ask's position, which the card's state names. */
+  readonly position: string
+  readonly status: 'pending' | 'answered' | 'cancelled'
+  readonly title: string
+  readonly url: string
+  readonly repo: string
+  readonly number: number
+  readonly outcome: { readonly merged: true; readonly sha: string } | { readonly merged: false; readonly reason: string } | null
+}
+
+export function mergeCardOf(question: ViewObject): MergeCard {
+  const q = question.object
+  const o = json(q.outcome)
+  return {
+    id: question.id,
+    position: text(q.position),
+    status: q.status === 'answered' ? 'answered' : q.status === 'cancelled' ? 'cancelled' : 'pending',
+    title: text(q.title),
+    url: text(q.url),
+    repo: text(q.repo),
+    number: Number(q.number),
+    outcome: o === null || o === undefined ? null : o.merged === true ? { merged: true, sha: text(o.sha) } : { merged: false, reason: text(o.reason) },
+  }
+}
+
+/** A merge card's own message, at its position. */
+function mergeMessage(question: ViewObject): ThreadMessageLike {
+  const card = mergeCardOf(question)
+  return {
+    id: `${question.id}:merge`,
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool-call',
+        toolCallId: question.id,
+        toolName: 'merge',
+        args: {} as never,
+        argsText: '',
+        ...(card.status === 'pending' ? {} : { result: card.status }),
+        artifact: { title: card.title, kind: 'other', status: card.status === 'pending' ? 'pending' : 'completed', merge: card },
+      },
+    ],
+    status: { type: 'complete', reason: 'stop' },
+    metadata: { custom: { merge: question.id } },
+  }
+}
 
 /**
  * A `delegate` call's answer, `started <id> · <title>`, or with `to`, `sent <id> · <title>` (docs/specs/mcp.md, "Tools"):
@@ -627,19 +679,15 @@ const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.
 
 /**
  * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), in the order offered:
- * each offered repository with None, Read and, when offered, Write; each offered service off or on.
+ * each offered repository with None, Read and, when offered, Review and Write; each offered service off or on.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
   return offered.map((profile) => {
-    const repo = /^github:([^:]+):(read|write)$/.exec(profile)
+    const repo = /^github:([^:]+):(read|review|write)$/.exec(profile)
     if (repo === null) return { key: profile, name: SERVICE_NAMES[profile] ?? profile, repository: false, choices: [{ label: 'Off', profile: null }, { label: 'On', profile }] }
-    const read = { label: 'Read', profile: `github:${repo[1]!}:read` }
-    return {
-      key: `github:${repo[1]!}`,
-      name: repo[1]!,
-      repository: true,
-      choices: [{ label: 'None', profile: null }, read, ...(repo[2] === 'write' ? [{ label: 'Write', profile }] : [])],
-    }
+    const level = (label: string) => ({ label, profile: `github:${repo[1]!}:${label.toLowerCase()}` })
+    const levels = repo[2] === 'write' ? ['Read', 'Review', 'Write'] : repo[2] === 'review' ? ['Read', 'Review'] : ['Read']
+    return { key: `github:${repo[1]!}`, name: repo[1]!, repository: true, choices: [{ label: 'None', profile: null }, ...levels.map(level)] }
   })
 }
 
@@ -933,7 +981,7 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
   }
   for (const question of elements.filter((e) => e.object.type === 'question')) {
     if (isGate(question) && gates.get(text(question.object.toolCallId)) === question) continue
-    placed.push({ position: text(question.object.position), messages: [isGate(question) ? gateMessage(question) : questionMessage(question)] })
+    placed.push({ position: text(question.object.position), messages: [isMergeCard(question) ? mergeMessage(question) : isGate(question) ? gateMessage(question) : questionMessage(question)] })
   }
   let sessions = 0
   const notices = ofKind(state, 'notice').sort(byPosition)

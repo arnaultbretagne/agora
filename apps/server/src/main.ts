@@ -4,8 +4,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { Delegations, Files, LogStore, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
-import { GrantSigner, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
+import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
+import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { teamFrom, teamHttp } from './team.ts'
 
@@ -90,6 +90,25 @@ const workstreams = new Workstreams({
 try {
   // docs/specs/delegation.md: the engine behind `delegate` and `submit`; an approval held 4 min 30 s.
   new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
+  // docs/specs/merge.md: the merge card, through the gateway from the server's own address, as the operator.
+  // With the test routes, GITHUB_TEST_API stands in for GitHub behind the gateway (docs/specs/merge.md, G8).
+  const githubTest = testRoutes && process.env.GITHUB_TEST_API ? process.env.GITHUB_TEST_API : null
+  if (credentials !== undefined && podAddress !== '')
+    new Merges(workstreams, {
+      github: new OperatorGitHub({
+        signer: credentials,
+        address: podAddress,
+        ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
+        ...(githubTest === null
+          ? {}
+          : {
+              request: async (input) => {
+                const r = await fetch(`${githubTest}${input.path}`, { method: input.method ?? 'GET', headers: { 'content-type': 'application/json' }, ...(input.body === undefined ? {} : { body: input.body }) })
+                return { status: r.status, body: await r.text() }
+              },
+            }),
+      }),
+    })
   await workstreams.start()
 } catch (error) {
   // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.

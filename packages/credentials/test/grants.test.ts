@@ -31,6 +31,18 @@ function allowedOnGitHub(grants: readonly Grant[], host: string, method: string,
 }
 
 /**
+ * Who acts on GitHub, as the gateway's listener decides it (docs/specs/credentials.md, "GitHub identities"): the
+ * contributor when a grant of its own — or one naming none — covers the request, else the reviewer when one of its
+ * grants does, else nobody of Agora's: the public routes, or the gateway's refusal.
+ */
+function identityOnGitHub(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): string {
+  const covers = (identity: string) => allowed(grants.filter((g) => (g.identity ?? 'contributor') === identity), host, method, pathAndQuery)
+  if (covers('contributor')) return 'contributor'
+  if (covers('reviewer')) return 'reviewer'
+  return allowedOnGitHub(grants, host, method, pathAndQuery) ? 'public' : 'refused'
+}
+
+/**
  * What the `previews` route decides, replayed: hostnames `*.preview.bretagne.dev`, and its rule — some grant with a
  * `hostPattern` the request's host matches, then path and method as on the other routes.
  */
@@ -133,6 +145,38 @@ describe('profiles', () => {
     ]
     for (const [profiles, host, method, path, expected] of cases) {
       assert.equal(allowedOnGitHub(compileProfiles(profiles), host, method, path), expected, `${profiles.join(',')}: ${method} ${host}${path}`)
+    }
+  })
+
+  it('C67 review opens a repository as the reviewer: every REST method, clone and fetch, never a push; read and write act as the contributor', () => {
+    assert.deepEqual(compileProfile('github:octo/app:review'), [
+      { host: 'api.github.com', path: '^/repos/octo/app(/[^?]*)?(\\?.*)?$', identity: 'reviewer' },
+      { host: 'github.com', path: '^/octo/app(\\.git)?/(info/refs\\?service=git-upload-pack|git-upload-pack)$', identity: 'reviewer' },
+    ])
+    for (const level of ['read', 'write']) assert.ok(compileProfile(`github:octo/app:${level}`).filter((g) => g.host.endsWith('github.com')).every((g) => g.identity === 'contributor'), level)
+    const cases: [string[], string, string, string, string][] = [
+      [['github:octo/app:review'], 'api.github.com', 'GET', '/repos/octo/app/pulls/7', 'reviewer'],
+      [['github:octo/app:review'], 'api.github.com', 'POST', '/repos/octo/app/pulls/7/reviews', 'reviewer'],
+      [['github:octo/app:review'], 'api.github.com', 'POST', '/repos/octo/app/issues/7/comments', 'reviewer'],
+      [['github:octo/app:review'], 'github.com', 'POST', '/octo/app.git/git-upload-pack', 'reviewer'],
+      [['github:octo/app:review'], 'github.com', 'GET', '/octo/app.git/info/refs?service=git-receive-pack', 'refused'],
+      [['github:octo/app:review'], 'api.github.com', 'GET', '/repos/octo/other', 'refused'],
+      [['github:octo/app:review'], 'api.github.com', 'POST', '/graphql', 'refused'],
+      [['github:octo/app:write'], 'api.github.com', 'POST', '/repos/octo/app/pulls', 'contributor'],
+      [['github:octo/app:read'], 'api.github.com', 'GET', '/repos/octo/app', 'contributor'],
+      // Both on one repository: the contributor wins, review adds nothing to write.
+      [['github:octo/app:write', 'github:octo/app:review'], 'api.github.com', 'POST', '/repos/octo/app/pulls/7/reviews', 'contributor'],
+      [['github:octo/app:review', 'github:octo/app:write'], 'github.com', 'POST', '/octo/app.git/git-receive-pack', 'contributor'],
+      // Read and review: the reads as the contributor, the review as the reviewer.
+      [['github:octo/app:read', 'github:octo/app:review'], 'api.github.com', 'GET', '/repos/octo/app', 'contributor'],
+      [['github:octo/app:read', 'github:octo/app:review'], 'api.github.com', 'POST', '/repos/octo/app/pulls/7/reviews', 'reviewer'],
+      // Write on one repository, review on another: each its own.
+      [['github:octo/app:write', 'github:octo/infra:review'], 'api.github.com', 'POST', '/repos/octo/app/pulls', 'contributor'],
+      [['github:octo/app:write', 'github:octo/infra:review'], 'api.github.com', 'POST', '/repos/octo/infra/pulls/3/reviews', 'reviewer'],
+      [['github:octo/app:write', 'github:octo/infra:review', 'internet'], 'api.github.com', 'GET', '/repos/octo/other', 'public'],
+    ]
+    for (const [profiles, host, method, path, expected] of cases) {
+      assert.equal(identityOnGitHub(compileProfiles(profiles), host, method, path), expected, `${profiles.join(',')}: ${method} ${host}${path}`)
     }
   })
 
@@ -309,7 +353,7 @@ describe('profiles', () => {
     assert.deepEqual(mcpServers(['anthropic', 'vault:read']), [vault])
     assert.deepEqual(mcpServers(['vault:write']), [vault])
     assert.deepEqual(mcpServers(['vault:read', 'vault:write']), [vault])
-    assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:write']), [])
+    assert.deepEqual(mcpServers(['anthropic', 'internet', 'github:octo/app:read']), [])
     assert.deepEqual(mcpServers([]), [])
   })
 
@@ -354,7 +398,7 @@ describe('profiles', () => {
   })
 
   it('refuses what it does not know, and names that could escape the pattern', () => {
-    for (const profile of ['github:octo/app:admin', 'github:octo:read', 'github:octo/..:read', 'github:octo/a b:read', 'openai', '']) {
+    for (const profile of ['github:octo/app:admin', 'github:octo/app:reviewer', 'github:octo:read', 'github:octo/..:read', 'github:octo/a b:read', 'openai', '']) {
       assert.throws(() => compileProfile(profile), /unknown profile|invalid repo/, profile)
     }
     assert.throws(() => compileProfiles([]), /no profile/)
@@ -410,6 +454,19 @@ describe('GrantSigner', () => {
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     assert.throws(() => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered: ['dropbox'] }), /unknown profile/)
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
+  })
+
+  it('C68 a repository’s write offered lets a Create or a Scope name its review, and its review its read; never a write under a review', () => {
+    const cases: [string[], string, boolean][] = [
+      [['github:o/a:write'], 'github:o/a:review', true],
+      [['github:o/a:review'], 'github:o/a:review', true],
+      [['github:o/a:review'], 'github:o/a:read', true],
+      [['github:o/a:review'], 'github:o/a:write', false],
+      [['github:o/a:read'], 'github:o/a:review', false],
+      [['github:o/b:write'], 'github:o/a:review', false],
+      [['vault:write'], 'github:o/a:review', false],
+    ]
+    for (const [offered, profile, expected] of cases) assert.equal(offers(offered, profile), expected, `${offered.join(',')}: ${profile}`)
   })
 
   it('C47 vault:write offered lets a Create or a Scope name vault:read, as a repository’s write does; vault:read offered, never vault:write', () => {

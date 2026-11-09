@@ -24,14 +24,15 @@ import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
 import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
-import { acceptsPrompt, isApproval, STEERING, waited, type Execution, type State } from './state.ts'
+import type { Merges } from './merges.ts'
+import { acceptsPrompt, isApproval, isMerge, STEERING, waited, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, validate, type Reason } from './acp.ts'
 import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
-import { answerRefusal, validApproval, validQuestion } from './questions.ts'
+import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
 import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -109,6 +110,8 @@ export class Workstreams implements Handler {
   private ticking = false
   /** The delegations' engine (docs/specs/delegation.md), attached by the server. */
   delegations: Delegations | null = null
+  /** The merge cards' engine (docs/specs/merge.md), attached by the server. */
+  merges: Merges | null = null
 
   constructor(options: WorkstreamsOptions) {
     this.options = options
@@ -183,6 +186,7 @@ export class Workstreams implements Handler {
     await this.projections.backfill()
     // docs/specs/delegation.md: the approvals no call holds any more expire; the outcomes not reported are found again.
     await this.delegations?.start()
+    await this.merges?.start()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
     if (this.store.files) this.sweeper = setInterval(() => void this.sweep(), this.options.sweepMs ?? 3_600_000)
   }
@@ -274,6 +278,9 @@ export class Workstreams implements Handler {
     if (this.stopped) return { accepted: false, reason: 'unavailable' }
     // The approval a command settles, when it does: its position, and how (docs/specs/delegation.md, "Approval").
     let settles: { position: string; outcome: 'approved' | 'refused'; words?: string } | null = null
+    // A merge card a command answers or cancels (docs/specs/merge.md).
+    let merging: string | null = null
+    let cancels: string | null = null
     // docs/specs/log.md, "Commands": the catalogue is read before the transaction, never under its lock.
     const catalogue = command.kind === 'Create' ? await this.executions.pools() : []
     return this.serial(workstream, async () => {
@@ -338,12 +345,14 @@ export class Workstreams implements Handler {
         if (command.kind === 'Ask') {
           if (state.question) return 'question_pending'
           if (command.body.kind === 'approval') return origin === 'agora' && validApproval(command.body) ? {} : 'invalid_question'
+          if (command.body.kind === 'merge') return origin === 'agora' && validMerge(command.body) ? {} : 'invalid_question'
           return validQuestion(command.body) ? {} : 'invalid_question'
         }
         if (command.kind === 'Answer') {
           if (!state.question || command.target.question !== state.question.position) return 'stale_question'
           const refusal = answerRefusal(object(state.question.content.body) ?? {}, command.body)
           if (refusal === null && isApproval(state.question)) settles = { position: state.question.position, outcome: 'approved' }
+          if (refusal === null && isMerge(state.question)) merging = state.question.position
           return refusal ?? {}
         }
         // docs/specs/log.md, "Commands": a waiting message, whatever the execution; no line to any agent.
@@ -370,7 +379,9 @@ export class Workstreams implements Handler {
         if (current.lost || current.failed) return 'execution_unavailable'
         if (current.stopped) return 'stopped'
         if (command.kind === 'Write') {
-          if (state.question) return 'question_pending'
+          // A merge card waits for a click, not for an answer: the person's message cancels it, and goes (docs/specs/merge.md).
+          if (state.question && !isMerge(state.question)) return 'question_pending'
+          cancels = isMerge(state.question) ? state.question!.position : null
           if (!current.connection || this.executions.connectionOf(current.id) !== current.connection) return 'disconnected'
           if (this.ending(current)) return 'execution_ending'
           // docs/specs/log.md, "Messages during a turn": behind a turn or another message, it waits if it says it may.
@@ -449,6 +460,9 @@ export class Workstreams implements Handler {
       })
       this.report({ operation: 'admission', outcome: answer.accepted ? 'accepted' : 'refused', workstream, command: command.id })
       if (answer.accepted && settles !== null) this.delegations?.settled(workstream, settles.position, settles.outcome, settles.words)
+      if (answer.accepted && cancels !== null && command.kind === 'Write') await this.store.fact(workstream, { kind: 'question.cancelled', content: { question: cancels } })
+      // Carried out after this command, in its own turn of the queue.
+      if (answer.accepted && merging !== null) void this.merges?.answered(workstream, merging).catch(() => this.report({ operation: 'dispatch', outcome: 'blocked', workstream, errorClass: 'unknown' }))
       if (answer.accepted) {
         if (command.kind === 'Create' && answer.execution) {
           // A replayed Create answers as the first did; an execution that has ended is not run again.

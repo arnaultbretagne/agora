@@ -25,7 +25,18 @@ export interface Grant {
    * resource of the server when absent; only these tools, and no prompt or resource, when present.
    */
   readonly tools?: readonly string[]
+  /**
+   * On GitHub, who acts (docs/specs/credentials.md, "GitHub identities"): the GitHub App whose token the gateway sets
+   * for what this grant covers. `contributor` when absent; `contributor` wins when grants of both cover a request.
+   */
+  readonly identity?: GitHubIdentity
 }
+
+/**
+ * GitHub's actors for Agora: one writes (`agora-contributor[bot]`), one reviews (`agora-reviewer[bot]`); and the operator,
+ * whose account merges from the merge card — Agora's own `merge` grant alone names it (docs/specs/merge.md).
+ */
+export type GitHubIdentity = 'contributor' | 'reviewer' | 'operator'
 
 /** An MCP server a profile opens, as `session/new` names it: reached through the gateway like any host, with no secret. */
 export interface McpServer {
@@ -62,6 +73,9 @@ export const KUBERNETES_HOST = 'kubernetes.agora.internal'
  */
 export const AGORA_MCP_HOST = 'mcp.agora.internal'
 const AGORA: McpServer = { type: 'http', name: 'agora', url: `https://${AGORA_MCP_HOST}/mcp`, headers: [] }
+const AGORA_MCP_GRANT: Grant = { host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }
+/** A repository's write, which opens `propose_merge` for it (docs/specs/merge.md). */
+export const GITHUB_WRITE = /^github:([^/:]+\/[^/:]+):write$/
 /** The profiles that open Agora's MCP server; Agora tells their tools apart (docs/specs/mcp.md, "The path"). */
 const AGORA_PROFILES: ReadonlySet<string> = new Set(['agora:read', 'agora:delegate', 'agora:submit'])
 /**
@@ -97,8 +111,8 @@ export function compileProfile(profile: string): Grant[] {
   if (profile === 'kubernetes:read') return [{ host: KUBERNETES_HOST, path: '^/(api|apis|openapi|version)(/[^?]*)?(\\?.*)?$', methods: [...READ] }]
   // Agora's own MCP server: its endpoint only, as the vault's. No tools: Agora tells its tools apart itself, by
   // the rights it recorded (docs/specs/mcp.md).
-  if (profile === 'agora:read' || profile === 'agora:delegate' || profile === 'agora:submit') return [{ host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }]
-  const github = /^github:([^/:]+)\/([^/:]+):(read|write)$/.exec(profile)
+  if (profile === 'agora:read' || profile === 'agora:delegate' || profile === 'agora:submit') return [AGORA_MCP_GRANT]
+  const github = /^github:([^/:]+)\/([^/:]+):(read|review|write)$/.exec(profile)
   if (github !== null) {
     const [, owner = '', repo = '', level] = github
     if (!NAME.test(owner) || !NAME.test(repo) || repo === '.' || repo === '..') throw new ProfileRefused(`invalid repo: ${owner}/${repo}`)
@@ -106,9 +120,13 @@ export function compileProfile(profile: string): Grant[] {
     // git smart HTTP: a clone POSTs too (git-upload-pack); writing is git-receive-pack.
     const services = level === 'write' ? '(upload|receive)' : 'upload'
     const git = `^/${escape(owner)}/${escape(repo)}(\\.git)?/(info/refs\\?service=git-${services}-pack|git-${services}-pack)$`
+    // Review: every method on the REST API and clone and fetch, as the reviewer's own App; GitHub's rules on main, not
+    // the grant, keep it from merging (docs/specs/credentials.md, "GitHub identities").
+    if (level === 'review') return [{ host: 'api.github.com', path: rest, identity: 'reviewer' }, { host: 'github.com', path: git, identity: 'reviewer' }]
+    // A write opens Agora's MCP server too, for `propose_merge` on that repository (docs/specs/merge.md).
     return level === 'write'
-      ? [{ host: 'api.github.com', path: rest }, { host: 'github.com', path: git }]
-      : [{ host: 'api.github.com', path: rest, methods: [...READ] }, { host: 'github.com', path: git }]
+      ? [{ host: 'api.github.com', path: rest, identity: 'contributor' }, { host: 'github.com', path: git, identity: 'contributor' }, AGORA_MCP_GRANT]
+      : [{ host: 'api.github.com', path: rest, methods: [...READ], identity: 'contributor' }, { host: 'github.com', path: git, identity: 'contributor' }]
   }
   throw new ProfileRefused(`unknown profile: ${profile}`)
 }
@@ -119,6 +137,11 @@ export function compileProfile(profile: string): Grant[] {
  */
 const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
   limits: () => Object.values(LIMIT_ENDPOINTS).map((e) => ({ host: e.host, path: `^${escape(e.path)}$`, methods: ['GET'] })),
+  // The merge card (docs/specs/merge.md): a pull request and its reviews read, its merge, as the operator.
+  merge: () => [
+    { host: 'api.github.com', path: '^/repos/[^/?]+/[^/?]+/pulls/[0-9]+(/reviews)?(\\?[^/]*)?$', methods: ['GET'], identity: 'operator' },
+    { host: 'api.github.com', path: '^/repos/[^/?]+/[^/?]+/pulls/[0-9]+/merge$', methods: ['PUT'], identity: 'operator' },
+  ],
 }
 
 /** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
@@ -141,7 +164,7 @@ export function baseProfiles(annotation: string | undefined): { profiles: string
 export function mcpServers(profiles: readonly string[]): McpServer[] {
   const servers: McpServer[] = []
   if (profiles.some((profile) => profile === 'vault:read' || profile === 'vault:write')) servers.push(VAULT)
-  if (profiles.some((profile) => AGORA_PROFILES.has(profile))) servers.push(AGORA)
+  if (profiles.some((profile) => AGORA_PROFILES.has(profile) || GITHUB_WRITE.test(profile))) servers.push(AGORA)
   return servers
 }
 
@@ -157,11 +180,15 @@ export function offeredProfiles(value: string | undefined): string[] {
   return profiles
 }
 
-/** Whether a profile may be named, given those offered: itself, or the read of a repository or of the vault under its write. */
+/**
+ * Whether a profile may be named, given those offered: itself; the read or the review of a repository under its write,
+ * its read under its review; the vault's read under its write.
+ */
 export function offers(offered: readonly string[], profile: string): boolean {
   if (offered.includes(profile)) return true
-  const read = /^(github:[^:]+|vault):read$/.exec(profile)
-  return read !== null && offered.includes(`${read[1]!}:write`)
+  const github = /^(github:[^:]+):(read|review)$/.exec(profile)
+  if (github !== null) return offered.includes(`${github[1]!}:write`) || (github[2] === 'read' && offered.includes(`${github[1]!}:review`))
+  return profile === 'vault:read' && offered.includes('vault:write')
 }
 
 export interface GrantSignerOptions {
@@ -191,7 +218,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }

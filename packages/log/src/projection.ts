@@ -25,7 +25,7 @@ export interface Projector {
   version: string
   create(): Projection
 }
-export const core: Projector = { name: 'core', version: '8', create: () => new CoreProjection() }
+export const core: Projector = { name: 'core', version: '9', create: () => new CoreProjection() }
 
 /** What lies under a Workstream, at every depth (docs/specs/log.md, "Sub-streams"). */
 export type Below = { count: number; live: number; waiting: number }

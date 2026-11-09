@@ -1,6 +1,6 @@
 // What a tool call's line says (docs/specs/assistant-ui.md, "Parts"): the agent's title made readable,
 // and the size of its change; and what the line of a fold says. Pure, like view.ts.
-import type { Gate } from './view.ts'
+import type { Gate, MergeCard } from './view.ts'
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
 export type Todo = { content: string; status: string }
@@ -18,6 +18,8 @@ export type Artifact = {
   /** A `delegate` line's: the delegate its call started; the approval it waits for or waited for. */
   delegate?: { id: string; title: string }
   gate?: Gate
+  /** A merge card's (docs/specs/merge.md). */
+  merge?: MergeCard
 }
 
 const basename = (path: string | undefined): string => (path ? (path.split('/').at(-1) ?? path) : '')

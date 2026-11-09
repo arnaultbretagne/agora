@@ -1,8 +1,9 @@
 // The one move of the files already in PostgreSQL to R2 (docs/specs/files.md, B9; the files ADR): each entry's
 // files become references, checked to expand back to what was stored; the views' files too; each anchor's
-// bytes become its object. Run as the database owner, the server stopped, holding the files lock shared so
-// that no sweep runs meanwhile. A row is moved in a transaction of its own: a stop leaves the others as
-// they were, and a second run moves only what is left.
+// bytes become its object. Run as the database owner, holding the files lock shared so that no sweep runs
+// meanwhile; the server may run: entries never change, and a view the projector changes meanwhile is left
+// for a second run. A row is moved in a transaction of its own: a stop leaves the others as they were, and
+// a second run moves only what is left.
 import type { Pool, PoolClient } from 'pg'
 import { canonical, decode, encode } from './json.ts'
 import { digest, expandFiles, FILE_MIN, FILES_LOCK, findFiles, type Files } from './files.ts'
@@ -84,7 +85,7 @@ export async function moveFiles(owner: Pool, files: Files, log: (line: string) =
     let next: [string, string, string] = ['00000000-0000-0000-0000-000000000000', '', '00000000-0000-0000-0000-000000000000']
     for (;;) {
       const page = await client.query(
-        `SELECT workstream, kind, id, object::text AS object FROM objects
+        `SELECT workstream, kind, id, last_position, object::text AS object FROM objects
          WHERE (workstream, kind, id) > ($1::uuid, $2, $3::uuid) AND length(object::text) >= $4
          ORDER BY workstream, kind, id LIMIT ${String(PAGE)}`,
         [next[0], next[1], next[2], FILE_MIN],
@@ -94,11 +95,20 @@ export async function moveFiles(owner: Pool, files: Files, log: (line: string) =
         next = [row.workstream as string, row.kind as string, row.id as string]
         const found = findFiles(decode(row.object as string))
         if (!found) continue
+        let updated = false
         await inTransaction(client, async () => {
           await kept(client, files, found.bytes, moved)
-          await client.query('UPDATE objects SET object = $4::jsonb WHERE workstream = $1 AND kind = $2 AND id = $3', [row.workstream, row.kind, row.id, encode(found.value)])
+          // Only the view as it was read: one the projector changed since is left for the next run.
+          const done = await client.query('UPDATE objects SET object = $4::jsonb WHERE workstream = $1 AND kind = $2 AND id = $3 AND last_position = $5', [
+            row.workstream,
+            row.kind,
+            row.id,
+            encode(found.value),
+            row.last_position,
+          ])
+          updated = done.rowCount === 1
         })
-        moved.objects++
+        if (updated) moved.objects++
       }
     }
     // The anchors: their bytes become their object, the record names it.

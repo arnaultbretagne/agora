@@ -3,6 +3,7 @@
 // (ExecutionManager.attachCredentials). And the accounts' limits, read through the same gateway.
 export {
   BASE_PROFILES,
+  GITHUB_WRITE,
   BASE_PROFILES_ANNOTATION,
   GrantSigner,
   PREVIEW_HOSTS,
@@ -19,6 +20,7 @@ export {
   mcpServers,
   offeredProfiles,
   offers,
+  type GitHubIdentity,
   type Grant,
   type GrantSignerOptions,
   type McpServer,
@@ -36,3 +38,4 @@ export {
   type WindowKind,
 } from './limits.ts'
 export type { Credentials } from '@agora/harness-bridge/outbound'
+export { OperatorGitHub, stateOf, type GitHub, type MergeOutcome, type MergeState, type OperatorGitHubOptions, type PullRequest } from './github.ts'

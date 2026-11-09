@@ -14,7 +14,8 @@ node packages/log/scripts/migrate.ts
 It prints `log schema ready`, or exits non-zero.
 
 `move-files.ts` moves the files already in the database to R2, once (`docs/specs/files.md`, B9): as the
-database owner, with the files' bucket, the server stopped and the schema applied. Each entry's files
+database owner, with the files' bucket and the schema applied; the server may run, a view it changes
+meanwhile being left for a second run. Each entry's files
 become references, each checked to expand back to what was stored; the views' files too; each anchor's
 bytes become its object. A second run moves only what is left. Then `VACUUM (FULL)` gives the space back.
 

@@ -390,12 +390,12 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the rights: each offered repository with None, Read and, when offered, Write; a service off or on; the services first, the Internet first; the button', () => {
+test('U31 the rights: each offered repository with None, Read and, when offered, Review and Write; a service off or on; the services first, the Internet first; the button', () => {
   const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
   assert.deepEqual(
     entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
     [
-      ['o/a', ['None', 'Read', 'Write']],
+      ['o/a', ['None', 'Read', 'Review', 'Write']],
       ['o/b', ['None', 'Read']],
       ['z.ai', ['Off', 'On']],
       ['Internet', ['Off', 'On']],
@@ -411,6 +411,9 @@ test('U31 the rights: each offered repository with None, Read and, when offered,
   assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'zai'], entries), 'z.ai, a · Write, b · Read')
   assert.equal(accessTitle([], entries), 'No access')
   assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
+  assert.deepEqual(entries[0]!.choices.map((c) => c.profile), [null, 'github:o/a:read', 'github:o/a:review', 'github:o/a:write'])
+  assert.equal(accessTitle(['github:o/a:review'], entries), 'a · Review')
+  assert.deepEqual(accessEntries(['github:o/c:review'])[0]!.choices.map((c) => c.profile), [null, 'github:o/c:read', 'github:o/c:review'], 'a review offered: its read under it, never a write')
   assert.deepEqual(accessEntries([]), [])
 })
 
@@ -792,4 +795,38 @@ test('U77 tools in a row, the reasoning in them, one fold each; a pending permis
   assert.equal(foldOf([named('a', 'completed'), named('b', 'in_progress'), named('c', 'completed')]).running, true)
   assert.equal(foldOf([named('a', 'completed'), named('b', 'completed')]).latest, 'b now')
   assert.equal(foldOf([named('a', 'completed'), named('b', 'completed')]).running, false)
+})
+
+const mergeAsk = {
+  kind: 'merge',
+  title: 'Add feature 7',
+  text: '[owner/a#7](https://github.com/owner/a/pull/7) · `main ← feat/7` · agora-contributor[bot]',
+  options: [{ optionId: 'merge', name: 'Merge', kind: 'allow_once' }],
+  repo: 'owner/a',
+  number: 7,
+  url: 'https://github.com/owner/a/pull/7',
+}
+const pendingMerge = [commandEntry(1, 'Ask', {}, mergeAsk)]
+
+test('G8 a merge card: its own message, the pull request and its status; sending open while it waits; merged, refused, cancelled', () => {
+  const card = (entries: readonly Entry[]) => {
+    const message = messagesOf(stateOf(entries))[0]!
+    const call = (message.content as unknown as QuestionPart[])[0]!
+    assert.deepEqual([message.role, call.type, call.toolName], ['assistant', 'tool-call', 'merge'])
+    return call.artifact!.merge!
+  }
+  const pending = card(pendingMerge)
+  assert.deepEqual(
+    [pending.status, pending.position, pending.title, pending.url, pending.repo, pending.number, pending.outcome],
+    ['pending', '1', 'Add feature 7', 'https://github.com/owner/a/pull/7', 'owner/a', 7, null],
+  )
+  // Sending stays open: the person's message cancels the card, it does not answer it (docs/specs/merge.md).
+  const state = stateOf(pendingMerge)
+  const open = composerOf(state, workstreamOf(state, QUESTION_WS))
+  assert.deepEqual([open.open, open.reason, open.refuses], [true, null, false])
+  const answered = [...pendingMerge, commandEntry(2, 'Answer', { question: '1' }, { optionId: 'merge' })]
+  assert.deepEqual([card(answered).status, card(answered).outcome], ['answered', null])
+  assert.deepEqual(card([...answered, factEntry(3, 'merge.merged', { question: '1', sha: 'f00d1234' })]).outcome, { merged: true, sha: 'f00d1234' })
+  assert.deepEqual(card([...answered, factEntry(3, 'merge.refused', { question: '1', reason: 'waiting for a review' })]).outcome, { merged: false, reason: 'waiting for a review' })
+  assert.equal(card([...pendingMerge, factEntry(2, 'question.cancelled', { question: '1' })]).status, 'cancelled')
 })
