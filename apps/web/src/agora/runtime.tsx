@@ -6,7 +6,7 @@
 // Workstream is created on its first message, never before; the message waits, shown, until its
 // Session is open, then is written.
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
@@ -434,6 +434,21 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       if (composer.cancellable) await send('Cancel', { execution: view.execution, turn: composer.cancellable.id }, {})
     },
   })
+
+  // A text typed and not sent stays with its Workstream, or the draft (docs/specs/assistant-ui.md,
+  // "Sending"): the composer is one for all of them, so moving puts this one's away and shows the other's.
+  // Attachments are not kept: the other agent may not take them. Before the composer's effects, which
+  // may put back a message given back to the Workstream just opened.
+  const drafts = useRef(new Map<string | null, string>())
+  const shownFor = useRef(id)
+  useLayoutEffect(() => {
+    if (shownFor.current === id) return
+    const input = runtime.thread.composer
+    drafts.current.set(shownFor.current, input.getState().text)
+    shownFor.current = id
+    input.setText(drafts.current.get(id) ?? '')
+    void input.clearAttachments().catch(() => {})
+  }, [id, runtime])
 
   const open = useCallback(
     (next: string | null) => {

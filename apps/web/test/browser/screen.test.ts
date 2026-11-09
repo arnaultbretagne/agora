@@ -1605,6 +1605,8 @@ test('U81 Copy shown on hover over an earlier response: the thread under it does
   // The last response has its Copy for good; the earlier one only on hover.
   await page.locator('main [data-role="assistant"]').last().getByRole('button', { name: 'Copy' }).waitFor()
   await page.mouse.move(5, 5)
+  // Measured once the messages have slid in.
+  await page.waitForFunction(() => document.querySelector('main')!.getAnimations({ subtree: true }).every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
   assert.equal(await copy.count(), 0, 'no Copy before the hover')
   const before = (await next.boundingBox())!
   await first.hover()

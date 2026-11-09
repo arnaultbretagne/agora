@@ -9,7 +9,7 @@
 import { AuiIf, ComposerPrimitive, QueueItemPrimitive, useAui, useAuiState } from '@assistant-ui/react'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, XIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
-import { Fragment, useEffect, useRef, useState, type FC, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useState, type FC, type KeyboardEvent } from 'react'
 import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
@@ -348,7 +348,7 @@ const WaitingMessages: FC = () => {
 
 export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { id, returned, takeReturned, pending, composer, commands, promptCapabilities, pool } = useAgora()
+  const { returned, takeReturned, pending, composer, commands, promptCapabilities, pool } = useAgora()
   const team = composer.create && pool === TEAM
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
@@ -375,19 +375,6 @@ export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
       setDismissed(text)
     }
   }
-  // Each Workstream, and the draft, keeps its own unsent text: moving puts this one's away and the
-  // other's back. Attachments are not kept: the other agent may not take them. Before the message given
-  // back below, which goes to the Workstream it opens.
-  const drafts = useRef(new Map<string | null, string>())
-  const shownFor = useRef(id)
-  useEffect(() => {
-    if (shownFor.current === id) return
-    const input = aui.composer()
-    drafts.current.set(shownFor.current, input.getState().text)
-    shownFor.current = id
-    input.setText(drafts.current.get(id) ?? '')
-    void input.clearAttachments().catch(() => {})
-  }, [id, aui])
   // A message whose execution failed to start comes back here, its attachments with it, to be sent again.
   useEffect(() => {
     if (returned === null) return
