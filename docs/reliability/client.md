@@ -38,6 +38,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R30 | 2026-11-04 | `fd0c720` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11; the mock agent's `/delegate` calling the server's MCP port as a harness does. |
 | R31 | 2026-11-05 | `7875149` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11. Screenshots taken in Chromium against the same server; and, a manual check and not evidence, three real threads of the deployed server read through `kubectl port-forward`, every request but a GET refused in the browser. |
 | R32 | 2026-11-08 | `d4bc539` | local | `npm run check`, all green: Node 24.20.0, Playwright's Chromium against the real server, its files in the testkit's S3 endpoint standing in for R2 (`specs/files.md`). |
+| R33 | 2026-11-09 | `57761aa` | unit, local | `npm run check`, with `npm run test:browser`, all green, in the pull request's CI (run 42637714459): Node 24.22.2, PostgreSQL 17.11, Playwright's Chromium; U80's phone part on a phone's screen (390 × 844, touch). Before it, U81 failed by 0.3 px measured while a message slid in, and U82 on the first Workstream's text still in the second's composer, the composer remounted with each Workstream; both fixed. |
 
 ## Cases
 
@@ -164,9 +165,9 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U77 | — | unit | R31 | proven | claude-code: `2 edits, 1 command` `+22 −0`, `3 edits, 1 command` `+5 −5`. codex: `4 commands, 2 other tools` `3 failed`, `1 command, 1 other tool`. opencode: `2 other tools, 2 edits, 2 commands` with its reasoning in it, `1 edit, 1 command, 1 other tool` `+1 −1`. A pending permission, a `delegate` line, an approval and a question out; answered, or its turn cancelled, in; what stays out ends a fold: 1, then 2. |
 | U78 | — | local | R31 | proven | `/tool-run 3`, the permission pending: `1 read, 1 command` `1 failed`, `1 edit, 1 search` `+1 −1`, both closed, `Looking first.` and `Now the change.` around them, `Write demo.txt` outside with Allow. Answered: `A long command` `4 tools`, closed. Done: `2 edits, 1 search, 1 command` `+2 −2`, closed; opened, `Edit demo.txt`, `Search demo`, `Write demo.txt`, `A long command`, the first opening onto its diff. `/tool`: its line, no fold. |
 | U79 | — | local | R32 | proven | A 200 × 120 PNG of noise written with a message: its tile `/api/files/fb4d4d58…?type=image%2Fpng&owner=…`, drawn; opened, 200 × 120 from the same address; the thread 6025 characters, the reference in it, none of the image's base64. |
-| U80 | — | local | — | not verified | — |
-| U81 | — | local | — | not verified | — |
-| U82 | — | local | — | not verified | — |
+| U80 | — | local | R33 | proven | Enter: `first line\nsecond line` in the field, one user message 500 ms on; Ctrl or Cmd and Enter: a second, of the two lines, `Echo #2` of them, the field empty. On the phone: `on the phone\ntoo`, nothing sent 500 ms on; **Send**: a third, `Echo #3` of it. |
+| U81 | — | local | R33 | proven | Copy under the last response; none under the first; hovered: its Copy below the first response's box and above the next message, which stayed at the same y; Copy itself hovered: shown, the y the same; left: gone, the y the same. |
+| U82 | — | local | R33 | proven | The second, the first, the draft each opened with an empty field; then `for beta`, `for alpha`, `for the draft`; the draft's sent: `Echo #1: for the draft.`, the field empty there and in the draft after **New workstream**. |
 
 ## Not covered
 
