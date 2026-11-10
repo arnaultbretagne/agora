@@ -118,6 +118,14 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
 | A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
 
+In the composer, as in every state:
+
+| Element | Rule |
+| --- | --- |
+| The keys | Enter starts a new line, on a phone as on a computer; Ctrl+Enter, or ⌘+Enter, sends, as **Send** does. |
+| A text not sent | Each Workstream, and the draft, keeps its own, its attachments with it: moving to another, or to the draft with **New workstream**, puts it away and shows the other's, empty if it has none; coming back shows it again, the attachments added again as when first attached. Kept in the page only: gone after a reload. |
+| A message given back | A draft's Workstream or a team refused, a refused Create or Write, or a first message whose execution did not start: the message goes back into the composer of its own Workstream — of the draft for the first two —, with the reason above it, shown there when that Workstream is, never in another's. Several waiting there: all of them, one after the other, a blank line between their texts. A reason is said until that Workstream's next command, or until it is left. |
+
 ## Messages during a turn
 
 Sending stays open while a turn runs: one gesture, and Agora decides whether the message goes into
@@ -125,7 +133,7 @@ the turn or after it (`log.md`, "Messages during a turn").
 
 | Element | Rule |
 | --- | --- |
-| Send | **Cancel** while a turn runs; **Send** beside it once the composer holds something. Enter sends, as between turns. |
+| Send | **Cancel** while a turn runs; **Send** beside it once the composer holds something. Ctrl+Enter or ⌘+Enter sends, as between turns. |
 | Waiting | Above the composer, oldest first, each message that waits as the thread gives it: its text on one line, cut, then its attachments counted, and when it is not the person's, who wrote it; a cross sends **Retract**. Gone once sent or retracted. |
 | Sent into the turn | In the thread at its place, as a user's message; the agent's response goes on under it. |
 | Held | While messages wait with no turn running and sending open, as after a Cancel or with no execution running, above them: "These go with your next message." |
@@ -360,7 +368,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
 | Thread | User message, on the right in a bubble, with its turn's note | `MessagePrimitive` (**ours**) |
 | Thread | A user message's attachments, above its bubble; an image opened whole | `Attachment` (registry), adapted: a Radix dialog, no avatar |
-| Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts` — tools in a row folded, consecutive reasoning together —, the turn's failure under it, Copy on hover | `MessagePrimitive` (**ours**) |
+| Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts` — tools in a row folded, consecutive reasoning together —, the turn's failure under it; Copy under the last, and on hover under an earlier one, floating in the gap below it: nothing moves | `MessagePrimitive` (**ours**) |
 | Thread | Notice, for `system` messages | **ours** |
 | Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
 | Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
@@ -496,7 +504,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U67 | A turn saved, then in progress; then uncertain; a permission pending | Sending open and the turn running, the model and access pickers closed; then sending closed, as U3 and U4. |
 | U68 | A turn with a `steered` `user` element between an agent's text and its next; one with that element before any text | `user`, `assistant`, `user`, `assistant`, by their ids, the first `assistant` `complete`, the last with the turn's status, no note under the second `user`; the other: no empty `assistant` before it. |
 | U69 | `waiting` elements: two waiting, one sent, one retracted | Two queue items, in position order, with their text; removing one sends **Retract** with its position; `enqueue` and `steer` send **Write** with `mayWait`. |
-| U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
+| U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Ctrl+Enter or ⌘+Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
 | U71 | In a browser, an agent that does not, a turn running: two messages sent, the first retracted | Both above the composer, oldest first; the cross takes the first away, never sent; at the turn's end the second's turn. |
 | U72 | In a browser, a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
 | U73 | In a browser, a Write refused during a turn; a first message refused | Its reason above the composer; the text back in the composer; likewise. |
@@ -506,6 +514,10 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U77 | The real histories of the three harnesses; a permission pending, then answered; a `delegate` line, an approval, a question | Each run of tools between two texts, the reasoning in it, one fold, with its count, its label by kind and its note, its failures counted; the permission out of its fold until answered; the `delegate` line, the approval and the question out. |
 | U78 | In a browser, a turn with tools in a row, a text between them, one asking a permission, one running; then a tool alone | While the permission is pending: two folds, closed, each with its label and note, the texts between them, the tool that asks outside them with its card. Answered: in its fold; while the last tool runs, the fold says its label and "4 tools", closed. Once done: the label and note of the whole; opened, each tool's line in order, one opening onto its diff. The tool alone: its own line, no fold. |
 | U79 | In a browser, a `user` element of text and a JPEG whose `data` is a file reference; the image opened | One tile, its image read from `/api/files/<sha256>?type=image/jpeg`; the same address opened whole; no base64 in the thread received. |
+| U80 | In a browser, an open Workstream: a line typed, Enter, another line, then Ctrl+Enter or ⌘+Enter; then on a phone's screen, the same with Enter, then **Send** | Enter: both lines in the composer, nothing sent; then one message of the two lines, the agent's answer, the composer empty. On the phone: likewise, sent by **Send**. |
+| U81 | In a browser with a mouse, two exchanges: the first response hovered, then its Copy, then neither | Copy under the last response; none under the first until hovered; hovered: its Copy in the gap below it, above the next message, which has not moved; on Copy, still shown; left, gone; the next message never moved. |
+| U82 | In a browser, two Workstreams: a file attached and a text typed in one, the other opened from the list, a text typed, **New workstream**, a text typed; then each opened again; then the draft's text sent; then the first's sent; then the other reloaded | The other and the draft opened with an empty composer and no attachment, the other still none once its view is known; coming back, each with its own text: the first's with its attachment, the other's, the draft's. The draft's sent: the new Workstream's composer empty, and the draft's after **New workstream**. The first's sent: its prompt holds the file. Reloaded: the composer empty, no attachment. |
+| U83 | In a browser, two Workstreams: a message sent in one, refused once the other has been opened from the list; then the first opened again | In the other: its composer empty, the reason not said. The first: the message in its composer, the reason above it. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

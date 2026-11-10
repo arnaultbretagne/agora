@@ -5,8 +5,8 @@
 // Sending with no execution running starts one first (docs/specs/assistant-ui.md, "Sending"): a new
 // Workstream is created on its first message, never before; the message waits, shown, until its
 // Session is open, then is written.
-import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type Attachment, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
@@ -41,6 +41,11 @@ import {
 export interface Draft {
   readonly text: string
   readonly attachments: readonly CompleteAttachment[]
+}
+
+/** A message given back to the composer of its Workstream, or of the draft (`for` null). */
+interface Returned extends Draft {
+  readonly for: string | null
 }
 
 /** A first message waiting for the Session its Create opens. */
@@ -78,10 +83,8 @@ export interface Agora {
   readonly access: readonly string[]
   /** Gives an entry a choice: kept for the next Create, or sent at once (Scope) with the whole set. */
   chooseAccess(entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): void
-  /** The reason of the last command refused, until the next one. */
+  /** The reason of the last command refused in this Workstream, until its next one or until it is left. */
   readonly refusal: string | null
-  /** A message given back to the composer after its execution failed to start. */
-  readonly returned: Draft | null
   /** What the agent accepts beyond text: the open or last execution's, or, when sending starts one, its pool's. */
   readonly promptCapabilities: PromptCapabilities | null
   /** The limits of the account the pool shown draws from; null before they are read or when it has none. */
@@ -93,7 +96,6 @@ export interface Agora {
   /** A permission answered to its agent, or a question answered to the log, with its note. */
   answer(permission: string, optionId: string, note?: string): Promise<void>
   open(id: string | null): void
-  takeReturned(): void
   /** Whether a team can be launched: the harness picker offers it. */
   readonly teams: boolean
   /** Who the proxy says the person is. */
@@ -142,6 +144,9 @@ const REFUSALS: Record<string, string> = {
 
 export const refusalText = (reason: string): string => REFUSALS[reason] ?? `Refused (${reason}).`
 
+/** An attachment the adapter has prepared (one given back), not a file still to prepare. */
+const complete = (a: Attachment): a is CompleteAttachment => a.status.type === 'complete'
+
 const POOL_KEY = 'agora:pool'
 const storedPool = (): string | null => {
   try {
@@ -171,14 +176,21 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // Its sub-streams' rows, read only once a `delegate` line has started one.
   const delegating = useMemo(() => delegatesOf(state).length > 0, [state])
   const delegates = useList(api, null, id !== null && delegating, id)
-  const [refusal, setRefusal] = useState<string | null>(null)
+  // The reason of the last command refused, with the Workstream it was sent in: shown only there.
+  const [refusal, setRefusal] = useState<{ for: string | null; text: string } | null>(null)
+  const refuse = useCallback((text: string, workstream: string | null) => setRefusal({ for: workstream, text }), [])
+  const unrefuse = useCallback((workstream: string | null) => setRefusal((r) => (r?.for === workstream ? null : r)), [])
+  // The Workstream the composer holds; a file refused is said there.
+  const shownFor = useRef(id)
   const [pools, setPools] = useState<Pool[] | null>(null)
   // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
   const [picked, setPicked] = useState<{ for: string | null; pool: string } | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   // Settings picked before a Create, for the Workstream and pool they were picked in.
   const [chosenFor, setChosenFor] = useState<{ for: string | null; pool: string | null; values: Record<string, string> }>({ for: null, pool: null, values: {} })
-  const [returned, setReturned] = useState<Draft | null>(null)
+  // Put back into their Workstream's composer once that Workstream is shown, oldest first.
+  const [returned, setReturned] = useState<readonly Returned[]>([])
+  const giveBack = useCallback((message: Returned) => setReturned((r) => [...r, message]), [])
   // The access picked: for the next Create of this Workstream or draft (no execution), or sent to its
   // execution and shown until the view has it.
   const [pickedAccess, setPickedAccess] = useState<{ for: string | null; execution: string | null; profiles: readonly string[] } | null>(null)
@@ -239,7 +251,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const attachments = useMemo(
     () =>
       promptCapabilities !== null && acceptOf(promptCapabilities) !== null
-        ? attachmentAdapter(promptCapabilities, (name, why) => setRefusal(`${name} can't be attached: ${why}.`))
+        ? attachmentAdapter(promptCapabilities, (name, why) => refuse(`${name} can't be attached: ${why}.`, shownFor.current))
         : undefined,
     // Kept while what the agent accepts stays the same: the composer's attachments are counted in it.
     [promptCapabilities?.image, promptCapabilities?.embeddedContext],
@@ -263,13 +275,13 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
 
   const send = useCallback(
     async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id): Promise<Answer> => {
-      setRefusal(null)
+      unrefuse(workstream)
       if (workstream === null) return { accepted: false, reason: 'no_workstream' }
       const answer = await api.command(workstream, kind, target, body)
-      if (!answer.accepted) setRefusal(refusalText(answer.reason ?? 'unavailable'))
+      if (!answer.accepted) refuse(refusalText(answer.reason ?? 'unavailable'), workstream)
       return answer
     },
-    [api, id],
+    [api, id, refuse, unrefuse],
   )
 
   const answer = useCallback(
@@ -293,15 +305,15 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   /** A message with no execution running: a Create first, the Write once its Session is open. */
   const start = useCallback(
     async (draft: Draft, prompt: readonly Block[]) => {
-      if (pool === null) return setRefusal('No harness is available.')
+      if (pool === null) return refuse('No harness is available.', id)
       // A team: its goal to the server, which creates the lead's Workstream and starts the run.
       if (pool === TEAM) {
         const workstream = crypto.randomUUID()
-        setRefusal(null)
+        unrefuse(id)
         const launchedTeam = await api.team(workstream, draft.text)
         if (!launchedTeam.accepted) {
-          setRefusal(refusalText(launchedTeam.reason ?? 'unavailable'))
-          setReturned(draft)
+          refuse(refusalText(launchedTeam.reason ?? 'unavailable'), id)
+          giveBack({ ...draft, for: id })
           return
         }
         setLaunched((l) => new Set(l).add(workstream))
@@ -312,18 +324,21 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       if (workstream === null) {
         workstream = crypto.randomUUID()
         const created = await api.create(workstream)
-        if (!created.accepted) return setRefusal(refusalText(created.reason ?? 'unavailable'))
+        if (!created.accepted) {
+          refuse(refusalText(created.reason ?? 'unavailable'), id)
+          return giveBack({ ...draft, for: id })
+        }
       }
       const created = await send('Create', {}, startBody(pool, chosen, access), workstream)
       if (!created.accepted || created.execution === undefined) {
-        setReturned(draft)
+        giveBack({ ...draft, for: workstream })
         if (id === null) onOpen(workstream)
         return
       }
       setPending({ workstream, execution: created.execution, ...draft, prompt, harness: harnessOf(pool) })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, send, onOpen, harnessOf, chosen, access],
+    [api, id, pool, send, onOpen, harnessOf, chosen, access, refuse, unrefuse, giveBack],
   )
 
   const chooseSetting = useCallback(
@@ -357,21 +372,21 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     const step = firstMessageStep(pending.execution, view, state.complete)
     if (step === 'wait') return
     if (step === 'give back') {
-      setReturned({ text: pending.text, attachments: pending.attachments })
-      setRefusal(refusalText('startup'))
+      giveBack({ text: pending.text, attachments: pending.attachments, for: pending.workstream })
+      refuse(refusalText('startup'), pending.workstream)
       setPending(null)
       return
     }
     writing.current = true
     void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt], mayWait: true })
       .then((written) => {
-        if (!written.accepted) setReturned({ text: pending.text, attachments: pending.attachments })
+        if (!written.accepted) giveBack({ text: pending.text, attachments: pending.attachments, for: pending.workstream })
       })
       .finally(() => {
         writing.current = false
         setPending(null)
       })
-  }, [pending, id, state.complete, view, send])
+  }, [pending, id, state.complete, view, send, giveBack, refuse])
 
   const messages = useMemo(() => {
     const own = messagesOf(state)
@@ -393,9 +408,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
       if (composer.create) return start(draft, prompt)
       // During a turn it waits; refused, it comes back to the composer.
       const written = await send('Write', { execution: view.execution, session: view.session }, { prompt, mayWait: true })
-      if (!written.accepted) setReturned(draft)
+      if (!written.accepted) giveBack({ ...draft, for: id })
     },
-    [attachments, composer.create, start, send, view.execution, view.session],
+    [attachments, composer.create, start, send, id, view.execution, view.session, giveBack],
   )
 
   const waiting = useMemo(() => waitingOf(state), [state])
@@ -435,14 +450,53 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     },
   })
 
+  // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
+  // (docs/specs/assistant-ui.md, "Sending"): the composer is one for all of them, so moving puts this
+  // one's away and shows the other's. Its text at once, before the screen is painted; its attachments
+  // once the runtime has the Workstream's adapter — known with its view —, through which they are added
+  // again; still waiting when the person moves on, they stay with it.
+  const drafts = useRef(new Map<string | null, { text: string; attachments: readonly Attachment[] }>())
+  const toRestore = useRef<readonly Attachment[]>([])
+  useLayoutEffect(() => {
+    if (shownFor.current === id) return
+    const input = runtime.thread.composer
+    const { text, attachments: held } = input.getState()
+    drafts.current.set(shownFor.current, { text, attachments: [...held, ...toRestore.current] })
+    shownFor.current = id
+    const kept = drafts.current.get(id)
+    drafts.current.delete(id)
+    input.setText(kept?.text ?? '')
+    // Emptied at once, a file still being prepared cancelled; what the adapter is told comes after.
+    void input.clearAttachments().catch(() => {})
+    toRestore.current = kept?.attachments ?? []
+  }, [id, runtime])
+  useEffect(() => {
+    const restoring = toRestore.current
+    if (restoring.length === 0 || attachments === undefined) return
+    toRestore.current = []
+    const input = runtime.thread.composer
+    for (const a of restoring)
+      void input.addAttachment(complete(a) ? { id: a.id, type: a.type, name: a.name, contentType: a.contentType, content: a.content } : a.file).catch(() => {})
+  }, [id, runtime, attachments])
+  // The messages given back: into their Workstream's composer, once that one is shown; several, one
+  // after the other.
+  useEffect(() => {
+    const mine = returned.filter((r) => r.for === id)
+    if (mine.length === 0) return
+    const input = runtime.thread.composer
+    input.setText(mine.map((r) => r.text).filter((t) => t !== '').join('\n\n'))
+    for (const a of mine.flatMap((r) => r.attachments)) void input.addAttachment({ id: a.id, type: a.type, name: a.name, contentType: a.contentType, content: a.content }).catch(() => {})
+    setReturned((r) => r.filter((m) => !mine.includes(m)))
+  }, [returned, id, runtime])
+
   const open = useCallback(
     (next: string | null) => {
-      setRefusal(null)
+      // The reason said here goes with it; one said for another Workstream waits there.
+      unrefuse(id)
       onOpen(next)
     },
-    [onOpen],
+    [onOpen, unrefuse, id],
   )
-  const takeReturned = useCallback(() => setReturned(null), [])
 
   const agora: Agora = {
     api,
@@ -462,8 +516,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     offered,
     access,
     chooseAccess,
-    refusal,
-    returned,
+    refusal: refusal?.for === id ? refusal.text : null,
     promptCapabilities,
     limits,
     refreshLimits,
@@ -471,7 +524,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     send: (kind, target, body) => send(kind, target, body),
     answer,
     open,
-    takeReturned,
     teams,
     account,
     agents,
