@@ -346,7 +346,7 @@ function contentText(content: unknown): string {
     .join('\n')
 }
 
-/** An approval (docs/specs/assistant-ui.md, "A tool's line"): on the `delegate` line it gates, or a box of its own. */
+/** An approval (docs/specs/assistant-ui.md, "A tool's line"): on the `spawn_agent` line it gates, or a box of its own. */
 export interface Gate {
   readonly id: string
   readonly status: 'pending' | 'answered' | 'refused' | 'expired'
@@ -423,11 +423,12 @@ function mergeMessage(question: ViewObject): ThreadMessageLike {
 }
 
 /**
- * A `delegate` call's answer, `started <id> · <title>`, or with `to`, `sent <id> · <title>` (docs/specs/mcp.md, "Tools"):
- * as a harness gives it, the text alone or inside the JSON of its result.
+ * The delegate a call's answer names (docs/specs/mcp.md, "Tools"): `started <id> · <title>` for `spawn_agent`, `sent <id> ·
+ * <title>` for `send_message`, `stopped` or `no turn to stop <id> · <title>` for `stop_agent` — as a harness gives it, the
+ * text alone or inside the JSON of its result.
  */
 export function startedDelegate(output: string): { id: string; title: string } | null {
-  const m = /(?:started|sent) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
+  const m = /(?:started|sent|stopped|no turn to stop) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
   return m ? { id: m[1]!, title: m[2]!.trim() } : null
 }
 
@@ -435,13 +436,17 @@ export function startedDelegate(output: string): { id: string; title: string } |
 const outputOf = (tool: Json): string =>
   tool.rawOutput === undefined ? contentText(tool.content) : typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)
 
-/** A `delegate` line, by its title as each harness gives it: `delegate`, `mcp__agora__delegate`, `agora_delegate`… */
-const delegating = (tool: Json): boolean => /delegate/i.test(text(tool.title))
+/**
+ * A line that may name a delegate, by its title as each harness gives it — `mcp__agora__spawn_agent`, `mcp.agora.send_message`,
+ * `agora_stop_agent`…: the tool's name alone, `spawn_agent`, `send_message`, `stop_agent`, or the `delegate` of an earlier
+ * contract. A command that merely names one, with words around it, is no such line.
+ */
+const delegating = (tool: Json): boolean => /^\S*?(?<![a-z0-9])(?:spawn_agent|send_message|stop_agent|delegate)$/i.test(text(tool.title).trim())
 
-/** The delegates this Workstream's `delegate` lines started: whose rows their lines read. */
+/** The delegates this Workstream's lines name: whose rows their lines read. */
 export function delegatesOf(state: ThreadState): string[] {
   return ofKind(state, 'element').flatMap((e) => {
-    // Only a `delegate` line's output is read: every other tool's would cost its whole size at each change.
+    // Only such a line's output is read: every other tool's would cost its whole size at each change.
     const started = e.object.type === 'tool' && delegating(e.object) ? startedDelegate(outputOf(e.object)) : null
     return started ? [started.id] : []
   })

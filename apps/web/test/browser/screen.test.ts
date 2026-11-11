@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78–U86: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78–U83, U85–U87: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -33,7 +33,7 @@ let github: HttpServer
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
   db = await database()
-  // Agora's MCP server where the mock agent's `/delegate` calls it: the lab has no gateway (packages/mock-agent).
+  // Agora's MCP server where the mock agent's `/spawn_agent` calls it: the lab has no gateway (packages/mock-agent).
   const mcpPort = await freePort()
   process.env.AGORA_MOCK_MCP = `http://127.0.0.1:${String(mcpPort)}/mcp`
   c = await cluster()
@@ -222,9 +222,9 @@ async function delegating(page: Page, text: string): Promise<string> {
   await thread(page).getByText(`Echo #1: ${text}.`).waitFor()
   return idOf(page)
 }
-/** What the mock agent is told to call `delegate` with (packages/mock-agent). */
-const delegateCall = (args: Record<string, unknown>) => `/delegate ${JSON.stringify(args)}`
-/** A `delegate` line of the thread, by its label. */
+/** What the mock agent is told to call `spawn_agent` with (packages/mock-agent). */
+const delegateCall = (args: Record<string, unknown>) => `/spawn_agent ${JSON.stringify(args)}`
+/** A delegate's line of the thread, by its label. */
 const delegateLine = (page: Page, label: string) => thread(page).locator('[data-delegate]').filter({ hasText: label })
 /** The calls that need the person: a right beyond the caller's — a repository it was not given. */
 const beyond = (instructions: string) => delegateCall({ instructions, harness: 'mock', rights: ['github:owner/b:read'] })
@@ -1256,7 +1256,7 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and far in
   await page.context().close()
 })
 
-test('U65 an agent’s delegate within its rights, then its last message of 10,000 characters: the line names and links to it; working, then idle; the message shown as the delegate’s, whole, by its title, then the agent’s answer', async () => {
+test('U65 an agent’s spawn_agent within its rights, then its last message of 10,000 characters: the line names and links to it; working, then idle; the message shown as the delegate’s, whole, by its title, then the agent’s answer', async () => {
   const page = await fresh()
   await delegating(page, 'before delegating')
   await send(page, delegateCall({ instructions: '/sleep 3', harness: 'mock' }))
@@ -1758,7 +1758,7 @@ const promptsOf = async (id: string): Promise<string[][]> =>
     .filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt')
     .map((e) => ((e.content.params as { prompt: { type: string; text?: string }[] }).prompt ?? []).filter((b) => b.type === 'text').map((b) => String(b.text)))
 
-test('U84 a first message, its Workstream left before its Session opens for an ended one, a message sent there: both go, each a Create carrying it; neither waits for its Workstream to be on screen', async (t) => {
+test('U85 a first message, its Workstream left before its Session opens for an ended one, a message sent there: both go, each a Create carrying it; neither waits for its Workstream to be on screen', async (t) => {
   const page = await fresh()
   const alpha = await started(page, 'alpha kept task')
   const view = (await viewOf(server.url, alpha)) as { execution: string }
@@ -1806,7 +1806,7 @@ test('U84 a first message, its Workstream left before its Session opens for an e
   t.diagnostic(`posted: ${JSON.stringify(posted.map((c) => [c.workstream === beta ? 'beta' : 'alpha', c.kind]))}; prompts of beta ${JSON.stringify(await promptsOf(beta))}, the last of alpha ${JSON.stringify((await promptsOf(alpha)).at(-1))}`)
 })
 
-test('U85 a first message, the page reloaded while its sandbox starts: the message still in the thread, waiting for the sandbox; then the answer', async () => {
+test('U86 a first message, the page reloaded while its sandbox starts: the message still in the thread, waiting for the sandbox; then the answer', async () => {
   const page = await fresh()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
@@ -1828,7 +1828,7 @@ test('U85 a first message, the page reloaded while its sandbox starts: the messa
   assert.deepEqual(await promptsOf(idOf(page)), [['kept across a reload']])
 })
 
-test('U86 a first message with a file, its Pod never starting, its execution ended at its deadline: the reason, the text and the file back in the composer; after a reload too; sent again, the agent given both', async (t) => {
+test('U87 a first message with a file, its Pod never starting, its execution ended at its deadline: the reason, the text and the file back in the composer; after a reload too; sent again, the agent given both', async (t) => {
   const page = await fresh()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
@@ -1862,7 +1862,7 @@ test('U86 a first message with a file, its Pod never starting, its execution end
   await tile.waitFor()
   assert.equal(await thread(page).getByText('waiting for the sandbox').count(), 0, 'no longer in the thread')
   assert.deepEqual(await promptsOf(id), [])
-  await shot(page, 'U86-given-back')
+  await shot(page, 'U87-given-back')
   // After a reload: the log gives it back again.
   await page.reload()
   await reason.waitFor()

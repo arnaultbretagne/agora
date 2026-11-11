@@ -65,6 +65,6 @@ sequenceDiagram
   gateway open it to the gateway alone.
 - The gateway has a route of its own, `agora`, with no credential.
 - The MCP TypeScript SDK becomes a dependency of the server.
-- Every tool added later, `delegate` first, comes with a right and Agora's check.
+- Every tool added later, `spawn_agent` first, comes with a right and Agora's check.
 - A Session keeps its servers once open: a Session opened without `agora:read` never gets the
   server; one scoped out of it keeps the server, which refuses its calls.

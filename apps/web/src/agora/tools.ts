@@ -15,7 +15,7 @@ export type Artifact = {
   note?: boolean
   answer?: string
   answerNote?: string | null
-  /** A `delegate` line's: the delegate its call started; the approval it waits for or waited for. */
+  /** A delegate's line's: the delegate its call names; the approval it waits for or waited for. */
   delegate?: { id: string; title: string }
   gate?: Gate
   /** A merge card's (docs/specs/merge.md). */

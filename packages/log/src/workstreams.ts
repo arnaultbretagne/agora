@@ -445,10 +445,13 @@ export class Workstreams implements Handler {
         if (command.kind === 'Cancel') {
           if (!state.active || !['in_progress', 'uncertain'].includes(state.active.status) || command.target.turn !== state.active.id)
             return 'stale_turn'
+          // Who cancels is Agora's alone to say: a delegator's `stop_agent` (docs/specs/delegation.md, "Stopping and listing").
+          const { from: _from, ...own } = command.body
           return {
             execution: current.id,
             session: state.active.session ?? undefined,
             line: { method: 'session/cancel', params: { sessionId: current.acpId } },
+            ...(origin === 'agora' || _from === undefined ? {} : { body: own }),
           }
         }
         const permission = state.permissions.get(`in:${idKey(command.body.requestId)}`)

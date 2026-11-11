@@ -34,6 +34,7 @@ import {
   sections,
   startBody,
   startedDelegate,
+  delegatesOf,
   startingOf,
   waitingOf,
   windowName,
@@ -677,12 +678,51 @@ const settled = {
   expired: [...pendingApproval, factEntry(2, 'question.expired', { question: '1' })],
 }
 
-test('U65 a `delegate` answer read as a harness gives it: the text alone, or inside its result’s JSON; `to`’s too', () => {
+test('U65 a `spawn_agent` answer read as a harness gives it: the text alone, or inside its result’s JSON; `send_message`’s and `stop_agent`’s too', () => {
   const id = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
   assert.deepEqual(startedDelegate(`started ${id} · Review the change`), { id, title: 'Review the change' })
   assert.deepEqual(startedDelegate(`sent ${id} · Review the change`), { id, title: 'Review the change' })
+  assert.deepEqual(startedDelegate(`stopped ${id} · Review the change`), { id, title: 'Review the change' })
+  assert.deepEqual(startedDelegate(`no turn to stop ${id} · Review the change`), { id, title: 'Review the change' })
   assert.deepEqual(startedDelegate(JSON.stringify({ content: [{ type: 'text', text: `started ${id} · Review the change` }] }, null, 2)), { id, title: 'Review the change' })
   assert.equal(startedDelegate('refused: use the read-only rights'), null)
+  assert.equal(startedDelegate('sent'), null, 'a message to its delegator names no delegate')
+})
+
+test('U84 a send_message and a stop_agent naming a delegate, a send_message to parent, a list_agents, a delegate line of an earlier contract, a command naming a tool: the first two and the earlier one a delegate’s line; the others as any tool’s', () => {
+  const id = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
+  const line = (position: number, title: string, rawOutput: string) => ({
+    kind: 'element',
+    id: `tool-${String(position)}`,
+    object: { type: 'tool', turn: 't', session: 's', firstPosition: String(position), lastPosition: String(position), toolCallId: `call-${String(position)}`, title, kind: 'other', status: 'completed', rawOutput },
+  })
+  const messages = messagesOf(
+    crafted([
+      turnObject('done'),
+      said(1, 'go'),
+      line(2, 'mcp__agora__send_message', `sent ${id} · Review the change`),
+      line(3, 'agora_stop_agent', `stopped ${id} · Review the change`),
+      line(4, 'mcp__agora__send_message', 'sent'),
+      line(5, 'mcp__agora__list_agents', `${id} · Review the change · working`),
+      line(6, 'delegate', `started ${id} · Review the change`),
+      // A command that names a tool and quotes its answer is no delegate's line; nor is a list, whatever it prints.
+      line(7, 'grep -n spawn_agent entries.json', `12: started ${id} · Review the change`),
+      line(8, 'mcp.agora.list_agents', `sent ${id} · Review the change`),
+      line(9, 'mcp.agora.spawn_agent', `started ${id} · Review the change`),
+    ]),
+  )
+  const parts = (messages.find((m) => m.role === 'assistant')!.content as unknown as { type: string; artifact?: { title?: string; delegate?: { id: string; title: string } } }[]).filter((p) => p.type === 'tool-call')
+  assert.deepEqual(parts.map((p) => [p.artifact?.title, p.artifact?.delegate ?? null]), [
+    ['mcp__agora__send_message', { id, title: 'Review the change' }],
+    ['agora_stop_agent', { id, title: 'Review the change' }],
+    ['mcp__agora__send_message', null],
+    ['mcp__agora__list_agents', null],
+    ['delegate', { id, title: 'Review the change' }],
+    ['grep -n spawn_agent entries.json', null],
+    ['mcp.agora.list_agents', null],
+    ['mcp.agora.spawn_agent', { id, title: 'Review the change' }],
+  ])
+  assert.deepEqual(delegatesOf(crafted([line(2, 'mcp__agora__send_message', `sent ${id} · Review the change`), line(5, 'mcp__agora__list_agents', `${id} · Review the change · working`)])), [id])
 })
 
 test('U62 an approval pending: sending open, no Create, what is sent refusing it; refused, sending as it was', () => {

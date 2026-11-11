@@ -1,12 +1,12 @@
-// Delegation (docs/specs/delegation.md): an agent hands work to another through Agora's MCP server. Two Workstreams, one
-// gesture: a message written in the other's, by the primitive the person uses, Agora then deciding as for any message
-// whether it goes into the running turn or as the next (docs/specs/log.md, "Messages during a turn"). A call giving more
-// rights than the caller holds waits for the person. Everything is read back from the log.
+// Delegation (docs/specs/delegation.md): an agent hands work to another through Agora's MCP server, by the gestures the
+// harnesses give their own sub-agents. Two Workstreams, one gesture: a message written in the other's, by the primitive
+// the person uses, Agora then deciding as for any message whether it goes into the running turn or as the next
+// (docs/specs/log.md, "Messages during a turn"). A call giving more rights than the caller holds waits for the person.
+// Everything is read back from the log.
 import { randomUUID } from 'node:crypto'
-import { Ajv2020 } from 'ajv/dist/2020.js'
 import { offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
-import { canonical, identity, object, schemaValue, UUID } from './json.ts'
+import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META } from './marks.ts'
 import { delegationOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
@@ -20,19 +20,12 @@ const MATCH_TRIES = 10,
   MATCH_EVERY_MS = 200
 const MAX_DEPTH = 3
 const AT_ONCE = 3
-/** How many `to` one delegate may be given since the person last wrote: every loop between two agents goes through it. */
+/** How many `send_message` one delegate may be given since the person last wrote: every loop between two agents goes through it. */
 const MAX_EXCHANGES = 10
-const KEYWORDS = new Set(['type', 'properties', 'required', 'items', 'enum', 'description', 'additionalProperties'])
-const ajv = new Ajv2020({ strict: false, allErrors: true })
 /** What says an execution can take no prompt any more, the first of them. */
 const OVER = ['execution.failed', 'execution.lost', 'execution.ended']
-
-/** A schema's check: each call brings a new object, which ajv would keep for good. */
-const checkOf = (schema: Record<string, unknown>) => {
-  const check = ajv.compile(schema)
-  ajv.removeSchema(schema)
-  return check
-}
+/** The right that opens a caller's own delegates to it; a delegate's own right reaches its delegator alone. */
+const DELEGATE_RIGHT = 'agora:delegate'
 
 /** What a tool answers instead of its result: the reason (docs/specs/delegation.md). */
 export class Refused extends Error {}
@@ -49,36 +42,11 @@ type Settled = { outcome: 'approved' } | { outcome: 'refused'; words: string } |
 interface Mark {
   readonly workstream: string
   readonly as: 'delegator' | 'delegate' | 'agora'
-  readonly output_schema?: Record<string, unknown>
-  /** On a delegate's: the turn it wrote in, which then submits nothing by itself. */
-  readonly turn?: string | null
-}
-
-/** Why a schema cannot be a delegation's `output_schema`, or null when it can (docs/specs/delegation.md, "Typed results"). */
-export function schemaRefusal(schema: unknown): string | null {
-  const root = object(schema)
-  if (root === null || root.type !== 'object') return 'invalid_schema'
-  const walk = (node: unknown): boolean => {
-    if (typeof node === 'boolean') return true
-    const o = object(node)
-    if (o === null) return false
-    for (const [key, value] of Object.entries(o)) {
-      if (!KEYWORDS.has(key)) return false
-      if (key === 'properties') {
-        const properties = object(value)
-        if (properties === null || !Object.values(properties).every(walk)) return false
-      }
-      if ((key === 'items' || key === 'additionalProperties') && !walk(value)) return false
-    }
-    return true
-  }
-  if (!walk(root)) return 'invalid_schema'
-  try {
-    checkOf(root)
-  } catch {
-    return 'invalid_schema'
-  }
-  return null
+  /**
+   * On a delegate's last message: the turn it closes. A `submit` of the earlier contract carried the turn it was called
+   * in, which then sent nothing more; a `send_message` to `parent` carries none.
+   */
+  readonly turn?: string
 }
 
 const line = (text: string): string => text.split('\n').map((l) => l.trim()).find((l) => l !== '')?.slice(0, 80) ?? 'Delegate'
@@ -268,21 +236,15 @@ export class Delegations {
     return String(row.rows[0]?.title ?? fallback)
   }
 
-  // ---------------------------------------------------------------- delegate
+  // ---------------------------------------------------------------- spawn_agent
 
   /**
-   * docs/specs/delegation.md: starts a delegate, at once or once the person approves; with `to`, writes to one again.
-   * `progress` keeps a held call open; `toolUseId` is the caller's tool line when its harness names it.
+   * docs/specs/delegation.md: starts a delegate, at once or once the person approves. `progress` keeps a held call open;
+   * `toolUseId` is the caller's tool line when its harness names it.
    */
-  async delegate(caller: Caller, args: Readonly<Record<string, unknown>>, hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null }): Promise<string> {
+  async spawn(caller: Caller, args: Readonly<Record<string, unknown>>, hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null }): Promise<string> {
     const instructions = args.instructions
     if (typeof instructions !== 'string' || instructions.trim() === '') throw new Refused('invalid_query: instructions')
-    const schema = args.output_schema === undefined || args.output_schema === null ? null : (args.output_schema as Record<string, unknown>)
-    if (schema !== null) {
-      const refusal = schemaRefusal(schema)
-      if (refusal !== null) throw new Refused(refusal)
-    }
-    if (args.to !== undefined && args.to !== null) return this.writeTo(caller, String(args.to).toLowerCase(), instructions, schema, args)
     const found = await this.store.writer.query('SELECT depth, owner FROM workstreams WHERE id=$1', [caller.workstream])
     const depth = Number(found.rows[0]?.depth ?? 0)
     if (depth >= MAX_DEPTH) throw new Refused('depth_exceeded')
@@ -291,7 +253,7 @@ export class Delegations {
     const delegate = randomUUID()
     this.followed.set(delegate, { delegator: caller.workstream, seen: new Set() })
     try {
-      return await this.started(delegate, caller, args, instructions, schema, hold)
+      return await this.started(delegate, caller, args, instructions, hold)
     } catch (error) {
       this.followed.delete(delegate)
       throw error
@@ -303,7 +265,6 @@ export class Delegations {
     caller: Caller,
     args: Readonly<Record<string, unknown>>,
     instructions: string,
-    schema: Record<string, unknown> | null,
     hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
   ): Promise<string> {
     const pools = await this.workstreams.catalogue()
@@ -320,7 +281,7 @@ export class Delegations {
     const beyond = rights.filter((r) => !offers(caller.profiles, r))
     let approval: string | null = null
     if (beyond.length > 0) {
-      const { settled, position } = await this.approve(caller, { harness: String(pool.harness), settings, beyond, instructions, schema }, args, hold)
+      const { settled, position } = await this.approve(caller, { harness: String(pool.harness), settings, beyond, instructions }, args, hold)
       if (settled.outcome === 'refused') throw new Refused(`refused: ${settled.words}`)
       if (settled.outcome === 'expired') throw new Refused('expired')
       approval = position
@@ -348,29 +309,110 @@ export class Delegations {
       kind: 'delegation.started',
       content: { delegator: caller.workstream, delegatorExecution: caller.execution, harness: pool.harness, pool: pool.name, settings, rights, ...(approval !== null ? { approval } : {}) },
     })
-    const written = await this.fromDelegator(caller.workstream, delegate, instructions, schema)
+    const written = await this.fromDelegator(caller.workstream, delegate, instructions)
     if (!written.accepted) throw new Refused(written.reason)
     return `started ${delegate} · ${line(instructions)}`
   }
 
-  /** `to`: a message to one of the caller's delegates, whatever it is doing (docs/specs/delegation.md, "Messages"). */
-  private async writeTo(caller: Caller, to: string, instructions: string, schema: Record<string, unknown> | null, args: Readonly<Record<string, unknown>>): Promise<string> {
-    for (const key of ['harness', 'model', 'effort', 'rights']) if (args[key] !== undefined && args[key] !== null) throw new Refused(`invalid_query: ${key}`)
-    if (!UUID.test(to)) throw new Refused('not_a_delegate')
+  // ---------------------------------------------------------------- send_message
+
+  /**
+   * docs/specs/delegation.md, "Messages": the words, written in the other's Workstream — one of the caller's delegates',
+   * whatever it is doing, or `parent`, its own delegator's.
+   */
+  async send(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
+    const message = args.message
+    if (typeof message !== 'string' || message.trim() === '') throw new Refused('invalid_query: message')
+    if (typeof args.to !== 'string' || args.to.trim() === '') throw new Refused('invalid_query: to')
+    const to = args.to.trim().toLowerCase()
+    const delegator = await this.delegatorOf(caller.workstream)
+    if (to === 'parent' || (delegator !== null && to === delegator)) {
+      if (delegator === null) throw new Refused('no_delegator')
+      const written = await this.fromDelegate(delegator, caller.workstream, randomUUID(), message, null)
+      if (!written.accepted) throw new Refused(written.reason)
+      return 'sent'
+    }
+    await this.mine(caller, to)
+    if ((await this.exchanges(caller.workstream, to)) >= MAX_EXCHANGES) throw new Refused('too_many_exchanges: the person has to write first')
+    if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: await this.past(to) })
+    const written = await this.fromDelegator(caller.workstream, to, message)
+    if (!written.accepted) throw new Refused(written.reason)
+    return `sent ${to} · ${await this.titleOf(to, line(message))}`
+  }
+
+  /** The Workstream that started this one by `spawn_agent`, or null: a delegate's delegator. */
+  private async delegatorOf(workstream: string): Promise<string | null> {
+    const found = await this.store.writer.query(
+      "SELECT w.parent FROM workstreams w WHERE w.id = $1 AND w.parent IS NOT NULL AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
+      [workstream],
+    )
+    return (found.rows[0]?.parent as string | undefined) ?? null
+  }
+
+  /** `to`, one of the caller's delegates the person has not stopped: `not_a_delegate`, `delegate_stopped` otherwise. */
+  private async mine(caller: Caller, to: string): Promise<void> {
+    // A delegate's own right reaches its delegator alone (docs/specs/mcp.md, "The path").
+    if (!UUID.test(to) || !caller.profiles.includes(DELEGATE_RIGHT)) throw new Refused('not_a_delegate')
     const delegate = await this.store.writer.query(
       "SELECT 1 FROM workstreams w WHERE w.id = $1 AND w.parent = $2 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
       [to, caller.workstream],
     )
     if (delegate.rowCount === 0) throw new Refused('not_a_delegate')
     if ((await this.store.state(to)).current?.stopped) throw new Refused('delegate_stopped')
-    if ((await this.exchanges(caller.workstream, to)) >= MAX_EXCHANGES) throw new Refused('too_many_exchanges: the person has to write first')
-    if (!this.followed.has(to)) this.followed.set(to, { delegator: caller.workstream, seen: await this.past(to) })
-    const written = await this.fromDelegator(caller.workstream, to, instructions, schema)
-    if (!written.accepted) throw new Refused(written.reason)
-    return `sent ${to} · ${await this.titleOf(to, line(instructions))}`
   }
 
-  /** The `to` a delegate was given since the person last wrote, in its Workstream or its delegator's; its first message is not one. */
+  // ---------------------------------------------------------------- stop_agent, list_agents
+
+  /**
+   * docs/specs/delegation.md, "Stopping and listing": the delegate's turn in progress or uncertain cancelled, by a Cancel
+   * of Agora's that names its delegator; with no such turn, nothing is done.
+   */
+  async stop(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
+    if (typeof args.to !== 'string' || args.to.trim() === '') throw new Refused('invalid_query: to')
+    const to = args.to.trim().toLowerCase()
+    await this.mine(caller, to)
+    const title = await this.titleOf(to)
+    // Twice at most: the turn seen may end, and the next start, between the look and the Cancel.
+    for (let tries = 0; tries < 2; tries++) {
+      const state = await this.store.state(to)
+      const turn = state.active
+      if (!turn || !state.current || !['in_progress', 'uncertain'].includes(turn.status)) return `no turn to stop ${to} · ${title}`
+      const cancelled = await this.workstreams.command(
+        to,
+        { id: randomUUID(), kind: 'Cancel', target: { execution: state.current.id, turn: turn.id }, body: { from: { workstream: caller.workstream, as: 'delegator' } } },
+        'agora',
+      )
+      if (cancelled.accepted) return `stopped ${to} · ${title}`
+      if (cancelled.reason === 'stopped') throw new Refused('delegate_stopped')
+      if (cancelled.reason !== 'stale_turn') throw new Refused(String(cancelled.reason ?? 'unavailable'))
+    }
+    return `no turn to stop ${to} · ${title}`
+  }
+
+  /**
+   * docs/specs/delegation.md, "Stopping and listing": the caller's delegates, the most recently changed first, each as its
+   * row says it; one just started has no row yet, and is read from the log.
+   */
+  async list(caller: Caller): Promise<string> {
+    const mine = await this.store.writer.query(
+      "SELECT w.id FROM workstreams w WHERE w.parent = $1 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started')",
+      [caller.workstream],
+    )
+    const ids = (mine.rows as { id: string }[]).map((r) => r.id)
+    if (ids.length === 0) return 'no delegate'
+    const rows = await this.store.projector.query("SELECT workstream, title, row->>'delegation' AS delegation, changed_at FROM listings WHERE workstream = ANY($1::uuid[])", [ids])
+    const listed = new Map((rows.rows as { workstream: string; title: string | null; delegation: string | null; changed_at: Date | string }[]).map((r) => [r.workstream, r]))
+    const out: { id: string; title: string; state: string; at: number }[] = []
+    for (const id of ids) {
+      const row = listed.get(id)
+      if (row?.delegation) out.push({ id, title: row.title ?? 'Delegate', state: row.delegation, at: new Date(row.changed_at).getTime() })
+      else out.push({ id, title: row?.title ?? 'Delegate', state: delegationOf(await this.store.state(id)), at: Number.MAX_SAFE_INTEGER })
+    }
+    out.sort((a, b) => b.at - a.at || (a.id < b.id ? -1 : 1))
+    return out.map((d) => `${d.id} · ${d.title} · ${d.state}`).join('\n')
+  }
+
+  /** The `send_message` a delegate was given since the person last wrote, in its Workstream or its delegator's; its first message is not one. */
   private async exchanges(delegator: string, delegate: string): Promise<number> {
     const writes = async (workstream: string) => (await this.store.entries(workstream)).filter((e) => e.kind === 'command' && e.content.kind === 'Write')
     const [ours, theirs] = [await writes(delegator), await writes(delegate)]
@@ -378,15 +420,8 @@ export class Delegations {
     return theirs.slice(1).filter((e) => markOf(object(e.content.body)?.prompt)?.as === 'delegator' && Date.parse(e.time) > since).length
   }
 
-  private fromDelegator(delegator: string, delegate: string, instructions: string, schema: Record<string, unknown> | null): Promise<Answer> {
-    const asked = schema === null ? '' : ` Give submit a result of this shape: ${JSON.stringify(schema)}`
-    return this.write(
-      delegate,
-      randomUUID(),
-      { workstream: delegator, as: 'delegator', ...(schema !== null ? { output_schema: schema } : {}) },
-      `From your delegator ${delegator}, an agent, not the person. It receives your last message:${asked}`,
-      instructions,
-    )
+  private fromDelegator(delegator: string, delegate: string, words: string): Promise<Answer> {
+    return this.write(delegate, randomUUID(), { workstream: delegator, as: 'delegator' }, `From your delegator ${delegator}, an agent, not the person. It receives your last message:`, words)
   }
 
   /** The caller's delegates awaiting approval or working (docs/specs/delegation.md, "A delegation"). */
@@ -394,7 +429,9 @@ export class Delegations {
     let count = 0
     for (const [delegate, known] of this.followed) {
       if (known.delegator !== caller) continue
-      if (delegationOf(await this.store.state(delegate)) === 'working') count++
+      const state = await this.store.state(delegate)
+      // From its Cancel on, a turn holds no place: its agent may take its time to say it stopped.
+      if (delegationOf(state) === 'working' && !(state.held && state.active)) count++
     }
     return count
   }
@@ -404,7 +441,7 @@ export class Delegations {
   /** Holds the call until the person approves, writes, or the approval expires (docs/specs/delegation.md, "Approval"). */
   private async approve(
     caller: Caller,
-    proposal: { harness: string; settings: Record<string, string>; beyond: string[]; instructions: string; schema: unknown },
+    proposal: { harness: string; settings: Record<string, string>; beyond: string[]; instructions: string },
     args: Readonly<Record<string, unknown>>,
     hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
   ): Promise<{ settled: Settled; position: string }> {
@@ -424,7 +461,6 @@ export class Delegations {
         .split('\n')
         .map((l) => `> ${l}`)
         .join('\n'),
-      ...(proposal.schema !== null ? ['', 'A result of this shape:', '```json', JSON.stringify(proposal.schema, null, 2), '```'] : []),
     ].join('\n')
     const asked = await this.workstreams.command(
       caller.workstream,
@@ -474,7 +510,7 @@ export class Delegations {
     await this.workstreams.record(workstream, { kind: 'question.expired', content: { question: position } })
   }
 
-  /** The caller's tool line a call came from, when its harness does not name it: running, `delegate`, the same arguments. */
+  /** The caller's tool line a call came from, when its harness does not name it: running, `spawn_agent`, the same arguments. */
   private async match(caller: string, args: Readonly<Record<string, unknown>>): Promise<string | null> {
     const found = await this.store.projector.query(
       "SELECT object::text FROM objects WHERE workstream=$1 AND kind='element' AND type='tool' ORDER BY first_position DESC LIMIT 20",
@@ -483,7 +519,7 @@ export class Delegations {
     const wanted = canonical(args)
     for (const row of found.rows as { object: string }[]) {
       const tool = object(JSON.parse(row.object))
-      if (!tool || !['pending', 'in_progress'].includes(String(tool.status)) || !/delegate/i.test(String(tool.title ?? ''))) continue
+      if (!tool || !['pending', 'in_progress'].includes(String(tool.status)) || !/spawn_agent/i.test(String(tool.title ?? ''))) continue
       // Its input, or the arguments of the MCP call it wraps (`{ server, tool, arguments }`).
       const input = object(tool.rawInput)
       if ([input, object(input?.arguments)].some((v) => v !== null && canonical(v) === wanted) && typeof tool.toolCallId === 'string') return tool.toolCallId
@@ -491,45 +527,10 @@ export class Delegations {
     return null
   }
 
-  // ---------------------------------------------------------------- submit
-
-  /** The schema the last message of its delegator's it was given holds, or null (docs/specs/delegation.md, "Typed results"). */
-  private async schemaOf(delegate: string): Promise<Record<string, unknown> | null> {
-    const entries = await this.store.entries(delegate)
-    const waiting = new Set((await this.store.state(delegate)).waiting.map((w) => w.position))
-    const retracted = new Set(entries.filter((e) => e.kind === 'command' && e.content.kind === 'Retract').map((e) => String(object(e.content.target)?.message)))
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]!
-      if (e.kind !== 'command' || e.content.kind !== 'Write' || waiting.has(e.position) || retracted.has(e.position)) continue
-      const mark = markOf(object(e.content.body)?.prompt)
-      // Read back from the log, its numbers lossless: ajv needs ordinary ones.
-      if (mark?.as === 'delegator') return mark.output_schema === undefined ? null : object(schemaValue(mark.output_schema))
-    }
-    return null
-  }
-
-  /** docs/specs/delegation.md, "Messages": the words, written in its delegator's Workstream. */
-  async submit(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
-    const message = args.message
-    if (typeof message !== 'string' || message.trim() === '') throw new Refused('invalid_query: message')
-    const parent = await this.store.writer.query('SELECT parent FROM workstreams WHERE id=$1', [caller.workstream])
-    const delegator = parent.rows[0]?.parent as string | null | undefined
-    if (!delegator) throw new Refused('not_allowed')
-    const schema = await this.schemaOf(caller.workstream)
-    const result = args.result
-    if (schema !== null) {
-      const check = checkOf(schema)
-      if (!check(result)) throw new Refused(`invalid_result: ${result === undefined ? `a result of this shape is asked for: ${JSON.stringify(schema)}` : (check.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? ''}`.trim()).join('; ')}`)
-    }
-    const words = result === undefined ? message : `${message}\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``
-    const turn = (await this.store.state(caller.workstream)).active?.id ?? null
-    const written = await this.fromDelegate(delegator, caller.workstream, randomUUID(), words, turn)
-    if (!written.accepted) throw new Refused(written.reason)
-    return 'sent'
-  }
+  // ---------------------------------------------------------------- what a delegate says
 
   private async fromDelegate(delegator: string, delegate: string, id: string, words: string, turn: string | null): Promise<Answer> {
-    return this.write(delegator, id, { workstream: delegate, as: 'delegate', turn }, `From your delegate ${delegate} "${await this.titleOf(delegate)}", not the person:`, words)
+    return this.write(delegator, id, { workstream: delegate, as: 'delegate', ...(turn !== null ? { turn } : {}) }, `From your delegate ${delegate} "${await this.titleOf(delegate)}", not the person:`, words)
   }
 
   // ---------------------------------------------------------------- what comes back by itself
@@ -567,8 +568,13 @@ export class Delegations {
       const why = object(turn.failure)?.message ?? turn.failure
       return e?.lost || e?.failed || e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
     }
-    if (turn.status === 'cancelled') return e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
+    if (turn.status === 'cancelled') {
+      // Its delegator's own `stop_agent` is told nothing: its call's answer said it.
+      const ours = entries.some((x) => x.kind === 'command' && x.content.kind === 'Cancel' && object(x.content.target)?.turn === turn.id && object(object(x.content.body)?.from)?.as === 'delegator')
+      return e?.stopped || ours ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
+    }
     if (!this.holdsAnothers(entries, turn, next)) return null
+    // A turn of the earlier contract in which the delegate called `submit` sent nothing more: said then, said for good.
     if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return null
     const words = lastMessageOf(entries, turn, next)
     const id = identity(delegate, turn.id, 'last message')
