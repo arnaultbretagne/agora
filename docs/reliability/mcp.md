@@ -12,6 +12,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R4 | 2026-11-03 | `0451c69` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 now lists the tools as the delegate's Session opens, before its instructions, the engine held: it fails on `5ff8da9`'s engine, passes on this one (agora #179). |
 | R5 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. M9, on the new adapters. |
 | R6 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 and M11 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client and plain `fetch`. |
+| R7 | 2026-11-11 | `f433f48` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 to M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client, as R6. |
 
 ## Cases
 
@@ -32,6 +33,9 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M11 | — | local | R3 | proven | `tools/list`: `application/json`; a `delegate` call held by an approval of 1.5 s: `text/event-stream`, 3 progress notifications or more, then the answer to request 2; the approval `expired`. |
 | M10 | — | local | R6 | proven | With `agora:delegate`: `delegate` alone, not read-only, `instructions`, `harness`, `model`, `effort`, `rights`, `output_schema`, `to`. From a delegate asked for a result, as its Session opens: `submit` alone, `message` and `result`, `message` alone required. |
 | M11 | — | local | R6 | proven | `tools/list`: `application/json`. A `delegate` call held by an approval of 1.5 s: `text/event-stream`, 3 progress notifications or more, then its answer; the element `expired`. |
+| M10 | — | local | R7 | proven | With `agora:delegate`: `spawn_agent`, `send_message`, `stop_agent`, `list_agents`, the last alone read-only; their parameters `instructions`, `harness`, `model`, `effort`, `rights`; `to`, `message`; `to`; none. From a delegate, as its Session opens: `send_message` alone, `to` and `message`, both required. From one holding `agora:delegate` and `agora:submit`: the four, each once. |
+| M11 | — | local | R7 | proven | As R6, the call held a `spawn_agent`. |
+| M12 | — | local | R7 | proven | From a delegate, `stop_agent` and `list_agents`: `not_allowed`; from its delegator, `delegate` and `submit`: `not_allowed`; the delegate still `in_progress`, one sub-stream. A delegate that delegated, scoped down to `agora:submit`: `send_message` alone listed; to its own delegate: `not_a_delegate`, one Write in it. |
 
 ## Not covered
 

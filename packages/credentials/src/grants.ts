@@ -79,8 +79,8 @@ export const GITHUB_WRITE = /^github:([^/:]+\/[^/:]+):write$/
 /** The profiles that open Agora's MCP server; Agora tells their tools apart (docs/specs/mcp.md, "The path"). */
 const AGORA_PROFILES: ReadonlySet<string> = new Set(['agora:read', 'agora:delegate', 'agora:submit'])
 /**
- * Agora's own profiles, given by Agora alone — `agora:submit` to a delegate asked for a result
- * (docs/specs/delegation.md, "Typed results") —: never offered, never named by a Create or a Scope.
+ * Agora's own profiles, given by Agora alone — `agora:submit` to every delegate, to reach its delegator
+ * (docs/specs/delegation.md, "A delegation") —: never offered, never named by a Create or a Scope.
  */
 export const AGORA_OWN_PROFILES: ReadonlySet<string> = new Set(['agora:submit'])
 
