@@ -1,0 +1,1653 @@
+{
+ "claude-caps/a-one-waited": {
+  "lines": 29,
+  "kept": 30,
+  "diagnostics": [],
+  "childLines": 5,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 18724,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZGNhZTllOGQtMWE4MS00NmQ2LWFlYzctOTA5NTBhOWI1NjJ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: The sub-agent is running in the background. I'll give you the result once it reports back.",
+     "text: 391",
+     "text: 17 x 23 = 391, per the sub-agent."
+    ]
+   }
+  ]
+ },
+ "claude-caps/b-two-parallel": {
+  "lines": 30,
+  "kept": 31,
+  "diagnostics": [],
+  "childLines": 10,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 18539,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 2
+   },
+   "config_option_update": {
+    "acp:config_option_update": 6
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiODMwNmIyMTItODk3My00OTU0LTk1MzAtYWY4MTg1N2IzMmU"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: 12 x 12 = 144",
+     "text: 169",
+     "text: 12 x 12 = 144, and 13 x 13 = 169."
+    ]
+   }
+  ]
+ },
+ "claude-caps/c-background": {
+  "lines": 75,
+  "kept": 76,
+  "diagnostics": [],
+  "childLines": 22,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19701,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 5
+   },
+   "tool_call_update": {
+    "tool": 9
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 4
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNjgyYmE5Y2QtMDIyYi00YzU4LTg5MDgtZDQ5YWM5NDA0MDU"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: Launched.",
+     "tool-call: execute \"sleep 25; echo background-finished\"",
+     "text: The first attempt was blocked by a hook that rejects foreground `sleep` chains. I'll run the same command with `run_in_background`, which th",
+     "tool-call: execute \"sleep 25; echo background-finished\"",
+     "text: The command is running in the background. I'll wait on its output file with Monitor so I can report the real result.",
+     "tool-call: other \"ToolSearch\"",
+     "tool-call: other \"Monitor\"",
+     "text: The `sleep 25` command is running in the background, and I'm waiting for its output before reporting the result.\n\n- The first attempt was bl",
+     "text: The background agent has not finished. It reports that its `sleep 25` is still running in the background, so I don't have the `background-fi",
+     "tool-call: read \"Read /tmp/claude-10001/-home-harness-work/941407b2-fb41-456a-9ce6-2685577c3fe2/tasks/b8yp0n6gs.output\"",
+     "text: The background command finished with exit code 0. Its exact output was:\n\n```\nbackground-finished\n[exited with code 0]\n```\n\nThe first foregro",
+     "text: The background agent finished. Its command `sleep 25; echo background-finished` exited with code 0 and printed:\n\n```\nbackground-finished\n```"
+    ]
+   }
+  ]
+ },
+ "claude-caps/d-nested": {
+  "lines": 37,
+  "kept": 38,
+  "diagnostics": [],
+  "childLines": 14,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 18488,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 4
+   },
+   "config_option_update": {
+    "acp:config_option_update": 6
+   },
+   "subagent_update": {
+    "acp:subagent_update": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiMGU5YTFhMWUtZDI2Ny00MmQ2LTlmYzctOWMwYTZlMWFiYTM"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: 56",
+     "text: (a) The second sub-agent reported **56** for 7 x 8.\n\n(b) Yes, I was able to start it. The Agent call with the general-purpose type succeeded",
+     "text: The first sub-agent reported that the nested sub-agent computed 7 x 8 = 56, and that it was able to start that second sub-agent."
+    ]
+   }
+  ]
+ },
+ "claude-caps/e-permission": {
+  "lines": 33,
+  "kept": 34,
+  "diagnostics": [],
+  "childLines": 9,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 18887,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "session/request_permission": {
+    "permission": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZTVhMGViZTAtNTJjZi00ZGI0LWFmYmUtMjk3ZWVjZGEwN2Y"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: The sub-agent is running in the background. I'll wait for its completion notification before replying.",
+     "tool-call: edit \"Write note.txt\"",
+     "text: Created `/home/harness/work/note.txt` with the content `hello`.",
+     "text: done"
+    ]
+   }
+  ]
+ },
+ "claude-caps/f-cancel-child": {
+  "lines": 52,
+  "kept": 53,
+  "diagnostics": [],
+  "childLines": 17,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19006,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 4
+   },
+   "tool_call_update": {
+    "tool": 7
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYmY5NWVkYmEtNGU2Ny00YmRhLTg1YmQtOTdmNzc3ODJiMWV"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"sleep 45; echo slept\"",
+     "text: The sub-agent is running the `sleep 45; echo slept` command in the background. I'll report what it returned once its completion notification",
+     "text: The foreground sleep was blocked, and the tool description says to use `run_in_background` for this kind of wait. I'll run the same command ",
+     "tool-call: execute \"sleep 45; echo slept\"",
+     "text: The command is running in the background. I'll load Monitor to wait for its output.",
+     "tool-call: other \"ToolSearch\"",
+     "tool-call: other \"Monitor\"",
+     "text: The sub-agent was stopped before it reported `slept`; its last message said the command was still running in the background, so the sleep ou"
+    ]
+   }
+  ]
+ },
+ "claude-caps/g-cancel-parent-foreground": {
+  "lines": 38,
+  "kept": 39,
+  "diagnostics": [],
+  "childLines": 7,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19120,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "tool_call_update": {
+    "tool": 1
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiM2M2ZGFhZGQtYWRhNS00ZjU2LTkzMjYtMWYyMzBkMDkyZWV"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: The sub-agent has started and is running the `sleep 45;",
+     "tool-call: execute \"sleep 45; echo slept\"",
+     "text:  echo slept` command in the background. I'll report its result once the completion notification arrives.",
+     "text: The command was blocked before it ran, so I have no output to report. The Bash tool rejected `sleep 45; echo slept` with: \"Blocked: sleep 45",
+     "text: The sub-agent could not run `sleep 45; echo slept`: the Bash tool blocked the command, so there is no output to report."
+    ]
+   }
+  ]
+ },
+ "claude-caps/h-cancel-parent-background": {
+  "lines": 146,
+  "kept": 147,
+  "diagnostics": [],
+  "childLines": 15,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 21620,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 3
+   },
+   "tool_call_update": {
+    "tool": 5
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 3
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZWViZmRhNTgtMDg0OC00ODU2LThmZjUtYzM5OWQ5NDRhMDd"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"sleep 30\"",
+     "tool-call: execute \"sleep 40; echo bg-done\"",
+     "tool-call: execute \"sleep 30\"",
+     "text: The shell blocked the foreground `sleep` and suggested running the command in the background instead, so I'll do that with the same command.",
+     "tool-call: execute \"sleep 40; echo bg-done\"",
+     "text: The sub-agent is running in the background and will report `bg-done` when its `sleep 40` finishes. I did not wait for it.\n\nMy foreground `sl",
+     "text: The command is running in the background, so I don't have its output yet. I'll report `bg-done` once the background task finishes and the ou",
+     "tool-call: read \"Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output\"",
+     "text: The `sleep 30` finished with exit code 0, so the foreground step is done.\n\nThe sub-agent's `sleep 40; echo bg-done` is not confirmed yet. It",
+     "tool-call: read \"Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output\"",
+     "text: The background command finished with exit code 0. Its output, verbatim:\n\n```\nbg-done\n```\n\nThe foreground attempt was blocked by the shell, s",
+     "text: The sub-agent's `sleep 40; echo bg-done` finished with exit code 0 and printed `bg-done`. The `sleep 30` I ran earlier had already completed"
+    ]
+   }
+  ]
+ },
+ "claude-baseline/a-one-waited": {
+  "lines": 30,
+  "kept": 31,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 18767,
+   "size": 1000000
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYjNiM2E2YTgtNjgwYS00ZDJlLThjZWYtNDhjY2QwMDg0ZDJ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: think \"Compute 17 x 23\"",
+     "text: The sub-agent is running in the background to compute 17 x 23. I'll give you the result when it reports back.",
+     "text: 17 x 23 = 391."
+    ]
+   }
+  ]
+ },
+ "claude-baseline/b-two-parallel": {
+  "lines": 26,
+  "kept": 27,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 18546,
+   "size": 1000000
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYjM5MWY4ODUtYmNlNC00MmE4LTg2ODItZTU1ZWFjZjA3YzE"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: think \"Compute 12 x 12\"",
+     "tool-call: think \"Compute 13 x 13\"",
+     "text: 12 x 12 = 144 and 13 x 13 = 169."
+    ]
+   }
+  ]
+ },
+ "claude-baseline/c-background": {
+  "lines": 65,
+  "kept": 66,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 19714,
+   "size": 1000000
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiY2RjNTlmNDEtZDMyMS00ODM0LWI5MTItMDAwMzg1N2E4MzQ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: think \"Run delayed background echo\"",
+     "text: Launched.",
+     "tool-call: execute \"sleep 25; echo background-finished\"",
+     "tool-call: execute \"sleep 25; echo background-finished\"",
+     "tool-call: read \"Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output\"",
+     "text: The background agent has not returned the output yet. It reports that its `sleep 25; echo background-finished` command was launched as a bac",
+     "tool-call: read \"Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output\"",
+     "text: The background agent finished. Its `sleep 25; echo background-finished` command exited with code 0 and printed `background-finished`. The ag"
+    ]
+   }
+  ]
+ },
+ "claude-baseline/e-permission": {
+  "lines": 35,
+  "kept": 36,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 19015,
+   "size": 1000000
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYzhiYmRjOTQtMDVlZi00MzQzLWJjOGItZjhiNTRmYjFmYmI"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: think \"Create note.txt with hello\"",
+     "tool-call: edit \"Write note.txt\"",
+     "text: The sub-agent is running in the background and hasn't reported back yet, so I can't reply \"done\" yet. I'll send it once the agent completes ",
+     "text: done"
+    ]
+   }
+  ]
+ },
+ "claude-caps-2/f2-cancel-child": {
+  "lines": 50,
+  "kept": 51,
+  "diagnostics": [],
+  "childLines": 6,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19026,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "tool_call_update": {
+    "tool": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiMDYwM2M0NGQtZDJlOS00NWRjLTg5ODktYjRlM2YwYmI0NmJ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"node -e \\\"setTimeout(() => console.log('slept'), 45000)\\\"\"",
+     "text: The sub-agent started, but it launched in the background even though you asked for the foreground. I'm still waiting on its result, so I don",
+     "text: The sleep sub-agent was stopped before it reported any output, so I have no result from the command."
+    ]
+   }
+  ]
+ },
+ "claude-caps-2/g2-cancel-parent-foreground": {
+  "lines": 46,
+  "kept": 47,
+  "diagnostics": [],
+  "childLines": 8,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19150,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNDg2ZWNiZjMtZWQ3My00NjI5LTg5YmMtZjIxMmEyNDYyMjg"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"node -e \\\"setTimeout(() => console.log('slept'), 45000)\\\"\"",
+     "text: The sub-agent is still running. I launched it without `run_in_background: false`, so it went to the background instead of the foreground you",
+     "text: The command printed exactly `slept`. I ran it unmodified with the Bash tool, and it took about 45 seconds.",
+     "text: The sub-agent ran `node -e \"setTimeout(() => console.log('slept'), 45000)\"` unmodified, and it printed `slept` after about 45 seconds."
+    ]
+   }
+  ]
+ },
+ "claude-caps-2/h2-cancel-parent-background": {
+  "lines": 44,
+  "kept": 45,
+  "diagnostics": [],
+  "childLines": 8,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "mode=bypassPermissions",
+   "model=haiku",
+   "effort=medium",
+   "agent=general-purpose"
+  ],
+  "viewUsage": {
+   "used": 19417,
+   "size": 1000000
+  },
+  "lastChildConfigIds": [
+   "mode",
+   "model",
+   "effort",
+   "agent"
+  ],
+  "lastChildUsage": null,
+  "became": {
+   "session_message": {
+    "acp:session_message": 1
+   },
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiMWUzM2EwZGMtZDNkZC00NTJhLWJhZGMtMjAwYjJkOWU1MzJ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"node -e \\\"setTimeout(() => console.log('parent-done'), 30000)\\\"\"",
+     "tool-call: execute \"node -e \\\"setTimeout(() => console.log('bg-done'), 40000)\\\"\"",
+     "text: bg-done",
+     "text: The background agent finished and printed `bg-done`. My own `parent-done` command was interrupted before it returned, so I didn't see its ou"
+    ]
+   }
+  ]
+ },
+ "codex-caps/a-one-waited": {
+  "lines": 28,
+  "kept": 29,
+  "diagnostics": [],
+  "childLines": 4,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna"
+  ],
+  "viewUsage": {
+   "used": 11605,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "11222"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 1
+   },
+   "usage_update": {
+    "acp:usage_update": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNTA0MjE2ZjAtMmQxOS00NjlkLThlZGQtMjViZGExNzNmNTV"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: 391",
+     "tool-call: other \"wait\"",
+     "text: 17 × 23 = 391."
+    ]
+   }
+  ]
+ },
+ "codex-caps/b-two-parallel": {
+  "lines": 66,
+  "kept": 67,
+  "diagnostics": [],
+  "childLines": 22,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna"
+  ],
+  "viewUsage": {
+   "used": 11785,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "12325"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 4
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 16
+   },
+   "usage_update": {
+    "acp:usage_update": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYTcyNDU0MDItYzM3Ni00OWVmLWJmYzEtNmJiZmNjNDRhY2Y"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: 12 × 12 = 144.",
+     "tool-call: other \"wait\"",
+     "text: 13 ×",
+     "text:  13 = 169.",
+     "tool-call: other \"wait\"",
+     "text: 12 × 12 = 144, and 13 × 13 = 169."
+    ]
+   }
+  ]
+ },
+ "codex-caps/c-background": {
+  "lines": 26,
+  "kept": 27,
+  "diagnostics": [],
+  "childLines": 10,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna"
+  ],
+  "viewUsage": {
+   "used": 12353,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "12353"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 2
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   },
+   "usage_update": {
+    "acp:usage_update": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 3
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNDYxMGUzNWQtYWM3ZC00NjEzLWEzNTQtNDdmMzQ1ZjA3MzF"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: Launched.",
+     "tool-call: execute \"sleep 25; echo background-finished\"",
+     "text: background-finished"
+    ]
+   }
+  ]
+ },
+ "codex-caps/d-nested": {
+  "lines": 74,
+  "kept": 75,
+  "diagnostics": [],
+  "childLines": 34,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna"
+  ],
+  "viewUsage": {
+   "used": 11683,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "12494"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 3
+   },
+   "subagent_update": {
+    "acp:subagent_update": 4
+   },
+   "usage_update": {
+    "acp:usage_update": 4
+   },
+   "tool_call": {
+    "tool": 2
+   },
+   "tool_call_update": {
+    "tool": 1
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 20
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNmMwZmNkOTAtYTJjZS00ODQ2LWI2NDUtMzQwNGE3ZWJjN2M"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: other \"wait\"",
+     "tool-call: other \"wait\"",
+     "text: I could start the second sub-agent; it reported that 7 × 8 = 56.",
+     "tool-call: other \"wait\"",
+     "text: The sub-agent reported that it could start the second sub-agent, which calculated 7 × 8 = 56."
+    ]
+   }
+  ]
+ },
+ "codex-caps/e-permission": {
+  "lines": 76,
+  "kept": 77,
+  "diagnostics": [],
+  "childLines": 41,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna"
+  ],
+  "viewUsage": {
+   "used": 12391,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "13385"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 2
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 29
+   },
+   "tool_call": {
+    "tool": 2
+   },
+   "tool_call_update": {
+    "tool": 2
+   },
+   "usage_update": {
+    "acp:usage_update": 3
+   },
+   "agent_thought_chunk": {
+    "agent_thought_chunk": 2
+   },
+   "session/request_permission": {
+    "permission": 1
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiMzRhMzYzZDQtY2QzNi00N2I3LThiMjMtZjhmOTllMGM1N2Z"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: I’ll delegate the file creation as requested and wait for the agent’s report.",
+     "text: I’ll create the requested file with a shell command and confirm its contents.",
+     "tool-call: other \"wait\"",
+     "tool-call: execute \"printf 'hello' > note.txt && cat note.txt\"",
+     "reasoning",
+     "tool-call: execute \"printf 'hello' > note.txt && cat note.txt\"",
+     "text: Created `note.txt` in `/home/harness/work` containing `hello`.",
+     "text: done"
+    ]
+   }
+  ]
+ },
+ "codex-caps/f-cancel-child": {
+  "lines": 51,
+  "kept": 52,
+  "diagnostics": [],
+  "childLines": 20,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna",
+   "reasoning_effort=low"
+  ],
+  "viewUsage": {
+   "used": 11692,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model",
+   "reasoning_effort"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "12333"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 1
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 15
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "usage_update": {
+    "acp:usage_update": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZTg0M2NjODMtNTU5Ny00YmQ5LTgyZDAtNmUwNmFjMzZlNzl"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "text: I’ll run the requested shell command and report its output when it finishes.",
+     "tool-call: execute \"sleep 45; echo slept\"",
+     "tool-call: other \"wait\"",
+     "tool-call: other \"wait\"",
+     "text: The sub-agent was stopped before it reported any output."
+    ]
+   }
+  ]
+ },
+ "codex-caps/g-cancel-parent-foreground": {
+  "lines": 32,
+  "kept": 33,
+  "diagnostics": [],
+  "childLines": 17,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna",
+   "reasoning_effort=low"
+  ],
+  "viewUsage": {
+   "used": 11591,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model",
+   "reasoning_effort"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "12368"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 1
+   },
+   "agent_message_chunk": {
+    "agent_message_chunk": 12
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "usage_update": {
+    "acp:usage_update": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZjY0ZTRjMDAtM2QwMS00MzY2LTk4MWQtN2FjNWMyMDg0YmI"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"pwd\"",
+     "tool-call: other \"wait\"",
+     "text: I’ll run the requested command and report the exact output.",
+     "tool-call: execute \"sleep 45; echo slept\""
+    ]
+   }
+  ]
+ },
+ "codex-caps/h-cancel-parent-background": {
+  "lines": 18,
+  "kept": 19,
+  "diagnostics": [],
+  "childLines": 5,
+  "childLinesSession": [
+   "the parent session"
+  ],
+  "turns": 1,
+  "viewSettings": [
+   "model=gpt-6-luna",
+   "reasoning_effort=low"
+  ],
+  "viewUsage": {
+   "used": 11562,
+   "size": 258400
+  },
+  "lastChildConfigIds": [
+   "model",
+   "reasoning_effort"
+  ],
+  "lastChildUsage": {
+   "used": {
+    "isLosslessNumber": true,
+    "value": "11264"
+   },
+   "size": {
+    "isLosslessNumber": true,
+    "value": "258400"
+   }
+  },
+  "became": {
+   "config_option_update": {
+    "acp:config_option_update": 1
+   },
+   "tool_call": {
+    "tool": 1
+   },
+   "usage_update": {
+    "acp:usage_update": 1
+   },
+   "tool_call_update": {
+    "tool": 2
+   }
+  },
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNGUwZDY2MmUtNGM2My00ZTNiLTk0OGEtN2IxOWQwZDU3Y2I"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: execute \"sleep 30\"",
+     "tool-call: execute \"sleep 40; echo bg-done\""
+    ]
+   }
+  ]
+ },
+ "codex-baseline/a-one-waited": {
+  "lines": 22,
+  "kept": 23,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 11604,
+   "size": 258400
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNTY3NmFkYjUtY2FkYy00MDFkLTg5YjUtOTg4YTM4ZDI3NGM"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: other \"Start subagent multiply\"",
+     "tool-call: other \"wait\"",
+     "tool-call: other \"Complete subagent multiply\"",
+     "text: 17 × 23 = 391."
+    ]
+   }
+  ]
+ },
+ "codex-baseline/b-two-parallel": {
+  "lines": 37,
+  "kept": 38,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 11732,
+   "size": 258400
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiYTNiN2MyYWItODUxOS00MDcwLTgwYWQtYjAyMjVmYjk0ZjU"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: other \"Start subagent calc12\"",
+     "tool-call: other \"Complete subagent calc12\"",
+     "tool-call: other \"Start subagent calc13\"",
+     "tool-call: other \"wait\"",
+     "tool-call: other \"Complete subagent calc13\"",
+     "text: 12 × 12 = 144, and 13 × 13 = 169."
+    ]
+   }
+  ]
+ },
+ "codex-baseline/c-background": {
+  "lines": 14,
+  "kept": 15,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 11538,
+   "size": 258400
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiZTM3MzMyMTctMDU3MS00ZDFkLTkyNDktYjg0NTdmNWM3Mzh"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: other \"Start subagent background_report\"",
+     "text: Launched.",
+     "tool-call: other \"Complete subagent background_report\""
+    ]
+   }
+  ]
+ },
+ "codex-baseline/e-permission": {
+  "lines": 15,
+  "kept": 16,
+  "diagnostics": [],
+  "childLines": 0,
+  "childLinesSession": [],
+  "turns": 1,
+  "viewSettings": [
+   "mode=default",
+   "model=default",
+   "effort=default"
+  ],
+  "viewUsage": {
+   "used": 12363,
+   "size": 258400
+  },
+  "lastChildConfigIds": null,
+  "lastChildUsage": null,
+  "became": {},
+  "shown": [
+   {
+    "role": "system",
+    "parts": [
+     "text: Session started with Mock agent."
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     "text: /raw eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiNzE3MmY2MTgtMDY5NS00M2VhLWEwYjctYTgwOWJjMDI3YTQ"
+    ]
+   },
+   {
+    "role": "assistant",
+    "parts": [
+     "tool-call: other \"Start subagent create_note\"",
+     "tool-call: other \"wait\"",
+     "tool-call: execute \"Run command\"",
+     "tool-call: other \"Complete subagent create_note\"",
+     "text: done"
+    ]
+   }
+  ]
+ }
+}

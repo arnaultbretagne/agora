@@ -1,0 +1,96 @@
+captures/codex-caps.jsonl: 442 lines, 281629 bytes
+validator: {"ok":442}; taken as extensions: {"_auth/status_update":1,"subagent_update":60}
+
+[a-one-waited] child 01a1caf4-c0a7-7e70-a4ce-a0914ccd531c:subagent:01a1caf4-d208-79e0-8634-ca78da5c4596 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Multiply" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 5159ms {"state":"running"} → 5161ms {"state":"running"} → 6721ms {"state":"idle","stopReason":"end_turn"}
+  announced at 5133ms; its first own line at 5135ms (config_option_update)
+  own stream: 4 lines, 1748 bytes: {"config_option_update":2,"agent_message_chunk":1,"usage_update":1}; on the parent's stream: 6 subagent_update lines, 1684 bytes; tool content session refs: 0
+
+[b-two-parallel] child 01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f0d3-7b62-ac24-775c29507c47 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Multiply 12" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 13138ms {"state":"running"} → 13138ms {"state":"running"} → 16601ms {"state":"idle","stopReason":"end_turn"}
+  announced at 13113ms; its first own line at 13114ms (config_option_update)
+  own stream: 11 lines, 3895 bytes: {"config_option_update":2,"agent_message_chunk":8,"usage_update":1}; on the parent's stream: 6 subagent_update lines, 1687 bytes; tool content session refs: 0
+
+[b-two-parallel] child 01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f996-70a1-8804-973c1130de0a (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Multiply 13" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 15292ms {"state":"running"} → 15292ms {"state":"running"} → 17111ms {"state":"idle","stopReason":"end_turn"}
+  announced at 15278ms; its first own line at 15278ms (config_option_update)
+  own stream: 11 lines, 3895 bytes: {"config_option_update":2,"agent_message_chunk":8,"usage_update":1}; on the parent's stream: 6 subagent_update lines, 1687 bytes; tool content session refs: 0
+
+[c-background] child 01a1caf5-0fc4-7980-96fe-f5a0eee59324:subagent:01a1caf5-1a8a-7372-a2a0-542805597abb (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Background sleep" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 23722ms {"state":"running"} → 23723ms {"state":"running"} → 52969ms {"state":"idle","stopReason":"end_turn"}
+  announced at 23710ms; its first own line at 23710ms (config_option_update)
+  own stream: 10 lines, 4005 bytes: {"config_option_update":2,"tool_call":1,"tool_call_update":2,"usage_update":2,"agent_message_chunk":3}; on the parent's stream: 6 subagent_update lines, 1692 bytes; tool content session refs: 0
+
+[d-nested] child 01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Relay" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 88307ms {"state":"running"} → 88308ms {"state":"running"} → 98601ms {"state":"idle","stopReason":"end_turn"}
+  announced at 88295ms; its first own line at 88295ms (config_option_update)
+  own stream: 27 lines, 8975 bytes: {"config_option_update":2,"usage_update":3,"tool_call":1,"tool_call_update":1,"agent_message_chunk":20}; on the parent's stream: 6 subagent_update lines, 1681 bytes; tool content session refs: 0
+
+[d-nested] child 01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-2966-73c0-b461-75b499326eba (depth 2, parent 01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Multiply" description undefined capabilities [{},{"cancel":{}}] cwd []
+  states: 93092ms {"state":"running"} → 93092ms {"state":"running"}
+  announced at 93082ms; its first own line at 93082ms (config_option_update)
+  own stream: 3 lines, 1445 bytes: {"config_option_update":1,"usage_update":1,"tool_call":1}; on the parent's stream: 4 subagent_update lines, 1294 bytes; tool content session refs: 0
+
+[e-permission] child 01a1caf6-46c9-70d1-a78d-e55db107cd23:subagent:01a1caf6-51c3-77d1-ba9b-8b53d6c1465b (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Create note" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 103393ms {"state":"running"} → 103394ms {"state":"running"} → 112475ms {"state":"requires_action"} → 116490ms {"state":"running"} → 119044ms {"state":"idle","stopReason":"end_turn"}
+  announced at 103385ms; its first own line at 103385ms (config_option_update)
+  own stream: 41 lines, 14755 bytes: {"config_option_update":2,"agent_message_chunk":29,"tool_call":2,"tool_call_update":2,"usage_update":3,"agent_thought_chunk":2,"session/request_permission":1}; on the parent's stream: 8 subagent_update lines, 2245 bytes; tool content session refs: 0
+  permission at 112475ms under 01a1caf6-46c9-70d1-a78d-e55db107cd23:subagent:01a1caf6-51c3-77d1-ba9b-8b53d6c1465b
+
+[f-cancel-child] child 01a1caf6-94a1-7bc0-85c0-6579636473a4:subagent:01a1caf6-a456-7db1-9855-275781a512e3 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Sleep report" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 124587ms {"state":"running"} → 124587ms {"state":"running"} → 132791ms {"state":"idle","stopReason":"cancelled"}
+  announced at 124573ms; its first own line at 124573ms (config_option_update)
+  own stream: 21 lines, 7164 bytes: {"config_option_update":1,"agent_message_chunk":15,"tool_call":1,"session/cancel":1,"usage_update":1,"tool_call_update":2}; on the parent's stream: 6 subagent_update lines, 1689 bytes; tool content session refs: 0
+
+[g-cancel-parent-foreground] child 01a1caf8-ca87-7483-b993-a2ddc50aded9:subagent:01a1caf8-dd71-77e1-be6b-8df9638b0d52 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Sleep report" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 270378ms {"state":"running"} → 270378ms {"state":"running"} → 278395ms {"state":"idle","stopReason":"cancelled"}
+  announced at 270318ms; its first own line at 270318ms (config_option_update)
+  own stream: 17 lines, 6081 bytes: {"config_option_update":1,"agent_message_chunk":12,"tool_call":1,"usage_update":1,"tool_call_update":2}; on the parent's stream: 6 subagent_update lines, 1689 bytes; tool content session refs: 0
+
+[h-cancel-parent-background] child 01a1caf9-38f5-71d0-af7c-28ce112df18e:subagent:01a1caf9-42a3-7541-8ad1-4d2290e889b0 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title, state
+  title "Background sleep" description undefined capabilities [{},{"cancel":{}},{"cancel":null}] cwd []
+  states: 296190ms {"state":"running"} → 296190ms {"state":"running"} → 304223ms {"state":"idle","stopReason":"cancelled"}
+  announced at 296151ms; its first own line at 296151ms (config_option_update)
+  own stream: 5 lines, 2364 bytes: {"config_option_update":1,"tool_call":1,"usage_update":1,"tool_call_update":2}; on the parent's stream: 6 subagent_update lines, 1693 bytes; tool content session refs: 0
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/984 | 0/0 | 0/0 (total 2/984)
+  a-one-waited: 26/25365 | 4/1748 | 6/1684 (total 36/28797)
+  b-two-parallel: 40/29189 | 22/7790 | 12/3374 (total 74/40353)
+  c-background: 19/23343 | 10/4005 | 6/1692 (total 35/29040)
+  d-nested: 41/29595 | 30/10420 | 10/2975 (total 81/42990)
+  e-permission: 36/27909 | 41/14755 | 8/2245 (total 85/44909)
+  f-cancel-child: 34/27629 | 21/7164 | 6/1689 (total 61/36482)
+  g-cancel-parent-foreground: 18/23453 | 16/5692 | 6/1689 (total 40/30834)
+  h-cancel-parent-background: 16/22794 | 6/2753 | 6/1693 (total 28/27240)
+
+launch/wait tool lines:
+  [a-one-waited] 6940ms 01a1caf4-c0a tool_call name=other title="wait" status=in_progress
+  [b-two-parallel] 16822ms 01a1caf4-e52 tool_call name=other title="wait" status=in_progress
+  [b-two-parallel] 18488ms 01a1caf4-e52 tool_call name=other title="wait" status=in_progress
+  [d-nested] 89801ms 01a1caf6-0b4 tool_call name=other title="wait" status=in_progress
+  [d-nested] 96039ms 01a1caf6-0b4 tool_call name=other title="wait" status=in_progress
+  [d-nested] 99327ms 01a1caf6-0b4 tool_call name=other title="wait" status=in_progress
+  [e-permission] 105637ms 01a1caf6-46c tool_call name=other title="wait" status=in_progress
+  [f-cancel-child] 128872ms 01a1caf6-94a tool_call name=other title="wait" status=in_progress
+  [f-cancel-child] 190588ms 01a1caf6-94a tool_call name=other title="wait" status=in_progress
+  [g-cancel-parent-foreground] 272525ms 01a1caf8-ca8 tool_call name=other title="wait" status=in_progress

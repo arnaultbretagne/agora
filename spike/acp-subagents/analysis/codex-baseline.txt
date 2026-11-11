@@ -1,0 +1,24 @@
+captures/codex-baseline.jsonl: 124 lines, 108410 bytes
+validator: {"ok":124}; taken as extensions: {"_auth/status_update":1}
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/969 | 0/0 | 0/0 (total 2/969)
+  a-one-waited: 30/26632 | 0/0 | 0/0 (total 30/26632)
+  b-two-parallel: 45/30690 | 0/0 | 0/0 (total 45/30690)
+  c-background: 23/24647 | 0/0 | 0/0 (total 23/24647)
+  e-permission: 24/25472 | 0/0 | 0/0 (total 24/25472)
+
+launch/wait tool lines:
+  [a-one-waited] 5032ms 01a1cafa-d8c tool_call name=other title="Start subagent multiply" status=in_progress
+  [a-one-waited] 6732ms 01a1cafa-d8c tool_call name=other title="wait" status=in_progress
+  [a-one-waited] 12952ms 01a1cafa-d8c tool_call name=other title="Complete subagent multiply" status=in_progress
+  [b-two-parallel] 19684ms 01a1cafb-146 tool_call name=other title="Start subagent calc12" status=in_progress
+  [b-two-parallel] 21582ms 01a1cafb-146 tool_call name=other title="Complete subagent calc12" status=in_progress
+  [b-two-parallel] 21763ms 01a1cafb-146 tool_call name=other title="Start subagent calc13" status=in_progress
+  [b-two-parallel] 23347ms 01a1cafb-146 tool_call name=other title="wait" status=in_progress
+  [b-two-parallel] 24228ms 01a1cafb-146 tool_call name=other title="Complete subagent calc13" status=in_progress
+  [c-background] 29564ms 01a1cafb-3dc tool_call name=other title="Start subagent background_report" status=in_progress
+  [c-background] 59128ms 01a1cafb-3dc tool_call name=other title="Complete subagent background_report" status=in_progress
+  [e-permission] 94597ms 01a1cafc-3b1 tool_call name=other title="Start subagent create_note" status=in_progress
+  [e-permission] 96276ms 01a1cafc-3b1 tool_call name=other title="wait" status=in_progress
+  [e-permission] 110601ms 01a1cafc-3b1 tool_call name=other title="Complete subagent create_note" status=in_progress

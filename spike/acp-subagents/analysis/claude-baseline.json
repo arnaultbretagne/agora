@@ -1,0 +1,443 @@
+{
+ "file": "captures/claude-baseline.jsonl",
+ "lines": 197,
+ "bytes": 180062,
+ "validator": {
+  "verdicts": {
+   "ok": 197
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1
+  }
+ },
+ "children": [],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 815,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 815
+  },
+  "a-one-waited": {
+   "parentLines": 35,
+   "parentBytes": 39566,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 35,
+   "totalBytes": 39566
+  },
+  "b-two-parallel": {
+   "parentLines": 42,
+   "parentBytes": 42921,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 42,
+   "totalBytes": 42921
+  },
+  "c-background": {
+   "parentLines": 75,
+   "parentBytes": 55144,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 75,
+   "totalBytes": 55144
+  },
+  "e-permission": {
+   "parentLines": 43,
+   "parentBytes": 41616,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 43,
+   "totalBytes": 41616
+  }
+ },
+ "launches": [
+  {
+   "scenario": "a-one-waited",
+   "t": 3221,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call",
+   "name": "Agent",
+   "title": "Task",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 3371,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "title": "Compute 17 x 23",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 3442,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 3450,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 3492,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 3562,
+   "session": "2908f9a7-7ea3-4c0b-800b-e9cddb0fe448",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "status": "completed",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 7594,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call",
+   "name": "Agent",
+   "title": "Task",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 7874,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "title": "Compute 12 x 12",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 7949,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 7978,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8009,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8094,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call",
+   "name": "Agent",
+   "title": "Task",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8374,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "title": "Compute 13 x 13",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8376,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8379,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 8381,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 9235,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 9245,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "status": "completed",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 9293,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 9297,
+   "session": "bc461711-8a30-4177-8d13-c5523ecb4850",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "status": "completed",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 12883,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call",
+   "name": "Agent",
+   "title": "Task",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13325,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "title": "Run delayed background echo",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13410,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13464,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13485,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13543,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 13601,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "status": "completed",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 19374,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call",
+   "name": "Read",
+   "title": "Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "c-background",
+   "t": 44528,
+   "session": "de742e6c-db79-467a-b202-3f3acb7d57b5",
+   "kind": "tool_call",
+   "name": "Read",
+   "title": "Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86314,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call",
+   "name": "Agent",
+   "title": "Task",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86896,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "title": "Create note.txt with hello",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86902,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86916,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86954,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "e-permission",
+   "t": 86966,
+   "session": "a2bc0c49-e60c-45b0-981a-b09cab8d408c",
+   "kind": "tool_call_update",
+   "name": "Agent",
+   "status": "completed",
+   "meta": [
+    "claudeCode"
+   ]
+  }
+ ]
+}

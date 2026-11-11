@@ -1,0 +1,96 @@
+{
+ "name": "codex-baseline",
+ "subagents": false,
+ "sessions": [
+  {
+   "label": "a-one-waited",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use your spawn_agent tool exactly once to start a sub-agent whose task is to compute 17 x 23 and answer with the number. Wait for it with your wait tool, then tell me the result in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "b-two-parallel",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent twice to start two sub-agents that work in parallel: the first computes 12 x 12, the second computes 13 x 13. Wait for both, then give both results in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "c-background",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start one sub-agent whose task is to run the shell command `sleep 25; echo background-finished` and report its output. Do not wait for it: right after starting it, reply 'Launched.' and end your turn.",
+     "lingerMs": 60000
+    }
+   ]
+  },
+  {
+   "label": "e-permission",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "read-only"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start a sub-agent whose task is to create the file note.txt in the current directory containing the word hello, with a shell command, and report. Wait for it, then reply 'done'.",
+     "permissionDelayMs": 4000
+    }
+   ]
+  }
+ ]
+}

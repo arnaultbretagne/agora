@@ -1,0 +1,201 @@
+{
+ "name": "codex-caps",
+ "subagents": true,
+ "sessions": [
+  {
+   "label": "a-one-waited",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use your spawn_agent tool exactly once to start a sub-agent whose task is to compute 17 x 23 and answer with the number. Wait for it with your wait tool, then tell me the result in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "b-two-parallel",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent twice to start two sub-agents that work in parallel: the first computes 12 x 12, the second computes 13 x 13. Wait for both, then give both results in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "c-background",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start one sub-agent whose task is to run the shell command `sleep 25; echo background-finished` and report its output. Do not wait for it: right after starting it, reply 'Launched.' and end your turn.",
+     "lingerMs": 60000
+    }
+   ]
+  },
+  {
+   "label": "d-nested",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start a sub-agent. Its task: use spawn_agent itself to start another sub-agent that computes 7 x 8, wait for it, then report that number and say whether it could start that second sub-agent. Wait for your sub-agent and tell me in one sentence what it reported."
+    }
+   ]
+  },
+  {
+   "label": "e-permission",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "read-only"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start a sub-agent whose task is to create the file note.txt in the current directory containing the word hello, with a shell command, and report. Wait for it, then reply 'done'.",
+     "permissionDelayMs": 4000
+    }
+   ]
+  },
+  {
+   "label": "f-cancel-child",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start a sub-agent whose task is to run the shell command `sleep 45; echo slept` and report its output. Wait for it, then tell me in one sentence what it reported, or that it was stopped.",
+     "cancel": {
+      "target": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 10000
+    }
+   ]
+  },
+  {
+   "label": "g-cancel-parent-foreground",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start a sub-agent whose task is to run the shell command `sleep 45; echo slept` and report its output. Wait for it, then tell me in one sentence what it reported.",
+     "cancel": {
+      "target": "parent",
+      "from": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 15000
+    }
+   ]
+  },
+  {
+   "label": "h-cancel-parent-background",
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use spawn_agent to start one sub-agent whose task is to run the shell command `sleep 40; echo bg-done` and report its output. Do not wait for it. Then run the shell command `sleep 30` yourself, then reply 'finished'.",
+     "cancel": {
+      "target": "parent",
+      "from": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 55000
+    }
+   ]
+  }
+ ]
+}

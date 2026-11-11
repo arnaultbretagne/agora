@@ -1,0 +1,34 @@
+captures/codex-caps-2.jsonl: 48 lines, 70347 bytes
+validator: {"ok":48}; taken as extensions: {"_auth/status_update":1,"subagent_update":3}
+
+[q7-load-b] child 01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f0d3-7b62-ac24-775c29507c47 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title
+  title "Multiply 12" description undefined capabilities [{}] cwd []
+  states: 
+  announced at 1490ms; its first own line at 1490ms (config_option_update)
+  own stream: 1 lines, 747 bytes: {"config_option_update":1}; on the parent's stream: 1 subagent_update lines, 287 bytes; tool content session refs: 0
+
+[q7-load-b] child 01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f996-70a1-8804-973c1130de0a (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title
+  title "Multiply 13" description undefined capabilities [{}] cwd []
+  states: 
+  announced at 1506ms; its first own line at 1506ms (config_option_update)
+  own stream: 1 lines, 747 bytes: {"config_option_update":1}; on the parent's stream: 1 subagent_update lines, 287 bytes; tool content session refs: 0
+
+[q7-load-d] child 01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1 (depth 1, parent root)
+  first subagent_update fields: sessionId, capabilities, title; all: sessionId, capabilities, title
+  title "Relay" description undefined capabilities [{}] cwd []
+  states: 
+  announced at 1767ms; its first own line at 1767ms (config_option_update)
+  own stream: 1 lines, 747 bytes: {"config_option_update":1}; on the parent's stream: 1 subagent_update lines, 281 bytes; tool content session refs: 0
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/984 | 0/0 | 0/0 (total 2/984)
+  q7-resume-a: 10/18327 | 0/0 | 0/0 (total 10/18327)
+  q7-load-b: 16/25391 | 2/1494 | 2/574 (total 20/27459)
+  q7-load-d: 14/22549 | 1/747 | 1/281 (total 16/23577)
+
+launch/wait tool lines:
+  [q7-load-b] 1566ms 01a1caf4-e52 tool_call name=other title="wait" status=completed
+  [q7-load-b] 1567ms 01a1caf4-e52 tool_call name=other title="wait" status=completed
+  [q7-load-d] 1786ms 01a1caf6-0b4 tool_call name=other title="wait" status=completed

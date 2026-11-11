@@ -1,0 +1,87 @@
+[
+ {
+  "capture": "claude-caps",
+  "label": "d-nested",
+  "at": 5841,
+  "title": "Nested sub-agent test",
+  "children": [
+   {
+    "id": "affe2834e78519523",
+    "parent": null,
+    "state": {
+     "state": "running"
+    },
+    "capabilities": {
+     "cancel": {}
+    },
+    "title": "Nested sub-agent test for 7x8",
+    "description": "general-purpose"
+   },
+   {
+    "id": "a3816c0f043311a86",
+    "parent": "affe2834e78519523",
+    "state": {
+     "state": "running"
+    },
+    "capabilities": {
+     "cancel": {}
+    },
+    "title": "Compute 7 times 8",
+    "description": "general-purpose"
+   }
+  ]
+ },
+ {
+  "capture": "claude-caps",
+  "label": "e-permission",
+  "at": 4334,
+  "title": "Sub-agent writes note.txt",
+  "children": [
+   {
+    "id": "a91bc49816b45014e",
+    "parent": null,
+    "state": {
+     "state": "requires_action"
+    },
+    "capabilities": {
+     "cancel": {}
+    },
+    "title": "Create note.txt with hello",
+    "description": "general-purpose"
+   }
+  ]
+ },
+ {
+  "capture": "codex-caps",
+  "label": "b-two-parallel",
+  "at": 6493,
+  "title": "Parallel sub-agent multiplication",
+  "children": [
+   {
+    "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f0d3-7b62-ac24-775c29507c47",
+    "parent": null,
+    "state": {
+     "state": "idle",
+     "stopReason": "end_turn"
+    },
+    "capabilities": {
+     "cancel": null
+    },
+    "title": "Multiply 12",
+    "description": ""
+   },
+   {
+    "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f996-70a1-8804-973c1130de0a",
+    "parent": null,
+    "state": {
+     "state": "running"
+    },
+    "capabilities": {
+     "cancel": {}
+    },
+    "title": "Multiply 13",
+    "description": ""
+   }
+  ]
+ }
+]

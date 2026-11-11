@@ -1,0 +1,873 @@
+{
+ "file": "captures/codex-caps.jsonl",
+ "lines": 442,
+ "bytes": 281629,
+ "validator": {
+  "verdicts": {
+   "ok": 442
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1,
+   "subagent_update": 60
+  }
+ },
+ "children": [
+  {
+   "id": "01a1caf4-c0a7-7e70-a4ce-a0914ccd531c:subagent:01a1caf4-d208-79e0-8634-ca78da5c4596",
+   "parent": "01a1caf4-c0a7-7e70-a4ce-a0914ccd531c",
+   "depth": 1,
+   "announcedAt": 5133,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 5159,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 5161,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 6721,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 1,
+    "usage_update": 1
+   },
+   "ownLines": 4,
+   "ownBytes": 1748,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1684,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 5135,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply",
+   "root": "a-one-waited"
+  },
+  {
+   "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f0d3-7b62-ac24-775c29507c47",
+   "parent": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "depth": 1,
+   "announcedAt": 13113,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 13138,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 13138,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 16601,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 8,
+    "usage_update": 1
+   },
+   "ownLines": 11,
+   "ownBytes": 3895,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1687,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 13114,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 12",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f996-70a1-8804-973c1130de0a",
+   "parent": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "depth": 1,
+   "announcedAt": 15278,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 15292,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 15292,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 17111,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 8,
+    "usage_update": 1
+   },
+   "ownLines": 11,
+   "ownBytes": 3895,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1687,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 15278,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 13",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "01a1caf5-0fc4-7980-96fe-f5a0eee59324:subagent:01a1caf5-1a8a-7372-a2a0-542805597abb",
+   "parent": "01a1caf5-0fc4-7980-96fe-f5a0eee59324",
+   "depth": 1,
+   "announcedAt": 23710,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 23722,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 23723,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 52969,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "tool_call": 1,
+    "tool_call_update": 2,
+    "usage_update": 2,
+    "agent_message_chunk": 3
+   },
+   "ownLines": 10,
+   "ownBytes": 4005,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1692,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 23710,
+   "firstOwnKind": "config_option_update",
+   "title": "Background sleep",
+   "root": "c-background"
+  },
+  {
+   "id": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1",
+   "parent": "01a1caf6-0b47-7e60-8168-966a8dd270d7",
+   "depth": 1,
+   "announcedAt": 88295,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 88307,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 88308,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 98601,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "usage_update": 3,
+    "tool_call": 1,
+    "tool_call_update": 1,
+    "agent_message_chunk": 20
+   },
+   "ownLines": 27,
+   "ownBytes": 8975,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1681,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 88295,
+   "firstOwnKind": "config_option_update",
+   "title": "Relay",
+   "root": "d-nested"
+  },
+  {
+   "id": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-2966-73c0-b461-75b499326eba",
+   "parent": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1",
+   "depth": 2,
+   "announcedAt": 93082,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 93092,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 93092,
+     "state": {
+      "state": "running"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "usage_update": 1,
+    "tool_call": 1
+   },
+   "ownLines": 3,
+   "ownBytes": 1445,
+   "parentStreamLines": 4,
+   "parentStreamBytes": 1294,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 93082,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply",
+   "root": "d-nested"
+  },
+  {
+   "id": "01a1caf6-46c9-70d1-a78d-e55db107cd23:subagent:01a1caf6-51c3-77d1-ba9b-8b53d6c1465b",
+   "parent": "01a1caf6-46c9-70d1-a78d-e55db107cd23",
+   "depth": 1,
+   "announcedAt": 103385,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 103393,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 103394,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 112475,
+     "state": {
+      "state": "requires_action"
+     }
+    },
+    {
+     "t": 116490,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 119044,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 29,
+    "tool_call": 2,
+    "tool_call_update": 2,
+    "usage_update": 3,
+    "agent_thought_chunk": 2,
+    "session/request_permission": 1
+   },
+   "ownLines": 41,
+   "ownBytes": 14755,
+   "parentStreamLines": 8,
+   "parentStreamBytes": 2245,
+   "permissions": [
+    {
+     "t": 112475,
+     "sessionId": "01a1caf6-46c9-70d1-a78d-e55db107cd23:subagent:01a1caf6-51c3-77d1-ba9b-8b53d6c1465b",
+     "toolCall": "exec-577d18b4-5c25-4f7e-9218-d820a563d3a6"
+    }
+   ],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 103385,
+   "firstOwnKind": "config_option_update",
+   "title": "Create note",
+   "root": "e-permission"
+  },
+  {
+   "id": "01a1caf6-94a1-7bc0-85c0-6579636473a4:subagent:01a1caf6-a456-7db1-9855-275781a512e3",
+   "parent": "01a1caf6-94a1-7bc0-85c0-6579636473a4",
+   "depth": 1,
+   "announcedAt": 124573,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 124587,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 124587,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 132791,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "agent_message_chunk": 15,
+    "tool_call": 1,
+    "session/cancel": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 21,
+   "ownBytes": 7164,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1689,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 124573,
+   "firstOwnKind": "config_option_update",
+   "title": "Sleep report",
+   "root": "f-cancel-child"
+  },
+  {
+   "id": "01a1caf8-ca87-7483-b993-a2ddc50aded9:subagent:01a1caf8-dd71-77e1-be6b-8df9638b0d52",
+   "parent": "01a1caf8-ca87-7483-b993-a2ddc50aded9",
+   "depth": 1,
+   "announcedAt": 270318,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 270378,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 270378,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 278395,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "agent_message_chunk": 12,
+    "tool_call": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 17,
+   "ownBytes": 6081,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1689,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 270318,
+   "firstOwnKind": "config_option_update",
+   "title": "Sleep report",
+   "root": "g-cancel-parent-foreground"
+  },
+  {
+   "id": "01a1caf9-38f5-71d0-af7c-28ce112df18e:subagent:01a1caf9-42a3-7541-8ad1-4d2290e889b0",
+   "parent": "01a1caf9-38f5-71d0-af7c-28ce112df18e",
+   "depth": 1,
+   "announcedAt": 296151,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 296190,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 296190,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 304223,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "tool_call": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 5,
+   "ownBytes": 2364,
+   "parentStreamLines": 6,
+   "parentStreamBytes": 1693,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 296151,
+   "firstOwnKind": "config_option_update",
+   "title": "Background sleep",
+   "root": "h-cancel-parent-background"
+  }
+ ],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 984,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 984
+  },
+  "a-one-waited": {
+   "parentLines": 26,
+   "parentBytes": 25365,
+   "childLines": 4,
+   "childBytes": 1748,
+   "announceLines": 6,
+   "announceBytes": 1684,
+   "total": 36,
+   "totalBytes": 28797
+  },
+  "b-two-parallel": {
+   "parentLines": 40,
+   "parentBytes": 29189,
+   "childLines": 22,
+   "childBytes": 7790,
+   "announceLines": 12,
+   "announceBytes": 3374,
+   "total": 74,
+   "totalBytes": 40353
+  },
+  "c-background": {
+   "parentLines": 19,
+   "parentBytes": 23343,
+   "childLines": 10,
+   "childBytes": 4005,
+   "announceLines": 6,
+   "announceBytes": 1692,
+   "total": 35,
+   "totalBytes": 29040
+  },
+  "d-nested": {
+   "parentLines": 41,
+   "parentBytes": 29595,
+   "childLines": 30,
+   "childBytes": 10420,
+   "announceLines": 10,
+   "announceBytes": 2975,
+   "total": 81,
+   "totalBytes": 42990
+  },
+  "e-permission": {
+   "parentLines": 36,
+   "parentBytes": 27909,
+   "childLines": 41,
+   "childBytes": 14755,
+   "announceLines": 8,
+   "announceBytes": 2245,
+   "total": 85,
+   "totalBytes": 44909
+  },
+  "f-cancel-child": {
+   "parentLines": 34,
+   "parentBytes": 27629,
+   "childLines": 21,
+   "childBytes": 7164,
+   "announceLines": 6,
+   "announceBytes": 1689,
+   "total": 61,
+   "totalBytes": 36482
+  },
+  "g-cancel-parent-foreground": {
+   "parentLines": 18,
+   "parentBytes": 23453,
+   "childLines": 16,
+   "childBytes": 5692,
+   "announceLines": 6,
+   "announceBytes": 1689,
+   "total": 40,
+   "totalBytes": 30834
+  },
+  "h-cancel-parent-background": {
+   "parentLines": 16,
+   "parentBytes": 22794,
+   "childLines": 6,
+   "childBytes": 2753,
+   "announceLines": 6,
+   "announceBytes": 1693,
+   "total": 28,
+   "totalBytes": 27240
+  }
+ },
+ "launches": [
+  {
+   "scenario": "a-one-waited",
+   "t": 6940,
+   "session": "01a1caf4-c0a7-7e70-a4ce-a0914ccd531c",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 16822,
+   "session": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 18488,
+   "session": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "d-nested",
+   "t": 89801,
+   "session": "01a1caf6-0b47-7e60-8168-966a8dd270d7",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "d-nested",
+   "t": 96039,
+   "session": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "d-nested",
+   "t": 99327,
+   "session": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-2966-73c0-b461-75b499326eba",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "e-permission",
+   "t": 105637,
+   "session": "01a1caf6-46c9-70d1-a78d-e55db107cd23",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "f-cancel-child",
+   "t": 128872,
+   "session": "01a1caf6-94a1-7bc0-85c0-6579636473a4",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "f-cancel-child",
+   "t": 190588,
+   "session": "01a1caf6-94a1-7bc0-85c0-6579636473a4",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "g-cancel-parent-foreground",
+   "t": 272525,
+   "session": "01a1caf8-ca87-7483-b993-a2ddc50aded9",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  }
+ ]
+}

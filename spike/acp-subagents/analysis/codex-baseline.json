@@ -1,0 +1,199 @@
+{
+ "file": "captures/codex-baseline.jsonl",
+ "lines": 124,
+ "bytes": 108410,
+ "validator": {
+  "verdicts": {
+   "ok": 124
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1
+  }
+ },
+ "children": [],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 969,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 969
+  },
+  "a-one-waited": {
+   "parentLines": 30,
+   "parentBytes": 26632,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 30,
+   "totalBytes": 26632
+  },
+  "b-two-parallel": {
+   "parentLines": 45,
+   "parentBytes": 30690,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 45,
+   "totalBytes": 30690
+  },
+  "c-background": {
+   "parentLines": 23,
+   "parentBytes": 24647,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 23,
+   "totalBytes": 24647
+  },
+  "e-permission": {
+   "parentLines": 24,
+   "parentBytes": 25472,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 24,
+   "totalBytes": 25472
+  }
+ },
+ "launches": [
+  {
+   "scenario": "a-one-waited",
+   "t": 5032,
+   "session": "01a1cafa-d8cd-7dd3-985a-598cbb5c61b1",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Start subagent multiply",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 6732,
+   "session": "01a1cafa-d8cd-7dd3-985a-598cbb5c61b1",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "a-one-waited",
+   "t": 12952,
+   "session": "01a1cafa-d8cd-7dd3-985a-598cbb5c61b1",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Complete subagent multiply",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 19684,
+   "session": "01a1cafb-146e-7852-8703-6f8b2a7c95ab",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Start subagent calc12",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 21582,
+   "session": "01a1cafb-146e-7852-8703-6f8b2a7c95ab",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Complete subagent calc12",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 21763,
+   "session": "01a1cafb-146e-7852-8703-6f8b2a7c95ab",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Start subagent calc13",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 23347,
+   "session": "01a1cafb-146e-7852-8703-6f8b2a7c95ab",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 24228,
+   "session": "01a1cafb-146e-7852-8703-6f8b2a7c95ab",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Complete subagent calc13",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "c-background",
+   "t": 29564,
+   "session": "01a1cafb-3dcc-7982-9cbb-411e7f4924f9",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Start subagent background_report",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "c-background",
+   "t": 59128,
+   "session": "01a1cafb-3dcc-7982-9cbb-411e7f4924f9",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Complete subagent background_report",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "e-permission",
+   "t": 94597,
+   "session": "01a1cafc-3b14-72b1-bfe7-dfe44c79a96f",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Start subagent create_note",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "e-permission",
+   "t": 96276,
+   "session": "01a1cafc-3b14-72b1-bfe7-dfe44c79a96f",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "e-permission",
+   "t": 110601,
+   "session": "01a1cafc-3b14-72b1-bfe7-dfe44c79a96f",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "Complete subagent create_note",
+   "status": "in_progress",
+   "meta": null
+  }
+ ]
+}

@@ -1,0 +1,80 @@
+{
+ "name": "claude-baseline",
+ "subagents": false,
+ "sessions": [
+  {
+   "label": "a-one-waited",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use the Agent tool exactly once to start a general-purpose sub-agent whose task is to compute 17 x 23 and answer with the number. Wait for it, then tell me the result in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "b-two-parallel",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "In one single message, start two general-purpose sub-agents in parallel with the Agent tool: the first computes 12 x 12, the second computes 13 x 13. When both are back, give both results in one short sentence."
+    }
+   ]
+  },
+  {
+   "label": "c-background",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Start one general-purpose sub-agent with the Agent tool in the background (run_in_background: true). Its task: run the shell command `sleep 25; echo background-finished` with Bash and report the output. Do not wait for it: right after starting it, reply 'Launched.' and end your turn.",
+     "lingerMs": 60000
+    }
+   ]
+  },
+  {
+   "label": "e-permission",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "default"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use the Agent tool to start a general-purpose sub-agent whose task is to create the file /home/harness/work/note.txt containing the word hello, using the Write tool, and report. Wait for it, then reply 'done'.",
+     "permissionDelayMs": 4000
+    }
+   ]
+  }
+ ]
+}

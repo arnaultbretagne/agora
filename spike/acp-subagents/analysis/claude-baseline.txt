@@ -1,0 +1,46 @@
+captures/claude-baseline.jsonl: 197 lines, 180062 bytes
+validator: {"ok":197}; taken as extensions: {"_auth/status_update":1}
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/815 | 0/0 | 0/0 (total 2/815)
+  a-one-waited: 35/39566 | 0/0 | 0/0 (total 35/39566)
+  b-two-parallel: 42/42921 | 0/0 | 0/0 (total 42/42921)
+  c-background: 75/55144 | 0/0 | 0/0 (total 75/55144)
+  e-permission: 43/41616 | 0/0 | 0/0 (total 43/41616)
+
+launch/wait tool lines:
+  [a-one-waited] 3221ms 2908f9a7-7ea tool_call name=Agent title="Task" status=pending
+  [a-one-waited] 3371ms 2908f9a7-7ea tool_call_update name=Agent title="Compute 17 x 23" status=undefined
+  [a-one-waited] 3442ms 2908f9a7-7ea tool_call_update name=Agent title=undefined status=undefined
+  [a-one-waited] 3450ms 2908f9a7-7ea tool_call_update name=Agent title=undefined status=undefined
+  [a-one-waited] 3492ms 2908f9a7-7ea tool_call_update name=Agent title=undefined status=undefined
+  [a-one-waited] 3562ms 2908f9a7-7ea tool_call_update name=Agent title=undefined status=completed
+  [b-two-parallel] 7594ms bc461711-8a3 tool_call name=Agent title="Task" status=pending
+  [b-two-parallel] 7874ms bc461711-8a3 tool_call_update name=Agent title="Compute 12 x 12" status=undefined
+  [b-two-parallel] 7949ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 7978ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 8009ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 8094ms bc461711-8a3 tool_call name=Agent title="Task" status=pending
+  [b-two-parallel] 8374ms bc461711-8a3 tool_call_update name=Agent title="Compute 13 x 13" status=undefined
+  [b-two-parallel] 8376ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 8379ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 8381ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 9235ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 9245ms bc461711-8a3 tool_call_update name=Agent title=undefined status=completed
+  [b-two-parallel] 9293ms bc461711-8a3 tool_call_update name=Agent title=undefined status=undefined
+  [b-two-parallel] 9297ms bc461711-8a3 tool_call_update name=Agent title=undefined status=completed
+  [c-background] 12883ms de742e6c-db7 tool_call name=Agent title="Task" status=pending
+  [c-background] 13325ms de742e6c-db7 tool_call_update name=Agent title="Run delayed background echo" status=undefined
+  [c-background] 13410ms de742e6c-db7 tool_call_update name=Agent title=undefined status=undefined
+  [c-background] 13464ms de742e6c-db7 tool_call_update name=Agent title=undefined status=undefined
+  [c-background] 13485ms de742e6c-db7 tool_call_update name=Agent title=undefined status=undefined
+  [c-background] 13543ms de742e6c-db7 tool_call_update name=Agent title=undefined status=undefined
+  [c-background] 13601ms de742e6c-db7 tool_call_update name=Agent title=undefined status=completed
+  [c-background] 19374ms de742e6c-db7 tool_call name=Read title="Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output" status=pending
+  [c-background] 44528ms de742e6c-db7 tool_call name=Read title="Read /tmp/claude-10001/-home-harness-work/de742e6c-db79-467a-b202-3f3acb7d57b5/tasks/bimbr5peg.output" status=pending
+  [e-permission] 86314ms a2bc0c49-e60 tool_call name=Agent title="Task" status=pending
+  [e-permission] 86896ms a2bc0c49-e60 tool_call_update name=Agent title="Create note.txt with hello" status=undefined
+  [e-permission] 86902ms a2bc0c49-e60 tool_call_update name=Agent title=undefined status=undefined
+  [e-permission] 86916ms a2bc0c49-e60 tool_call_update name=Agent title=undefined status=undefined
+  [e-permission] 86954ms a2bc0c49-e60 tool_call_update name=Agent title=undefined status=undefined
+  [e-permission] 86966ms a2bc0c49-e60 tool_call_update name=Agent title=undefined status=completed

@@ -1,0 +1,117 @@
+captures/claude-caps.jsonl: 523 lines, 394161 bytes
+validator: {"ok":523}; taken as extensions: {"_auth/status_update":1,"subagent_update":26,"session_message":28}
+
+[a-one-waited] child a6259e22f8b4d14c6 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Compute 17 x 23" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 4678ms {"state":"running"} → 6021ms {"state":"idle","stopReason":"end_turn"}
+  announced at 4678ms; its first own line at 4678ms (session_message)
+  own stream: 5 lines, 2472 bytes: {"session_message":1,"config_option_update":3,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 528 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Compute 17 x 23 and answer with just the number."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Compute 17 x 23 and answer with just the number."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+
+[b-two-parallel] child aec53c55534ca0438 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Compute 12 x 12" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 10646ms {"state":"running"} → 11835ms {"state":"idle","stopReason":"end_turn"}
+  announced at 10646ms; its first own line at 10646ms (session_message)
+  own stream: 5 lines, 2478 bytes: {"session_message":1,"config_option_update":3,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 528 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "What is 12 x 12? Reply with just the number."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "What is 12 x 12? Reply with just the number."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "12 x 12 = 144"
+
+[b-two-parallel] child a550d1005a9848118 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Compute 13 x 13" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 10955ms {"state":"running"} → 11956ms {"state":"idle","stopReason":"end_turn"}
+  announced at 10955ms; its first own line at 10955ms (session_message)
+  own stream: 5 lines, 2468 bytes: {"session_message":1,"config_option_update":3,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 528 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "What is 13 x 13? Reply with just the number."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "What is 13 x 13? Reply with just the number."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "169"
+
+[c-background] child a901343f62ec57464 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run delayed background echo" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 16964ms {"state":"running"} → 26772ms {"state":"idle","stopReason":"end_turn"} → 45818ms {"state":"running"} → 48310ms {"state":"idle","stopReason":"end_turn"}
+  announced at 16964ms; its first own line at 16964ms (session_message)
+  own stream: 22 lines, 13016 bytes: {"session_message":1,"config_option_update":3,"tool_call":5,"tool_call_update":9,"agent_message_chunk":4}; on the parent's stream: 4 subagent_update lines, 981 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Bash tool to run exactly this shell command: `sleep 25; echo background-finished`. Then report the exact output back. Do nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Bash tool to run exactly this shell command: `sleep 25; echo background-finished`. Then report the exact output back. Do nothing else."
+
+[d-nested] child affe2834e78519523 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Nested sub-agent test for 7x8" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 93282ms {"state":"running"} → 97930ms {"state":"idle","stopReason":"end_turn"}
+  announced at 93282ms; its first own line at 93282ms (session_message)
+  own stream: 7 lines, 3760 bytes: {"session_message":3,"config_option_update":3,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 542 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId — "56"
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "<tools-used-before-summary>Agent</tools-used-before-summary>\n(a) The second sub-agent reported **56** for 7 x 8.\n\n(b) Yes, I was able to start it. The Agent cal"
+
+[d-nested] child a3816c0f043311a86 (depth 2, parent affe2834e78519523)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Compute 7 times 8" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 95437ms {"state":"running"} → 96457ms {"state":"idle","stopReason":"end_turn"}
+  announced at 95437ms; its first own line at 95438ms (session_message)
+  own stream: 5 lines, 2463 bytes: {"session_message":1,"config_option_update":3,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 492 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Compute 7 x 8. Reply with just the number and nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Compute 7 x 8. Reply with just the number and nothing else."
+
+[e-permission] child a91bc49816b45014e (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Create note.txt with hello" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 103478ms {"state":"running"} → 105026ms {"state":"requires_action"} → 109047ms {"state":"running"} → 109940ms {"state":"idle","stopReason":"end_turn"}
+  announced at 103478ms; its first own line at 103478ms (session_message)
+  own stream: 9 lines, 4897 bytes: {"session_message":1,"config_option_update":3,"tool_call":1,"session/request_permission":1,"tool_call_update":2,"agent_message_chunk":1}; on the parent's stream: 4 subagent_update lines, 967 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Write tool to create the file /home/harness/work/note.txt with exactly the content: hello\n\nDo not create any other files. After writing, reply with a on"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Write tool to create the file /home/harness/work/note.txt with exactly the content: hello\n\nDo not create any other files. After writing, reply with a on"
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+  permission at 105027ms under a91bc49816b45014e
+
+[f-cancel-child] child a692d2360911aded0 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run sleep and report output" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 115142ms {"state":"running"} → 123172ms {"state":"idle","stopReason":"cancelled"}
+  announced at 115142ms; its first own line at 115142ms (session_message)
+  own stream: 18 lines, 9839 bytes: {"session_message":1,"config_option_update":3,"tool_call":4,"tool_call_update":7,"agent_message_chunk":2,"session/cancel":1}; on the parent's stream: 2 subagent_update lines, 541 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report the exact output the command produced. Do nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report the exact output the command produced. Do nothing else."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+
+[g-cancel-parent-foreground] child a2e1b8654c70a8c1f (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run sleep 45 command" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 137575ms {"state":"running"} → 142990ms {"state":"idle","stopReason":"end_turn"}
+  announced at 137575ms; its first own line at 137576ms (session_message)
+  own stream: 7 lines, 4521 bytes: {"session_message":1,"config_option_update":3,"tool_call":1,"tool_call_update":1,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 533 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report back the exact output the command produced. Do nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report back the exact output the command produced. Do nothing else."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+
+[h-cancel-parent-background] child a6a92639ba5db9b8b (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run background sleep command" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 162819ms {"state":"running"} → 168710ms {"state":"idle","stopReason":"end_turn"} → 206495ms {"state":"running"} → 208954ms {"state":"idle","stopReason":"end_turn"}
+  announced at 162819ms; its first own line at 162820ms (session_message)
+  own stream: 15 lines, 9092 bytes: {"session_message":1,"config_option_update":3,"tool_call":3,"tool_call_update":5,"agent_message_chunk":3}; on the parent's stream: 4 subagent_update lines, 982 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Bash tool to run exactly this shell command: `sleep 40; echo bg-done`. Then report its output back, verbatim, in your final reply. Do nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Bash tool to run exactly this shell command: `sleep 40; echo bg-done`. Then report its output back, verbatim, in your final reply. Do nothing else."
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/830 | 0/0 | 0/0 (total 2/830)
+  a-one-waited: 33/37067 | 5/2472 | 2/528 (total 40/40067)
+  b-two-parallel: 26/34957 | 10/4946 | 4/1056 (total 40/40959)
+  c-background: 59/43123 | 22/13016 | 4/981 (total 85/57120)
+  d-nested: 31/37018 | 12/6223 | 4/1034 (total 47/44275)
+  e-permission: 28/34860 | 9/4897 | 4/967 (total 41/40724)
+  f-cancel-child: 43/39846 | 18/9839 | 2/541 (total 63/50226)
+  g-cancel-parent-foreground: 39/39201 | 7/4521 | 2/533 (total 48/44255)
+  h-cancel-parent-background: 138/65631 | 15/9092 | 4/982 (total 157/75705)
+
+launch/wait tool lines:
+  [c-background] 47101ms a901343f62ec tool_call name=Read title="Read /tmp/claude-10001/-home-harness-work/941407b2-fb41-456a-9ce6-2685577c3fe2/tasks/b8yp0n6gs.output" status=pending
+  [h-cancel-parent-background] 199022ms de303b70-df6 tool_call_update name=Read title="Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output" status=undefined
+  [h-cancel-parent-background] 207998ms a6a92639ba5d tool_call name=Read title="Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output" status=pending

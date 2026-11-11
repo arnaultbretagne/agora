@@ -1,0 +1,82 @@
+captures/claude-caps-2.jsonl: 225 lines, 198077 bytes
+validator: {"ok":225}; taken as extensions: {"_auth/status_update":1,"subagent_update":18,"session_message":20}
+
+[q7-load-b] child aec53c55534ca0438 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, state; all: sessionId, title, description, state
+  title "Compute 12 x 12" description "general-purpose" capabilities [] cwd []
+  states: 1855ms {"state":"running"} → 2028ms {"state":"idle","stopReason":"end_turn"} → 2933ms {"state":"idle","stopReason":"end_turn"}
+  announced at 1855ms; its first own line at 1855ms (config_option_update)
+  own stream: 4 lines, 1321 bytes: {"config_option_update":2,"session_message":1,"agent_message_chunk":1}; on the parent's stream: 3 subagent_update lines, 730 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "What is 12 x 12? Reply with just the number."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "What is 12 x 12? Reply with just the number."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "12 x 12 = 144"
+
+[q7-load-b] child a550d1005a9848118 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, state; all: sessionId, title, description, state
+  title "Compute 13 x 13" description "general-purpose" capabilities [] cwd []
+  states: 2018ms {"state":"running"} → 2028ms {"state":"idle","stopReason":"end_turn"} → 2935ms {"state":"idle","stopReason":"end_turn"}
+  announced at 2018ms; its first own line at 2019ms (config_option_update)
+  own stream: 4 lines, 1311 bytes: {"config_option_update":2,"session_message":1,"agent_message_chunk":1}; on the parent's stream: 3 subagent_update lines, 730 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "What is 13 x 13? Reply with just the number."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "What is 13 x 13? Reply with just the number."
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "169"
+
+[q7-load-d] child affe2834e78519523 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, state; all: sessionId, title, description, state
+  title "Nested sub-agent test for 7x8" description "general-purpose" capabilities [] cwd []
+  states: 3222ms {"state":"running"} → 3236ms {"state":"idle","stopReason":"end_turn"} → 4945ms {"state":"idle","stopReason":"end_turn"}
+  announced at 3222ms; its first own line at 3223ms (config_option_update)
+  own stream: 6 lines, 2603 bytes: {"config_option_update":2,"session_message":3,"agent_message_chunk":1}; on the parent's stream: 3 subagent_update lines, 744 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId — "56"
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "<tools-used-before-summary>Agent</tools-used-before-summary>\n\n(a) The second sub-agent reported **56** for 7 x 8.\n\n(b) Yes, I was able to start it. The Agent ca"
+
+[q7-load-d] child a3816c0f043311a86 (depth 2, parent affe2834e78519523)
+  first subagent_update fields: sessionId, title, description, state; all: sessionId, title, description, state
+  title "Compute 7 times 8" description "general-purpose" capabilities [] cwd []
+  states: 3233ms {"state":"running"} → 3235ms {"state":"idle","stopReason":"end_turn"} → 4945ms {"state":"idle","stopReason":"end_turn"}
+  announced at 3233ms; its first own line at 3233ms (config_option_update)
+  own stream: 4 lines, 1306 bytes: {"config_option_update":2,"session_message":1,"agent_message_chunk":1}; on the parent's stream: 3 subagent_update lines, 675 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Compute 7 x 8. Reply with just the number and nothing else."
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Compute 7 x 8. Reply with just the number and nothing else."
+
+[f2-cancel-child] child a137045de0aa88816 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run 45-second sleep command" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 8454ms {"state":"running"} → 16501ms {"state":"idle","stopReason":"cancelled"}
+  announced at 8454ms; its first own line at 8454ms (session_message)
+  own stream: 7 lines, 3940 bytes: {"session_message":1,"config_option_update":3,"tool_call":1,"session/cancel":1,"tool_call_update":1}; on the parent's stream: 2 subagent_update lines, 541 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Run this exact command with the Bash tool and report its output: node -e \"setTimeout(() => console.log('slept'), 45000)\"\n\nDo not modify the command. Report back"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Run this exact command with the Bash tool and report its output: node -e \"setTimeout(() => console.log('slept'), 45000)\"\n\nDo not modify the command. Report back"
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+
+[g2-cancel-parent-foreground] child abe2dc11972495dd3 (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run 45-second sleep command" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 31127ms {"state":"running"} → 79276ms {"state":"idle","stopReason":"end_turn"}
+  announced at 31127ms; its first own line at 31129ms (session_message)
+  own stream: 8 lines, 4184 bytes: {"session_message":1,"config_option_update":3,"tool_call":1,"tool_call_update":2,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 540 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Use the Bash tool to run this exact command and report its output: node -e \"setTimeout(() => console.log('slept'), 45000)\"\n\nDo not modify the command. Report ba"
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Use the Bash tool to run this exact command and report its output: node -e \"setTimeout(() => console.log('slept'), 45000)\"\n\nDo not modify the command. Report ba"
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId — "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+
+[h2-cancel-parent-background] child a32d7e65daa163aaf (depth 1, parent root)
+  first subagent_update fields: sessionId, title, description, capabilities, state; all: sessionId, title, description, capabilities, state
+  title "Run background timer command" description "general-purpose" capabilities [{"cancel":{}}] cwd []
+  states: 62109ms {"state":"running"} → 104575ms {"state":"idle","stopReason":"end_turn"}
+  announced at 62109ms; its first own line at 62111ms (session_message)
+  own stream: 8 lines, 4065 bytes: {"session_message":1,"config_option_update":3,"tool_call":1,"tool_call_update":2,"agent_message_chunk":1}; on the parent's stream: 2 subagent_update lines, 541 bytes; tool content session refs: 0
+  session_message on the parent stream: fields messageId, senderSessionId, recipientSessionId, recipientMessageId — "Run this exact command with the Bash tool and report its output (just the stdout text, nothing else): node -e \"setTimeout(() => console.log('bg-done'), 40000)\""
+  session_message on the child stream: fields messageId, senderSessionId, recipientSessionId, senderMessageId — "Run this exact command with the Bash tool and report its output (just the stdout text, nothing else): node -e \"setTimeout(() => console.log('bg-done'), 40000)\""
+
+per scenario (lines/bytes): parent stream | children own | subagent_update on parent
+  initialize: 2/830 | 0/0 | 0/0 (total 2/830)
+  q7-resume-a: 3/2676 | 0/0 | 0/0 (total 3/2676)
+  q7-load-b: 9/17018 | 6/2050 | 4/998 (total 19/20066)
+  q7-load-d: 7/17077 | 10/3909 | 6/1438 (total 23/22424)
+  f2-cancel-child: 53/54659 | 9/4522 | 4/984 (total 66/60165)
+  g2-cancel-parent-foreground: 34/37522 | 5/3007 | 1/309 (total 40/40838)
+  h2-cancel-parent-background: 58/45064 | 11/5242 | 3/772 (total 72/51078)
+
+launch/wait tool lines:

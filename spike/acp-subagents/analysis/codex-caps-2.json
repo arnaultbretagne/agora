@@ -1,0 +1,196 @@
+{
+ "file": "captures/codex-caps-2.jsonl",
+ "lines": 48,
+ "bytes": 70347,
+ "validator": {
+  "verdicts": {
+   "ok": 48
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1,
+   "subagent_update": 3
+  }
+ },
+ "children": [
+  {
+   "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f0d3-7b62-ac24-775c29507c47",
+   "parent": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "depth": 1,
+   "announcedAt": 1490,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "capabilities": [
+    {}
+   ],
+   "cwd": [],
+   "states": [],
+   "ownKinds": {
+    "config_option_update": 1
+   },
+   "ownLines": 1,
+   "ownBytes": 747,
+   "parentStreamLines": 1,
+   "parentStreamBytes": 287,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 1490,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 12",
+   "root": "q7-load-b"
+  },
+  {
+   "id": "01a1caf4-e521-7fe0-ac5b-ba4d11797841:subagent:01a1caf4-f996-70a1-8804-973c1130de0a",
+   "parent": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "depth": 1,
+   "announcedAt": 1506,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "capabilities": [
+    {}
+   ],
+   "cwd": [],
+   "states": [],
+   "ownKinds": {
+    "config_option_update": 1
+   },
+   "ownLines": 1,
+   "ownBytes": 747,
+   "parentStreamLines": 1,
+   "parentStreamBytes": 287,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 1506,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 13",
+   "root": "q7-load-b"
+  },
+  {
+   "id": "01a1caf6-0b47-7e60-8168-966a8dd270d7:subagent:01a1caf6-16ca-7293-aafe-70fa2d5876f1",
+   "parent": "01a1caf6-0b47-7e60-8168-966a8dd270d7",
+   "depth": 1,
+   "announcedAt": 1767,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "capabilities": [
+    {}
+   ],
+   "cwd": [],
+   "states": [],
+   "ownKinds": {
+    "config_option_update": 1
+   },
+   "ownLines": 1,
+   "ownBytes": 747,
+   "parentStreamLines": 1,
+   "parentStreamBytes": 281,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 1767,
+   "firstOwnKind": "config_option_update",
+   "title": "Relay",
+   "root": "q7-load-d"
+  }
+ ],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 984,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 984
+  },
+  "q7-resume-a": {
+   "parentLines": 10,
+   "parentBytes": 18327,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 10,
+   "totalBytes": 18327
+  },
+  "q7-load-b": {
+   "parentLines": 16,
+   "parentBytes": 25391,
+   "childLines": 2,
+   "childBytes": 1494,
+   "announceLines": 2,
+   "announceBytes": 574,
+   "total": 20,
+   "totalBytes": 27459
+  },
+  "q7-load-d": {
+   "parentLines": 14,
+   "parentBytes": 22549,
+   "childLines": 1,
+   "childBytes": 747,
+   "announceLines": 1,
+   "announceBytes": 281,
+   "total": 16,
+   "totalBytes": 23577
+  }
+ },
+ "launches": [
+  {
+   "scenario": "q7-load-b",
+   "t": 1566,
+   "session": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "completed",
+   "meta": null
+  },
+  {
+   "scenario": "q7-load-b",
+   "t": 1567,
+   "session": "01a1caf4-e521-7fe0-ac5b-ba4d11797841",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "completed",
+   "meta": null
+  },
+  {
+   "scenario": "q7-load-d",
+   "t": 1786,
+   "session": "01a1caf6-0b47-7e60-8168-966a8dd270d7",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "completed",
+   "meta": null
+  }
+ ]
+}

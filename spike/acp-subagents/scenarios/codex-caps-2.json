@@ -1,0 +1,72 @@
+{
+ "name": "codex-caps-2",
+ "subagents": true,
+ "sessions": [
+  {
+   "label": "q7-resume-a",
+   "open": {
+    "method": "session/resume",
+    "sessionOf": "id:01a1caf4-c0a7-7e70-a4ce-a0914ccd531c"
+   },
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": []
+  },
+  {
+   "label": "q7-load-b",
+   "open": {
+    "method": "session/load",
+    "sessionOf": "id:01a1caf4-e521-7fe0-ac5b-ba4d11797841"
+   },
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": []
+  },
+  {
+   "label": "q7-load-d",
+   "open": {
+    "method": "session/load",
+    "sessionOf": "id:01a1caf6-0b47-7e60-8168-966a8dd270d7"
+   },
+   "config": [
+    [
+     "model",
+     "gpt-6-luna"
+    ],
+    [
+     "mode",
+     "agent-full-access"
+    ],
+    [
+     "reasoning_effort",
+     "low"
+    ]
+   ],
+   "steps": []
+  }
+ ]
+}

@@ -1,0 +1,131 @@
+{
+ "name": "claude-caps-2",
+ "subagents": true,
+ "sessions": [
+  {
+   "label": "q7-resume-a",
+   "open": {
+    "method": "session/resume",
+    "sessionOf": "id:c83235f0-aad8-4e49-a9c3-90a9c76bd7ec"
+   },
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": []
+  },
+  {
+   "label": "q7-load-b",
+   "open": {
+    "method": "session/load",
+    "sessionOf": "id:c8e38da4-da6c-4efb-9b73-046ee752727b"
+   },
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": []
+  },
+  {
+   "label": "q7-load-d",
+   "open": {
+    "method": "session/load",
+    "sessionOf": "id:28fce141-5be0-4fdf-81c4-685cd161b109"
+   },
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": []
+  },
+  {
+   "label": "f2-cancel-child",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use the Agent tool in the foreground (do not set run_in_background) to start a general-purpose sub-agent whose task is to run this exact command with Bash: `node -e \"setTimeout(() => console.log('slept'), 45000)\"` and report its output. Wait for it, then tell me in one sentence what it reported, or that it was stopped.",
+     "cancel": {
+      "target": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 10000
+    }
+   ]
+  },
+  {
+   "label": "g2-cancel-parent-foreground",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Use the Agent tool in the foreground (do not set run_in_background) to start a general-purpose sub-agent whose task is to run this exact command with Bash: `node -e \"setTimeout(() => console.log('slept'), 45000)\"` and report its output. Wait for it, then tell me in one sentence what it reported.",
+     "cancel": {
+      "target": "parent",
+      "from": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 20000
+    }
+   ]
+  },
+  {
+   "label": "h2-cancel-parent-background",
+   "config": [
+    [
+     "model",
+     "haiku"
+    ],
+    [
+     "mode",
+     "bypassPermissions"
+    ]
+   ],
+   "steps": [
+    {
+     "prompt": "Start one general-purpose sub-agent with the Agent tool in the background (run_in_background: true) whose task is to run this exact command with Bash: `node -e \"setTimeout(() => console.log('bg-done'), 40000)\"` and report its output. Then, without waiting for it, run this exact command yourself with Bash: `node -e \"setTimeout(() => console.log('parent-done'), 30000)\"`, then reply 'finished'.",
+     "cancel": {
+      "target": "parent",
+      "from": "child",
+      "afterMs": 8000
+     },
+     "lingerMs": 60000
+    }
+   ]
+  }
+ ]
+}

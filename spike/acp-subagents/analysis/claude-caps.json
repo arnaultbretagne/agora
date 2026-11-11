@@ -1,0 +1,1093 @@
+{
+ "file": "captures/claude-caps.jsonl",
+ "lines": 523,
+ "bytes": 394161,
+ "validator": {
+  "verdicts": {
+   "ok": 523
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1,
+   "subagent_update": 26,
+   "session_message": 28
+  }
+ },
+ "children": [
+  {
+   "id": "a6259e22f8b4d14c6",
+   "parent": "c83235f0-aad8-4e49-a9c3-90a9c76bd7ec",
+   "depth": 1,
+   "announcedAt": 4678,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 4678,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 6021,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 5,
+   "ownBytes": 2472,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 528,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Compute 17 x 23 and answer with just the number."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Compute 17 x 23 and answer with just the number."
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 4678,
+   "firstOwnKind": "session_message",
+   "title": "Compute 17 x 23",
+   "description": "general-purpose",
+   "root": "a-one-waited"
+  },
+  {
+   "id": "aec53c55534ca0438",
+   "parent": "c8e38da4-da6c-4efb-9b73-046ee752727b",
+   "depth": 1,
+   "announcedAt": 10646,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 10646,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 11835,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 5,
+   "ownBytes": 2478,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 528,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "What is 12 x 12? Reply with just the number."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "What is 12 x 12? Reply with just the number."
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "12 x 12 = 144"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 10646,
+   "firstOwnKind": "session_message",
+   "title": "Compute 12 x 12",
+   "description": "general-purpose",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "a550d1005a9848118",
+   "parent": "c8e38da4-da6c-4efb-9b73-046ee752727b",
+   "depth": 1,
+   "announcedAt": 10955,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 10955,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 11956,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 5,
+   "ownBytes": 2468,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 528,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "What is 13 x 13? Reply with just the number."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "What is 13 x 13? Reply with just the number."
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "169"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 10955,
+   "firstOwnKind": "session_message",
+   "title": "Compute 13 x 13",
+   "description": "general-purpose",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "a901343f62ec57464",
+   "parent": "941407b2-fb41-456a-9ce6-2685577c3fe2",
+   "depth": 1,
+   "announcedAt": 16964,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 16964,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 26772,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    },
+    {
+     "t": 45818,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 48310,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "tool_call": 5,
+    "tool_call_update": 9,
+    "agent_message_chunk": 4
+   },
+   "ownLines": 22,
+   "ownBytes": 13016,
+   "parentStreamLines": 4,
+   "parentStreamBytes": 981,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 25; echo background-finished`. Then report the exact output back. Do nothing else."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 25; echo background-finished`. Then report the exact output back. Do nothing else."
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 16964,
+   "firstOwnKind": "session_message",
+   "title": "Run delayed background echo",
+   "description": "general-purpose",
+   "root": "c-background"
+  },
+  {
+   "id": "affe2834e78519523",
+   "parent": "28fce141-5be0-4fdf-81c4-685cd161b109",
+   "depth": 1,
+   "announcedAt": 93282,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 93282,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 97930,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 3,
+    "config_option_update": 3,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 7,
+   "ownBytes": 3760,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 542,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "You are a sub-agent. Do exactly this:\n1. Use the Agent tool yourself to start another general-purpose sub-agent. Its task: compute 7 x 8 and reply with just the"
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "56"
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "<tools-used-before-summary>Agent</tools-used-before-summary>\n(a) The second sub-agent reported **56** for 7 x 8.\n\n(b) Yes, I was able to start it. The Agent cal"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 93282,
+   "firstOwnKind": "session_message",
+   "title": "Nested sub-agent test for 7x8",
+   "description": "general-purpose",
+   "root": "d-nested"
+  },
+  {
+   "id": "a3816c0f043311a86",
+   "parent": "affe2834e78519523",
+   "depth": 2,
+   "announcedAt": 95437,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 95437,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 96457,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 5,
+   "ownBytes": 2463,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 492,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Compute 7 x 8. Reply with just the number and nothing else."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Compute 7 x 8. Reply with just the number and nothing else."
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 95438,
+   "firstOwnKind": "session_message",
+   "title": "Compute 7 times 8",
+   "description": "general-purpose",
+   "root": "d-nested"
+  },
+  {
+   "id": "a91bc49816b45014e",
+   "parent": "f20946bb-5e28-4b99-8854-2394969d1894",
+   "depth": 1,
+   "announcedAt": 103478,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 103478,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 105026,
+     "state": {
+      "state": "requires_action"
+     }
+    },
+    {
+     "t": 109047,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 109940,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "tool_call": 1,
+    "session/request_permission": 1,
+    "tool_call_update": 2,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 9,
+   "ownBytes": 4897,
+   "parentStreamLines": 4,
+   "parentStreamBytes": 967,
+   "permissions": [
+    {
+     "t": 105027,
+     "sessionId": "a91bc49816b45014e",
+     "toolCall": "toolu_01EE3sDyWHdJCjA9TEvbi5EN"
+    }
+   ],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Use the Write tool to create the file /home/harness/work/note.txt with exactly the content: hello\n\nDo not create any other files. After writing, reply with a on"
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Use the Write tool to create the file /home/harness/work/note.txt with exactly the content: hello\n\nDo not create any other files. After writing, reply with a on"
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 103478,
+   "firstOwnKind": "session_message",
+   "title": "Create note.txt with hello",
+   "description": "general-purpose",
+   "root": "e-permission"
+  },
+  {
+   "id": "a692d2360911aded0",
+   "parent": "be319f4a-db90-4a62-b495-99af4f75f8fd",
+   "depth": 1,
+   "announcedAt": 115142,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 115142,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 123172,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "tool_call": 4,
+    "tool_call_update": 7,
+    "agent_message_chunk": 2,
+    "session/cancel": 1
+   },
+   "ownLines": 18,
+   "ownBytes": 9839,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 541,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report the exact output the command produced. Do nothing else."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report the exact output the command produced. Do nothing else."
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 115142,
+   "firstOwnKind": "session_message",
+   "title": "Run sleep and report output",
+   "description": "general-purpose",
+   "root": "f-cancel-child"
+  },
+  {
+   "id": "a2e1b8654c70a8c1f",
+   "parent": "f6b6d88f-71c2-4795-84dc-09c3c6beef60",
+   "depth": 1,
+   "announcedAt": 137575,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 137575,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 142990,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "tool_call": 1,
+    "tool_call_update": 1,
+    "agent_message_chunk": 1
+   },
+   "ownLines": 7,
+   "ownBytes": 4521,
+   "parentStreamLines": 2,
+   "parentStreamBytes": 533,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report back the exact output the command produced. Do nothing else."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 45; echo slept`. Then report back the exact output the command produced. Do nothing else."
+    },
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId"
+     ],
+     "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing"
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 137576,
+   "firstOwnKind": "session_message",
+   "title": "Run sleep 45 command",
+   "description": "general-purpose",
+   "root": "g-cancel-parent-foreground"
+  },
+  {
+   "id": "a6a92639ba5db9b8b",
+   "parent": "de303b70-df60-4589-bcac-27bf4b8d34c9",
+   "depth": 1,
+   "announcedAt": 162819,
+   "fieldsFirst": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "title",
+    "description",
+    "capabilities",
+    "state"
+   ],
+   "capabilities": [
+    {
+     "cancel": {}
+    }
+   ],
+   "cwd": [],
+   "states": [
+    {
+     "t": 162819,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 168710,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    },
+    {
+     "t": 206495,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 208954,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "session_message": 1,
+    "config_option_update": 3,
+    "tool_call": 3,
+    "tool_call_update": 5,
+    "agent_message_chunk": 3
+   },
+   "ownLines": 15,
+   "ownBytes": 9092,
+   "parentStreamLines": 4,
+   "parentStreamBytes": 982,
+   "permissions": [],
+   "messages": [
+    {
+     "where": "parent stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "recipientMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 40; echo bg-done`. Then report its output back, verbatim, in your final reply. Do nothing else."
+    },
+    {
+     "where": "child stream",
+     "dir": "session_message",
+     "fields": [
+      "messageId",
+      "senderSessionId",
+      "recipientSessionId",
+      "senderMessageId"
+     ],
+     "text": "Use the Bash tool to run exactly this shell command: `sleep 40; echo bg-done`. Then report its output back, verbatim, in your final reply. Do nothing else."
+    }
+   ],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 162820,
+   "firstOwnKind": "session_message",
+   "title": "Run background sleep command",
+   "description": "general-purpose",
+   "root": "h-cancel-parent-background"
+  }
+ ],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 830,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 830
+  },
+  "a-one-waited": {
+   "parentLines": 33,
+   "parentBytes": 37067,
+   "childLines": 5,
+   "childBytes": 2472,
+   "announceLines": 2,
+   "announceBytes": 528,
+   "total": 40,
+   "totalBytes": 40067
+  },
+  "b-two-parallel": {
+   "parentLines": 26,
+   "parentBytes": 34957,
+   "childLines": 10,
+   "childBytes": 4946,
+   "announceLines": 4,
+   "announceBytes": 1056,
+   "total": 40,
+   "totalBytes": 40959
+  },
+  "c-background": {
+   "parentLines": 59,
+   "parentBytes": 43123,
+   "childLines": 22,
+   "childBytes": 13016,
+   "announceLines": 4,
+   "announceBytes": 981,
+   "total": 85,
+   "totalBytes": 57120
+  },
+  "d-nested": {
+   "parentLines": 31,
+   "parentBytes": 37018,
+   "childLines": 12,
+   "childBytes": 6223,
+   "announceLines": 4,
+   "announceBytes": 1034,
+   "total": 47,
+   "totalBytes": 44275
+  },
+  "e-permission": {
+   "parentLines": 28,
+   "parentBytes": 34860,
+   "childLines": 9,
+   "childBytes": 4897,
+   "announceLines": 4,
+   "announceBytes": 967,
+   "total": 41,
+   "totalBytes": 40724
+  },
+  "f-cancel-child": {
+   "parentLines": 43,
+   "parentBytes": 39846,
+   "childLines": 18,
+   "childBytes": 9839,
+   "announceLines": 2,
+   "announceBytes": 541,
+   "total": 63,
+   "totalBytes": 50226
+  },
+  "g-cancel-parent-foreground": {
+   "parentLines": 39,
+   "parentBytes": 39201,
+   "childLines": 7,
+   "childBytes": 4521,
+   "announceLines": 2,
+   "announceBytes": 533,
+   "total": 48,
+   "totalBytes": 44255
+  },
+  "h-cancel-parent-background": {
+   "parentLines": 138,
+   "parentBytes": 65631,
+   "childLines": 15,
+   "childBytes": 9092,
+   "announceLines": 4,
+   "announceBytes": 982,
+   "total": 157,
+   "totalBytes": 75705
+  }
+ },
+ "launches": [
+  {
+   "scenario": "c-background",
+   "t": 47101,
+   "session": "a901343f62ec57464",
+   "kind": "tool_call",
+   "name": "Read",
+   "title": "Read /tmp/claude-10001/-home-harness-work/941407b2-fb41-456a-9ce6-2685577c3fe2/tasks/b8yp0n6gs.output",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "h-cancel-parent-background",
+   "t": 199022,
+   "session": "de303b70-df60-4589-bcac-27bf4b8d34c9",
+   "kind": "tool_call_update",
+   "name": "Read",
+   "title": "Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output",
+   "meta": [
+    "claudeCode"
+   ]
+  },
+  {
+   "scenario": "h-cancel-parent-background",
+   "t": 207998,
+   "session": "a6a92639ba5db9b8b",
+   "kind": "tool_call",
+   "name": "Read",
+   "title": "Read /tmp/claude-10001/-home-harness-work/de303b70-df60-4589-bcac-27bf4b8d34c9/tasks/bz9y3c7p4.output",
+   "status": "pending",
+   "meta": [
+    "claudeCode"
+   ]
+  }
+ ]
+}
