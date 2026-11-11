@@ -113,7 +113,8 @@
 - A delegator's `stop_agent` cancels a turn and nothing else: the delegate's own delegates go on, and
   the next message written to it, one of theirs included, starts it again.
 - Earlier `delegate` and `submit` lines stay in the log, drawn as they were; a call to either name is
-  refused.
+  refused. A turn that called `submit` under that contract stays silent: the engine reads the mark that
+  `submit` left, or the first start of this one would send each such turn's last words to its delegator.
 - An execution that took no prompt is not continued by itself, or a delegate that cannot start would
   make Pods without end: a message coming once it was over tries once more, as the person's Create does.
   There are never more Creates of Agora's than messages.
