@@ -79,6 +79,7 @@ names the side that serves it.
 | A known method, in its direction, with a matching body | Valid. |
 | A method the schema does not know, in a valid envelope | Valid: an extension. |
 | A `session/update` whose type the schema does not know, in a valid notification with a Session id and a string type | Valid: an extension. |
+| A `tool_call` or a `tool_call_update` with a content item of type `session`, naming a session | Valid: an extension. |
 | An answer that correlates with no request, in a valid envelope | Valid; it resolves nothing. |
 | A known method in the wrong direction, or with a body that does not match | Invalid: `wrong_direction`, `invalid_body`. |
 | A batch | Invalid: `batch`. |
@@ -222,6 +223,7 @@ flow — asks the person, and the interface answers.
 | `turn_active`, `turn_uncertain` | Configure, Scope or a Write without `mayWait`: a turn saved or in progress; that Write also behind a message waiting. Write, Configure or Scope: a turn uncertain. |
 | `stale_message` | Retract: not a waiting message, or one with a `_session/steering` line unanswered. |
 | `stale_turn` | Cancel: the target is not the turn in progress or uncertain. |
+| `native` | Any command addressed to a native sub-stream ("Native sub-agents"). |
 | `stale_permission`, `invalid_permission_option` | Respond to a permission: not that pending request; an option it did not offer. |
 | `invalid_question` | Ask: a body outside its bounds. |
 | `question_pending` | Ask, Write or Configure while a question is pending — a Write of the person's while a merge card waits excepted (`merge.md`). |
@@ -271,7 +273,34 @@ depth: whatever starts a sub-stream checks its own. A sub-stream belongs to the 
 | Root and depth | The parent's root, and the parent's depth plus one. |
 | Owner | The parent's, whoever creates it: a sub-stream belongs to the person who owns its root. |
 | Its row | In its parent's list, not in its owner's ("The list"). |
-| What comes up | A Workstream's row counts what lies under it, at every depth: the sub-streams; those in state `starting`, `ready` or `interrupted`; those with a question pending. Its `changedAt` is the latest of its own and theirs. |
+| What comes up | A Workstream's row counts what lies under it, at every depth: the sub-streams; those in state `starting`, `ready` or `interrupted`, and the native ones working or waiting ("Native sub-agents"); those with a question pending, and the native ones waiting. Its `changedAt` is the latest of its own and theirs. |
+
+## Native sub-agents
+
+A harness may start sub-agents of its own inside its execution — Claude Code's `Agent`, Codex's
+`spawn_agent`. With `subagents` declared at `initialize` (`executions.md`), its adapter announces each
+one and sends what it does under an ACP session id of its own (ACP, "Subagent Sessions"; written
+against claude-agent-acp 0.100.0 and codex-acp 2.5.0).
+
+**Each sub-agent announced is a sub-stream of the Workstream that announced it, read-only: Agora
+neither starts it nor writes to it. Its lines stay in the log of the Workstream whose execution
+carries them — its host —, and the projection gives them a thread of their own.**
+
+| Rule | Detail |
+| --- | --- |
+| Announced | By a `session/update` of type `subagent_update` whose `params.sessionId` is a session Agora knows in that execution — its Session's own, or a sub-agent's already announced — and whose `update.sessionId` it does not know there: the sub-agent's ACP session id. In the transaction that writes the line, the sub-agent's Workstream is created: its id the name-based UUID of its host and that ACP session id; its parent the Workstream of the announcing session; its root, depth and owner as any sub-stream's ("Sub-streams"). |
+| Its lines | Every line, in either direction, whose `params.sessionId` is its ACP session id, and every `subagent_update` naming it. They are written in its host's log, at its host's positions, as any line. A line naming a session never announced in that execution is its Session's, as before. |
+| What they leave alone | Its host's Session: its settings, its commands, its usage, its title, its turns and their elements. A sub-agent's `config_option_update`, `available_commands_update` and `usage_update` are kept in the log and give no object. |
+| Its turns | A turn opens with its first line, and with the first that follows an `idle` — its `requestPosition` that line's position —; it ends with a `subagent_update` whose `state` says `idle`: `done`; `cancelled` for a `stopReason` `cancelled`; `failed` for `error`, its `failure` the error's message. `running` and `requires_action` keep it in progress; `unknown`, or a state not named here, changes nothing. A turn still in progress when its host's Session ends, or its execution is lost, fails or ends, is `failed`, as any turn. |
+| Its task | A `session_message` among its lines whose `recipientSessionId` is its own: a `user` element of the turn it opens, its `content` the message's, `from` its parent's Workstream, `as` `parent`. Any other `session_message` is kept in the log and gives no object: what a sub-agent answers is in its own text. |
+| Its elements | Its other lines fold as a Session's do ("Elements"): text, reasoning, tools, plans, permissions, each of its turn in progress, or of its last. In the identities of "Views", the sub-stream stands for the Session, and its turn's is the name-based UUID of the sub-stream and the position of the line that opens it. |
+| In its parent's thread | One `subagent` element at its announcement, of the announcing session's turn, changed by each `subagent_update` naming it. |
+| Its view and its row | "The Workstream view": `state` `native`, with `native` and `subagent`. Its row, in its parent's list, carries `subagent`. Both are written with its host's, from its host's entries, in one fold and one transaction: it has no checkpoint of its own, and a rebuild of its host rebuilds it. |
+| Its routes | Its row, its thread and its list answer as any Workstream's, from its announcement on. |
+| Commands | A native sub-stream takes none of its own: any command addressed to it is refused, `native`. Two of its host's reach it. Respond to a permission, for one it asked: answered on its host's execution. Cancel, its target the sub-stream's turn in progress, accepted while its `native.cancel` is true (`stale_turn` otherwise): one `session/cancel` naming its ACP session id; the host's own turn goes on. |
+| Messages during a turn | A waiting message does not go into a turn while a sub-agent of that Session has a turn in progress ("Messages during a turn", "Into the turn"): it goes once none has, or as the next turn. |
+| A replay | A sub-agent announced again — a later execution's `session/load` replaying its history — is the same Workstream. The lines a Session's opening replays before its answer are kept in the log and give no object in a sub-stream. |
+| Not announced | A harness that announces nothing changes nothing: its sub-agents are its tool lines, as before. |
 
 ## Views
 
@@ -309,6 +338,7 @@ the client shows them is `assistant-ui.md`.
 | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | Consecutive chunks of one type and `messageId` | `turn`, `session`, `chunks`, `text`: their text blocks joined |
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
+| `subagent` | A `subagent_update` announcing a sub-agent, then each one naming it ("Native sub-agents") | `turn`, `session`, `workstream`: the sub-stream's id; `title` and `description`, the last given; `state`: the sub-stream's `subagent`; `cancel`: its `native.cancel` |
 | `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
 | `question` | An Ask, then its Answer, a refusing Write, its expiry or its cancellation | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`, for a merge card `kind` `merge`, `repo`, `number` and `url`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`, `cancelled`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text; for a merge card, `outcome`: `merged` and its `sha`, or `refused` and its `reason` |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel`, `_session/steering` and their answers | `turn`, `session`, `line`: the line whole |
@@ -341,11 +371,14 @@ anchors, the dispatch of its prompts, the agent's title, and a delegate's turns'
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `question` | The pending question's position, or null. |
 | `delegation` | A delegate's state (`delegation.md`, "A delegation"): `working`, `idle`, `failed` or `cancelled`. Absent on any other Workstream. |
+| `native` | On a native sub-stream ("Native sub-agents") alone: `host`, the Workstream whose log holds its lines; `description`, its last one, or null; `cancel`, true while the last `capabilities` its `subagent_update` gave hold `cancel`. Its `title` is its own last `session_info_update` title, otherwise its last `subagent_update` title, otherwise "Sub-agent"; its `harness` its host's; `exchanges` its turns; every other field null or empty. |
+| `subagent` | A native sub-stream's state: `working`, a turn in progress; `waiting`, while its last state is `requires_action`; else its last turn's: `idle` for `done`, `failed`, `cancelled`. Absent on any other Workstream. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
 | `changedAt` | The time of the entry that changed the view last. |
 
 | `state` | When, the first that applies |
 | --- | --- |
+| `native` | A native sub-stream ("Native sub-agents"). |
 | `none` | No Create accepted. |
 | `ended` | The last execution has `execution.ended`. |
 | `failed` | It has `execution.failed`. |
@@ -387,7 +420,7 @@ changes instead of fetching every view again.
 
 | Rule | Detail |
 | --- | --- |
-| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question` and a delegate's `delegation`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
+| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question`, a delegate's `delegation` and a native sub-stream's `subagent`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
 | List | A root's row is in its owner's list: the person's identity for their own, their agents' folder for their agents' ("HTTP"). A sub-stream's row is in its parent's list. |
 | Positions | Per list, strictly increasing and never reused: each row written takes its list's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
 | Up the line | A row written writes its parent's row again in the same transaction, then its parent's, up to the root, each with what lies under it, each in its own list. Lists are taken from the sub-stream up, so that two lines never wait on each other. |
@@ -610,6 +643,21 @@ exception message.
 | L125 | A Write of Agora's before the Session opens; with the execution ended; with its pool gone; with its Create refused `quota`; after a Stop | Accepted, `waiting` true each time. Sent once it is open; a Create with the last execution's pool, settings, profiles and limits, then sent; with a pool of its harness; tried again once a place is free; waiting, no Create, until the person's next one. |
 | L126 | A Write of Agora's while an approval, a question or a permission is pending | Waiting, the approval not refused; sent once it is settled. |
 | L127 | A Write of Agora's during a turn, to an agent that says it | One `_session/steering`, its first block Agora's line; the `user` element `steered`, with `from` and `as`, without that line; in the catch-up, with that line. |
+| L128 | Agora's `initialize` | `clientCapabilities` holds `subagents`, an empty object, beside `fs` and `terminal`. |
+| L129 | An agent announcing a sub-agent during its turn; then, under the sub-agent's session id, its task, a text, a tool and `idle` `end_turn`; then the turn's answer | A sub-stream of the Workstream, its id the name-based UUID of its host and that session id, one level deeper, `state` `native`; in its thread one turn `done`: a `user` element `from` its parent, `as` `parent`, its text, its tool; in its host's thread a `subagent` element at the announcement, `idle`, and none of the sub-agent's text or tool; the host's turn `done`. |
+| L130 | A sub-agent's `config_option_update`, `available_commands_update`, `usage_update` and `session_info_update` | Its host's `settings`, `commands`, `usage` and `title` unchanged; the sub-stream's `title` the one it gave. |
+| L131 | A sub-agent announcing one of its own; two announced in one turn | The second's parent the first's sub-stream, two levels below the host; two sub-streams of the host; the host's row counting each under it, and those working among its live ones. |
+| L132 | A sub-agent asking a permission; Respond to a permission addressed to its host; the same addressed to the sub-stream | A `permission` element in the sub-stream's thread, `subagent` `waiting`, its row and its ancestors' counting it among those waiting; the answer sent on its host's execution, naming that request, then `working`; `native`, nothing sent. |
+| L133 | Cancel on a sub-stream's turn in progress, `cancel` advertised; then its `idle` `cancelled`; Cancel with `cancel` withdrawn; on a turn already ended | One `session/cancel` naming its ACP session id, none for the host's turn; its turn `cancelled`, `subagent` `cancelled`, the host's turn going on; `stale_turn`, no line; `stale_turn`. |
+| L134 | A sub-agent `idle`, then `running` again, then `idle`; one answering `idle` with `stopReason` `error` | Two turns in its thread, each `done`; a turn `failed`, with the error's message. |
+| L135 | A sub-agent `running` as its host's execution ends; one never saying `idle`, its host's Session ending | Each turn `failed`, each `subagent` `failed`; none counted live under the host. |
+| L136 | A message waiting while a sub-agent of the Session has a turn in progress, its agent taking messages into a turn; then the sub-agent `idle` | No `_session/steering` while it works; one once it is `idle`. |
+| L137 | A Write, a Configure, a Create and a Stop addressed to a native sub-stream | `native` each time, nothing written. |
+| L138 | A later execution's `session/load` replaying a sub-agent's announcement and lines; a `session/resume` announcing nothing | The same sub-stream, its thread as it was, no turn added; no sub-stream added, each as it was. |
+| L139 | A rebuild of a host with native sub-streams | The same sub-streams, identities and rows as the incremental run gave. |
+| L140 | A `tool_call_update` with a content item of type `session` | Valid; its `tool` element holds it. |
+| L141 | Lines naming a session id never announced; an agent announcing nothing | Elements of the host's turn, as before; no sub-stream. |
+| L142 | Live, Claude Code and Codex, each asked to start two sub-agents of its own, one running a command | Each announced: a sub-stream with its title, its text and its tool, `idle` once done; the host's thread holding a `subagent` element for each and none of their text or tools; its settings and its usage its own. |
 | L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
 | L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 

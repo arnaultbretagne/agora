@@ -56,8 +56,8 @@ What the client reads of each view object. Every object also carries `id`, `firs
 
 | Kind | Fields read |
 | --- | --- |
-| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation` |
-| a list row | `title`, `state`, `harness`, `question`, `changedAt` |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation`, `native`, `subagent` |
+| a list row | `title`, `state`, `harness`, `question`, `subagent`, `changedAt` |
 | `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
 | `element` | `type`, `turn`, `session`, and per type below |
 | `notice` | `type`, `reason`, `origin`, `harness` |
@@ -80,6 +80,10 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 | Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question, from its card. |
 | Stop | `execution` | — | For an execution neither stopped nor ended. |
 
+In a native sub-stream (`log.md`, "Native sub-agents") the client offers two commands, both sent to its
+host, `native.host`: RespondPermission, for a permission asked there; Cancel, for its turn in progress,
+while `native.cancel` is true. It offers no other.
+
 ## The Workstream's state
 
 The view's `state` (`log.md`, "The Workstream view") decides what the screen offers. Its label shows
@@ -95,6 +99,7 @@ in the header, after the harness.
 | `lost` | lost | Closed: "The sandbox was lost. It ends at its deadline; then a new one can start." |
 | `failed` | failed | Open: sending starts a new execution. |
 | `ended` | ended | Open: sending starts a new execution, which continues the Workstream. |
+| `native` | Its `subagent`: "working", "waiting for you", "idle", "failed", "cancelled" | None; in its place: "Read-only: a sub-agent of “<its parent's title>” takes no message." |
 
 In `ready`, sending is open when the snapshot is complete, no turn is uncertain, no permission is
 pending, and no setting is being changed. Otherwise the reason shows
@@ -245,6 +250,7 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | A turn | A `user` message, id `{turn}:user`, from the text blocks of its `user` element, its other blocks as attachments; then an `assistant` message, id `{turn}:assistant`, from its other elements in position order. | The turn's `requestPosition`. |
 | A message sent into a turn | Its `steered` `user` element: a `user` message, id `{turn}:user:{position}`, its `firstPosition`, with no turn's note, among its turn's messages; the `assistant` message split around it, the part after it id `{turn}:assistant:{position}`. A part with nothing to show is left out, but the last; each part `complete`, but the last, which has the turn's `status`. | Within its turn. |
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
+| A native sub-stream's turn | As a turn; its `user` message, when it has a `user` element, shown as from its parent, by its title; without one, its `assistant` message alone. | The turn's `requestPosition`. |
 | A message of Agora's | A `user` element `as` `agora`, or an earlier delegation's `report` element, in place of its turn's `user` message: a `system` message, id `{turn}:report`, one line, "From Agora", opening on its text; its `assistant` message as any turn's. Sent into a turn, the same, at its place there. | The turn's `requestPosition`. |
 | A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
 
@@ -308,6 +314,7 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | A merge card's | A box of its own at its position (`merge.md`): the pull request's title as a link, `owner/name#number`, its state as the card says it, and one button, Merge, open only when the state is `ready`; then "Merging…", and "Merged" with the sha or "Not merged" with the reason; a card a message cancelled, "Cancelled". |
 | An approval's | On the `delegate` line it gates, open: the proposal — harness, model, the rights beyond the caller's, the instructions — and one button, Approve; once settled, "Approved", "Refused" and the words, or "Expired before a decision". Matched to no line, the same box at the approval's position. |
 | A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
+| A sub-agent's | A `subagent` element (`log.md`, "Native sub-agents"), drawn as a delegate's line is: its label the sub-agent's title, a link to its sub-stream; its note its state: "working", "waiting for you", "idle", "failed", "cancelled". Out of a fold, as a delegate's. |
 
 #### Folded tools
 
@@ -364,6 +371,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
 | Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
 | Header | Title, or a waiting first message; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
+| Sidebar, header, composer | A native sub-stream: in the sidebar, a row among its parent's sub-streams, its title after a small "sub-agent" mark, a coral, pulsing dot while `working`, "waiting for you" while `waiting`, a red dot for `failed`, none otherwise; in the header, its parents, its title, its harness · its state label, **Cancel** while its turn is in progress and `native.cancel` is true, never **Stop**; no composer and no picker, the read-only line in their place | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
 | Thread | User message, on the right in a bubble, with its turn's note | `MessagePrimitive` (**ours**) |
@@ -495,6 +503,10 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U56 | In a browser, a root with sub-streams, one two levels down waiting for the person; the root unfolded, then the first sub-stream | Folded: a chevron and "waiting for you"; unfolded: its sub-streams indented below it; the first's own sub-stream behind its chevron, then below it. |
 | U57 | A sub-stream under a folded root asks a question, from another client | The root moves to the top and shows "waiting for you", without a reload. |
 | U58 | A sub-stream two levels down opened by its address | Its line unfolds in the list; the header shows its two parents before its title, each opening its Workstream. |
+| U85 | In a browser, a Workstream whose agent announced two sub-agents, one working, one asking a permission; its root folded, then unfolded | Folded: "waiting for you"; unfolded: both rows under it, each after its "sub-agent" mark, the first with the working dot, the second "waiting for you". |
+| U86 | In a browser, that Workstream's thread | One line for each sub-agent at its announcement, with its title, a link to its sub-stream and its state; none of their text or tools; the model picker and the context's ring the Workstream's own. |
+| U87 | In a browser, a native sub-stream opened: working, `cancel` advertised; then idle; one that advertises none; one with no task | Its parents in the header, its task shown as from its parent, its text and its tools; no composer, "Read-only: a sub-agent of …"; **Cancel**, which sends Cancel to its host for its turn; then "idle", no **Cancel**; never a **Cancel**; its response alone. No **Stop** and no picker in any. |
+| U88 | In a browser, a permission pending in a native sub-stream; an option chosen | Its card in the sub-stream's thread; RespondPermission sent to its host with that request; the option answered. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
 | U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
 | U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |

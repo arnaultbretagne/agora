@@ -7,7 +7,8 @@ can expect to receive from a harness that speaks ACP.
 stable part only. Not the extensions of any particular implementation.
 
 Agora's `initialize` announces neither file system nor terminal (`fs` and `terminal` set to no):
-what an agent can send only to a client that does is marked **No** here.
+what an agent can send only to a client that does is marked **No** here. It declares `subagents`, an
+extension two adapters implement (`log.md`, "Native sub-agents").
 
 Each agent announces which parts of the standard it supports (`initialize`, session and prompt
 capabilities, configuration options). An "ACP" element appears only if the connected agent provides
@@ -51,7 +52,7 @@ the data; the interface hides the rest.
 | file-tree | **Partial** | files touched and diffs from tools | Rebuilt by Agora. |
 | image-generation | **Partial** | `image` block in the response | The image arrives whole, with no progress. |
 | web-search, sources, document-reference | **Partial** | `search` / `fetch` tools, `resource_link` blocks | No structured citations. |
-| subagent-list, task-card, agent-handoff | **Partial** | tool calls, if the agent exposes its subagents through them | ACP does not know about subagents. |
+| subagent-list, task-card, agent-handoff | **Partial** | `subagent_update` and a session id of its own for each sub-agent, from an adapter that implements "Subagent Sessions"; else tool calls, if the agent exposes its subagents through them | An extension, not in the pinned schema; opencode sends nothing. |
 | message-actions | **Partial** | — | Copy and rate: yes. Regenerate: no (see regenerate-menu). |
 | mcp-server-panel | **Partial** | MCP servers declared by Agora when the session is created | No server state; dynamic connection unstable. |
 | thread-list, thread-search, conversation-search, shared-conversation | **Agora** | The Workstream views; their title from `session_info_update` or the first prompt | ACP also has `session/list`, but the log is authoritative. |

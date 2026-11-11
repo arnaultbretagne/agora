@@ -21,7 +21,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | Text | A `user` element's blocks as the catch-up gives them (`log.md`, "Continuing"); an `agent_message_chunk` element's `text`. Each is split at its line breaks; an element without text gives no line. |
 | Numbers | From 1, across the Workstream, in that order. An exchange's numbers never change: only the last element of the exchange in progress grows, and nothing follows it; a rebuild gives the same lines. |
 | Kinds | `header`, `user`, `agent`, `tool`, `agora`. |
-| Who wrote | A header names who wrote the exchange's prompt: `you`; `delegator`, `delegate` or `agora` for a message of another Workstream's or of Agora's (`delegation.md`, "Messages"). Their lines are `user` lines, Agora's own line left out. An earlier delegation's headers stay: `caller` for its messages; `agora` for its reports, whose lines are `agora` lines, read, never searched. |
+| Who wrote | A header names who wrote the exchange's prompt: `you`; `delegator`, `delegate` or `agora` for a message of another Workstream's or of Agora's (`delegation.md`, "Messages"); `parent` for a native sub-agent's task (`log.md`, "Native sub-agents"), a turn of its that has none opening on `## <n> · agent`. Their lines are `user` lines, Agora's own line left out. An earlier delegation's headers stay: `caller` for its messages; `agora` for its reports, whose lines are `agora` lines, read, never searched. |
 | A message sent into a turn | Among the agent's lines, at its first position: `## <n> · <who wrote>, during the turn`, its text as a `user` element's, then `## <n> · agent` again. |
 | Left out | Reasoning, tool content, plans, permissions, questions to the person, and what a resumed Session replays outside any turn. |
 
@@ -54,6 +54,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | ID | Case | Expected |
 | --- | --- | --- |
 | S14 | An exchange with a message sent into its turn, between the agent's two texts; then searched for that message's words | The agent's first lines, `## <n> · you, during the turn`, the message's lines of kind `user`, `## <n> · agent`, the agent's next lines; the same numbers once its views are rebuilt; found as a user's line. |
+| S15 | A native sub-stream's transcript, read; a word its sub-agent alone said, searched | `## 1 · <started> · parent`, its task's lines, then `## 1 · agent`, its text and its tools; found in the sub-stream, not in its host. |
 | S1 | A Workstream of two exchanges, the second calling a tool that succeeds and one that fails; its transcript read whole | Its two headers per exchange, the user's lines, the agent's, `[tool: …]` and `[tool: … — failed]`, numbered from 1 in that order. |
 | S2 | The same transcript after a third exchange, then after its views are rebuilt | The first two exchanges' lines at the same numbers, with the same text. |
 | S3 | An exchange in progress, its answer streaming | Its last lines grow; no line before them moves. |
