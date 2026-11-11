@@ -13,6 +13,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R5 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, taking `_session/steering` as the adapters do, or not saying it can (D30); the delegators' and the delegates' MCP calls through the MCP TypeScript SDK 1.32.2's own client, their executions named as the gateway names them. An approval lives 3 s and its call hears progress every 500 ms (D8: 2 s and 400 ms), in place of 4 min 30 s and 30 s. Each guard these cases hold was also removed in turn: D5, D32, D37, D40–D44 and L99 each failed. |
 | R6 | 2026-11-05 | `bf49026` | local | `npm run check`, all green, as R5, on the commit that adds `too_many_exchanges`: every case of R5 ran again, its test unchanged; D45 new. Each clause of the cap was also removed in turn, and D45 failed. |
 | R7 | 2026-11-05 | `da5389a` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:55bb99d7…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34, `zai-coding-plan/glm-5.3`, effort low), each harness with its pool's default model; the cases' owner. The cases' script on `da5389a`, corrected between runs: D15 asks for `submit` by name, D29 for a logbook. |
+| R8 | 2026-11-11 | `f433f48` | local | `npm run check`, all green, as R5: Node 24.20.0, PostgreSQL 17.11. On the commit that gives the tools the harnesses' names: every case of R6 ran again under `spawn_agent` and `send_message`; D18, D19 and D26 as the contract now says them; D46 to D50 and D52 new. Nine guards were removed in turn, and each time one of D27, D46, D50, D52, M10, M12 and U84 failed. |
 
 ## Cases
 
@@ -68,6 +69,23 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D43 | real: the mock agent never answers the setting | local | R5 | proven | Its Session open: no prompt, one waiting. Ended: 1.5 s on, one execution. A `to`: two; ended: 1.5 s on, still two. |
 | D44 | simulated: stub, `command` refused for one beat | local | R5 | proven | Its turn failed, its execution ended. The refused beat: no Write in the delegator's. The next: one message; still one after another beat. |
 | D45 | — | local | R6 | proven | `sent` ten times, then a tool error `too_many_exchanges: the person has to write first`, no Write added; the delegate's `submit`: `sent`. A Write of the person's in the delegator's Workstream: the same again. One in the delegate's: `sent`. |
+| D1 | — | local | R8 | proven | By `spawn_agent`: `started <id> · hello delegate` at once; its parent the delegator's Workstream, its depth 1, on `mock-test`; its first message `hello delegate`, `from` its delegator, `as` `delegator`. |
+| D18 | — | local | R8 | proven | A `send_message` to `parent` during `/sleep 2`: `sent`; the delegator's first prompt `From your delegate <id> "/sleep 2", not the person:`, then `the words`; its `user` element `from` the delegate, `as` `delegate`. |
+| D19 | — | local | R8 | proven | `/words 100001`: the delegator's prompt's second block those 100,001 characters, equal to them. |
+| D26 | — | local | R8 | proven | Done: `Echo #1: plain.`, `as` `delegate`. With a `send_message` to `parent` in it: `said before the end`, then `Slept 2 s.`, three messages in all, still three 600 ms on. The person's: still three. The person's with a `send_message` sent into it: a fourth, `Slept 2 s.`. With no message: a fifth, `as` `agora`, `Your delegate <id> "plain": It ended its turn with nothing to say.` |
+| D27 | — | local | R8 | proven | The person's Cancel carrying a `from` as a delegator's would: stored without it; one message `as` `agora`, `…: The person cancelled its turn.`; two messages in all 600 ms on. |
+| D46 | — | local | R8 | proven | A permission pending: `stopped <id> · /permission`; one `session/cancel`; the permission answered `cancelled`; the Cancel's `from` the delegator's Workstream, `as` `delegator`; `cancelled`; three more delegates `started`; no message at the delegator 1.5 s on; `sent <id> · …`, a second prompt; the person's Cancel of that turn: one message `as` `agora`, `…: The person cancelled its turn.` |
+| D46 | real: the agent ends its turn 15 s on, cancelled or not (mock `/stubborn`) | local | R8 | proven | Three working: a fourth `too_many_delegates`; `stopped <id> · …`, its turn still `in_progress`; a fourth `started`. |
+| D47 | — | local | R8 | proven | Its turn done: `no turn to stop <id> · plain`, no `session/cancel`, no Cancel in its log; stopped by the person: `delegate_stopped`; another Workstream: `not_a_delegate`. |
+| D48 | — | local | R8 | proven | `stopped <id> · …`, its turn `cancelled`; its own delegate still `in_progress`; then a second prompt of the stopped one's: `From your delegate <id> …`, `Slept 4 s.` |
+| D49 | — | local | R8 | proven | `no delegate`; then three lines, in this order: `<id> · /sleep 30 working · working`, `<id> · /sleep 30 stopped · cancelled`, `<id> · plain · idle`; the held call in none. |
+| D50 | — | local | R8 | proven | By its delegator's id: `sent`, a `user` element `from` the delegate, `as` `delegate`. Holding `agora:delegate`, to a sibling: `not_a_delegate` for `send_message` and for `stop_agent`. The delegator to its delegate's delegate: `not_a_delegate` for both. `parent` from the root: `no_delegator`. The sibling and the one below still `in_progress`, one Write each, no Cancel. |
+| D52 | simulated: forced-state, the message a `submit` of the earlier contract wrote, written by the test with its mark | local | R8 | proven | The turn done: one message at the delegator, `handed in by submit`, still one 1.5 s on; a second engine on the same log, nothing seen: still one. |
+| D15 | — | live | — | not verified | As the contract now says it — by `spawn_agent`, the delegate's last message used — it has not run: the tools are not deployed. |
+| D16 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
+| D29 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
+| D31 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
+| D51 | — | live | — | not verified | Not run: the tools are not deployed. |
 
 ## Not covered
 
@@ -82,3 +100,5 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | Agora ending within the beat after a delegate's execution ended: what its end says is not written | — |
 | A turn failed by an answer `-32603`, seen between that line and the loss it brings: two messages of Agora's where one is meant | — |
 | A model's API refusing an output (a content filter, answered `-32603`): the execution lost, and Agora's message says so, not why | — |
+| The person's Stop, or a delegate's turn ending and its next starting, between `stop_agent`'s look and its Cancel: `delegate_stopped`, and the next turn looked for once, are read in the code, shown by no case | — |
+| A harness's own tool line titled as one of Agora's — `spawn_agent`, `send_message` — whose answer has the shape of Agora's: drawn as a delegate's line | — |
