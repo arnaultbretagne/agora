@@ -25,7 +25,7 @@ import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
-import { acceptsPrompt, isApproval, isMerge, STEERING, waited, type Execution, type State } from './state.ts'
+import { acceptsPrompt, isApproval, isMerge, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, validate, type Reason } from './acp.ts'
@@ -283,6 +283,8 @@ export class Workstreams implements Handler {
     let cancels: string | null = null
     // docs/specs/log.md, "Commands": the catalogue is read before the transaction, never under its lock.
     const catalogue = command.kind === 'Create' ? await this.executions.pools() : []
+    // What each pool accepts in a prompt, for the message a Create carries.
+    const offered = command.kind === 'Create' && command.body.prompt !== undefined ? await this.catalogue() : []
     return this.serial(workstream, async () => {
       if (this.blocked.has(workstream)) return { accepted: false, reason: 'unavailable' }
       const answer = await this.store.accept(workstream, command, async (state, tx) => {
@@ -299,6 +301,15 @@ export class Workstreams implements Handler {
             const [min, max] = LIMIT_BOUNDS[key]
             if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < min || raw > max) return 'invalid_create'
             limits[key] = raw
+          }
+          // docs/specs/log.md, "Commands": the message it carries, checked as a Write that waits.
+          let message: { id: string; prompt: unknown } | undefined
+          if (command.body.prompt !== undefined) {
+            const accepts = (offered.find((p) => p.name === pool.name)?.promptCapabilities ?? null) as PromptCapabilities | null
+            if (!acceptsPrompt(accepts, command.body.prompt)) return 'prompt_unsupported'
+            const line = validate(encode({ jsonrpc: '2.0', id: 'waits', method: 'session/prompt', params: { sessionId: 'waits', prompt: command.body.prompt } }), 'out')
+            if (!line.ok) return line.reason
+            message = { id: randomUUID(), prompt: command.body.prompt }
           }
           await tx.client.query('SELECT pg_advisory_xact_lock($1)', [QUOTA_LOCK])
           const active = await tx.client.query(
@@ -339,6 +350,7 @@ export class Workstreams implements Handler {
               ...(settings.length > 0 ? { settings } : {}),
               execution,
             },
+            ...(message ? { message } : {}),
           }
         }
         // docs/specs/log.md, "Commands": a question, whatever the execution; no line to any agent.

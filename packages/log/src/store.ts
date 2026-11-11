@@ -65,6 +65,8 @@ export interface AcceptedEffect {
   body?: Record<string, unknown>
   /** A Write with no line: it waits (docs/specs/log.md, "Messages during a turn"). */
   waits?: boolean
+  /** A Create's message (docs/specs/log.md, "Commands"): written with it, a Write that waits, under this id. */
+  message?: { id: string; prompt: unknown }
 }
 
 const COLUMNS =
@@ -447,6 +449,7 @@ export class LogStore {
             effect.claimName ?? null,
           ],
         )
+        if (effect.message && effect.execution) await this.first(tx, effect.execution, effect.message)
         return answer
       })
     } catch (error) {
@@ -606,6 +609,18 @@ export class LogStore {
       }
       return { handled: true, position }
     })
+  }
+  /**
+   * A Create's message (docs/specs/log.md, "Commands"): a Write that waits, in the Create's commit, at the next
+   * position, marked `first` with the execution it starts.
+   */
+  private async first(tx: Transaction, execution: string, message: { id: string; prompt: unknown }): Promise<void> {
+    const write = { id: message.id, kind: 'Write', target: {}, body: { prompt: message.prompt, mayWait: true } }
+    const position = await tx.append({ kind: 'command', content: { ...write, waits: true, first: execution }, command: write.id })
+    await tx.client.query(
+      'INSERT INTO commands(workstream,id,kind,target,fingerprint,answer,position) VALUES($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7)',
+      [tx.workstream, write.id, write.kind, encode(write.target), hash({ kind: write.kind, target: write.target, body: write.body }), encode({ accepted: true, command: write.id, position, waiting: true }), position],
+    )
   }
   /** Appends a lifecycle entry; one that ends an execution also ends its open Sessions. */
   async fact(workstream: string, input: Append): Promise<string> {

@@ -2,13 +2,13 @@
 // the objects become messages, the user's actions become commands, and what the screen offers follows
 // the Workstream's state. A refused command shows its reason; its effect, if any, comes from the thread.
 //
-// Sending with no execution running starts one first (docs/specs/assistant-ui.md, "Sending"): a new
-// Workstream is created on its first message, never before; the message waits, shown, until its
-// Session is open, then is written.
+// Sending with no execution running starts one (docs/specs/assistant-ui.md, "Sending"): a new
+// Workstream is created on its first message, never before; the Create carries the message, which the
+// log holds and sends once its Session is open. The thread shows it from then on.
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type Attachment, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
-import { acceptOf, attachmentAdapter, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
+import { acceptOf, attachmentAdapter, composerAttachments, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
@@ -17,12 +17,13 @@ import {
   accessGranted,
   composerOf,
   delegatesOf,
-  firstMessageStep,
   messagesOf,
   poolOffered,
   poolLimits,
   poolSettings,
+  returnedOf,
   startBody,
+  startingOf,
   TEAM,
   waitingOf,
   withAccess,
@@ -48,14 +49,6 @@ interface Returned extends Draft {
   readonly for: string | null
 }
 
-/** A first message waiting for the Session its Create opens. */
-export interface Pending extends Draft {
-  readonly workstream: string
-  readonly execution: string
-  readonly prompt: readonly Block[]
-  readonly harness: string
-}
-
 export interface Agora {
   readonly api: Api
   readonly id: string | null
@@ -68,7 +61,8 @@ export interface Agora {
   readonly pools: readonly Pool[] | null
   /** The pool a new execution starts in. */
   readonly pool: string | null
-  readonly pending: Pending | null
+  /** A message waits for the Session of the execution it starts: the thread shows it (docs/specs/assistant-ui.md, "Sending"). */
+  readonly starting: boolean
   /** The settings the model picker offers: the open Session's, or, when sending starts one, its pool's. */
   readonly settings: readonly Setting[] | null
   /** The values picked for the execution a message will start. */
@@ -185,7 +179,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const [pools, setPools] = useState<Pool[] | null>(null)
   // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
   const [picked, setPicked] = useState<{ for: string | null; pool: string } | null>(null)
-  const [pending, setPending] = useState<Pending | null>(null)
   // Settings picked before a Create, for the Workstream and pool they were picked in.
   const [chosenFor, setChosenFor] = useState<{ for: string | null; pool: string | null; values: Record<string, string> }>({ for: null, pool: null, values: {} })
   // Put back into their Workstream's composer once that Workstream is shown, oldest first.
@@ -237,7 +230,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [api])
   useEffect(refreshLimits, [refreshLimits])
   const limits = useMemo(() => poolLimits(pools?.find((p) => p.name === pool)?.baseProfiles, accounts), [pools, pool, accounts])
-  const harnessOf = useCallback((name: string) => pools?.find((p) => p.name === name)?.harness ?? name, [pools])
   const chosen = useMemo(() => (chosenFor.for === id && chosenFor.pool === pool ? chosenFor.values : {}), [chosenFor, id, pool])
   const settings = useMemo(
     () => (composer.create ? poolSettings(pools?.find((p) => p.name === pool)) : (view.settings ?? null)),
@@ -302,7 +294,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [state, send],
   )
 
-  /** A message with no execution running: a Create first, the Write once its Session is open. */
+  /** A message with no execution running: a Create carrying it; the log sends it once its Session is open. */
   const start = useCallback(
     async (draft: Draft, prompt: readonly Block[]) => {
       if (pool === null) return refuse('No harness is available.', id)
@@ -329,16 +321,11 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
           return giveBack({ ...draft, for: id })
         }
       }
-      const created = await send('Create', {}, startBody(pool, chosen, access), workstream)
-      if (!created.accepted || created.execution === undefined) {
-        giveBack({ ...draft, for: workstream })
-        if (id === null) onOpen(workstream)
-        return
-      }
-      setPending({ workstream, execution: created.execution, ...draft, prompt, harness: harnessOf(pool) })
+      const created = await send('Create', {}, { ...startBody(pool, chosen, access), prompt: [...prompt] }, workstream)
+      if (!created.accepted) giveBack({ ...draft, for: workstream })
       if (id === null) onOpen(workstream)
     },
-    [api, id, pool, send, onOpen, harnessOf, chosen, access, refuse, unrefuse, giveBack],
+    [api, id, pool, send, onOpen, chosen, access, refuse, unrefuse, giveBack],
   )
 
   const chooseSetting = useCallback(
@@ -365,39 +352,23 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [access, id, accessKey, send],
   )
 
-  // The waiting message is written once its execution's Session is open, and given back if it failed.
-  const writing = useRef(false)
+  // The messages the log gave back, their execution not having started (docs/specs/assistant-ui.md,
+  // "Sending"): into this Workstream's composer with the reason, once per page.
+  const handed = useRef(new Set<string>())
   useEffect(() => {
-    if (pending === null || pending.workstream !== id || writing.current) return
-    const step = firstMessageStep(pending.execution, view, state.complete)
-    if (step === 'wait') return
-    if (step === 'give back') {
-      giveBack({ text: pending.text, attachments: pending.attachments, for: pending.workstream })
-      refuse(refusalText('startup'), pending.workstream)
-      setPending(null)
-      return
-    }
-    writing.current = true
-    void send('Write', { execution: view.execution, session: view.session }, { prompt: [...pending.prompt], mayWait: true })
-      .then((written) => {
-        if (!written.accepted) giveBack({ text: pending.text, attachments: pending.attachments, for: pending.workstream })
-      })
-      .finally(() => {
-        writing.current = false
-        setPending(null)
-      })
-  }, [pending, id, state.complete, view, send, giveBack, refuse])
+    if (id === null || !state.complete) return
+    const back = returnedOf(state, view).filter((m) => !handed.current.has(m.id))
+    if (back.length === 0) return
+    for (const m of back) handed.current.add(m.id)
+    refuse(refusalText('startup'), id)
+    void (async () => {
+      // An image the log keeps in R2 is read again; one that cannot be read comes back without it.
+      for (const m of back) giveBack({ text: m.text, attachments: await composerAttachments(m.blocks).catch(() => []), for: id })
+    })()
+  }, [state, view, id, refuse, giveBack])
 
-  const messages = useMemo(() => {
-    const own = messagesOf(state)
-    if (pending === null || pending.workstream !== id) return own
-    const custom = { turnStatus: 'pending', harness: pending.harness }
-    return [
-      ...own,
-      { id: 'pending:user', role: 'user', content: [{ type: 'text', text: pending.text }], attachments: pending.attachments, metadata: { custom } },
-      { id: 'pending:assistant', role: 'assistant', content: [], status: { type: 'running' }, metadata: { custom } },
-    ] satisfies ThreadMessageLike[]
-  }, [state, pending, id])
+  const starting = useMemo(() => startingOf(state, view).length > 0, [state, view])
+  const messages = useMemo(() => messagesOf(state, view), [state, view])
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
@@ -413,7 +384,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [attachments, composer.create, start, send, id, view.execution, view.session, giveBack],
   )
 
-  const waiting = useMemo(() => waitingOf(state), [state])
+  const waiting = useMemo(() => waitingOf(state, view), [state, view])
   // The log holds the messages (docs/specs/assistant-ui.md, "The connection point"): this lists them, sends and takes one back.
   const queue = useMemo(
     () => ({
@@ -440,8 +411,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     messages,
     convertMessage: (message) => message,
     // While an approval waits, Send in place of Cancel: what is sent refuses it.
-    isRunning: (composer.running && !composer.refuses) || (pending !== null && pending.workstream === id),
-    isSendDisabled: !composer.open || (pending !== null && pending.workstream === id),
+    isRunning: (composer.running && !composer.refuses) || starting,
+    isSendDisabled: !composer.open,
     onNew,
     queue,
     adapters: { attachments },
@@ -508,7 +479,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     list,
     pools,
     pool,
-    pending: pending !== null && pending.workstream === id ? pending : null,
+    starting,
     settings,
     chosen,
     commands,
