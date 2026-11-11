@@ -80,7 +80,7 @@ function restore(rows: ThreadRow[], harness: string, user: { text: string; from?
     }
     // A child's thread opens on no Session of its own: no notice.
     if (row.kind === 'notice') return user === null || user.from ? [] : [{ ...row, object: { ...o, harness } }]
-    if (row.kind === 'workstream') return [{ ...row, object: { ...o, harness, pool: null, title: 'replayed' } }]
+    if (row.kind === 'workstream') return [{ ...row, object: { ...o, harness, pool: null } }]
     if (row.kind === 'turn' && o.harness) return [{ ...row, object: { ...o, harness } }]
     return [row]
   })
