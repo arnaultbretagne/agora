@@ -14,6 +14,8 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R6 | 2026-11-05 | `bf49026` | local | `npm run check`, all green, as R5, on the commit that adds `too_many_exchanges`: every case of R5 ran again, its test unchanged; D45 new. Each clause of the cap was also removed in turn, and D45 failed. |
 | R7 | 2026-11-05 | `da5389a` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:55bb99d7…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34, `zai-coding-plan/glm-5.3`, effort low), each harness with its pool's default model; the cases' owner. The cases' script on `da5389a`, corrected between runs: D15 asks for `submit` by name, D29 for a logbook. |
 | R8 | 2026-11-11 | `f433f48` | local | `npm run check`, all green, as R5: Node 24.20.0, PostgreSQL 17.11. On the commit that gives the tools the harnesses' names: every case of R6 ran again under `spawn_agent` and `send_message`; D18, D19 and D26 as the contract now says them; D46 to D50 and D52 new. Nine guards were removed in turn, and each time one of D27, D46, D50, D52, M10, M12 and U84 failed. |
+| R9 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. D15 and D51, on the new harnesses (agora #204, infra-k8s #358). |
+| R10 | 2026-11-11 | `c27561b` | live | As R9, D51 alone, played again once the executions of R9 were gone. |
 
 ## Cases
 
@@ -81,11 +83,12 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D49 | — | local | R8 | proven | `no delegate`; then three lines, in this order: `<id> · /sleep 30 working · working`, `<id> · /sleep 30 stopped · cancelled`, `<id> · plain · idle`; the held call in none. |
 | D50 | — | local | R8 | proven | By its delegator's id: `sent`, a `user` element `from` the delegate, `as` `delegate`. Holding `agora:delegate`, to a sibling: `not_a_delegate` for `send_message` and for `stop_agent`. The delegator to its delegate's delegate: `not_a_delegate` for both. `parent` from the root: `no_delegator`. The sibling and the one below still `in_progress`, one Write each, no Cancel. |
 | D52 | simulated: forced-state, the message a `submit` of the earlier contract wrote, written by the test with its mark | local | R8 | proven | The turn done: one message at the delegator, `handed in by submit`, still one 1.5 s on; a second engine on the same log, nothing seen: still one. |
-| D15 | — | live | — | not verified | As the contract now says it — by `spawn_agent`, the delegate's last message used — it has not run: the tools are not deployed. |
+| D15 | — | live | R9 | proven | Each given `agora:delegate`, by `spawn_agent` — `mcp__agora__spawn_agent`, `mcp.agora.spawn_agent`, `agora_spawn_agent`: the delegate's last message reached its caller by `session/prompt` (at 58, 57, 116), in two, two and three turns; each caller said the product. |
 | D16 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
 | D29 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
 | D31 | — | live | — | not verified | By `spawn_agent`, not run: the tools are not deployed. |
-| D51 | — | live | — | not verified | Not run: the tools are not deployed. |
+| D51 | — | live | R9 | not verified | Claude Code and Codex passed. opencode: its three `spawn_agent` calls were refused `quota`, Agora's cap on active executions, which R9's earlier cases and their delegates still filled; no delegate, the case timed out. |
+| D51 | — | live | R10 | proven | Each harness called Agora's four tools and none of its own — `mcp__agora__…`, `mcp.agora.…`, `agora_…` `spawn_agent`, `list_agents`, `stop_agent`, `send_message`; the list said its delegate working; `stopped <id>`; PONG came back (at 68, 94, 403). |
 
 ## Not covered
 
