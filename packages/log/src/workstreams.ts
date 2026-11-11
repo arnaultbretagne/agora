@@ -276,8 +276,6 @@ export class Workstreams implements Handler {
    */
   async command(workstream: string, command: Command, origin: 'person' | 'agora' = 'person'): Promise<Answer> {
     if (this.stopped) return { accepted: false, reason: 'unavailable' }
-    // docs/specs/log.md, "Native sub-agents": a native sub-stream takes no command of its own; its host's reach it.
-    if ((await this.store.hostOf(workstream)) !== null) return { accepted: false, reason: 'native' }
     // The approval a command settles, when it does: its position, and how (docs/specs/delegation.md, "Approval").
     let settles: { position: string; outcome: 'approved' | 'refused'; words?: string } | null = null
     // A merge card a command answers or cancels (docs/specs/merge.md).
@@ -287,6 +285,9 @@ export class Workstreams implements Handler {
     const catalogue = command.kind === 'Create' ? await this.executions.pools() : []
     return this.serial(workstream, async () => {
       if (this.blocked.has(workstream)) return { accepted: false, reason: 'unavailable' }
+      // docs/specs/log.md, "Native sub-agents": a native sub-stream takes no command of its own; its host's reach it.
+      // Read once the Workstream is known to admit commands: a storage outage answers `unavailable`, never an error.
+      if ((await this.store.hostOf(workstream)) !== null) return { accepted: false, reason: 'native' }
       const answer = await this.store.accept(workstream, command, async (state, tx) => {
         const current = state.current
         if (command.kind === 'Create') {

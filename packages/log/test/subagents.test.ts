@@ -58,6 +58,8 @@ const subagent = (lab: Lab, child: string, states: string[], timeoutMs = 15_000)
     const view = await viewOf(lab, child)
     return view && states.includes(String(view.subagent)) ? view : null
   }, timeoutMs)
+/** The projection brought up to the log: `lab.state` reads the log's fold, which runs ahead of the projector. */
+const projected = (lab: Lab, ws: string) => lab.workstreams.projections.run(ws)
 const oneHosted = (lab: Lab, ws: string, count = 1) => until(`${String(count)} sub-stream(s)`, async () => ((await hosted(lab, ws)).length === count ? hosted(lab, ws) : null))
 
 test('L128 Agora’s initialize: clientCapabilities holds subagents, an empty object, beside fs and terminal', async (t) => {
@@ -73,6 +75,7 @@ test('L129 an agent announcing a sub-agent during its turn, then its task, a tex
   const [row] = await oneHosted(lab, ws)
   const acp = await acpOf(lab, ws, row!.id)
   assert.deepEqual([row!.id, row!.parent, row!.depth, row!.host], [childWorkstream(ws, acp), ws, 1, ws])
+  await projected(lab, ws)
   const view = await subagent(lab, row!.id, ['idle'])
   assert.deepEqual([view.state, view.subagent, view.title, view.harness, object(view.native)?.host, view.execution], ['native', 'idle', 'Count the files', 'mock', ws, null])
   // Its thread: one turn, opened by its task, with its text and its tool.
@@ -98,6 +101,7 @@ test('L130 a sub-agent’s config_option_update, available_commands_update, usag
   assert.ok((await lab.write(ws, sub({ n: 1, settings: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
   const [row] = await oneHosted(lab, ws)
+  await projected(lab, ws)
   const view = await subagent(lab, row!.id, ['idle'])
   assert.equal(view.title, 'Count the files, as it names itself')
   const after = (await viewOf(lab, ws))!
@@ -117,6 +121,7 @@ test('L131 a sub-agent announcing one of its own; two announced in one turn: the
   assert.ok(working.count >= 2)
   await lab.turn(ws, 'done', 30_000)
   const rows = await oneHosted(lab, ws, 4)
+  await projected(lab, ws)
   const top = rows.filter((r) => r.parent === ws)
   const lower = rows.filter((r) => r.parent !== ws)
   assert.deepEqual([top.length, lower.length], [2, 2])
@@ -175,6 +180,7 @@ test('L133 Cancel on a sub-stream’s turn in progress, cancel advertised; with 
   const host = await lab.turn(ws, 'done', 20_000)
   assert.equal(host.status, 'done')
   assert.equal((await lab.state(ws)).held, false)
+  await projected(lab, ws)
   // A turn already ended.
   assert.deepEqual(await lab.command(ws, 'Cancel', { execution: execution.id, turn: turn.id }), { accepted: false, reason: 'stale_turn' })
   // None advertised.
@@ -200,6 +206,7 @@ test('L134 a sub-agent idle, then running again, then idle; one answering idle w
   assert.ok((await lab.write(ws, sub({ n: 1, error: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
   const rows = await oneHosted(lab, ws, 2)
+  await projected(lab, ws)
   const view = await subagent(lab, rows[1]!.id, ['failed'])
   assert.equal(view.subagent, 'failed')
   const [failed] = await turnsOf(lab, rows[1]!.id)
@@ -217,6 +224,7 @@ test('L135 a sub-agent running as its host’s execution ends; one never saying 
   await until('two live under the host', async () => (await below(lab, ws))?.live === 2)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)
   await until('the host ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  await projected(lab, ws)
   for (const row of rows) {
     const view = await subagent(lab, row.id, ['failed'])
     assert.equal(view.subagent, 'failed')
@@ -250,6 +258,7 @@ test('L137 a Write, a Configure, a Create and a Stop addressed to a native sub-s
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   await lab.turn(ws, 'done', 20_000)
   const [row] = await oneHosted(lab, ws)
+  await projected(lab, ws)
   const e = (await lab.state(ws)).current!
   const refused = { accepted: false, reason: 'native' }
   assert.deepEqual(await lab.command(row!.id, 'Write', { execution: execution.id, session: e.session }, { prompt: [{ type: 'text', text: 'to a sub-agent' }] }), refused)
@@ -267,6 +276,7 @@ test('L139 a rebuild of a host with native sub-streams: the same sub-streams, id
   assert.ok((await lab.write(ws, sub({ n: 1, count: 2, nested: true }))).accepted)
   await lab.turn(ws, 'done', 30_000)
   const rows = await oneHosted(lab, ws, 4)
+  await projected(lab, ws)
   for (const row of rows) await subagent(lab, row.id, ['idle'])
   await until('none live under the host', async () => (await below(lab, ws))?.live === 0)
   const snapshot = async () => {
@@ -323,6 +333,7 @@ test('S15 a native sub-stream’s transcript, read; one with no task: its task u
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   await lab.turn(ws, 'done', 20_000)
   const [row] = await oneHosted(lab, ws)
+  await projected(lab, ws)
   await subagent(lab, row!.id, ['idle'])
   const transcript = async (id: string) => (await read(lab.store.projector, id, 1, 100)).lines.map((l) => [l.kind, l.text])
   const own = await transcript(row!.id)
@@ -340,6 +351,7 @@ test('S15 a native sub-stream’s transcript, read; one with no task: its task u
   assert.ok((await lab.write(ws, sub({ n: 1, task: false }))).accepted)
   await until('its second turn done', async () => (await lab.state(ws)).turns.size === 2 && (await lab.state(ws)).active === null, 20_000)
   const rows = await oneHosted(lab, ws, 2)
+  await projected(lab, ws)
   await subagent(lab, rows[1]!.id, ['idle'])
   assert.deepEqual((await transcript(rows[1]!.id))[0], ['header', '## 1 · agent'])
 })
