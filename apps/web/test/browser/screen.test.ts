@@ -78,7 +78,7 @@ before(async () => {
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '80', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -1578,7 +1578,8 @@ const nav = (page: Page) => page.getByRole('navigation', { name: 'Workstreams' }
 const subagentLine = (page: Page, label: string) => thread(page).locator('[data-delegate]').filter({ hasText: label })
 
 test('U85 a Workstream whose agent announced two sub-agents, one working, one asking a permission; its root folded, then unfolded: waiting for you; both rows under it, each after its sub-agent mark, the first working, the second waiting for you', async () => {
-  const page = await fresh()
+  // A list of its own: nobody else's Workstream waits or works in it.
+  const page = await proxied('subagents-sidebar@example.org')
   await withSubagents(page, { n: 25, count: 2, permission: 2 })
   await subagentLine(page, 'Read the changelog').getByText('waiting for you').waitFor()
   // Folded: what waits under it comes up.
@@ -1598,7 +1599,8 @@ test('U85 a Workstream whose agent announced two sub-agents, one working, one as
 })
 
 test('U86 that Workstream’s thread: one line for each sub-agent at its announcement, with its title, a link to its sub-stream and its state; none of their text or tools; the model picker the Workstream’s own', async () => {
-  const page = await fresh()
+  // A list of its own: nobody else's Workstream waits or works in it.
+  const page = await proxied('subagents-thread@example.org')
   const id = await withSubagents(page, { n: 3, count: 2, settings: true })
   for (const title of ['Count the files', 'Read the changelog']) {
     const line = subagentLine(page, title)
@@ -1618,7 +1620,8 @@ test('U86 that Workstream’s thread: one line for each sub-agent at its announc
 })
 
 test('U87 a native sub-stream opened, working, cancel advertised; then cancelled; one that advertises none; one with no task: its parents, its task as from its parent, its text and tools, no composer, Read-only; Cancel, sent to its host; then cancelled and no Cancel; never a Cancel; its response alone', async () => {
-  const page = await fresh()
+  // A list of its own: nobody else's Workstream waits or works in it.
+  const page = await proxied('subagents-substream@example.org')
   const id = await withSubagents(page, { n: 25 })
   await subagentLine(page, 'Count the files').getByRole('link').click()
   await page.waitForURL((url) => /\/w\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(id))
@@ -1662,7 +1665,8 @@ test('U87 a native sub-stream opened, working, cancel advertised; then cancelled
 })
 
 test('U88 a permission pending in a native sub-stream; an option chosen: its card in the sub-stream’s thread; RespondPermission sent to its host with that request; the option answered', async () => {
-  const page = await fresh()
+  // A list of its own: nobody else's Workstream waits or works in it.
+  const page = await proxied('subagents-permission@example.org')
   const id = await withSubagents(page, { n: 2, permission: true })
   const line = subagentLine(page, 'Count the files')
   await line.getByText('waiting for you').waitFor()
