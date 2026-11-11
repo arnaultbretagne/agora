@@ -1039,6 +1039,11 @@ const delegatedTo = async (w: Workstream): Promise<string | null> => {
   }
   return null
 }
+/** A delegate left running holds a place among the executions until its deadline: each case stops its own. */
+const stopDelegate = async (delegate: string) => {
+  const current = fold((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]).current
+  if (current && !current.ended) await api('POST', `/api/workstreams/${delegate}/commands`, { id: randomUUID(), kind: 'Stop', target: { execution: current.id }, body: {} })
+}
 const toolLines = async (w: Workstream) =>
   (await w.entries())
     .filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
@@ -1073,6 +1078,7 @@ await check('D15', 'Delegation, each real harness: a task, its delegate’s last
     const state = await drained(w, 300_000)
     const said = await w.said()
     await w.stop()
+    await stopDelegate(delegate)
     assert(said.includes(String(x * y)), `${harness}: after its message, "${said.trim().slice(-160)}"`)
     // By Agora's `spawn_agent`, not a sub-agent of the harness's own.
     const started = (await toolLines(w)).filter((l) => /spawn_agent/i.test(l.title) && /agora/i.test(l.title))
@@ -1183,10 +1189,6 @@ await check('L122', 'A message during a long shell command, Claude Code and Code
 })
 
 // D29: a delegate asked for a long report: all of it reaches its delegator, which asks for no more.
-const stopDelegate = async (delegate: string) => {
-  const current = fold((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]).current
-  if (current && !current.ended) await api('POST', `/api/workstreams/${delegate}/commands`, { id: randomUUID(), kind: 'Stop', target: { execution: current.id }, body: {} })
-}
 
 await check('D29', 'Delegation, each real harness: a report of 30,000 characters, whole', async () => {
   const seen: string[] = []
@@ -1238,6 +1240,7 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
     const said = await w.said()
     const outcomes = await steeringOutcomes(w)
     await w.stop()
+    await stopDelegate(delegate)
     // The command's line open when the message came: its line only once it closed.
     const updates = entries.filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
     const opened = updates.find((x) => /FINISHED/.test(JSON.stringify((x.content.params as Json)?.update ?? {})) && String((x.content.params as Json)?.update?.sessionUpdate).startsWith('tool_call'))
