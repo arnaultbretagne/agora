@@ -1256,7 +1256,8 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
 
 // D51: each real harness drives a delegate by Agora's four tools, whose names are near its own sub-agents': it starts one
 // on a long command, lists, stops it, then writes to it — and uses none of its harness's own sub-agent tools. Billed.
-const NATIVE = /^(Agent|Task|SendMessage|TaskStop|ListAgents)\b|sub-?agent/i
+// A harness's own sub-agent tools, by the titles their lines bear: Claude Code's, Codex's, opencode's.
+const NATIVE = /^(Agent|Task|SendMessage|TaskStop|ListAgents)\b|^task\b|sub-?agent|spawn_agent|send_message|send_input|followup_task|wait_agent|list_agents|interrupt_agent|close_agent|stop_agent/i
 await check('D51', 'Delegation, each real harness: spawn_agent, list_agents, stop_agent and send_message of Agora’s, none of its own', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {

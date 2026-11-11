@@ -42,8 +42,11 @@ type Settled = { outcome: 'approved' } | { outcome: 'refused'; words: string } |
 interface Mark {
   readonly workstream: string
   readonly as: 'delegator' | 'delegate' | 'agora'
-  /** On a delegate's: the turn it wrote in. */
-  readonly turn?: string | null
+  /**
+   * On a delegate's last message: the turn it closes. A `submit` of the earlier contract carried the turn it was called
+   * in, which then sent nothing more; a `send_message` to `parent` carries none.
+   */
+  readonly turn?: string
 }
 
 const line = (text: string): string => text.split('\n').map((l) => l.trim()).find((l) => l !== '')?.slice(0, 80) ?? 'Delegate'
@@ -325,8 +328,7 @@ export class Delegations {
     const delegator = await this.delegatorOf(caller.workstream)
     if (to === 'parent' || (delegator !== null && to === delegator)) {
       if (delegator === null) throw new Refused('no_delegator')
-      const turn = (await this.store.state(caller.workstream)).active?.id ?? null
-      const written = await this.fromDelegate(delegator, caller.workstream, randomUUID(), message, turn)
+      const written = await this.fromDelegate(delegator, caller.workstream, randomUUID(), message, null)
       if (!written.accepted) throw new Refused(written.reason)
       return 'sent'
     }
@@ -369,18 +371,22 @@ export class Delegations {
     if (typeof args.to !== 'string' || args.to.trim() === '') throw new Refused('invalid_query: to')
     const to = args.to.trim().toLowerCase()
     await this.mine(caller, to)
-    const state = await this.store.state(to)
-    const turn = state.active
     const title = await this.titleOf(to)
-    if (!turn || !state.current || !['in_progress', 'uncertain'].includes(turn.status)) return `no turn to stop ${to} · ${title}`
-    const cancelled = await this.workstreams.command(
-      to,
-      { id: randomUUID(), kind: 'Cancel', target: { execution: state.current.id, turn: turn.id }, body: { from: { workstream: caller.workstream, as: 'delegator' } } },
-      'agora',
-    )
-    // Ended between the look and the Cancel: nothing left to stop.
-    if (!cancelled.accepted) return `no turn to stop ${to} · ${title}`
-    return `stopped ${to} · ${title}`
+    // Twice at most: the turn seen may end, and the next start, between the look and the Cancel.
+    for (let tries = 0; tries < 2; tries++) {
+      const state = await this.store.state(to)
+      const turn = state.active
+      if (!turn || !state.current || !['in_progress', 'uncertain'].includes(turn.status)) return `no turn to stop ${to} · ${title}`
+      const cancelled = await this.workstreams.command(
+        to,
+        { id: randomUUID(), kind: 'Cancel', target: { execution: state.current.id, turn: turn.id }, body: { from: { workstream: caller.workstream, as: 'delegator' } } },
+        'agora',
+      )
+      if (cancelled.accepted) return `stopped ${to} · ${title}`
+      if (cancelled.reason === 'stopped') throw new Refused('delegate_stopped')
+      if (cancelled.reason !== 'stale_turn') throw new Refused(String(cancelled.reason ?? 'unavailable'))
+    }
+    return `no turn to stop ${to} · ${title}`
   }
 
   /**
@@ -423,7 +429,9 @@ export class Delegations {
     let count = 0
     for (const [delegate, known] of this.followed) {
       if (known.delegator !== caller) continue
-      if (delegationOf(await this.store.state(delegate)) === 'working') count++
+      const state = await this.store.state(delegate)
+      // From its Cancel on, a turn holds no place: its agent may take its time to say it stopped.
+      if (delegationOf(state) === 'working' && !(state.held && state.active)) count++
     }
     return count
   }
@@ -522,7 +530,7 @@ export class Delegations {
   // ---------------------------------------------------------------- what a delegate says
 
   private async fromDelegate(delegator: string, delegate: string, id: string, words: string, turn: string | null): Promise<Answer> {
-    return this.write(delegator, id, { workstream: delegate, as: 'delegate', turn }, `From your delegate ${delegate} "${await this.titleOf(delegate)}", not the person:`, words)
+    return this.write(delegator, id, { workstream: delegate, as: 'delegate', ...(turn !== null ? { turn } : {}) }, `From your delegate ${delegate} "${await this.titleOf(delegate)}", not the person:`, words)
   }
 
   // ---------------------------------------------------------------- what comes back by itself
@@ -566,6 +574,8 @@ export class Delegations {
       return e?.stopped || ours ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'cancelled'), 'The person cancelled its turn.')
     }
     if (!this.holdsAnothers(entries, turn, next)) return null
+    // A turn of the earlier contract in which the delegate called `submit` sent nothing more: said then, said for good.
+    if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return null
     const words = lastMessageOf(entries, turn, next)
     const id = identity(delegate, turn.id, 'last message')
     return words === '' ? this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.') : this.fromDelegate(delegator, delegate, id, words, turn.id)

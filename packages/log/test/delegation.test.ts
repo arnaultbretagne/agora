@@ -990,7 +990,7 @@ test('L127 a Write of Agora’s during a turn, to an agent that says it: one ste
   assert.match(exchange!.agent, new RegExp(`\\[during this turn: From your delegate ${delegate} .*\\n?into the turn\\]`))
 })
 
-test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alone, as its Session opens, before its instructions: the four tools, list_agents alone read-only; send_message alone', async (t) => {
+test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alone, as its Session opens, before its instructions; from one holding both: the four tools, list_agents alone read-only; send_message alone; the four, each once', async (t) => {
   const { lab, url, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const tools = (await c.listTools()).tools
@@ -1005,6 +1005,11 @@ test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alo
   const opened = await until('the delegate’s Session', async () => ((await lab.state(delegate)).current?.session ? (await lab.state(delegate)).current : null))
   const listed = (await (await client(t, url, opened.id)).listTools()).tools
   assert.deepEqual(listed.map((x) => [x.name, Object.keys(x.inputSchema.properties ?? {}), x.inputSchema.required]), [['send_message', ['to', 'message'], ['to', 'message']]])
+  // A delegate that may delegate holds `send_message` by both its rights: listed once.
+  const both = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 3', harness: 'mock', rights: ['agora:delegate'] } })))
+  const holder = await until('its Session', async () => ((await lab.state(both)).current?.session ? (await lab.state(both)).current : null))
+  assert.deepEqual(holder.profiles, ['agora:delegate', 'agora:submit'])
+  assert.deepEqual((await (await client(t, url, holder.id)).listTools()).tools.map((x) => x.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents'])
 })
 
 test('M11 a spawn_agent call Agora holds: an SSE stream, progress then the answer; another message, one JSON answer', async (t) => {
@@ -1069,8 +1074,27 @@ test('D46 stop_agent on a delegate whose turn runs, a permission pending in it; 
   // The person's own Cancel is told to its delegator within a second (D27): none of this one is.
   await sleep(1_500)
   assert.equal((await fromOthers(lab, ws)).length, 0, 'nothing written to its delegator')
-  assert.match(text(await c.callTool({ name: 'send_message', arguments: { to: delegate, message: 'go on' } })), new RegExp(`^sent ${delegate} · `))
+  assert.match(text(await c.callTool({ name: 'send_message', arguments: { to: delegate, message: '/sleep 20' } })), new RegExp(`^sent ${delegate} · `))
   await until('its next turn', async () => (await prompts(lab, delegate)).length === 2, 20_000)
+  // Its delegator's Cancel silenced that turn alone: the person's, on the next, is told.
+  const next = await working(lab, delegate)
+  assert.ok((await lab.command(delegate, 'Cancel', { execution: next.id, turn: (await lab.state(delegate)).active!.id })).accepted)
+  const told = (await manyFromOthers(lab, ws, 1, 20_000)).find((u) => u.from === delegate)
+  assert.deepEqual([told?.as, /: The person cancelled its turn\.$/.test(wordsOf(told!))], ['agora', true])
+})
+
+test('D46 stop_agent on a delegate that takes its time to stop, two others working: from its Cancel on, a place among the three is free', async (t) => {
+  const { lab, url, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  // It ends its turn only 15 s on, cancelled or not: its Cancel is written, its turn still in progress.
+  const slow = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/stubborn 15', harness: 'mock' } })))
+  for (const n of [1, 2]) delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: `/sleep 20 ${String(n)}`, harness: 'mock' } })))
+  await working(lab, slow)
+  const full = (await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a fourth', harness: 'mock' } })) as Text
+  assert.deepEqual([full.isError, text(full)], [true, 'too_many_delegates'])
+  assert.match(text(await c.callTool({ name: 'stop_agent', arguments: { to: slow } })), new RegExp(`^stopped ${slow} · `))
+  assert.equal((await lab.state(slow)).active?.status, 'in_progress', 'its agent has not answered yet')
+  delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a fourth', harness: 'mock' } })))
 })
 
 test('D47 stop_agent on a delegate with no turn in progress; on one the person stopped; on a Workstream that is not the caller’s delegate: no turn to stop, no line sent; delegate_stopped; not_a_delegate', async (t) => {
@@ -1134,19 +1158,50 @@ test('D49 list_agents with no delegate; with three — one working, one idle, on
   void held
 })
 
-test('D50 a delegate’s send_message to its delegator’s id; to another delegate of its delegator’s; parent from an execution that is no delegate: sent, as to parent; not_a_delegate; no_delegator', async (t) => {
+test('D50 a delegate’s send_message to its delegator’s id; to another delegate of its delegator’s, and stop_agent on it, holding agora:delegate itself; a delegator’s to its delegate’s own delegate; parent from an execution that is no delegate: sent, as to parent; not_a_delegate each time; no_delegator', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
-  const one = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 20 one', harness: 'mock' } })))
+  // The first may delegate itself: only whose delegate the other is keeps it from it.
+  const one = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 20 one', harness: 'mock', rights: ['agora:delegate'] } })))
   const two = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 20 two', harness: 'mock' } })))
   const d = await client(t, url, (await working(lab, one)).id)
   await working(lab, two)
   assert.equal(text(await d.callTool({ name: 'send_message', arguments: { to: ws, message: 'by its id' } })), 'sent')
   const [user] = await manyFromOthers(lab, ws, 1)
   assert.deepEqual([user?.from, user?.as, wordsOf(user!)], [one, 'delegate', 'by its id'])
-  const sibling = (await d.callTool({ name: 'send_message', arguments: { to: two, message: 'to a sibling' } })) as Text
-  assert.deepEqual([sibling.isError, text(sibling)], [true, 'not_a_delegate'])
-  const orphan = (await c.callTool({ name: 'send_message', arguments: { to: 'parent', message: 'to nobody' } })) as Text
-  assert.deepEqual([orphan.isError, text(orphan)], [true, 'no_delegator'])
-  assert.equal((await kinds(lab, two, 'command')).filter((x) => x.content.kind === 'Write').length, 1, 'the sibling was written its instructions alone')
+  const refusedAs = async (who: Client, name: string, args: Record<string, unknown>, reason: string) => {
+    const answer = (await who.callTool({ name, arguments: args })) as Text
+    assert.deepEqual([answer.isError, text(answer)], [true, reason], `${name} ${JSON.stringify(args)}`)
+  }
+  await refusedAs(d, 'send_message', { to: two, message: 'to a sibling' }, 'not_a_delegate')
+  await refusedAs(d, 'stop_agent', { to: two }, 'not_a_delegate')
+  const below = delegateOf(text(await d.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 20 below', harness: 'mock' } })))
+  await working(lab, below)
+  await refusedAs(c, 'send_message', { to: below, message: 'past its delegate' }, 'not_a_delegate')
+  await refusedAs(c, 'stop_agent', { to: below }, 'not_a_delegate')
+  await refusedAs(c, 'send_message', { to: 'parent', message: 'to nobody' }, 'no_delegator')
+  assert.equal((await lab.state(two)).active?.status, 'in_progress', 'the sibling still at work')
+  assert.equal((await lab.state(below)).active?.status, 'in_progress', 'the one below still at work')
+  for (const w of [two, below]) assert.equal((await kinds(lab, w, 'command')).filter((x) => ['Write', 'Cancel'].includes(String(x.content.kind))).length, 1, 'its instructions alone')
+})
+
+test('D52 a turn of the earlier contract, done with a submit in it; then a fresh engine, as after a restart: nothing more written to its delegator, then or after', async (t) => {
+  const { lab, url, ws, execution, delegations } = await started(t, ['agora:delegate'])
+  const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 2', harness: 'mock' } })))
+  await working(lab, delegate)
+  // As that contract's `submit` wrote it: a message of the delegate's marked with the turn it was called in.
+  const turn = (await lab.state(delegate)).active!.id
+  assert.ok((await delegations.write(ws, randomUUID(), { workstream: delegate, as: 'delegate', turn }, `From your delegate ${delegate} "/sleep 2", not the person:`, 'handed in by submit')).accepted)
+  await lab.turn(delegate, 'done', 20_000)
+  await manyFromOthers(lab, ws, 1)
+  await sleep(1_500)
+  assert.deepEqual((await fromOthers(lab, ws)).map(wordsOf), ['handed in by submit'])
+  // Another engine, as at the first start of this contract: it reads the delegate's past with nothing seen.
+  const fresh = new Delegations(lab.workstreams, { manual: true })
+  await fresh.recover()
+  await fresh.start()
+  await fresh.tick(true)
+  await sleep(1_000)
+  assert.deepEqual((await fromOthers(lab, ws)).map(wordsOf), ['handed in by submit'])
+  // The same turn with no such message sends its last one: D26, and after a restart D28.
 })

@@ -633,7 +633,7 @@ test('U65 a `spawn_agent` answer read as a harness gives it: the text alone, or 
   assert.equal(startedDelegate('sent'), null, 'a message to its delegator names no delegate')
 })
 
-test('U84 a send_message and a stop_agent naming a delegate, a send_message to parent, a list_agents, a delegate line of an earlier contract: the first two and the last a delegate’s line; the others as any tool’s', () => {
+test('U84 a send_message and a stop_agent naming a delegate, a send_message to parent, a list_agents, a delegate line of an earlier contract, a command naming a tool: the first two and the earlier one a delegate’s line; the others as any tool’s', () => {
   const id = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
   const line = (position: number, title: string, rawOutput: string) => ({
     kind: 'element',
@@ -649,6 +649,10 @@ test('U84 a send_message and a stop_agent naming a delegate, a send_message to p
       line(4, 'mcp__agora__send_message', 'sent'),
       line(5, 'mcp__agora__list_agents', `${id} · Review the change · working`),
       line(6, 'delegate', `started ${id} · Review the change`),
+      // A command that names a tool and quotes its answer is no delegate's line; nor is a list, whatever it prints.
+      line(7, 'grep -n spawn_agent entries.json', `12: started ${id} · Review the change`),
+      line(8, 'mcp.agora.list_agents', `sent ${id} · Review the change`),
+      line(9, 'mcp.agora.spawn_agent', `started ${id} · Review the change`),
     ]),
   )
   const parts = (messages.find((m) => m.role === 'assistant')!.content as unknown as { type: string; artifact?: { title?: string; delegate?: { id: string; title: string } } }[]).filter((p) => p.type === 'tool-call')
@@ -658,6 +662,9 @@ test('U84 a send_message and a stop_agent naming a delegate, a send_message to p
     ['mcp__agora__send_message', null],
     ['mcp__agora__list_agents', null],
     ['delegate', { id, title: 'Review the change' }],
+    ['grep -n spawn_agent entries.json', null],
+    ['mcp.agora.list_agents', null],
+    ['mcp.agora.spawn_agent', { id, title: 'Review the change' }],
   ])
   assert.deepEqual(delegatesOf(crafted([line(2, 'mcp__agora__send_message', `sent ${id} · Review the change`), line(5, 'mcp__agora__list_agents', `${id} · Review the change · working`)])), [id])
 })

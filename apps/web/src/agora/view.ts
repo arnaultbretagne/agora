@@ -406,10 +406,11 @@ const outputOf = (tool: Json): string =>
   tool.rawOutput === undefined ? contentText(tool.content) : typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)
 
 /**
- * A line that may name a delegate, by its title as each harness gives it — `mcp__agora__spawn_agent`, `agora_send_message`…:
- * `spawn_agent`, `send_message`, `stop_agent`, and the `delegate` of an earlier contract.
+ * A line that may name a delegate, by its title as each harness gives it — `mcp__agora__spawn_agent`, `mcp.agora.send_message`,
+ * `agora_stop_agent`…: the tool's name alone, `spawn_agent`, `send_message`, `stop_agent`, or the `delegate` of an earlier
+ * contract. A command that merely names one, with words around it, is no such line.
  */
-const delegating = (tool: Json): boolean => /spawn_agent|send_message|stop_agent|delegate/i.test(text(tool.title))
+const delegating = (tool: Json): boolean => /^\S*?(?<![a-z0-9])(?:spawn_agent|send_message|stop_agent|delegate)$/i.test(text(tool.title).trim())
 
 /** The delegates this Workstream's lines name: whose rows their lines read. */
 export function delegatesOf(state: ThreadState): string[] {
