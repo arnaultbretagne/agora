@@ -61,12 +61,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-      # The client's browser tests (apps/web/test/browser) drive Playwright's headless Chromium.
+      # The client's browser tests (apps/web/test/browser) drive Playwright's headless Chromium. The
+      # runner's image already holds the libraries Chromium needs: no system package is installed,
+      # so a run never depends on Ubuntu's mirrors.
       - name: Typecheck and test every workspace, the client in a browser
         if: steps.checked.outputs.done != 'true'
         run: |
           npm ci --no-audit --no-fund
-          npx -w @agora/web playwright install --with-deps --only-shell chromium
+          npx -w @agora/web playwright install --only-shell chromium
           npm run check
 
   image:
