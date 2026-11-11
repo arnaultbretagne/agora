@@ -25,7 +25,7 @@ import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
-import { acceptsPrompt, isApproval, isMerge, STEERING, waited, type Execution, type State } from './state.ts'
+import { acceptsPrompt, childWorking, isApproval, isMerge, STEERING, waited, type Execution, type State } from './state.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, validate, type Reason } from './acp.ts'
@@ -276,6 +276,8 @@ export class Workstreams implements Handler {
    */
   async command(workstream: string, command: Command, origin: 'person' | 'agora' = 'person'): Promise<Answer> {
     if (this.stopped) return { accepted: false, reason: 'unavailable' }
+    // docs/specs/log.md, "Native sub-agents": a native sub-stream takes no command of its own; its host's reach it.
+    if ((await this.store.hostOf(workstream)) !== null) return { accepted: false, reason: 'native' }
     // The approval a command settles, when it does: its position, and how (docs/specs/delegation.md, "Approval").
     let settles: { position: string; outcome: 'approved' | 'refused'; words?: string } | null = null
     // A merge card a command answers or cancels (docs/specs/merge.md).
@@ -431,6 +433,12 @@ export class Workstreams implements Handler {
           return { execution: current.id, body: { profiles } }
         }
         if (command.kind === 'Cancel') {
+          // A native sub-agent's turn, where its adapter offers it: its own `session/cancel`, the host's turn going on.
+          const child = [...state.children.values()].find((c) => c.execution === current.id && c.turns.some((t) => t.id === command.target.turn))
+          if (child) {
+            if (!child.cancel || child.turns.at(-1)?.status !== 'in_progress' || child.turns.at(-1)?.id !== command.target.turn) return 'stale_turn'
+            return { execution: current.id, session: child.session ?? undefined, line: { method: 'session/cancel', params: { sessionId: child.acpId } } }
+          }
           if (!state.active || !['in_progress', 'uncertain'].includes(state.active.status) || command.target.turn !== state.active.id)
             return 'stale_turn'
           // Who cancels is Agora's alone to say: a delegator's `stop_agent` (docs/specs/delegation.md, "Stopping and listing").
@@ -734,7 +742,7 @@ export class Workstreams implements Handler {
       }
       const sent = await this.dispatch(workstream, entry, connection)
       state = await this.store.state(workstream)
-      if (sent && entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection)
+      if (sent && entry.method === 'session/cancel') await this.cancelPermissions(workstream, e.id, connection, String(object(entry.content.params)?.sessionId))
     }
   }
 
@@ -749,7 +757,8 @@ export class Workstreams implements Handler {
     const blocks = object(message.content.body)?.prompt
     const session = e.session
     if (state.active) {
-      if (state.active.status !== 'in_progress' || !e.steering || state.unsteerable || state.tools.size > 0 || !steerable(blocks)) return
+      // While a sub-agent of the Session works, its agent may be waiting for it with no tool line to show it.
+      if (state.active.status !== 'in_progress' || !e.steering || state.unsteerable || state.tools.size > 0 || childWorking(state, e.id) || !steerable(blocks)) return
       // docs/specs/files.md, "References": a message's files are given back before it becomes a line of its own.
       const params = { sessionId: e.acpId, prompt: object((await this.store.expand(message)).body)?.prompt, _meta: { steering: { idleBehavior: 'promptRequired' } } }
       await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: STEERING, params }, session, message.command ?? undefined))
@@ -762,11 +771,16 @@ export class Workstreams implements Handler {
     await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: 'session/prompt', params: { sessionId: e.acpId, prompt } }, session, message.command ?? undefined))
   }
 
-  /** ACP: once `session/cancel` is sent, every pending permission of the execution is answered `cancelled`. */
-  private async cancelPermissions(workstream: string, execution: string, connection: string): Promise<void> {
+  /**
+   * ACP: once `session/cancel` is sent, every pending permission of the session cancelled is answered `cancelled` — a
+   * native sub-agent's own when it is the one cancelled, the Session's and none of its sub-agents' otherwise.
+   */
+  private async cancelPermissions(workstream: string, execution: string, connection: string, acpId: string): Promise<void> {
     const state = await this.store.state(workstream)
     for (const permission of [...state.permissions.values()]) {
       if (permission.execution !== execution) continue
+      const asked = String(object(permission.content.params)?.sessionId)
+      if (state.children.has(acpId) ? asked !== acpId : state.children.has(asked)) continue
       const line = await this.store.transaction(workstream, (tx) =>
         tx.outgoing(execution, { id: permission.rpc_id, result: { outcome: { outcome: 'cancelled' } } }, permission.session ?? undefined),
       )
@@ -856,7 +870,8 @@ export class Workstreams implements Handler {
       await this.store.transaction(workstream, (tx) =>
         tx.outgoing(e.id, {
           method: 'initialize',
-          params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'agora', version: '1' } },
+          // `subagents`: each sub-agent its harness starts is announced, and speaks under a session id of its own (docs/specs/log.md, "Native sub-agents").
+          params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, subagents: {} }, clientInfo: { name: 'agora', version: '1' } },
         }),
       )
       return
@@ -915,12 +930,16 @@ export class Workstreams implements Handler {
       }
       const state = tx.state
       const command = tx.entries.find((x) => x.kind === 'command' && x.command === entry.command)
+      // A native sub-agent's cancellation stands by its own turn, not its host's.
+      const cancelled = entry.method === 'session/cancel' ? state.children.get(String(object(entry.content.params)?.sessionId)) : undefined
       const staleCancel =
         entry.method === 'session/cancel' &&
-        (!state.active ||
-          !['in_progress', 'uncertain'].includes(state.active.status) ||
-          state.active.session !== entry.session ||
-          (command?.content.kind === 'Cancel' && object(command.content.target)?.turn !== state.active.id))
+        (cancelled
+          ? cancelled.turns.at(-1)?.status !== 'in_progress'
+          : !state.active ||
+            !['in_progress', 'uncertain'].includes(state.active.status) ||
+            state.active.session !== entry.session ||
+            (command?.content.kind === 'Cancel' && object(command.content.target)?.turn !== state.active.id))
       // An answer goes to that very request occurrence, and only the first answer written for it.
       const permission = entry.request_position ? state.requestPositions.get(entry.request_position) : undefined
       const first = tx.entries.find(

@@ -28,6 +28,7 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/fetch [METHOD] URL [BODY]` | A request through `HTTPS_PROXY`, like a real harness (`docs/specs/credentials.md`); answers with what came back. GET by default. |
 | `/words N` | One message of N characters. |
 | `/turn-error` | Answers the prompt with an error of its own (-32000) and keeps running. |
+| `/sub {json}` | Sub-agents of its own, reported as an adapter implementing ACP's "Subagent Sessions" reports them (`docs/specs/log.md`, "Native sub-agents"): each announced on its parent's stream, its task, text, tool and permission under a session id of its own, its state on its parent's stream. `n` seconds of work, `count` side by side, `permission`, `nested`, `task: false` (no task, as Codex), `cancel: false`, `background`, `again`, `error`, `silent` (never idle), `settings` (settings, commands, usage and a title of its own). A `session/cancel` naming one stops it alone. |
 | `/spawn_agent {json}`, `/send_message {json}`, `/stop_agent {json}`, `/list_agents` | A call to that tool of Agora's MCP server at `AGORA_MOCK_MCP`, like a real harness (`docs/specs/delegation.md`): its tool line, the call — the execution named by the `sub` of `~/.agora/access.json`, as the gateway names it —, then its answer on the line and in a message. |
 
 During a turn it takes `_session/steering`, answers `injected`, and says what it heard the next time it

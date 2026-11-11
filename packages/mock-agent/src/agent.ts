@@ -73,6 +73,8 @@ const home = process.env.HOME ?? '/tmp'
 const sessions = new Map<string, Session>()
 const turns = new Map<string, Turn>()
 const outgoing = new Map<Id, (message: Message) => void>()
+/** The sub-agents at work, by their own session id: what a `session/cancel` naming one stops (ACP, "Subagent Sessions"). */
+const subagents = new Map<string, { cancelled: boolean; wake: () => void }>()
 let initialized = false
 let nextOutgoing = 1
 /** The id of the prompt being answered, for the behaviours that write its answer themselves. */
@@ -193,6 +195,97 @@ function hear(session: Session, turn: Turn): void {
 }
 
 /** Waits up to `ms`, returning early (with true) when the turn is cancelled. */
+/** What `/sub` asks of each sub-agent. */
+interface SubOptions {
+  /** Seconds of work, 1 by default; how many run side by side, 1 by default. */
+  n?: number
+  count?: number
+  title?: string
+  /** It asks a permission, and waits for the answer. */
+  permission?: boolean
+  /** It starts a sub-agent of its own. */
+  nested?: boolean
+  /** No task is reported, as Codex; no `cancel` is offered. */
+  task?: boolean
+  cancel?: boolean
+  /** Its parent ends its turn without waiting for it; or goes on that many seconds once its sub-agents are done. */
+  background?: boolean
+  after?: number
+  /** Once idle, it works again, then is idle again; it ends in error; it never says it is idle. */
+  again?: boolean
+  error?: boolean
+  silent?: boolean
+  /** It gives settings, commands, a usage and a title of its own. */
+  settings?: boolean
+}
+
+/**
+ * One sub-agent, as an adapter that implements ACP's "Subagent Sessions" reports it: announced on its parent's stream,
+ * its task, its text, a tool and its permission under a session id of its own, then its state on its parent's stream.
+ */
+async function subagent(parent: string, id: string, options: SubOptions): Promise<void> {
+  const title = options.title ?? 'Count the files'
+  const me = { cancelled: false, wake: () => {} }
+  subagents.set(id, me)
+  const state = (value: Record<string, unknown>) => update(parent, { sessionUpdate: 'subagent_update', sessionId: id, state: value })
+  const rest = (ms: number) =>
+    new Promise<void>((resolve) => {
+      if (me.cancelled) return resolve()
+      const timer = setTimeout(resolve, ms)
+      me.wake = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
+  update(parent, { sessionUpdate: 'subagent_update', sessionId: id, title, description: 'general-purpose', capabilities: options.cancel === false ? {} : { cancel: {} }, state: { state: 'running' } })
+  if (options.task !== false)
+    update(id, { sessionUpdate: 'session_message', messageId: `task-${id}`, senderSessionId: parent, recipientSessionId: id, senderMessageId: `task-${id}`, content: [{ type: 'text', text: `${title}, and say how many.` }] })
+  if (options.settings) {
+    update(id, { sessionUpdate: 'config_option_update', configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'sub-model', options: [{ value: 'sub-model', name: 'Sub model' }] }] })
+    update(id, { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'sub-only', description: 'A command of the sub-agent alone' }] })
+    update(id, { sessionUpdate: 'usage_update', used: 4242, size: 9999 })
+    update(id, { sessionUpdate: 'session_info_update', title: `${title}, as it names itself` })
+  }
+  say(id, `Working on: ${title}.`)
+  const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+  update(id, { sessionUpdate: 'tool_call', toolCallId, title: 'ls -1 | wc -l', kind: 'execute', status: 'in_progress' })
+  if (options.permission) {
+    state({ state: 'requires_action' })
+    await Promise.race([
+      request('session/request_permission', {
+        sessionId: id,
+        toolCall: { toolCallId, title: 'ls -1 | wc -l', kind: 'execute', status: 'pending' },
+        options: [
+          { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+        ],
+      }),
+      new Promise<void>((resolve) => {
+        me.wake = resolve
+      }),
+    ])
+    if (!me.cancelled) state({ state: 'running' })
+  }
+  if (options.nested && !me.cancelled) await subagent(id, `${id}-below`, { n: 1, title: `${title}, one level down` })
+  await rest((options.n ?? 1) * 1000)
+  if (me.cancelled) {
+    update(id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' })
+    subagents.delete(id)
+    return state({ state: 'idle', stopReason: 'cancelled' })
+  }
+  update(id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' })
+  say(id, 'Done: 7 files.')
+  if (options.silent) return
+  state(options.error ? { state: 'idle', stopReason: 'error', error: { code: -32000, message: 'the sub-agent failed' } } : { state: 'idle', stopReason: 'end_turn' })
+  if (options.again) {
+    state({ state: 'running' })
+    say(id, 'One more look.')
+    await rest(300)
+    state({ state: 'idle', stopReason: 'end_turn' })
+  }
+  subagents.delete(id)
+}
+
 function pause(turn: Turn, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     if (turn.cancelled) return resolve(true)
@@ -508,6 +601,24 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, reply)
       return 'end_turn'
     }
+    case '/sub': {
+      // /sub {json}: sub-agents of its own, as claude-agent-acp and codex-acp report theirs to a client that declared
+      // `subagents` (docs/specs/log.md, "Native sub-agents"); a cancelled turn stops none of them, as Claude Code's.
+      const options = JSON.parse(text.trim().slice('/sub'.length).trim() || '{}') as SubOptions
+      const stem = `sub-${randomUUID().slice(0, 8)}`
+      const all = Promise.all(Array.from({ length: options.count ?? 1 }, (_, i) => subagent(session.id, `${stem}-${String(i + 1)}`, { ...options, title: options.title ?? ['Count the files', 'Read the changelog', 'List the tests'][i % 3]! })))
+      if (!options.background) {
+        const cancelled = await Promise.race([all.then(() => false), new Promise<boolean>((resolve) => {
+          if (turn.cancelled) return resolve(true)
+          turn.wake = () => resolve(true)
+        })])
+        if (cancelled) return 'cancelled'
+        if (options.after !== undefined && (await pause(turn, options.after * 1000))) return 'cancelled'
+      }
+      remember(session, 'agent', 'Sub-agents done.')
+      say(session.id, options.background ? 'Sub-agents started.' : 'Sub-agents done.')
+      return 'end_turn'
+    }
     case '/spawn_agent':
     case '/send_message':
     case '/stop_agent':
@@ -708,6 +819,13 @@ async function handle(message: Message): Promise<void> {
       return
     }
     case 'session/cancel': {
+      // A sub-agent's own: it stops, its parent's turn goes on.
+      const sub = subagents.get(String(params.sessionId))
+      if (sub !== undefined) {
+        sub.cancelled = true
+        sub.wake()
+        return
+      }
       const turn = turns.get(String(params.sessionId))
       if (turn !== undefined) {
         turn.cancelled = true
