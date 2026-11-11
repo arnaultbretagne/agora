@@ -11,6 +11,7 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | R3 | 2026-11-02 | `15b6b66` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6, each test on a database of its own. The search's first step reads `objects_text`; S1–S10 are R2's tests, unchanged. |
 | R5 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; a real message into a running turn, through the mock agent. |
 | R6 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; a real delegation in the lab, its `submit` as its delegator's own turn and sent into a turn. |
+| R7 | 2026-11-11 | `c0d5049` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; S15 on the lab, the mock agent reporting a sub-agent of its own. |
 
 ## Cases
 
@@ -49,3 +50,4 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | S11 | — | local | R3 | proven | On `the Kube cluster`, `a kube node`, `k.be written as such`: `kube` 1 line; `(?i)KUBE` 2; `(?i)^A KUBE` 1; `***=k.be` 1; each answered 200. |
 | S14 | — | local | R5 | proven | Lines 1 to 10: `## 1 · you`, `/sleep 2`, `## 1 · agent`, `… second 1/2`, `## 1 · you, during the turn`, `also a needle` of kind `user`, `## 1 · agent`, `Heard: also a needle.`, `… second 2/2`, `Slept 2 s.`; the same once rebuilt; `a needle` found at 6 and 8. |
 | S13 | — | local | R6 | proven | The delegate's first header ending `· delegator`, then `/sleep 5` of kind `user`. The delegator's: a header ending `· delegate`, then `count the quokkas`; `## n · delegate, during the turn`, then `count the wombats`, both of kind `user`. No line opening `From your `. `search` `wombats`: that line. |
+| S15 | — | local | R7 | proven | Its transcript: `## 1 · <date> · parent`, `Count the files, and say how many.`, `## 1 · agent`, `Working on: Count the files.`, `[tool: ls -1 \| wc -l]`, `Done: 7 files.`; none of them in its host's. With no task: `## 1 · agent` first. |

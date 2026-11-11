@@ -42,6 +42,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R34 | 2026-11-09 | `780f811` | unit, local | `npm run check`, with `npm run test:browser`, all green, in the pull request's CI (run 42651457112): Node 24.22.2, PostgreSQL 17.11, Playwright's Chromium; the tests sending with Ctrl or Cmd and Enter; for U83 the refusal fulfilled in the browser 1.5 s late. Before it, U82 failed on the attachment not added again: the Workstream just opened had no adapter until its view came; fixed. The same tree's first run failed on B1 (`packages/log`), which passed on the two runs before it, and stopped before the browser cases. |
 | R35 | 2026-11-09 | `adbccfa` | unit, local | `npm run check`, with `npm run test:browser`, all green, in the pull request's CI (run 42655554205): Node 24.22.2, PostgreSQL 17.11, Playwright's Chromium; a reason said only in its Workstream, the messages given back in a list; for U83 the refusal held in the browser until the other Workstream is shown. The same tree's first run, at `4555444`, failed on B1 (`packages/log`), as one of R34's did; it passed here. |
 | R36 | 2026-11-11 | `f433f48` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent calling Agora's MCP server by `/spawn_agent`. |
+| R37 | 2026-11-11 | `c0d5049` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent reporting sub-agents of its own by `/sub`. |
 
 ## Cases
 
@@ -186,6 +187,12 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U65 | — | unit | R36 | proven | `started <id> · Review the change`, `sent <id> · …`, `stopped <id> · …`, `no turn to stop <id> · …`, and the first inside a result's JSON: the id and the title; `refused: …` and `sent` alone: none. |
 | U65 | — | local | R36 | proven | As R30, the agent's call a `spawn_agent`. |
 | U84 | — | unit | R36 | proven | `mcp__agora__send_message` answering `sent <id> · …`, `agora_stop_agent` answering `stopped <id> · …`, `delegate` and `mcp.agora.spawn_agent` answering `started <id> · …`: each a delegate's line, with that id and title. `mcp__agora__send_message` answering `sent`, `mcp__agora__list_agents`, `mcp.agora.list_agents` answering `sent <id> · …`, and `grep -n spawn_agent entries.json` quoting `started <id> · …`: none. |
+| U85 | — | local | R37 | proven | Two sub-agents, the second asking a permission: folded, "waiting for you" on the root, one row; unfolded, three rows, `sub-agent Count the files` with its working dot and `sub-agent Read the changelog` "waiting for you", no dot. |
+| U86 | — | unit | R37 | proven | A `subagent` element: a part with the sub-stream's id and title; `working` and `waiting` `in_progress`, `idle` `completed` with its result, `failed` an error; out of a fold; its sub-stream among those whose rows are read. |
+| U86 | — | local | R37 | proven | A line for each, a link `/w/<id>`, "working" then "idle"; no `Working on:`, no `ls -1 \| wc -l` in the host's thread; no `sub-model` in its settings, its `usage` null, no "Sub model" in its picker. |
+| U87 | — | unit | R37 | proven | Not open, no Create, read-only, no reason; Cancel for its turn in progress with `cancel` true, none with false or once done; its pending permission whatever its Session; a turn with no task: one `assistant` message, any other turn `user` then `assistant`. |
+| U87 | — | local | R37 | proven | Its parent in the header, "working"; `From /sub {…}` over its task; its text and its tool; no composer, no model picker, no Stop; "Read-only: a sub-agent of “/sub {…}” takes no message."; **Cancel** clicked: "cancelled", no Cancel, one Cancel in its host's log and no entry in its own; its line in its host's thread "cancelled". One with no `cancel` and no task: no Cancel, no "From", then "idle". |
+| U88 | — | local | R37 | proven | "waiting for you" on its line and in its header; **Allow** clicked: a RespondPermission in its host's log, none in its own; "idle", the button gone. |
 
 ## Not covered
 
