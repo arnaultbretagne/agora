@@ -71,6 +71,11 @@
 
 ## Consequences
 
+- An adapter's own bounds are not Agora's to trust: 64 native sub-streams a Workstream, five levels deep. Each row
+  written reads its siblings and climbs its line under its owner's list, so a harness announcing without end would
+  hold every other Workstream of that person.
+- What reads the log's lines for the host must know a sub-agent's from its own: the catch-up's exchanges and a
+  delegate's last message leave them out, or a sub-agent's words would pass for its host's.
 - A sub-agent shows working for as long as its adapter says nothing else: Codex's sub-agents of
   sub-agents until their host's execution ends, then `failed`.
 - A Codex sub-agent's thread opens on its answer: Codex reports no task.

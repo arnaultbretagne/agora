@@ -1648,6 +1648,8 @@ test('U87 a native sub-stream opened, working, cancel advertised; then cancelled
   await page.goBack()
   await page.waitForURL((url) => url.pathname.endsWith(id))
   await thread(page).getByText('Sub-agents done.').waitFor()
+  // In its host's thread its line says what happened to it: cancelled, as its turn was.
+  await subagentLine(page, 'Count the files').getByText('cancelled', { exact: true }).waitFor()
   await send(page, subCall({ n: 6, cancel: false, task: false, title: 'List the tests' }))
   await subagentLine(page, 'List the tests').getByRole('link').click()
   await page.waitForURL((url) => /\/w\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(id))
