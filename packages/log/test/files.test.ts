@@ -55,12 +55,14 @@ test('B1 a received tool update carrying a 4 MiB image: one object, references w
   const expanded = await lab.store.expand(entry)
   for (const ref of entry.files!) assert.equal(at(expanded, ref.path), bytes.toString('base64'))
   assert.equal(canonical(findFiles(expanded)!.value), canonical(entry.content))
-  // The thread holds the reference, not the bytes.
-  const tool = await lab.store.projector.query("SELECT object::text AS o FROM objects WHERE workstream=$1 AND type='tool'", [ws])
-  assert.equal(tool.rowCount, 1)
-  assert.ok(String(tool.rows[0].o).includes(reference(digest)))
-  assert.ok(String(tool.rows[0].o).length < 10_000, `the tool's view is ${String(String(tool.rows[0].o).length)} characters`)
-  t.diagnostic(`files ${JSON.stringify(entry.files)}; objects ${JSON.stringify([...s3.objects.keys()])}; PutObject ${String(s3.count('PutObject'))}; the tool's view ${String(String(tool.rows[0].o).length)} characters`)
+  // The thread holds the reference, not the bytes: read once the update is projected, which a received line is
+  // within a quarter of a second, not at once. One tool object, and it holds the reference.
+  const view = await until('the tool’s view holding the reference', async () => {
+    const tool = await lab.store.projector.query("SELECT object::text AS o FROM objects WHERE workstream=$1 AND type='tool'", [ws])
+    return tool.rowCount === 1 && String(tool.rows[0].o).includes(reference(digest)) ? String(tool.rows[0].o) : null
+  })
+  assert.ok(view.length < 10_000, `the tool's view is ${String(view.length)} characters`)
+  t.diagnostic(`files ${JSON.stringify(entry.files)}; objects ${JSON.stringify([...s3.objects.keys()])}; PutObject ${String(s3.count('PutObject'))}; the tool's view ${String(view.length)} characters`)
 })
 
 test('B2 the same image in two Workstreams, then once its row is gone: one object, stored once, found again with a 412', async (t) => {
