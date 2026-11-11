@@ -508,21 +508,17 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       say(session.id, reply)
       return 'end_turn'
     }
-    // /submit {json}: a `submit` call, as a harness makes one (docs/specs/delegation.md): the words in its delegator's Workstream.
-    case '/submit': {
-      const args = JSON.parse(text.trim().slice('/submit'.length).trim() || '{}') as Record<string, unknown>
-      const answer = await callAgora('submit', args, turn)
-      if (turn.cancelled) return 'cancelled'
-      say(session.id, `Submitted: ${answer.text}`)
-      return 'end_turn'
-    }
-    case '/delegate': {
-      // /delegate {json}: a `delegate` call, as a harness makes one (docs/specs/delegation.md): its tool line,
-      // the call to Agora's MCP server, then its answer on the line and in a message.
-      const args = JSON.parse(text.trim().slice('/delegate'.length).trim() || '{}') as Record<string, unknown>
+    case '/spawn_agent':
+    case '/send_message':
+    case '/stop_agent':
+    case '/list_agents': {
+      // /<tool> {json}: a call to one of Agora's delegation tools, as a harness makes one (docs/specs/delegation.md): its
+      // tool line, the call to Agora's MCP server, then its answer on the line and in a message.
+      const name = text.trim().split(/\s/)[0]!.slice(1)
+      const args = JSON.parse(text.trim().slice(name.length + 1).trim() || '{}') as Record<string, unknown>
       const toolCallId = `outil-${randomUUID().slice(0, 8)}`
-      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'delegate', kind: 'other', status: 'in_progress', rawInput: args })
-      const answer = await callAgora('delegate', args, turn)
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: name, kind: 'other', status: 'in_progress', rawInput: args })
+      const answer = await callAgora(name, args, turn)
       if (turn.cancelled) return 'cancelled'
       update(session.id, {
         sessionUpdate: 'tool_call_update',
@@ -531,12 +527,13 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
         rawOutput: answer.text,
         content: [{ type: 'content', content: { type: 'text', text: answer.text } }],
       })
-      remember(session, 'agent', `Delegated: ${answer.text}`)
-      say(session.id, `Delegated: ${answer.text}`)
+      const said = `${{ spawn_agent: 'Delegated', send_message: 'Sent', stop_agent: 'Stopped', list_agents: 'Listed' }[name] ?? name}: ${answer.text}`
+      remember(session, 'agent', said)
+      say(session.id, said)
       return 'end_turn'
     }
     case '/propose_merge': {
-      // /propose_merge {json}: a `propose_merge` call (docs/specs/merge.md), as `/delegate` makes its own.
+      // /propose_merge {json}: a `propose_merge` call (docs/specs/merge.md), as `/spawn_agent` makes its own.
       const args = JSON.parse(text.trim().slice('/propose_merge'.length).trim() || '{}') as Record<string, unknown>
       const toolCallId = `outil-${randomUUID().slice(0, 8)}`
       update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'propose_merge', kind: 'other', status: 'in_progress', rawInput: args })

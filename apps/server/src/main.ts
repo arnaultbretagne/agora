@@ -88,7 +88,7 @@ const workstreams = new Workstreams({
 })
 
 try {
-  // docs/specs/delegation.md: the engine behind `delegate` and `submit`; an approval held 4 min 30 s.
+  // docs/specs/delegation.md: the engine behind `spawn_agent`, `send_message`, `stop_agent` and `list_agents`; an approval held 4 min 30 s.
   new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
   // docs/specs/merge.md: the merge card, through the gateway from the server's own address, as the operator.
   // With the test routes, GITHUB_TEST_API stands in for GitHub behind the gateway (docs/specs/merge.md, G8).

@@ -2,7 +2,7 @@
 
 /**
  * Who wrote a message, on its first block, Agora's line (docs/specs/delegation.md, "Messages"). Its value: `{ workstream,
- * as }`, `as` being `delegator`, `delegate` or `agora`, with `output_schema` on a delegator's and `turn` on a delegate's.
+ * as }`, `as` being `delegator`, `delegate` or `agora`, with `turn` on a delegate's.
  */
 export const FROM_META = 'agora.bretagne.dev/from'
 

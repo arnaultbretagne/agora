@@ -1028,8 +1028,8 @@ await check('M9', 'MCP, each real harness: search, then read, a past conversatio
   return seen.join(' | ')
 })
 
-// docs/specs/delegation.md, D15: each real harness, given agora:delegate, delegates a typed task within its rights; the
-// delegate — on the caller's harness — submits its result; its message reaches the caller; the caller answers with it.
+// docs/specs/delegation.md, D15: each real harness, given agora:delegate, delegates a task within its rights; the
+// delegate — on the caller's harness — answers; its last message reaches the caller; the caller answers with it.
 // The product is in no prompt of the caller's after its first: only the delegate's message can give it. Billed.
 const delegatedTo = async (w: Workstream): Promise<string | null> => {
   for (const x of await w.entries()) {
@@ -1056,7 +1056,7 @@ const drained = (w: Workstream, timeoutMs: number) =>
     return state.waiting.length === 0 && state.active === null && state.steering === null ? state : null
   }, timeoutMs)
 
-await check('D15', 'Delegation, each real harness: a typed task, submitted, its message used', async () => {
+await check('D15', 'Delegation, each real harness: a task, its delegate’s last message used', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
     assert(pool !== undefined, `no ${harness} pool`)
@@ -1064,9 +1064,8 @@ await check('D15', 'Delegation, each real harness: a typed task, submitted, its 
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      `With the delegate tool of the agora MCP server, ask a delegate to compute ${String(x)} times ${String(y)} and to hand the result with its submit tool, with an output_schema ` +
-      'asking for an object whose number "product" is required. Once it has started, end your turn. When its message comes back, ' +
-      'answer with the product it gave, as a number alone.'
+      `With the spawn_agent tool of the agora MCP server, start a delegate and ask it to compute ${String(x)} times ${String(y)} and to answer with the product, as a number alone. ` +
+      'Once it has started, end your turn. When its message comes back, answer with the product it gave, as a number alone.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
     const message = await until('its message', () => messageFrom(w, delegate), 600_000)
@@ -1075,28 +1074,24 @@ await check('D15', 'Delegation, each real harness: a typed task, submitted, its 
     const said = await w.said()
     await w.stop()
     assert(said.includes(String(x * y)), `${harness}: after its message, "${said.trim().slice(-160)}"`)
-    // By `submit`, not its last message: the tool a harness may never have listed.
-    const called = ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[])
-      .filter((e) => e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update')
-      .map((e) => (e.content.params as Json)?.update)
-      .filter((u) => u?.sessionUpdate === 'tool_call' || u?.sessionUpdate === 'tool_call_update')
-      .some((u) => /submit/i.test(String(u.title ?? '')))
-    assert(called, `${harness}: the delegate called no submit`)
-    seen.push(`${harness}: delegate ${delegate.slice(0, 8)}, its submit at ${message.position} by ${String(message.method)}, ${String(state.turns.size)} turn(s), the product said`)
+    // By Agora's `spawn_agent`, not a sub-agent of the harness's own.
+    const started = (await toolLines(w)).filter((l) => /spawn_agent/i.test(l.title) && /agora/i.test(l.title))
+    assert(started.length === 1, `${harness}: its spawn_agent lines: ${JSON.stringify(await toolLines(w))}`)
+    seen.push(`${harness}: delegate ${delegate.slice(0, 8)} by "${started[0]!.title}", its last message at ${message.position} by ${String(message.method)}, ${String(state.turns.size)} turn(s), the product said`)
   }
   return seen.join(' | ')
 })
 
-// D16: each real harness calling `delegate` with a right it does not hold: the approval Agora asks names the caller's
-// `delegate` tool line — by its id on Claude Code, by its arguments on the others. Refused by writing, as the person would.
-await check('D16', 'Delegation beyond the caller’s rights, each real harness: the approval names its delegate line', async () => {
+// D16: each real harness calling `spawn_agent` with a right it does not hold: the approval Agora asks names the caller's
+// `spawn_agent` tool line — by its id on Claude Code, by its arguments on the others. Refused by writing, as the person would.
+await check('D16', 'Delegation beyond the caller’s rights, each real harness: the approval names its spawn_agent line', async () => {
   const seen: string[] = []
   for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
     assert(pool !== undefined, `no ${harness} pool`)
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      'With the delegate tool of the agora MCP server, delegate this task, giving the delegate the rights ["internet"]: ' +
+      'With the spawn_agent tool of the agora MCP server, start a delegate with this task, giving it the rights ["internet"]: ' +
       '"Fetch https://example.org and give its title." Wait for the tool to answer, then tell me what it answered.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const ask = await until('the approval', async () => (await w.entries()).find((e) => e.kind === 'command' && e.content.kind === 'Ask' && (e.content.body as Json)?.kind === 'approval'), 300_000)
@@ -1108,7 +1103,7 @@ await check('D16', 'Delegation beyond the caller’s rights, each real harness: 
     assert(refused.status === 200, `${harness}: the refusal not accepted: ${JSON.stringify(refused)}`)
     await w.turn(['done', 'failed'], 300_000)
     await w.stop()
-    assert(line !== undefined && /delegate/i.test(line.title), `${harness}: the approval names "${named}"; tool lines ${JSON.stringify(lines)}`)
+    assert(line !== undefined && /spawn_agent/i.test(line.title), `${harness}: the approval names "${named}"; tool lines ${JSON.stringify(lines)}`)
     seen.push(`${harness}: the approval names ${named} ("${line.title}")`)
   }
   return seen.join(' | ')
@@ -1200,7 +1195,7 @@ await check('D29', 'Delegation, each real harness: a report of 30,000 characters
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      'With the delegate tool of the agora MCP server, ask a delegate to write, as its final message, a logbook of at least 400 numbered entries, each two full sentences of its own ' +
+      'With the spawn_agent tool of the agora MCP server, start a delegate and ask it to write, as its final message, a logbook of at least 400 numbered entries, each two full sentences of its own ' +
       'about a day in the life of a lighthouse keeper, ending with the line THE END. Once it has started, end your turn. When its message comes back, say how its last line reads, and nothing else.'
     assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
     const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
@@ -1210,10 +1205,10 @@ await check('D29', 'Delegation, each real harness: a report of 30,000 characters
     assert(size >= 30_000, `${harness}: ${String(size)} characters in its message`)
     assert(JSON.stringify(message.content).includes('THE END'), `${harness}: its last line missing`)
     await drained(w, 300_000)
-    const writes = (await toolLines(w)).filter((l) => /delegate/i.test(l.title)).length
+    const writes = (await toolLines(w)).filter((l) => /spawn_agent|send_message/i.test(l.title)).length
     await w.stop()
-    assert(writes === 1, `${harness}: ${String(writes)} delegate calls`)
-    seen.push(`${harness}: ${String(size)} characters at ${message.position}, one delegate call`)
+    assert(writes === 1, `${harness}: ${String(writes)} spawn_agent or send_message calls`)
+    seen.push(`${harness}: ${String(size)} characters at ${message.position}, one spawn_agent call`)
   }
   return seen.join(' | ')
 })
@@ -1227,7 +1222,7 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
     const w = new Workstream()
     await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
     const prompt =
-      'First, with the delegate tool of the agora MCP server, ask a delegate to run exactly this shell command and to reply with its output and nothing else: ' +
+      'First, with the spawn_agent tool of the agora MCP server, start a delegate and ask it to run exactly this shell command and to reply with its output and nothing else: ' +
       'node -e "setTimeout(()=>console.log(require(\'node:crypto\').randomUUID()),30000)". ' +
       'Then, without waiting for it, run exactly this shell command in the foreground, waiting for it: node -e "setTimeout(()=>console.log(\'FINISHED\'),90000)". ' +
       'When it is done, tell me the value your delegate sent you.'
@@ -1255,6 +1250,47 @@ await check('D31', 'Delegation, Claude Code and Codex: a delegate’s message du
     assert(state.turns.size === 1, `${harness}: ${String(state.turns.size)} turns`)
     assert(said.includes(value), `${harness}: the value not said: "${said.slice(-160)}"`)
     seen.push(`${harness}: its message at ${message.position}, the command closed at ${closed.position}, injected, one turn, the value said`)
+  }
+  return seen.join(' | ')
+})
+
+// D51: each real harness drives a delegate by Agora's four tools, whose names are near its own sub-agents': it starts one
+// on a long command, lists, stops it, then writes to it — and uses none of its harness's own sub-agent tools. Billed.
+const NATIVE = /^(Agent|Task|SendMessage|TaskStop|ListAgents)\b|sub-?agent/i
+await check('D51', 'Delegation, each real harness: spawn_agent, list_agents, stop_agent and send_message of Agora’s, none of its own', async () => {
+  const seen: string[] = []
+  for (const [harness, pool] of [['claude-code', claude], ['codex', codex], ['opencode', opencode]] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      'Use the tools of the agora MCP server for all of this, never sub-agents of your own. ' +
+      '1. With spawn_agent, start a delegate and ask it to run exactly this shell command and to reply with its output: node -e "setTimeout(()=>console.log(\'LATE\'),120000)". ' +
+      '2. With list_agents, list your delegates. 3. With stop_agent, stop that delegate. ' +
+      '4. With send_message, write to that delegate: "Reply with the single word PONG and nothing else." Then end your turn. ' +
+      'When its message comes back, tell me the word your delegate replied.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
+    const message = await until('its message', async () => {
+      const found = await messageFrom(w, delegate)
+      return found && /PONG/.test(JSON.stringify(found.content)) ? found : null
+    }, 600_000)
+    await drained(w, 300_000)
+    const said = await w.said()
+    const lines = await toolLines(w)
+    const updates = (await w.entries())
+      .filter((x) => x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update')
+      .map((x) => JSON.stringify((x.content.params as Json)?.update ?? {}))
+    await w.stop()
+    await stopDelegate(delegate)
+    for (const name of ['spawn_agent', 'list_agents', 'stop_agent', 'send_message'])
+      assert(lines.some((l) => new RegExp(name, 'i').test(l.title) && /agora/i.test(l.title)), `${harness}: no ${name} of Agora's among ${JSON.stringify(lines)}`)
+    const own = lines.filter((l) => !/agora/i.test(l.title) && NATIVE.test(l.title))
+    assert(own.length === 0, `${harness}: its own sub-agent tools: ${JSON.stringify(own)}`)
+    assert(updates.some((u) => u.includes(`${delegate} · `) && /· working/.test(u)), `${harness}: the list does not say its delegate working`)
+    assert(updates.some((u) => u.includes(`stopped ${delegate}`)), `${harness}: no "stopped ${delegate}"`)
+    assert(/PONG/.test(said), `${harness}: after its message, "${said.trim().slice(-160)}"`)
+    seen.push(`${harness}: ${lines.filter((l) => /agora/i.test(l.title)).map((l) => l.title).join(', ')}; listed working; stopped; PONG at ${message.position}`)
   }
   return seen.join(' | ')
 })

@@ -33,7 +33,7 @@ let github: HttpServer
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
   db = await database()
-  // Agora's MCP server where the mock agent's `/delegate` calls it: the lab has no gateway (packages/mock-agent).
+  // Agora's MCP server where the mock agent's `/spawn_agent` calls it: the lab has no gateway (packages/mock-agent).
   const mcpPort = await freePort()
   process.env.AGORA_MOCK_MCP = `http://127.0.0.1:${String(mcpPort)}/mcp`
   c = await cluster()
@@ -210,9 +210,9 @@ async function delegating(page: Page, text: string): Promise<string> {
   await thread(page).getByText(`Echo #1: ${text}.`).waitFor()
   return idOf(page)
 }
-/** What the mock agent is told to call `delegate` with (packages/mock-agent). */
-const delegateCall = (args: Record<string, unknown>) => `/delegate ${JSON.stringify(args)}`
-/** A `delegate` line of the thread, by its label. */
+/** What the mock agent is told to call `spawn_agent` with (packages/mock-agent). */
+const delegateCall = (args: Record<string, unknown>) => `/spawn_agent ${JSON.stringify(args)}`
+/** A delegate's line of the thread, by its label. */
 const delegateLine = (page: Page, label: string) => thread(page).locator('[data-delegate]').filter({ hasText: label })
 /** The calls that need the person: a right beyond the caller's — a repository it was not given. */
 const beyond = (instructions: string) => delegateCall({ instructions, harness: 'mock', rights: ['github:owner/b:read'] })
@@ -1229,7 +1229,7 @@ test('U59 a word said only in an exchange of a Workstream not loaded, and far in
   await page.context().close()
 })
 
-test('U65 an agent’s delegate within its rights, then its last message of 10,000 characters: the line names and links to it; working, then idle; the message shown as the delegate’s, whole, by its title, then the agent’s answer', async () => {
+test('U65 an agent’s spawn_agent within its rights, then its last message of 10,000 characters: the line names and links to it; working, then idle; the message shown as the delegate’s, whole, by its title, then the agent’s answer', async () => {
   const page = await fresh()
   await delegating(page, 'before delegating')
   await send(page, delegateCall({ instructions: '/sleep 3', harness: 'mock' }))
