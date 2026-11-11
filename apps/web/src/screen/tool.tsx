@@ -237,7 +237,9 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   const waiting = a.gate?.status === 'pending' || Boolean(row?.question) || state === 'waiting'
   const settled = a.gate !== undefined && a.gate.status !== 'pending' && d === undefined
   const tone: Tone = waiting ? 'attention' : state === 'failed' || (isError && !settled) ? 'error' : state === 'working' || (d === undefined && running) ? 'live' : 'quiet'
-  const meta = waiting ? 'waiting for you' : state !== null ? DELEGATION[state] : isError && !settled ? 'failed' : undefined
+  // A native sub-agent's turn was cancelled; a delegate was stopped.
+  const native = a.subagent !== undefined || row?.state === 'native'
+  const meta = waiting ? 'waiting for you' : state !== null ? (native && state === 'cancelled' ? 'cancelled' : DELEGATION[state]) : isError && !settled ? 'failed' : undefined
   const harness = row?.harness ?? (typeof args.harness === 'string' ? args.harness : view.harness)
   const label = d ? (
     <a

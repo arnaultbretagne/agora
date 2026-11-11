@@ -276,11 +276,12 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [pickedAccess, view.execution, view.profiles])
 
   const send = useCallback(
-    async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id): Promise<Answer> => {
-      unrefuse(workstream)
+    // `shown`: the Workstream on screen when the command goes to another — a native sub-stream's go to its host.
+    async (kind: CommandKind, target: Json, body: Json, workstream: string | null = id, shown: string | null = workstream): Promise<Answer> => {
+      unrefuse(shown)
       if (workstream === null) return { accepted: false, reason: 'no_workstream' }
       const answer = await api.command(workstream, kind, target, body)
-      if (!answer.accepted) refuse(refusalText(answer.reason ?? 'unavailable'), workstream)
+      if (!answer.accepted) refuse(refusalText(answer.reason ?? 'unavailable'), shown)
       return answer
     },
     [api, id, refuse, unrefuse],
@@ -301,6 +302,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
         { requestId: permission.requestId, outcome: { outcome: 'selected', optionId } },
         view.native?.host ?? id,
+        id,
       )
     },
     [state, send, view.native, id],
@@ -310,7 +312,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const cancel = useCallback(async () => {
     const turn = composer.cancellable
     if (turn === null) return
-    await send('Cancel', { execution: view.native ? turn.object.execution : view.execution, turn: turn.id }, {}, view.native?.host ?? id)
+    await send('Cancel', { execution: view.native ? turn.object.execution : view.execution, turn: turn.id }, {}, view.native?.host ?? id, id)
   }, [composer.cancellable, send, view.native, view.execution, id])
 
   /** A message with no execution running: a Create first, the Write once its Session is open. */

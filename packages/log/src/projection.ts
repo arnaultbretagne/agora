@@ -154,6 +154,18 @@ export class Projections {
         return thread
       }
       const own = await threadOf(workstream)
+      /**
+       * The threads whose rows a run writes, in the order their lists are taken: the native sub-streams first, the
+       * deepest first, then the Workstream itself — from the sub-stream up, as every other run takes them
+       * (docs/specs/log.md, "The list", "Up the line"), so that two runs never wait on each other.
+       */
+      const upward = async (targets: readonly string[]): Promise<string[]> => {
+        const hosted = targets.filter((t) => t !== workstream)
+        if (hosted.length === 0) return targets.includes(workstream) ? [workstream] : []
+        const depths = new Map((await client.query('SELECT id, depth FROM workstreams WHERE id = ANY($1::uuid[])', [hosted])).rows.map((r) => [r.id as string, Number(r.depth)]))
+        hosted.sort((a, b) => (depths.get(b) ?? 0) - (depths.get(a) ?? 0) || (a < b ? -1 : 1))
+        return [...hosted, ...(targets.includes(workstream) ? [workstream] : [])]
+      }
       // A reset takes the next position, and every object one after it: the complete state, in order.
       const reset = async (target = workstream) => {
         const thread = await threadOf(target)
@@ -185,7 +197,7 @@ export class Projections {
           this.memory.set(`${workstream}:${selected.name}`, { version: selected.version, projection })
         }
         // From the sub-streams up: each row counts what lies under it as the reset before it left it.
-        for (const target of [...hosted].sort()) await reset(target)
+        for (const target of await upward([...hosted])) await reset(target)
         await reset()
       } else {
         const key = `${workstream}:${projector.name}`
@@ -203,17 +215,20 @@ export class Projections {
         if (delta.length) {
           const changed = held.projection.apply(delta)
           let removed = false
+          // Each view's row is written once every object is, in the lists' own order.
+          const views = new Map<string, Record<string, unknown>>()
           for (const id of changed) {
             const item = held.projection.objects.get(id)
             if (item) {
               const target = item.workstream ?? workstream
               await this.upsert(client, target, projector, item, String(++(await threadOf(target)).position))
-              if (item.kind === 'workstream') await this.list(client, target, item.object)
+              if (item.kind === 'workstream') views.set(target, item.object)
             } else {
               const deleted = await client.query('DELETE FROM objects WHERE workstream=$1 AND projector=$2 AND id=$3', [workstream, projector.name, id])
               removed ||= Boolean(deleted.rowCount)
             }
           }
+          for (const target of await upward([...views.keys()])) await this.list(client, target, views.get(target))
           // A removal leaves no object to carry it: the client is given the complete state instead.
           if (removed) await reset()
           await client.query(

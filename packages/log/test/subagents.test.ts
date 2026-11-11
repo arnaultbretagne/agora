@@ -5,7 +5,9 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { test } from 'node:test'
-import { childWorkstream, core, hash, object, read, type ListRow } from '../src/index.ts'
+import { randomUUID } from 'node:crypto'
+import { childWorkstream, core, CoreProjection, fold, hash, lastMessageOf, MAX_SUBAGENT_DEPTH, MAX_SUBAGENTS, object, read, type Entry, type ListRow } from '../src/index.ts'
+import { exchangesOf } from '../src/catch-up.ts'
 import { base64, database, expire, FakeKube, Lab, lines, sleep, until } from './support.ts'
 
 type T = { after(fn: () => Promise<void>): void }
@@ -96,7 +98,7 @@ test('L129 an agent announcing a sub-agent during its turn, then its task, a tex
 })
 
 test('L130 a sub-agent’s config_option_update, available_commands_update, usage_update and session_info_update: its host’s settings, commands, usage and title unchanged; the sub-stream’s title the one it gave', async (t) => {
-  const { lab, ws } = await started(t)
+  const { lab, db, ws } = await started(t)
   const before = (await viewOf(lab, ws))!
   assert.ok((await lab.write(ws, sub({ n: 1, settings: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -108,6 +110,10 @@ test('L130 a sub-agent’s config_option_update, available_commands_update, usag
   assert.deepEqual([after.settings, after.commands, after.usage], [before.settings, before.commands, before.usage])
   assert.ok(!JSON.stringify(after).includes('sub-model') && !JSON.stringify(after).includes('sub-only') && !JSON.stringify(after).includes('4242'))
   assert.equal(after.title, sub({ n: 1, settings: true }).slice(0, 80))
+  // Captured, not refused: they are in the log, and no diagnostic names them.
+  const kinds = lines(await lab.entries(ws), 'in', 'session/update').map((e) => String(object(object(e.content.params)?.update)?.sessionUpdate))
+  for (const kind of ['config_option_update', 'available_commands_update', 'usage_update', 'session_info_update']) assert.ok(kinds.includes(kind), kind)
+  assert.equal(Number((await db.admin.query('SELECT count(*) FROM diagnostics WHERE workstream=$1', [ws])).rows[0].count), 0)
   // Positive control: its own lines of those kinds do change its view (settings.test.ts, L49).
 })
 
@@ -271,8 +277,8 @@ test('L137 a Write, a Configure, a Create and a Stop addressed to a native sub-s
   assert.ok((await lab.write(ws, 'to its host')).accepted)
 })
 
-test('L139 a rebuild of a host with native sub-streams: the same sub-streams, identities and rows as the incremental run gave', async (t) => {
-  const { lab, ws } = await started(t)
+test('L139 a rebuild of a host with native sub-streams, their objects gone; then a fresh fold going on from its checkpoint: the same sub-streams, identities and rows as the incremental run gave', async (t) => {
+  const { lab, db, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, count: 2, nested: true }))).accepted)
   await lab.turn(ws, 'done', 30_000)
   const rows = await oneHosted(lab, ws, 4)
@@ -288,10 +294,24 @@ test('L139 a rebuild of a host with native sub-streams: the same sub-streams, id
     return out
   }
   const before = await snapshot()
+  // With the sub-streams' objects gone: a rebuild produces them, it does not merely leave them.
+  await db.admin.query('DELETE FROM objects WHERE workstream = ANY($1::uuid[])', [rows.map((r) => r.id)])
+  assert.equal((await lab.workstreams.projections.objects(rows[0]!.id)).length, 0)
   await lab.workstreams.projections.run(ws, core, true)
   assert.deepEqual(await snapshot(), before)
   // Positive control: every thread held objects to compare.
   for (const row of rows) assert.ok((before[row.id] as unknown[]).length >= 4)
+  // A fresh process folds up to its checkpoint, then goes on: what follows equals a rebuild of the whole.
+  lab.workstreams.projections.forget(ws)
+  assert.ok((await lab.write(ws, sub({ n: 1, again: true }))).accepted)
+  await until('its second turn done', async () => (await lab.state(ws)).turns.size === 2 && (await lab.state(ws)).active === null, 30_000)
+  const all = await oneHosted(lab, ws, 5)
+  await projected(lab, ws)
+  await subagent(lab, all[4]!.id, ['idle'])
+  const whole = async () => Object.fromEntries(await Promise.all([ws, ...all.map((r) => r.id)].map(async (id) => [id, (await lab.workstreams.projections.objects(id)).map((o) => [o.kind, o.id, hash(o.object), o.first_position, o.last_position])])))
+  const incremental = await whole()
+  await lab.workstreams.projections.run(ws, core, true)
+  assert.deepEqual(await whole(), incremental)
 })
 
 test('L140 a tool_call_update with a content item of type session: valid; its tool element holds it', async (t) => {
@@ -354,4 +374,158 @@ test('S15 a native sub-stream’s transcript, read; one with no task: its task u
   await projected(lab, ws)
   await subagent(lab, rows[1]!.id, ['idle'])
   assert.deepEqual((await transcript(rows[1]!.id))[0], ['header', '## 1 · agent'])
+})
+
+test('L133 a sub-agent cancelled, a permission of its own pending beside another’s; then its host’s turn cancelled: cancelled answered to that sub-agent’s alone; none of its sub-agents’ on the host’s Cancel', async (t) => {
+  const { lab, ws, execution } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 30, count: 2, permission: true }))).accepted)
+  const rows = await oneHosted(lab, ws, 2)
+  for (const row of rows) await subagent(lab, row.id, ['waiting'])
+  const pending = async (child: string) => (await elements(lab, child, 'permission'))[0]
+  await until('both permissions', async () => (await pending(rows[0]!.id)) !== undefined && (await pending(rows[1]!.id)) !== undefined)
+  assert.ok((await lab.command(ws, 'Cancel', { execution: execution.id, turn: (await turnsOf(lab, rows[0]!.id))[0]!.id })).accepted)
+  await subagent(lab, rows[0]!.id, ['cancelled'])
+  await until('its permission answered', async () => (await pending(rows[0]!.id))?.status === 'answered')
+  assert.match(JSON.stringify((await pending(rows[0]!.id))?.answer), /cancelled/)
+  assert.equal((await pending(rows[1]!.id))?.status, 'pending', 'the other’s untouched')
+  // The host's own turn cancelled: its Session's permissions, none of its sub-agents'.
+  const turn = (await lab.state(ws)).active!
+  assert.ok((await lab.command(ws, 'Cancel', { execution: execution.id, turn: turn.id })).accepted)
+  await lab.turn(ws, 'cancelled', 20_000)
+  await sleep(800)
+  await projected(lab, ws)
+  assert.equal((await pending(rows[1]!.id))?.status, 'pending')
+  assert.equal((await viewOf(lab, rows[1]!.id))?.subagent, 'waiting')
+})
+
+test('L143 a sub-agent idle with a permission of its own left pending: answered cancelled by Agora; its host takes a message again', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1, permission: true, giveUp: 2 }))).accepted)
+  const [row] = await oneHosted(lab, ws)
+  await subagent(lab, row!.id, ['waiting'])
+  assert.equal((await lab.state(ws)).permissions.size, 1)
+  await lab.turn(ws, 'done', 20_000)
+  await until('no permission pending in its host', async () => (await lab.state(ws)).permissions.size === 0)
+  await projected(lab, ws)
+  const [permission] = await elements(lab, row!.id, 'permission')
+  assert.equal(permission!.status, 'answered')
+  assert.match(JSON.stringify(permission!.answer), /cancelled/)
+  assert.equal((await viewOf(lab, row!.id))?.subagent, 'cancelled')
+  // Its host is held by nothing: a message goes.
+  assert.ok((await lab.write(ws, 'after it gave up')).accepted)
+  await until('its second turn done', async () => (await lab.state(ws)).turns.size === 2 && (await lab.state(ws)).active === null, 20_000)
+})
+
+test('L144 an agent speaking, announcing a sub-agent, then speaking again: its line between its two texts', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1, preface: true }))).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  await projected(lab, ws)
+  const own = inOrder((await objectsOf(lab, ws)).filter((o) => o.object === 'element' && ['agent_message_chunk', 'subagent'].includes(String(o.type))))
+  assert.deepEqual(own.map((e) => (e.type === 'subagent' ? 'line' : e.text)), ['Starting sub-agents.', 'line', 'Sub-agents done.'])
+})
+
+test('L145 a sub-agent at work again under its session id in a later execution: the same sub-stream, a turn of that execution, cancelled through it; ended with it', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1, id: 'sub-kept' }))).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  const [row] = await oneHosted(lab, ws)
+  await projected(lab, ws)
+  await subagent(lab, row!.id, ['idle'])
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  await until('the first execution ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  const second = await lab.open(ws)
+  assert.ok((await lab.write(ws, sub({ n: 30, id: 'sub-kept' }))).accepted)
+  await until('its second turn in progress', async () => (await turnsOf(lab, row!.id)).length === 2 && (await viewOf(lab, row!.id))?.subagent === 'working', 20_000)
+  assert.equal((await hosted(lab, ws)).length, 1, 'the same sub-stream')
+  const again = (await turnsOf(lab, row!.id))[1]!
+  assert.equal(again.execution, second.id)
+  // Its host holds messages for it, and its Cancel goes through that execution.
+  assert.ok((await lab.command(ws, 'Cancel', { execution: second.id, turn: again.id })).accepted)
+  await subagent(lab, row!.id, ['cancelled'])
+  await lab.turn(ws, 'done', 20_000)
+})
+
+test('L146 more sub-agents announced than a Workstream hosts; a chain deeper than it goes: no sub-stream beyond the bounds, and none of their lines in the host’s thread', async (t) => {
+  const { lab, ws } = await started(t)
+  const acp = (await lab.state(ws)).current!.acpId!
+  const update = (sessionId: string, value: Record<string, unknown>) => JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: value } })
+  const announce = (on: string, id: string) => update(on, { sessionUpdate: 'subagent_update', sessionId: id, title: id, state: { state: 'idle', stopReason: 'end_turn' } })
+  const chain = Array.from({ length: MAX_SUBAGENT_DEPTH + 2 }, (_, i) => `deep-${String(i + 1)}`)
+  const deepest = chain.at(-1)!
+  assert.ok((await lab.write(ws, `/raw ${base64(...chain.map((id, i) => announce(i === 0 ? acp : chain[i - 1]!, id)), update(deepest, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'from too deep' } }))}`)).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  await projected(lab, ws)
+  assert.deepEqual((await hosted(lab, ws)).map((r) => r.depth).sort(), Array.from({ length: MAX_SUBAGENT_DEPTH }, (_, i) => i + 1))
+  assert.ok(!JSON.stringify(await objectsOf(lab, ws)).includes('from too deep'), 'not its host’s words either')
+  const flat = Array.from({ length: MAX_SUBAGENTS + 2 }, (_, i) => `flat-${String(i + 1)}`)
+  assert.ok((await lab.write(ws, `/raw ${base64(...flat.map((id) => announce(acp, id)))}`)).accepted)
+  await until('its second turn done', async () => (await lab.state(ws)).turns.size === 2 && (await lab.state(ws)).active === null, 30_000)
+  await projected(lab, ws)
+  assert.equal((await hosted(lab, ws)).length, MAX_SUBAGENTS)
+  assert.equal(Number((await below(lab, ws))?.count), MAX_SUBAGENTS)
+})
+
+test('L147 a native sub-stream given as the parent of a new Workstream: unknown_parent', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  const [row] = await oneHosted(lab, ws)
+  await assert.rejects(lab.store.create(randomUUID(), null, row!.id), /unknown_parent/)
+  // Positive control: its host can be one.
+  await lab.store.create(randomUUID(), null, ws)
+})
+
+test('L148 a sub-agent’s lines among its host’s, read from the log: none of them in the host’s exchange for a catch-up, nor in a delegate’s last message', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
+  const turn = await lab.turn(ws, 'done', 20_000)
+  const entries = await lab.entries(ws)
+  const children = new Set((await lab.state(ws)).children.keys())
+  assert.equal(children.size, 1)
+  const [exchange] = exchangesOf(entries, [turn.requestPosition], children)
+  assert.equal(exchange!.agent, 'Sub-agents done.')
+  assert.equal(lastMessageOf(entries, turn, undefined, children), 'Sub-agents done.')
+  // Positive control: read without knowing them, its words and its tool are taken for the host's.
+  assert.match(exchangesOf(entries, [turn.requestPosition])[0]!.agent, /Working on: Count the files\.[\s\S]*ls -1 \| wc -l/)
+  assert.equal(lastMessageOf(entries, turn, undefined, new Set()), 'Done: 7 files.Sub-agents done.')
+})
+
+test('L138 a later execution’s session/load replaying a sub-agent’s announcement and lines: the same sub-stream, no turn added, no object in its thread', async (t) => {
+  const { lab, ws } = await started(t)
+  assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  const real = [...(await lab.entries(ws))]
+  const child = [...(await lab.state(ws)).children.values()][0]!
+  // Simulated: the entries a restore by `session/load` would add — its Create, its request, then the lines the adapter
+  // replays before its answer, written with no Session, as the capture writes them.
+  let position = BigInt(real.at(-1)!.position)
+  const next = () => String(++position)
+  const create = real.find((e) => e.kind === 'command' && e.content.kind === 'Create')!
+  const second = randomUUID()
+  const acp = (await lab.state(ws)).current!.acpId!
+  const base: Entry = { ...create, kind: 'acp', execution: second, session: null, command: null, direction: 'in', rpc_kind: 'notification', method: 'session/update', correlated_method: null, request_position: null, rpc_id: null, connection: null, receive_ordinal: null, files: null, content: {} }
+  const replayed: Entry[] = [
+    { ...create, position: next(), execution: second, content: { ...create.content, execution: second, claimName: `claim-${second}` } },
+    { ...base, position: next(), direction: 'out', rpc_kind: 'request', method: 'session/load', rpc_id: `agora-${second}-load`, content: { jsonrpc: '2.0', id: `agora-${second}-load`, method: 'session/load', params: { sessionId: acp, cwd: '/', mcpServers: [] } } },
+    ...real
+      .filter((e) => e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update' && JSON.stringify(e.content).includes(child.acpId))
+      .map((e) => ({ ...base, position: next(), content: e.content })),
+  ]
+  assert.ok(replayed.length > 4)
+  const before = fold(real)
+  const after = fold([...real, ...replayed])
+  assert.deepEqual([...after.children.keys()], [...before.children.keys()])
+  const [same] = [...after.children.values()]
+  assert.deepEqual([same!.workstream, same!.execution, same!.turns.map((x) => [x.id, x.status])], [child.workstream, child.execution, child.turns.map((x) => [x.id, x.status])])
+  const projection = new CoreProjection()
+  projection.apply(real)
+  const own = () => [...projection.objects.values()].filter((o) => o.workstream === child.workstream).map((o) => [o.id, hash(o.object)])
+  const objects = own()
+  const changed = projection.apply(replayed)
+  assert.deepEqual(own(), objects)
+  assert.ok(![...changed].some((id) => projection.objects.get(id)?.workstream === child.workstream))
+  // Positive control: the same lines with a Session open are a sub-agent at work again.
+  const live = replayed.slice(2).map((e) => ({ ...e, execution: before.current!.id, session: before.current!.session }))
+  assert.equal(fold([...real, ...live]).children.get(child.acpId)!.turns.length, 2)
 })

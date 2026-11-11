@@ -348,12 +348,20 @@ const WaitingMessages: FC = () => {
 
 /** The composer; in a native sub-stream, which takes no message, the line that says so (docs/specs/assistant-ui.md, "The screen"). */
 export const Composer: FC<{ placeholder?: string }> = (props) => {
-  const { composer, line } = useAgora()
+  const { composer, line, refusal } = useAgora()
   if (composer.readOnly)
     return (
-      <p data-read-only className="text-muted-foreground border-foreground/15 w-full border-l-2 pl-3 text-[13px]">
-        Read-only: a sub-agent of “{line.at(-1)?.title ?? 'its parent'}” takes no message.
-      </p>
+      <div className="flex w-full flex-col gap-2">
+        {/* What its host refused of a Cancel or an answer made here. */}
+        {refusal !== null && (
+          <p role="alert" className="text-destructive border-destructive/40 border-l-2 pl-3 text-[13px]">
+            {refusal}
+          </p>
+        )}
+        <p data-read-only className="text-muted-foreground border-foreground/15 border-l-2 pl-3 text-[13px]">
+          Read-only: a sub-agent of “{line.at(-1)?.title ?? 'its parent'}” takes no message.
+        </p>
+      </div>
     )
   return <Writing {...props} />
 }

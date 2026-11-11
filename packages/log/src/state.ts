@@ -81,7 +81,12 @@ export interface Child {
   turns: Turn[]
   /** The position of the line that announced it. */
   announcedAt: string
+  /** Beyond the bounds: known, so that its lines are not its host's, and given no sub-stream. */
+  unlisted?: true
 }
+/** How many native sub-streams a Workstream hosts, and how deep below it: an adapter's own bounds are not Agora's to trust. */
+export const MAX_SUBAGENTS = 64
+export const MAX_SUBAGENT_DEPTH = 5
 /** A native sub-stream's id (docs/specs/log.md, "Native sub-agents", "Announced"). */
 export const childWorkstream = (host: string, acpId: string): string => identity(host, acpId, 'subagent')
 /** A native sub-stream's state: `working`, `waiting`, else its last turn's. */
@@ -96,15 +101,21 @@ export function subagentOf(child: Child): 'working' | 'waiting' | 'idle' | 'fail
  * `subagent_update` on a session known in that execution — its Session's own, the one its opening replays, or a
  * sub-agent's already announced — naming an ACP session not known there. Its id, and the Workstream that announces it.
  */
-export function announcement(state: State, execution: Execution | undefined, line: unknown): { acpId: string; parent: string } | null {
+export function announcement(state: State, execution: Execution | undefined, line: unknown): { acpId: string; parent: string; listed: boolean } | null {
   const message = object(line)
   const params = object(message?.params)
   const update = message?.method === 'session/update' ? object(params?.update) : null
   const sid = params?.sessionId
   if (!execution || update?.sessionUpdate !== 'subagent_update' || typeof update.sessionId !== 'string' || typeof sid !== 'string') return null
   if (state.children.has(update.sessionId) || update.sessionId === execution.acpId || update.sessionId === execution.openingAcp) return null
-  const parent = sid === execution.acpId || sid === execution.openingAcp ? state.workstream : state.children.get(sid)?.workstream
-  return parent === undefined ? null : { acpId: update.sessionId, parent }
+  const announcer = state.children.get(sid)
+  const parent = sid === execution.acpId || sid === execution.openingAcp ? state.workstream : announcer?.workstream
+  if (parent === undefined) return null
+  // Its depth below its host: one more than the sub-agent that announced it.
+  let depth = 1
+  for (let above = announcer; above !== undefined; above = [...state.children.values()].find((c) => c.workstream === above!.parent)) depth++
+  const listed = announcer?.unlisted !== true && depth <= MAX_SUBAGENT_DEPTH && [...state.children.values()].filter((c) => !c.unlisted).length < MAX_SUBAGENTS
+  return { acpId: update.sessionId, parent, listed }
 }
 /** Whether a sub-agent of an execution has a turn in progress (docs/specs/log.md, "Native sub-agents", "Messages during a turn"). */
 export const childWorking = (state: State, execution: string): boolean =>
@@ -479,8 +490,14 @@ export function fold(entries: readonly Entry[], initial?: State): State {
               waiting: false,
               turns: [],
               announcedAt: entry.position,
+              ...(announced.listed ? {} : { unlisted: true as const }),
             }
             state.children.set(child.acpId, child)
+          }
+          // Seen again in a later execution, at work: it is that execution's now, its Session's.
+          if (child && !replayed && child.execution !== execution.id) {
+            child.execution = execution.id
+            child.session = execution.session
           }
           if (child && !replayed) {
             if (Object.hasOwn(update, 'title')) child.title = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
@@ -499,6 +516,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
         } else if (sid !== null && !replayed) {
           const child = state.children.get(sid)
+          if (child && child.execution !== execution.id) {
+            child.execution = execution.id
+            child.session = execution.session
+          }
           if (child && child.turns.length === 0) openChild(child, entry)
           if (child && update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title')) child.ownTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
         }
@@ -814,7 +835,8 @@ export class CoreProjection {
        * A native sub-agent as its sub-stream shows it (docs/specs/log.md, "Native sub-agents"): its turns, its view, and
        * its line in its parent's thread, each put when it changed.
        */
-      const putChild = (child: Child, announcing?: string) => {
+      const putChild = (child: Child) => {
+        if (child.unlisted) return
         const code = (key: string, value: unknown): boolean => {
           const encoded = encode(value)
           if (this.childCodes.get(key) === encoded) return false
@@ -850,7 +872,14 @@ export class CoreProjection {
           continuation: {},
         }
         if (code(`view:${child.workstream}`, view)) put('workstream', child.workstream, { ...view, changedAt: entry.time }, entry.position, child.workstream)
-        if (!this.announcedIn.has(child.acpId)) this.announcedIn.set(child.acpId, announcing)
+        // Its line is of the turn its parent was in when it was first shown: its host's, or the announcing sub-agent's.
+        if (!this.announcedIn.has(child.acpId)) {
+          const above = [...state.children.values()].find((c) => c.workstream === child.parent)
+          const turn = above ? above.turns.at(-1) : (active ?? [...state.turns.values()].reverse().find((t) => t.session === child.session))
+          this.announcedIn.set(child.acpId, turn?.id)
+          // What its parent says after it is a text of its own, below its line.
+          if (turn) runs.delete(turn.id)
+        }
         const line = { type: 'subagent', turn: this.announcedIn.get(child.acpId), session: child.session, workstream: child.workstream, title, description: child.description, state: subagent, cancel: child.cancel }
         // In its parent's thread: its host's, or the sub-stream of the sub-agent that announced it.
         if (code(`line:${child.workstream}`, line)) put('element', identity(child.workstream, 'subagent'), line, entry.position, child.parent === entry.workstream ? undefined : child.parent)
@@ -879,12 +908,12 @@ export class CoreProjection {
       const replayed = entry.session === null
       if (entry.direction === 'in' && type === 'subagent_update' && typeof update?.sessionId === 'string' && state.children.has(update.sessionId)) {
         const announced = state.children.get(update.sessionId)!
-        if (!replayed) putChild(announced, (child ? child.turns.at(-1) : (active ?? [...state.turns.values()].reverse().find((t) => t.session === entry.session)))?.id)
+        if (!replayed) putChild(announced)
         continue
       }
       // Among sessions, what one tells another: a sub-agent's task opens its turn; the rest is in each one's own text.
       if (entry.direction === 'in' && type === 'session_message' && (child !== null || [update?.senderSessionId, update?.recipientSessionId].some((id) => typeof id === 'string' && state.children.has(id)))) {
-        if (child !== null && !replayed && update?.recipientSessionId === child.acpId) {
+        if (child !== null && !replayed && !child.unlisted && update?.recipientSessionId === child.acpId) {
           putChild(child)
           put(
             'element',
@@ -897,7 +926,7 @@ export class CoreProjection {
         continue
       }
       if (child !== null) {
-        if (replayed) continue
+        if (replayed || child.unlisted) continue
         putChild(child)
         // Its settings, its commands, its usage and its title are no element: its view has its title.
         if (entry.method === 'session/update' && ['config_option_update', 'available_commands_update', 'usage_update', 'session_info_update'].includes(String(type))) continue

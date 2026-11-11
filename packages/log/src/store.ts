@@ -290,9 +290,10 @@ export class LogStore {
     let line: { owner: string; root: string | null; depth: number }
     if (parent === null) line = { owner: uuid(owner), root: null, depth: 0 }
     else {
-      const found = await this.writer.query('SELECT owner, coalesce(root,id) AS root, depth FROM workstreams WHERE id=$1', [uuid(parent)])
-      const p = found.rows[0] as { owner: string; root: string; depth: number } | undefined
-      if (!p || (allowed !== null && !allowed.includes(p.owner))) throw new Error('unknown_parent')
+      const found = await this.writer.query('SELECT owner, coalesce(root,id) AS root, depth, host FROM workstreams WHERE id=$1', [uuid(parent)])
+      const p = found.rows[0] as { owner: string; root: string; depth: number; host: string | null } | undefined
+      // A native sub-stream starts nothing of Agora's (docs/specs/log.md, "Native sub-agents").
+      if (!p || p.host !== null || (allowed !== null && !allowed.includes(p.owner))) throw new Error('unknown_parent')
       line = { owner: p.owner, root: p.root, depth: p.depth + 1 }
     }
     await this.writer.query('INSERT INTO workstreams(id,owner,parent,root,depth) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [
@@ -566,7 +567,7 @@ export class LogStore {
       // docs/specs/log.md, "Native sub-agents": a sub-agent announced gets its Workstream in the transaction that writes
       // its line — a sub-stream of the one that announced it, its lines in this log.
       const announced = announcement(state, target, envelope.value)
-      if (announced)
+      if (announced?.listed)
         await tx.client.query(
           'INSERT INTO workstreams(id,owner,parent,root,depth,host) SELECT $1, p.owner, p.id, coalesce(p.root,p.id), p.depth+1, $3 FROM workstreams p WHERE p.id=$2 ON CONFLICT DO NOTHING',
           [childWorkstream(workstream, announced.acpId), announced.parent, workstream],

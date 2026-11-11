@@ -135,7 +135,7 @@ const cut = (text: string): string => (text.length > FIELD_MAX ? `${text.slice(0
  * The exchanges of these prompts, in order: the user's message, but an earlier catch-up; then what
  * the agent said and the tools it called, in the order it gave them. No reasoning, no tool content.
  */
-export function exchangesOf(entries: readonly Entry[], positions: readonly string[]): Exchange[] {
+export function exchangesOf(entries: readonly Entry[], positions: readonly string[], children: ReadonlySet<string> = new Set()): Exchange[] {
   const wanted = new Set(positions)
   type Part = { tool?: string; said?: 'user' | 'agora'; text: string }
   const turns = new Map<string, { user: string; parts: Part[]; tools: Map<string, Part> }>()
@@ -162,7 +162,8 @@ export function exchangesOf(entries: readonly Entry[], positions: readonly strin
       const user = (Array.isArray(prompt) ? prompt : []).map(blockText).filter((t) => t !== '').join('\n')
       turns.set(e.position, { user, parts: [], tools: new Map() })
     }
-    if (e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update' && e.session) {
+    // A native sub-agent's lines are in this log, and none of its host's exchange (docs/specs/log.md, "Native sub-agents").
+    if (e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update' && e.session && !children.has(String(object(e.content.params)?.sessionId))) {
       const turn = turns.get(latest.get(e.session) ?? '')
       const update = object(object(e.content.params)?.update)
       if (!turn || !update) continue

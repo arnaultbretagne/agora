@@ -217,6 +217,12 @@ interface SubOptions {
   silent?: boolean
   /** It gives settings, commands, a usage and a title of its own. */
   settings?: boolean
+  /** Their session ids start with this, in place of a random stem: the same sub-agent, seen again. */
+  id?: string
+  /** It stops waiting for its permission after that many seconds, and is idle with its request left open. */
+  giveUp?: number
+  /** Its parent says a word before it starts them. */
+  preface?: boolean
 }
 
 /**
@@ -263,7 +269,10 @@ async function subagent(parent: string, id: string, options: SubOptions): Promis
       new Promise<void>((resolve) => {
         me.wake = resolve
       }),
-    ])
+      ...(options.giveUp !== undefined ? [new Promise<'gave up'>((resolve) => setTimeout(() => resolve('gave up'), options.giveUp! * 1000))] : []),
+    ]).then((outcome) => {
+      if (outcome === 'gave up') me.cancelled = true
+    })
     if (!me.cancelled) state({ state: 'running' })
   }
   if (options.nested && !me.cancelled) await subagent(id, `${id}-below`, { n: 1, title: `${title}, one level down` })
@@ -605,7 +614,8 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       // /sub {json}: sub-agents of its own, as claude-agent-acp and codex-acp report theirs to a client that declared
       // `subagents` (docs/specs/log.md, "Native sub-agents"); a cancelled turn stops none of them, as Claude Code's.
       const options = JSON.parse(text.trim().slice('/sub'.length).trim() || '{}') as SubOptions
-      const stem = `sub-${randomUUID().slice(0, 8)}`
+      const stem = options.id ?? `sub-${randomUUID().slice(0, 8)}`
+      if (options.preface) say(session.id, 'Starting sub-agents.')
       const all = Promise.all(
         Array.from({ length: options.count ?? 1 }, (_, i) =>
           subagent(session.id, `${stem}-${String(i + 1)}`, {

@@ -326,7 +326,7 @@ export class Workstreams implements Handler {
             const metadata = object(decode(found.rows[0].metadata))
             if (metadata?.harness !== pool.harness || typeof metadata.sessionId !== 'string') return 'anchor_incompatible'
           } else anchor = lastAnchor(anchors, state, pool.harness) ?? undefined
-          const catchUp = catchUpText(exchangesOf(tx.entries, lacking(anchors, state, anchor ?? null)), anchor !== undefined)
+          const catchUp = catchUpText(exchangesOf(tx.entries, lacking(anchors, state, anchor ?? null), new Set(state.children.keys())), anchor !== undefined)
           const execution = randomUUID()
           return {
             execution,
@@ -508,7 +508,7 @@ export class Workstreams implements Handler {
     }
     if (entries.some((x) => x.execution === e.id && x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt' && state.attempts.has(x.position) && carried(x)))
       return null
-    return catchUpText(exchangesOf(entries, turns), e.body.anchor !== undefined, Number(schemaValue(recorded!.omitted)) || 0)
+    return catchUpText(exchangesOf(entries, turns, new Set(state.children.keys())), e.body.anchor !== undefined, Number(schemaValue(recorded!.omitted)) || 0)
   }
 
   /** A Create's or a Scope's profiles, checked (docs/specs/credentials.md, "Offered profiles"): each once, or the refusal. */
@@ -1082,6 +1082,12 @@ export class Workstreams implements Handler {
     // After a turn, what went out through the bridge: tunnels, the proxy's answers, in the mechanics' view.
     if (entry?.correlated_method === 'session/prompt' && ['response', 'error'].includes(entry.rpc_kind ?? ''))
       void this.executions.info(execution).catch(() => {})
+    // A sub-agent that ends its turn leaves no permission pending: nothing would answer it, and it would hold its host
+    // (docs/specs/log.md, "Native sub-agents", "Its turns").
+    const update = entry?.direction === 'in' && entry.method === 'session/update' ? object(object(entry.content.params)?.update) : null
+    const idle = update?.sessionUpdate === 'subagent_update' && object(update.state)?.state === 'idle' ? state.children.get(String(update.sessionId)) : undefined
+    const connection = this.executions.connectionOf(execution)
+    if (idle && connection !== null && e && !e.ended && !e.lost && !e.failed) await this.cancelPermissions(workstream, execution, connection, idle.acpId)
     await this.drive(workstream)
     this.projectSoon(workstream)
   }

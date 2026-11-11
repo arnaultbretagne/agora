@@ -56,14 +56,15 @@ const markOf = (prompt: unknown): Record<string, unknown> | null =>
   object(object(object(Array.isArray(prompt) ? (prompt as unknown[]).find((b) => !isCatchUp(b)) : null)?._meta)?.[FROM_META])
 
 /** What a turn says last: its text since its last tool or its reasoning, whole (docs/specs/delegation.md, "Messages"). */
-function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined): string {
+export function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined, children: ReadonlySet<string>): string {
   const from = BigInt(turn.requestPosition)
   const to = next === undefined ? null : BigInt(next.requestPosition)
   let words = ''
   let speaker: unknown
   let cut = true
   for (const e of entries) {
-    if (e.kind !== 'acp' || e.direction !== 'in' || e.method !== 'session/update') continue
+    // What a native sub-agent of the delegate's says is not the delegate's last message (docs/specs/log.md, "Native sub-agents").
+    if (e.kind !== 'acp' || e.direction !== 'in' || e.method !== 'session/update' || children.has(String(object(e.content.params)?.sessionId))) continue
     const at = BigInt(e.position)
     if (at <= from || (to !== null && at >= to)) continue
     const update = object(object(e.content.params)?.update)
@@ -576,7 +577,7 @@ export class Delegations {
     if (!this.holdsAnothers(entries, turn, next)) return null
     // A turn of the earlier contract in which the delegate called `submit` sent nothing more: said then, said for good.
     if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return null
-    const words = lastMessageOf(entries, turn, next)
+    const words = lastMessageOf(entries, turn, next, new Set(state.children.keys()))
     const id = identity(delegate, turn.id, 'last message')
     return words === '' ? this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.') : this.fromDelegate(delegator, delegate, id, words, turn.id)
   }
