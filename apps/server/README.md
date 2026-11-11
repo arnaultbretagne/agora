@@ -20,7 +20,7 @@ only port open to sandboxes).
 | `SIGNING_KEY_FILE` | required | Ed25519 private key that signs the bridge tokens. |
 | `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`, `LOG_ANCHORS_URL` | required | The three runtime logins of the log's database (`packages/log/scripts/README.md`). |
 | `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Lease, maximum turn duration, renewal step. |
-| `APPROVAL_SECONDS` | 270 | How long an approval of a `delegate` call waits for the person (`docs/specs/delegation.md`, "Approval"). |
+| `APPROVAL_SECONDS` | 270 | How long an approval of a `spawn_agent` call waits for the person (`docs/specs/delegation.md`, "Approval"). |
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
 | `TEST_ROUTES` | — | `true` to open the test routes and page. |
 | `CLIENT_DIR` | `apps/web/dist` | The client's built files. |

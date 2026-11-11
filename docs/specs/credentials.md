@@ -58,8 +58,8 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
 | `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
 | `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). |
-| `agora:delegate` | The same grant as `agora:read`; Agora opens `delegate` to it (`delegation.md`). |
-| `agora:submit` | The same grant as `agora:read`; Agora opens `submit` to it. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`) but one keeping what its Workstream's last execution holds. |
+| `agora:delegate` | The same grant as `agora:read`; Agora opens `spawn_agent`, `send_message`, `stop_agent` and `list_agents` to it (`delegation.md`). |
+| `agora:submit` | The same grant as `agora:read`; Agora opens `send_message` to it, toward its delegator alone. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`) but one keeping what its Workstream's last execution holds. |
 
 Grants are additive. GraphQL (`/graphql`) is covered by no profile. A GitHub grant names who acts,
 `identity`: `contributor` for read and write, `reviewer` for review.

@@ -17,7 +17,7 @@ import { GITHUB_WRITE } from '@agora/credentials'
 export const CALLER_HEADER = 'x-agora-execution'
 const SUBJECT = /^agora ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** A message larger than this is no tool call of ours: `submit` carries what a line of a prompt can hold. */
+/** A message larger than this is no tool call of ours: `send_message` carries what a line of a prompt can hold. */
 const MAX_BODY = MAX_LINE
 
 const SEARCH: Tool = {
@@ -71,45 +71,62 @@ const READ: Tool = {
   annotations: { readOnlyHint: true },
 }
 
-const DELEGATE: Tool = {
-  name: 'delegate',
+// The four tools of delegation bear the names the harnesses give their own sub-agents' gestures (docs/specs/delegation.md).
+const SPAWN_AGENT: Tool = {
+  name: 'spawn_agent',
   description:
-    'Hand work to another agent, which runs on its own as a sub-stream of your Workstream. The call answers once it has started; ' +
-    'what it sends comes back to you later as a message, whole — do not wait or poll for it, carry on or end your turn. ' +
-    '`to` writes to one of your delegates again, whatever it is doing. `output_schema` asks for a result of that shape (a JSON Schema whose root is an object): ' +
-    'give one when you will act on fields of the result — a verdict, findings, a number —, leave it out when you will read prose. ' +
+    'Start another agent of Agora’s, a delegate. It is not a sub-agent of your own harness: it runs in an execution of its own — ' +
+    'its harness, its model, its rights — as a sub-stream of your Workstream, where the person sees it and can write to it. ' +
+    'The call answers once it has started; its last message comes back to you later as a message, whole — do not wait or poll for it, carry on or end your turn. ' +
     'Rights beyond your own wait for the person’s approval.',
   inputSchema: {
     type: 'object',
     properties: {
-      instructions: { type: 'string', description: 'The delegate’s first message, or the next one with `to`.' },
+      instructions: { type: 'string', description: 'The delegate’s first message: what it has to do, and what you need back.' },
       harness: { type: 'string', description: 'claude-code, codex or opencode; yours by default.' },
       model: { type: 'string', description: 'A model the harness offers; its default otherwise.' },
       effort: { type: 'string', description: 'An effort the harness offers; its default otherwise.' },
       rights: { type: 'array', items: { type: 'string' }, description: 'The delegate’s rights, as profiles — e.g. github:owner/repo:read; none by default.' },
-      output_schema: { type: 'object', description: 'A JSON Schema, its root an object: the shape of the result to hand back with `submit`.' },
-      to: { type: 'string', format: 'uuid', description: 'One of your delegates, to write to again.' },
     },
     required: ['instructions'],
     additionalProperties: false,
   },
 }
 
-/** Listed to every delegate from its start: a harness may list its tools once (docs/specs/delegation.md, "Typed results"). */
-const SUBMIT: Tool = {
-  name: 'submit',
+/** Listed to every delegate from its start, toward its delegator: a harness may list its tools once (docs/specs/mcp.md, "The path"). */
+const SEND_MESSAGE: Tool = {
+  name: 'send_message',
   description:
-    'Send a message to the agent that delegated to you: a result, a question, news, as many times as you have something to say. ' +
-    'A turn with no `submit` sends your last message for you; with one, nothing more goes by itself. Give `result` when it asked for a shape.',
+    'Write to another agent of Agora’s. To one of your delegates, by its id, whatever it is doing: its next message. ' +
+    'To `parent`, the agent that started you: what cannot wait for the end of your turn — a question, news. ' +
+    'Your turn’s last message goes to it by itself, so do not send your result this way.',
   inputSchema: {
     type: 'object',
     properties: {
+      to: { type: 'string', description: 'The id of one of your delegates, or `parent`.' },
       message: { type: 'string', description: 'The words, whole.' },
-      result: { type: 'object', description: 'The object it asked for, in the shape it gave.' },
     },
-    required: ['message'],
+    required: ['to', 'message'],
     additionalProperties: false,
   },
+}
+
+const STOP_AGENT: Tool = {
+  name: 'stop_agent',
+  description: 'Stop what one of your delegates is doing now. The delegate stays: `send_message` reaches it, and starts its next turn.',
+  inputSchema: {
+    type: 'object',
+    properties: { to: { type: 'string', format: 'uuid', description: 'The id of one of your delegates.' } },
+    required: ['to'],
+    additionalProperties: false,
+  },
+}
+
+const LIST_AGENTS: Tool = {
+  name: 'list_agents',
+  description: 'Your delegates and whether each is working: one line each, `<id> · <title> · <state>` — working, idle, failed or cancelled.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true },
 }
 
 /** Listed to an execution holding a repository's write, for those repositories (docs/specs/merge.md). */
@@ -131,7 +148,12 @@ const PROPOSE_MERGE: Tool = {
 }
 
 /** The tools each right opens (docs/specs/mcp.md, "The path"). */
-const RIGHTS: Readonly<Record<string, readonly Tool[]>> = { 'agora:read': [SEARCH, READ], 'agora:delegate': [DELEGATE], 'agora:submit': [SUBMIT] }
+const RIGHTS: Readonly<Record<string, readonly Tool[]>> = {
+  'agora:read': [SEARCH, READ],
+  'agora:delegate': [SPAWN_AGENT, SEND_MESSAGE, STOP_AGENT, LIST_AGENTS],
+  'agora:submit': [SEND_MESSAGE],
+}
+const DELEGATION = new Set(['spawn_agent', 'send_message', 'stop_agent', 'list_agents'])
 
 /** What a tool answers instead of its result: the reason, as the HTTP API gives it. */
 class Refused extends Error {}
@@ -250,8 +272,9 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
     return reply(res, 400, 'invalid_message')
   }
   const delegations = workstreams.delegations
+  // Each tool once: a delegate that may delegate holds `send_message` by both its rights.
   const tools = [
-    ...caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? []))),
+    ...new Set(caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? [])))),
     ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p)) ? [PROPOSE_MERGE] : []),
   ]
   const execution = subject![1]!
@@ -263,9 +286,11 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
     const args = request.params.arguments ?? {}
     try {
       if (tool.name === 'propose_merge') return { content: [{ type: 'text', text: await workstreams.merges!.propose({ workstream: caller.workstream, execution, profiles: caller.profiles }, args) }] }
-      if (tool.name === 'delegate' || tool.name === 'submit') {
+      if (DELEGATION.has(tool.name)) {
         const who = { workstream: caller.workstream, execution, profiles: caller.profiles }
-        if (tool.name === 'submit') return { content: [{ type: 'text', text: await delegations!.submit(who, args) }] }
+        if (tool.name === 'send_message') return { content: [{ type: 'text', text: await delegations!.send(who, args) }] }
+        if (tool.name === 'stop_agent') return { content: [{ type: 'text', text: await delegations!.stop(who, args) }] }
+        if (tool.name === 'list_agents') return { content: [{ type: 'text', text: await delegations!.list(who) }] }
         // A held call hears progress, so that no harness gives up first (docs/specs/delegation.md, "Approval").
         const token = request.params._meta?.progressToken
         let progress = 0
@@ -276,7 +301,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
           aborted: extra.signal,
           toolUseId: typeof request.params._meta?.['claudecode/toolUseId'] === 'string' ? (request.params._meta['claudecode/toolUseId'] as string) : null,
         }
-        return { content: [{ type: 'text', text: await delegations!.delegate(who, args, hold) }] }
+        return { content: [{ type: 'text', text: await delegations!.spawn(who, args, hold) }] }
       }
       return { content: [{ type: 'text', text: await call(workstreams, owner, tool.name, args) }] }
     } catch (error) {
@@ -290,8 +315,8 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
       return { content: [{ type: 'text', text: reason }], isError: true }
     }
   })
-  // One JSON answer per message, but `delegate`'s: an SSE stream, its progress then its answer (docs/specs/mcp.md, "The path").
-  const streaming = object(message)?.method === 'tools/call' && object(object(message)?.params)?.name === 'delegate'
+  // One JSON answer per message, but `spawn_agent`'s: an SSE stream, its progress then its answer (docs/specs/mcp.md, "The path").
+  const streaming = object(message)?.method === 'tools/call' && object(object(message)?.params)?.name === 'spawn_agent'
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !streaming })
   res.on('close', () => {
     void transport.close()

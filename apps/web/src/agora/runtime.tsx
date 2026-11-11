@@ -104,7 +104,7 @@ export interface Agora {
   readonly agents: ListFeed
   /** The open Workstream's parents, its root first; none for a root (docs/specs/assistant-ui.md, "Header"). */
   readonly line: readonly ListRow[]
-  /** The rows of the delegates its `delegate` lines started, read live (docs/specs/assistant-ui.md, "A tool's line"). */
+  /** The rows of the delegates its lines name, read live (docs/specs/assistant-ui.md, "A tool's line"). */
   readonly delegates: readonly ListRow[]
   /** The messages handed to assistant-ui, which shows them a render later. */
   readonly messages: readonly ThreadMessageLike[]
@@ -173,7 +173,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // The teams launched from this page whose lead has not written yet: their Workstream waits for it.
   const [launched, setLaunched] = useState<ReadonlySet<string>>(new Set())
   const { state, connection } = useThread(api, id)
-  // Its sub-streams' rows, read only once a `delegate` line has started one.
+  // Its sub-streams' rows, read only once a line names a delegate.
   const delegating = useMemo(() => delegatesOf(state).length > 0, [state])
   const delegates = useList(api, null, id !== null && delegating, id)
   // The reason of the last command refused, with the Workstream it was sent in: shown only there.

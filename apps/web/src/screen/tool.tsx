@@ -1,6 +1,6 @@
 // A tool call, in the trace grammar (docs/specs/assistant-ui.md, "Parts"): one line with the agent's
 // own title, opening onto its diff, its output or its input; and, while the agent waits for it, the
-// permission it asks, with the options it offers. A `delegate` line names its delegate and its state, and holds
+// permission it asks, with the options it offers. A delegate's line names its delegate and its state, and holds
 // the approval it waits for. Tools in a row fold under one line.
 import { useAuiState, type ToolCallMessagePartComponent } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, GitMergeIcon, LoaderCircleIcon } from 'lucide-react'
@@ -227,7 +227,7 @@ const MergeBox: FC<{ card: MergeCard }> = ({ card }) => {
   )
 }
 
-/** A `delegate` line: its delegate's title and harness, a link to it, the state its row gives; its approval. */
+/** A delegate's line — `spawn_agent`, or a `send_message` or a `stop_agent` naming one: its title and harness, a link to it, the state its row gives; its approval. */
 const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isError: boolean; running: boolean }> = ({ artifact: a, args, isError, running }) => {
   const { delegates, open, view } = useAgora()
   const d = a.delegate
