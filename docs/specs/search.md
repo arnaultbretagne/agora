@@ -54,7 +54,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | ID | Case | Expected |
 | --- | --- | --- |
 | S14 | An exchange with a message sent into its turn, between the agent's two texts; then searched for that message's words | The agent's first lines, `## <n> · you, during the turn`, the message's lines of kind `user`, `## <n> · agent`, the agent's next lines; the same numbers once its views are rebuilt; found as a user's line. |
-| S15 | A native sub-stream's transcript, read; a word its sub-agent alone said, searched | `## 1 · <started> · parent`, its task's lines, then `## 1 · agent`, its text and its tools; found in the sub-stream, not in its host. |
+| S15 | A native sub-stream's transcript, read; its host's; one with no task | `## 1 · <started> · parent`, its task's lines, then `## 1 · agent`, its text and its tools; none of them in its host's; `## 1 · agent` first. |
 | S1 | A Workstream of two exchanges, the second calling a tool that succeeds and one that fails; its transcript read whole | Its two headers per exchange, the user's lines, the agent's, `[tool: …]` and `[tool: … — failed]`, numbered from 1 in that order. |
 | S2 | The same transcript after a third exchange, then after its views are rebuilt | The first two exchanges' lines at the same numbers, with the same text. |
 | S3 | An exchange in progress, its answer streaming | Its last lines grow; no line before them moves. |

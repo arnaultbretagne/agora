@@ -148,7 +148,7 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
       (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'as' THEN p.object->>'as' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
         WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text AND NOT p.object ? 'steered' LIMIT 1) AS author,
       -- A native sub-agent's turn answers no prompt of Agora's (docs/specs/log.md, "Native sub-agents"): with no task reported, it has no first header.
-      (o.object->>'requestId') IS NULL AS unprompted
+      coalesce((o.object->>'native')::boolean, false) AS unprompted
     FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
   ), parts AS (
     SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 0 AS part, 'header' AS kind,

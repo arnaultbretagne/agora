@@ -201,8 +201,8 @@ interface SubOptions {
   n?: number
   count?: number
   title?: string
-  /** It asks a permission, and waits for the answer. */
-  permission?: boolean
+  /** It asks a permission, and waits for the answer: each of them, or the one of that rank alone. */
+  permission?: boolean | number
   /** It starts a sub-agent of its own. */
   nested?: boolean
   /** No task is reported, as Codex; no `cancel` is offered. */
@@ -606,7 +606,15 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       // `subagents` (docs/specs/log.md, "Native sub-agents"); a cancelled turn stops none of them, as Claude Code's.
       const options = JSON.parse(text.trim().slice('/sub'.length).trim() || '{}') as SubOptions
       const stem = `sub-${randomUUID().slice(0, 8)}`
-      const all = Promise.all(Array.from({ length: options.count ?? 1 }, (_, i) => subagent(session.id, `${stem}-${String(i + 1)}`, { ...options, title: options.title ?? ['Count the files', 'Read the changelog', 'List the tests'][i % 3]! })))
+      const all = Promise.all(
+        Array.from({ length: options.count ?? 1 }, (_, i) =>
+          subagent(session.id, `${stem}-${String(i + 1)}`, {
+            ...options,
+            permission: options.permission === true || options.permission === i + 1,
+            title: options.title ?? ['Count the files', 'Read the changelog', 'List the tests'][i % 3]!,
+          }),
+        ),
+      )
       if (!options.background) {
         const cancelled = await Promise.race([all.then(() => false), new Promise<boolean>((resolve) => {
           if (turn.cancelled) return resolve(true)

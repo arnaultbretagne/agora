@@ -23,6 +23,8 @@ export interface Turn {
   answered: boolean
   stopReason?: unknown
   failure?: unknown
+  /** A native sub-agent's turn (docs/specs/log.md, "Native sub-agents"): it answers no prompt of Agora's. */
+  native?: true
 }
 export interface Execution {
   id: string
@@ -224,6 +226,7 @@ function openChild(child: Child, entry: Entry): void {
     status: 'in_progress',
     dispatching: true,
     answered: false,
+    native: true,
   })
 }
 /** Its turn in progress ends: by what it said, or with its host's Session or execution. */

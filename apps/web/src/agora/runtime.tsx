@@ -101,6 +101,8 @@ export interface Agora {
   /** Who the proxy says the person is. */
   readonly account: Account
   /** The person's agents' folder: their runs' members. */
+  /** Cancel, for the open Workstream's turn in progress or uncertain. */
+  readonly cancel: () => Promise<void>
   readonly agents: ListFeed
   /** The open Workstream's parents, its root first; none for a root (docs/specs/assistant-ui.md, "Header"). */
   readonly line: readonly ListRow[]
@@ -199,7 +201,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // A draft has no thread to wait for: sending is offered at once, and starts everything. A team just
   // launched waits for its lead's first turn.
   const composer = useMemo<Composer>(() => {
-    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false, held: false }
+    if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false, held: false, readOnly: false }
     const own = composerOf(state, view)
     const starting = launched.has(id) && state.complete && ![...state.objects.values()].some((o) => o.kind === 'turn')
     return starting ? { ...own, open: false, create: false, reason: 'The team is starting…' } : own
@@ -293,14 +295,23 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         await send('Answer', { question: permission.position }, { optionId, ...(note ? { note } : {}) })
         return
       }
+      // A native sub-stream's permission is answered through its host (docs/specs/log.md, "Native sub-agents").
       await send(
         'RespondPermission',
         { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
         { requestId: permission.requestId, outcome: { outcome: 'selected', optionId } },
+        view.native?.host ?? id,
       )
     },
-    [state, send],
+    [state, send, view.native, id],
   )
+
+  /** Cancel, for the turn in progress or uncertain: a native sub-stream's goes through its host, with that turn's execution. */
+  const cancel = useCallback(async () => {
+    const turn = composer.cancellable
+    if (turn === null) return
+    await send('Cancel', { execution: view.native ? turn.object.execution : view.execution, turn: turn.id }, {}, view.native?.host ?? id)
+  }, [composer.cancellable, send, view.native, view.execution, id])
 
   /** A message with no execution running: a Create first, the Write once its Session is open. */
   const start = useCallback(
@@ -445,9 +456,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     onNew,
     queue,
     adapters: { attachments },
-    onCancel: async () => {
-      if (composer.cancellable) await send('Cancel', { execution: view.execution, turn: composer.cancellable.id }, {})
-    },
+    onCancel: cancel,
   })
 
   // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
@@ -523,6 +532,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     choosePool,
     send: (kind, target, body) => send(kind, target, body),
     answer,
+    cancel,
     open,
     teams,
     account,

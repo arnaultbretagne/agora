@@ -346,7 +346,19 @@ const WaitingMessages: FC = () => {
   )
 }
 
-export const Composer: FC<{ placeholder?: string }> = ({ placeholder }) => {
+/** The composer; in a native sub-stream, which takes no message, the line that says so (docs/specs/assistant-ui.md, "The screen"). */
+export const Composer: FC<{ placeholder?: string }> = (props) => {
+  const { composer, line } = useAgora()
+  if (composer.readOnly)
+    return (
+      <p data-read-only className="text-muted-foreground border-foreground/15 w-full border-l-2 pl-3 text-[13px]">
+        Read-only: a sub-agent of “{line.at(-1)?.title ?? 'its parent'}” takes no message.
+      </p>
+    )
+  return <Writing {...props} />
+}
+
+const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
   const { pending, composer, commands, promptCapabilities, pool } = useAgora()
   const team = composer.create && pool === TEAM

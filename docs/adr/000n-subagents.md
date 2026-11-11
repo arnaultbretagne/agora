@@ -81,6 +81,8 @@
   background. Not measured: what a message sent into the turn does while one is awaited.
 - After a restore, the sub-agents of earlier executions stay as they ended: nothing announces them again.
 - The tree gains a row for each sub-agent, folded under its parent.
+- A native sub-stream is a row of `workstreams` naming its host: one column more, added by the log's own SQL, as
+  the tree's were. The core projector's version does not change: a log with no sub-agent projects as before.
 - The extension is not in the pinned schema, and its RFD still changes. What Agora reads of it — the
   members of `subagent_update` and of `session_message` — is in one place: `log.md`, "Native
   sub-agents".

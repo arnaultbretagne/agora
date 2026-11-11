@@ -7,7 +7,7 @@ import { after, ofKind, type Json, type ThreadState, type ViewObject } from './o
 type Part = Exclude<ThreadMessageLike['content'], string>[number]
 type Status = NonNullable<ThreadMessageLike['status']>
 
-export type WorkstreamState = 'none' | 'starting' | 'ready' | 'interrupted' | 'stopped' | 'lost' | 'failed' | 'ended'
+export type WorkstreamState = 'none' | 'starting' | 'ready' | 'interrupted' | 'stopped' | 'lost' | 'failed' | 'ended' | 'native'
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
 
 export interface WorkstreamView {
@@ -36,6 +36,13 @@ export interface WorkstreamView {
   readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
   /** The pending question's position, or null (docs/specs/log.md, "The Workstream view"). */
   readonly question?: string | null
+  /**
+   * On a native sub-stream alone (docs/specs/log.md, "Native sub-agents"): its host, whose log holds its lines and takes
+   * the commands that reach it; its description; whether its turn can be cancelled. And its state: `working`, `waiting`,
+   * `idle`, `failed` or `cancelled`.
+   */
+  readonly native?: { readonly host: string; readonly description: string | null; readonly cancel: boolean } | null
+  readonly subagent?: string | null
 }
 
 export interface Usage {
@@ -101,6 +108,8 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     promptCapabilities: promptCapabilitiesOf(o.promptCapabilities),
     exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
     question: text(o.question) || null,
+    native: json(o.native) && text(json(o.native)!.host) ? { host: text(json(o.native)!.host), description: text(json(o.native)!.description) || null, cancel: json(o.native)!.cancel === true } : null,
+    subagent: text(o.subagent) || null,
     continuation: Object.fromEntries(
       Object.entries(json(o.continuation) ?? {}).flatMap(([harness, c]) => {
         const v = json(c)
@@ -138,6 +147,8 @@ export interface Composer {
   readonly refuses: boolean
   /** Messages wait with no turn running: the next one sends them (docs/specs/assistant-ui.md, "Messages during a turn"). */
   readonly held: boolean
+  /** A native sub-stream: it takes no message (docs/specs/log.md, "Native sub-agents"). */
+  readonly readOnly: boolean
 }
 
 const STATE_REASON: Record<WorkstreamState, string | null> = {
@@ -149,6 +160,7 @@ const STATE_REASON: Record<WorkstreamState, string | null> = {
   lost: 'The sandbox was lost. It ends at its deadline; then a new one can start.',
   failed: null,
   ended: null,
+  native: null,
 }
 
 /** The states in which no execution runs: sending starts one. */
@@ -157,6 +169,12 @@ const IDLE: readonly WorkstreamState[] = ['none', 'failed', 'ended']
 export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const turns = turnsOf(state)
   const last = turns.at(-1)
+  // A native sub-stream takes no message: its turn can be cancelled where its adapter offers it, a permission it asks answered.
+  if (view.state === 'native') {
+    const working = turns.find((t) => status(t) === 'in_progress') ?? null
+    const asked = ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending') ?? null
+    return { open: false, create: false, reason: null, running: working !== null, cancellable: view.native?.cancel === true ? working : null, uncertain: null, pendingPermission: asked, refuses: false, held: false, readOnly: true }
+  }
   const active = turns.find((t) => ['saved', 'in_progress', 'uncertain'].includes(status(t))) ?? null
   const uncertain = active && status(active) === 'uncertain' ? active : null
   const pendingPermission =
@@ -169,7 +187,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const cancellable = turns.find((t) => ['in_progress', 'uncertain'].includes(status(t))) ?? null
   const settling = view.state === 'ready' && view.configuring === true
   // A pending approval leaves sending open, a turn running included: what is sent refuses it (docs/specs/assistant-ui.md).
-  if (state.complete && pending(true)) return { open: true, create: false, reason: null, running, cancellable, uncertain, pendingPermission, refuses: true, held: false }
+  if (state.complete && pending(true)) return { open: true, create: false, reason: null, running, cancellable, uncertain, pendingPermission, refuses: true, held: false, readOnly: false }
   const reason = !state.complete
     ? 'Loading…'
     : pendingQuestion
@@ -187,7 +205,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   // A turn running leaves sending open: what is sent waits (docs/specs/assistant-ui.md, "Messages during a turn").
   const open = create || (state.complete && view.state === 'ready' && uncertain === null && pendingPermission === null && !pendingQuestion && !settling)
   const held = open && active === null && waitingOf(state).length > 0
-  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false, held }
+  return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false, held, readOnly: false }
 }
 
 /** A message that waits, as the list above the composer shows it (docs/specs/assistant-ui.md, "Messages during a turn"). */
@@ -416,6 +434,8 @@ const delegating = (tool: Json): boolean => /^\S*?(?<![a-z0-9])(?:spawn_agent|se
 export function delegatesOf(state: ThreadState): string[] {
   return ofKind(state, 'element').flatMap((e) => {
     // Only such a line's output is read: every other tool's would cost its whole size at each change.
+    // A native sub-agent's line names its sub-stream itself (docs/specs/log.md, "Native sub-agents").
+    if (e.object.type === 'subagent' && text(e.object.workstream)) return [text(e.object.workstream)]
     const started = e.object.type === 'tool' && delegating(e.object) ? startedDelegate(outputOf(e.object)) : null
     return started ? [started.id] : []
   })
@@ -456,6 +476,26 @@ function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObj
   }
 }
 
+/**
+ * A native sub-agent's line in its parent's thread (docs/specs/assistant-ui.md, "A tool's line"): drawn as a delegate's
+ * is, by its title, with a link to its sub-stream and its state.
+ */
+function subagentPart(e: ViewObject): Part {
+  const o = e.object
+  const state = text(o.state) || 'working'
+  const working = state === 'working' || state === 'waiting'
+  return {
+    type: 'tool-call',
+    toolCallId: e.id,
+    toolName: 'other',
+    args: {} as never,
+    argsText: '',
+    ...(working ? {} : { result: state }),
+    isError: state === 'failed',
+    artifact: { title: text(o.title) || 'Sub-agent', kind: 'other', status: working ? 'in_progress' : state === 'failed' ? 'failed' : 'completed', delegate: { id: text(o.workstream), title: text(o.title) || 'Sub-agent' }, subagent: state },
+  }
+}
+
 function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>): Part[] {
   const permissions = new Map<string, ViewObject>()
   for (const e of elements)
@@ -468,6 +508,7 @@ function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>)
     else if (o.type === 'agent_thought_chunk') parts.push({ type: 'reasoning', text: text(o.text) })
     else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId)), gates.get(text(o.toolCallId))))
     else if (o.type === 'plan') parts.push({ type: 'data', name: 'plan', data: { entries: list(o.entries) } as never })
+    else if (o.type === 'subagent') parts.push(subagentPart(e))
     else if (o.type === 'permission') {
       const call = json(json(o.params)?.toolCall) ?? {}
       if (!tools.has(text(call.toolCallId))) parts.push(toolPart(call, e))
@@ -833,6 +874,8 @@ export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' 
   readonly below?: { readonly count: number; readonly live: number; readonly waiting: number }
   /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `idle`, `failed`, `cancelled`; an earlier delegate's may say `completed`. */
   readonly delegation?: string
+  /** A native sub-stream's state (docs/specs/log.md, "Native sub-agents"): `working`, `waiting`, `idle`, `failed`, `cancelled`. */
+  readonly subagent?: string | null
 }
 
 export interface Section {
@@ -931,9 +974,9 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
       if (e.object.steered === true) responses.push({ said: e, parts: [] })
       else if (e.object.type !== 'user' && e.object.type !== 'report') responses.at(-1)!.parts.push(e)
     }
-    placed.push({
-      position: text(turn.object.requestPosition),
-      messages: [
+    // A native sub-agent's turn answers no prompt of Agora's: with no task reported, its response alone.
+    const unprompted = prompt === undefined && report === undefined && turn.object.native === true
+    const opening: ThreadMessageLike =
         report
           ? {
               id: `${turn.id}:report`,
@@ -950,7 +993,11 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
               attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
               // A delegate's message from its caller is the caller's, not the person's.
               metadata: { custom: from ? { ...custom, from } : custom },
-            },
+            }
+    placed.push({
+      position: text(turn.object.requestPosition),
+      messages: [
+        ...(unprompted ? [] : [opening]),
         ...responses.flatMap(({ said, parts }, i): ThreadMessageLike[] => {
           const at = said ? `:${text(said.object.firstPosition)}` : ''
           const last = i === responses.length - 1

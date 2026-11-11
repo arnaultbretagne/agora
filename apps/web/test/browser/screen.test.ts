@@ -1562,6 +1562,121 @@ test('U78 tools in a row folded, closed, a text between them, what waits for the
   assert.equal(await alone.locator('[data-tool-fold]').count(), 0, 'a tool alone')
 })
 
+/** What the mock agent is told of its own sub-agents (packages/mock-agent, `/sub`). */
+const subCall = (options: Record<string, unknown>) => `/sub ${JSON.stringify(options)}`
+/** A Workstream of the mock agent's whose first message starts sub-agents of its own. */
+async function withSubagents(page: Page, options: Record<string, unknown>): Promise<string> {
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await send(page, subCall(options))
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  return idOf(page)
+}
+/** The rows under a root, once unfolded: its sub-streams. */
+const nav = (page: Page) => page.getByRole('navigation', { name: 'Workstreams' })
+/** A native sub-agent's line of a thread, by its label. */
+const subagentLine = (page: Page, label: string) => thread(page).locator('[data-delegate]').filter({ hasText: label })
+
+test('U85 a Workstream whose agent announced two sub-agents, one working, one asking a permission; its root folded, then unfolded: waiting for you; both rows under it, each after its sub-agent mark, the first working, the second waiting for you', async () => {
+  const page = await fresh()
+  await withSubagents(page, { n: 25, count: 2, permission: 2 })
+  await subagentLine(page, 'Read the changelog').getByText('waiting for you').waitFor()
+  // Folded: what waits under it comes up.
+  await nav(page).getByText('waiting for you').waitFor()
+  assert.equal(await listItems(page).count(), 1)
+  await nav(page).getByRole('button', { name: 'Unfold' }).click()
+  await until('its two sub-streams', async () => (await listItems(page).count()) === 3)
+  const rows = nav(page).getByRole('group').locator('button[title]')
+  // The most recently changed first: whichever that is, each says what it is and how it stands.
+  assert.deepEqual((await rows.evaluateAll((all) => all.map((row) => row.textContent!.replace(/\s+/g, ' ').trim()))).sort(), ['sub-agentCount the files', 'sub-agentRead the changelogwaiting for you'])
+  const working = rows.filter({ hasText: 'Count the files' })
+  assert.equal(await working.locator('[aria-label="working"]').count(), 1, 'the working dot')
+  assert.equal(await working.getByText('sub-agent', { exact: true }).count(), 1)
+  assert.equal(await rows.filter({ hasText: 'Read the changelog' }).locator('[aria-label="working"]').count(), 0, 'waiting for you in place of its dot')
+  await shot(page, 'u85-subagents-sidebar')
+  await page.context().close()
+})
+
+test('U86 that Workstream’s thread: one line for each sub-agent at its announcement, with its title, a link to its sub-stream and its state; none of their text or tools; the model picker the Workstream’s own', async () => {
+  const page = await fresh()
+  const id = await withSubagents(page, { n: 3, count: 2, settings: true })
+  for (const title of ['Count the files', 'Read the changelog']) {
+    const line = subagentLine(page, title)
+    await line.getByText('working').waitFor()
+    assert.match((await line.getByRole('link').getAttribute('href')) ?? '', /^\/w\/[0-9a-f-]{36}$/)
+  }
+  await thread(page).getByText('Sub-agents done.').waitFor()
+  for (const title of ['Count the files', 'Read the changelog']) await subagentLine(page, title).getByText('idle', { exact: true }).waitFor()
+  await shot(page, 'u86-subagents-thread')
+  assert.equal(await thread(page).getByText('Working on:').count(), 0, 'none of their text')
+  assert.equal(await thread(page).getByText('ls -1 | wc -l').count(), 0, 'none of their tools')
+  // Its settings are its own: the sub-agents' model never reached its picker.
+  const view = await viewOf(server.url, id)
+  assert.ok(!JSON.stringify(view?.settings).includes('sub-model') && view?.usage === null)
+  assert.equal(await modelPicker(page).getByText('Sub model').count(), 0)
+  await page.context().close()
+})
+
+test('U87 a native sub-stream opened, working, cancel advertised; then cancelled; one that advertises none; one with no task: its parents, its task as from its parent, its text and tools, no composer, Read-only; Cancel, sent to its host; then cancelled and no Cancel; never a Cancel; its response alone', async () => {
+  const page = await fresh()
+  const id = await withSubagents(page, { n: 25 })
+  await subagentLine(page, 'Count the files').getByRole('link').click()
+  await page.waitForURL((url) => /\/w\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(id))
+  const child = idOf(page)
+  // Its parents in the header, its task shown as from its parent, its text and its tool.
+  await page.locator('header').getByRole('button', { name: subCall({ n: 25 }) }).waitFor()
+  await stateLabel(page, 'native').getByText('working').waitFor()
+  await thread(page).getByText('Count the files, and say how many.').waitFor()
+  await thread(page).getByText(`From ${subCall({ n: 25 })}`).waitFor()
+  await thread(page).getByText('Working on: Count the files.').waitFor()
+  await thread(page).getByText('ls -1 | wc -l').waitFor()
+  // No composer, no picker, no Stop: the line that says why, and Cancel.
+  await thread(page).locator('[data-read-only]').getByText(`Read-only: a sub-agent of “${subCall({ n: 25 })}” takes no message.`).waitFor()
+  assert.equal(await composerInput(page).count(), 0)
+  assert.equal(await modelPicker(page).count(), 0)
+  assert.equal(await page.getByRole('button', { name: 'Stop', exact: true }).count(), 0)
+  await shot(page, 'u87-subagent-working')
+  await page.locator('header').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await stateLabel(page, 'native').getByText('cancelled').waitFor()
+  assert.equal(await page.locator('header').getByRole('button', { name: 'Cancel', exact: true }).count(), 0)
+  // The Cancel went to its host, for the sub-stream's turn; none was written for the sub-stream itself.
+  const cancels = (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Cancel')
+  assert.equal(cancels.length, 1)
+  assert.equal((await entriesOf(child)).length, 0)
+  await shot(page, 'u87-subagent-cancelled')
+  // One that advertises none, and reports no task: never a Cancel; its response alone.
+  await page.goBack()
+  await page.waitForURL((url) => url.pathname.endsWith(id))
+  await thread(page).getByText('Sub-agents done.').waitFor()
+  await send(page, subCall({ n: 6, cancel: false, task: false, title: 'List the tests' }))
+  await subagentLine(page, 'List the tests').getByRole('link').click()
+  await page.waitForURL((url) => /\/w\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(id))
+  await stateLabel(page, 'native').getByText('working').waitFor()
+  await thread(page).getByText('Working on: List the tests.').waitFor()
+  assert.equal(await page.locator('header').getByRole('button', { name: 'Cancel', exact: true }).count(), 0)
+  assert.equal(await thread(page).getByText(/^From /).count(), 0, 'no task: its response alone')
+  await stateLabel(page, 'native').getByText('idle').waitFor()
+  await page.context().close()
+})
+
+test('U88 a permission pending in a native sub-stream; an option chosen: its card in the sub-stream’s thread; RespondPermission sent to its host with that request; the option answered', async () => {
+  const page = await fresh()
+  const id = await withSubagents(page, { n: 2, permission: true })
+  const line = subagentLine(page, 'Count the files')
+  await line.getByText('waiting for you').waitFor()
+  await line.getByRole('link').click()
+  await page.waitForURL((url) => /\/w\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(id))
+  const child = idOf(page)
+  await stateLabel(page, 'native').getByText('waiting for you').waitFor()
+  await shot(page, 'u88-subagent-permission')
+  await thread(page).getByRole('button', { name: 'Allow', exact: true }).click()
+  await until('its answer in its host’s log', async () => (await entriesOf(id)).some((e) => e.kind === 'command' && e.content.kind === 'RespondPermission'), 15_000)
+  assert.equal((await entriesOf(child)).length, 0)
+  await stateLabel(page, 'native').getByText('idle').waitFor()
+  assert.equal(await thread(page).getByRole('button', { name: 'Allow', exact: true }).count(), 0)
+  await page.context().close()
+})
+
 test('U80 Enter in the composer: a new line, nothing sent, on a computer and on a phone; Ctrl or Cmd with it, or Send: sent', async () => {
   const page = await fresh()
   const id = await started(page, 'before the lines')

@@ -93,7 +93,7 @@ export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNo
 }
 
 /** A delegation's state as its caller's line says it (docs/specs/assistant-ui.md, "A tool's line"). */
-const DELEGATION: Record<string, string> = { working: 'working', idle: 'idle', completed: 'idle', failed: 'failed', cancelled: 'stopped' }
+const DELEGATION: Record<string, string> = { working: 'working', waiting: 'waiting for you', idle: 'idle', completed: 'idle', failed: 'failed', cancelled: 'stopped' }
 
 const SETTLED: Record<Exclude<Gate['status'], 'pending'>, string> = { answered: 'Approved', refused: 'Refused', expired: 'Expired before a decision' }
 
@@ -232,8 +232,9 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   const { delegates, open, view } = useAgora()
   const d = a.delegate
   const row = d ? delegates.find((r) => r.id === d.id) : undefined
-  const state = d ? (row?.delegation ?? 'working') : null
-  const waiting = a.gate?.status === 'pending' || Boolean(row?.question)
+  // A delegate's state, or a native sub-agent's: its row's, else what its line last said.
+  const state = d ? (row?.delegation ?? row?.subagent ?? a.subagent ?? 'working') : null
+  const waiting = a.gate?.status === 'pending' || Boolean(row?.question) || state === 'waiting'
   const settled = a.gate !== undefined && a.gate.status !== 'pending' && d === undefined
   const tone: Tone = waiting ? 'attention' : state === 'failed' || (isError && !settled) ? 'error' : state === 'working' || (d === undefined && running) ? 'live' : 'quiet'
   const meta = waiting ? 'waiting for you' : state !== null ? DELEGATION[state] : isError && !settled ? 'failed' : undefined
