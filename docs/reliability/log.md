@@ -35,6 +35,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R27 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each log test on a database of its own; real bridges and the mock agent on FakeKube, taking `_session/steering` as the adapters do, or, with `AGORA_MOCK_NO_STEERING=1`, not saying it can. Each guard of a message's going was also removed in turn, and its case failed. |
 | R28 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. Cases L121 and L122. |
 | R29 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; L99 and L125–L127 on real delegations in the lab, the mock agent taking `_session/steering`. |
+| R30 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. L121 and L122, on the new harnesses (agora #204, infra-k8s #358). |
 
 ## Cases
 
@@ -187,7 +188,9 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L119 | — | local | R27 | proven | The exchange's user `/sleep 2`; `[the user, during this turn: also this]` after `… second 1/2` and before `Slept`; the same in the catch-up's text. |
 | L120 | — | local | R27 | proven | The turn's elements `user`, `agent_message_chunk`, `tool`, `agent_message_chunk`, the last two after its answer; the turn `done`; `Said after the answer.` in its exchange; a Write accepted, its turn done. |
 | L121 | — | live | R28 | proven | Claude Code and Codex: one steering line, `injected`; one turn; the word said. OpenCode: no steering line; two turns; the word said. |
+| L121 | — | live | R30 | proven | Claude Code and Codex: one steering line, `injected`; one turn; the word said. OpenCode: no steering line; two turns; the word said. |
 | L122 | — | live | R28 | proven | A command of 40 s, Claude Code and Codex: no steering line 5 s into it; its line one position after the command closed, `injected`; on Claude Code, `FINISHED-…` in the tool line, not moved to the background; one turn; the word said; nothing said in the 20 s after its answer. |
+| L122 | — | live | R30 | proven | Claude Code and Codex: the steering line one position after the command closed, `injected`; the word said in the turn; nothing after it. |
 | L123 | — | local | R27 | proven | `invalid_body` for a prompt that is a string; `line_too_large` for 17 MiB of text; no command written, nothing waiting; the turn done, one prompt. |
 | L124 | — | local | R27 | proven | A Cancel, then a Write `waiting` true, the agent answering `end_turn`: its own turn. A Cancel with a message waiting and no Write after it, the same answer: 500 ms on, one prompt, the message and its element waiting. |
 | L99 | — | local | R29 | proven | The delegate's view and its row: `working`, then `idle`, after a `to` `working` and `idle` again; none in its delegator's view or row. Its Pod starting for a next Create: `working`. |

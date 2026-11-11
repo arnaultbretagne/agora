@@ -35,6 +35,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R25 | 2026-11-03 | `c904f8c` | unit, local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C64's grants compiled, its `session/new` and C65 in the lab with a signer of its own and the mock harness. |
 | R26 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. C3, on the new adapter. |
 | R27 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C65 and C66 on real delegations in the lab. |
+| R28 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. C3, on the new harnesses (agora #204, infra-k8s #358). |
 
 ## Cases
 
@@ -53,6 +54,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C3 | — | live | R2 | proven | "Paris." in 2.2 s; three tunnels to `api.anthropic.com:443`, last 200. |
 | C3 | — | live | R7 | proven | "Paris." in 2.4 s; seven tunnels to `api.anthropic.com:443`, last 200. |
 | C3 | — | live | R26 | proven | "Paris" in 1.1 s on Haiku; seven tunnels to `api.anthropic.com:443`, 200. |
+| C3 | — | live | R28 | proven | "Paris" in 1.7 s on Haiku; nine tunnels to `api.anthropic.com:443`, 200. |
 | C4 | — | cluster | R0 | partial: the gateway's decisions are asserted; GitHub's answers are observed | A read 200, write 201, push 200; B read 200, fetch 200; B write, B push, C and GraphQL 403 from the gateway. The created file exists on A only, checked in GitHub. |
 | C4 | — | cluster | R1 | partial: the gateway's decisions are asserted; with stand-ins, no write can succeed | Permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
 | C4 | — | cluster | R2 | partial: the gateway's decisions are asserted; with stand-ins, no write can succeed | Permitted requests reach GitHub (401); B write, B push, C and GraphQL stop at the gateway (403). |
