@@ -252,8 +252,9 @@ export class Delegations {
   async spawn(caller: Caller, args: Readonly<Record<string, unknown>>, hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null }): Promise<string> {
     const instructions = args.instructions
     if (typeof instructions !== 'string' || instructions.trim() === '') throw new Refused('invalid_query: instructions')
-    // Its role, when one is named: a card Agora holds, or nothing starts.
-    const role = args.agent_type === undefined ? null : typeof args.agent_type === 'string' ? (this.roles.get(args.agent_type) ?? undefined) : undefined
+    // Its role, when one is named: a card Agora holds, or nothing starts. Null is no name, as for the other parameters.
+    if (args.agent_type != null && typeof args.agent_type !== 'string') throw new Refused('invalid_query: agent_type')
+    const role = typeof args.agent_type === 'string' ? this.roles.get(args.agent_type) : null
     if (role === undefined) throw new Refused('unknown_agent_type')
     const found = await this.store.writer.query('SELECT depth, owner FROM workstreams WHERE id=$1', [caller.workstream])
     const depth = Number(found.rows[0]?.depth ?? 0)
@@ -292,7 +293,8 @@ export class Delegations {
     const own = role !== null && pool.harness === role.harness ? role : null
     const wanted = { model: typeof args.model === 'string' ? args.model : (own?.model ?? null), effort: typeof args.effort === 'string' ? args.effort : (own?.effort ?? null) }
     // The effort under the name the pool gives it — `reasoning_effort` on Codex —, as the flows send it (docs/specs/flows.md, "Role cards").
-    const known = Array.isArray(pool.settings) ? (pool.settings as unknown[]).map((setting) => object(setting)?.id) : []
+    // What names it: the pool's own defaults, and what its last Session offered.
+    const known = [...(Array.isArray(pool.sessionConfig) ? pool.sessionConfig : []), ...(Array.isArray(pool.settings) ? pool.settings : [])].map((setting) => object(setting)?.id)
     if (wanted.model !== null) settings.model = wanted.model
     if (wanted.effort !== null) settings[EFFORT_IDS.find((id) => known.includes(id)) ?? 'effort'] = wanted.effort
     const beyond = rights.filter((r) => !offers(caller.profiles, r))

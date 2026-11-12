@@ -1271,14 +1271,17 @@ test('D54 a role with harness naming another; with model given; a role that name
   assert.deepEqual([none.pool, none.settings, none.opening], ['mock-test', [], from])
 })
 
-test('D55 agent_type naming no role; not a string; with no role held at all; a role, rights beyond the delegator’s: unknown_agent_type each time, no Workstream created; the approval names the role', async (t) => {
+test('D55 agent_type naming no role; not a string; null; with no role held at all; a role, rights beyond the delegator’s: unknown_agent_type; invalid_query; no role, as when absent; unknown_agent_type; no Workstream created by a refusal; the approval names the role', async (t) => {
   const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
   const c = await client(t, url, execution)
-  for (const agent_type of ['judge', 'Scout', '', 7, null]) {
+  for (const [agent_type, reason] of [['judge', 'unknown_agent_type'], ['Scout', 'unknown_agent_type'], ['', 'unknown_agent_type'], [7, 'invalid_query: agent_type'], [['scout'], 'invalid_query: agent_type']] as const) {
     const refused = (await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type } })) as Text
-    assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_agent_type'], JSON.stringify(agent_type))
+    assert.deepEqual([refused.isError, text(refused)], [true, reason], JSON.stringify(agent_type))
   }
   assert.equal(Number(((await db.admin.query('SELECT count(*) AS n FROM workstreams WHERE parent=$1', [ws])).rows[0] as { n: string }).n), 0)
+  // Null names nothing, as for any other parameter: a delegate with no role.
+  const plain = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type: null } })))
+  assert.equal((await kinds(lab, plain, 'delegation.started'))[0]!.content.agentType, undefined)
   const call = c.callTool({ name: 'spawn_agent', arguments: { instructions: 'needs the internet', agent_type: 'scout', rights: ['internet'] } })
   await until('the approval', async () => (await lab.state(ws)).question)
   const [approval] = await projected(lab, ws, 'question')
@@ -1291,13 +1294,24 @@ test('D55 agent_type naming no role; not a string; with no role held at all; a r
   assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_agent_type'])
 })
 
-test('D56 an effort, the call’s then a role’s, for a pool whose Sessions name it reasoning_effort: the delegate’s opening setting under that id, its Session set to it', async (t) => {
-  const deep = new Map<string, Role>([['deep', { name: 'deep', summary: 'Thinks it through.', harness: 'mock', model: null, effort: 'high', persona: '# Deep\n\nYou think it through.' }]])
-  const { lab, url, execution } = await started(t, ['agora:delegate'], { roles: deep }, { kube: (k) => (k.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { effortId: 'reasoning_effort' })) })
+test('D56 an effort, the call’s then a role’s, for a pool whose Sessions name it reasoning_effort; a role’s, for a pool no Session has opened in, whose defaults name it so: the delegate’s opening setting under that id, its Session set to it', async (t) => {
+  const deep = new Map<string, Role>([
+    ['deep', { name: 'deep', summary: 'Thinks it through.', harness: 'mock', model: null, effort: 'high', persona: '# Deep\n\nYou think it through.' }],
+    ['far', { name: 'far', summary: 'Thinks it through, elsewhere.', harness: 'other', model: null, effort: 'high', persona: '# Far\n\nYou think it through.' }],
+  ])
+  const { lab, url, execution } = await started(t, ['agora:delegate'], { roles: deep }, {
+    kube: (k) => {
+      k.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { effortId: 'reasoning_effort' })
+      // A pool nobody has used yet: its defaults alone say how it names its effort.
+      k.morePools.push(['other-test', 'other'])
+      k.sessionConfig['other-test'] = 'reasoning_effort=low'
+    },
+  })
   const c = await client(t, url, execution)
   // What the pool's last Session offered, the delegator's own here, is what the catalogue knows of it.
   await until('the pool’s settings known', async () => (await lab.workstreams.catalogue()).find((p) => p.name === 'mock-test')?.settings)
-  for (const [args, value] of [[{ harness: 'mock', effort: 'low' }, 'low'], [{ agent_type: 'deep' }, 'high']] as const) {
+  assert.equal((await lab.workstreams.catalogue()).find((p) => p.name === 'other-test')?.settings, null)
+  for (const [args, value] of [[{ harness: 'mock', effort: 'low' }, 'low'], [{ agent_type: 'deep' }, 'high'], [{ agent_type: 'far' }, 'high']] as const) {
     const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', ...args } })))
     await lab.turn(delegate, 'done')
     const current = (await lab.state(delegate)).current!

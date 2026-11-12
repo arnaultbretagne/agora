@@ -144,7 +144,8 @@
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
 - A role's persona is a message, not a system prompt: a harness that compacts a long conversation may
-  lose it, as a flow's member may. It is in the log, and a catch-up gives it back with the rest.
+  lose it, as a flow's member may. It is in the log: a catch-up gives it back with the first exchange,
+  unless the thread has grown past what a catch-up carries, which leaves the oldest exchanges out.
 - The cards ship in the server's image: a card changed reaches delegations with the next image, and a
   flow's run with its next clone. The two may differ for the time of a deploy.
 - A role gives no right: a `judge` started without read access to the repository it judges cannot read

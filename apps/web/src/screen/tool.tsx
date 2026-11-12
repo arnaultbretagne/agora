@@ -240,7 +240,8 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   // A native sub-agent's turn was cancelled; a delegate was stopped.
   const native = a.subagent !== undefined || row?.state === 'native'
   const meta = waiting ? 'waiting for you' : state !== null ? (native && state === 'cancelled' ? 'cancelled' : DELEGATION[state]) : isError && !settled ? 'failed' : undefined
-  const harness = row?.harness ?? (typeof args.harness === 'string' ? args.harness : view.harness)
+  // Its harness: its row's; before that, the one the call names, else the caller's — unless a role chose it.
+  const harness = row?.harness ?? (typeof args.harness === 'string' ? args.harness : typeof args.agent_type === 'string' ? null : view.harness)
   const label = d ? (
     <a
       href={`/w/${d.id}`}
@@ -250,7 +251,8 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
       }}
       className="hover:text-foreground underline-offset-2 hover:underline"
     >
-      {row?.title || d.title} · {harnessName(harness)}
+      {row?.title || d.title}
+      {harness !== null && ` · ${harnessName(harness)}`}
     </a>
   ) : a.gate ? (
     `delegate · ${a.gate.title}`

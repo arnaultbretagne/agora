@@ -87,10 +87,11 @@ const workstreams = new Workstreams({
   ...(credentials === undefined ? {} : { credentials }),
 })
 
+// The roles `spawn_agent` offers as `agent_type`: the cards the flows staff a team with. A card that cannot be read stops the start, saying so.
+const roles = loadRoles(process.env.ROLES_DIR ?? join(import.meta.dirname, '..', '..', 'flows', 'roles'))
+
 try {
   // docs/specs/delegation.md: the engine behind `spawn_agent`, `send_message`, `stop_agent` and `list_agents`; an approval held 4 min 30 s.
-  // Its roles: the cards the flows staff a team with, offered to `spawn_agent` as `agent_type`.
-  const roles = loadRoles(process.env.ROLES_DIR ?? join(import.meta.dirname, '..', '..', 'flows', 'roles'))
   new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000, roles })
   // docs/specs/merge.md: the merge card, through the gateway from the server's own address, as the operator.
   // With the test routes, GITHUB_TEST_API stands in for GitHub behind the gateway (docs/specs/merge.md, G8).
