@@ -11,7 +11,7 @@ The evidence behind the acceptance cases of `specs/search.md`.
 | R3 | 2026-11-02 | `15b6b66` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6, each test on a database of its own. The search's first step reads `objects_text`; S1–S10 are R2's tests, unchanged. |
 | R5 | 2026-11-04 | `8ed0819` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; a real message into a running turn, through the mock agent. |
 | R6 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11 with `pg_trgm` 1.6; a real delegation in the lab, its `submit` as its delegator's own turn and sent into a turn. |
-| R7 | 2026-11-11 | `c0d5049` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; S15 on the lab, the mock agent reporting a sub-agent of its own. |
+| R7 | 2026-11-12 | `2a50031` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; S15 on the lab, the mock agent reporting a sub-agent of its own. |
 
 ## Cases
 

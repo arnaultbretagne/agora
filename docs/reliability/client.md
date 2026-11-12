@@ -43,7 +43,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R35 | 2026-11-09 | `adbccfa` | unit, local | `npm run check`, with `npm run test:browser`, all green, in the pull request's CI (run 42655554205): Node 24.22.2, PostgreSQL 17.11, Playwright's Chromium; a reason said only in its Workstream, the messages given back in a list; for U83 the refusal held in the browser until the other Workstream is shown. The same tree's first run, at `4555444`, failed on B1 (`packages/log`), as one of R34's did; it passed here. |
 | R36 | 2026-11-11 | `f433f48` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent calling Agora's MCP server by `/spawn_agent`. |
 | R37 | 2026-11-11 | `27dc7ce` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11, Playwright 1.63.0's Chromium; the browser suite's server allowing 90 executions at once; for U18, U85 and U86 a Pod two to five seconds to come (FakeKube's `allocationDelayMs`). The whole browser suite of `068e0fc`, 60 executions allowed, failed on its last cases, U86, U87 and G8, none of their messages shown; allowing 90, they passed, and one run failed on U81 (the next message 179 px lower after the hover), which passed six times alone, in the run before, and in this one. |
-| R38 | 2026-11-11 | `c0d5049` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent reporting sub-agents of its own by `/sub`. |
+| R38 | 2026-11-12 | `2a50031` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent reporting sub-agents of its own by `/sub`. |
 
 ## Cases
 
@@ -205,5 +205,6 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 
 | Failure | Issue |
 | --- | --- |
+| A delegate's line before its row is read, its call naming a role: no harness beside its title until then; asserted by no case | — |
 | Attachments with the real harnesses — claude-code, codex, opencode — and the pools' `promptCapabilities` in the cluster; the paperclip on an iPhone, its camera, a HEIC photo re-encoded by WebKit (U46 runs in Chromium, a PNG drawn by the page) | #147 |
 | On an iPhone: the status bar opaque in the page's colour, the page's top not blurred; the bars following the theme; the screen on what the keyboard leaves; the home-screen icon; the keyboard staying down on opening a Workstream; the thread's end reaching the page, read with `EventSource`; the context's popover opened by a touch (U37–U41 and U43 emulate the screen, WebKit's rule and a touch screen in Chromium, not iOS) | #137 |
