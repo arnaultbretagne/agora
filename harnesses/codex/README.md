@@ -1,7 +1,7 @@
 # codex
 
-Image `agora-harness-codex`: the bridge in front of codex-acp 2.5.0, which runs `codex app-server`
-(codex 0.165.0), on the operator's ChatGPT subscription through the gateway (profile `chatgpt`,
+Image `agora-harness-codex`: the bridge in front of codex-acp 2.6.0, which runs `codex app-server`
+(codex 0.166.0), on the operator's ChatGPT subscription through the gateway (profile `chatgpt`,
 `docs/specs/credentials.md`). No credential in the image.
 
 | File | Role |
