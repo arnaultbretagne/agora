@@ -64,13 +64,13 @@ const subagent = (lab: Lab, child: string, states: string[], timeoutMs = 15_000)
 const projected = (lab: Lab, ws: string) => lab.workstreams.projections.run(ws)
 const oneHosted = (lab: Lab, ws: string, count = 1) => until(`${String(count)} sub-stream(s)`, async () => ((await hosted(lab, ws)).length === count ? hosted(lab, ws) : null))
 
-test('L128 Agora’s initialize: clientCapabilities holds subagents, an empty object, beside fs and terminal', async (t) => {
+test('L133 Agora’s initialize: clientCapabilities holds subagents, an empty object, beside fs and terminal', async (t) => {
   const { lab, ws } = await started(t)
   const [initialize] = lines(await lab.entries(ws), 'out', 'initialize')
   assert.deepEqual(object(initialize!.content.params)?.clientCapabilities, { fs: { readTextFile: false, writeTextFile: false }, terminal: false, subagents: {} })
 })
 
-test('L129 an agent announcing a sub-agent during its turn, then its task, a text, a tool and idle under its own session id: a sub-stream, one level deeper, native; one turn done in its thread; a subagent element in its host’s, none of its text or tool', async (t) => {
+test('L134 an agent announcing a sub-agent during its turn, then its task, a text, a tool and idle under its own session id: a sub-stream, one level deeper, native; one turn done in its thread; a subagent element in its host’s, none of its text or tool', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   const host = await lab.turn(ws, 'done', 20_000)
@@ -97,7 +97,7 @@ test('L129 an agent announcing a sub-agent during its turn, then its task, a tex
   assert.deepEqual((await elements(lab, ws, 'acp')).filter((e) => JSON.stringify(e.line).includes(acp)), [])
 })
 
-test('L130 a sub-agent’s config_option_update, available_commands_update, usage_update and session_info_update: its host’s settings, commands, usage and title unchanged; the sub-stream’s title the one it gave', async (t) => {
+test('L135 a sub-agent’s config_option_update, available_commands_update, usage_update and session_info_update: its host’s settings, commands, usage and title unchanged; the sub-stream’s title the one it gave', async (t) => {
   const { lab, db, ws } = await started(t)
   const before = (await viewOf(lab, ws))!
   assert.ok((await lab.write(ws, sub({ n: 1, settings: true }))).accepted)
@@ -117,7 +117,7 @@ test('L130 a sub-agent’s config_option_update, available_commands_update, usag
   // Positive control: its own lines of those kinds do change its view (settings.test.ts, L49).
 })
 
-test('L131 a sub-agent announcing one of its own; two announced in one turn: the second’s parent the first’s sub-stream, two levels down; the host’s row counting each under it, those working among its live ones', async (t) => {
+test('L136 a sub-agent announcing one of its own; two announced in one turn: the second’s parent the first’s sub-stream, two levels down; the host’s row counting each under it, those working among its live ones', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 3, count: 2, nested: true }))).accepted)
   const working = await until('two working under the host', async () => {
@@ -143,7 +143,7 @@ test('L131 a sub-agent announcing one of its own; two announced in one turn: the
   assert.equal((await below(lab, top[0]!.id))?.count, 1)
 })
 
-test('L132 a sub-agent asking a permission; Respond to a permission addressed to the sub-stream, then to its host: waiting, counted among those waiting; native, nothing sent; the answer on its host’s execution, then working', async (t) => {
+test('L137 a sub-agent asking a permission; Respond to a permission addressed to the sub-stream, then to its host: waiting, counted among those waiting; native, nothing sent; the answer on its host’s execution, then working', async (t) => {
   const { lab, ws, execution } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, permission: true }))).accepted)
   const [row] = await oneHosted(lab, ws)
@@ -170,7 +170,7 @@ test('L132 a sub-agent asking a permission; Respond to a permission addressed to
   await until('nothing waits under its host', async () => (await below(lab, ws))?.waiting === 0)
 })
 
-test('L133 Cancel on a sub-stream’s turn in progress, cancel advertised; with none advertised; on a turn already ended: one session/cancel naming its ACP session, its turn cancelled, the host’s going on; stale_turn, no line; stale_turn', async (t) => {
+test('L138 Cancel on a sub-stream’s turn in progress, cancel advertised; with none advertised; on a turn already ended: one session/cancel naming its ACP session, its turn cancelled, the host’s going on; stale_turn, no line; stale_turn', async (t) => {
   const { lab, ws, execution } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 20 }))).accepted)
   const [row] = await oneHosted(lab, ws)
@@ -199,7 +199,7 @@ test('L133 Cancel on a sub-stream’s turn in progress, cancel advertised; with 
   await lab.turn(ws, 'done', 20_000)
 })
 
-test('L134 a sub-agent idle, then running again, then idle; one answering idle with stopReason error: two turns in its thread, each done; a turn failed, with the error’s message', async (t) => {
+test('L139 a sub-agent idle, then running again, then idle; one answering idle with stopReason error: two turns in its thread, each done; a turn failed, with the error’s message', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, again: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -219,7 +219,7 @@ test('L134 a sub-agent idle, then running again, then idle; one answering idle w
   assert.deepEqual([failed!.status, failed!.failure, failed!.stopReason], ['failed', 'the sub-agent failed', 'error'])
 })
 
-test('L135 a sub-agent running as its host’s execution ends; one never saying idle: each turn failed, each sub-stream failed; none counted live under the host', async (t) => {
+test('L140 a sub-agent running as its host’s execution ends; one never saying idle: each turn failed, each sub-stream failed; none counted live under the host', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, silent: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -240,7 +240,7 @@ test('L135 a sub-agent running as its host’s execution ends; one never saying 
   assert.deepEqual((await elements(lab, ws, 'subagent')).map((line) => line.state), ['failed', 'failed'])
 })
 
-test('L136 a message waiting while a sub-agent of the Session has a turn in progress, its agent taking messages into a turn; then the sub-agent idle: no steering line while it works; one once it is idle', async (t) => {
+test('L141 a message waiting while a sub-agent of the Session has a turn in progress, its agent taking messages into a turn; then the sub-agent idle: no steering line while it works; one once it is idle', async (t) => {
   const { lab, ws, execution } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 3, after: 6 }))).accepted)
   const [row] = await oneHosted(lab, ws)
@@ -259,7 +259,7 @@ test('L136 a message waiting while a sub-agent of the Session has a turn in prog
   assert.equal((await lab.state(ws)).turns.size, 1)
 })
 
-test('L137 a Write, a Configure, a Create and a Stop addressed to a native sub-stream: native each time, nothing written', async (t) => {
+test('L142 a Write, a Configure, a Create and a Stop addressed to a native sub-stream: native each time, nothing written', async (t) => {
   const { lab, ws, execution } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -277,7 +277,7 @@ test('L137 a Write, a Configure, a Create and a Stop addressed to a native sub-s
   assert.ok((await lab.write(ws, 'to its host')).accepted)
 })
 
-test('L139 a rebuild of a host with native sub-streams, their objects gone; then a fresh fold going on from its checkpoint: the same sub-streams, identities and rows as the incremental run gave', async (t) => {
+test('L144 a rebuild of a host with native sub-streams, their objects gone; then a fresh fold going on from its checkpoint: the same sub-streams, identities and rows as the incremental run gave', async (t) => {
   const { lab, db, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, count: 2, nested: true }))).accepted)
   await lab.turn(ws, 'done', 30_000)
@@ -314,7 +314,7 @@ test('L139 a rebuild of a host with native sub-streams, their objects gone; then
   assert.deepEqual(await whole(), incremental)
 })
 
-test('L140 a tool_call_update with a content item of type session: valid; its tool element holds it', async (t) => {
+test('L145 a tool_call_update with a content item of type session: valid; its tool element holds it', async (t) => {
   const { lab, db, ws } = await started(t)
   const acp = (await lab.state(ws)).current!.acpId
   const line = (update: Record<string, unknown>) => JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acp, update } })
@@ -332,7 +332,7 @@ test('L140 a tool_call_update with a content item of type session: valid; its to
   await until('its diagnostic', async () => Number((await db.admin.query("SELECT count(*) FROM diagnostics WHERE workstream=$1 AND reason='invalid_body'", [ws])).rows[0].count) === 1, 20_000)
 })
 
-test('L141 lines naming a session id never announced; an agent announcing nothing: elements of the host’s turn, as before; no sub-stream', async (t) => {
+test('L146 lines naming a session id never announced; an agent announcing nothing: elements of the host’s turn, as before; no sub-stream', async (t) => {
   const { lab, ws } = await started(t)
   const stray = JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'never-announced', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'from nowhere' } } } })
   // A `subagent_update` on a session Agora does not know announces nothing either.
@@ -376,7 +376,7 @@ test('S15 a native sub-stream’s transcript, read; one with no task: its task u
   assert.deepEqual((await transcript(rows[1]!.id))[0], ['header', '## 1 · agent'])
 })
 
-test('L133 a sub-agent cancelled, a permission of its own pending beside another’s; then its host’s turn cancelled: cancelled answered to that sub-agent’s alone; none of its sub-agents’ on the host’s Cancel', async (t) => {
+test('L138 a sub-agent cancelled, a permission of its own pending beside another’s; then its host’s turn cancelled: cancelled answered to that sub-agent’s alone; none of its sub-agents’ on the host’s Cancel', async (t) => {
   const { lab, ws, execution } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 30, count: 2, permission: true }))).accepted)
   const rows = await oneHosted(lab, ws, 2)
@@ -398,7 +398,7 @@ test('L133 a sub-agent cancelled, a permission of its own pending beside another
   assert.equal((await viewOf(lab, rows[1]!.id))?.subagent, 'waiting')
 })
 
-test('L143 a sub-agent idle with a permission of its own left pending: answered cancelled by Agora; its host takes a message again', async (t) => {
+test('L148 a sub-agent idle with a permission of its own left pending: answered cancelled by Agora; its host takes a message again', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, permission: true, giveUp: 2 }))).accepted)
   const [row] = await oneHosted(lab, ws)
@@ -416,7 +416,7 @@ test('L143 a sub-agent idle with a permission of its own left pending: answered 
   await until('its second turn done', async () => (await lab.state(ws)).turns.size === 2 && (await lab.state(ws)).active === null, 20_000)
 })
 
-test('L144 an agent speaking, announcing a sub-agent, then speaking again: its line between its two texts', async (t) => {
+test('L149 an agent speaking, announcing a sub-agent, then speaking again: its line between its two texts', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, preface: true }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -425,7 +425,7 @@ test('L144 an agent speaking, announcing a sub-agent, then speaking again: its l
   assert.deepEqual(own.map((e) => (e.type === 'subagent' ? 'line' : e.text)), ['Starting sub-agents.', 'line', 'Sub-agents done.'])
 })
 
-test('L145 a sub-agent at work again under its session id in a later execution: the same sub-stream, a turn of that execution, cancelled through it; ended with it', async (t) => {
+test('L150 a sub-agent at work again under its session id in a later execution: the same sub-stream, a turn of that execution, cancelled through it; ended with it', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1, id: 'sub-kept' }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -446,7 +446,7 @@ test('L145 a sub-agent at work again under its session id in a later execution: 
   await lab.turn(ws, 'done', 20_000)
 })
 
-test('L146 more sub-agents announced than a Workstream hosts; a chain deeper than it goes: no sub-stream beyond the bounds, and none of their lines in the host’s thread', async (t) => {
+test('L151 more sub-agents announced than a Workstream hosts; a chain deeper than it goes: no sub-stream beyond the bounds, and none of their lines in the host’s thread', async (t) => {
   const { lab, ws } = await started(t)
   const acp = (await lab.state(ws)).current!.acpId!
   const update = (sessionId: string, value: Record<string, unknown>) => JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: value } })
@@ -466,7 +466,7 @@ test('L146 more sub-agents announced than a Workstream hosts; a chain deeper tha
   assert.equal(Number((await below(lab, ws))?.count), MAX_SUBAGENTS)
 })
 
-test('L147 a native sub-stream given as the parent of a new Workstream: unknown_parent', async (t) => {
+test('L152 a native sub-stream given as the parent of a new Workstream: unknown_parent', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -476,7 +476,7 @@ test('L147 a native sub-stream given as the parent of a new Workstream: unknown_
   await lab.store.create(randomUUID(), null, ws)
 })
 
-test('L148 a sub-agent’s lines among its host’s, read from the log: none of them in the host’s exchange for a catch-up, nor in a delegate’s last message', async (t) => {
+test('L153 a sub-agent’s lines among its host’s, read from the log: none of them in the host’s exchange for a catch-up, nor in a delegate’s last message', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   const turn = await lab.turn(ws, 'done', 20_000)
@@ -491,7 +491,7 @@ test('L148 a sub-agent’s lines among its host’s, read from the log: none of 
   assert.equal(lastMessageOf(entries, turn, undefined, new Set()), 'Done: 7 files.Sub-agents done.')
 })
 
-test('L138 a later execution’s session/load replaying a sub-agent’s announcement and lines: the same sub-stream, no turn added, no object in its thread', async (t) => {
+test('L143 a later execution’s session/load replaying a sub-agent’s announcement and lines: the same sub-stream, no turn added, no object in its thread', async (t) => {
   const { lab, ws } = await started(t)
   assert.ok((await lab.write(ws, sub({ n: 1 }))).accepted)
   await lab.turn(ws, 'done', 20_000)
