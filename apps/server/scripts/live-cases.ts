@@ -1299,6 +1299,42 @@ await check('D51', 'Delegation, each real harness: spawn_agent, list_agents, sto
   return seen.join(' | ')
 })
 
+// D57: a delegate started with a role. Claude Code names `judge`, then `dev`: the first runs on Codex with its card's
+// model and effort — the effort under Codex's own id —, the second on Claude Code; each is given its card, once. Billed.
+await check('D57', 'Delegation with a role, from Claude Code: judge on Codex, dev on Claude Code, each given its card and its settings', async () => {
+  assert(claude !== undefined, 'no claude-code pool')
+  const seen: string[] = []
+  for (const [role, harness, heading, model, effort] of [['judge', 'codex', '# Judge', 'gpt-6.1-sol', 'xhigh'], ['dev', 'claude-code', '# Dev', 'opus', 'high']] as const) {
+    const w = new Workstream()
+    await w.open(claude, { limits: { leaseSeconds: 600 }, profiles: ['agora:delegate'] })
+    const prompt =
+      `With the spawn_agent tool of the agora MCP server, start a delegate with agent_type "${role}", no harness, no model and no effort, and these instructions: ` +
+      '"Say in one sentence what your role is here, then end your turn. Do nothing else." Once it has started, end your turn. When its message comes back, repeat it to me word for word.'
+    assert((await w.write(prompt)).status === 200, `${role}: Write refused`)
+    const delegate = await until('the delegate', () => delegatedTo(w), 300_000)
+    const message = await until('its message', () => messageFrom(w, delegate), 600_000)
+    await drained(w, 300_000)
+    await w.stop()
+    const entries = ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]) ?? []
+    await stopDelegate(delegate)
+    const current = fold(entries).current
+    const startedAs = entries.find((e) => e.kind === 'delegation.started')?.content as Json
+    assert(startedAs?.agentType === role && startedAs?.harness === harness && current?.body.harness === harness, `${role}: started as ${JSON.stringify(startedAs)}`)
+    // Its card, in Agora's line of its first prompt, and in no later one.
+    const prompts = entries.filter((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt').map((e) => String(((e.content.params as Json)?.prompt as Json[] | undefined)?.[0]?.text ?? ''))
+    assert(prompts[0]?.startsWith(`From Agora, not the person: your role, \`${role}\`.\n\n${heading}\n`), `${role}: its first prompt opens: ${String(prompts[0]).slice(0, 200)}`)
+    assert(prompts.slice(1).every((text) => !text.includes(heading)), `${role}: its card given again`)
+    // Its card's model and effort: asked at its Create, and what its Session says it runs with.
+    const opening = (Array.isArray(current?.body.settings) ? current.body.settings : []) as { id: string; value: string }[]
+    const said = new Map((Array.isArray(current?.settings) ? (current.settings as Json[]) : []).map((option) => [String(option.id ?? option.configId), String(option.currentValue)]))
+    const wanted = opening.filter((setting) => setting.id === 'model' || /effort/.test(setting.id))
+    assert(JSON.stringify(wanted.map((setting) => setting.value).sort()) === JSON.stringify([model, effort].sort()), `${role}: its opening settings: ${JSON.stringify(opening)}`)
+    for (const setting of wanted) assert(said.get(setting.id) === setting.value, `${role}: ${setting.id} is ${String(said.get(setting.id))}, not ${setting.value}`)
+    seen.push(`${role}: delegate ${delegate.slice(0, 8)} on ${harness}, ${wanted.map((setting) => `${setting.id}=${setting.value}`).join(', ')}; its card in its first prompt alone; its message at ${message.position}`)
+  }
+  return seen.join(' | ')
+})
+
 await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {
   if (claude === undefined) throw new Error('no claude-code pool')
   const pod = await warmed()
