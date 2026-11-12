@@ -159,4 +159,5 @@ delegate itself is written nothing: its call's answer says it.
 - A result of a shape its delegator gives: asked for in the instructions and read as any message; nothing
   checks it.
 - A delegate's role shown to the person: on its row, in its thread.
+- The title of a delegate with a role: an agent that names itself from what it reads first names itself after its card.
 - A role's persona given again once its harness has compacted its first message away.
