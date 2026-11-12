@@ -18,7 +18,7 @@ sequenceDiagram
   participant A as Agora
   participant P as The person
   participant D as Delegate (a sub-stream)
-  C->>A: spawn_agent(harness, rights, instructions)
+  C->>A: spawn_agent(agent_type, harness, rights, instructions)
   alt rights beyond the delegator's
     A->>P: an approval on that call, held at most 4 min 30 s
     P->>A: Approve, or a message, or nothing
@@ -38,7 +38,8 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | The delegator | The execution that calls `spawn_agent` (`mcp.md`, "The path"), and its Workstream. |
-| The delegate | A new Workstream, a sub-stream of the delegator's: the same person, one level deeper. Its execution: the pool of the `harness` named, the delegator's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise; the rights given (`rights`), none by default, and Agora's own `agora:submit`; the delegator's lease and turn duration. Its title: the first line of `instructions`. |
+| The delegate | A new Workstream, a sub-stream of the delegator's: the same person, one level deeper. Its execution: the pool of the `harness` named, the delegator's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise, the effort sent under the id the pool's Sessions give it — `effort`, or `reasoning_effort` —, as the flows send it (`flows.md`, "Role cards"); the rights given (`rights`), none by default, and Agora's own `agora:submit`; the delegator's lease and turn duration. Its title: the first line of `instructions`. |
+| Its role | `agent_type`, when given, names one of Agora's roles: a role card (`flows.md`, "Role cards"), as the harnesses name an agent's type when they start a sub-agent of their own. The card gives the delegate its persona, said once, in Agora's line of its first message ("Messages"), and what it works with by default: its harness, unless `harness` names one; its model and its effort, on that harness alone — on another, that pool's defaults —, unless `model` or `effort` name them. A card gives no right. `unknown_agent_type`: a name that is no card's; nothing starts. Without `agent_type`, a delegate has no role. |
 | Started | Once the delegate's Workstream exists and its Create is accepted. Its first message waits there until its Session opens. |
 | Depth | A delegate sits at most three levels below the person's Workstream: a delegator at depth 3 is refused, `depth_exceeded`. |
 | At once | At most three of a delegator's delegates awaiting approval or working: another is refused, `too_many_delegates`. |
@@ -54,7 +55,7 @@ sequenceDiagram
 | From the delegator | `spawn_agent`: `instructions` is the delegate's first message; answered `started <id> · <title>`. `send_message`, `to` one of its delegates: `message` is its next message, whatever it is doing; answered `sent <id> · <title>`. `not_a_delegate`: a Workstream that is not one of its delegates. `delegate_stopped`: one the person stopped. `too_many_exchanges`: ten `send_message` to that delegate since the person last wrote, in its Workstream or its delegator's; the person's next message there opens ten more. |
 | From the delegate | A turn holding a message that is not the person's, once done, sends its last message to its delegator: the same message, whole. Before that, `send_message`, `to` `parent` or its delegator's id: `message`, written in its delegator's Workstream — a question, news —; answered `sent`, as many times as it has something to say; its turn's last message goes all the same. `no_delegator`: `parent` from an execution that is no delegate. A turn of the earlier contract in which the delegate called `submit` — a message of its in its delegator's Workstream marked with that `turn` — sends nothing more, as then. |
 | A message | A Write of Agora's, with `mayWait` as the client's (`log.md`, "Commands"). Its prompt: a first text block, Agora's line saying who writes, marked `_meta` `agora.bretagne.dev/from` — its value `{ workstream, as }`, `as` being `delegator`, `delegate` or `agora`, a delegate's last message with the `turn` it closes —, then the words, whole: nothing summarised, nothing cut, up to a line's limit (`log.md`, "ACP lines"). |
-| Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
+| Agora's line | To a delegate: `From your delegator <id>, an agent, not the person. It receives your last message:`. The first message of a delegate with a role, before that line and in the same block: `` From Agora, not the person: your role, `<role>`. ``, the card's persona, a line `---`. To a delegator: `From your delegate <id> "<title>", not the person:`. |
 | Its way | That of any message (`log.md`, "Messages during a turn"): in order, into the running turn or as the next, the person able to retract it while it waits. Nothing refuses it: it waits while its Workstream cannot take it, and a Workstream whose execution has ended is continued first (`log.md`, same place). |
 | What it is worth | Agora keeps no verdict and no outcome. The delegator reads, and answers with `send_message` when it wants something else. |
 
@@ -84,7 +85,7 @@ delegate itself is written nothing: its call's answer says it.
 
 | Element | Rule |
 | --- | --- |
-| The gate | Agora holds the call: nothing starts, the call stays open. It asks the person in the delegator's Workstream with an Ask of kind `approval` (`log.md`, "Commands"): its title the delegate's; its text the proposal — harness, model, effort, the rights beyond the delegator's, the instructions —; one option, Approve (`allow_once`); the tool line it gates when Agora can match it ("Matching"); its expiry, 4 min 30 s on. |
+| The gate | Agora holds the call: nothing starts, the call stays open. It asks the person in the delegator's Workstream with an Ask of kind `approval` (`log.md`, "Commands"): its title the delegate's; its text the proposal — the delegate's role when it has one, harness, model, effort, the rights beyond the delegator's, the instructions —; one option, Approve (`allow_once`); the tool line it gates when Agora can match it ("Matching"); its expiry, 4 min 30 s on. |
 | Approve | The Answer: the delegate starts; the call answers `started`. |
 | Writing | A Write of the person's in the delegator's Workstream while the approval is pending is its refusal, accepted whatever the turn: no prompt is sent, the approval is answered with the words, and the call answers `refused` with them. |
 | No answer | At its expiry, the call answers `expired` and the approval is marked `expired`. |
@@ -141,6 +142,11 @@ delegate itself is written nothing: its call's answer says it.
 | D50 | A delegate's `send_message` to its delegator's id; to another delegate of its delegator's, and `stop_agent` on it, holding `agora:delegate` itself; a delegator's to its delegate's own delegate; `parent` from an execution that is no delegate | `sent`, as to `parent`; `not_a_delegate` each time, nothing written, no turn cancelled; `no_delegator`. |
 | D51 | Live, each harness — Claude Code, Codex, opencode — given `agora:delegate`: starting a delegate on a long command, listing, stopping it, then writing to it | Each calls Agora's `spawn_agent`, `list_agents`, `stop_agent` and `send_message`, and none of its harness's own sub-agent tools; the list names the delegate `working`; `stopped`; the delegate answers the message. |
 | D52 | A turn of the earlier contract, done with a `submit` in it; then the server's start | Nothing more written to its delegator, at its end or at the start. |
+| D53 | `spawn_agent` with `agent_type`, a role of another harness than the delegator's, with a model and an effort; then a `send_message`; the agent titling itself with the first line it read | `started`; the delegate on that harness's pool, the role's model and effort its opening settings, its `delegation.started` naming the role; its first prompt: one block of Agora's — the role's line, the persona, `---`, the delegator's line —, then the instructions; its `user` element and its title the instructions alone, that title kept; the next message opening on the delegator's line alone. |
+| D54 | A role with `harness` naming another; with `model` given; a role whose card names no model and no effort; no `agent_type` | The pool named, none of the role's settings, its persona all the same; that model, the role's effort; its pool's own settings; the delegator's harness, the delegator's line alone. |
+| D55 | `agent_type` naming no role, or not a string; with no role held; a role, rights beyond the delegator's | `unknown_agent_type` each time, no Workstream created; the approval's text opens on the role. |
+| D56 | An effort, the call's then a role's, for a pool whose Sessions name it `reasoning_effort` | The delegate's opening setting `reasoning_effort`, its Session set to that value. |
+| D57 | Live, Claude Code delegating with `agent_type` `judge`, then with `dev` | A delegate on Codex, its model and effort the card's, answering as the judge its card describes; one on Claude Code, as the dev. |
 
 ## To be specified
 
@@ -152,3 +158,5 @@ delegate itself is written nothing: its call's answer says it.
 - The delegate's thread saying who cancelled its turn.
 - A result of a shape its delegator gives: asked for in the instructions and read as any message; nothing
   checks it.
+- A delegate's role shown to the person: on its row, in its thread.
+- A role's persona given again once its harness has compacted its first message away.

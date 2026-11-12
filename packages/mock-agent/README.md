@@ -40,4 +40,5 @@ it received of them: an image's type, its width × height for a PNG or a JPEG, a
 resource's `uri`, type and characters.
 
 For tests, `AGORA_MOCK_INITIALIZE_DELAY_MS` delays the answer to `initialize`, and
-`AGORA_MOCK_INITIALIZE_INVALID=1` makes it invalid.
+`AGORA_MOCK_INITIALIZE_INVALID=1` makes it invalid. `AGORA_MOCK_EFFORT_ID` names its effort setting:
+`reasoning_effort`, as Codex names its own.

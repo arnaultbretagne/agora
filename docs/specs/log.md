@@ -35,7 +35,7 @@ projected from it.**
 | `execution.failed` | Startup or restoration cannot complete. | The reason and the request position when there is one. |
 | `anchor.received` | An authenticated anchor is stored. | Its id; never its bytes. |
 | `execution.ended` | The claim has disappeared. | The reason, and the anchor received if any. |
-| `delegation.started` | A delegate's Workstream is created by `spawn_agent` (`delegation.md`), in that Workstream. | The delegator's Workstream and execution; the harness, model, effort and rights given; the approval's position in the delegator's Workstream, when one was asked. |
+| `delegation.started` | A delegate's Workstream is created by `spawn_agent` (`delegation.md`), in that Workstream. | The delegator's Workstream and execution; the harness, model, effort and rights given; the role given, `agentType`, when there is one; the approval's position in the delegator's Workstream, when one was asked. |
 | `delegation.continued`, `delegation.result`, `delegation.reported` | Not written any more; those in the log stay. | |
 | `question.expired` | An approval reaches its expiry unanswered, or the server starts while it waits (`delegation.md`, "Approval"). | The question's position. |
 | `question.cancelled` | A Write of the person's while a merge card waits (`merge.md`, "The card"). | The question's position. |

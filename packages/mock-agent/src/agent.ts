@@ -42,7 +42,8 @@ interface Session {
 const SETTINGS: { id: string; name: string; category: string; values: string[] }[] = [
   { id: 'mode', name: 'Mode', category: 'mode', values: ['default', 'full-access'] },
   { id: 'model', name: 'Model', category: 'model', values: ['default', 'mock-small', 'mock-large', 'mock-broken'] },
-  { id: 'effort', name: 'Effort', category: 'thought_level', values: ['default', 'low', 'high'] },
+  // AGORA_MOCK_EFFORT_ID: the id its effort goes by, `reasoning_effort` as Codex names it.
+  { id: process.env.AGORA_MOCK_EFFORT_ID || 'effort', name: 'Effort', category: 'thought_level', values: ['default', 'low', 'high'] },
 ]
 const COMMANDS = [
   { name: 'recall', description: 'Repeat what was said before', input: null },

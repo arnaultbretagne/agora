@@ -39,6 +39,8 @@ COPY packages/log/sql packages/log/sql
 COPY packages/log/scripts packages/log/scripts
 COPY apps/server/src apps/server/src
 COPY apps/server/public apps/server/public
+# The role cards `spawn_agent` offers (docs/specs/delegation.md): the flows' own, one catalogue.
+COPY apps/flows/roles apps/flows/roles
 COPY --from=web /app/apps/web/dist apps/web/dist
 ENV NODE_NO_WARNINGS=1
 USER 10001:10001

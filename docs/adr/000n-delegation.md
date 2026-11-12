@@ -1,7 +1,7 @@
 # ADR 000n — Delegation
 
 - **Status:** accepted
-- **Date:** 2026-11-11
+- **Date:** 2026-11-12
 
 ## Context
 
@@ -26,6 +26,17 @@
   none has a tool to end it, and none types a message between agents. A result of a given shape exists
   only for a one-shot agent started by a script, checked on its final answer by what started it (Pi's
   `tools.agent`, Claude Code's workflow scripts), and for a whole run (`codex exec --output-schema`).
+- Three of them start a sub-agent as a type picked from a catalogue, by one parameter of the gesture
+  that starts it (read on 2026-11-12): Claude Code's `Agent`, `subagent_type`, optional — measured in a
+  capture of 2026-11-11, always `general-purpose` —; codex 0.166.0's `spawn_agent`, `agent_type`,
+  optional, "omit unless explicitly asked"; opencode 1.19.5's `task`, `subagent_type`, required. A
+  type is a description the caller reads, instructions the sub-agent is given — a system prompt, or
+  Codex's developer instructions —, and a model, an effort, tools. The caller never writes that
+  prompt: it names the type and gives the task. Pi's p2 has no type: its `subagent` takes a model, a
+  thinking level and tools at each spawn; the sub-agent example of the Pi before it took an `agent`,
+  a Markdown file's name.
+- Agora already has such a catalogue: the flows' role cards — a persona, a harness, a model, an effort
+  each —, which a flow puts at the head of a member's first message.
 
 ## Decision
 
@@ -50,6 +61,10 @@
    `send_message`, `stop_agent`, `list_agents` — and do what those do: no tool ends a delegate's work,
    its last message does; no message is typed; stopping cancels the running turn and leaves the
    delegate within reach; listing says who is working. Decided on 2026-11-11.
+8. `spawn_agent` takes an optional `agent_type`, as the harnesses' own gesture does: one of Agora's
+   roles, the flows' cards. The card gives the delegate its persona, in Agora's line of its first
+   message, and the harness, model and effort it works with unless the call names others. Decided on
+   2026-11-12.
 
 ## Why
 
@@ -72,6 +87,8 @@
   name the tool (`reliability/delegation.md`, R7).
 - **Nothing invented.** Each gesture is one four harnesses already run, with the meaning they give it;
   what none of them does — a tool to hand a result in, a typed message — Agora does not do either.
+- **One catalogue of roles.** A delegate started as a `judge` is the judge a flow runs: the same card,
+  the same model. A role is written once, and what improves it improves both.
 
 ## What we tried
 
@@ -92,6 +109,9 @@
 | An envelope approved once, the Prefect team flow | A fixed plan; delegations compose instead, each call under its own rule. |
 | MCP's `outputSchema` | It types a tool's own answer; `spawn_agent` answers before the work is done. |
 | MCP elicitation | It asks the person, not the model. |
+| A role's persona as the harness's system prompt | Each harness has its own way in — an agent file, a configuration layer, a field of its adapter — and Agora's executions are warm: their Pods start before anyone knows who they will be. Not built: the persona goes where the flows already put it, in the first message, by the one way every harness reads. |
+| The persona in the delegator's words, at the head of the instructions | The delegate's title and its first message in its thread would be the card's, not the task's. In Agora's line, the thread and the title stay the delegator's. |
+| The card's text first in Agora's line | An agent that titles itself with the first line it reads would be named after its card: the line opens `From Agora,`, which the title's rule already leaves out (`specs/delegation.md`, D32). |
 
 ## Consequences
 
@@ -123,6 +143,12 @@
   Stop: it is not a loop between two agents.
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
 - A turn's maximum duration no longer counts the time its approvals waited.
+- A role's persona is a message, not a system prompt: a harness that compacts a long conversation may
+  lose it, as a flow's member may. It is in the log, and a catch-up gives it back with the rest.
+- The cards ship in the server's image: a card changed reaches delegations with the next image, and a
+  flow's run with its next clone. The two may differ for the time of a deploy.
+- A role gives no right: a `judge` started without read access to the repository it judges cannot read
+  it. The delegator names the rights, and the person approves those beyond its own.
 - A delegate's view and its row in the list carry its state, which its delegator's `spawn_agent` line
   shows and `list_agents` says.
 - A call Agora holds answers in an SSE stream; every other message stays one JSON answer.

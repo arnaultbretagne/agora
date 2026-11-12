@@ -9,7 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
-import { CALLER_HEADER, createMcpServer, delegationOf, Delegations, object, type Entry } from '../src/index.ts'
+import { join } from 'node:path'
+import { CALLER_HEADER, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, type Entry, type Role } from '../src/index.ts'
 import { database, expire, FakeKube, grants, Lab, lines, sleep, until, type LabOptions } from './support.ts'
 
 type Text = { content: { type: string; text: string }[]; isError?: boolean }
@@ -18,7 +19,7 @@ type T = { after(fn: () => Promise<void>): void }
 async function started(
   t: T,
   profiles: string[],
-  options: { approvalMs?: number; progressMs?: number; manual?: boolean } = {},
+  options: { approvalMs?: number; progressMs?: number; manual?: boolean; roles?: ReadonlyMap<string, Role> } = {},
   extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void } = {},
 ) {
   const pair = keys()
@@ -1204,4 +1205,129 @@ test('D52 a turn of the earlier contract, done with a submit in it; then a fresh
   await sleep(1_000)
   assert.deepEqual((await fromOthers(lab, ws)).map(wordsOf), ['handed in by submit'])
   // The same turn with no such message sends its last one: D26, and after a restart D28.
+})
+
+/** Two roles as a card gives them: one of another harness with its model and effort, one that leaves them to its pool. */
+const ROLES = new Map<string, Role>([
+  ['scout', { name: 'scout', summary: 'Looks before anyone builds.', harness: 'other', model: 'mock-large', effort: 'high', persona: '# Scout\n\nYou look, and you say what you saw.' }],
+  ['plain', { name: 'plain', summary: 'Leaves its settings to its pool.', harness: 'mock', model: null, effort: null, persona: '# Plain\n\nNothing of your own.' }],
+])
+const otherPool = (k: FakeKube) => k.morePools.push(['other-test', 'other'])
+
+test('D53 spawn_agent with agent_type, a role of another harness with its model and effort; then a send_message; the agent titling itself with what it read first: that harness’s pool, the role’s settings; its first prompt the role’s line, its persona, then its delegator’s line, the instructions apart; its user element and its title the instructions alone; the next message with no persona', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
+  const c = await client(t, url, execution)
+  const answer = text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'look at the tests\nand say what fails', agent_type: 'scout' } }))
+  const delegate = delegateOf(answer)
+  assert.equal(answer, `started ${delegate} · look at the tests`)
+  await lab.turn(delegate, 'done')
+  const current = (await lab.state(delegate)).current!
+  assert.deepEqual([current.body.pool, current.body.harness, current.body.settings], ['other-test', 'other', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }]])
+  const [opening, words, ...rest] = blocksOf((await prompts(lab, delegate))[0]!)
+  assert.equal(
+    opening!.text,
+    `From Agora, not the person: your role, \`scout\`.\n\n# Scout\n\nYou look, and you say what you saw.\n\n---\n\nFrom your delegator ${ws}, an agent, not the person. It receives your last message:`,
+  )
+  assert.deepEqual([words!.text, rest.length], ['look at the tests\nand say what fails', 0])
+  const [user] = await projected(lab, delegate, 'user')
+  assert.deepEqual([user?.from, user?.as, wordsOf(user!)], [ws, 'delegator', 'look at the tests\nand say what fails'])
+  const title = async () => (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')?.object.title
+  await until('its title', async () => (await title()) === 'look at the tests')
+  assert.equal((await kinds(lab, delegate, 'delegation.started'))[0]!.content.agentType, 'scout')
+  // An agent titling itself with the first thing it read: the role's line is Agora's, not what it works on.
+  const acp = current.acpId!
+  const titled = Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acp, update: { sessionUpdate: 'session_info_update', title: opening!.text.split('\n')[0] } } })).toString('base64')
+  assert.match(text(await c.callTool({ name: 'send_message', arguments: { to: delegate, message: `/raw ${titled}` } })), /^sent /)
+  await until('its turn over', async () => (await lab.state(delegate)).turns.size === 2 && (await lab.state(delegate)).active === null)
+  await sleep(500)
+  assert.equal(await title(), 'look at the tests')
+  // Its role is said once: the next message opens on its delegator's line alone.
+  const [line] = blocksOf((await prompts(lab, delegate))[1]!)
+  assert.equal(line!.text, `From your delegator ${ws}, an agent, not the person. It receives your last message:`)
+})
+
+test('D54 a role with harness naming another; with model given; a role that names no model and no effort; no agent_type: the pool named, none of the role’s settings, its persona all the same; that model, the role’s effort; its pool’s own; the delegator’s harness and its line alone', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
+  const c = await client(t, url, execution)
+  const spawn = async (args: Record<string, unknown>) => {
+    const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', ...args } })))
+    await lab.turn(delegate, 'done')
+    const current = (await lab.state(delegate)).current!
+    return { pool: current.body.pool, settings: current.body.settings ?? [], opening: blocksOf((await prompts(lab, delegate))[0]!)[0]!.text }
+  }
+  const from = `From your delegator ${ws}, an agent, not the person. It receives your last message:`
+  // On another harness than its own, a role's model and effort mean nothing: that pool's defaults stand.
+  const elsewhere = await spawn({ agent_type: 'scout', harness: 'mock' })
+  assert.deepEqual([elsewhere.pool, elsewhere.settings], ['mock-test', []])
+  assert.match(elsewhere.opening, /^From Agora, not the person: your role, `scout`\.\n\n# Scout\n/)
+  // What the call names wins over the role's.
+  const chosen = await spawn({ agent_type: 'scout', model: 'mock-small' })
+  assert.deepEqual([chosen.pool, chosen.settings], ['other-test', [{ id: 'model', value: 'mock-small' }, { id: 'effort', value: 'high' }]])
+  const plain = await spawn({ agent_type: 'plain' })
+  assert.deepEqual([plain.pool, plain.settings], ['mock-test', []])
+  assert.equal(plain.opening, `From Agora, not the person: your role, \`plain\`.\n\n# Plain\n\nNothing of your own.\n\n---\n\n${from}`)
+  // The control: with no role, as before.
+  const none = await spawn({})
+  assert.deepEqual([none.pool, none.settings, none.opening], ['mock-test', [], from])
+})
+
+test('D55 agent_type naming no role; not a string; with no role held at all; a role, rights beyond the delegator’s: unknown_agent_type each time, no Workstream created; the approval names the role', async (t) => {
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
+  const c = await client(t, url, execution)
+  for (const agent_type of ['judge', 'Scout', '', 7, null]) {
+    const refused = (await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type } })) as Text
+    assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_agent_type'], JSON.stringify(agent_type))
+  }
+  assert.equal(Number(((await db.admin.query('SELECT count(*) AS n FROM workstreams WHERE parent=$1', [ws])).rows[0] as { n: string }).n), 0)
+  const call = c.callTool({ name: 'spawn_agent', arguments: { instructions: 'needs the internet', agent_type: 'scout', rights: ['internet'] } })
+  await until('the approval', async () => (await lab.state(ws)).question)
+  const [approval] = await projected(lab, ws, 'question')
+  assert.match(String(approval?.text), /^Role `scout`: \*\*other\*\*, mock-large, effort high\n\nRights beyond the caller's: `internet`/)
+  assert.equal((await lab.command(ws, 'Answer', { question: (await lab.state(ws)).question!.position }, { optionId: 'approve' })).accepted, true)
+  assert.equal((await kinds(lab, delegateOf(text(await call)), 'delegation.started'))[0]!.content.agentType, 'scout')
+  // An Agora holding no role knows none.
+  const bare = await started(t, ['agora:delegate'])
+  const refused = (await (await client(t, bare.url, bare.execution)).callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type: 'scout' } })) as Text
+  assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_agent_type'])
+})
+
+test('D56 an effort, the call’s then a role’s, for a pool whose Sessions name it reasoning_effort: the delegate’s opening setting under that id, its Session set to it', async (t) => {
+  const deep = new Map<string, Role>([['deep', { name: 'deep', summary: 'Thinks it through.', harness: 'mock', model: null, effort: 'high', persona: '# Deep\n\nYou think it through.' }]])
+  const { lab, url, execution } = await started(t, ['agora:delegate'], { roles: deep }, { kube: (k) => (k.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { effortId: 'reasoning_effort' })) })
+  const c = await client(t, url, execution)
+  // What the pool's last Session offered, the delegator's own here, is what the catalogue knows of it.
+  await until('the pool’s settings known', async () => (await lab.workstreams.catalogue()).find((p) => p.name === 'mock-test')?.settings)
+  for (const [args, value] of [[{ harness: 'mock', effort: 'low' }, 'low'], [{ agent_type: 'deep' }, 'high']] as const) {
+    const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', ...args } })))
+    await lab.turn(delegate, 'done')
+    const current = (await lab.state(delegate)).current!
+    assert.deepEqual(current.body.settings, [{ id: 'reasoning_effort', value }])
+    const setting = (current.settings as { id: string; currentValue: string }[]).find((x) => x.id === 'reasoning_effort')
+    assert.equal(setting?.currentValue, value)
+  }
+})
+
+test('M13 tools/list with roles held; with none; Agora’s own cards read; a card leaving its model to its pool: spawn_agent takes agent_type, one of the roles, each named with what it does; no agent_type; dev, judge, lead and sre, each with its harness and its persona; no model of its own', async (t) => {
+  const { url, execution } = await started(t, ['agora:delegate'], { roles: ROLES })
+  const spawn = (await (await client(t, url, execution)).listTools()).tools.find((tool) => tool.name === 'spawn_agent')!
+  const properties = spawn.inputSchema.properties as Record<string, { enum?: string[]; description: string }>
+  assert.deepEqual([Object.keys(properties), spawn.inputSchema.required], [['instructions', 'harness', 'model', 'effort', 'rights', 'agent_type'], ['instructions']])
+  assert.deepEqual(properties.agent_type!.enum, ['scout', 'plain'])
+  assert.match(properties.agent_type!.description, /Roles:\n- scout: Looks before anyone builds\.\n- plain: Leaves its settings to its pool\.$/)
+  const bare = await started(t, ['agora:delegate'])
+  const without = (await (await client(t, bare.url, bare.execution)).listTools()).tools.find((tool) => tool.name === 'spawn_agent')!
+  assert.deepEqual(Object.keys(without.inputSchema.properties ?? {}), ['instructions', 'harness', 'model', 'effort', 'rights'])
+  // The cards the server is given: the flows' own.
+  const cards = loadRoles(join(import.meta.dirname, '..', '..', '..', 'apps', 'flows', 'roles'))
+  assert.deepEqual([...cards.keys()], ['dev', 'judge', 'lead', 'sre'])
+  for (const card of cards.values()) {
+    assert.ok(['claude-code', 'codex', 'opencode'].includes(card.harness) && card.summary !== '' && card.persona.startsWith('# '), card.name)
+    assert.ok(!card.persona.includes('\n---\n') && !/^---/.test(card.persona), `${card.name}: its front matter is not its persona`)
+  }
+  assert.deepEqual([cards.get('judge')!.harness, cards.get('judge')!.model, cards.get('judge')!.effort], ['codex', 'gpt-6.1-sol', 'xhigh'])  // A card that leaves its model to its pool, as the flows read it; one with no front matter is no card.
+  assert.deepEqual(parseRole('---\nrole: reader\nsummary: Reads: and says so.\nharness: opencode\nmodel: default\n---\n\n# Reader\n\nYou read.\n'), {
+    name: 'reader', summary: 'Reads: and says so.', harness: 'opencode', model: null, effort: null, persona: '# Reader\n\nYou read.',
+  })
+  assert.throws(() => parseRole('# Reader\n\nYou read.\n'), /front matter/)
+  assert.throws(() => parseRole('---\nrole: reader\n---\n\n# Reader\n'), /its harness/)
 })

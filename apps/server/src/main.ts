@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, logHttp, telemetry } from '@agora/log'
+import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, loadRoles, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { teamFrom, teamHttp } from './team.ts'
@@ -89,7 +89,9 @@ const workstreams = new Workstreams({
 
 try {
   // docs/specs/delegation.md: the engine behind `spawn_agent`, `send_message`, `stop_agent` and `list_agents`; an approval held 4 min 30 s.
-  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
+  // Its roles: the cards the flows staff a team with, offered to `spawn_agent` as `agent_type`.
+  const roles = loadRoles(process.env.ROLES_DIR ?? join(import.meta.dirname, '..', '..', 'flows', 'roles'))
+  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000, roles })
   // docs/specs/merge.md: the merge card, through the gateway from the server's own address, as the operator.
   // With the test routes, GITHUB_TEST_API stands in for GitHub behind the gateway (docs/specs/merge.md, G8).
   const githubTest = testRoutes && process.env.GITHUB_TEST_API ? process.env.GITHUB_TEST_API : null
