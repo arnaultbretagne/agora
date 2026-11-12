@@ -10,6 +10,7 @@ import { MAX_LINE } from './acp.ts'
 import { object } from './json.ts'
 import type { Workstreams } from './workstreams.ts'
 import { Refused as DelegationRefused } from './delegation.ts'
+import type { Role } from './roles.ts'
 import { Refused as MergeRefused } from './merges.ts'
 import { GITHUB_WRITE } from '@agora/credentials'
 
@@ -83,7 +84,7 @@ const SPAWN_AGENT: Tool = {
     type: 'object',
     properties: {
       instructions: { type: 'string', description: 'The delegate’s first message: what it has to do, and what you need back.' },
-      harness: { type: 'string', description: 'claude-code, codex or opencode; yours by default.' },
+      harness: { type: 'string', description: 'claude-code, codex or opencode; yours by default, or the role’s when agent_type names one.' },
       model: { type: 'string', description: 'A model the harness offers; its default otherwise.' },
       effort: { type: 'string', description: 'An effort the harness offers; its default otherwise.' },
       rights: { type: 'array', items: { type: 'string' }, description: 'The delegate’s rights, as profiles — e.g. github:owner/repo:read; none by default.' },
@@ -94,6 +95,18 @@ const SPAWN_AGENT: Tool = {
 }
 
 /** Listed to every delegate from its start, toward its delegator: a harness may list its tools once (docs/specs/mcp.md, "The path"). */
+/** `spawn_agent` as an execution is offered it: with `agent_type` when Agora holds roles, each named with what it does. */
+function spawnAgent(roles: ReadonlyMap<string, Role>): Tool {
+  if (roles.size === 0) return SPAWN_AGENT
+  const offered = [...roles.values()].map((role) => `- ${role.name}: ${role.summary}`).join('\n')
+  const agentType = {
+    type: 'string',
+    enum: [...roles.keys()],
+    description: `The delegate’s role: who it is, and the harness, model and effort it works with unless you name others. Omit it for an agent with no role. Roles:\n${offered}`,
+  }
+  return { ...SPAWN_AGENT, inputSchema: { ...SPAWN_AGENT.inputSchema, properties: { ...SPAWN_AGENT.inputSchema.properties, agent_type: agentType } } }
+}
+
 const SEND_MESSAGE: Tool = {
   name: 'send_message',
   description:
@@ -275,8 +288,11 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
   // Each tool once: a delegate that may delegate holds `send_message` by both its rights.
   const tools = [
     ...new Set(caller.profiles.flatMap((profile) => (delegations === null && profile !== 'agora:read' ? [] : (RIGHTS[profile] ?? [])))),
-    ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p)) ? [PROPOSE_MERGE] : []),
   ]
+    .map((tool) => (tool === SPAWN_AGENT ? spawnAgent(delegations!.roles) : tool))
+    .concat([
+    ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p)) ? [PROPOSE_MERGE] : []),
+  ])
   const execution = subject![1]!
   const server = new Server({ name: 'agora', version: '1.0.0' }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...tools] }))

@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS workstreams (
 ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS parent uuid REFERENCES workstreams(id);
 ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS root uuid REFERENCES workstreams(id);
 ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS depth integer NOT NULL DEFAULT 0 CHECK(depth >= 0);
+-- A native sub-stream (docs/specs/log.md, "Native sub-agents"): the Workstream whose log holds its lines. None for any other.
+ALTER TABLE workstreams ADD COLUMN IF NOT EXISTS host uuid REFERENCES workstreams(id);
+CREATE INDEX IF NOT EXISTS workstreams_host ON workstreams(host) WHERE host IS NOT NULL;
 -- The projector's own row: its lock never waits on capture, which locks the Workstream row.
 CREATE TABLE IF NOT EXISTS threads (
  workstream uuid PRIMARY KEY REFERENCES workstreams(id), last_position bigint NOT NULL DEFAULT 0 CHECK(last_position >= 0)
@@ -143,12 +146,14 @@ CREATE OR REPLACE FUNCTION transcript(of_workstreams uuid[])
       row_number() OVER (PARTITION BY o.workstream ORDER BY (o.object->>'requestPosition')::bigint, o.id) AS exchange,
       -- Who wrote its prompt (docs/specs/search.md, "Who wrote"): a message says so; an earlier delegation's report is Agora's, its marked message a caller's.
       (SELECT CASE WHEN p.type = 'report' THEN 'agora' WHEN p.object ? 'as' THEN p.object->>'as' WHEN p.object ? 'from' THEN 'caller' END FROM objects p
-        WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text AND NOT p.object ? 'steered' LIMIT 1) AS author
+        WHERE p.workstream = o.workstream AND p.kind = 'element' AND p.type IN ('user', 'report') AND p.object->>'turn' = o.id::text AND NOT p.object ? 'steered' LIMIT 1) AS author,
+      -- A native sub-agent's turn answers no prompt of Agora's (docs/specs/log.md, "Native sub-agents"): with no task reported, it has no first header.
+      coalesce((o.object->>'native')::boolean, false) AS unprompted
     FROM objects o WHERE o.workstream = ANY(of_workstreams) AND o.kind = 'turn'
   ), parts AS (
     SELECT t.workstream, t.exchange, 0 AS slot, 0::bigint AS place, 0 AS part, 'header' AS kind,
       '## ' || t.exchange || coalesce(' · ' || to_char(t.started::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') || ' · ' || coalesce(t.author, 'you') AS text
-    FROM turns t
+    FROM turns t WHERE t.author IS NOT NULL OR NOT t.unprompted
     UNION ALL
     SELECT t.workstream, t.exchange, 2, 0, 0, 'header', '## ' || t.exchange || ' · agent' FROM turns t
     UNION ALL
@@ -183,7 +188,7 @@ DO $$ BEGIN
  EXECUTE format('GRANT CONNECT ON DATABASE %I TO agora_writer, agora_projector, agora_anchors', current_database());
 END $$;
 GRANT USAGE ON SCHEMA public TO agora_writer,agora_projector,agora_anchors;
-GRANT SELECT(id,owner,last_position,parent,root,depth), INSERT(id,owner,parent,root,depth), UPDATE(last_position) ON workstreams TO agora_writer;
+GRANT SELECT(id,owner,last_position,parent,root,depth,host), INSERT(id,owner,parent,root,depth,host), UPDATE(last_position) ON workstreams TO agora_writer;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files),
  INSERT(workstream,position,kind,execution,session,content,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files) ON entries TO agora_writer;
 GRANT SELECT(sha256,size,time), INSERT(sha256,size) ON files TO agora_writer;
@@ -192,7 +197,7 @@ GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position), INS
 GRANT SELECT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256,time), INSERT(id,workstream,execution,connection,receive_ordinal,direction,reason,size,sha256) ON diagnostics TO agora_writer;
 GRANT UPDATE(ended_position) ON sessions TO agora_writer;
 GRANT SELECT(id,workstream,execution,session,metadata,time) ON anchors TO agora_writer;
-GRANT SELECT(id,owner,parent,root,depth) ON workstreams TO agora_projector;
+GRANT SELECT(id,owner,parent,root,depth,host) ON workstreams TO agora_projector;
 GRANT SELECT(workstream,last_position,reset_position), INSERT(workstream), UPDATE(last_position,reset_position) ON threads TO agora_projector;
 GRANT SELECT(workstream,position,kind,execution,session,content,time,direction,rpc_kind,method,correlated_method,request_position,rpc_id,command,connection,receive_ordinal,files) ON entries TO agora_projector;
 GRANT SELECT(workstream,projector,kind,id,object,first_position,last_position,type,position), INSERT(workstream,projector,kind,id,object,first_position,last_position,type,position), UPDATE(object,first_position,last_position,type,position) ON objects TO agora_projector;

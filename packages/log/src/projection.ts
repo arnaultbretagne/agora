@@ -39,6 +39,8 @@ export type ListRow = {
   harness: unknown
   question: unknown
   delegation?: unknown
+  /** A native sub-stream's state (docs/specs/log.md, "Native sub-agents"). */
+  subagent?: unknown
   below: Below
   changedAt: string
 }
@@ -54,8 +56,9 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
   for (const child of children) {
     const under = child.below ?? { count: 0, live: 0, waiting: 0 }
     below.count += 1 + under.count
-    below.live += (LIVE.has(String(child.state)) ? 1 : 0) + under.live
-    below.waiting += (child.question ? 1 : 0) + under.waiting
+    // A native sub-stream has no execution of its own: it counts while it works, and waits while a permission of its is pending.
+    below.live += (LIVE.has(String(child.state)) || ['working', 'waiting'].includes(String(child.subagent)) ? 1 : 0) + under.live
+    below.waiting += (child.question || child.subagent === 'waiting' ? 1 : 0) + under.waiting
     if (Date.parse(child.changedAt) > Date.parse(changedAt)) changedAt = child.changedAt
   }
   return {
@@ -68,6 +71,7 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
     question: view.question ?? null,
     // A delegate's alone: any other row stays as it was written.
     ...(view.delegation ? { delegation: view.delegation } : {}),
+    ...(view.subagent ? { subagent: view.subagent } : {}),
     below,
     changedAt,
   }
@@ -136,20 +140,43 @@ export class Projections {
     let broken = false
     try {
       await client.query('BEGIN')
-      await client.query('INSERT INTO threads(workstream) VALUES($1) ON CONFLICT DO NOTHING', [workstream])
-      const locked = await client.query('SELECT last_position,reset_position FROM threads WHERE workstream=$1 FOR UPDATE', [workstream])
-      let position = BigInt(locked.rows[0].last_position)
-      let resetAt = BigInt(locked.rows[0].reset_position)
+      // Each thread written is locked once, its own first: the Workstream's, then those of the native sub-streams it
+      // hosts, whose objects come from this fold alone (docs/specs/log.md, "Native sub-agents").
+      const threads = new Map<string, { position: bigint; resetAt: bigint }>()
+      const threadOf = async (target: string) => {
+        let thread = threads.get(target)
+        if (!thread) {
+          await client.query('INSERT INTO threads(workstream) VALUES($1) ON CONFLICT DO NOTHING', [target])
+          const locked = await client.query('SELECT last_position,reset_position FROM threads WHERE workstream=$1 FOR UPDATE', [target])
+          thread = { position: BigInt(locked.rows[0].last_position), resetAt: BigInt(locked.rows[0].reset_position) }
+          threads.set(target, thread)
+        }
+        return thread
+      }
+      const own = await threadOf(workstream)
+      /**
+       * The threads whose rows a run writes, in the order their lists are taken: the native sub-streams first, the
+       * deepest first, then the Workstream itself — from the sub-stream up, as every other run takes them
+       * (docs/specs/log.md, "The list", "Up the line"), so that two runs never wait on each other.
+       */
+      const upward = async (targets: readonly string[]): Promise<string[]> => {
+        const hosted = targets.filter((t) => t !== workstream)
+        if (hosted.length === 0) return targets.includes(workstream) ? [workstream] : []
+        const depths = new Map((await client.query('SELECT id, depth FROM workstreams WHERE id = ANY($1::uuid[])', [hosted])).rows.map((r) => [r.id as string, Number(r.depth)]))
+        hosted.sort((a, b) => (depths.get(b) ?? 0) - (depths.get(a) ?? 0) || (a < b ? -1 : 1))
+        return [...hosted, ...(targets.includes(workstream) ? [workstream] : [])]
+      }
       // A reset takes the next position, and every object one after it: the complete state, in order.
-      const reset = async () => {
-        resetAt = ++position
+      const reset = async (target = workstream) => {
+        const thread = await threadOf(target)
+        thread.resetAt = ++thread.position
         const renumbered = await client.query(
           'UPDATE objects o SET position=$2::bigint+n.rank FROM (SELECT kind,id,row_number() OVER (ORDER BY kind,id) AS rank FROM objects WHERE workstream=$1) n WHERE o.workstream=$1 AND o.kind=n.kind AND o.id=n.id',
-          [workstream, String(resetAt)],
+          [target, String(thread.resetAt)],
         )
-        position += BigInt(renumbered.rowCount ?? 0)
-        const views = await client.query("SELECT object::text FROM objects WHERE workstream=$1 AND kind='workstream'", [workstream])
-        for (const v of views.rows) await this.list(client, workstream, decode(v.object))
+        thread.position += BigInt(renumbered.rowCount ?? 0)
+        const views = await client.query("SELECT object::text FROM objects WHERE workstream=$1 AND kind='workstream'", [target])
+        for (const v of views.rows) await this.list(client, target, decode(v.object))
       }
       const checkpoints = new Map<string, { version: string; position: string }>(
         (
@@ -160,12 +187,17 @@ export class Projections {
       if (rebuild || (previous !== undefined && previous.version !== projector.version)) {
         for (const name of checkpoints.keys()) if (!this.registry.has(name)) throw new Error('projector_not_registered')
         const entries = await readEntries(client, workstream)
+        // The native sub-streams it hosts are rebuilt with it: those it had, and those the fold gives.
+        const hosted = new Set((await client.query('SELECT id FROM workstreams WHERE host=$1 ORDER BY id', [workstream])).rows.map((r) => r.id as string))
         for (const selected of this.registry.values()) {
           const projection = selected.create()
           projection.apply(entries)
-          await this.replace(client, workstream, selected, projection)
+          for (const item of projection.objects.values()) if (item.workstream !== undefined) hosted.add(item.workstream)
+          for (const target of [workstream, ...hosted]) await this.replace(client, workstream, target, selected, projection)
           this.memory.set(`${workstream}:${selected.name}`, { version: selected.version, projection })
         }
+        // From the sub-streams up: each row counts what lies under it as the reset before it left it.
+        for (const target of await upward([...hosted])) await reset(target)
         await reset()
       } else {
         const key = `${workstream}:${projector.name}`
@@ -183,16 +215,20 @@ export class Projections {
         if (delta.length) {
           const changed = held.projection.apply(delta)
           let removed = false
+          // Each view's row is written once every object is, in the lists' own order.
+          const views = new Map<string, Record<string, unknown>>()
           for (const id of changed) {
             const item = held.projection.objects.get(id)
             if (item) {
-              await this.upsert(client, workstream, projector, item, String(++position))
-              if (item.kind === 'workstream') await this.list(client, workstream, item.object)
+              const target = item.workstream ?? workstream
+              await this.upsert(client, target, projector, item, String(++(await threadOf(target)).position))
+              if (item.kind === 'workstream') views.set(target, item.object)
             } else {
               const deleted = await client.query('DELETE FROM objects WHERE workstream=$1 AND projector=$2 AND id=$3', [workstream, projector.name, id])
               removed ||= Boolean(deleted.rowCount)
             }
           }
+          for (const target of await upward([...views.keys()])) await this.list(client, target, views.get(target))
           // A removal leaves no object to carry it: the client is given the complete state instead.
           if (removed) await reset()
           await client.query(
@@ -206,9 +242,10 @@ export class Projections {
           )
         }
       }
-      await client.query('UPDATE threads SET last_position=$2,reset_position=$3 WHERE workstream=$1', [workstream, String(position), String(resetAt)])
+      for (const [target, thread] of threads)
+        await client.query('UPDATE threads SET last_position=$2,reset_position=$3 WHERE workstream=$1', [target, String(thread.position), String(thread.resetAt)])
       await client.query('COMMIT')
-      return String(position)
+      return String(own.position)
     } catch (error) {
       await client.query('ROLLBACK').catch(() => (broken = true))
       for (const name of this.registry.keys()) this.memory.delete(`${workstream}:${name}`)
@@ -232,9 +269,13 @@ export class Projections {
     )
     if (written.rowCount !== 1) throw new Error('projector_object_conflict')
   }
-  /** Replaces a projector's objects with a rebuilt projection, removing obsolete ones; the reset that follows numbers them. */
+  /**
+   * Replaces a projector's objects in one thread — the Workstream's own, or a native sub-stream's it hosts — with a
+   * rebuilt projection, removing obsolete ones; the reset that follows numbers them. The checkpoint is the Workstream's.
+   */
   private async replace(
     client: PoolClient,
+    host: string,
     workstream: string,
     projector: Projector,
     projection: Projection,
@@ -245,6 +286,7 @@ export class Projections {
     )
     const remaining = new Map(old.rows.map((o) => [o.id as string, o]))
     for (const item of projection.objects.values()) {
+      if ((item.workstream ?? host) !== workstream) continue
       const prior = remaining.get(item.id)
       remaining.delete(item.id)
       if (
@@ -261,6 +303,7 @@ export class Projections {
         projector.name,
         id,
       ])
+    if (workstream !== host) return
     await client.query(
       'INSERT INTO checkpoints(workstream,projector,version,position) VALUES($1,$2,$3,$4) ON CONFLICT(workstream,projector) DO UPDATE SET version=excluded.version,position=excluded.position',
       [workstream, projector.name, projector.version, projection.position],

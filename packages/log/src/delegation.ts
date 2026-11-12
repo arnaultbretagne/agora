@@ -8,6 +8,7 @@ import { offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META } from './marks.ts'
+import type { Role } from './roles.ts'
 import { delegationOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
 import type { Workstreams } from './workstreams.ts'
@@ -26,6 +27,8 @@ const MAX_EXCHANGES = 10
 const OVER = ['execution.failed', 'execution.lost', 'execution.ended']
 /** The right that opens a caller's own delegates to it; a delegate's own right reaches its delegator alone. */
 const DELEGATE_RIGHT = 'agora:delegate'
+/** The ids a harness gives its effort setting: Codex's is `reasoning_effort`. */
+const EFFORT_IDS = ['effort', 'reasoning_effort']
 
 /** What a tool answers instead of its result: the reason (docs/specs/delegation.md). */
 export class Refused extends Error {}
@@ -56,14 +59,15 @@ const markOf = (prompt: unknown): Record<string, unknown> | null =>
   object(object(object(Array.isArray(prompt) ? (prompt as unknown[]).find((b) => !isCatchUp(b)) : null)?._meta)?.[FROM_META])
 
 /** What a turn says last: its text since its last tool or its reasoning, whole (docs/specs/delegation.md, "Messages"). */
-function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined): string {
+export function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn | undefined, children: ReadonlySet<string>): string {
   const from = BigInt(turn.requestPosition)
   const to = next === undefined ? null : BigInt(next.requestPosition)
   let words = ''
   let speaker: unknown
   let cut = true
   for (const e of entries) {
-    if (e.kind !== 'acp' || e.direction !== 'in' || e.method !== 'session/update') continue
+    // What a native sub-agent of the delegate's says is not the delegate's last message (docs/specs/log.md, "Native sub-agents").
+    if (e.kind !== 'acp' || e.direction !== 'in' || e.method !== 'session/update' || children.has(String(object(e.content.params)?.sessionId))) continue
     const at = BigInt(e.position)
     if (at <= from || (to !== null && at >= to)) continue
     const update = object(object(e.content.params)?.update)
@@ -98,16 +102,19 @@ export class Delegations {
   private readonly approvalMs: number
   private readonly progressMs: number
   private readonly manual: boolean
+  /** The roles `spawn_agent` offers as `agent_type` (docs/specs/delegation.md, "A delegation"). */
+  readonly roles: ReadonlyMap<string, Role>
 
   /**
    * `approvalMs` and `progressMs` are the spec's 4 min 30 s and 30 s, shorter in tests; `manual` leaves the clock to
-   * whoever calls `tick(true)`: the point a test holds to order what happens.
+   * whoever calls `tick(true)`: the point a test holds to order what happens. `roles`: the cards a delegate may be given.
    */
-  constructor(workstreams: Workstreams, options: { approvalMs?: number; progressMs?: number; manual?: boolean } = {}) {
+  constructor(workstreams: Workstreams, options: { approvalMs?: number; progressMs?: number; manual?: boolean; roles?: ReadonlyMap<string, Role> } = {}) {
     this.workstreams = workstreams
     this.approvalMs = options.approvalMs ?? APPROVAL_MS
     this.progressMs = options.progressMs ?? PROGRESS_MS
     this.manual = options.manual ?? false
+    this.roles = options.roles ?? new Map()
     workstreams.delegations = this
   }
 
@@ -245,6 +252,10 @@ export class Delegations {
   async spawn(caller: Caller, args: Readonly<Record<string, unknown>>, hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null }): Promise<string> {
     const instructions = args.instructions
     if (typeof instructions !== 'string' || instructions.trim() === '') throw new Refused('invalid_query: instructions')
+    // Its role, when one is named: a card Agora holds, or nothing starts. Null is no name, as for the other parameters.
+    if (args.agent_type != null && typeof args.agent_type !== 'string') throw new Refused('invalid_query: agent_type')
+    const role = typeof args.agent_type === 'string' ? this.roles.get(args.agent_type) : null
+    if (role === undefined) throw new Refused('unknown_agent_type')
     const found = await this.store.writer.query('SELECT depth, owner FROM workstreams WHERE id=$1', [caller.workstream])
     const depth = Number(found.rows[0]?.depth ?? 0)
     if (depth >= MAX_DEPTH) throw new Refused('depth_exceeded')
@@ -253,7 +264,7 @@ export class Delegations {
     const delegate = randomUUID()
     this.followed.set(delegate, { delegator: caller.workstream, seen: new Set() })
     try {
-      return await this.started(delegate, caller, args, instructions, hold)
+      return await this.started(delegate, caller, args, instructions, role, hold)
     } catch (error) {
       this.followed.delete(delegate)
       throw error
@@ -265,23 +276,31 @@ export class Delegations {
     caller: Caller,
     args: Readonly<Record<string, unknown>>,
     instructions: string,
+    role: Role | null,
     hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
   ): Promise<string> {
     const pools = await this.workstreams.catalogue()
     const callerState = await this.store.state(caller.workstream)
     const callerExecution = callerState.executions.get(caller.execution)
-    const harness = typeof args.harness === 'string' ? args.harness : String(callerExecution?.body.harness ?? '')
+    const harness = typeof args.harness === 'string' ? args.harness : (role?.harness ?? String(callerExecution?.body.harness ?? ''))
     const pool = pools.find((p) => p.harness === harness || p.name === harness)
     if (!pool) throw new Refused('unknown_harness')
     const rights = Array.isArray(args.rights) ? args.rights.map(String) : []
     const offered = this.workstreams.options.credentials?.offered ?? []
     if (offered.length > 0 && rights.some((r) => !offers(offered, r))) throw new Refused('profile_not_offered')
     const settings: Record<string, string> = {}
-    for (const id of ['model', 'effort'] as const) if (typeof args[id] === 'string') settings[id] = String(args[id])
+    // A role's model and effort are its own harness's: on another, the pool's defaults stand.
+    const own = role !== null && pool.harness === role.harness ? role : null
+    const wanted = { model: typeof args.model === 'string' ? args.model : (own?.model ?? null), effort: typeof args.effort === 'string' ? args.effort : (own?.effort ?? null) }
+    // The effort under the name the pool gives it — `reasoning_effort` on Codex —, as the flows send it (docs/specs/flows.md, "Role cards").
+    // What names it: the pool's own defaults, and what its last Session offered.
+    const known = [...(Array.isArray(pool.sessionConfig) ? pool.sessionConfig : []), ...(Array.isArray(pool.settings) ? pool.settings : [])].map((setting) => object(setting)?.id)
+    if (wanted.model !== null) settings.model = wanted.model
+    if (wanted.effort !== null) settings[EFFORT_IDS.find((id) => known.includes(id)) ?? 'effort'] = wanted.effort
     const beyond = rights.filter((r) => !offers(caller.profiles, r))
     let approval: string | null = null
     if (beyond.length > 0) {
-      const { settled, position } = await this.approve(caller, { harness: String(pool.harness), settings, beyond, instructions }, args, hold)
+      const { settled, position } = await this.approve(caller, { role: role?.name ?? null, harness: String(pool.harness), ...wanted, beyond, instructions }, args, hold)
       if (settled.outcome === 'refused') throw new Refused(`refused: ${settled.words}`)
       if (settled.outcome === 'expired') throw new Refused('expired')
       approval = position
@@ -307,9 +326,9 @@ export class Delegations {
     // Recorded once its execution is accepted: a Create refused (`quota`) leaves an empty sub-stream, never listed, never followed.
     await this.workstreams.record(delegate, {
       kind: 'delegation.started',
-      content: { delegator: caller.workstream, delegatorExecution: caller.execution, harness: pool.harness, pool: pool.name, settings, rights, ...(approval !== null ? { approval } : {}) },
+      content: { delegator: caller.workstream, delegatorExecution: caller.execution, harness: pool.harness, pool: pool.name, settings, rights, ...(role !== null ? { agentType: role.name } : {}), ...(approval !== null ? { approval } : {}) },
     })
-    const written = await this.fromDelegator(caller.workstream, delegate, instructions)
+    const written = await this.fromDelegator(caller.workstream, delegate, instructions, role)
     if (!written.accepted) throw new Refused(written.reason)
     return `started ${delegate} · ${line(instructions)}`
   }
@@ -420,8 +439,11 @@ export class Delegations {
     return theirs.slice(1).filter((e) => markOf(object(e.content.body)?.prompt)?.as === 'delegator' && Date.parse(e.time) > since).length
   }
 
-  private fromDelegator(delegator: string, delegate: string, words: string): Promise<Answer> {
-    return this.write(delegate, randomUUID(), { workstream: delegator, as: 'delegator' }, `From your delegator ${delegator}, an agent, not the person. It receives your last message:`, words)
+  /** A delegator's words; with a role, its first message opens on the role's persona (docs/specs/delegation.md, "Messages": Agora's line). */
+  private fromDelegator(delegator: string, delegate: string, words: string, role: Role | null = null): Promise<Answer> {
+    const from = `From your delegator ${delegator}, an agent, not the person. It receives your last message:`
+    const opening = role === null ? from : `From Agora, not the person: your role, \`${role.name}\`.\n\n${role.persona}\n\n---\n\n${from}`
+    return this.write(delegate, randomUUID(), { workstream: delegator, as: 'delegator' }, opening, words)
   }
 
   /** The caller's delegates awaiting approval or working (docs/specs/delegation.md, "A delegation"). */
@@ -441,7 +463,7 @@ export class Delegations {
   /** Holds the call until the person approves, writes, or the approval expires (docs/specs/delegation.md, "Approval"). */
   private async approve(
     caller: Caller,
-    proposal: { harness: string; settings: Record<string, string>; beyond: string[]; instructions: string },
+    proposal: { role: string | null; harness: string; model: string | null; effort: string | null; beyond: string[]; instructions: string },
     args: Readonly<Record<string, unknown>>,
     hold: { progress: () => void; aborted: AbortSignal; toolUseId: string | null },
   ): Promise<{ settled: Settled; position: string }> {
@@ -453,7 +475,7 @@ export class Delegations {
     }
     const expiresAt = new Date(Date.now() + this.approvalMs).toISOString()
     const body = [
-      `**${proposal.harness}**${proposal.settings.model ? `, ${proposal.settings.model}` : ''}${proposal.settings.effort ? `, effort ${proposal.settings.effort}` : ''}`,
+      `${proposal.role !== null ? `Role \`${proposal.role}\`: ` : ''}**${proposal.harness}**${proposal.model ? `, ${proposal.model}` : ''}${proposal.effort ? `, effort ${proposal.effort}` : ''}`,
       '',
       `Rights beyond the caller's: ${proposal.beyond.map((r) => `\`${r}\``).join(', ')}`,
       '',
@@ -576,7 +598,7 @@ export class Delegations {
     if (!this.holdsAnothers(entries, turn, next)) return null
     // A turn of the earlier contract in which the delegate called `submit` sent nothing more: said then, said for good.
     if ((await this.store.entries(delegator)).some((x) => x.kind === 'command' && x.content.kind === 'Write' && markOf(object(x.content.body)?.prompt)?.workstream === delegate && markOf(object(x.content.body)?.prompt)?.turn === turn.id)) return null
-    const words = lastMessageOf(entries, turn, next)
+    const words = lastMessageOf(entries, turn, next, new Set(state.children.keys()))
     const id = identity(delegate, turn.id, 'last message')
     return words === '' ? this.notice(delegator, delegate, id, 'It ended its turn with nothing to say.') : this.fromDelegate(delegator, delegate, id, words, turn.id)
   }

@@ -87,8 +87,8 @@ without renewal. A new prompt restarts the lease if the sandbox is still usable.
 
 All of this happens before the claim, with no user; the only token is the warm one, for the
 pool's base profiles. The bridge sends no ACP.
-Agora sends `initialize` on its first connection, with `fs` and `terminal` set to *no*, and keeps
-the answer. codex refuses a second `initialize`: Agora never resends it to the same instance.
+Agora sends `initialize` on its first connection, with `fs` and `terminal` set to *no* and
+`subagents` declared (`log.md`, "Native sub-agents"), and keeps the answer. codex refuses a second `initialize`: Agora never resends it to the same instance.
 
 ### The bridge's routes
 

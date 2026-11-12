@@ -25,7 +25,7 @@ export interface LabBridge {
 export async function mockBridge(
   publicKey: KeyObject,
   podName = 'sbx-test',
-  options: { home?: string; initializeDelayMs?: number; initializeInvalid?: boolean; readAtStart?: boolean; restartOnAnchor?: boolean; noSteering?: boolean; silentSettings?: boolean } = {},
+  options: { home?: string; initializeDelayMs?: number; initializeInvalid?: boolean; readAtStart?: boolean; restartOnAnchor?: boolean; noSteering?: boolean; silentSettings?: boolean; effortId?: string } = {},
 ): Promise<LabBridge> {
   const home = options.home ?? mkdtempSync(join(tmpdir(), 'bridge-'))
   const workspace = join(home, 'work')
@@ -40,6 +40,7 @@ export async function mockBridge(
       `AGORA_MOCK_READ_AT_START=${options.readAtStart ? '1' : '0'}`,
       `AGORA_MOCK_NO_STEERING=${options.noSteering ? '1' : '0'}`,
       `AGORA_MOCK_SILENT_SETTINGS=${options.silentSettings ? '1' : '0'}`,
+      `AGORA_MOCK_EFFORT_ID=${options.effortId ?? ''}`,
       process.execPath,
       MOCK_AGENT,
     ],

@@ -6,7 +6,7 @@ them in-cluster (infra-k8s `apps/prefect`); nothing here is built into an image.
 
 | File | Content |
 | --- | --- |
-| `roles/` | The role cards — `lead`, `dev`, `sre`, `judge`: each one's persona and default harness, model and effort. |
+| `roles/` | The role cards — `lead`, `dev`, `sre`, `judge`: each one's persona and default harness, model and effort. The server's image carries them too: they are the roles `spawn_agent` offers (`docs/specs/delegation.md`). |
 | `team.py` | The team, standard library only: the cards, Agora's offer, the lead's decisions and what the flow accepts of them, every prompt. |
 | `agora.py` | A member's turns on Agora, standard library only: ids derived from the turn, its execution, the Write, the answer. |
 | `flows.py` | The flows: `lead`, `lead-rehearsal` and `rehearsal`. |

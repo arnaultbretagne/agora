@@ -5,7 +5,7 @@
 // at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
 // frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
-import { ChevronRightIcon, ChevronUpIcon, FolderIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SunIcon } from 'lucide-react'
+import { ChevronRightIcon, ChevronUpIcon, FolderIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
@@ -71,6 +71,12 @@ const DOT: Partial<Record<WorkstreamState, string>> = {
   failed: 'bg-destructive',
 }
 
+/** A native sub-stream's dot (docs/specs/assistant-ui.md, "The screen"): while it works, and once it failed. */
+const SUBAGENT_DOT: Record<string, string> = { working: 'bg-primary animate-pulse', failed: 'bg-destructive' }
+const dotOf = (w: ListRow): string | undefined => (w.state === 'native' ? SUBAGENT_DOT[w.subagent ?? ''] : DOT[w.state])
+/** A native sub-stream's state, as the header says it. */
+const SUBAGENT_LABEL: Record<string, string> = { working: 'working', waiting: 'waiting for you', idle: 'idle', failed: 'failed', cancelled: 'cancelled' }
+
 /** What a folded row shows of what lies under it: one waiting for the person first, else how many are live, else how many. */
 const Below: FC<{ below: NonNullable<ListRow['below']> }> = ({ below }) =>
   below.live > 0 ? (
@@ -91,7 +97,7 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
   match,
 }) => {
   const folded = fold !== undefined && !fold.open && w.below !== undefined
-  const waiting = w.question || (folded && w.below!.waiting > 0)
+  const waiting = w.question || w.subagent === 'waiting' || (folded && w.below!.waiting > 0)
   return (
     <div
       className={cn(
@@ -121,7 +127,11 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
         className={cn('flex min-w-0 flex-1 items-center gap-2 pr-2 pl-1 text-left', match === undefined && 'h-8')}
       >
         {match === undefined ? (
-          <span className="min-w-0 flex-1 truncate">{w.title}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {/* Its harness's own sub-agent: read-only, told from a delegate by its mark. */}
+            {w.state === 'native' && <span className="text-muted-foreground/80 mr-1.5 font-mono text-[11px]">sub-agent</span>}
+            {w.title}
+          </span>
         ) : (
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate">{w.title}</span>
@@ -136,7 +146,7 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
           <span className="text-primary shrink-0 text-[11px] font-medium">waiting for you</span>
         ) : (
           <>
-            {DOT[w.state] && <span aria-label={w.state} className={cn('size-1.5 shrink-0 rounded-full', DOT[w.state])} />}
+            {dotOf(w) && <span aria-label={w.state === 'native' ? (w.subagent ?? 'native') : w.state} className={cn('size-1.5 shrink-0 rounded-full', dotOf(w))} />}
             {folded && <Below below={w.below!} />}
           </>
         )}
@@ -440,7 +450,7 @@ const STATE_LABEL: Partial<Record<WorkstreamState, string>> = {
 }
 
 const Title: FC = () => {
-  const { id, view, send, connection, line, open } = useAgora()
+  const { id, view, send, connection, line, open, composer, cancel } = useAgora()
   const stoppable = view.execution !== null && ['starting', 'ready', 'interrupted', 'lost'].includes(view.state)
   if (id === null) return <span className="min-w-0 flex-1 truncate text-[13px] font-medium">New workstream</span>
   const state = view.state
@@ -456,6 +466,20 @@ const Title: FC = () => {
         </span>
       ))}
       <span className="min-w-0 truncate text-[13px] font-medium">{view.title}</span>
+      {state === 'native' && (
+        <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
+          <span aria-hidden className="max-sm:hidden">·</span>
+          <span className="max-sm:hidden">{harnessName(view.harness)}</span>
+          <span aria-hidden>·</span>
+          {view.subagent === 'working' ? (
+            <ShimmerLabel data-state="native">{SUBAGENT_LABEL.working}</ShimmerLabel>
+          ) : (
+            <span data-state="native" className={cn(view.subagent === 'waiting' && 'text-primary font-medium')}>
+              {SUBAGENT_LABEL[view.subagent ?? ''] ?? 'idle'}
+            </span>
+          )}
+        </span>
+      )}
       {STATE_LABEL[state] && (
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
           {/* On a phone the title needs the room; the composer shows the harness. */}
@@ -471,6 +495,19 @@ const Title: FC = () => {
       )}
       <span className="flex-1" />
       {connection === 'offline' && <ShimmerLabel className="text-muted-foreground shrink-0 font-mono text-[11px]">reconnecting to the server</ShimmerLabel>}
+      {/* A native sub-stream has no composer to cancel from: its turn is cancelled here, where its adapter offers it. */}
+      {composer.readOnly && composer.cancellable && (
+        <button
+          type="button"
+          aria-label="Cancel"
+          title="Cancel what this sub-agent is doing"
+          onClick={() => void cancel()}
+          className="text-muted-foreground hover:text-foreground rounded-control flex h-7 shrink-0 items-center gap-1.5 px-2 text-[13px] transition-colors max-sm:-me-1"
+        >
+          <SquareIcon className="size-3" />
+          <span>Cancel</span>
+        </button>
+      )}
       {stoppable && (
         <button
           type="button"

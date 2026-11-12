@@ -725,6 +725,44 @@ test('U84 a send_message and a stop_agent naming a delegate, a send_message to p
   assert.deepEqual(delegatesOf(crafted([line(2, 'mcp__agora__send_message', `sent ${id} · Review the change`), line(5, 'mcp__agora__list_agents', `${id} · Review the change · working`)])), [id])
 })
 
+test('U89 a subagent element among a turn’s parts: a delegate’s line, its sub-stream and its state; its sub-stream among those whose rows the thread reads', () => {
+  const child = '7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f'
+  const line = (state: string) => ({ kind: 'element', id: 'sub-line', object: { type: 'subagent', turn: 't', session: 's', firstPosition: '2', lastPosition: '3', workstream: child, title: 'Count the files', description: 'general-purpose', state, cancel: true } })
+  const partOf = (state: string) => {
+    const thread = crafted([turnObject('in_progress'), said(1, 'go'), line(state), chunk(4, 'its own words')])
+    const assistant = messagesOf(thread).find((m) => m.role === 'assistant')!
+    return (assistant.content as unknown as { type: string; isError?: boolean; result?: string; artifact?: { title?: string; status?: string; subagent?: string; delegate?: { id: string; title: string } } }[]).find((p) => p.type === 'tool-call')!
+  }
+  assert.deepEqual([partOf('working').artifact?.delegate, partOf('working').artifact?.subagent, partOf('working').artifact?.status, partOf('working').result], [{ id: child, title: 'Count the files' }, 'working', 'in_progress', undefined])
+  assert.deepEqual([partOf('waiting').artifact?.subagent, partOf('waiting').artifact?.status], ['waiting', 'in_progress'])
+  assert.deepEqual([partOf('idle').artifact?.status, partOf('idle').result, partOf('idle').isError], ['completed', 'idle', false])
+  assert.deepEqual([partOf('failed').artifact?.status, partOf('failed').isError], ['failed', true])
+  assert.equal(foldable(partOf('idle') as never), false, 'out of a fold, as a delegate’s')
+  assert.deepEqual(delegatesOf(crafted([line('working')])), [child])
+})
+
+test('U90 a native sub-stream’s view: no sending, read-only; Cancel for its turn in progress while cancel is offered; its permission pending; a turn with no task, its response alone', () => {
+  const native = (cancel: boolean) => ({ kind: 'workstream', id: 'w', object: { title: 'Count the files', state: 'native', harness: 'mock', native: { host: 'h', description: null, cancel }, subagent: 'working' } })
+  const turn = (status: string) => ({ kind: 'turn', id: 't', object: { status, requestPosition: '1', session: 's', execution: 'e', requestId: null, native: true } })
+  const permission = { kind: 'element', id: 'p', object: { type: 'permission', turn: 't', session: 's', firstPosition: '3', lastPosition: '3', status: 'pending', execution: 'e', requestPosition: '3', params: { toolCall: { toolCallId: 'x', title: 'ls' }, options: [] } } }
+  const of = (objects: Parameters<typeof crafted>[0]) => {
+    const thread = { ...crafted(objects), complete: true }
+    return { thread, composer: composerOf(thread, workstreamOf(thread, 'w')) }
+  }
+  const working = of([native(true), turn('in_progress'), chunk(2, 'at work')]).composer
+  assert.deepEqual([working.open, working.create, working.readOnly, working.reason, working.cancellable?.id], [false, false, true, null, 't'])
+  assert.equal(of([native(false), turn('in_progress')]).composer.cancellable, null, 'no Cancel where none is offered')
+  assert.equal(of([native(true), turn('done')]).composer.cancellable, null, 'nor once its turn is over')
+  // Its permission is its own, whatever Session its host's execution has.
+  assert.equal(of([native(true), turn('in_progress'), permission]).composer.pendingPermission?.id, 'p')
+  // No task reported: no message of anybody's before its response.
+  const { thread } = of([native(true), turn('done'), chunk(2, 'its answer')])
+  assert.deepEqual(messagesOf(thread).map((m) => m.role), ['assistant'])
+  assert.equal(workstreamOf(thread, 'w').native?.host, 'h')
+  // Positive control: any other turn keeps its first message.
+  assert.deepEqual(messagesOf(crafted([turnObject('done'), chunk(2, 'an answer')])).map((m) => m.role), ['user', 'assistant'])
+})
+
 test('U62 an approval pending: sending open, no Create, what is sent refusing it; refused, sending as it was', () => {
   const state = stateOf(pendingApproval)
   const open = composerOf(state, workstreamOf(state, QUESTION_WS))

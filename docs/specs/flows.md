@@ -64,6 +64,7 @@ The envelope, what the lead asks, and a turn the flow cannot settle are question
 | --- | --- |
 | File | `apps/flows/roles/<role>.md`: a front matter of `key: value` lines between two `---` lines — `role`, `summary`, `harness`, `model`, `effort` — then the persona in Markdown. |
 | Roles | `lead`, `dev`, `sre`, `judge`; a run without one of the four fails at its start. |
+| Outside a run | The same cards are the roles an agent names when it delegates: `spawn_agent`'s `agent_type` (`delegation.md`, "A delegation"). The server reads them from its own image, at its start. |
 | Base rubric | The judge's numbered list under its heading `## Base rubric`; its items are R1, R2… in order. |
 | Overrides | The run's `overrides`: a role's `harness`, `model` or `effort`. Any other key, or an unknown role, fails the run at its start. An override wins over what the lead proposes for a member of that role. |
 | Settings | `model` goes as the setting `model`; `effort` as `effort` or `reasoning_effort`, whichever the pool offers. `default` sends none. A value the pool does not offer refuses the decision proposing it; for the lead's own, it fails the run at its start. |

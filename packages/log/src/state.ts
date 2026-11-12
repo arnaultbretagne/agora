@@ -23,6 +23,8 @@ export interface Turn {
   answered: boolean
   stopReason?: unknown
   failure?: unknown
+  /** A native sub-agent's turn (docs/specs/log.md, "Native sub-agents"): it answers no prompt of Agora's. */
+  native?: true
 }
 export interface Execution {
   id: string
@@ -53,9 +55,74 @@ export interface Execution {
   promptCapabilities: PromptCapabilities | null
   /** Its agent takes a message into a running turn: its `initialize` answer's `_meta.steering.supported`. */
   steering: boolean
+  /** The ACP session a `session/resume` or a `session/load` not yet answered names: what it replays is that session's. */
+  openingAcp: string | null
   /** A `session/prompt` of its own was written: it took a prompt (docs/specs/log.md, "Messages during a turn"). */
   prompted: boolean
 }
+/**
+ * A sub-agent its harness started of its own (docs/specs/log.md, "Native sub-agents"): announced on its parent's
+ * stream, then speaking under an ACP session id of its own. Its lines stay in its host's log.
+ */
+export interface Child {
+  acpId: string
+  /** Its sub-stream: the name-based UUID of its host and its ACP session id. */
+  workstream: string
+  /** The Workstream of the session that announced it: its host, or another sub-agent's sub-stream. */
+  parent: string
+  execution: string
+  session: string | null
+  /** Its last `subagent_update` title and description; its own last `session_info_update` title. */
+  title: string | null
+  description: string | null
+  ownTitle: string | null
+  /** Its last `capabilities` hold `cancel`. */
+  cancel: boolean
+  /** Its last state is `requires_action`. */
+  waiting: boolean
+  turns: Turn[]
+  /** The position of the line that announced it. */
+  announcedAt: string
+  /** Beyond the bounds: known, so that its lines are not its host's, and given no sub-stream. */
+  unlisted?: true
+}
+/** How many native sub-streams a Workstream hosts, and how deep below it: an adapter's own bounds are not Agora's to trust. */
+export const MAX_SUBAGENTS = 64
+export const MAX_SUBAGENT_DEPTH = 5
+/** A native sub-stream's id (docs/specs/log.md, "Native sub-agents", "Announced"). */
+export const childWorkstream = (host: string, acpId: string): string => identity(host, acpId, 'subagent')
+/** A native sub-stream's state: `working`, `waiting`, else its last turn's. */
+export function subagentOf(child: Child): 'working' | 'waiting' | 'idle' | 'failed' | 'cancelled' {
+  const turn = child.turns.at(-1)
+  if (!turn || turn.status === 'done') return 'idle'
+  if (turn.status === 'in_progress') return child.waiting ? 'waiting' : 'working'
+  return turn.status === 'cancelled' ? 'cancelled' : 'failed'
+}
+/**
+ * The sub-agent a received line announces, when it does (docs/specs/log.md, "Native sub-agents", "Announced"): a
+ * `subagent_update` on a session known in that execution — its Session's own, the one its opening replays, or a
+ * sub-agent's already announced — naming an ACP session not known there. Its id, and the Workstream that announces it.
+ */
+export function announcement(state: State, execution: Execution | undefined, line: unknown): { acpId: string; parent: string; listed: boolean } | null {
+  const message = object(line)
+  const params = object(message?.params)
+  const update = message?.method === 'session/update' ? object(params?.update) : null
+  const sid = params?.sessionId
+  if (!execution || update?.sessionUpdate !== 'subagent_update' || typeof update.sessionId !== 'string' || typeof sid !== 'string') return null
+  if (state.children.has(update.sessionId) || update.sessionId === execution.acpId || update.sessionId === execution.openingAcp) return null
+  const announcer = state.children.get(sid)
+  const parent = sid === execution.acpId || sid === execution.openingAcp ? state.workstream : announcer?.workstream
+  if (parent === undefined) return null
+  // Its depth below its host: one more than the sub-agent that announced it.
+  let depth = 1
+  for (let above = announcer; above !== undefined; above = [...state.children.values()].find((c) => c.workstream === above!.parent)) depth++
+  const listed = announcer?.unlisted !== true && depth <= MAX_SUBAGENT_DEPTH && [...state.children.values()].filter((c) => !c.unlisted).length < MAX_SUBAGENTS
+  return { acpId: update.sessionId, parent, listed }
+}
+/** Whether a sub-agent of an execution has a turn in progress (docs/specs/log.md, "Native sub-agents", "Messages during a turn"). */
+export const childWorking = (state: State, execution: string): boolean =>
+  [...state.children.values()].some((c) => c.execution === execution && c.turns.at(-1)?.status === 'in_progress')
+
 export interface PromptCapabilities {
   image: boolean
   audio: boolean
@@ -114,6 +181,8 @@ export interface State {
   held: boolean
   /** The tool calls of the running turn still open. */
   tools: Set<string>
+  /** The native sub-agents announced in this Workstream's executions, by ACP session id (docs/specs/log.md, "Native sub-agents"). */
+  children: Map<string, Child>
 }
 
 /** Whether a question's Ask is one of Agora's approvals (docs/specs/delegation.md, "Approval"). */
@@ -157,6 +226,33 @@ function profilesIn(body: unknown): string[] {
   return Array.isArray(profiles) ? profiles.map(String) : []
 }
 
+/** A sub-agent's turn opens at a line of its own: its `requestPosition` that line's (docs/specs/log.md, "Native sub-agents", "Its turns"). */
+function openChild(child: Child, entry: Entry): void {
+  child.waiting = false
+  child.turns.push({
+    id: identity(child.workstream, entry.position, 'turn'),
+    session: child.session,
+    execution: child.execution,
+    requestId: null,
+    requestPosition: entry.position,
+    startedAt: entry.time,
+    status: 'in_progress',
+    dispatching: true,
+    answered: false,
+    native: true,
+  })
+}
+/** Its turn in progress ends: by what it said, or with its host's Session or execution. */
+function endChild(child: Child, status: TurnStatus, stopReason?: unknown, failure?: unknown): void {
+  const turn = child.turns.at(-1)
+  if (turn?.status !== 'in_progress') return
+  turn.status = status
+  turn.answered = true
+  if (stopReason !== undefined) turn.stopReason = stopReason
+  if (failure !== undefined) turn.failure = failure
+  child.waiting = false
+}
+
 export function fold(entries: readonly Entry[], initial?: State): State {
   const state: State = initial ?? {
     workstream: entries[0]?.workstream ?? '',
@@ -183,6 +279,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     unsteerable: false,
     held: false,
     tools: new Set(),
+    children: new Map(),
   }
   const turnsByRequest = new Map<string, Turn>([...state.turns.values()].map((turn) => [turn.requestPosition, turn]))
   for (const entry of entries) {
@@ -206,6 +303,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         profiles: profilesIn(content.body),
         promptCapabilities: null,
         steering: false,
+        openingAcp: null,
         prompted: false,
       }
       state.executions.set(execution.id, execution)
@@ -265,6 +363,8 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       execution.connection = undefined
       for (const turn of state.turns.values())
         if (turn.execution === execution.id && !turn.answered) turn.status = 'failed'
+      // A sub-agent's turn ends with its host's execution, as any turn (docs/specs/log.md, "Native sub-agents").
+      for (const child of state.children.values()) if (child.execution === execution.id) endChild(child, 'failed', undefined, entry.kind.slice('execution.'.length))
       if (state.steering !== null && state.requestPositions.get(state.steering)?.execution === execution.id) state.steering = null
       state.tools.clear()
       // Given back (docs/specs/log.md, "Messages during a turn"): its Create's message, the execution having taken no prompt.
@@ -281,9 +381,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             : permission.execution === entry.execution
         )
           state.permissions.delete(key)
+    if (entry.kind === 'session.ended') for (const child of state.children.values()) if (child.session === entry.session) endChild(child, 'failed', undefined, 'session_ended')
     if (entry.kind === 'session.opened' && execution) {
       execution.session = entry.session
       execution.acpId = String(content.acpId)
+      execution.openingAcp = null
     }
     if (entry.kind === 'acp') {
       const key = `${entry.direction}:${idKey(entry.rpc_id)}`
@@ -318,6 +420,10 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           state.tools.clear()
         }
         if (entry.method === STEERING && entry.direction === 'out') state.steering = entry.position
+        if (['session/resume', 'session/load'].includes(entry.method ?? '') && entry.direction === 'out' && execution) {
+          const opening = object(content.params)?.sessionId
+          execution.openingAcp = typeof opening === 'string' ? opening : null
+        }
       } else if (entry.rpc_kind === 'response' || entry.rpc_kind === 'error') {
         const requestKey = `${entry.direction === 'in' ? 'out' : 'in'}:${idKey(entry.rpc_id)}`
         const request = entry.request_position
@@ -362,12 +468,70 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
         }
       }
-      if (entry.method === 'session/cancel' && entry.direction === 'out') {
+      if (entry.method === 'session/cancel' && entry.direction === 'out' && !state.children.has(String(object(content.params)?.sessionId))) {
         state.unsteerable = true
         state.held = true
       }
+      // Native sub-agents (docs/specs/log.md, "Native sub-agents"): announced, then what each says of its work.
+      if (entry.direction === 'in' && execution && entry.rpc_kind !== 'response' && entry.rpc_kind !== 'error') {
+        const params = object(content.params)
+        const update = entry.method === 'session/update' ? object(params?.update) : null
+        const sid = typeof params?.sessionId === 'string' ? params.sessionId : null
+        // What a Session's opening replays before its answer gives no turn: the sub-agents it names are only known again.
+        const replayed = execution.session === null
+        if (update?.sessionUpdate === 'subagent_update' && typeof update.sessionId === 'string' && sid !== null) {
+          let child = state.children.get(update.sessionId)
+          const announced = announcement(state, execution, content)
+          if (announced) {
+            child = {
+              acpId: announced.acpId,
+              workstream: childWorkstream(state.workstream, announced.acpId),
+              parent: announced.parent,
+              execution: execution.id,
+              session: execution.session,
+              title: null,
+              description: null,
+              ownTitle: null,
+              cancel: false,
+              waiting: false,
+              turns: [],
+              announcedAt: entry.position,
+              ...(announced.listed ? {} : { unlisted: true as const }),
+            }
+            state.children.set(child.acpId, child)
+          }
+          // Seen again in a later execution, at work: it is that execution's now, its Session's.
+          if (child && !replayed && child.execution !== execution.id) {
+            child.execution = execution.id
+            child.session = execution.session
+          }
+          if (child && !replayed) {
+            if (Object.hasOwn(update, 'title')) child.title = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
+            if (Object.hasOwn(update, 'description')) child.description = typeof update.description === 'string' && update.description.trim() !== '' ? update.description.trim() : null
+            if (Object.hasOwn(update, 'capabilities')) child.cancel = object(object(update.capabilities)?.cancel) !== null
+            const said = object(update.state)
+            const working = said?.state === 'running' || said?.state === 'requires_action'
+            const open = child.turns.at(-1)?.status === 'in_progress'
+            // A turn opens with its first line, unless that line says it is done; after an `idle`, with the next working state.
+            if (!open && (working || (child.turns.length === 0 && said?.state !== 'idle'))) openChild(child, entry)
+            if (working) child.waiting = said?.state === 'requires_action'
+            if (said?.state === 'idle') {
+              const failure = object(said.error)?.message ?? said.error
+              endChild(child, said.stopReason === 'cancelled' ? 'cancelled' : said.stopReason === 'error' ? 'failed' : 'done', said.stopReason, said.stopReason === 'error' ? failure : undefined)
+            }
+          }
+        } else if (sid !== null && !replayed) {
+          const child = state.children.get(sid)
+          if (child && child.execution !== execution.id) {
+            child.execution = execution.id
+            child.session = execution.session
+          }
+          if (child && child.turns.length === 0) openChild(child, entry)
+          if (child && update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title')) child.ownTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
+        }
+      }
     }
-    if (entry.kind === 'acp' && entry.direction === 'in' && entry.method === 'session/update' && execution && entry.session === execution.session) {
+    if (entry.kind === 'acp' && entry.direction === 'in' && entry.method === 'session/update' && execution && entry.session === execution.session && !state.children.has(String(object(content.params)?.sessionId))) {
       const update = object(object(content.params)?.update)
       if (update?.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) execution.settings = update.configOptions
       if (update?.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) execution.commands = update.availableCommands
@@ -424,6 +588,8 @@ export interface ProjectedObject {
   object: Record<string, unknown>
   first_position: string
   last_position: string
+  /** The Workstream whose thread holds it, when not the one folded: a native sub-stream's (docs/specs/log.md, "Native sub-agents"). */
+  workstream?: string
 }
 /**
  * The core projector, incremental (docs/specs/log.md, "Views"): `apply` folds further entries and
@@ -452,13 +618,17 @@ export class CoreProjection {
   private readonly known = noAnchors()
   /** What the view last showed of the settings, to put it only when that changes. */
   private settingsCode = ''
+  /** What was last put of each native sub-agent — its turns, its view, its line in its parent's thread —, and the turn that announced it. */
+  private readonly childCodes = new Map<string, string>()
+  private readonly announcedIn = new Map<string, string | undefined>()
   apply(entries: readonly Entry[]): Set<string> {
     const changed = new Set<string>()
     const objects = this.objects,
       ranks = this.ranks,
       runs = this.runs
-    const put = (kind: ProjectedObject['kind'], id: string, value: Record<string, unknown>, position: string) => {
+    const put = (kind: ProjectedObject['kind'], id: string, value: Record<string, unknown>, position: string, target?: string) => {
       const previous = objects.get(id)
+      const workstream = target ?? previous?.workstream
       objects.set(id, {
         kind,
         id,
@@ -467,6 +637,7 @@ export class CoreProjection {
         object: { ...value, id, firstPosition: previous?.first_position ?? position, lastPosition: position },
         first_position: previous?.first_position ?? position,
         last_position: position,
+        ...(workstream !== undefined ? { workstream } : {}),
       })
       changed.add(id)
     }
@@ -570,7 +741,7 @@ export class CoreProjection {
       if (entry.kind === 'acp' && entry.method === 'session/update') {
         const update = object(object(entry.content.params)?.update)
         // An agent titling itself with the first thing it read: Agora's line is not what it works on.
-        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title') && !(typeof update.title === 'string' && /^\s*From (your delegator\b|your delegate\b|Agora,)/.test(update.title))) {
+        if (update?.sessionUpdate === 'session_info_update' && Object.hasOwn(update, 'title') && !state.children.has(String(object(entry.content.params)?.sessionId)) && !(typeof update.title === 'string' && /^\s*From (your delegator\b|your delegate\b|Agora,)/.test(update.title))) {
           this.agentTitle = typeof update.title === 'string' && update.title.trim() !== '' ? update.title.trim() : null
           titled = true
         }
@@ -672,6 +843,62 @@ export class CoreProjection {
               : item.object.execution === entry.execution)
           )
             put('element', item.id, { ...item.object, status: 'cancelled' }, entry.position)
+      /**
+       * A native sub-agent as its sub-stream shows it (docs/specs/log.md, "Native sub-agents"): its turns, its view, and
+       * its line in its parent's thread, each put when it changed.
+       */
+      const putChild = (child: Child) => {
+        if (child.unlisted) return
+        const code = (key: string, value: unknown): boolean => {
+          const encoded = encode(value)
+          if (this.childCodes.get(key) === encoded) return false
+          this.childCodes.set(key, encoded)
+          return true
+        }
+        for (const turn of child.turns) if (code(turn.id, turn)) put('turn', turn.id, { ...turn }, entry.position, child.workstream)
+        const title = child.ownTitle ?? child.title ?? 'Sub-agent'
+        const subagent = subagentOf(child)
+        const harness = state.executions.get(child.execution)?.body.harness
+        const view = {
+          execution: null,
+          session: null,
+          stopped: false,
+          ended: false,
+          lost: false,
+          unavailable: true,
+          title,
+          state: 'native',
+          settings: null,
+          commands: [],
+          configuring: false,
+          usage: null,
+          profiles: [],
+          promptCapabilities: null,
+          pool: null,
+          harness: typeof harness === 'string' ? harness : null,
+          anchor: null,
+          exchanges: child.turns.length,
+          question: null,
+          native: { host: entry.workstream, description: child.description, cancel: child.cancel },
+          subagent,
+          continuation: {},
+        }
+        if (code(`view:${child.workstream}`, view)) put('workstream', child.workstream, { ...view, changedAt: entry.time }, entry.position, child.workstream)
+        // Its line is of the turn its parent was in when it was first shown: its host's, or the announcing sub-agent's.
+        if (!this.announcedIn.has(child.acpId)) {
+          const above = [...state.children.values()].find((c) => c.workstream === child.parent)
+          const turn = above ? above.turns.at(-1) : (active ?? [...state.turns.values()].reverse().find((t) => t.session === child.session))
+          this.announcedIn.set(child.acpId, turn?.id)
+          // What its parent says after it is a text of its own, below its line.
+          if (turn) runs.delete(turn.id)
+        }
+        const line = { type: 'subagent', turn: this.announcedIn.get(child.acpId), session: child.session, workstream: child.workstream, title, description: child.description, state: subagent, cancel: child.cancel }
+        // In its parent's thread: its host's, or the sub-stream of the sub-agent that announced it.
+        if (code(`line:${child.workstream}`, line)) put('element', identity(child.workstream, 'subagent'), line, entry.position, child.parent === entry.workstream ? undefined : child.parent)
+      }
+      // Their host's Session or execution ending ends their turns too.
+      if (entry.kind === 'session.ended' || ['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind))
+        for (const child of state.children.values()) if (this.announcedIn.has(child.acpId)) putChild(child)
       if (entry.kind !== 'acp') continue
       const request =
         entry.rpc_kind === 'request'
@@ -679,13 +906,47 @@ export class CoreProjection {
           : entry.request_position
             ? state.requestPositions.get(entry.request_position)
             : state.requests.get(`${entry.direction === 'in' ? 'out' : 'in'}:${idKey(entry.rpc_id)}`)
-      const turn =
+      const hostTurn =
         entry.method === 'session/prompt'
           ? [...state.turns.values()].find((t) => t.requestPosition === entry.position)
           : (active ?? [...state.turns.values()].reverse().find((t) => t.session === entry.session))
       const params = object(entry.content.params),
         update = object(params?.update)
       const type = update?.sessionUpdate
+      // Whose line it is (docs/specs/log.md, "Native sub-agents"): a sub-agent's when it names its ACP session, or answers a request of its.
+      const named = entry.rpc_kind === 'response' || entry.rpc_kind === 'error' ? object(request?.content.params)?.sessionId : params?.sessionId
+      const child = (typeof named === 'string' ? state.children.get(named) : undefined) ?? null
+      // What a Session's opening replays before its answer gives no object in a sub-stream.
+      const replayed = entry.session === null
+      if (entry.direction === 'in' && type === 'subagent_update' && typeof update?.sessionId === 'string' && state.children.has(update.sessionId)) {
+        const announced = state.children.get(update.sessionId)!
+        if (!replayed) putChild(announced)
+        continue
+      }
+      // Among sessions, what one tells another: a sub-agent's task opens its turn; the rest is in each one's own text.
+      if (entry.direction === 'in' && type === 'session_message' && (child !== null || [update?.senderSessionId, update?.recipientSessionId].some((id) => typeof id === 'string' && state.children.has(id)))) {
+        if (child !== null && !replayed && !child.unlisted && update?.recipientSessionId === child.acpId) {
+          putChild(child)
+          put(
+            'element',
+            identity(child.workstream, entry.position, 'prompt'),
+            { type: 'user', turn: child.turns.at(-1)?.id, session: entry.session, content: Array.isArray(update.content) ? update.content : [], from: child.parent, as: 'parent' },
+            entry.position,
+            child.workstream,
+          )
+        }
+        continue
+      }
+      if (child !== null) {
+        if (replayed || child.unlisted) continue
+        putChild(child)
+        // Its settings, its commands, its usage and its title are no element: its view has its title.
+        if (entry.method === 'session/update' && ['config_option_update', 'available_commands_update', 'usage_update', 'session_info_update'].includes(String(type))) continue
+      }
+      /** Where a line's objects go, and what stands for its Session in their identities: a sub-agent's sub-stream, or the Session. */
+      const target = child?.workstream
+      const scoped = child?.workstream ?? entry.session ?? entry.execution!
+      const turn = child ? child.turns.at(-1) : hostTurn
       if (entry.method === 'session/prompt' && entry.direction === 'out') {
         left(this.waitingElements.get(String(entry.command)), 'sent', entry.position)
         // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
@@ -718,7 +979,7 @@ export class CoreProjection {
         update &&
         ['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(String(type))
       ) {
-        const scope = turn?.id ?? entry.session ?? entry.execution!
+        const scope = turn?.id ?? scoped
         const discriminator = `${String(type)}:${String(update.messageId ?? '')}`
         let run = runs.get(scope)
         if (!run || run.discriminator !== discriminator) {
@@ -741,6 +1002,7 @@ export class CoreProjection {
             text: String(previous?.object.text ?? '') + (content?.type === 'text' ? String(content.text) : ''),
           },
           entry.position,
+          target,
         )
       } else if (
         entry.method === 'session/update' &&
@@ -748,27 +1010,29 @@ export class CoreProjection {
         ['tool_call', 'tool_call_update'].includes(String(type)) &&
         typeof update.toolCallId === 'string'
       ) {
-        const id = identity(entry.session ?? entry.execution!, update.toolCallId, 'tool')
+        const id = identity(scoped, update.toolCallId, 'tool')
         put(
           'element',
           id,
           { ...objects.get(id)?.object, ...update, type: 'tool', turn: turn?.id, session: entry.session },
           entry.position,
+          target,
         )
         if (turn) runs.delete(turn.id)
       } else if (entry.method === 'session/update' && type === 'plan') {
-        const scope = turn?.id ?? entry.session ?? entry.execution!
+        const scope = turn?.id ?? scoped
         put(
           'element',
           identity(scope, 'plan'),
           { type: 'plan', turn: turn?.id, session: entry.session, entries: update?.entries },
           entry.position,
+          target,
         )
         runs.delete(scope)
       } else if (entry.method === 'session/request_permission') {
         put(
           'element',
-          identity(entry.session ?? entry.execution!, entry.position, 'permission'),
+          identity(scoped, entry.position, 'permission'),
           {
             type: 'permission',
             execution: entry.execution,
@@ -780,13 +1044,14 @@ export class CoreProjection {
             status: 'pending',
           },
           entry.position,
+          target,
         )
       } else if (
         request?.method === 'session/request_permission' &&
         entry.direction === 'out' &&
         ['response', 'error'].includes(entry.rpc_kind ?? '')
       ) {
-        const id = identity(request.session ?? entry.execution!, request.position, 'permission')
+        const id = identity(child?.workstream ?? request.session ?? entry.execution!, request.position, 'permission')
         put(
           'element',
           id,
@@ -815,6 +1080,7 @@ export class CoreProjection {
           identity(entry.workstream, entry.position, 'generic'),
           { type: 'acp', session: entry.session, turn: turn?.id, line: entry.content },
           entry.position,
+          target,
         )
         if (turn) runs.delete(turn.id)
       }

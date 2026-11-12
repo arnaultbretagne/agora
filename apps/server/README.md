@@ -24,6 +24,7 @@ only port open to sandboxes).
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
 | `TEST_ROUTES` | — | `true` to open the test routes and page. |
 | `CLIENT_DIR` | `apps/web/dist` | The client's built files. |
+| `ROLES_DIR` | `apps/flows/roles` | The role cards `spawn_agent` offers as `agent_type` (`docs/specs/delegation.md`, "A delegation"). |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Expected audience of the Pods' projected token. |
 | `GATEWAY_PROXY` | — | The gateway as sandboxes see it, `host:port`. Without it, no credential can be attached. |
 | `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants. |

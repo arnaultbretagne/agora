@@ -166,8 +166,16 @@ export function validate(
         !updates.has(update.sessionUpdate)
       )
         extension = true
-      else if (!candidates.some((d) => d.validate(schemaValue(kind === 'response' ? v.result : (v.params ?? {})))))
-        return invalid('invalid_body')
+      else {
+        let body: unknown = kind === 'response' ? v.result : (v.params ?? {})
+        // docs/specs/log.md, "Validation": a tool call's content naming a session is an extension the schema does not know.
+        const content = update?.content
+        if (method === 'session/update' && ['tool_call', 'tool_call_update'].includes(String(update?.sessionUpdate)) && Array.isArray(content)) {
+          const known = content.filter((item) => !(object(item)?.type === 'session' && typeof object(item)?.sessionId === 'string'))
+          if (known.length !== content.length) body = { ...params, update: { ...update, content: known } }
+        }
+        if (!candidates.some((d) => d.validate(schemaValue(body)))) return invalid('invalid_body')
+      }
     }
   }
   return { ok: true, envelope: { value: v, raw: text, kind, method, id: hasId ? id : null, extension } }

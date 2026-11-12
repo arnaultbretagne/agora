@@ -14,6 +14,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R6 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 and M11 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client and plain `fetch`. |
 | R7 | 2026-11-11 | `f433f48` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M10 to M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP TypeScript SDK 1.32.2's own client, as R6. |
 | R8 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. M9, on the new harnesses (agora #204, infra-k8s #358). |
+| R9 | 2026-11-12 | `2a50031` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M13 against the MCP server on a port of its own, the engine holding two roles of the test's own, then none; Agora's cards read from `apps/flows/roles`. |
 
 ## Cases
 
@@ -38,6 +39,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M10 | — | local | R7 | proven | With `agora:delegate`: `spawn_agent`, `send_message`, `stop_agent`, `list_agents`, the last alone read-only; their parameters `instructions`, `harness`, `model`, `effort`, `rights`; `to`, `message`; `to`; none. From a delegate, as its Session opens: `send_message` alone, `to` and `message`, both required. From one holding `agora:delegate` and `agora:submit`: the four, each once. |
 | M11 | — | local | R7 | proven | As R6, the call held a `spawn_agent`. |
 | M12 | — | local | R7 | proven | From a delegate, `stop_agent` and `list_agents`: `not_allowed`; from its delegator, `delegate` and `submit`: `not_allowed`; the delegate still `in_progress`, one sub-stream. A delegate that delegated, scoped down to `agora:submit`: `send_message` alone listed; to its own delegate: `not_a_delegate`, one Write in it. |
+| M13 | — | local | R9 | proven | With roles: `spawn_agent`'s properties `instructions`, `harness`, `model`, `effort`, `rights`, `agent_type`, `instructions` alone required; `agent_type` an `enum`, `scout` and `plain`, its description ending on a line for each with its summary. With none: no `agent_type`. The cards: `dev`, `judge`, `lead`, `sre`, each on `claude-code`, `codex` or `opencode`, with a summary and a persona opening on its heading, no front matter in it; `judge` on `codex`, `gpt-6.1-sol`, `xhigh`. A card whose `model` is `default`: no model of its own; one with no front matter, one with no harness: not read. |
 
 ## Not covered
 

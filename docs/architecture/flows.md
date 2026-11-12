@@ -13,7 +13,7 @@ other.
 | Prefect's server | Keeps the flows, their runs and states; serves its UI at prefect.bretagne.dev, behind the identity proxy. | Its own database. |
 | Prefect's worker | Polls the work pool `agora`, clones the agora repository at the deployment's branch, runs the flow as a process of its own Pod. | The runs' results, on local storage. |
 | The flow (`apps/flows`) | Reads the lead's decisions, refuses what the rules or the envelope do not allow, carries out the rest, and writes every prompt. Names every branch and Workstream. | Nothing between runs. |
-| The role cards (`apps/flows/roles`) | Each role's persona and default settings: lead, dev, sre, judge. | The run's version, cloned with the flow. |
+| The role cards (`apps/flows/roles`) | Each role's persona and default settings: lead, dev, sre, judge. Also the roles an agent names when it delegates (`spawn_agent`'s `agent_type`), read by the server from its image. | The run's version, cloned with the flow. |
 | The lead | A manager: never designs or codes. Proposes the features, their acceptance criteria, the team and each member's access; then, turn after turn, one decision. | Its Workstream: the run's whole story as it saw it. |
 | A dev | Designs, codes and proves one feature on the branch the flow names, up to a draft pull request. | Its Workstream and the feature's branch. |
 | The sre | Owns how things run on the cluster, which is production only: changes it through its GitOps repository, with a rollout, a way back and proof. | Its Workstream and its branch. |

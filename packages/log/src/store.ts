@@ -6,7 +6,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { Pool, types, type PoolClient } from 'pg'
 import { validate, idKey, requestMethod, type Direction, type Reason, type Envelope } from './acp.ts'
 import { decode, encode, hash, object, uuid, supported } from './json.ts'
-import { fold, type State } from './state.ts'
+import { announcement, childWorkstream, fold, type State } from './state.ts'
 import { digest, expandFiles, findFiles, type FileRef, type Files } from './files.ts'
 
 // docs/specs/log.md, "Storage": bigint stays a decimal string; arithmetic uses JavaScript bigint.
@@ -292,9 +292,10 @@ export class LogStore {
     let line: { owner: string; root: string | null; depth: number }
     if (parent === null) line = { owner: uuid(owner), root: null, depth: 0 }
     else {
-      const found = await this.writer.query('SELECT owner, coalesce(root,id) AS root, depth FROM workstreams WHERE id=$1', [uuid(parent)])
-      const p = found.rows[0] as { owner: string; root: string; depth: number } | undefined
-      if (!p || (allowed !== null && !allowed.includes(p.owner))) throw new Error('unknown_parent')
+      const found = await this.writer.query('SELECT owner, coalesce(root,id) AS root, depth, host FROM workstreams WHERE id=$1', [uuid(parent)])
+      const p = found.rows[0] as { owner: string; root: string; depth: number; host: string | null } | undefined
+      // A native sub-stream starts nothing of Agora's (docs/specs/log.md, "Native sub-agents").
+      if (!p || p.host !== null || (allowed !== null && !allowed.includes(p.owner))) throw new Error('unknown_parent')
       line = { owner: p.owner, root: p.root, depth: p.depth + 1 }
     }
     await this.writer.query('INSERT INTO workstreams(id,owner,parent,root,depth) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [
@@ -384,6 +385,12 @@ export class LogStore {
   /** The Workstream's entries, in position order: the cache itself, never to be modified. */
   async entries(workstream: string): Promise<readonly Entry[]> {
     return (await this.sync(this.writer, uuid(workstream))).entries
+  }
+  /** docs/specs/log.md, "Native sub-agents": the Workstream whose log holds a native sub-stream's lines, or null for any other. */
+  async hostOf(workstream: string): Promise<string | null> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workstream)) return null
+    const found = await this.writer.query('SELECT host FROM workstreams WHERE id=$1', [workstream])
+    return (found.rows[0]?.host as string | null | undefined) ?? null
   }
   async state(workstream: string): Promise<State> {
     return (await this.sync(this.writer, uuid(workstream))).state
@@ -560,6 +567,14 @@ export class LogStore {
         ['session/new', 'session/resume', 'session/load'].includes(request.method!)
       const acpId = opens ? (request!.method === 'session/new' ? response?.sessionId : params?.sessionId) : null
       if (opens && typeof acpId === 'string') session = randomUUID()
+      // docs/specs/log.md, "Native sub-agents": a sub-agent announced gets its Workstream in the transaction that writes
+      // its line — a sub-stream of the one that announced it, its lines in this log.
+      const announced = announcement(state, target, envelope.value)
+      if (announced?.listed)
+        await tx.client.query(
+          'INSERT INTO workstreams(id,owner,parent,root,depth,host) SELECT $1, p.owner, p.id, coalesce(p.root,p.id), p.depth+1, $3 FROM workstreams p WHERE p.id=$2 ON CONFLICT DO NOTHING',
+          [childWorkstream(workstream, announced.acpId), announced.parent, workstream],
+        )
       const position = await tx.acp(
         envelope,
         execution,
