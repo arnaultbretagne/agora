@@ -1,0 +1,871 @@
+{
+ "file": "captures/codex-caps-2.6.0.jsonl",
+ "lines": 501,
+ "bytes": 340707,
+ "validator": {
+  "verdicts": {
+   "ok": 501
+  },
+  "refused": [],
+  "extensions": {
+   "_auth/status_update": 1,
+   "subagent_update": 70
+  }
+ },
+ "children": [
+  {
+   "id": "01a1cf1c-d814-7dc3-a53c-bb574f911166:subagent:01a1cf1c-e9a6-7932-adfc-903aaa5f2919",
+   "parent": "01a1cf1c-d814-7dc3-a53c-bb574f911166",
+   "depth": 1,
+   "announcedAt": 5356,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state",
+    "cwd"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 5394,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 5394,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 7320,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 1,
+    "usage_update": 1
+   },
+   "ownLines": 4,
+   "ownBytes": 1748,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1958,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 5357,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply",
+   "root": "a-one-waited"
+  },
+  {
+   "id": "01a1cf1d-287b-7a01-a241-c981ee769db2:subagent:01a1cf1d-32d6-71d1-b75f-6ef614555ec3",
+   "parent": "01a1cf1d-287b-7a01-a241-c981ee769db2",
+   "depth": 1,
+   "announcedAt": 24077,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state",
+    "cwd"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 24098,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 24098,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 26118,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 8,
+    "usage_update": 1
+   },
+   "ownLines": 11,
+   "ownBytes": 3895,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1961,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 24078,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 12",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "01a1cf1d-287b-7a01-a241-c981ee769db2:subagent:01a1cf1d-3a8a-72b2-9f6a-e7b586346d52",
+   "parent": "01a1cf1d-287b-7a01-a241-c981ee769db2",
+   "depth": 1,
+   "announcedAt": 26047,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "cwd",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 26061,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 26062,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 28133,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 8,
+    "usage_update": 1
+   },
+   "ownLines": 11,
+   "ownBytes": 3895,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1961,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 26048,
+   "firstOwnKind": "config_option_update",
+   "title": "Multiply 13",
+   "root": "b-two-parallel"
+  },
+  {
+   "id": "01a1cf1d-504d-7bd0-a5ae-b9254e5226fb:subagent:01a1cf1d-5bae-7ef3-8a57-d0dd92aae58a",
+   "parent": "01a1cf1d-504d-7bd0-a5ae-b9254e5226fb",
+   "depth": 1,
+   "announcedAt": 34554,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "cwd",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 34602,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 34604,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 65882,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "tool_call": 1,
+    "tool_call_update": 2,
+    "usage_update": 2,
+    "agent_message_chunk": 3
+   },
+   "ownLines": 10,
+   "ownBytes": 4005,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1966,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 34554,
+   "firstOwnKind": "config_option_update",
+   "title": "Background sleep",
+   "root": "c-background"
+  },
+  {
+   "id": "01a1cf1e-4b92-7030-a1d2-afb4cec27244:subagent:01a1cf1e-5a9e-7902-af0b-7afe136a6d2a",
+   "parent": "01a1cf1e-4b92-7030-a1d2-afb4cec27244",
+   "depth": 1,
+   "announcedAt": 99814,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state",
+    "cwd"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 99829,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 99829,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 106645,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "usage_update": 3,
+    "tool_call": 1,
+    "tool_call_update": 1,
+    "agent_message_chunk": 21
+   },
+   "ownLines": 28,
+   "ownBytes": 9284,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1959,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 99815,
+   "firstOwnKind": "config_option_update",
+   "title": "Delegator",
+   "root": "d-nested"
+  },
+  {
+   "id": "01a1cf1e-4b92-7030-a1d2-afb4cec27244:subagent:01a1cf1e-64c8-7750-9840-49dbaf2e164d",
+   "parent": "01a1cf1e-4b92-7030-a1d2-afb4cec27244:subagent:01a1cf1e-5a9e-7902-af0b-7afe136a6d2a",
+   "depth": 2,
+   "announcedAt": 102416,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "cwd",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 102428,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 102428,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 104724,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 8,
+    "usage_update": 1
+   },
+   "ownLines": 11,
+   "ownBytes": 3892,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 2282,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 102416,
+   "firstOwnKind": "config_option_update",
+   "title": "Calculator",
+   "root": "d-nested"
+  },
+  {
+   "id": "01a1cf1e-8233-77a3-9f6c-1f4b0439ef03:subagent:01a1cf1e-8e44-72e3-8a7b-eab3a49f99df",
+   "parent": "01a1cf1e-8233-77a3-9f6c-1f4b0439ef03",
+   "depth": 1,
+   "announcedAt": 113033,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "cwd",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 113049,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 113049,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 118560,
+     "state": {
+      "state": "idle",
+      "stopReason": "end_turn"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 2,
+    "agent_message_chunk": 51,
+    "tool_call": 1,
+    "tool_call_update": 1,
+    "usage_update": 2
+   },
+   "ownLines": 57,
+   "ownBytes": 18793,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1959,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 113034,
+   "firstOwnKind": "config_option_update",
+   "title": "Make note",
+   "root": "e-permission"
+  },
+  {
+   "id": "01a1cf1e-b453-7b00-934d-8e536f285e15:subagent:01a1cf1e-c7da-7d93-a311-55f8db1f219c",
+   "parent": "01a1cf1e-b453-7b00-934d-8e536f285e15",
+   "depth": 1,
+   "announcedAt": 127765,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state",
+    "cwd"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 127793,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 127793,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 135898,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "tool_call": 1,
+    "session/cancel": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 6,
+   "ownBytes": 2511,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1961,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 127765,
+   "firstOwnKind": "config_option_update",
+   "title": "Sleep task",
+   "root": "f-cancel-child"
+  },
+  {
+   "id": "01a1cf1f-ee81-7e13-a8c9-b7aba6ecdd16:subagent:01a1cf1f-f8bf-7ab3-9d89-1fe9e135ece8",
+   "parent": "01a1cf1f-ee81-7e13-a8c9-b7aba6ecdd16",
+   "depth": 1,
+   "announcedAt": 205815,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "state",
+    "cwd"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 205827,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 205827,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 213878,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "tool_call": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 5,
+   "ownBytes": 2360,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1964,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 205815,
+   "firstOwnKind": "config_option_update",
+   "title": "Sleep command",
+   "root": "g-cancel-parent-foreground"
+  },
+  {
+   "id": "01a1cf20-5390-75f0-bcdf-d86410a810e5:subagent:01a1cf20-5ed9-7000-8529-e9a3100c6faa",
+   "parent": "01a1cf20-5390-75f0-bcdf-d86410a810e5",
+   "depth": 1,
+   "announcedAt": 231964,
+   "fieldsFirst": [
+    "sessionId",
+    "capabilities",
+    "title"
+   ],
+   "fieldsAll": [
+    "sessionId",
+    "capabilities",
+    "title",
+    "cwd",
+    "state"
+   ],
+   "capabilities": [
+    {},
+    {
+     "cancel": {}
+    },
+    {
+     "cancel": null
+    }
+   ],
+   "cwd": [
+    "/home/harness/work"
+   ],
+   "states": [
+    {
+     "t": 231978,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 231978,
+     "state": {
+      "state": "running"
+     }
+    },
+    {
+     "t": 240119,
+     "state": {
+      "state": "idle",
+      "stopReason": "cancelled"
+     }
+    }
+   ],
+   "ownKinds": {
+    "config_option_update": 1,
+    "tool_call": 1,
+    "usage_update": 1,
+    "tool_call_update": 2
+   },
+   "ownLines": 5,
+   "ownBytes": 2364,
+   "parentStreamLines": 7,
+   "parentStreamBytes": 1967,
+   "permissions": [],
+   "messages": [],
+   "toolSessionRefs": 0,
+   "firstOwnLineAt": 231964,
+   "firstOwnKind": "config_option_update",
+   "title": "Background sleep",
+   "root": "h-cancel-parent-background"
+  }
+ ],
+ "perScenario": {
+  "initialize": {
+   "parentLines": 2,
+   "parentBytes": 995,
+   "childLines": 0,
+   "childBytes": 0,
+   "announceLines": 0,
+   "announceBytes": 0,
+   "total": 2,
+   "totalBytes": 995
+  },
+  "a-one-waited": {
+   "parentLines": 28,
+   "parentBytes": 31497,
+   "childLines": 4,
+   "childBytes": 1748,
+   "announceLines": 7,
+   "announceBytes": 1958,
+   "total": 39,
+   "totalBytes": 35203
+  },
+  "b-two-parallel": {
+   "parentLines": 42,
+   "parentBytes": 35318,
+   "childLines": 22,
+   "childBytes": 7790,
+   "announceLines": 14,
+   "announceBytes": 3922,
+   "total": 78,
+   "totalBytes": 47030
+  },
+  "c-background": {
+   "parentLines": 21,
+   "parentBytes": 29481,
+   "childLines": 10,
+   "childBytes": 4005,
+   "announceLines": 7,
+   "announceBytes": 1966,
+   "total": 38,
+   "totalBytes": 35452
+  },
+  "d-nested": {
+   "parentLines": 56,
+   "parentBytes": 39152,
+   "childLines": 39,
+   "childBytes": 13176,
+   "announceLines": 14,
+   "announceBytes": 4241,
+   "total": 109,
+   "totalBytes": 56569
+  },
+  "e-permission": {
+   "parentLines": 65,
+   "parentBytes": 41320,
+   "childLines": 57,
+   "childBytes": 18793,
+   "announceLines": 7,
+   "announceBytes": 1959,
+   "total": 129,
+   "totalBytes": 62072
+  },
+  "f-cancel-child": {
+   "parentLines": 34,
+   "parentBytes": 32920,
+   "childLines": 6,
+   "childBytes": 2511,
+   "announceLines": 7,
+   "announceBytes": 1961,
+   "total": 47,
+   "totalBytes": 37392
+  },
+  "g-cancel-parent-foreground": {
+   "parentLines": 17,
+   "parentBytes": 28407,
+   "childLines": 4,
+   "childBytes": 1971,
+   "announceLines": 7,
+   "announceBytes": 1964,
+   "total": 28,
+   "totalBytes": 32342
+  },
+  "h-cancel-parent-background": {
+   "parentLines": 18,
+   "parentBytes": 28932,
+   "childLines": 6,
+   "childBytes": 2753,
+   "announceLines": 7,
+   "announceBytes": 1967,
+   "total": 31,
+   "totalBytes": 33652
+  }
+ },
+ "launches": [
+  {
+   "scenario": "a-one-waited",
+   "t": 7155,
+   "session": "01a1cf1c-d814-7dc3-a53c-bb574f911166",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 27444,
+   "session": "01a1cf1d-287b-7a01-a241-c981ee769db2",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "b-two-parallel",
+   "t": 29548,
+   "session": "01a1cf1d-287b-7a01-a241-c981ee769db2",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "d-nested",
+   "t": 101489,
+   "session": "01a1cf1e-4b92-7030-a1d2-afb4cec27244",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "d-nested",
+   "t": 104776,
+   "session": "01a1cf1e-4b92-7030-a1d2-afb4cec27244:subagent:01a1cf1e-5a9e-7902-af0b-7afe136a6d2a",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "e-permission",
+   "t": 116080,
+   "session": "01a1cf1e-8233-77a3-9f6c-1f4b0439ef03",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "f-cancel-child",
+   "t": 129222,
+   "session": "01a1cf1e-b453-7b00-934d-8e536f285e15",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  },
+  {
+   "scenario": "g-cancel-parent-foreground",
+   "t": 207489,
+   "session": "01a1cf1f-ee81-7e13-a8c9-b7aba6ecdd16",
+   "kind": "tool_call",
+   "name": "other",
+   "title": "wait",
+   "status": "in_progress",
+   "meta": null
+  }
+ ]
+}

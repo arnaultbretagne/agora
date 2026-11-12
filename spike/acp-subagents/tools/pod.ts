@@ -6,9 +6,11 @@
 import { readFileSync } from 'node:fs'
 
 const IMAGES: Record<string, string> = {
-  // The pools' images on 2026-11-11 (SandboxTemplates claude-code-6c8bf87a9038 and codex-3013411865ab).
-  'claude-code': 'ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:6c8bf87a903824b3c9d87257a5f734ea3a5b42449328d961628da5266e2718e4',
-  codex: 'ghcr.io/arnaultbretagne/agora-harness-codex@sha256:3013411865ab1833e72eefb60e2f1e0bd75262d201ce7850476816e6f55d8a48',
+  // The pools' images on 2026-11-12, the measurement taken again after the harnesses' upgrade (SandboxTemplates
+  // claude-code-220dcdea6c5d and codex-156dc39bef82: claude-agent-acp 0.106.0, codex-acp 2.6.0). On 2026-11-11 they were
+  // claude-code-6c8bf87a9038 and codex-3013411865ab.
+  'claude-code': 'ghcr.io/arnaultbretagne/agora-harness-claude-code@sha256:220dcdea6c5d9b39322c4e795b2742b771fc23427e91228afe1ac03fc25c01cd',
+  codex: 'ghcr.io/arnaultbretagne/agora-harness-codex@sha256:156dc39bef8270db4426746839bd57a881912cea4a500dac7d525b37402b19c4',
 }
 const [harness, name, publicPem] = process.argv.slice(2) as [string, string, string]
 const image = IMAGES[harness]

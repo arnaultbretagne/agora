@@ -1,0 +1,693 @@
+{
+ "claude-caps-0.106.0/a-one-waited": {
+  "lines": 33,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Compute 17 x 23: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "session_info_update",
+   "available_commands_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Compute 17 x 23",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "user": 1,
+     "agent_message_chunk": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/b-two-parallel": {
+  "lines": 29,
+  "announced": 2,
+  "subStreams": 2,
+  "diagnostics": [],
+  "hostLines": [
+   "Compute 12 times 12: idle",
+   "Compute 13 times 13: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "session_info_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Compute 12 times 12",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "user": 1,
+     "agent_message_chunk": 1
+    }
+   },
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Compute 13 times 13",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1,
+     "user": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/c-background": {
+  "lines": 43,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Run delayed background echo: idle"
+  ],
+  "hostGeneric": [
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Run delayed background echo",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1,
+     "user": 1,
+     "tool": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/d-nested": {
+  "lines": 43,
+  "announced": 2,
+  "subStreams": 2,
+  "diagnostics": [],
+  "hostLines": [
+   "Outer sub-agent: start inner sub-agent: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "available_commands_update",
+   "available_commands_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Outer sub-agent: start inner sub-agent",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "user": 2,
+     "agent_message_chunk": 1,
+     "subagent": 1
+    }
+   },
+   {
+    "depth": 2,
+    "under": "a sub-stream",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Compute 7 x 8",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1,
+     "user": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/e-permission": {
+  "lines": 37,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Create note.txt with hello: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=default,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Create note.txt with hello",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "user": 1,
+     "agent_message_chunk": 1,
+     "tool": 1,
+     "permission": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/f-cancel-child": {
+  "lines": 50,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Run sleep test command: cancelled"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "available_commands_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "cancelled",
+    "title": "Run sleep test command",
+    "cancel": true,
+    "turns": [
+     "cancelled"
+    ],
+    "elements": {
+     "tool": 2,
+     "agent_message_chunk": 1,
+     "user": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/g-cancel-parent-foreground": {
+  "lines": 32,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Run sleep and echo: idle"
+  ],
+  "hostGeneric": [
+   "session_info_update",
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Run sleep and echo",
+    "cancel": true,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1,
+     "user": 1,
+     "tool": 1
+    }
+   }
+  ]
+ },
+ "claude-caps-0.106.0/h-cancel-parent-background": {
+  "lines": 114,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Run background sleep echo: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "available_commands_update"
+  ],
+  "hostViewUntouched": "usage its own; settings as before (a child said mode=bypassPermissions,model=haiku,effort=medium,agent=general-purpose)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Run background sleep echo",
+    "cancel": true,
+    "turns": [
+     "done",
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 3,
+     "tool": 3,
+     "user": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/a-one-waited": {
+  "lines": 29,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Multiply: idle"
+  ],
+  "hostGeneric": [
+   "available_commands_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "session_info_update",
+   "session_info_update",
+   "session_info_update",
+   "usage_update",
+   "available_commands_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 11231/258400); settings as before (a child said model=gpt-6-luna)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Multiply",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/b-two-parallel": {
+  "lines": 68,
+  "announced": 2,
+  "subStreams": 2,
+  "diagnostics": [],
+  "hostLines": [
+   "Multiply 13: idle",
+   "Multiply 12: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "session_info_update",
+   "session_info_update",
+   "available_commands_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 11241/258400); settings as before (a child said model=gpt-6-luna)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Multiply 12",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1
+    }
+   },
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Multiply 13",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/c-background": {
+  "lines": 27,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Background sleep: idle"
+  ],
+  "hostGeneric": [
+   "session_info_update",
+   "session_info_update",
+   "available_commands_update",
+   "usage_update",
+   "session_info_update",
+   "session_info_update",
+   "available_commands_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 12349/258400); settings as before (a child said model=gpt-6-luna)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Background sleep",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "tool": 1,
+     "agent_message_chunk": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/d-nested": {
+  "lines": 100,
+  "announced": 2,
+  "subStreams": 2,
+  "diagnostics": [],
+  "hostLines": [
+   "Delegator: idle"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "available_commands_update",
+   "session_info_update",
+   "session_info_update",
+   "session_info_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 12533/258400); settings as before (a child said model=gpt-6-luna)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Delegator",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1,
+     "subagent": 1,
+     "tool": 1
+    }
+   },
+   {
+    "depth": 2,
+    "under": "a sub-stream",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Calculator",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/e-permission": {
+  "lines": 119,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Make note: idle"
+  ],
+  "hostGeneric": [
+   "available_commands_update",
+   "available_commands_update",
+   "usage_update",
+   "session_info_update",
+   "usage_update",
+   "session_info_update",
+   "session_info_update",
+   "session_info_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 13224/258400); settings as before (a child said model=gpt-6-luna)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "idle",
+    "title": "Make note",
+    "cancel": false,
+    "turns": [
+     "done"
+    ],
+    "elements": {
+     "agent_message_chunk": 2,
+     "tool": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/f-cancel-child": {
+  "lines": 35,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Sleep task: cancelled"
+  ],
+  "hostGeneric": [
+   "session_info_update",
+   "session_info_update",
+   "usage_update",
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "usage_update",
+   "session_info_update",
+   "available_commands_update",
+   "session_info_update",
+   "usage_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 11273/258400); settings as before (a child said model=gpt-6-luna,reasoning_effort=low)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "cancelled",
+    "title": "Sleep task",
+    "cancel": false,
+    "turns": [
+     "cancelled"
+    ],
+    "elements": {
+     "tool": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/g-cancel-parent-foreground": {
+  "lines": 18,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Sleep command: cancelled"
+  ],
+  "hostGeneric": [
+   "available_commands_update",
+   "usage_update",
+   "available_commands_update",
+   "session_info_update",
+   "usage_update",
+   "session_info_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 11273/258400); settings as before (a child said model=gpt-6-luna,reasoning_effort=low)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "cancelled",
+    "title": "Sleep command",
+    "cancel": false,
+    "turns": [
+     "cancelled"
+    ],
+    "elements": {
+     "tool": 1
+    }
+   }
+  ]
+ },
+ "codex-caps-2.6.0/h-cancel-parent-background": {
+  "lines": 19,
+  "announced": 1,
+  "subStreams": 1,
+  "diagnostics": [],
+  "hostLines": [
+   "Background sleep: cancelled"
+  ],
+  "hostGeneric": [
+   "usage_update",
+   "available_commands_update",
+   "usage_update",
+   "session_info_update",
+   "available_commands_update",
+   "session_info_update"
+  ],
+  "hostViewUntouched": "usage its own (a child said 12332/258400); settings as before (a child said model=gpt-6-luna,reasoning_effort=low)",
+  "children": [
+   {
+    "depth": 1,
+    "under": "host",
+    "state": "native",
+    "subagent": "cancelled",
+    "title": "Background sleep",
+    "cancel": false,
+    "turns": [
+     "cancelled"
+    ],
+    "elements": {
+     "tool": 1
+    }
+   }
+  ]
+ }
+}
