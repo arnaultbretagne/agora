@@ -1,7 +1,7 @@
 # Harness image: the bridge in front of claude-code's ACP adapter, launched by Agent Sandbox in its
 # pools. Built from the repository root:  docker build -f harnesses/claude-code/Dockerfile .
-# Exact versions: claude-agent-acp 0.100.0 and the CLI its SDK bundles, 2.1.316 (docs/adr, Steering). It names its
-# models with their version (opus is Opus 5.5) and offers Fable 5.1. No credential: the token below is a marker that
+# Exact versions: claude-agent-acp 0.106.0 and the CLI its SDK bundles, 2.1.322 (docs/adr, Steering). It names its
+# models with their version (opus is Opus 5.5) and offers Fable 5.2. No credential: the token below is a marker that
 # only selects the CLI's OAuth mode.
 FROM node:24-bookworm-slim
 # git, for the agent's repositories: it reaches GitHub through the gateway, whose root it trusts by
@@ -17,8 +17,8 @@ ADD --chmod=755 --checksum=sha256:33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65
 RUN kubectl version --client
 WORKDIR /app
 RUN npm install --global --no-audit --no-fund \
-      @anthropic-ai/claude-code@2.1.316 \
-      @agentclientprotocol/claude-agent-acp@0.100.0 \
+      @anthropic-ai/claude-code@2.1.322 \
+      @agentclientprotocol/claude-agent-acp@0.106.0 \
     && npm cache clean --force \
     && claude --version \
     && node /usr/local/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --cli --version

@@ -3,9 +3,9 @@
   "private": true,
   "description": "What the codex image installs: the ACP adapter, and codex pinned under it.",
   "dependencies": {
-    "@agentclientprotocol/codex-acp": "2.5.0"
+    "@agentclientprotocol/codex-acp": "2.6.0"
   },
   "overrides": {
-    "@openai/codex": "0.165.0"
+    "@openai/codex": "0.166.0"
   }
 }
