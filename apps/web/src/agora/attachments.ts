@@ -127,6 +127,30 @@ export function attachmentsOf(blocks: readonly unknown[], key?: object): Attachm
   return out
 }
 
+/**
+ * A prompt's blocks other than text as the composer's attachments, to be sent again (docs/specs/assistant-ui.md,
+ * "Sending"): an image with its bytes, read from Agora when the log keeps them in R2; an embedded resource as its file.
+ */
+export async function composerAttachments(blocks: readonly Json[], read: (address: string) => Promise<ArrayBuffer> = async (address) => (await fetch(address)).arrayBuffer()): Promise<CompleteAttachment[]> {
+  const out: CompleteAttachment[] = []
+  for (const b of blocks) {
+    const base = { id: crypto.randomUUID(), status: { type: 'complete' as const } }
+    if (b.type === 'image' && text(b.data) !== '') {
+      const name = text(b.uri) || 'image'
+      const address = imageOf(b)
+      const image = address.startsWith('data:') ? address : `data:${text(b.mimeType)};base64,${base64Of(new Uint8Array(await read(address)))}`
+      out.push({ ...base, type: 'image', name, contentType: text(b.mimeType), content: [{ type: 'image', image, filename: name }] })
+    }
+    const resource = json(b.resource)
+    if (b.type === 'resource' && resource) {
+      const name = text(resource.uri) || 'resource'
+      const mimeType = text(resource.mimeType) || 'text/plain'
+      out.push({ ...base, type: 'document', name, contentType: mimeType, content: [{ type: 'file', filename: name, mimeType, data: base64Of(new TextEncoder().encode(text(resource.text))) }] })
+    }
+  }
+  return out
+}
+
 /** A file prepared: the content its attachment carries, and the bytes it adds to the prompt. */
 export async function prepare(file: File, caps: PromptCapabilities): Promise<{ content: CompleteAttachment['content']; type: 'image' | 'document'; size: number } | { refused: string }> {
   const refused = refusalOf(file, caps)

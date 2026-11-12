@@ -18,9 +18,9 @@ user's actions into commands.**
 Registry components are copied into `apps/web` (`npx assistant-ui add <name>`, shadcn model) and
 modified freely. Only `@assistant-ui/react` and `@assistant-ui/react-markdown` are dependencies.
 
-The client invents no state, but one: the first message of an execution, shown waiting until its
-Session opens ("Sending"). Every other message the user writes appears once the server has saved
-it. A command's effect is read in the thread, never in the answer to the command.
+The client invents no state: a message the user writes appears once the server has saved it, the
+one that starts an execution included ("Sending"). A command's effect is read in the thread, never
+in the answer to the command.
 
 One operator: the server sits behind the identity proxy (Pocket-ID), and the list shows every
 Workstream.
@@ -70,7 +70,7 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 
 | Command | Target | Body | Offered |
 | --- | --- | --- | --- |
-| Create | — | `pool`, from the catalogue; `settings`, the model and effort picked; `profiles`, the access picked. Never an anchor: the server finds the one it continues from (`log.md`, "Continuing"). | With a message sent while no execution runs ("Sending"). |
+| Create | — | `pool`, from the catalogue; `settings`, the model and effort picked; `profiles`, the access picked; `prompt`, the message that starts it, as a Write's. Never an anchor: the server finds the one it continues from (`log.md`, "Continuing"). | With a message sent while no execution runs ("Sending"). |
 | Configure | `execution`, `session` | `configId`, `value` | When sending is open and no turn runs, from the model picker ("Settings and commands"). |
 | Scope | `execution` | `profiles`: the whole access picked | When no turn runs, from the access picker ("Access"). |
 | Write | `execution`, `session` | `prompt`: one `text` block; `mayWait`: true | When sending is open (below). |
@@ -119,9 +119,9 @@ and, as in `none`, `failed` and `ended`, it starts an execution:
 | The harness | Picked inside the composer, among the catalogue's pools but those kept for the tests (`testing`). Offered first: the one picked in this Workstream; else the Workstream's own pool, or one of its harness once that pool is gone with an older image; else, in a draft, the one picked last, remembered in the browser; else the first. A harness with an anchor in the Workstream (`continuation`) is noted "continues its saved session". |
 | The Workstream | A draft gets its id and `POST /api/workstreams`, then its address `/w/{id}`. |
 | What the agent will be given | Above the composer, when the Workstream has exchanges (`exchanges`) and the harness picked has no anchor holding them all: "{Harness} resumes its saved session; the {n} exchanges since then go to it as text.", from its `continuation`; with none, "No saved {Harness} session: the {n} exchanges above go to the agent as text." One exchange: "the 1 exchange … goes". Nothing when its anchor holds them all. |
-| Create | `pool`; `settings`: the model and effort picked, if any; `profiles`: the access picked, if any ("Access"). |
-| The message | Shown at once, noted "waiting for the sandbox", the response "starting {harness}". Written (**Write**) once that execution's state is `ready` with its Session. |
-| A failure | A refused Create, or the execution `failed`, `ended` or `lost` before its Session opens: the message goes back into the composer, with "The sandbox could not start. Your message is back in the composer." |
+| Create | `pool`; `settings`: the model and effort picked, if any; `profiles`: the access picked, if any ("Access"); `prompt`: the message, its text then its attachments ("Attachments"). One command: accepted, the log holds the message, and sends it once the Session is open (`log.md`, "Messages during a turn"). |
+| The message | Read in the thread, as any other. While the execution starts, each `waiting` element whose `first` is that execution is shown where its turn will be: the message, noted "waiting for the sandbox", the response "starting {harness}"; it is not listed above the composer. Once sent it is its turn. Leaving the Workstream, reloading or closing the page changes nothing to it. |
+| A failure | A refused Create: the message goes back into the composer, with its reason. An execution that did not start: the log gives the message back (`log.md`, "Messages during a turn"), and each `returned` element whose `first` is the Workstream's execution goes back into that Workstream's composer, text and attachments — an image kept in R2 read again from `GET /api/files/{sha256}` —, with "The sandbox could not start. Your message is back in the composer." Once per page: after a reload too, until that Workstream's next Create. |
 
 In the composer, as in every state:
 
@@ -129,7 +129,7 @@ In the composer, as in every state:
 | --- | --- |
 | The keys | Enter starts a new line, on a phone as on a computer; Ctrl+Enter, or ⌘+Enter, sends, as **Send** does. |
 | A text not sent | Each Workstream, and the draft, keeps its own, its attachments with it: moving to another, or to the draft with **New workstream**, puts it away and shows the other's, empty if it has none; coming back shows it again, the attachments added again as when first attached. Kept in the page only: gone after a reload. |
-| A message given back | A draft's Workstream or a team refused, a refused Create or Write, or a first message whose execution did not start: the message goes back into the composer of its own Workstream — of the draft for the first two —, with the reason above it, shown there when that Workstream is, never in another's. Several waiting there: all of them, one after the other, a blank line between their texts. A reason is said until that Workstream's next command, or until it is left. |
+| A message given back | A draft's Workstream or a team refused, a refused Create or Write, or a message given back by the log ("Sending"): the message goes back into the composer of its own Workstream — of the draft for the first two —, with the reason above it, shown there when that Workstream is, never in another's. Several waiting there: all of them, one after the other, a blank line between their texts. A reason is said until that Workstream's next command, or until it is left. |
 
 ## Messages during a turn
 
@@ -220,7 +220,7 @@ not offered: the harnesses do not read them from a prompt alike.
 | A text file | Any other file whose content is UTF-8 without a NUL character, at most 256 KiB, when the agent accepts embedded resources. Sent as a `resource` block: `uri` the file's name, `mimeType` its type or `text/plain`, `text` its content. |
 | Refused | Any other file, an image the browser cannot read, a text file over 256 KiB, a kind the agent does not accept, or attachments beyond 12 MiB in all: not attached; above the composer, "{name} can't be attached: {why}." until the next command. |
 | In the composer | Above the text, a tile for each attachment: an image's thumbnail, its name as its title; a file's icon and name; a cross to remove it. Sending is open with attachments and no text. |
-| Sent | **Write**'s prompt: a text block when there is text, then the attachments in the order they were added. A first message carries them through its execution's start, and gives them back to the composer with its text. |
+| Sent | **Write**'s prompt: a text block when there is text, then the attachments in the order they were added. The message that starts an execution carries them in its Create's `prompt`; given back, they return to the composer with its text. |
 | In the thread | Above the user's bubble, a tile for each block of its prompt that is not text: an image's thumbnail, titled by its `uri`, which opens whole — read from `GET /api/files/{sha256}` with its `mimeType` when its `data` is a reference (`files.md`); an embedded resource or a link by its `uri`; another block by its type. A message of attachments alone has no bubble. |
 
 ## The connection point: `useExternalStoreRuntime`
@@ -229,11 +229,11 @@ The only point of contact between Agora's objects and assistant-ui.
 
 | Property | Fed by |
 | --- | --- |
-| `messages` + `convertMessage` | The turns and notices, in position order (below), and a first message while it waits. |
-| `isRunning` | The last turn is saved or in progress, or a first message waits. |
-| `isSendDisabled` | Sending is not open, or a first message waits. |
-| `onNew` | **Write**, with the composer's text and attachments ("Attachments"); with no execution running, the steps of "Sending". |
-| `queue` | `items`: the `waiting` elements still waiting, in position order, each by its id with its text blocks as `parts`; `steerItems`: none; `enqueue` and `steer`: as `onNew`; `remove`: **Retract**; `move` and `edit`: nothing. |
+| `messages` + `convertMessage` | The turns and notices, in position order (below), then the messages waiting for the Session of the execution they start ("Sending"). |
+| `isRunning` | The last turn is saved or in progress, or a message waits for the Session of the execution it starts. |
+| `isSendDisabled` | Sending is not open. |
+| `onNew` | **Write**, with the composer's text and attachments ("Attachments"); with no execution running, **Create** carrying them, by the steps of "Sending". |
+| `queue` | `items`: the `waiting` elements still waiting, but those shown in the thread while their execution starts ("Sending"), in position order, each by its id with its text blocks as `parts`; `steerItems`: none; `enqueue` and `steer`: as `onNew`; `remove`: **Retract**; `move` and `edit`: nothing. |
 | `adapters.attachments` | Agora's: what the agent accepts, prepared in the browser ("Attachments"). |
 | `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
 
@@ -370,7 +370,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Sidebar | **New workstream**: the draft at `/`; **Search**: 250 ms after the last key, the Workstreams whose title or exchanges hold the text — sub-streams and the agents' folder's included —, the most recently changed first, each a row of the list with the latest matching line of its exchanges under its title — from the word before the text, the text marked —, replace the list and the folder until the box is empty | **ours** |
 | Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
 | Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
-| Header | Title, or a waiting first message; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
+| Header | Title; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Sidebar, header, composer | A native sub-stream: in the sidebar, a row among its parent's sub-streams, its title after a small "sub-agent" mark, a coral, pulsing dot while `working`, "waiting for you" while `waiting`, a red dot for `failed`, none otherwise; in the header, its parents, its title, its harness · its state label, **Cancel** while its turn is in progress and `native.cancel` is true, never **Stop**; no composer and no picker, the read-only line in their place | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
@@ -378,7 +378,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Thread | A user message's attachments, above its bubble; an image opened whole | `Attachment` (registry), adapted: a Radix dialog, no avatar |
 | Thread | Response, bare on the page, its parts grouped by `MessagePrimitive.GroupedParts` — tools in a row folded, consecutive reasoning together —, the turn's failure under it; Copy under the last, and on hover under an earlier one, floating in the gap below it: nothing moves | `MessagePrimitive` (**ours**) |
 | Thread | Notice, for `system` messages | **ours** |
-| Composer | Input, Send, Cancel; a spinner while a first message waits | `ComposerPrimitive` |
+| Composer | Input, Send, Cancel; a spinner while a message waits for the Session of the execution it starts | `ComposerPrimitive` |
 | Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
 | Composer | The paperclip, and the attachments' tiles above the text | `Attachment` (registry), adapted |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
@@ -459,10 +459,10 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U12 | A real claude-code history: files written and edited, each after a permission | Each change's line labelled with its action and file, its diff taken from its permission, the lines added and removed; each permission answered. |
 | U13 | Real codex and opencode histories: shell commands, some failing, a todo list, reasoning | Commands without their shell; the failures marked; the todo list as entries; the reasoning kept. |
 | U14 | Workstreams changed today, yesterday, this week, before, and two with no entry; one of them read twice, by the stream and by a page | Grouped by day; those with no entry left out unless open; a search keeps the titles that contain it; the one read twice listed once, as last changed. |
-| U15 | A first message, while its execution starts, opens, or fails | Waits; is written once that execution is `ready` with its Session; is given back if it fails, ends or is lost first. |
+| U15 | `waiting` elements, one `first` the Workstream's execution in `starting`, one of another execution; then that execution `ready`; then one `returned`, `first` the Workstream's execution, and one `first` an earlier execution | The first in the thread, "waiting for the sandbox" and a running response, not above the composer; the other above the composer; `ready`: both above the composer. The `returned` one of the Workstream's execution given back, its text and blocks; the earlier one not. |
 | U16 | In a browser, **New workstream** from an open Workstream, then Back | The draft at `/`, the greeting, no message of the other; Back: that Workstream and its messages. |
 | U17 | In a browser, two Workstreams switched in the list | Each shows its own messages only; the open one marked in the list. |
-| U18 | In a browser, a first message from the draft | Nothing on the server before it; then the message at once, the address `/w/{id}`, the agent's answer, the Workstream in the list. |
+| U18 | In a browser, a first message from the draft | Nothing on the server before it; then one Create carrying the message and no Write; the message at once, "waiting for the sandbox"; the address `/w/{id}`, the agent's answer, the Workstream in the list. |
 | U19 | In a browser, a permission | The card with the agent's options; sending closed with its reason; Allow: the agent goes on, the card gone, sending open again. |
 | U20 | In a browser, a reload on a Workstream | The same messages, each once. |
 | U21 | In a browser, **Stop** | The state `stopped`, **Stop** gone, sending closed with its reason. |
@@ -519,7 +519,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U70 | In a browser, an agent taking messages into its turn, a turn running: a text typed, then sent with Ctrl+Enter or ⌘+Enter | **Cancel** alone, then **Send** beside it once typed; the message in the thread above the rest of the response; nothing left waiting; **Cancel** still offered until the turn ends. |
 | U71 | In a browser, an agent that does not, a turn running: two messages sent, the first retracted | Both above the composer, oldest first; the cross takes the first away, never sent; at the turn's end the second's turn. |
 | U72 | In a browser, a message waiting, then **Cancel** | "These go with your next message."; nothing goes; a next message sent: the first's turn, then its own. |
-| U73 | In a browser, a Write refused during a turn; a first message refused | Its reason above the composer; the text back in the composer; likewise. |
+| U73 | In a browser, a Write refused during a turn; a first message whose Create is refused | Its reason above the composer; the text back in the composer; likewise. |
 | U74 | In a browser, a turn running: `/` typed, Escape; then Escape again | The commands hidden, the turn going on; then the turn cancelled. |
 | U75 | In a browser, a message with an attachment sent during a turn, then taken back | One line above the composer, its attachment counted; no message of it in the thread; taken back, gone, and never sent. |
 | U76 | A delegate's message sent into its delegator's running turn; one of Agora's; one waiting | In the thread at its place, the first as the delegate's, by its title, the second a "From Agora" line, the response going on under them; the third above the composer, saying who wrote it. |
@@ -531,6 +531,9 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U82 | In a browser, two Workstreams: a file attached and a text typed in one, the other opened from the list, a text typed, **New workstream**, a text typed; then each opened again; then the draft's text sent; then the first's sent; then the other reloaded | The other and the draft opened with an empty composer and no attachment, the other still none once its view is known; coming back, each with its own text: the first's with its attachment, the other's, the draft's. The draft's sent: the new Workstream's composer empty, and the draft's after **New workstream**. The first's sent: its prompt holds the file. Reloaded: the composer empty, no attachment. |
 | U83 | In a browser, two Workstreams: a message sent in one, refused once the other has been opened from the list; then the first opened again | In the other: its composer empty, the reason not said. The first: the message in its composer, the reason above it. |
 | U84 | A thread holding a `send_message` and a `stop_agent` naming a delegate, a `send_message` to `parent`, a `list_agents`, a `delegate` line of an earlier contract, and a command whose text names `spawn_agent` and whose output quotes its answer | The first two and the earlier one as a delegate's line, each with its title, its link and its state; the others as any tool's line. |
+| U85 | In a browser, a first message sent from the draft, its Workstream left before its Session opens for one whose execution has ended, a message sent there | One Create each, carrying its message, and no Write; the first one's message goes while the other Workstream is on screen; both answered, each in its own. |
+| U86 | In a browser, a first message, the page reloaded while its execution starts | The message in the thread again, "waiting for the sandbox", the response "starting {harness}", a spinner in place of Send; then the agent's answer. |
+| U87 | In a browser, a first message with a text file attached, its Pod never starting, its execution ended at its deadline; the page reloaded; sent again | "The sandbox could not start. Your message is back in the composer."; the text and the file's tile back in the composer, the message no longer in the thread; after the reload, the same; sent again: one `session/prompt` holding the text and the file. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, foldable, foldOf, labelOf, type Artifact } from '../src/agora/tools.ts'
-import { acceptOf, blockOf, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
+import { acceptOf, blockOf, composerAttachments, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
 import {
   accessDefault,
   accessDisplay,
@@ -20,7 +20,6 @@ import {
   composerOf,
   excerpt,
   continuationNote,
-  firstMessageStep,
   messagesOf,
   modelChoice,
   noticeText,
@@ -30,11 +29,13 @@ import {
   poolLimits,
   poolSettings,
   resetIn,
+  returnedOf,
   merged,
   sections,
   startBody,
   startedDelegate,
   delegatesOf,
+  startingOf,
   waitingOf,
   windowName,
   withAccess,
@@ -323,13 +324,68 @@ test('U59 the line under a title: from the word before the text, the text apart,
   assert.deepEqual(excerpt('costs (a+b) twice', '(a+b)'), { before: 'costs ', text: '(a+b)', after: ' twice' })
 })
 
-test('U15 a first message waits for the Session its Create opens: written once ready, given back if the execution fails', () => {
-  const base: WorkstreamView = { id: 'w', title: 't', state: 'starting', pool: 'p', harness: 'mock', execution: 'e1', session: null, anchor: null }
-  assert.equal(firstMessageStep('e1', base, false), 'wait')
-  assert.equal(firstMessageStep('e1', base, true), 'wait')
-  assert.equal(firstMessageStep('e1', { ...base, execution: 'e0', state: 'ended' }, true), 'wait')
-  assert.equal(firstMessageStep('e1', { ...base, state: 'ready', session: 's' }, true), 'write')
-  for (const state of ['failed', 'ended', 'lost'] as const) assert.equal(firstMessageStep('e1', { ...base, state }, true), 'give back')
+/** A log of the entries that matter here, folded by the log's own projector and read as a thread. */
+const logged = (entries: readonly Entry[]): ThreadState => {
+  let state = empty
+  const position = String(entries.length)
+  for (const o of project(entries)) state = apply(state, { type: 'snapshot', position, operation: 'upsert', kind: o.kind, id: o.id, object: o.object as Record<string, unknown> })
+  return apply(state, { type: 'snapshot-end', position })
+}
+const entryOf = (position: number, kind: string, content: Record<string, unknown>, columns: Record<string, unknown> = {}): Entry =>
+  ({ workstream: ws, position: String(position), time: '2026-01-01T00:00:00.000Z', kind, execution: null, session: null, content, direction: null, rpc_kind: null, method: null, correlated_method: null, request_position: null, rpc_id: null, command: null, connection: null, receive_ordinal: null, files: null, ...columns }) as unknown as Entry
+const createOf = (position: number, execution: string): Entry =>
+  entryOf(position, 'command', { id: `c${String(position)}`, kind: 'Create', target: {}, body: { pool: 'mock-test', harness: 'mock', execution }, execution, claimName: `sbx-${execution}` }, { execution, command: `c${String(position)}` })
+/** A Write that waits: one written during a turn, or, with `first`, the message its Create carried. */
+const waitingWrite = (position: number, blocks: readonly unknown[], first?: string): Entry =>
+  entryOf(position, 'command', { id: `w${String(position)}`, kind: 'Write', target: {}, body: { prompt: blocks, mayWait: true }, waits: true, ...(first ? { first } : {}) }, { command: `w${String(position)}` })
+const PIXEL = { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=', uri: 'pixel.png' }
+
+test('U15 a message waiting for the Session of the execution it starts: in the thread while it starts, above the composer once ready; given back by the log, to its own execution alone', () => {
+  const older = waitingWrite(1, [{ type: 'text', text: 'left from before' }])
+  const entries = [older, createOf(2, 'e1'), waitingWrite(3, [{ type: 'text', text: 'starts it' }, PIXEL], 'e1')]
+  const starting = logged(entries)
+  const view = workstreamOf(starting, ws)
+  assert.deepEqual([view.state, view.execution, view.title], ['starting', 'e1', 'left from before'])
+  // While it starts: in the thread, where its turn will be; the one of another execution above the composer.
+  assert.deepEqual(startingOf(starting, view).map((e) => e.object.position), ['3'])
+  assert.deepEqual(waitingOf(starting, view).map((w) => [w.position, w.text]), [['1', 'left from before']])
+  const shown = messagesOf(starting, view).slice(-2)
+  const [said, response] = shown
+  assert.deepEqual(shown.map((m) => [m.role, (m.metadata?.custom as Record<string, unknown>).turnStatus, (m.metadata?.custom as Record<string, unknown>).harness]), [['user', 'pending', 'mock'], ['assistant', 'pending', 'mock']])
+  assert.deepEqual([said!.content, said!.attachments?.map((a) => [a.type, a.name]), response!.status], [[{ type: 'text', text: 'starts it' }], [['image', 'pixel.png']], { type: 'running' }])
+  // Once the Session is ready: no longer in the thread, both above the composer, oldest first.
+  const ready = { ...view, state: 'ready' as const, session: 's' }
+  assert.deepEqual([startingOf(starting, ready).length, messagesOf(starting, ready).filter((m) => (m.metadata?.custom as Record<string, unknown> | undefined)?.turnStatus === 'pending').length], [0, 0])
+  assert.deepEqual(waitingOf(starting, ready).map((w) => w.position), ['1', '3'])
+  // Its execution failing before any prompt: the log gives it back; the other still waits.
+  const failed = logged([...entries, entryOf(4, 'execution.failed', { reason: 'startup_failed' }, { execution: 'e1' })])
+  const after = workstreamOf(failed, ws)
+  assert.equal(after.state, 'failed')
+  assert.deepEqual(returnedOf(failed, after).map((m) => [m.text, m.blocks]), [['starts it', [PIXEL]]])
+  assert.deepEqual([startingOf(failed, after).length, waitingOf(failed, after).map((w) => w.position)], [0, ['1']])
+  // The next Create: what an earlier execution gave back is not given again; its own message is in the thread.
+  const again = logged([...entries, entryOf(4, 'execution.failed', { reason: 'startup_failed' }, { execution: 'e1' }), createOf(5, 'e2'), waitingWrite(6, [{ type: 'text', text: 'sent again' }], 'e2')])
+  const next = workstreamOf(again, ws)
+  assert.deepEqual([next.execution, returnedOf(again, next).length, startingOf(again, next).map((e) => e.object.position)], ['e2', 0, ['6']])
+})
+
+test('U15 a message given back: its blocks as the composer’s attachments, an image kept in R2 read again; sent again, the same blocks', async () => {
+  const kept = { type: 'image', mimeType: 'image/jpeg', data: `agora-file:sha256:${'ab'.repeat(32)}`, uri: 'photo.jpg' }
+  const notes = { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } }
+  const read: string[] = []
+  const attachments = await composerAttachments([PIXEL, kept, notes], async (address) => {
+    read.push(address)
+    return new TextEncoder().encode('jpeg bytes').buffer as ArrayBuffer
+  })
+  assert.deepEqual(attachments.map((a) => [a.type, a.name, a.contentType, a.status.type]), [
+    ['image', 'pixel.png', 'image/png', 'complete'],
+    ['image', 'photo.jpg', 'image/jpeg', 'complete'],
+    ['document', 'notes.md', 'text/markdown', 'complete'],
+  ])
+  // Only the one kept in R2 is read, from the files route.
+  assert.equal(read.length, 1)
+  assert.match(read[0]!, new RegExp(`^/api/files/${'ab'.repeat(32)}\\?type=image%2Fjpeg`))
+  assert.deepEqual(promptOf('again', attachments), [{ type: 'text', text: 'again' }, PIXEL, { ...kept, data: Buffer.from('jpeg bytes').toString('base64') }, notes])
 })
 
 test('U25 the real harnesses settings: the model and the effort without default, the current marked; no mode offered', async () => {

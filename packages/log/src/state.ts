@@ -57,6 +57,8 @@ export interface Execution {
   steering: boolean
   /** The ACP session a `session/resume` or a `session/load` not yet answered names: what it replays is that session's. */
   openingAcp: string | null
+  /** A `session/prompt` of its own was written: it took a prompt (docs/specs/log.md, "Messages during a turn"). */
+  prompted: boolean
 }
 /**
  * A sub-agent its harness started of its own (docs/specs/log.md, "Native sub-agents"): announced on its parent's
@@ -302,6 +304,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
         promptCapabilities: null,
         steering: false,
         openingAcp: null,
+        prompted: false,
       }
       state.executions.set(execution.id, execution)
       state.current = execution
@@ -364,6 +367,8 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       for (const child of state.children.values()) if (child.execution === execution.id) endChild(child, 'failed', undefined, entry.kind.slice('execution.'.length))
       if (state.steering !== null && state.requestPositions.get(state.steering)?.execution === execution.id) state.steering = null
       state.tools.clear()
+      // Given back (docs/specs/log.md, "Messages during a turn"): its Create's message, the execution having taken no prompt.
+      if (!execution.prompted) state.waiting = state.waiting.filter((w) => w.content.first !== execution.id)
     }
     if (
       entry.kind === 'session.ended' ||
@@ -408,6 +413,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
           state.turns.set(turn.id, turn)
           turnsByRequest.set(entry.position, turn)
+          if (execution) execution.prompted = true
           // A message that waited has gone; the new turn takes messages, its tools to come.
           state.waiting = state.waiting.filter((w) => w.command !== entry.command)
           state.unsteerable = false
@@ -665,8 +671,14 @@ export class CoreProjection {
       if (entry.kind === 'command' && entry.content.kind === 'Write' && entry.content.waits === true) {
         const id = identity(entry.workstream, entry.position, 'waiting')
         this.waitingElements.set(String(entry.command), id)
-        put('element', id, { type: 'waiting', position: entry.position, status: 'waiting', ...said(object(entry.content.body)?.prompt) }, entry.position)
+        const first = typeof entry.content.first === 'string' ? { first: entry.content.first } : {}
+        put('element', id, { type: 'waiting', position: entry.position, status: 'waiting', ...first, ...said(object(entry.content.body)?.prompt) }, entry.position)
       }
+      // A Create's message given back (docs/specs/log.md, "Messages during a turn"): it keeps its blocks.
+      if (['execution.ended', 'execution.lost', 'execution.failed'].includes(entry.kind) && entry.execution && state.executions.get(entry.execution)?.prompted === false)
+        for (const item of [...objects.values()])
+          if (item.object.type === 'waiting' && item.object.status === 'waiting' && item.object.first === entry.execution)
+            put('element', item.id, { ...item.object, status: 'returned' }, entry.position)
       if (entry.kind === 'command' && entry.content.kind === 'Retract')
         left(identity(entry.workstream, String(object(entry.content.target)?.message), 'waiting'), 'retracted', entry.position)
       // A question to the person (docs/specs/log.md, "Elements"): its Ask, then its Answer.

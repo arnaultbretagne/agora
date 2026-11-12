@@ -61,10 +61,10 @@ sequenceDiagram
     participant Client
     participant Server
     User->>Client: picks a harness, writes
-    Client->>Server: a new Workstream, then Create
-    Note over Client: the message shown, waiting for the sandbox
-    Server-->>Client: thread: starting, then ready with its Session
-    Client->>Server: Write
+    Client->>Server: a new Workstream, then Create carrying the message
+    Note over Server: the message in the log, waiting for the Session
+    Server-->>Client: thread: starting, the message waiting for the sandbox
+    Note over Server: the Session opens: the log sends the message
     Server-->>Client: thread: the turn, saved, then the response
 ```
 
@@ -72,8 +72,12 @@ Nothing exists on the server before the first message: a new Workstream is a dra
 browser. When no execution runs — none yet, or the last one failed or ended — sending starts one
 first, and it continues the Workstream: the server restores the harness's last anchor and gives the
 agent the exchanges it lacks as text. Before sending, the composer says when the agent will get
-some of the conversation as text only. If the execution fails before its Session opens, the message
-goes back to the composer.
+some of the conversation as text only.
+
+The message travels with the Create: once accepted it is in the log, which sends it when the Session
+opens. The page only shows it — leaving the Workstream, reloading or closing the page loses nothing,
+and the agent starts all the same. If the execution does not start, the log gives the message back,
+and the composer of its Workstream holds it again, with its attachments.
 
 ## From objects to the screen
 

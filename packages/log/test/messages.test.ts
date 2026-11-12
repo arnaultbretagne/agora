@@ -1,11 +1,12 @@
 // docs/specs/log.md, "Messages during a turn": a message written during a turn waits in the log, then goes into the
 // running turn when the agent can take it there, as the next turn otherwise. Real bridges, the mock agent.
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { keys, mockBridge } from '@agora/testkit'
 import { catchUpText, exchangesOf } from '../src/catch-up.ts'
 import { object, type Entry } from '../src/index.ts'
-import { expire, FakeKube, lines, opened, sleep, until, type Lab } from './support.ts'
+import { database, expire, FakeKube, Lab, lines, opened, sleep, until, type LabOptions } from './support.ts'
 
 /** An agent that does not say `_meta.steering.supported`, as opencode. */
 const noSteering = () => {
@@ -564,4 +565,185 @@ test('L124 a Cancel the agent answers end_turn, a message waiting and no Write a
   assert.equal(prompts(await lab.entries(ws)).length, 1)
   assert.equal((await lab.state(ws)).waiting.length, 1)
   await projected(lab, ws, answer.position, 'waiting')
+})
+
+// ---------------------------------------------------------------- a Create's message
+
+/** An agent that takes this long to answer `initialize`, in the Pods `slowed` names by their order: its Session opens after it. */
+const slow = (initializeDelayMs: number, slowed: (pod: number) => boolean = () => true) => {
+  const own = keys()
+  const kube = new FakeKube(own.publicKey)
+  let pods = 0
+  kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, slowed(pods++) ? { initializeDelayMs } : {})
+  return { kube, keys: own }
+}
+/** Agora and a Workstream with no execution. */
+const fresh = async (t: { after(fn: () => Promise<void>): void }, options: Omit<LabOptions, 'db'> = {}) => {
+  const db = await database()
+  const context = { db, lab: await Lab.start({ db, ...options }), ws: '' }
+  t.after(async () => {
+    await context.lab.close()
+    await db.drop()
+  })
+  context.ws = await context.lab.workstream()
+  return context
+}
+/** A Create carrying a message, as the client sends one. */
+const createWith = (lab: Lab, ws: string, prompt: unknown, id = randomUUID()) => lab.workstreams.command(ws, { id, kind: 'Create', target: {}, body: { pool: 'mock-test', prompt } })
+/** The position of the Write a Create's message is: the one after its Create. */
+const messageOf = (answer: { position: string }) => String(BigInt(answer.position) + 1n)
+const commandCount = async (lab: Lab, ws: string) => (await lab.entries(ws)).filter((x) => x.kind === 'command').length
+
+test('L128 a Create carrying a message, its Session two seconds to open: a Write that waits written with it, sent once the Session is open; sent again, the first answer', async (t) => {
+  const { lab, db, ws } = await fresh(t, slow(2_000))
+  const blocks = text('first words\nand more')
+  const command = { id: randomUUID(), kind: 'Create' as const, target: {}, body: { pool: 'mock-test', prompt: blocks } }
+  const answer = await lab.workstreams.command(ws, command)
+  assert.ok(answer.accepted)
+  const execution = answer.execution!
+  const at = await lab.entries(ws)
+  const create = at.find((x) => x.position === answer.position)!
+  const write = at.find((x) => x.position === messageOf(answer))!
+  assert.deepEqual([create.content.kind, object(create.content.body)?.prompt], ['Create', undefined])
+  assert.deepEqual([write.kind, write.content.kind, write.content.waits, write.content.first, write.content.target, write.content.body], ['command', 'Write', true, execution, {}, { prompt: blocks, mayWait: true }])
+  // One commit: both rows written by one transaction.
+  const xmin = (await db.admin.query('SELECT xmin::text AS x FROM entries WHERE workstream=$1 AND position IN ($2,$3)', [ws, create.position, write.position])).rows.map((r) => String(r.x))
+  assert.equal(xmin.length, 2)
+  assert.equal(xmin[0], xmin[1])
+  // While the Session opens: waiting, no line.
+  const state = await lab.state(ws)
+  assert.deepEqual([state.waiting.map((w) => w.position), state.current?.session, prompts(at).length], [[write.position], null, 0])
+  await projected(lab, ws, write.position, 'waiting')
+  const element = await waitingOf(lab, ws, write.position)
+  assert.deepEqual([element?.first, element?.content], [execution, blocks])
+  const title = (await objectsOf(lab, ws)).find((o) => o.kind === 'workstream')?.object.title
+  assert.equal(title, 'first words')
+  // Sent again: the first answer, nothing written.
+  const commands = await commandCount(lab, ws)
+  assert.deepEqual(await lab.workstreams.command(ws, command), answer)
+  assert.equal(await commandCount(lab, ws), commands)
+  // Its turn, once the Session is open.
+  await allDone(lab, ws, 1, 20_000)
+  const entries = await lab.entries(ws)
+  const sent = prompts(entries)
+  assert.equal(sent.length, 1)
+  assert.deepEqual([object(sent[0]!.content.params)?.prompt, sent[0]!.command], [blocks, write.command])
+  const opening = entries.find((x) => x.kind === 'session.opened')!
+  assert.ok(BigInt(opening.position) < BigInt(sent[0]!.position))
+  await projected(lab, ws, write.position, 'sent')
+  t.diagnostic(`Create at ${create.position}, its Write at ${write.position}, waits, first its execution, one transaction (xmin ${xmin[0]!}); title '${String(title)}'; session.opened at ${opening.position}, session/prompt at ${sent[0]!.position}; ${String(sent.length)} prompt; ${String(commands)} commands before and after the replay`)
+})
+
+test('L129 a Create carrying a message whose prompt is not valid ACP, beyond the line’s maximum, or holds an image for a pool no Session has opened in: refused, nothing written, no execution', async (t) => {
+  const { lab, ws } = await fresh(t)
+  const image = [{ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=', uri: 'pixel.png' }]
+  const refusals = [await createWith(lab, ws, 'not blocks'), await createWith(lab, ws, text('x'.repeat(17 * 1024 * 1024))), await createWith(lab, ws, image)]
+  assert.deepEqual(refusals, [
+    { accepted: false, reason: 'invalid_body' },
+    { accepted: false, reason: 'line_too_large' },
+    { accepted: false, reason: 'prompt_unsupported' },
+  ])
+  assert.deepEqual([(await lab.entries(ws)).length, (await lab.state(ws)).current], [0, null])
+  // Once a Session of that pool has said it takes images, the same Create is accepted, and its message goes.
+  await lab.open(await lab.workstream())
+  await until('the pool known to take images', async () => object((await lab.workstreams.catalogue()).find((p) => p.name === 'mock-test')?.promptCapabilities)?.image === true)
+  assert.ok((await createWith(lab, ws, image)).accepted)
+  await allDone(lab, ws, 1, 20_000)
+  assert.equal(prompts(await lab.entries(ws)).length, 1)
+  t.diagnostic(`refused ${refusals.map((r) => (r.accepted ? 'accepted' : r.reason)).join(', ')}; 0 entries, no execution; accepted once the pool's last Session took images`)
+})
+
+test('L130 a Create carrying a message whose agent never answers initialize: failed, no prompt; the message given back, its element returned with its blocks; the next Create’s alone goes', async (t) => {
+  // The first Pod's agent never answers in time; the next ones do.
+  const { lab, ws } = await fresh(t, { ...slow(30_000, (pod) => pod === 0), workstreams: { responseTimeoutMs: 1000 } })
+  const blocks = text('never read')
+  const answer = await createWith(lab, ws, blocks)
+  assert.ok(answer.accepted)
+  const written = messageOf(answer)
+  assert.deepEqual((await lab.state(ws)).waiting.map((w) => w.position), [written])
+  const failed = await until('execution.failed', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.failed'))
+  assert.equal(failed.content.reason, 'startup_failed')
+  assert.equal((await lab.state(ws)).waiting.length, 0)
+  await projected(lab, ws, written, 'returned')
+  const element = await waitingOf(lab, ws, written)
+  assert.deepEqual([element?.first, element?.content, element?.lastPosition], [answer.execution, blocks, failed.position])
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  await until('ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  assert.equal(prompts(await lab.entries(ws)).length, 0)
+  // Another message, with the next Create: it alone goes.
+  assert.ok((await createWith(lab, ws, text('read at last'))).accepted)
+  await allDone(lab, ws, 1, 20_000)
+  const sent = prompts(await lab.entries(ws)).map(promptText)
+  assert.deepEqual(sent, [['read at last']])
+  assert.equal((await waitingOf(lab, ws, written))?.status, 'returned')
+  t.diagnostic(`execution.failed (${String(failed.content.reason)}) at ${failed.position}: the message of ${written} returned at that position, its blocks kept; prompts in all: ${JSON.stringify(sent)}`)
+})
+
+test('L130 a Create carrying a message, stopped before its Session opens: ended at its deadline, no prompt; the message given back', async (t) => {
+  const { lab, ws } = await fresh(t, slow(3_000))
+  const blocks = text('stopped before it was read')
+  const answer = await createWith(lab, ws, blocks)
+  assert.ok(answer.accepted)
+  const written = messageOf(answer)
+  assert.ok((await lab.command(ws, 'Stop', { execution: answer.execution })).accepted)
+  // Its claim, once there, at its deadline.
+  await until('obtained', async () => (await lab.state(ws)).current?.uid)
+  assert.equal((await waitingOf(lab, ws, written))?.status, 'waiting')
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  const ended = await until('execution.ended', async () => (await lab.entries(ws)).find((x) => x.kind === 'execution.ended'), 30_000)
+  const entries = await lab.entries(ws)
+  assert.deepEqual([(await lab.state(ws)).waiting.length, prompts(entries).length, entries.some((x) => x.kind === 'execution.failed')], [0, 0, false])
+  await projected(lab, ws, written, 'returned')
+  const element = await waitingOf(lab, ws, written)
+  assert.deepEqual([element?.content, element?.lastPosition], [blocks, ended.position])
+  t.diagnostic(`stopped, then execution.ended at ${ended.position}: no prompt, no execution.failed; the message of ${written} returned at that position`)
+})
+
+test('L131 a message left waiting by an ended execution, then a Create carrying one, its execution lost during the first turn: the older first, the Create’s still waiting, sent in the next execution', async (t) => {
+  const { lab, ws, e } = await opened(t, noSteering())
+  // A message left waiting: written during a turn, its execution ending before it could go.
+  assert.ok((await lab.write(ws, '/sleep 30')).accepted)
+  await running(lab, ws)
+  assert.ok((await say(lab, ws, '/die 2')).accepted)
+  await expire(lab.kube, e.claimName)
+  await until('ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  assert.equal((await lab.state(ws)).waiting.length, 1)
+  // The Create's message waits behind it; the older one's turn loses the execution.
+  const answer = await createWith(lab, ws, text('the newer one'))
+  assert.ok(answer.accepted)
+  const written = messageOf(answer)
+  const older = await until('the older one’s prompt', async () => prompts(await lab.entries(ws)).at(1), 20_000)
+  assert.equal(promptText(older).at(-1), '/die 2')
+  await until('lost', async () => (await lab.state(ws)).current?.lost, 20_000)
+  const lost = await lab.state(ws)
+  assert.deepEqual([lost.current?.id, lost.waiting.map((w) => w.position)], [answer.execution, [written]])
+  await expire(lab.kube, lost.current!.claimName)
+  await until('ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  assert.deepEqual([(await lab.state(ws)).waiting.map((w) => w.position), (await waitingOf(lab, ws, written))?.status], [[written], 'waiting'])
+  // The next execution: it goes.
+  assert.ok((await lab.command(ws, 'Create', {}, { pool: 'mock-test' })).accepted)
+  const newer = await until('its prompt', async () => prompts(await lab.entries(ws)).at(2), 20_000)
+  assert.equal(promptText(newer).at(-1), 'the newer one')
+  await lab.turn(ws, 'done')
+  await projected(lab, ws, written, 'sent')
+  t.diagnostic(`prompts in order: ${JSON.stringify(prompts(await lab.entries(ws)).map((x) => promptText(x).at(-1)))}; after its execution's loss and end the Create's message still waiting, then sent in the next execution`)
+})
+
+test('L132 Agora killed after a Create carrying a message, before its Session is open: read back, sent once', async (t) => {
+  const context = await fresh(t)
+  // Its Pod two seconds to come: nothing of the Session exists when Agora dies.
+  context.lab.kube.allocationDelayMs = 2_000
+  const answer = await createWith(context.lab, context.ws, text('across the restart'))
+  assert.ok(answer.accepted)
+  const before = await context.lab.state(context.ws)
+  assert.deepEqual([before.waiting.length, before.current?.session], [1, null])
+  context.lab = await context.lab.restart('halt')
+  const { lab, ws } = context
+  await allDone(lab, ws, 1, 30_000)
+  const entries = await lab.entries(ws)
+  const sent = prompts(entries)
+  assert.deepEqual(sent.map(promptText), [['across the restart']])
+  assert.equal(entries.filter((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === sent[0]!.position).length, 1)
+  await projected(lab, ws, messageOf(answer), 'sent')
+  t.diagnostic(`killed with the message waiting and no Session; after the restart: ${String(sent.length)} session/prompt, dispatched once, its turn done`)
 })

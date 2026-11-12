@@ -450,10 +450,10 @@ const STATE_LABEL: Partial<Record<WorkstreamState, string>> = {
 }
 
 const Title: FC = () => {
-  const { id, view, pending, send, connection, line, open, composer, cancel } = useAgora()
+  const { id, view, send, connection, line, open, composer, cancel } = useAgora()
   const stoppable = view.execution !== null && ['starting', 'ready', 'interrupted', 'lost'].includes(view.state)
   if (id === null) return <span className="min-w-0 flex-1 truncate text-[13px] font-medium">New workstream</span>
-  const state = pending ? 'starting' : view.state
+  const state = view.state
   return (
     <>
       {line.map((parent, i) => (
@@ -465,7 +465,7 @@ const Title: FC = () => {
           <ChevronRightIcon aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
         </span>
       ))}
-      <span className="min-w-0 truncate text-[13px] font-medium">{pending ? pending.text.split('\n')[0] : view.title}</span>
+      <span className="min-w-0 truncate text-[13px] font-medium">{view.title}</span>
       {state === 'native' && (
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
           <span aria-hidden className="max-sm:hidden">·</span>
@@ -484,7 +484,7 @@ const Title: FC = () => {
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
           {/* On a phone the title needs the room; the composer shows the harness. */}
           <span aria-hidden className="max-sm:hidden">·</span>
-          <span className="max-sm:hidden">{harnessName(pending?.harness ?? view.harness)}</span>
+          <span className="max-sm:hidden">{harnessName(view.harness)}</span>
           <span aria-hidden>·</span>
           {state === 'starting' || state === 'interrupted' ? (
             <ShimmerLabel data-state={state}>{STATE_LABEL[state]}</ShimmerLabel>

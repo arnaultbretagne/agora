@@ -280,8 +280,8 @@ const Usage: FC = () => {
 
 /** What stands between the user and sending, said above the field. */
 const Notes: FC = () => {
-  const { refusal, composer, view, send, pending, pools, pool } = useAgora()
-  const continuation = composer.create && pending === null ? continuationNote(view, pools?.find((p) => p.name === pool)?.harness) : null
+  const { refusal, composer, view, send, starting, pools, pool } = useAgora()
+  const continuation = composer.create ? continuationNote(view, pools?.find((p) => p.name === pool)?.harness) : null
   return (
     <div className="flex flex-col gap-2 empty:hidden">
       {refusal && (
@@ -301,7 +301,7 @@ const Notes: FC = () => {
           </button>
         </div>
       ) : (
-        composer.reason !== null && pending === null && <p className="text-muted-foreground border-foreground/15 border-l-2 pl-3 text-[13px]">{composer.reason}</p>
+        composer.reason !== null && !starting && <p className="text-muted-foreground border-foreground/15 border-l-2 pl-3 text-[13px]">{composer.reason}</p>
       )}
     </div>
   )
@@ -368,7 +368,7 @@ export const Composer: FC<{ placeholder?: string }> = (props) => {
 
 const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { pending, composer, commands, promptCapabilities, pool } = useAgora()
+  const { starting, composer, commands, promptCapabilities, pool } = useAgora()
   const team = composer.create && pool === TEAM
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
@@ -449,7 +449,7 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Usage />
-            {pending ? (
+            {starting ? (
               <span className="bg-primary/60 text-primary-foreground rounded-control grid size-7 place-items-center pointer-coarse:size-9" aria-label="Starting">
                 <LoaderCircleIcon className="size-4 animate-spin" />
               </span>

@@ -204,7 +204,7 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   const create = state.complete && IDLE.includes(view.state) && !pendingQuestion
   // A turn running leaves sending open: what is sent waits (docs/specs/assistant-ui.md, "Messages during a turn").
   const open = create || (state.complete && view.state === 'ready' && uncertain === null && pendingPermission === null && !pendingQuestion && !settling)
-  const held = open && active === null && waitingOf(state).length > 0
+  const held = open && active === null && waitingOf(state, view).length > 0
   return { open, create, reason: open ? null : reason, running, cancellable, uncertain, pendingPermission, refuses: false, held, readOnly: false }
 }
 
@@ -221,10 +221,41 @@ export interface Waiting {
   readonly as: string | null
 }
 
-/** The messages waiting, oldest first. */
-export function waitingOf(state: ThreadState): Waiting[] {
+/**
+ * The messages waiting for the Session of the execution they start (docs/specs/assistant-ui.md, "Sending"):
+ * those the Workstream's execution was created with, while it starts. The thread shows them.
+ */
+export function startingOf(state: ThreadState, view: WorkstreamView): ViewObject[] {
+  if (view.state !== 'starting' || view.execution === null) return []
   return ofKind(state, 'element')
-    .filter((e) => e.object.type === 'waiting' && e.object.status === 'waiting')
+    .filter((e) => e.object.type === 'waiting' && e.object.status === 'waiting' && e.object.first === view.execution)
+    .sort(byPosition)
+}
+
+/** A message the log gave back (docs/specs/log.md, "Messages during a turn"): its text, and its blocks that are not text. */
+export interface Returned {
+  readonly id: string
+  readonly text: string
+  readonly blocks: readonly Json[]
+}
+
+/** The messages given back by the Workstream's execution, which did not start: they return to its composer. */
+export function returnedOf(state: ThreadState, view: WorkstreamView): Returned[] {
+  if (view.execution === null) return []
+  return ofKind(state, 'element')
+    .filter((e) => e.object.type === 'waiting' && e.object.status === 'returned' && e.object.first === view.execution)
+    .sort(byPosition)
+    .map((e) => {
+      const blocks = list(e.object.content).map((b) => json(b)).filter((b): b is Json => b !== undefined)
+      return { id: e.id, text: blocks.filter((b) => b.type === 'text').map((b) => text(b.text)).join('\n'), blocks: blocks.filter((b) => b.type !== 'text') }
+    })
+}
+
+/** The messages waiting above the composer, oldest first: all but those the thread shows while their execution starts. */
+export function waitingOf(state: ThreadState, view?: WorkstreamView): Waiting[] {
+  const starting = new Set(view ? startingOf(state, view).map((e) => e.id) : [])
+  return ofKind(state, 'element')
+    .filter((e) => e.object.type === 'waiting' && e.object.status === 'waiting' && !starting.has(e.id))
     .sort(byPosition)
     .map((e) => {
       const blocks = list(e.object.content).map((b) => json(b))
@@ -630,16 +661,6 @@ export function continuationNote(view: WorkstreamView, harness: string | null | 
     : `No saved ${harnessName(harness)} session: the ${exchanges(total)} above ${go(total)} to the agent as text.`
 }
 
-/**
- * A first message waits for the Session its Create opens: written once that execution is ready, given
- * back if it fails, ends or is lost first.
- */
-export function firstMessageStep(execution: string, view: WorkstreamView, complete: boolean): 'wait' | 'write' | 'give back' {
-  if (!complete || view.execution !== execution) return 'wait'
-  if (view.state === 'failed' || view.state === 'ended' || view.state === 'lost') return 'give back'
-  return view.state === 'ready' && view.session !== null ? 'write' : 'wait'
-}
-
 // ---------------------------------------------------------------- settings and commands
 
 /** The values a picker offers: the real ones, never `default`. */
@@ -952,7 +973,7 @@ export function excerpt(line: string, text: string, lead = 16): Excerpt {
 const textOf = (user: ViewObject | undefined): string =>
   list(user?.object.content).map((b) => json(b)).filter((b) => b?.type === 'text').map((b) => text(b!.text)).join('\n')
 
-export function messagesOf(state: ThreadState): ThreadMessageLike[] {
+export function messagesOf(state: ThreadState, view?: WorkstreamView): ThreadMessageLike[] {
   const elements = ofKind(state, 'element').sort(byPosition)
   const placed: { position: string; messages: ThreadMessageLike[] }[] = []
   // An approval goes on the tool line it names, when this Workstream holds it.
@@ -1062,5 +1083,15 @@ export function messagesOf(state: ThreadState): ThreadMessageLike[] {
       ],
     })
   }
-  return placed.sort((a, b) => (after(a.position, b.position) ? 1 : after(b.position, a.position) ? -1 : 0)).flatMap((p) => p.messages)
+  const messages = placed.sort((a, b) => (after(a.position, b.position) ? 1 : after(b.position, a.position) ? -1 : 0)).flatMap((p) => p.messages)
+  // The messages waiting for the Session of the execution they start, where their turns will be
+  // (docs/specs/assistant-ui.md, "Sending").
+  const starting = view ? startingOf(state, view) : []
+  if (starting.length === 0) return messages
+  const custom = { turnStatus: 'pending', harness: view!.harness }
+  return [
+    ...messages,
+    ...starting.map((e): ThreadMessageLike => ({ id: `${e.id}:user`, role: 'user', content: [{ type: 'text', text: textOf(e) }], attachments: attachmentsOf(list(e.object.content), e.object), metadata: { custom } })),
+    { id: 'starting:assistant', role: 'assistant', content: [], status: { type: 'running' }, metadata: { custom } },
+  ]
 }
