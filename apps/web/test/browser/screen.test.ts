@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78, U79: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78–U83, U85–U87: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -78,7 +78,7 @@ before(async () => {
   const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '60', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '90', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
@@ -190,6 +190,18 @@ async function started(page: Page, text: string): Promise<string> {
   return idOf(page)
 }
 
+/** The commands the page posts, in order: each one's Workstream, kind and, for a message, its prompt. */
+function commandsPosted(page: Page): { workstream: string; kind: string; prompt: unknown }[] {
+  const posted: { workstream: string; kind: string; prompt: unknown }[] = []
+  page.on('request', (request) => {
+    const route = /\/api\/workstreams\/([0-9a-f-]{36})\/commands$/.exec(new URL(request.url()).pathname)
+    if (request.method() !== 'POST' || !route) return
+    const command = request.postDataJSON() as { kind: string; body?: { prompt?: unknown } }
+    posted.push({ workstream: route[1]!, kind: command.kind, prompt: command.body?.prompt })
+  })
+  return posted
+}
+
 const entriesOf = async (id: string) => (await (await fetch(`${server.url}/api/workstreams/${id}/entries`)).json()) as { kind: string; content: Record<string, unknown> }[]
 const modelPicker = (page: Page) => page.getByRole('button', { name: 'Model', exact: true })
 const accessPicker = (page: Page) => page.getByRole('button', { name: 'Access', exact: true })
@@ -249,19 +261,34 @@ test('U17 two Workstreams switched in the list: each shows its own messages only
   assert.equal(await thread(page).getByText('alpha task').count(), 0)
 })
 
-test('U18 a first message: nothing on the server before it; then shown at once, the address /w/<id>, the answer, the list', async () => {
+test('U18 a first message: nothing on the server before it; then one Create carrying it, shown at once while its sandbox starts, the address /w/<id>, the answer, the list', async (t) => {
   const page = await fresh()
+  const posted = commandsPosted(page)
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
   await composerInput(page).fill('a brand new task')
   const before = await stored()
   assert.equal(await stored(), before, 'opening the draft and picking a harness create nothing')
-  await page.getByRole('button', { name: 'Send' }).click()
-  await thread(page).getByText('a brand new task', { exact: true }).waitFor({ timeout: 1000 })
-  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  // Its Pod two seconds to come: the message is seen waiting.
+  c.kube.allocationDelayMs = 2_000
+  try {
+    await page.getByRole('button', { name: 'Send' }).click()
+    await thread(page).getByText('a brand new task', { exact: true }).waitFor({ timeout: 1000 })
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    await thread(page).getByText('waiting for the sandbox').waitFor()
+    await thread(page).getByText('starting Mock agent').waitFor()
+    await stateLabel(page, 'starting').waitFor()
+    assert.equal(await page.getByRole('list', { name: 'Messages waiting' }).count(), 0, 'not above the composer')
+    await shot(page, 'U18-starting')
+  } finally {
+    c.kube.allocationDelayMs = 0
+  }
   await thread(page).getByText('Echo #1: a brand new task.').waitFor()
+  assert.equal(await thread(page).getByText('waiting for the sandbox').count(), 0)
   assert.equal(await stored(), before + 1)
   await page.getByRole('navigation', { name: 'Workstreams' }).getByText('a brand new task').waitFor()
+  assert.deepEqual(posted.map((c) => [c.kind, c.prompt]), [['Create', [{ type: 'text', text: 'a brand new task' }]]])
+  t.diagnostic(`commands posted by the page: ${JSON.stringify(posted.map((c) => c.kind))}, the Create's prompt ${JSON.stringify(posted[0]?.prompt)}`)
 })
 
 test('U19 a permission: the card with the agent options; Allow: the agent goes on, the card gone, sending open again', async () => {
@@ -1468,9 +1495,9 @@ test('U73 a first message refused: its reason above the composer, the text back 
   const page = await fresh()
   await page.goto(`${server.url}/`)
   await pickHarness(page, 'Mock agent')
-  // Simulated: the server's refusal of the Write alone, once its execution is ready.
+  // Simulated: the server's refusal of the Create that carries it.
   await page.route('**/commands', (route) =>
-    route.request().postDataJSON().kind === 'Write' ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'permission_pending' }) }) : route.continue(),
+    route.request().postDataJSON().kind === 'Create' ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'permission_pending' }) }) : route.continue(),
   )
   await send(page, 'first words kept')
   await page.getByRole('alert').getByText('Answer the permission request first.').waitFor()
@@ -1723,6 +1750,132 @@ test('U83 a Write refused once the person has moved to another Workstream: neith
   await page.waitForURL(`${server.url}/w/${beta}`)
   await until('the text back in its own', async () => (await composerInput(page).inputValue()) === 'sent from beta')
   await page.getByRole('alert').getByText('Answer the permission request first.').waitFor()
+})
+
+/** The `session/prompt` lines of a Workstream, each as the text blocks it holds. */
+const promptsOf = async (id: string): Promise<string[][]> =>
+  (await entriesOf(id))
+    .filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt')
+    .map((e) => ((e.content.params as { prompt: { type: string; text?: string }[] }).prompt ?? []).filter((b) => b.type === 'text').map((b) => String(b.text)))
+
+test('U85 a first message, its Workstream left before its Session opens for an ended one, a message sent there: both go, each a Create carrying it; neither waits for its Workstream to be on screen', async (t) => {
+  const page = await fresh()
+  const alpha = await started(page, 'alpha kept task')
+  const view = (await viewOf(server.url, alpha)) as { execution: string }
+  await page.locator('header').getByRole('button', { name: /Stop/ }).click()
+  await expire(c.kube, claimName(view.execution))
+  await stateLabel(page, 'ended').waitFor()
+  const list = page.getByRole('navigation', { name: 'Workstreams' })
+  const posted = commandsPosted(page)
+  // Each Pod three seconds to come: both Workstreams are left before their Session opens.
+  c.kube.allocationDelayMs = 3_000
+  let beta = ''
+  try {
+    await page.getByRole('button', { name: 'New workstream', exact: true }).click()
+    await page.waitForURL(`${server.url}/`)
+    await pickHarness(page, 'Mock agent')
+    await send(page, 'a side question')
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    beta = idOf(page)
+    assert.notEqual(beta, alpha)
+    await list.getByText('alpha kept task').click()
+    await page.waitForURL(`${server.url}/w/${alpha}`)
+    await thread(page).getByText('Echo #1: alpha kept task.').waitFor()
+    assert.deepEqual(await promptsOf(beta), [], 'left before its Session opened')
+    await send(page, 'a follow-up')
+    await thread(page).getByText('waiting for the sandbox').waitFor()
+    // The other one's message goes while this Workstream is the one on screen.
+    await until('the side question sent', async () => (await promptsOf(beta)).length === 1, 30_000)
+    assert.equal(new URL(page.url()).pathname, `/w/${alpha}`)
+  } finally {
+    c.kube.allocationDelayMs = 0
+  }
+  await thread(page).getByText(/a follow-up/).last().waitFor()
+  await until('the follow-up sent', async () => (await promptsOf(alpha)).length === 2, 30_000)
+  // Restored from its anchor, the mock agent says what it remembers after its echo.
+  await thread(page).getByText(/Echo #2: a follow-up\./).waitFor()
+  await list.getByText('a side question').click()
+  await page.waitForURL(`${server.url}/w/${beta}`)
+  await thread(page).getByText('Echo #1: a side question.').waitFor()
+  assert.deepEqual((await promptsOf(beta)).map((p) => p.at(-1)), ['a side question'])
+  assert.equal((await promptsOf(alpha)).at(-1)!.at(-1), 'a follow-up')
+  assert.deepEqual(posted.map((c) => [c.workstream === beta ? 'beta' : 'alpha', c.kind, (c.prompt as { text: string }[])[0]?.text]), [
+    ['beta', 'Create', 'a side question'],
+    ['alpha', 'Create', 'a follow-up'],
+  ])
+  t.diagnostic(`posted: ${JSON.stringify(posted.map((c) => [c.workstream === beta ? 'beta' : 'alpha', c.kind]))}; prompts of beta ${JSON.stringify(await promptsOf(beta))}, the last of alpha ${JSON.stringify((await promptsOf(alpha)).at(-1))}`)
+})
+
+test('U86 a first message, the page reloaded while its sandbox starts: the message still in the thread, waiting for the sandbox; then the answer', async () => {
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  c.kube.allocationDelayMs = 5_000
+  try {
+    await send(page, 'kept across a reload')
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    await thread(page).getByText('waiting for the sandbox').waitFor()
+    await page.reload()
+    await thread(page).getByText('kept across a reload', { exact: true }).waitFor()
+    await thread(page).getByText('waiting for the sandbox').waitFor()
+    await thread(page).getByText('starting Mock agent').waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Send' }).count(), 0, 'a spinner in place of Send')
+    assert.deepEqual(await promptsOf(idOf(page)), [], 'reloaded before its Session opened')
+  } finally {
+    c.kube.allocationDelayMs = 0
+  }
+  await thread(page).getByText('Echo #1: kept across a reload.').waitFor()
+  assert.deepEqual(await promptsOf(idOf(page)), [['kept across a reload']])
+})
+
+test('U87 a first message with a file, its Pod never starting, its execution ended at its deadline: the reason, the text and the file back in the composer; after a reload too; sent again, the agent given both', async (t) => {
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  const composer = page.locator('main form')
+  const tile = composer.getByText('notes.md')
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Attach files' }).click()])
+  await chooser.setFiles({ name: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('# Notes\n') })
+  await tile.waitFor()
+  await composerInput(page).fill('read the notes')
+  // Real: the Pod of this claim never starts; its claim then reaches its deadline.
+  const factory = c.kube.bridgeFactory
+  c.kube.bridgeFactory = () => new Promise(() => {})
+  let id = ''
+  try {
+    await page.getByRole('button', { name: 'Send' }).click()
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    id = idOf(page)
+    await thread(page).getByText('waiting for the sandbox').waitFor()
+    const view = await until('its execution', async () => {
+      const v = (await viewOf(server.url, id)) as { execution?: string } | undefined
+      return v?.execution ? (v as { execution: string }) : null
+    })
+    await until('its claim', () => c.kube.claims.has(claimName(view.execution)))
+    await expire(c.kube, claimName(view.execution))
+  } finally {
+    c.kube.bridgeFactory = factory
+  }
+  const reason = page.getByRole('alert').getByText('The sandbox could not start. Your message is back in the composer.')
+  await reason.waitFor()
+  await until('the text back', async () => (await composerInput(page).inputValue()) === 'read the notes')
+  await tile.waitFor()
+  assert.equal(await thread(page).getByText('waiting for the sandbox').count(), 0, 'no longer in the thread')
+  assert.deepEqual(await promptsOf(id), [])
+  await shot(page, 'U87-given-back')
+  // After a reload: the log gives it back again.
+  await page.reload()
+  await reason.waitFor()
+  await until('the text back after the reload', async () => (await composerInput(page).inputValue()) === 'read the notes')
+  await tile.waitFor()
+  // Sent again: another Create, and this time its message goes, the file with it.
+  await page.getByRole('button', { name: 'Send' }).click()
+  await thread(page).getByText('Echo #1: read the notes.').waitFor()
+  const sent = (await entriesOf(id)).filter((e) => e.kind === 'acp' && (e as unknown as { method: string }).method === 'session/prompt').map((e) => (e.content.params as { prompt: Record<string, unknown>[] }).prompt)
+  assert.deepEqual(sent, [[{ type: 'text', text: 'read the notes' }, { type: 'resource', resource: { uri: 'notes.md', mimeType: 'text/markdown', text: '# Notes\n' } }]])
+  assert.equal(await reason.count(), 0, 'its reason gone with the next command')
+  assert.equal(await composerInput(page).inputValue(), '')
+  t.diagnostic(`given back: "${'read the notes'}" and notes.md, before and after a reload; sent again: ${JSON.stringify(sent)}`)
 })
 
 test('G8 a merge card: the pull request as a link, its state, Merge closed while it waits for a review, open once ready; merged, squash; a card a message cancels', async () => {
