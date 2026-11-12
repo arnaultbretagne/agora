@@ -1,7 +1,7 @@
 # ADR 000n — Subagents
 
 - **Status:** proposed
-- **Date:** 2026-11-11
+- **Date:** 2026-11-12
 
 ## Context
 
@@ -16,7 +16,8 @@
   goes one way, from the agent to the client: the client may only cancel a sub-agent that offers it. A
   client asks for it by declaring `subagents` at `initialize`; in ACP v2 the RFD makes it part of the
   base protocol.
-- claude-agent-acp 0.100.0 and codex-acp 2.5.0 implement it. opencode's sub-agents were not measured.
+- claude-agent-acp, from 0.100.0, and codex-acp, from 2.5.0, implement it. opencode's sub-agents were
+  not measured.
 - Measured on 2026-11-11, on throwaway Pods of the production images (claude-code 2.1.316, codex
   0.165.0), one run per scenario, on Haiku and gpt-6-luna:
 
@@ -29,6 +30,17 @@
 | Claude Code | 6 of 8 sub-agents started in the background, told to wait or not. Cancelling the parent's turn stopped none. A sub-agent cancelled alone ended within 100 ms. |
 | Codex | Cancelling the parent's turn marked every sub-agent cancelled at once, their commands ending 35 to 40 s later. A sub-agent cancelled alone left its parent's `wait` asleep: its answer came at 255 s. A sub-agent's own sub-agent was never said `idle`. |
 | Restoring | `session/resume` announced nothing again on either. `session/load` replayed the sub-agents on Claude Code, the first level alone on Codex. |
+
+- Measured again on 2026-11-12, after the harnesses' upgrade (claude-agent-acp 0.106.0 with claude-code
+  2.1.322, codex-acp 2.6.0 with codex 0.166.0), the same way, the eight scenarios with `subagents`
+  declared, one run each; then every received line through this decision's code, in a lab, the mock
+  agent writing them byte for byte:
+
+| What | Found |
+| --- | --- |
+| Through the code | 16 scenarios, 970 lines: one sub-stream for each of the 20 sub-agents announced, at its level; no line refused; each host's settings and usage its own, whatever its sub-agents said of theirs. The same for the lines of 2026-11-11. |
+| Claude Code | As on 0.100.0: the same fields, states and messages; a sub-agent's permission under its own session id. |
+| Codex | Its announcement now carries a `cwd`. A sub-agent's own sub-agent was said `idle`. Its sub-agent, refused a write by its sandbox, asked no permission and reported the failure: `requires_action` was not seen. |
 
 ## Decision
 
@@ -76,8 +88,9 @@
   hold every other Workstream of that person.
 - What reads the log's lines for the host must know a sub-agent's from its own: the catch-up's exchanges and a
   delegate's last message leave them out, or a sub-agent's words would pass for its host's.
-- A sub-agent shows working for as long as its adapter says nothing else: Codex's sub-agents of
-  sub-agents until their host's execution ends, then `failed`.
+- A sub-agent shows working for as long as its adapter says nothing else, until its host's execution
+  ends, then `failed`: Codex 0.165.0's sub-agents of sub-agents did; on 0.166.0 the one measured was
+  said `idle`.
 - A Codex sub-agent's thread opens on its answer: Codex reports no task.
 - Cancelling a sub-agent is its adapter's doing, and Codex's parent may wait minutes for it. Cancelling
   a turn cancels none of its sub-agents: Claude Code leaves them running.

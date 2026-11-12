@@ -280,7 +280,7 @@ depth: whatever starts a sub-stream checks its own. A sub-stream belongs to the 
 A harness may start sub-agents of its own inside its execution — Claude Code's `Agent`, Codex's
 `spawn_agent`. With `subagents` declared at `initialize` (`executions.md`), its adapter announces each
 one and sends what it does under an ACP session id of its own (ACP, "Subagent Sessions"; written
-against claude-agent-acp 0.100.0 and codex-acp 2.5.0).
+against claude-agent-acp 0.100.0 and codex-acp 2.5.0, read again on 0.106.0 and 2.6.0).
 
 **Each sub-agent announced is a sub-stream of the Workstream that announced it, read-only: Agora
 neither starts it nor writes to it. Its lines stay in the log of the Workstream whose execution
