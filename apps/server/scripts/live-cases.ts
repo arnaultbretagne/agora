@@ -7,7 +7,7 @@
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { canonical, fold, type Entry, type State, type Turn } from '@agora/log'
+import { canonical, fold, subagentOf, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
 // Every Workstream the cases create belongs to this owner: no identity lists it, and purge-live-cases.sql removes them.
@@ -1295,6 +1295,100 @@ await check('D51', 'Delegation, each real harness: spawn_agent, list_agents, sto
     assert(updates.some((u) => u.includes(`stopped ${delegate}`)), `${harness}: no "stopped ${delegate}"`)
     assert(/PONG/.test(said), `${harness}: after its message, "${said.trim().slice(-160)}"`)
     seen.push(`${harness}: ${lines.filter((l) => /agora/i.test(l.title)).map((l) => l.title).join(', ')}; listed working; stopped; PONG at ${message.position}`)
+  }
+  return seen.join(' | ')
+})
+
+/** A thread as the projection gives it (docs/specs/log.md, "HTTP"): the objects of its snapshot. */
+const threadOf = async (workstream: string): Promise<Json[]> => {
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), 30_000)
+  try {
+    const response = await fetch(`${base}/api/workstreams/${workstream}/thread?after=0`, { signal: abort.signal })
+    if (!response.headers.get('content-type')?.startsWith('text/event-stream')) throw new Error(`thread ${workstream}: ${String(response.status)}`)
+    const rows: Json[] = []
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true })
+      for (let at = buffer.indexOf('\n\n'); at >= 0; at = buffer.indexOf('\n\n')) {
+        const event = JSON.parse(buffer.slice(0, at).replace(/^data: /, '')) as Json
+        buffer = buffer.slice(at + 2)
+        if (event.type === 'snapshot') rows.push(event)
+        else if (event.type === 'snapshot-end') return rows
+      }
+    }
+    throw new Error(`thread ${workstream}: ended before its snapshot did`)
+  } finally {
+    clearTimeout(timer)
+    abort.abort()
+  }
+}
+
+// docs/specs/log.md, L147: Claude Code and Codex each start two sub-agents of their own, one running a command. Each is
+// announced: a sub-stream with its title, its text and its tool, idle once done; the host's thread holds a line for each
+// and none of their tools; its settings and its usage stay its own. Billed.
+await check('L147', 'Native sub-agents, Claude Code and Codex: two each, one running a command, each a sub-stream', async () => {
+  const seen: string[] = []
+  for (const [harness, pool, tool] of [['claude-code', claude, 'Agent'], ['codex', codex, 'spawn_agent']] as const) {
+    assert(pool !== undefined, `no ${harness} pool`)
+    const mark = `MARK-${randomUUID().slice(0, 8)}`
+    const w = new Workstream()
+    await w.open(pool, { limits: { leaseSeconds: 600 } })
+    const prompt =
+      `Use your own ${tool} tool — sub-agents of your own harness, not the agora MCP server — to start two sub-agents: the first runs the shell command "echo ${mark}" and reports its output; ` +
+      'the second answers what 12 times 12 is, using no tool. Wait for both, then give me both results in one sentence.'
+    assert((await w.write(prompt)).status === 200, `${harness}: Write refused`)
+    await w.turn('done', 600_000)
+    // Each announced, and said idle: a sub-agent in the background may end after its host's turn.
+    const state = await until('its sub-agents idle', async () => {
+      const now = await w.state()
+      const children = [...now.children.values()]
+      return children.length >= 2 && children.every((child) => subagentOf(child) === 'idle') ? now : null
+    }, 300_000)
+    const host = await threadOf(w.id)
+    const entries = await w.entries()
+    await w.stop()
+    const children = [...state.children.values()]
+    assert(children.every((child) => child.unlisted !== true), `${harness}: a sub-agent given no sub-stream`)
+    const command = `echo ${mark}`
+    let ran = 0
+    for (const child of children) {
+      const thread = await threadOf(child.workstream)
+      const view = thread.find((row) => row.kind === 'workstream')?.object as Json | undefined
+      assert(view?.state === 'native' && view?.subagent === 'idle' && view?.native?.host === w.id, `${harness}: a sub-stream's view: ${JSON.stringify(view).slice(0, 300)}`)
+      assert(typeof view.title === 'string' && view.title !== '' && view.title !== 'Sub-agent', `${harness}: a sub-stream with no title of its own`)
+      const turns = thread.filter((row) => row.kind === 'turn').map((row) => String(row.object.status))
+      assert(turns.length >= 1 && turns.every((status) => status === 'done'), `${harness}: its turns: ${turns.join(', ')}`)
+      const elements = thread.filter((row) => row.kind === 'element').map((row) => row.object as Json)
+      assert(elements.some((element) => element.type === 'agent_message_chunk'), `${harness}: "${String(view.title)}" has no text of its own`)
+      if (elements.some((element) => element.type === 'tool' && JSON.stringify(element).includes(command))) ran++
+    }
+    assert(ran === 1, `${harness}: ${String(ran)} sub-streams hold the command's tool`)
+    // Its host's thread: a line for each at the first level, none of their tools; the line that starts none.
+    const own = host.filter((row) => row.kind === 'element').map((row) => row.object as Json)
+    const lines = own.filter((element) => element.type === 'subagent')
+    const first = children.filter((child) => child.parent === w.id)
+    assert(lines.length === first.length && lines.every((line) => line.state === 'idle'), `${harness}: ${String(lines.length)} lines for ${String(first.length)} sub-agents: ${JSON.stringify(lines.map((line) => line.state))}`)
+    assert(!own.some((element) => element.type === 'tool' && JSON.stringify(element).includes(command)), `${harness}: the sub-agent's command among its host's tools`)
+    // Its settings and its usage: what its own session said last, whatever its sub-agents said of theirs.
+    const view = host.find((row) => row.kind === 'workstream')?.object as Json | undefined
+    const updates = entries
+      .filter((e) => e.kind === 'acp' && e.direction === 'in' && e.method === 'session/update')
+      .map((e) => e.content.params as Json)
+    const lastOf = (kind: string, mine: boolean) => updates.filter((p) => p?.update?.sessionUpdate === kind && (p.sessionId === state.current?.acpId) === mine).at(-1)?.update as Json | undefined
+    const values = (options: unknown) => (Array.isArray(options) ? (options as Json[]).map((o) => `${String(o.id ?? o.configId)}=${String(o.currentValue)}`).join(',') : '')
+    const [usage, childUsage] = [lastOf('usage_update', true), lastOf('usage_update', false)]
+    if (usage) assert(Number(view?.usage?.used) === Number(usage.used) && Number(view?.usage?.size) === Number(usage.size), `${harness}: its usage ${JSON.stringify(view?.usage)}, its own session said ${String(usage.used)}/${String(usage.size)}`)
+    const childConfig = lastOf('config_option_update', false)
+    const model = (options: unknown) => (Array.isArray(options) ? ((options as Json[]).find((o) => o.category === 'model' || o.id === 'model')?.currentValue as string | undefined) : undefined)
+    const ownModel = model(lastOf('config_option_update', true)?.configOptions) ?? model(state.current?.settings)
+    assert(model(view?.settings) === ownModel, `${harness}: its model ${String(model(view?.settings))}, its own session said ${String(ownModel)}`)
+    seen.push(
+      `${harness}: ${String(children.length)} sub-agents, ${String(first.length)} at the first level — ${children.map((child) => `"${String(child.ownTitle ?? child.title)}"`).join(', ')} —, each a sub-stream, idle, its turns done; ` +
+        `the command in one of them and in none of its host's tools; ${String(lines.length)} lines in its host's thread; its model ${String(ownModel)}${childConfig ? ` (a sub-agent said ${values(childConfig.configOptions).slice(0, 80)})` : ''}` +
+        `${usage ? `, its usage ${String(usage.used)}/${String(usage.size)}${childUsage ? ` (a sub-agent said ${String(childUsage.used)})` : ''}` : ', no usage said'}`,
+    )
   }
   return seen.join(' | ')
 })
