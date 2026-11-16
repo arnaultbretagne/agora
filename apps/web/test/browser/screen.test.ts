@@ -1957,7 +1957,7 @@ test('U96 a phone, roles offered, one picked: the role picker as its mark, coral
   await page.context().close()
 })
 
-test('U97 a model picked in a draft, a role with it, a message sent, then New workstream; a role picked there: the model as the person left it on the new draft, No role on its role picker; the role’s model not set over it', async () => {
+test('U97 a model picked in a draft, a role with it, a message sent, then New workstream; a role picked there; an effort changed while a card’s show: the model as the person left it on the new draft, No role on its role picker; the role’s model not set over it; the model with its effort the person’s from then', async () => {
   await sessionsOpened()
   const page = await fresh()
   await page.goto(`${server.url}/`)
@@ -1985,6 +1985,12 @@ test('U97 a model picked in a draft, a role with it, a message sent, then New wo
   await other.goto(`${server.url}/`)
   await pickRole(other, 'dev')
   assert.deepEqual((await pickersOf(other)).model, 'mock-small · low')
+  // Its effort changed while the card's show: the model with its effort is the person's from then, No role or not.
+  await modelPicker(other).click()
+  await other.getByRole('menuitem', { name: 'high' }).click()
+  assert.deepEqual((await pickersOf(other)).model, 'mock-small · high')
+  await pickRole(other, 'No role')
+  assert.deepEqual((await pickersOf(other)).model, 'mock-small · high')
   await other.context().close()
   await page.context().close()
 })

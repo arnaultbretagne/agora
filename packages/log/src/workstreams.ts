@@ -527,22 +527,30 @@ export class Workstreams implements Handler {
 
   /**
    * The role's block a prompt carries (docs/specs/roles.md, "The persona"): with the first prompt that is not a command of
-   * an execution whose Session is new, until one carrying it has been dispatched. A Session restored holds it already.
+   * an execution whose Session does not hold it — a new one, or one restored from an anchor none of whose executions was
+   * given it —, until one carrying it has been dispatched.
    */
   private roleFor(entries: readonly Entry[], state: State, e: Execution, prompt: unknown): Role | null {
     const role = typeof e.body.role === 'string' ? this.options.roles?.get(e.body.role) : undefined
     if (role === undefined || !Array.isArray(prompt)) return null
     const first = prompt.map((b) => object(b)).find((b) => b?.type === 'text')
     if (typeof first?.text === 'string' && first.text.trimStart().startsWith('/')) return null
-    const session = entries.find((x) => x.kind === 'session.opened' && x.execution === e.id && x.session === e.session)
-    if ((session?.content.origin ?? 'new') !== 'new') return null
+    // The executions whose Session this one continues: its own, and those its anchor comes down from.
+    const holders = new Set([e.id])
+    const opened = (execution: string) => entries.find((x) => x.kind === 'session.opened' && x.execution === execution)?.content.origin ?? 'new'
+    const anchors = anchorsOf(entries, state)
+    for (let origin = opened(e.id); origin !== 'new'; ) {
+      const from = anchors.of.get(String(origin))?.execution
+      if (from === undefined || holders.has(from)) break
+      holders.add(from)
+      origin = opened(from)
+    }
     const carried = (x: Entry) => {
       const blocks = object(x.content.params)?.prompt
       return Array.isArray(blocks) && blocks.some(isRole)
     }
-    if (entries.some((x) => x.execution === e.id && x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt' && state.attempts.has(x.position) && carried(x)))
-      return null
-    return role
+    const given = entries.some((x) => x.execution !== null && holders.has(x.execution) && x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt' && state.attempts.has(x.position) && carried(x))
+    return given ? null : role
   }
 
   /**

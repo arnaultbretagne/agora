@@ -120,19 +120,22 @@ test('P3 a Create naming no card’s role; one whose role is no string: unknown_
   assert.equal((await c.lab.state(ws)).executions.size, 0)
 })
 
-test('P4 a second message in that Session; a message sent into a running turn: neither carries the block', async (t) => {
+test('P4 a second message in that Session; a first message that is a command, a plain one sent into its running turn, then a plain one: the block with the first alone; none into the turn, the block with the next prompt', async (t) => {
   const c = await started(t)
   await turn(c, 'first')
   await turn(c, 'second')
   assert.deepEqual((await prompts(c, c.e)).map((p) => p.some(isRole)), [true, false])
-  // Into a running turn: the turn's first prompt did not carry it either, the Session having had it.
-  assert.ok((await c.lab.write(c.ws, '/sleep 3')).accepted)
-  await until('the turn running', async () => (await c.lab.state(c.ws)).active?.status === 'in_progress')
-  const into = (await c.lab.command(c.ws, 'Write', { execution: c.e.id, session: c.e.session }, { prompt: [{ type: 'text', text: 'and this' }], mayWait: true })) as { accepted: boolean }
+  // Into a running turn that carried none, a command's: the message goes as it is, and the block waits for a prompt of its own.
+  const d = await started(t)
+  assert.ok((await d.lab.write(d.ws, '/sleep 3')).accepted)
+  await until('the turn running', async () => (await d.lab.state(d.ws)).active?.status === 'in_progress')
+  const into = (await d.lab.command(d.ws, 'Write', { execution: d.e.id, session: d.e.session }, { prompt: [{ type: 'text', text: 'and this' }], mayWait: true })) as { accepted: boolean }
   assert.equal(into.accepted, true)
-  const steering = await until('its steering line', async () => lines(await c.lab.entries(c.ws), 'out', '_session/steering').find((x) => x.rpc_kind === 'request'))
+  const steering = await until('its steering line', async () => lines(await d.lab.entries(d.ws), 'out', '_session/steering').find((x) => x.rpc_kind === 'request'))
   assert.deepEqual((steering.content.params as { prompt: Block[] }).prompt.map((b) => b.text), ['and this'])
-  await c.lab.turn(c.ws, 'done')
+  await d.lab.turn(d.ws, 'done')
+  await turn(d, 'a prompt of its own')
+  assert.deepEqual((await prompts(d, d.e)).map((p) => p.some(isRole)), [false, true])
 })
 
 test('P5 the execution ended, its anchor restored by the next; one whose anchor was lost, the next opening a new Session with a catch-up: no block with the first; with the second the block, then the catch-up, then the message', async (t) => {
@@ -223,4 +226,23 @@ test('P10 its transcript, and the exchange a catch-up gives of it: the person’
   const entries = await c.lab.entries(c.ws)
   const [exchange] = exchangesOf(entries, dispatched(await c.lab.state(c.ws)))
   assert.equal(exchange!.user, 'what do you see')
+})
+
+test('P12 a first message that is a command, the execution ended, its anchor restored by the next, then a plain message; that execution ended, its anchor restored in turn: the block with the plain message; none with the third execution’s', async (t) => {
+  const c = await started(t)
+  await turn(c, '/recall')
+  const anchor = String((await end(c, c.e)).content.anchor)
+  const second = await create(c)
+  const origin = async (e: Execution) => (await c.lab.entries(c.ws)).find((x) => x.kind === 'session.opened' && x.execution === e.id)!.content.origin
+  assert.equal(await origin(second), anchor)
+  await turn(c, 'prune')
+  // Restored, and never told who it is: the block goes with its first plain message.
+  const [first] = await prompts(c, second)
+  assert.deepEqual([isRole(first![0]), first!.at(-1)!.text], [true, 'prune'])
+  // The next restores an anchor that holds it.
+  const next = String((await end(c, second)).content.anchor)
+  const third = await create(c)
+  assert.equal(await origin(third), next)
+  await turn(c, 'abricot')
+  assert.deepEqual((await prompts(c, third)).map((p) => p.some(isRole)), [false])
 })
