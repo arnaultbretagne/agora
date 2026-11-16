@@ -44,6 +44,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R36 | 2026-11-11 | `f433f48` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent calling Agora's MCP server by `/spawn_agent`. |
 | R37 | 2026-11-11 | `27dc7ce` | unit, local | `npm run check`, with `npm run test:browser`, all green: Node 24.20.0, PostgreSQL 17.11, Playwright 1.63.0's Chromium; the browser suite's server allowing 90 executions at once; for U18, U85 and U86 a Pod two to five seconds to come (FakeKube's `allocationDelayMs`). The whole browser suite of `068e0fc`, 60 executions allowed, failed on its last cases, U86, U87 and G8, none of their messages shown; allowing 90, they passed, and one run failed on U81 (the next message 179 px lower after the hover), which passed six times alone, in the run before, and in this one. |
 | R38 | 2026-11-12 | `2a50031` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium, the mock agent reporting sub-agents of its own by `/sub`. |
+| R39 | 2026-11-16 | `f114962` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.11, Playwright's Chromium; the server reading three cards of the tests' own from `ROLES_DIR` — `dev` on the mock agent, `lead` on Claude Code's pool with `agora:delegate`, `judge` —, the mock agent's models and efforts. Screenshots of each state taken and looked at. Twelve guards of the role's decision were removed in turn, each caught by U92 to U95. |
 
 ## Cases
 
@@ -199,6 +200,17 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U90 | — | unit | R38 | proven | Not open, no Create, read-only, no reason; Cancel for its turn in progress with `cancel` true, none with false or once done; its pending permission whatever its Session; a turn with no task: one `assistant` message, any other turn `user` then `assistant`. |
 | U90 | — | local | R38 | proven | Its parent in the header, "working"; `From /sub {…}` over its task; its text and its tool; no composer, no model picker, no Stop; "Read-only: a sub-agent of “/sub {…}” takes no message."; **Cancel** clicked: "cancelled", no Cancel, one Cancel in its host's log and no entry in its own; its line in its host's thread "cancelled". One with no `cancel` and no task: no Cancel, no "From", then "idle". |
 | U91 | — | local | R38 | proven | "waiting for you" on its line and in its header; **Allow** clicked: a RespondPermission in its host's log, none in its own; "idle", the button gone. |
+| U52 | — | local | R39 | proven | The person's e-mail at the sidebar's foot; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the list their one Workstream, not someone else's. |
+| U92 | — | unit | R39 | proven | A role picked with nothing chosen: its card's pool, model, effort and access, each when offered; a harness, a model or an access the person chose: as they left it, a model keeping its harness; a card's model on another harness: not set; no role: the person's picks alone. |
+| U92 | — | local | R39 | proven | A draft: "Mock agent", "Model", "No role", "Internet"; the menu: No role, then each role, its summary under it. `lead` picked: "Claude Code", "mock-large · high", "lead", "Internet, agora:delegate". The person's "Mock agent" and "mock-large", then `lead`: both kept, the access with `agora:delegate`. **No role**: the harness and the model kept, the access back to "Internet". |
+| U93 | — | unit | R39 | proven | The Create's body: the pool, the settings, the profiles and `role`; a view's `role` read. |
+| U93 | — | local | R39 | proven | The Create carries `role` `lead`, `model` `mock-large`, `effort` `high` and the profiles shown; the Workstream open, no role picker, its header "lead" then "Claude Code"; its bubble the message alone. |
+| U94 | — | unit | R39 | proven | A later Create's body names no role. |
+| U94 | — | local | R39 | proven | A second message: a Write, no role; its execution ended, a message: a Create with no `role`; the header names the role each time. |
+| U95 | — | unit | R39 | proven | `GET /api/config` read: its roles as given, none when it gives none, the profiles offered beside them. |
+| U95 | simulated: stub, a role no card has added to the page's `GET /api/config` answer | local | R39 | proven | No role offered: no role picker, the access picker there. A role the server does not hold picked and sent: "This role is no longer available." above the composer, the text back in it. |
+| U96 | — | local | R39 | proven | 390 × 844: the role picker a grey mask, then coral once `lead` is picked; its name in its menu and its tooltip; no picker cut. |
+| U97 | — | local | R39 | proven | "mock-large" picked in a draft with `dev`, a message sent, then New workstream: "mock-large" on its picker, "No role" on the role's; `dev` picked there: "mock-large" still. In a page nothing was picked in: `dev` gives "mock-small · low"; its effort changed to high: "mock-small · high", kept with **No role**. |
 
 ## Not covered
 
