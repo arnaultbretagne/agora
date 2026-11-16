@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U97, U101, U102, U104–U109: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U97, U101, U102, U104–U111: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -2521,5 +2521,90 @@ test('U109 a delegate’s agent asking a form: its delegator’s thread holding 
   const receipt = thread(page).locator('[data-form="flow"][data-form-status="answered"]')
   await receipt.getByText('answered by its delegator').waitFor()
   await shot(page, 'u109-delegate')
+  await page.context().close()
+})
+
+test('U110 a form’s bounds: a required list with no minimum answered empty; a required text with no minimum answered empty; a list of two to three held back at one, never a fourth; a text of two to three code points: four letters held back, two emoji taken; the agent given each as the schema says', async () => {
+  const page = await fresh()
+  await started(page, 'before the bounds')
+  await send(page, '/question bounds')
+  const flow = formCard(page, 'flow')
+  await flow.getByText('1 of 4').waitFor()
+  // Tags, required, no minimum: Next open with nothing chosen.
+  assert.equal(await flow.getByRole('button', { name: 'Next' }).getAttribute('aria-disabled'), null)
+  await flow.getByRole('button', { name: 'Next' }).click()
+  // Code, a required text with no minimum: Next open, empty.
+  await flow.getByText('2 of 4').waitFor()
+  assert.equal(await flow.getByRole('button', { name: 'Next' }).getAttribute('aria-disabled'), null)
+  await flow.getByRole('button', { name: 'Next' }).click()
+  // Checks, two to three.
+  await flow.getByText('3 of 4').waitFor()
+  await flow.getByRole('checkbox', { name: 'Lint' }).click()
+  assert.equal(await flow.getByRole('button', { name: 'Next' }).getAttribute('aria-disabled'), 'true')
+  await flow.getByRole('checkbox', { name: 'Unit' }).click()
+  assert.equal(await flow.getByRole('button', { name: 'Next' }).getAttribute('aria-disabled'), null)
+  await flow.getByRole('checkbox', { name: 'Browser' }).click()
+  assert.equal(await flow.getByRole('checkbox', { name: 'Live' }).getAttribute('aria-disabled'), 'true')
+  await flow.getByRole('checkbox', { name: 'Live' }).click({ force: true })
+  assert.equal(await flow.getByRole('checkbox', { name: 'Live' }).getAttribute('aria-checked'), 'false')
+  await shot(page, 'u110-bounds')
+  await flow.getByRole('button', { name: 'Next' }).click()
+  // Short name, two to three code points.
+  await flow.getByText('4 of 4').waitFor()
+  await flow.getByRole('textbox').fill('abcd')
+  assert.equal(await flow.getByRole('button', { name: 'Answer' }).getAttribute('aria-disabled'), 'true')
+  await flow.getByRole('textbox').fill('😀😀')
+  assert.equal(await flow.getByRole('button', { name: 'Answer' }).getAttribute('aria-disabled'), null)
+  await flow.getByRole('button', { name: 'Answer' }).click()
+  await thread(page).getByText('Elicitation: accept {"code":"","tags":[],"short":"😀😀","checks":["lint","unit","browser"]}.').waitFor()
+  await page.context().close()
+})
+
+test('U111 RespondElicitation answered 503 once, for a select then for a Question Flow: the reason said in the box, its controls back, no receipt; answered again: the agent given it, the receipt', async () => {
+  const page = await fresh()
+  let failing = true
+  await page.route('**/api/workstreams/*/commands', async (route) => {
+    const command = route.request().postDataJSON() as { kind?: string }
+    if (command.kind === 'RespondElicitation' && failing) {
+      failing = false
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ accepted: false, reason: 'unavailable' }) })
+    }
+    return route.continue()
+  })
+  await started(page, 'before the refusals')
+  // A select, through the part's approval.
+  await send(page, '/question')
+  const select = formCard(page, 'select')
+  await select.getByText('waiting for you').waitFor()
+  await select.getByRole('radio', { name: /SQLite/ }).click()
+  await select.getByRole('button', { name: 'Answer' }).click()
+  await select.getByRole('alert').getByText('Agora cannot take it now; try again.').waitFor()
+  assert.equal(await select.getAttribute('data-form-status'), 'pending')
+  assert.equal(await select.locator('[data-state="receipt"]').count(), 0)
+  assert.equal(await select.getByRole('button', { name: 'Answer' }).getAttribute('aria-disabled'), null)
+  assert.ok(await select.getByRole('button', { name: 'Decline' }).isEnabled())
+  await shot(page, 'u111-select-refused')
+  await select.getByRole('button', { name: 'Answer' }).click()
+  await thread(page).getByText('Elicitation: accept {"question_0":"SQLite"}.').waitFor()
+  await thread(page).locator('[data-form="select"][data-form-status="answered"] [data-state="receipt"]').waitFor()
+  // A Question Flow, through the part's interrupt.
+  failing = true
+  await send(page, '/question several')
+  const flow = formCard(page, 'flow')
+  await flow.getByText('1 of 2').waitFor()
+  await flow.getByRole('radio', { name: /PostgreSQL/ }).click()
+  await flow.getByRole('button', { name: 'Next' }).click()
+  await flow.getByRole('checkbox', { name: /Lint/ }).click()
+  await flow.getByRole('button', { name: 'Answer' }).click()
+  await flow.getByRole('alert').getByText('Agora cannot take it now; try again.').waitFor()
+  assert.equal(await flow.getAttribute('data-form-status'), 'pending')
+  assert.equal(await flow.locator('[data-state="receipt"]').count(), 0)
+  await flow.getByText('2 of 2').waitFor()
+  assert.equal(await flow.getByRole('button', { name: 'Answer' }).getAttribute('aria-disabled'), null)
+  assert.ok(await flow.getByRole('button', { name: 'Decline' }).isEnabled())
+  await shot(page, 'u111-flow-refused')
+  await flow.getByRole('button', { name: 'Answer' }).click()
+  await thread(page).getByText('Elicitation: accept {"question_0":"PostgreSQL","question_1":["Lint"]}.').waitFor()
+  await thread(page).locator('[data-form="flow"][data-form-status="answered"] [data-state="receipt"]').waitFor()
   await page.context().close()
 })
