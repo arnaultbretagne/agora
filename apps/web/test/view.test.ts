@@ -1185,8 +1185,16 @@ test('U103 the forms of Claude Code and Codex, as assistant-ui holds them: one q
     ['question_1', 'many', 'Which checks should run before the merge?', 'Checks', 'question_1_custom'],
   ])
   assert.deepEqual(formContent(several, { question_0: ['SQLite'], question_1: ['Lint'] }, { question_1: 'a smoke test' }), { question_0: 'SQLite', question_1: ['Lint'], question_1_custom: 'a smoke test' })
-  // Codex's questions in their order, though the log keeps no member order: `required`'s.
-  const ordered = formOf({ id: 'f', object: { type: 'elicitation', params: requestUserInput(QUESTIONS.several!, 's', 'call_3'), status: 'pending' } } as never)
+  // Codex's questions in their order, though the log keeps no member order — jsonb's, the shorter key first —: `required`'s.
+  const stored = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(stored)
+      : value !== null && typeof value === 'object'
+        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.length - b.length || (a < b ? -1 : 1)).map(([k, v]) => [k, stored(v)]))
+        : value
+  const asked = stored(requestUserInput(QUESTIONS.several!, 's', 'call_3')) as Record<string, unknown>
+  assert.deepEqual(Object.keys((asked.requestedSchema as { properties: object }).properties), ['branch', 'environment', 'environment_note'])
+  const ordered = formOf({ id: 'f', object: { type: 'elicitation', params: asked, status: 'pending' } } as never)
   assert.deepEqual(ordered.questions.map((q) => q.key), ['environment', 'branch'])
   const rollout = formOf({ id: 'f', object: { type: 'elicitation', params: mcpForm('s'), status: 'pending' } } as never)
   assert.deepEqual(rollout.questions.map((q) => [q.key, q.kind, q.required]), [['replicas', 'integer', true], ['canary', 'yes-no', false]])

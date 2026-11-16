@@ -228,6 +228,7 @@ test('L165 a form’s fields, in order, and what fits them: a number within its 
   assert.equal(contentRefusal(params, { replicas: 6 }), 'replicas: out of bounds')
   assert.equal(contentRefusal(params, { replicas: 2.5 }), 'replicas: not an integer')
   assert.equal(contentRefusal(params, { replicas: 1, canary: 'yes' }), 'canary: not true or false')
+  assert.equal(contentRefusal(params, { replicas: 1, db: 'mysql' }), 'db: "mysql" is not one of its options')
   assert.equal(contentRefusal(params, { replicas: 1, checks: ['lint', 'deploy'] }), 'checks: "deploy" is not one of its options')
   assert.equal(contentRefusal(params, { canary: false }), 'replicas: required')
   assert.equal(contentRefusal(params, []), 'not an object')
