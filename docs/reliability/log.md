@@ -43,6 +43,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R35 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own. On the commit that removes the agents' folder: L76 and L79 as the contract now says them. |
 | R36 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. L147, on the server that gives a role its block. |
 | R37 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/permission` asks one and waits. On the commit that makes a pending permission a request of its Workstream's. On `523061a`, each guard of the cases removed in turn — the row's count, the view's `request` and its being put, the native sub-agents left out, Agora's `from` kept and the person's left out, the element's `from` —: its case failed each time. |
+| R38 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the log's 306 tests green; in the browser suite U81 failed once (its next message 179 px lower after the hover), then green alone three times and in the whole suite run again on the same commit. On the commit that answers a permission its agent withdraws and moves the core projector to version 10; the mock agent's `/withdraw` sending `$/cancel_request`. On `30d72de`, the version put back to 9: L157 failed; the withdrawn permission left unanswered: L158 failed. |
 
 ## Cases
 
@@ -239,6 +240,11 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L154 | real: the claim expired, then the execution ended | local | R37 | proven | A sub-stream two levels down, `/permission`: its view's and its row's `request` the request's position, `question` null, its parent's and its root's `below.waiting` 1. Answered: no `request`, 0, 0. Again, its turn cancelled: the permission `answered` by Agora, no `request`, 0, 0. Again, its claim expired: the execution ended, the permission `cancelled`, no `request`, 0, 0. |
 | L155 | — | local | R37 | proven | `/sub` with a permission: its host's row `below.waiting` 1, a permission pending in its host's log; its host's view and row with no `request`. |
 | L156 | — | local | R37 | proven | Agora's Respond with `from` `{ workstream, as: delegator }`: the command written with it; the permission `answered`, `from` that Workstream, `as` `delegator`. The person's with the same `from`: the command written without it; the permission with neither. |
+| L157 | simulated: forced-state — the checkpoints set to version 9 and the view and rows as it left them, by SQL; the bridges' address out of reach at the restart | local | R38 | proven | Rebuilt at start: the delegate's view `request` its request's position, `delegation` `waiting`; its row the same; its delegator's row `waiting` 1; `list_agents` `<id> · /permission · waiting`; its checkpoint at `10`; no `execution.connected` after the restart. |
+| L158 | — | local | R38 | proven | `/withdraw 1`: one `$/cancel_request` received; one answer to its request, `{ outcome: cancelled }`; its permission `answered` with it; no `request`, its parent's `waiting` 0; the agent said `Withdrawn: cancelled.`, its turn `done`. A `$/cancel_request` naming `mock-999`: received, no answer written. |
+| L154 | — | local | R38 | proven | As R37. |
+| L155 | — | local | R38 | proven | As R37. |
+| L156 | — | local | R38 | proven | As R37. |
 
 ## Not covered
 

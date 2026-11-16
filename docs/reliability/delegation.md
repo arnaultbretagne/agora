@@ -22,6 +22,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R14 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own, as R12. On the commit that makes a delegate's role its Create's: D53 to D55 as the contract now says them, D56 as before. |
 | R15 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. D57, its delegator on Claude Code, the role's block given by the log. |
 | R16 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, as R12: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that tells a delegator its delegate's request and gives it `answer_agent`: every case of R14 ran again; D46's test counting only the messages of its Cancel; D58 to D61 new, the delegates' requests the mock agent's `/permission`. On `523061a`, each guard of D58 to D60 removed in turn — `waiting` in the delegate's state, its place among the three, the request told once, the request named, the delegator's `from` —: its case failed each time; the refusal when the log itself answers `stale_permission` after the look, and `delegate_stopped` at that point, were dropped as no case could reach them. |
+| R17 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4, the log's tests all green, as R16: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that answers a permission its agent withdraws: every case of R16 ran again; D62 new. On `30d72de`, the withdrawn permission left unanswered: D62 failed. |
 
 ## Cases
 
@@ -111,6 +112,11 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D60 | — | local | R16 | proven | `allow-always`: `invalid_permission_option`; `the last one`: `invalid_query: request`; another Workstream: `not_a_delegate`; no RespondPermission written. The person answers first: `stale_permission: nothing pending in <id> · /permission 30`, the person's answer alone sent to the agent. Another delegate's request pending, a position not its: `stale_permission: request <n> pending in <id> · /permission`, nothing written. Named as an integer: `answered`; the person's then `stale_permission`. |
 | D46 | — | local | R16 | proven | As R8, the test now counting only the messages of its Cancel: its permission, told to the delegator as any request (D58), is not one; none of the Cancel; the person's Cancel on its next turn told, `as` `agora`, `The person cancelled its turn.` |
 | D61 | real: the delegator's claim expired, twice | local | R16 | proven | The delegator ended, its delegate's last message continued it once; ended again, the delegate asked a permission: a third execution, then a turn whose prompt's last block is the message naming the request. |
+| D62 | — | local | R17 | proven | Told: `list_agents` `<id> · /withdraw 4 · waiting`. Its turn done: one answer to its request, `cancelled`; its row `idle`, no `request`; `list_agents` `<id> · /withdraw 4 · idle`; `answer_agent` on it `stale_permission: nothing pending in <id> · /withdraw 4`; its last message `Withdrawn: cancelled.`; three more `started`. |
+| D58 | simulated: a second engine on the same log, then the first again | local | R17 | proven | As R16. |
+| D59 | — | local | R17 | proven | As R16. |
+| D60 | — | local | R17 | proven | As R16. |
+| D61 | real: the delegator's claim expired, twice | local | R17 | proven | As R16. |
 
 ## Not covered
 
