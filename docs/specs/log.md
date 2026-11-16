@@ -361,7 +361,7 @@ anchors, the dispatch of its prompts, the agent's title, and a delegate's turns'
 
 | Field | Value |
 | --- | --- |
-| `title` | The agent's last `session_info_update` title in the Workstream; otherwise the first line of the first Write's text, at most 80 characters; otherwise "New workstream". |
+| `title` | The agent's last `session_info_update` title in the Workstream, but one that repeats a line of Agora's own — opening `From your delegator`, `From your delegate` or `From Agora,` —; otherwise the first line of the first Write's text, at most 80 characters; otherwise "New workstream". |
 | `state` | Below. |
 | `execution`, `session` | The last execution's id and its open Session's, or null. |
 | `pool`, `harness` | The last execution's, or null. |
