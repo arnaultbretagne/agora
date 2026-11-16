@@ -13,6 +13,7 @@ import { createInterface } from 'node:readline'
 import { connect as tlsConnect } from 'node:tls'
 import { sessionsDir } from './storage.ts'
 import { mockFile } from './file.ts'
+import { ASKS, askTitle, askUserQuestion, mcpForm, QUESTIONS, requestUserInput } from './forms.ts'
 
 type Id = string | number
 interface Message {
@@ -95,11 +96,17 @@ function say(sessionId: string, text: string): void {
 }
 
 function request(method: string, params: Record<string, unknown>): Promise<Message> {
+  return asked(method, params).answer
+}
+
+/** A request, and its id: what a `$/cancel_request` withdrawing it names. */
+function asked(method: string, params: Record<string, unknown>): { id: Id; answer: Promise<Message> } {
   const id = `mock-${String(nextOutgoing++)}`
-  return new Promise((resolve) => {
+  const answer = new Promise<Message>((resolve) => {
     outgoing.set(id, resolve)
     send({ id, method, params })
   })
+  return { id, answer }
 }
 
 function transcriptPath(session: Session): string {
@@ -389,6 +396,60 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       if (await pause(turn, n * 1000)) return 'cancelled'
       remember(session, 'agent', `Done, after ${String(n)} s of silence.`)
       say(session.id, `Done, after ${String(n)} s of silence.`)
+      return 'end_turn'
+    }
+    // A form its harness asks (src/forms.ts, docs/specs/log.md, "Requests"): `/question` as Claude Code — AskUserQuestion
+    // with its tool line, `one`, `multi`, `several`; `mcp`, an MCP server's form —, `/form` as Codex — request_user_input,
+    // `one`, `text`, `secret`, `several`; `auto`, resolved without input after a second, the form withdrawn
+    // (`$/cancel_request`) as Codex does past its `autoResolutionMs`. It waits for the answer, then says what came back.
+    case '/question':
+    case '/form': {
+      const variant = argument ?? 'one'
+      const claude = command === '/question'
+      let toolCallId: string | undefined
+      let params: Record<string, unknown> | undefined
+      if (claude && variant === 'mcp') params = mcpForm(session.id)
+      else if (claude && ASKS[variant]) {
+        const asks = ASKS[variant]!
+        toolCallId = `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: askTitle(asks), kind: 'other', status: 'pending', rawInput: { questions: asks } })
+        params = askUserQuestion(asks, session.id, toolCallId)
+      } else if (!claude && (QUESTIONS[variant] || variant === 'auto'))
+        params = requestUserInput(QUESTIONS[variant] ?? QUESTIONS.one!, session.id, `call_${randomUUID().slice(0, 8)}`, variant === 'auto' ? 1000 : null)
+      if (params === undefined) {
+        say(session.id, `No such form: ${variant}.`)
+        return 'end_turn'
+      }
+      const form = asked('elicitation/create', params)
+      let resolved: () => void = () => undefined
+      const answer = await Promise.race([
+        form.answer,
+        new Promise<null>((resolve) => {
+          turn.wake = () => resolve(null)
+        }),
+        new Promise<'withdrawn'>((resolve) => {
+          resolved = () => resolve('withdrawn')
+          if (variant === 'auto') setTimeout(resolved, 1000)
+        }),
+      ])
+      if (answer === 'withdrawn') {
+        send({ method: '$/cancel_request', params: { requestId: form.id } })
+        remember(session, 'agent', 'Elicitation: resolved without input.')
+        say(session.id, 'Elicitation: resolved without input.')
+        return 'end_turn'
+      }
+      if (answer === null || turn.cancelled) {
+        if (toolCallId) update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' })
+        return 'cancelled'
+      }
+      const result = answer.result as { action?: string; content?: unknown } | undefined
+      const said =
+        answer.error !== undefined
+          ? `Elicitation: error ${JSON.stringify(answer.error)}.`
+          : `Elicitation: ${String(result?.action)}${result?.content !== undefined && result.content !== null ? ` ${JSON.stringify(result.content)}` : ''}.`
+      if (toolCallId) update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: result?.action === 'accept' ? 'completed' : 'failed' })
+      remember(session, 'agent', said)
+      say(session.id, said)
       return 'end_turn'
     }
     case '/permission': {

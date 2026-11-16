@@ -9,9 +9,15 @@ import { Api } from '../src/agora/api.ts'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, foldable, foldOf, labelOf, type Artifact } from '../src/agora/tools.ts'
 import { acceptOf, blockOf, composerAttachments, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
+import { ASKS, askUserQuestion, mcpForm, QUESTIONS, requestUserInput } from '../../../packages/mock-agent/src/forms.ts'
 import {
   accessDefault,
   accessDisplay,
+  approvalAnswer,
+  formContent,
+  formFor,
+  formOf,
+  numberFits,
   accessEntries,
   accessGranted,
   accessLabel,
@@ -1128,4 +1134,75 @@ test('U100 a list row with a request pending, and a delegate waiting on one: wai
   const now = new Date('2026-11-16T12:00:00.000Z')
   assert.deepEqual(sections([{ ...row, state: 'none' }], now, '', null).flatMap((s) => s.workstreams.map((w) => w.id)), ['a'])
   assert.deepEqual(sections([{ ...row, state: 'none', request: null }], now, '', null), [])
+})
+
+// ---------------------------------------------------------------- forms (docs/specs/assistant-ui.md, "Forms")
+
+test('U103 the forms of Claude Code and Codex, as assistant-ui holds them: one question of options — its “Other” folded in — an approval `select`, free-form; one text an approval `text`; one multi-select and several questions an interrupt; a number and a yes/no; settled; a secret form, nothing to answer; what each answer gives', () => {
+  const formPart = (params: Record<string, unknown>, extra: Record<string, unknown> = {}, tool = false) => {
+    const toolCallId = typeof params.toolCallId === 'string' ? params.toolCallId : undefined
+    const state = crafted([
+      turnObject('in_progress'),
+      ...(tool && toolCallId ? [{ kind: 'element', id: 'tool', object: { type: 'tool', turn: 't', session: 's', toolCallId, title: 'Which database should the service use?', kind: 'other', status: 'pending', firstPosition: '2' } }] : []),
+      { kind: 'element', id: 'form', object: { type: 'elicitation', turn: 't', session: 's', execution: 'e', requestId: 'mock-1', requestPosition: '3', params, status: 'pending', firstPosition: '3', ...extra } },
+    ])
+    const message = messagesOf(state).find((m) => m.role === 'assistant')!
+    const parts = message.content as unknown as (QuestionPart & { interrupt?: { type: string; payload: unknown }; toolCallId?: string })[]
+    return { part: parts.find((p) => p.type === 'tool-call')!, parts, message, state }
+  }
+  type Held = { display?: string; options?: { id: string; kind: string; label: string }[]; allowFreeform?: boolean; dismissible?: boolean; approved?: boolean; optionId?: string; text?: string; resolution?: string }
+  // Claude Code, one question: on its AskUserQuestion line, an approval of options, its "Other" free-form.
+  const one = formPart(askUserQuestion(ASKS.one!, 's', 'toolu_1'), {}, true)
+  assert.equal(one.parts.length, 1, 'its own tool line holds it')
+  const held = one.part.approval as unknown as Held
+  assert.deepEqual([held.display, held.allowFreeform, held.dismissible, held.options?.map((o) => [o.id, o.kind])], ['select', true, true, [['PostgreSQL', '_option'], ['SQLite', '_option']]])
+  assert.equal(one.part.artifact?.form?.shape, 'select')
+  assert.deepEqual(one.message.status, { type: 'requires-action', reason: 'tool-calls' })
+  const form = one.part.artifact!.form!
+  assert.deepEqual(approvalAnswer(form, { approved: true, optionId: 'SQLite', text: 'for the tests' }), { action: 'accept', content: { question_0: 'SQLite', question_0_custom: 'for the tests' } })
+  assert.deepEqual(approvalAnswer(form, { approved: true, text: 'MySQL' }), { action: 'accept', content: { question_0_custom: 'MySQL' } })
+  assert.deepEqual(approvalAnswer(form, { approved: false }), { action: 'decline' })
+  // Codex, one question: its field holds its question, required; "None of the above" and its note.
+  const codex = formOf({ id: 'f', object: { type: 'elicitation', params: requestUserInput(QUESTIONS.one!, 's', 'call_1'), status: 'pending' } } as never)
+  assert.deepEqual([codex.shape, codex.questions[0]?.question, codex.questions[0]?.required, codex.questions[0]?.other, codex.questions[0]?.options.map((o) => o.id)], ['select', 'Which environment should I deploy to?', true, 'environment_note', ['Staging', 'Production', 'None of the above']])
+  // One text: an approval `text`.
+  const text = formPart(requestUserInput(QUESTIONS.text!, 's', 'call_2'))
+  assert.deepEqual([(text.part.approval as unknown as Held).display, text.part.artifact?.form?.shape], ['text', 'text'])
+  assert.deepEqual(approvalAnswer(text.part.artifact!.form!, { approved: true, text: 'main' }), { action: 'accept', content: { branch: 'main' } })
+  // One multi-select, several questions, a number and a yes/no: interrupts, answered by `resume`.
+  for (const [params, shape] of [
+    [askUserQuestion(ASKS.multi!, 's', 'toolu_2'), 'list'],
+    [askUserQuestion(ASKS.several!, 's', 'toolu_3'), 'flow'],
+    [requestUserInput(QUESTIONS.several!, 's', 'call_3'), 'flow'],
+    [mcpForm('s'), 'flow'],
+  ] as const) {
+    const { part, message } = formPart(params)
+    assert.deepEqual([part.artifact?.form?.shape, part.approval, part.interrupt?.type, message.status], [shape, undefined, 'human', { type: 'requires-action', reason: 'interrupt' }])
+  }
+  const several = formOf({ id: 'f', object: { type: 'elicitation', params: askUserQuestion(ASKS.several!, 's', 'toolu_3'), status: 'pending' } } as never)
+  assert.deepEqual(several.questions.map((q) => [q.key, q.kind, q.question, q.label, q.other]), [
+    ['question_0', 'one', 'Which database should the service use?', 'Database', 'question_0_custom'],
+    ['question_1', 'many', 'Which checks should run before the merge?', 'Checks', 'question_1_custom'],
+  ])
+  assert.deepEqual(formContent(several, { question_0: ['SQLite'], question_1: ['Lint'] }, { question_1: 'a smoke test' }), { question_0: 'SQLite', question_1: ['Lint'], question_1_custom: 'a smoke test' })
+  // Codex's questions in their order, though the log keeps no member order: `required`'s.
+  const ordered = formOf({ id: 'f', object: { type: 'elicitation', params: requestUserInput(QUESTIONS.several!, 's', 'call_3'), status: 'pending' } } as never)
+  assert.deepEqual(ordered.questions.map((q) => q.key), ['environment', 'branch'])
+  const rollout = formOf({ id: 'f', object: { type: 'elicitation', params: mcpForm('s'), status: 'pending' } } as never)
+  assert.deepEqual(rollout.questions.map((q) => [q.key, q.kind, q.required]), [['replicas', 'integer', true], ['canary', 'yes-no', false]])
+  assert.deepEqual([numberFits(rollout.questions[0]!, '3'), numberFits(rollout.questions[0]!, '9'), numberFits(rollout.questions[0]!, '2.5')], [true, false, false])
+  assert.deepEqual(formContent(rollout, { canary: ['true'] }, { replicas: '3' }), { replicas: 3, canary: true })
+  // Settled: accepted, declined, cancelled; a secret form, Agora's decline, nothing to answer.
+  const settle = (extra: Record<string, unknown>) => formPart(askUserQuestion(ASKS.one!, 's', 'toolu_1'), extra, true).part.approval as unknown as Held
+  const accepted = settle({ status: 'answered', answer: { action: 'accept', content: { question_0: 'SQLite', question_0_custom: 'for the tests' } } })
+  assert.deepEqual([accepted.approved, accepted.optionId, accepted.text], [true, 'SQLite', 'for the tests'])
+  assert.deepEqual(settle({ status: 'answered', answer: { action: 'decline' } }).approved, false)
+  assert.equal(settle({ status: 'answered', answer: { action: 'cancel' } }).resolution, 'cancelled')
+  assert.equal(settle({ status: 'cancelled' }).resolution, 'cancelled')
+  const secret = formPart(requestUserInput(QUESTIONS.secret!, 's', 'call_4'), { declined: 'secret' })
+  assert.deepEqual([secret.part.artifact?.form?.declined, secret.part.interrupt, (secret.part.approval as unknown as Held | undefined)?.approved, secret.message.status], ['secret', undefined, false, { type: 'running' }])
+  // The pending form a part's `resume` answers, by the tool call it names.
+  assert.equal(formFor(formPart(askUserQuestion(ASKS.several!, 's', 'toolu_3')).state, 'toolu_3')?.id, 'form')
+  // A form names the composer's reason.
+  assert.equal(composerOf(one.state, { ...workstreamOf(one.state, MESSAGES_WS), state: 'ready' }).reason, 'Answer the question above.')
 })

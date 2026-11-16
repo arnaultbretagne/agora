@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
 import { diffStats, foldOf, labelOf, unanswered, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
 import { harnessName, type Gate, type MergeCard } from '../agora/view.ts'
+import { FormCard } from './form.tsx'
 import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
 
@@ -276,9 +277,11 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   )
 }
 
-export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval, respondToApproval }) => {
+export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval, respondToApproval, resume }) => {
   const a = (artifact ?? {}) as Artifact
   if (a.merge) return <MergeBox card={a.merge} respond={respondToApproval} />
+  // A form is its own box, its tool line's place included (docs/specs/assistant-ui.md, "Forms").
+  if (a.form) return <FormCard form={a.form} respond={respondToApproval} resume={resume} />
   if (a.delegate || a.gate)
     return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} respond={respondToApproval} />
   const ask = approval as Approval | undefined

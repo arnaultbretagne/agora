@@ -1002,7 +1002,7 @@ test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alo
     ['send_message', undefined, ['to', 'message'], ['to', 'message']],
     ['stop_agent', undefined, ['to'], ['to']],
     ['list_agents', true, [], undefined],
-    ['answer_agent', undefined, ['to', 'request', 'option'], ['to', 'request', 'option']],
+    ['answer_agent', undefined, ['to', 'request', 'option', 'content', 'decline'], ['to', 'request']],
   ])
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 3', harness: 'mock' } })))
   // As its Session opens: what a harness listing its tools once is given (Codex); nothing of it depends on its instructions.
@@ -1490,4 +1490,100 @@ test('D61 a delegate’s agent asking a permission while its delegator’s execu
     return state.executions.size === 3 && (await prompts(lab, ws)).length === 2 && [...state.turns.values()].at(-1)?.status === 'done'
   }, 30_000)
   assert.equal(blocksOf((await prompts(lab, ws)).at(-1)!).at(-1)!.text, requestNotice(delegate, '/sleep 4', request!.position))
+})
+
+// ---------------------------------------------------------------- forms (docs/specs/delegation.md, "Requests")
+
+/** The delegate's form pending, as the log holds it. */
+const formIn = (lab: Lab, delegate: string) =>
+  until('its form', async () => [...(await lab.state(delegate)).permissions.values()].find((p) => p.method === 'elicitation/create'), 20_000)
+/** What its agent was answered. */
+const answersIn = async (lab: Lab, delegate: string, request: Entry) => lines(await lab.entries(delegate), 'out').filter((x) => x.request_position === request.position).map((x) => x.content.result)
+
+test('D62 a delegate’s agent asking a form — Claude Code’s AskUserQuestion, two questions —: one message of Agora’s in its delegator’s Workstream, the form’s message, each field in order with its options, how to answer; the delegate waiting; answer_agent with content that fits: answered; one RespondElicitation naming the delegator; the agent given that content; its last message back', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/question several', harness: 'mock' } })))
+  const [notice] = await manyFromOthers(lab, ws, 1, 20_000)
+  const form = await formIn(lab, delegate)
+  assert.deepEqual([notice?.from, notice?.as], [delegate, 'agora'])
+  assert.equal(
+    wordsOf(notice!),
+    [
+      `Your delegate ${delegate} "/question several": it waits for an answer to its request ${form.position}: a form.`,
+      '',
+      'Asked: Please answer the following questions.',
+      '',
+      'Fields:',
+      '- `question_0` (one of the options below): Database — Which database should the service use?',
+      '  - `PostgreSQL`: Managed and durable; the team runs it already',
+      '  - `SQLite`: One file next to the service',
+      '- `question_0_custom` (text): Other — Type your own answer, or add a note to the option you chose above (optional).',
+      '- `question_1` (any of the options below): Checks — Which checks should run before the merge?',
+      '  - `Lint`',
+      '  - `Unit tests`: A minute',
+      '  - `Browser tests`: Ten minutes',
+      '- `question_1_custom` (text): Other — Type your own answer to add to your selection above (optional).',
+      '',
+      `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${form.position}, \`content\` an object giving each field you fill its value (each required one at least), or \`decline\` true to refuse it. If it is not, ask the person, who can answer it in that delegate's thread.`,
+    ].join('\n'),
+  )
+  assert.equal(text(await c.callTool({ name: 'list_agents', arguments: {} })), `${delegate} · /question several · waiting`)
+  const content = { question_0: 'PostgreSQL', question_1: ['Lint', 'Unit tests'] }
+  assert.equal(text(await c.callTool({ name: 'answer_agent', arguments: { to: delegate, request: form.position, content } })), `answered ${delegate} · /question several`)
+  const responds = (await kinds(lab, delegate, 'command')).filter((x) => x.content.kind === 'RespondElicitation')
+  assert.deepEqual(responds.map((x) => object(x.content.body)), [{ requestId: form.rpc_id, action: 'accept', content, from: { workstream: ws, as: 'delegator' } }])
+  assert.deepEqual(await answersIn(lab, delegate, form), [{ action: 'accept', content }])
+  const [answered] = await projected(lab, delegate, 'elicitation', (e) => e.status === 'answered')
+  assert.deepEqual([answered?.from, answered?.as], [ws, 'delegator'])
+  await lab.turn(delegate, 'done', 20_000)
+  const back = await until('its last message', async () => (await fromOthers(lab, ws)).find((u) => u.as === 'delegate'))
+  assert.equal(wordsOf(back), `Elicitation: accept ${JSON.stringify({ question_0: 'PostgreSQL', question_1: ['Lint', 'Unit tests'] })}.`)
+})
+
+test('D63 answer_agent on a delegate’s form: an option not offered, a field it has not, a required field left out, `option` instead of content, no content, then declined; then the person; and a Codex form left to the person: invalid_elicitation_content naming the field, invalid_query, nothing written; declined, one decline; the person’s stale; the person answering first, the delegator’s stale_permission', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const call = async (args: Record<string, unknown>) => (await c.callTool({ name: 'answer_agent', arguments: args })) as Text
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/form several', harness: 'mock' } })))
+  await manyFromOthers(lab, ws, 1, 20_000)
+  const form = await formIn(lab, delegate)
+  const refusals: [Record<string, unknown>, string][] = [
+    [{ content: { environment: 'Moon', branch: 'main' } }, 'invalid_elicitation_content: environment: "Moon" is not one of its options'],
+    [{ content: { environment: 'Staging', branch: 'main', region: 'eu' } }, 'invalid_elicitation_content: region: not a field of the form'],
+    [{ content: { environment: 'Staging' } }, 'invalid_elicitation_content: branch: required'],
+    [{ option: 'Staging' }, 'invalid_query: option'],
+    [{}, 'invalid_query: content'],
+  ]
+  for (const [args, refused] of refusals) {
+    const answer = await call({ to: delegate, request: form.position, ...args })
+    assert.deepEqual([answer.isError, text(answer)], [true, refused], JSON.stringify(args))
+  }
+  const responds = async (who: string) => (await kinds(lab, who, 'command')).filter((x) => x.content.kind === 'RespondElicitation').length
+  assert.equal(await responds(delegate), 0, 'nothing written')
+  assert.equal(text(await call({ to: delegate, request: form.position, decline: true })), `declined ${delegate} · /form several`)
+  assert.deepEqual(await answersIn(lab, delegate, form), [{ action: 'decline' }])
+  const e = (await lab.state(delegate)).current!
+  const person = await lab.command(delegate, 'RespondElicitation', { execution: e.id, session: form.session, requestPosition: form.position }, { requestId: form.rpc_id, action: 'decline' })
+  assert.deepEqual(person, { accepted: false, reason: 'stale_elicitation' })
+  // The person first, on another delegate's: the delegator's answer is stale, and says what waits.
+  const other = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/form', harness: 'mock' } })))
+  const asked = await formIn(lab, other)
+  const o = (await lab.state(other)).current!
+  assert.ok((await lab.command(other, 'RespondElicitation', { execution: o.id, session: asked.session, requestPosition: asked.position }, { requestId: asked.rpc_id, action: 'accept', content: { environment: 'Staging' } })).accepted)
+  const late = await call({ to: other, request: asked.position, content: { environment: 'Production' } })
+  assert.deepEqual([late.isError, text(late)], [true, `stale_permission: nothing pending in ${other} · /form`])
+  assert.deepEqual(await answersIn(lab, other, asked), [{ action: 'accept', content: { environment: 'Staging' } }])
+})
+
+test('D64 a delegate’s agent asking a form Agora declines — a secret field —: declined at once; nothing told to its delegator; the delegate never waiting', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/form secret', harness: 'mock' } })))
+  await lab.turn(delegate, 'done', 20_000)
+  const form = (await lab.entries(delegate)).find((x) => x.method === 'elicitation/create')!
+  assert.deepEqual(await answersIn(lab, delegate, form), [{ action: 'decline' }])
+  const back = await until('its last message', async () => (await fromOthers(lab, ws)).find((u) => u.as === 'delegate'), 20_000)
+  assert.equal(wordsOf(back), 'Elicitation: decline.')
+  assert.equal((await fromOthers(lab, ws)).filter((u) => /: it waits for an answer to its request /.test(wordsOf(u))).length, 0)
 })

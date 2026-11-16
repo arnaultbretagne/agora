@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
+import { contentRefusal, fieldsText } from './forms.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
@@ -88,11 +89,22 @@ const endOf = (e: Execution): string | null =>
   e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
 
 /**
- * What a delegate's request asks, as its delegator reads it (docs/specs/delegation.md, "Requests"): its number, the
- * tool call and its kind, each option, and how to answer it.
+ * What a delegate's request asks, as its delegator reads it (docs/specs/delegation.md, "Requests"): its number; for a
+ * permission, the tool call and its kind, each option; for a form, its message and each field; and how to answer it.
  */
 function requestText(delegate: string, request: Entry): string {
   const params = object(request.content.params)
+  if (request.method === 'elicitation/create')
+    return [
+      `it waits for an answer to its request ${request.position}: a form.`,
+      '',
+      `Asked: ${typeof params?.message === 'string' && params.message.trim() !== '' ? params.message.trim() : 'a form'}`,
+      '',
+      'Fields:',
+      ...fieldsText(params),
+      '',
+      `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${request.position}, \`content\` an object giving each field you fill its value (each required one at least), or \`decline\` true to refuse it. If it is not, ask the person, who can answer it in that delegate's thread.`,
+    ].join('\n')
   const call = object(params?.toolCall)
   const title = typeof call?.title === 'string' && call.title.trim() !== '' ? call.title.trim() : 'a tool call'
   const kind = typeof call?.kind === 'string' && call.kind !== '' ? ` (${call.kind})` : ''
@@ -436,14 +448,16 @@ export class Delegations {
   }
 
   /**
-   * docs/specs/delegation.md, "Requests": a request one of the caller's delegates waits on, answered with the option the
-   * caller chose, by a Respond to a permission of Agora's that names it. Whoever answers first, the person included, wins.
+   * docs/specs/delegation.md, "Requests": a request one of the caller's delegates waits on, answered as the caller chose —
+   * a permission with one of its options, a form with its content or declined — by a Respond of Agora's that names it.
+   * Whoever answers first, the person included, wins.
    */
   async answer(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
     if (typeof args.to !== 'string' || args.to.trim() === '') throw new Refused('invalid_query: to')
     const named = typeof args.request === 'number' && Number.isSafeInteger(args.request) ? String(args.request) : typeof args.request === 'string' ? args.request.trim() : ''
     if (!/^[1-9][0-9]*$/.test(named)) throw new Refused('invalid_query: request')
-    if (typeof args.option !== 'string' || args.option === '') throw new Refused('invalid_query: option')
+    if (args.option !== undefined && (typeof args.option !== 'string' || args.option === '')) throw new Refused('invalid_query: option')
+    if (args.decline !== undefined && typeof args.decline !== 'boolean') throw new Refused('invalid_query: decline')
     const to = args.to.trim().toLowerCase()
     await this.mine(caller, to)
     const title = await this.titleOf(to)
@@ -452,6 +466,29 @@ export class Delegations {
     // Not that request: what waits there now, so that the caller knows where it stands.
     if (request === undefined)
       throw new Refused(`stale_permission: ${pending.length === 0 ? 'nothing pending' : `request ${pending.map((r) => r.position).join(', ')} pending`} in ${to} · ${title}`)
+    // A form: accepted with its content, or declined (docs/specs/delegation.md, "Requests").
+    if (request.method === 'elicitation/create') {
+      if (args.option !== undefined) throw new Refused('invalid_query: option')
+      const decline = args.decline === true
+      if (!decline && object(args.content) === null) throw new Refused('invalid_query: content')
+      if (decline && args.content !== undefined) throw new Refused('invalid_query: content')
+      const refusal = decline ? null : contentRefusal(request.content.params, args.content)
+      if (refusal !== null) throw new Refused(`invalid_elicitation_content: ${refusal}`)
+      const given = await this.workstreams.command(
+        to,
+        {
+          id: randomUUID(),
+          kind: 'RespondElicitation',
+          target: { execution: request.execution, session: request.session, requestPosition: request.position },
+          body: { requestId: request.rpc_id, action: decline ? 'decline' : 'accept', ...(decline ? {} : { content: args.content }), from: { workstream: caller.workstream, as: 'delegator' } },
+        },
+        'agora',
+      )
+      if (given.accepted) return `${decline ? 'declined' : 'answered'} ${to} · ${title}`
+      throw new Refused(String(given.reason ?? 'unavailable'))
+    }
+    if (typeof args.option !== 'string') throw new Refused('invalid_query: option')
+    if (args.content !== undefined || args.decline !== undefined) throw new Refused(`invalid_query: ${args.content !== undefined ? 'content' : 'decline'}`)
     const answered = await this.workstreams.command(
       to,
       {

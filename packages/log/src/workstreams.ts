@@ -35,6 +35,7 @@ import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
+import { contentRefusal, declinedBy } from './forms.ts'
 import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -477,15 +478,30 @@ export class Workstreams implements Handler {
             ...(origin === 'agora' || _from === undefined ? {} : { body: own }),
           }
         }
-        const permission = state.permissions.get(`in:${idKey(command.body.requestId)}`)
-        if (
-          !permission ||
-          permission.execution !== current.id ||
-          permission.session !== current.session ||
-          command.target.session !== permission.session ||
-          command.target.requestPosition !== permission.position
-        )
-          return 'stale_permission'
+        const asked = state.permissions.get(`in:${idKey(command.body.requestId)}`)
+        const exact =
+          asked !== undefined &&
+          asked.execution === current.id &&
+          asked.session === current.session &&
+          command.target.session === asked.session &&
+          command.target.requestPosition === asked.position
+        // docs/specs/log.md, "Commands": an elicitation shown to whoever answers, accepted with what fits its form, or declined.
+        if (command.kind === 'RespondElicitation') {
+          if (!exact || asked.method !== 'elicitation/create' || declinedBy(asked.content.params) !== null) return 'stale_elicitation'
+          const action = command.body.action
+          if (action !== 'accept' && action !== 'decline') return 'invalid_elicitation_content'
+          if (action === 'decline' && command.body.content !== undefined) return 'invalid_elicitation_content'
+          if (action === 'accept' && contentRefusal(asked.content.params, command.body.content) !== null) return 'invalid_elicitation_content'
+          const { from: by, ...rest } = command.body
+          return {
+            execution: current.id,
+            session: asked.session ?? undefined,
+            line: { id: asked.rpc_id, result: action === 'accept' ? { action, content: command.body.content ?? {} } : { action } },
+            ...(origin === 'agora' || by === undefined ? {} : { body: rest }),
+          }
+        }
+        if (!exact || asked.method !== 'session/request_permission') return 'stale_permission'
+        const permission = asked
         const outcome = object(command.body.outcome),
           options = object(permission.content.params)?.options
         if (outcome?.outcome === 'selected' && (!Array.isArray(options) || !options.some((o) => object(o)?.optionId === outcome.optionId)))
@@ -777,6 +793,11 @@ export class Workstreams implements Handler {
         )
       state = await this.store.state(workstream)
     }
+    // An elicitation Agora does not show — not a form, an async question, a secret field — is declined by Agora at once (docs/specs/log.md, "Requests").
+    for (const asked of [...state.permissions.values()])
+      if (asked.execution === e.id && asked.method === 'elicitation/create' && declinedBy(asked.content.params) !== null)
+        await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { id: asked.rpc_id, result: { action: 'decline' } }, asked.session ?? undefined))
+    state = await this.store.state(workstream)
     for (const entry of [...state.outbox.values()]) {
       if (entry.execution !== e.id) continue
       if (state.attempts.has(entry.position) || state.failures.has(entry.position)) continue
@@ -837,8 +858,9 @@ export class Workstreams implements Handler {
   }
 
   /**
-   * ACP: once `session/cancel` is sent, every pending permission of the session cancelled is answered `cancelled` — a
-   * native sub-agent's own when it is the one cancelled, the Session's and none of its sub-agents' otherwise.
+   * ACP: once `session/cancel` is sent, every pending request of the session cancelled is answered — a permission
+   * `cancelled`, an elicitation `cancel` —, a native sub-agent's own when it is the one cancelled, the Session's and none
+   * of its sub-agents' otherwise.
    */
   private async cancelPermissions(workstream: string, execution: string, connection: string, acpId: string): Promise<void> {
     const state = await this.store.state(workstream)
@@ -847,7 +869,11 @@ export class Workstreams implements Handler {
       const asked = String(object(permission.content.params)?.sessionId)
       if (state.children.has(acpId) ? asked !== acpId : state.children.has(asked)) continue
       const line = await this.store.transaction(workstream, (tx) =>
-        tx.outgoing(execution, { id: permission.rpc_id, result: { outcome: { outcome: 'cancelled' } } }, permission.session ?? undefined),
+        tx.outgoing(
+          execution,
+          { id: permission.rpc_id, result: permission.method === 'elicitation/create' ? { action: 'cancel' } : { outcome: { outcome: 'cancelled' } } },
+          permission.session ?? undefined,
+        ),
       )
       const entry = (await this.store.entries(workstream)).find((x) => x.position === line.position)
       if (entry) await this.dispatch(workstream, entry, connection)
@@ -936,7 +962,12 @@ export class Workstreams implements Handler {
         tx.outgoing(e.id, {
           method: 'initialize',
           // `subagents`: each sub-agent its harness starts is announced, and speaks under a session id of its own (docs/specs/log.md, "Native sub-agents").
-          params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, subagents: {} }, clientInfo: { name: 'agora', version: '1' } },
+          // `elicitation.form`: its agent may ask a form, a request as a permission is (docs/specs/log.md, "Requests").
+          params: {
+            protocolVersion: 1,
+            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, subagents: {}, elicitation: { form: {} } },
+            clientInfo: { name: 'agora', version: '1' },
+          },
         }),
       )
       return
@@ -1011,7 +1042,7 @@ export class Workstreams implements Handler {
         (x) => x.direction === 'out' && ['response', 'error'].includes(x.rpc_kind ?? '') && x.request_position === entry.request_position,
       )
       const stalePermission =
-        entry.correlated_method === 'session/request_permission' &&
+        ['session/request_permission', 'elicitation/create'].includes(entry.correlated_method ?? '') &&
         (!permission || first?.position !== entry.position || state.requests.get(`in:${idKey(entry.rpc_id)}`)?.position !== permission.position)
       if (staleCancel || stalePermission) {
         await tx.append({

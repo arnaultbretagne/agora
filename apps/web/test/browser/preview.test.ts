@@ -1,4 +1,4 @@
-// docs/specs/preview.md, acceptance cases V2 to V6, V8: the server started as a preview, and its client in a real
+// docs/specs/preview.md, acceptance cases V2 to V6, V8, V9: the server started as a preview, and its client in a real
 // browser (Playwright's Chromium) behind the headers of the previews' two gates.
 //
 // Two ways to run it:
@@ -45,10 +45,12 @@ const GATEWAY_GATE = {
 }
 
 /**
- * The conversations an empty database gets: each mark of the mock's history, the three real harnesses', and a
- * delegation — its delegator listed, its delegate under it.
+ * The conversations an empty database gets: each mark of the mock's history, the three real harnesses', a
+ * delegation — its delegator listed, its delegate under it —, and two conversations waiting on a form.
  */
-const SEEDED = { total: 13, listed: 12, mock: 9, harnesses: ['claude-code', 'codex', 'opencode'] }
+const SEEDED = { total: 15, listed: 14, mock: 11, harnesses: ['claude-code', 'codex', 'opencode'] }
+/** The conversations waiting on a form: one question of options, and two questions. */
+const FORMS = { select: 'Pick the service’s database', flow: 'Plan the release checks' }
 /** The delegation's delegator, by its title. */
 const DELEGATOR = 'Ship the release notes'
 
@@ -277,6 +279,38 @@ test('V8 the delegation among the conversations: its delegator waiting for you, 
     await page.locator('main').getByText('Permission: allow-once.').waitFor()
     await until('waiting no more', async () => (await mine.getByText('waiting for you').count()) === 0)
     assert.equal(await page.getByText('asks before it goes on').count(), 0)
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('V9 the forms among the conversations: one waiting on a question of options, its select card; one waiting on two questions, its Question Flow; a form the mock agent asks live, answered through its card', async (t) => {
+  const url = await target(t)
+  const page = await behind(BROWSER_GATE)
+  try {
+    await page.goto(`${url}/`)
+    const nav = page.getByRole('navigation', { name: 'Workstreams' })
+    for (const [shape, title] of Object.entries(FORMS)) {
+      const row = nav.locator('button[title]').filter({ hasText: title })
+      await row.getByText('waiting for you').waitFor()
+      await row.click()
+      const card = page.locator(`main [data-form="${shape}"][data-form-status="pending"]`)
+      await card.getByText('waiting for you').waitFor()
+      assert.match(await card.innerText(), /Which database should the service use\?[\s\S]*PostgreSQL[\s\S]*SQLite/)
+      if (shape === 'flow') await card.getByText('1 of 2').waitFor()
+    }
+    // A form asked live, in a conversation of the person's.
+    await page.goto(`${url}/`)
+    await page.getByRole('button', { name: 'Harness' }).click()
+    await page.getByRole('menuitem', { name: /Mock agent/ }).click()
+    await send(page, '/question')
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    const card = page.locator('main [data-form="select"]')
+    await card.getByText('waiting for you').waitFor()
+    await card.getByRole('radio', { name: /PostgreSQL/ }).click()
+    await card.getByRole('button', { name: 'Answer' }).click()
+    await page.locator('main').getByText('Elicitation: accept {"question_0":"PostgreSQL"}.').waitFor()
+    await page.locator('main [data-form="select"][data-form-status="answered"]').waitFor()
   } finally {
     await page.context().close()
   }

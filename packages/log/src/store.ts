@@ -53,7 +53,7 @@ export type Answer =
   | { accepted: false; reason: string }
 export interface Command {
   id: string
-  kind: 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Ask' | 'Answer'
+  kind: 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'RespondElicitation' | 'Configure' | 'Scope' | 'Stop' | 'Ask' | 'Answer'
   target: Record<string, unknown>
   body: Record<string, unknown>
 }

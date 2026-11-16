@@ -15,8 +15,11 @@ import type { Connection } from './stream.ts'
 import {
   accessDefault,
   accessGranted,
+  approvalAnswer,
   composerOf,
   delegatesOf,
+  formFor,
+  formOf,
   messagesOf,
   poolOffered,
   poolLimits,
@@ -32,6 +35,7 @@ import {
   type AccountLimits,
   type AgentCommand,
   type Composer,
+  type FormAnswer,
   type Picks,
   type Role,
   type Setting,
@@ -283,29 +287,64 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   )
 
   /**
-   * An approval answered from its card (docs/specs/assistant-ui.md, "Answering"): assistant-ui's `respondToApproval` checks
-   * it against the part's approval and hands it here. A permission goes to its agent; a question of Agora's — an approval,
-   * a merge card, a question with its note as the answer's text — to the log.
+   * A form answered (docs/specs/assistant-ui.md, "Forms"): RespondElicitation, accepted with its content or declined; a
+   * native sub-stream's sent to its host.
    */
-  const answer = useCallback(
-    async ({ approvalId, optionId, text }: { approvalId: string; optionId?: string; text?: string }) => {
-      const permission = state.objects.get(approvalId)?.object
-      if (!permission || optionId === undefined) return
-      // A question to the person is answered to the log, not to an agent (docs/specs/log.md, "Commands").
-      if (permission.type === 'question') {
-        await send('Answer', { question: permission.position }, { optionId, ...(text ? { note: text } : {}) })
-        return
-      }
-      // A native sub-stream's permission is answered through its host (docs/specs/log.md, "Native sub-agents").
+  const respondForm = useCallback(
+    async (elementId: string, given: FormAnswer) => {
+      const form = state.objects.get(elementId)?.object
+      if (!form) return
       await send(
-        'RespondPermission',
-        { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
-        { requestId: permission.requestId, outcome: { outcome: 'selected', optionId } },
+        'RespondElicitation',
+        { execution: form.execution, session: form.session, requestPosition: form.requestPosition },
+        { requestId: form.requestId, ...given },
         view.native?.host ?? id,
         id,
       )
     },
     [state, send, view.native, id],
+  )
+
+  /**
+   * An approval answered from its card (docs/specs/assistant-ui.md, "Answering"): assistant-ui's `respondToApproval` checks
+   * it against the part's approval and hands it here. A permission goes to its agent; a form of one option or one text,
+   * as its content; a question of Agora's — an approval, a merge card, a question with its note as the answer's text —
+   * to the log.
+   */
+  const answer = useCallback(
+    async ({ approvalId, approved, optionId, text }: { approvalId: string; approved: boolean; optionId?: string; text?: string }) => {
+      const permission = state.objects.get(approvalId)
+      if (permission?.object.type === 'elicitation') {
+        await respondForm(approvalId, approvalAnswer(formOf(permission), { approved, ...(optionId !== undefined ? { optionId } : {}), ...(text !== undefined ? { text } : {}) }))
+        return
+      }
+      if (!permission || optionId === undefined) return
+      // A question to the person is answered to the log, not to an agent (docs/specs/log.md, "Commands").
+      if (permission.object.type === 'question') {
+        await send('Answer', { question: permission.object.position }, { optionId, ...(text ? { note: text } : {}) })
+        return
+      }
+      // A native sub-stream's permission is answered through its host (docs/specs/log.md, "Native sub-agents").
+      await send(
+        'RespondPermission',
+        { execution: permission.object.execution, session: permission.object.session, requestPosition: permission.object.requestPosition },
+        { requestId: permission.object.requestId, outcome: { outcome: 'selected', optionId } },
+        view.native?.host ?? id,
+        id,
+      )
+    },
+    [state, send, respondForm, view.native, id],
+  )
+
+  /** A form answered by its part's `resume` (docs/specs/assistant-ui.md, "Forms"): the tool call it names gives the form. */
+  const resume = useCallback(
+    ({ toolCallId, payload }: { toolCallId: string; payload: unknown }) => {
+      const form = formFor(state, toolCallId)
+      const given = payload as FormAnswer
+      if (form === null || (given.action !== 'accept' && given.action !== 'decline')) return
+      void respondForm(form.id, given)
+    },
+    [state, respondForm],
   )
 
   /** Cancel, for the turn in progress or uncertain: a native sub-stream's goes through its host, with that turn's execution. */
@@ -435,6 +474,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     adapters: { attachments },
     onCancel: cancel,
     onRespondToToolApproval: answer,
+    onResumeToolCall: resume,
   })
 
   // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
