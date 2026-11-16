@@ -1,4 +1,4 @@
-// docs/specs/log.md, "HTTP": the caller's account, and its agents' folder — the real server
+// docs/specs/log.md, "HTTP": the caller's account and its list — the real server
 // (apps/server/src/main.ts), the proxy's identity sent as its header.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
