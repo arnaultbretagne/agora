@@ -252,13 +252,13 @@ export class PreviewKube implements KubeApi {
     return copy(claim)
   }
 
+  /** The one pool, always ready: its sandboxes are made when a claim comes, none waits warm. */
   async listPools(): Promise<Pool[]> {
-    const ready = Math.max(0, 2 - [...this.claims.values()].filter((c) => c.metadata.deletionTimestamp === undefined).length)
     return [
       {
         metadata: { name: POOL, uid: POOL, labels: { [HARNESS_LABEL]: POOL }, annotations: { [SESSION_CONFIG_ANNOTATION]: 'mode=full-access' } },
         spec: { replicas: 2, sandboxTemplateRef: { name: POOL } },
-        status: { replicas: 2, readyReplicas: Math.max(ready, 1) },
+        status: { replicas: 2, readyReplicas: 2 },
       },
     ]
   }
