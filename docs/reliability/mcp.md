@@ -17,6 +17,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R9 | 2026-11-12 | `2a50031` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M13 against the MCP server on a port of its own, the engine holding two roles of the test's own, then none; Agora's cards read from `apps/flows/roles`. |
 | R10 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; M13 as R9, the roles the log's own and Agora's cards read from `roles`. |
 | R11 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP SDK's own client, as R7. On the commit that adds `answer_agent`. |
+| R12 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 as R11. On the commit where `answer_agent` takes a form's `content` or `decline`. |
 
 ## Cases
 
@@ -45,6 +46,8 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M13 | — | local | R10 | proven | As R9; a card's `access` read, none when it names none. |
 | M10 | — | local | R11 | proven | With `agora:delegate`: `spawn_agent`, `send_message`, `stop_agent`, `list_agents`, `answer_agent`, `list_agents` alone read-only; `answer_agent`'s `to`, `request`, `option`, all three required. A delegate with `agora:submit` alone, as its Session opens: `send_message` alone, `to`, `message`. One holding both: the five, each once. |
 | M12 | — | local | R11 | proven | From a delegate, `stop_agent`, `list_agents` and `answer_agent`: `not_allowed`; from its delegator, `delegate` and `submit`: `not_allowed`; the delegate still `in_progress`, one sub-stream. Scoped down to `agora:submit`: `send_message` listed alone, `not_a_delegate` to its own delegate, its one Write. |
+| M10 | — | local | R12 | proven | As R11, `answer_agent`'s parameters `to`, `request`, `option`, `content`, `decline`, `to` and `request` alone required. |
+| M12 | — | local | R12 | proven | As R11. |
 
 ## Not covered
 

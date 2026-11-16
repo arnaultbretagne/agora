@@ -44,6 +44,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R36 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. L147, on the server that gives a role its block. |
 | R37 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/permission` asks one and waits. On the commit that makes a pending permission a request of its Workstream's. On `523061a`, each guard of the cases removed in turn — the row's count, the view's `request` and its being put, the native sub-agents left out, Agora's `from` kept and the person's left out, the element's `from` —: its case failed each time. |
 | R38 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the log's 306 tests green; in the browser suite U81 failed once (its next message 179 px lower after the hover), then green alone three times and in the whole suite run again on the same commit. On the commit that answers a permission its agent withdraws and moves the core projector to version 10; the mock agent's `/withdraw` sending `$/cancel_request`. On `30d72de`, the version put back to 9: L157 failed; the withdrawn permission left unanswered: L158 failed. |
+| R39 | 2026-11-16 | `2970cd7` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/question` and `/form` send the forms claude-agent-acp 0.106.0 and codex-acp 2.6.0 build (`packages/mock-agent/src/forms.ts`). On the commit where Agora declares `elicitation.form` and the core projector is at version 11. On `ff962f1`, each guard removed in turn — an option a text field does not offer refused, a required field left out refused, a secret field declined —: L165 or L163 failed each time. |
+| R40 | 2026-11-16 | `ff962f1` | unit | L165 alone, its test given a refused option of a text field. |
 
 ## Cases
 
@@ -245,11 +247,26 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L154 | — | local | R38 | proven | As R37. |
 | L155 | — | local | R38 | proven | As R37. |
 | L156 | — | local | R38 | proven | As R37. |
+| L133 | — | local | R39 | proven | `clientCapabilities`: `fs` both false, `terminal` false, `subagents` `{}`, its test reading those three alone. |
+| L157 | simulated: forced-state, as R38 | local | R39 | proven | As R38, the core projector at version 11. |
+| L158 | — | local | R39 | proven | As R38. |
+| L159 | — | local | R39 | proven | `initialize`'s `clientCapabilities.elicitation`: `{ form: {} }`. |
+| L160 | — | local | R39 | proven | `/question`: an `elicitation/create` with its `toolCallId`; its view's and its row's `request` its position; an `elicitation` element `pending`, its message `Which database should the service use?`, no `declined`. A Write with `mayWait`: `permission_pending`. Accepted with `question_0` `SQLite` and `question_0_custom` `for the tests only`: one answer, `{ action: accept, content }`; the agent said `Elicitation: accept {"question_0":"SQLite","question_0_custom":"for the tests only"}.`; no `request`; the element `answered`, that answer. |
+| L161 | — | local | R39 | proven | `/form several`: `invalid_elicitation_content` for `Moon`, a field `region`, a list for `environment`, `branch` left out, `cancel`, `decline` with content; a Respond to a permission on it `stale_permission`; no answer written. Declined: one answer, `{ action: decline }`, the agent said `Elicitation: decline.`; answered again: `stale_elicitation`. |
+| L162 | real: the claim expired, then the execution ended | local | R39 | proven | `/question several` pending, its turn cancelled: no `request`; one answer, `{ action: cancel }`, on its element. `/form` pending, its claim expired: the execution ended, no `request`, no answer written, its element `cancelled`. |
+| L163 | — | local | R39 | proven | `/form secret`: one answer, `{ action: decline }`; the agent said `Elicitation: decline.`; its element `declined` `secret`, `answered`; no `request` in its view; a Respond accepting it `stale_elicitation`. `declinedBy`: `mode` for a url form, `async` for `_meta.codex.delivery` `async`, `secret`, none for a plain form. |
+| L164 | — | local | R39 | proven | `/form auto`: its `request` while pending; withdrawn after a second: one answer, `{ action: cancel }`, on its element; nothing pending, no `request`; a Write accepted after its turn. |
+| L165 | — | unit | R39 | proven | `replicas` (integer, required), `canary` (boolean), `checks` (array, `lint`, `test`), `db` (string, `pg`), in that order; a fitting content refused nothing; `replicas: out of bounds`, `replicas: not an integer`, `canary: not true or false`, `checks: "deploy" is not one of its options`, `replicas: required`, `not an object`. |
+| L165 | — | unit | R40 | proven | As R39, and `db: "mysql" is not one of its options`. |
+| L166 | — | local | R39 | proven | Two `/form text` answered `branch` `main`, each with `from` `{ workstream, as: delegator }`: Agora's command kept it, the person's not; the first element `from` that Workstream `as` `delegator`, the second neither. |
+| L167 | simulated: forced-state — the checkpoint set to version 10, the form's element made an `acp` line and the `request` taken from its view and its row, by SQL; the bridges' address out of reach at the restart | local | R39 | proven | Rebuilt at start: its view's and its row's `request` the form's position; its `elicitation` element `pending` at that position; its checkpoint at version 11; no new `execution.connected`. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
+| A form a native sub-agent asks: answered on its host's execution by the same command as its permission, shown by no case | — |
+| The forms the real harnesses send, Claude Code's and Codex's: L160 to L164 run the mock agent sending them as their adapters build them, no live run | — |
 | Two runs taking the lists in opposite orders, a host with native sub-streams and delegates projecting at once: the order is read in the code, shown by no case | — |
 | A sub-agent whose adapter never says it is idle, its host's execution still running: shown `working` until that execution ends | — |
 | What the real harnesses accept, in the cluster's catalogue, and the blocks they are given (L67 and L68 run with the mock agent) | #147 |
