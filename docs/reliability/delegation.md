@@ -25,6 +25,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R17 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4, the log's tests all green, as R16: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that answers a permission its agent withdraws: every case of R16 ran again; D62 new. On `30d72de`, the withdrawn permission left unanswered: D62 failed. |
 | R18 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own, as R17: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that has the dispatcher answer a withdrawn permission at each run. |
 | R19 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the delegates' forms the mock agent's `/question` and `/form`. On the commit where a delegate's form goes to its delegator and `answer_agent` answers it. Every case of R17 ran again. |
+| R20 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green; the delegates' forms the mock agent's `/question` and `/form`, `/question ticket` an MCP server's pattern and email. |
 
 ## Cases
 
@@ -128,6 +129,11 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D60 | — | local | R19 | proven | As R16. |
 | D61 | real: the delegator's claim expired, twice | local | R19 | proven | As R16. |
 | D62 | — | local | R19 | proven | As R17. |
+| D66 | — | local | R20 | proven | Agora's message: `` - `ticket` (text, matching `^[A-Z]+-[0-9]+$`, required): Ticket — Its key, as PROJ-123 ``, `` - `email` (text, email): Reporter ``. `invalid_elicitation_content: ticket: does not match its pattern`, `invalid_elicitation_content: email: not an email`; no Respond written; `answered <id> · /question ticket`, one answer, `{ ticket: PROJ-1 }`. |
+| D63 | — | local | R20 | proven | As R19. |
+| D64 | — | local | R20 | proven | As R19. |
+| D65 | — | local | R20 | proven | As R19. |
+| D62 | — | local | R20 | proven | As R18. |
 
 ## Not covered
 

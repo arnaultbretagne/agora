@@ -47,6 +47,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R39 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the writer's connections through `PgRelay`, whose `failCommit` cuts the connection of the first transaction sending a fragment before its COMMIT reaches PostgreSQL. On the commit that has the dispatcher answer a withdrawn permission at each run. L159 run against the answer written once after capture (`fe1f37f`'s): failed, its turn never answered; the dispatcher's answer removed: L158 and L159 failed. |
 | R40 | 2026-11-16 | `2970cd7` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/question` and `/form` send the forms claude-agent-acp 0.106.0 and codex-acp 2.6.0 build (`packages/mock-agent/src/forms.ts`). On the commit where Agora declares `elicitation.form` and the core projector is at version 11. On `ff962f1`, each guard removed in turn — an option a text field does not offer refused, a required field left out refused, a secret field declined —: L166 or L164 failed each time. |
 | R41 | 2026-11-16 | `ff962f1` | unit | L166 alone, its test given a refused option of a text field. |
+| R42 | 2026-11-16 | `3ae57a4` | unit, local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green. On the commit that checks a form's texts in code points, against their `format` and, in a worker, their `pattern`, and writes a withdrawn form's `cancel` by #214's dispatcher at each run; the cases of R40 and R41 then numbered one less, after #214's L159. Each guard removed in turn — code points, the format, the pattern at admission, a withdrawn form's `cancel` —: L169, L170 or L171 failed each time. |
 
 ## Cases
 
@@ -262,6 +263,18 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L166 | — | unit | R40 | proven | `replicas` (integer, required), `canary` (boolean), `checks` (array, `lint`, `test`), `db` (string, `pg`), in that order; a fitting content refused nothing; `replicas: out of bounds`, `replicas: not an integer`, `canary: not true or false`, `checks: "deploy" is not one of its options`, `replicas: required`, `not an object`. |
 | L166 | — | unit | R41 | proven | As R40, and `db: "mysql" is not one of its options`. |
 | L167 | — | local | R40 | proven | Two `/form text` answered `branch` `main`, each with `from` `{ workstream, as: delegator }`: Agora's command kept it, the person's not; the first element `from` that Workstream `as` `delegator`, the second neither. |
+| L163 | real: the claim expired, then the execution ended | local | R42 | proven | As R40, its name saying why no answer is written at the execution's end: no peer left to read one. |
+| L165 | — | local | R42 | proven | As R40, the `cancel` written by the dispatcher. |
+| L169 | — | unit | R42 | proven | `😀` fits `maxLength` 1, `😀😀` does not; `😀😀` fits 2 to 3, `abcd` does not; `not an email`, `not a uri`, `not a date`, `not a date-time` for the malformed ones, nothing for the well formed; `PROJ-123` matches, `oops` `does not match its pattern`; `^(a+)+$` on forty `a` and `!`: `could not be checked in time`, within 3 s, the server's 50 ms timer firing at least ten times meanwhile; `(`: `its pattern is no regular expression`. |
+| L170 | — | local | R42 | proven | `/question ticket`: `invalid_elicitation_content` for `oops`, then for `not-an-email`; no answer written; then `PROJ-1` and `person@example.org`: one answer, `{ action: accept, content }`. |
+| L171 | real: the writer's connection cut before the answer's COMMIT, the transaction rolled back | local | R42 | proven | `/form auto`: one failed write; then one answer to its request, `{ action: cancel }`, sent once; no `request`; nothing pending; its turn `done`. |
+| L160 | — | local | R42 | proven | As R40. |
+| L161 | — | local | R42 | proven | As R40. |
+| L162 | — | local | R42 | proven | As R40. |
+| L164 | — | local | R42 | proven | As R40. |
+| L166 | — | unit | R42 | proven | As R41. |
+| L167 | — | local | R42 | proven | As R40. |
+| L168 | simulated: forced-state, as R40 | local | R42 | proven | As R40. |
 | L168 | simulated: forced-state — the checkpoint set to version 10, the form's element made an `acp` line and the `request` taken from its view and its row, by SQL; the bridges' address out of reach at the restart | local | R40 | proven | Rebuilt at start: its view's and its row's `request` the form's position; its `elicitation` element `pending` at that position; its checkpoint at version 11; no new `execution.connected`. |
 
 ## Not covered
