@@ -26,6 +26,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R18 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own, as R17: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that has the dispatcher answer a withdrawn permission at each run. |
 | R19 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the delegates' forms the mock agent's `/question` and `/form`. On the commit where a delegate's form goes to its delegator and `answer_agent` answers it. Every case of R17 ran again. |
 | R20 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green; the delegates' forms the mock agent's `/question` and `/form`, `/question ticket` an MCP server's pattern and email. |
+| R21 | 2026-11-16 | `0b6315f` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; three passes: on `cf3dc14` the first stopped on L20 (`EADDRINUSE`, as R42), the second on D62 and D63 (`list_agents` saying `working`: it reads the delegate's row, which its projection had not yet written `waiting`); D63 then waits for that row, as D58 does; on `0b6315f` the third all green; as R20. |
 
 ## Cases
 
@@ -134,11 +135,15 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D64 | — | local | R20 | proven | As R19. |
 | D65 | — | local | R20 | proven | As R19. |
 | D62 | — | local | R20 | proven | As R18. |
+| D66 | — | local | R21 | proven | As R20, the command's own check of the pattern before the transaction as well. |
+| D63 | — | local | R21 | proven | As R19, its test waiting for the delegate's row `waiting` before `list_agents`, which reads that row. |
+| D64 | — | local | R21 | proven | As R19. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
+| `list_agents` read just after Agora's message about a request, before the delegate's row is projected `waiting`: it says `working` for a moment. D62 calls it at once and failed so under load once (R21's second pass); D58 and D63 wait for the row | — |
 | A delegate's form answered by a real delegator agent reading Agora's message — Claude Code, Codex —: run with the mock agent's `/answer_agent` alone | — |
 | A crash between a delegate's accepted Create and its `delegation.started`: a sub-stream that runs, never given its instructions, never reported | — |
 | A message of Agora's whose prompt fails before it is dispatched, a token or a deadline refused: gone from what waits, a failed turn in the thread, its agent never reading it | — |

@@ -48,6 +48,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R40 | 2026-11-16 | `2970cd7` | unit, local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/question` and `/form` send the forms claude-agent-acp 0.106.0 and codex-acp 2.6.0 build (`packages/mock-agent/src/forms.ts`). On the commit where Agora declares `elicitation.form` and the core projector is at version 11. On `ff962f1`, each guard removed in turn — an option a text field does not offer refused, a required field left out refused, a secret field declined —: L166 or L164 failed each time. |
 | R41 | 2026-11-16 | `ff962f1` | unit | L166 alone, its test given a refused option of a text field. |
 | R42 | 2026-11-16 | `3ae57a4` | unit, local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green. On the commit that checks a form's texts in code points, against their `format` and, in a worker, their `pattern`, and writes a withdrawn form's `cancel` by #214's dispatcher at each run; the cases of R40 and R41 then numbered one less, after #214's L159. Each guard removed in turn — code points, the format, the pattern at admission, a withdrawn form's `cancel` —: L169, L170 or L171 failed each time. |
+| R43 | 2026-11-16 | `0b6315f` | unit, local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; three passes: on `cf3dc14` the first stopped on L20 (`EADDRINUSE`, as R42), the second on D62 and D63 (`list_agents` saying `working`: it reads the delegate's row, which its projection had not yet written `waiting`); D63 then waits for that row, as D58 does; on `0b6315f` the third all green. On the commit where an answer whose pattern check cannot complete is refused `unavailable`. The writer's login through a PgRelay that cuts one chosen read. Its two guards removed in turn — the read's failure refusing the command, admission taking a check only for the form it finds pending —: L172 passed with either alone, and failed with both removed, the answer accepted unchecked. |
 
 ## Cases
 
@@ -275,6 +276,10 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L166 | — | unit | R42 | proven | As R41. |
 | L167 | — | local | R42 | proven | As R40. |
 | L168 | simulated: forced-state, as R40 | local | R42 | proven | As R40. |
+| L172 | real: the writer's connection cut as it sent the read of the Workstream's entries before the transaction | local | R43 | proven | `/question ticket`: `oops` refused `invalid_elicitation_content`; the read cut: `unavailable`, one read cut, no answer written; the store back: `oops` refused `invalid_elicitation_content`; `PROJ-7` accepted, one answer, `{ action: accept, content: { ticket: PROJ-7 } }`. |
+| L169 | — | unit | R43 | proven | As R42. |
+| L170 | — | local | R43 | proven | As R42. |
+| L171 | real: the writer's connection cut before the answer's COMMIT, the transaction rolled back | local | R43 | proven | As R42. |
 | L168 | simulated: forced-state — the checkpoint set to version 10, the form's element made an `acp` line and the `request` taken from its view and its row, by SQL; the bridges' address out of reach at the restart | local | R40 | proven | Rebuilt at start: its view's and its row's `request` the form's position; its `elicitation` element `pending` at that position; its checkpoint at version 11; no new `execution.connected`. |
 
 ## Not covered
