@@ -1587,6 +1587,8 @@ test('D63 a delegate’s agent asking a form — Claude Code’s AskUserQuestion
       `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${form.position}, \`content\` an object giving each field you fill its value (each required one at least), or \`decline\` true to refuse it. If it is not, ask the person, who can answer it in that delegate's thread.`,
     ].join('\n'),
   )
+  // list_agents reads the delegate's row, written by its projection a moment after the line: waited for, as D58 waits.
+  await until('its row waiting', async () => ((await lab.workstreams.projections.row(delegate, null)) as ListRow | null)?.delegation === 'waiting')
   assert.equal(text(await c.callTool({ name: 'list_agents', arguments: {} })), `${delegate} · /question several · waiting`)
   const content = { question_0: 'PostgreSQL', question_1: ['Lint', 'Unit tests'] }
   assert.equal(text(await c.callTool({ name: 'answer_agent', arguments: { to: delegate, request: form.position, content } })), `answered ${delegate} · /question several`)
