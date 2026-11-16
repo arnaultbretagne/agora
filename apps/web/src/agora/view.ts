@@ -43,6 +43,8 @@ export interface WorkstreamView {
    */
   readonly native?: { readonly host: string; readonly description: string | null; readonly cancel: boolean } | null
   readonly subagent?: string | null
+  /** Its role, its first execution's and kept (docs/specs/roles.md, "Naming a role"); null when it has none. */
+  readonly role?: string | null
 }
 
 export interface Usage {
@@ -65,13 +67,7 @@ export interface AgentCommand {
   readonly hint: string | null
 }
 
-const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent', team: 'Team' }
-
-/**
- * A team, in the harness picker beside the pools (docs/specs/assistant-ui.md, "Teams"): its first
- * message is the goal, and the server starts the lead on it.
- */
-export const TEAM = 'team'
+const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent' }
 
 /** A harness as people name it. */
 export const harnessName = (harness: string | null | undefined): string => (harness ? (HARNESS_NAMES[harness] ?? harness) : 'the agent')
@@ -110,6 +106,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     question: text(o.question) || null,
     native: json(o.native) && text(json(o.native)!.host) ? { host: text(json(o.native)!.host), description: text(json(o.native)!.description) || null, cancel: json(o.native)!.cancel === true } : null,
     subagent: text(o.subagent) || null,
+    role: text(o.role) || null,
     continuation: Object.fromEntries(
       Object.entries(json(o.continuation) ?? {}).flatMap(([harness, c]) => {
         const v = json(c)
@@ -820,11 +817,81 @@ export const accessGranted = (picked: readonly string[] | null, view: Workstream
   picked ?? (view.execution !== null ? (view.profiles ?? []) : initial)
 
 /**
- * The Create a message starts: the pool, with the settings and the access picked. Which save it
- * continues from is the server's to find (docs/specs/log.md, "Continuing").
+ * The Create a message starts: the pool, with the settings and the access picked, and the role, which only a
+ * Workstream's first names (docs/specs/assistant-ui.md, "Roles"). Which save it continues from is the server's
+ * to find (docs/specs/log.md, "Continuing").
  */
-export function startBody(pool: string, settings: Readonly<Record<string, string>>, access: readonly string[]): Json {
-  return { pool, ...(Object.keys(settings).length > 0 ? { settings: { ...settings } } : {}), ...(access.length > 0 ? { profiles: [...access] } : {}) }
+export function startBody(pool: string, settings: Readonly<Record<string, string>>, access: readonly string[], role: string | null = null): Json {
+  return {
+    pool,
+    ...(Object.keys(settings).length > 0 ? { settings: { ...settings } } : {}),
+    ...(access.length > 0 ? { profiles: [...access] } : {}),
+    ...(role !== null ? { role } : {}),
+  }
+}
+
+// ---------------------------------------------------------------- roles
+
+/** A role's card, as `GET /api/config` gives it (docs/specs/roles.md, "Cards"): who the agent is to be, and what it works with by default. */
+export interface Role {
+  readonly role: string
+  readonly summary: string
+  readonly harness: string
+  /** Its harness's own; null when the card leaves it to the pool. */
+  readonly model: string | null
+  readonly effort: string | null
+  /** The profiles a draft starts with beside its own, when the role is picked. */
+  readonly access: readonly string[]
+}
+
+/**
+ * What the person picked themselves before a Workstream's first execution (docs/specs/assistant-ui.md, "Roles"),
+ * each null while its picker has not been used there: the harness's pool; the model with its effort, by setting,
+ * and the pool they were picked in; the whole access.
+ */
+export interface Picks {
+  readonly pool: string | null
+  readonly settings: { readonly pool: string | null; readonly values: Readonly<Record<string, string>> } | null
+  readonly access: readonly string[] | null
+}
+
+/**
+ * The picks in effect once a role is picked (docs/specs/assistant-ui.md, "Roles"): its card's values are
+ * defaults, never set over the person's own. The harness, the model with its effort, and the access each take
+ * the card's only where the person picked nothing, and only what is offered: a pool of the card's harness — the
+ * draft's own, `start`, when it is one —; its model and its effort, on that harness alone (docs/specs/roles.md,
+ * "Naming a role"), each among that pool's options; its `access`, beside the draft's own start. A model the
+ * person picked is its harness's: it keeps that harness with it. With no role, the person's picks alone.
+ */
+export function withRole(
+  role: Role | null,
+  own: Picks,
+  pools: readonly ({ readonly name: string; readonly harness: string; readonly testing?: boolean } & NonNullable<Parameters<typeof poolSettings>[0]>)[],
+  offered: readonly string[],
+  start: string | null,
+): Picks {
+  const open = offeredPools(pools)
+  const named = (name: string | null | undefined) => open.find((p) => p.name === name)
+  const pool = named(own.pool) ?? named(own.settings?.pool) ?? (role === null ? undefined : [named(start), ...open].find((p) => p?.harness === role.harness))
+  // The model and effort picked in another pool are that pool's: here, the person picked none.
+  const on = pool ?? named(start)
+  const picked = own.settings !== null && own.settings.pool === on?.name ? own.settings : null
+  if (role === null) return { pool: pool?.name ?? null, settings: picked, access: own.access }
+  const values: Record<string, string> = {}
+  if (picked === null && on?.harness === role.harness) {
+    const choice = modelChoice(poolSettings(on))
+    const offer = (setting: Setting | undefined, options: Setting['options'], value: string | null) => {
+      if (setting && value !== null && options.some((o) => o.value === value)) values[setting.id] = value
+    }
+    offer(choice.model, choice.models, role.model)
+    offer(choice.effort, choice.efforts, role.effort)
+  }
+  const granted = [...role.access, ...accessDefault(offered)]
+  return {
+    pool: pool?.name ?? null,
+    settings: picked ?? (on && Object.keys(values).length > 0 ? { pool: on.name, values } : null),
+    access: own.access ?? accessEntries(offered).flatMap((entry) => accessOf(granted, entry) ?? []),
+  }
 }
 
 /** The commands `/` lists: while the composer holds `/` and a name being typed, those it starts. */

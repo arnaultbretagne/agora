@@ -2,7 +2,7 @@
 // is, its older rows a page at a time, a search on the server; a Workstream's thread, kept in the browser
 // with its cursor — reused only together — and read again from that cursor.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Api, Folder, Hit, Page } from './api.ts'
+import type { Api, Hit, Page } from './api.ts'
 import { empty, type ThreadState, type ViewObject } from './objects.ts'
 import { ThreadStream, type Connection } from './stream.ts'
 import { merged, type ListRow } from './view.ts'
@@ -31,25 +31,25 @@ const UNKNOWN: Older = { rows: [], next: null, known: false }
 const rowsOf = (state: ThreadState): ListRow[] => [...state.objects.values()].map((o) => o.object as unknown as ListRow)
 
 /** A page read once at a time; a page for a cursor no longer wanted is dropped. */
-function usePages(api: Api, folder: Folder | null, title: string, older: Older, onPage: (at: string, page: Page) => void, parent: string | null = null): () => void {
+function usePages(api: Api, title: string, older: Older, onPage: (at: string, page: Page) => void, parent: string | null = null): () => void {
   const reading = useRef(false)
   return useCallback(() => {
     const at = older.next
     if (reading.current || at === null) return
     reading.current = true
     void api
-      .page(folder, at, title, parent)
+      .page(at, title, parent)
       .then((page) => onPage(at, page), () => undefined)
       .finally(() => (reading.current = false))
-  }, [api, folder, title, older.next, onPage, parent])
+  }, [api, title, older.next, onPage, parent])
 }
 
 /**
- * A list of the person's (docs/specs/assistant-ui.md, "The exchanges"), one of their folders', or a
- * Workstream's sub-streams: its most recent rows then each change, read as the thread is and never
- * fetched again whole; below them, the older rows a page at a time.
+ * The person's list (docs/specs/assistant-ui.md, "The exchanges"), or a Workstream's sub-streams: its most
+ * recent rows then each change, read as the thread is and never fetched again whole; below them, the
+ * older rows a page at a time.
  */
-export function useList(api: Api, folder: Folder | null = null, enabled = true, parent: string | null = null): ListFeed {
+export function useList(api: Api, enabled = true, parent: string | null = null): ListFeed {
   const [state, setState] = useState<ThreadState>(empty)
   const [older, setOlder] = useState<Older>(UNKNOWN)
   useEffect(() => {
@@ -58,7 +58,7 @@ export function useList(api: Api, folder: Folder | null = null, enabled = true, 
     if (!enabled) return
     let first = true
     const stream = new ThreadStream(empty, {
-      url: (cursor) => api.listUrl(folder, cursor, parent),
+      url: (cursor) => api.listUrl(cursor, parent),
       onChange: (next) => {
         setState(next)
         // Below the first snapshot's oldest row, the older pages; none below fewer than a page. A row read
@@ -72,26 +72,26 @@ export function useList(api: Api, folder: Folder | null = null, enabled = true, 
     })
     stream.start()
     return () => stream.stop()
-  }, [api, folder, enabled, parent])
+  }, [api, enabled, parent])
   const onPage = useCallback((at: string, page: Page) => setOlder((o) => (o.next === at ? { rows: [...o.rows, ...page.rows], next: page.next, known: true } : o)), [])
-  const more = usePages(api, folder, '', older, onPage, parent)
+  const more = usePages(api, '', older, onPage, parent)
   const rows = useMemo(() => merged(rowsOf(state), older.rows), [state, older.rows])
   return { rows, more, end: older.known && older.next === null }
 }
 
 /**
- * The rows of a list whose title holds a text (docs/specs/assistant-ui.md, "Sidebar"), from every page:
+ * The rows of the list whose title holds a text (docs/specs/assistant-ui.md, "Sidebar"), from every page:
  * read from the server 250 ms after the last key, a page at a time; null while the text is empty. Until
  * the text's first page comes, the last text's rows stay, for the screen to filter.
  */
-export function useSearch(api: Api, folder: Folder | null, text: string, enabled = true): (ListFeed & { readonly text: string }) | null {
+export function useSearch(api: Api, text: string): (ListFeed & { readonly text: string }) | null {
   const wanted = text.trim()
   const [found, setFound] = useState<{ text: string; older: Older } | null>(null)
   useEffect(() => {
-    if (!enabled || wanted === '') return setFound(null)
+    if (wanted === '') return setFound(null)
     let live = true
     const timer = setTimeout(() => {
-      void api.page(folder, null, wanted).then(
+      void api.page(null, wanted).then(
         (page) => live && setFound({ text: wanted, older: { rows: page.rows, next: page.next, known: true } }),
         () => undefined,
       )
@@ -100,14 +100,14 @@ export function useSearch(api: Api, folder: Folder | null, text: string, enabled
       live = false
       clearTimeout(timer)
     }
-  }, [api, folder, wanted, enabled])
+  }, [api, wanted])
   const older = found?.older ?? UNKNOWN
   const onPage = useCallback(
     (at: string, page: Page) =>
       setFound((f) => (f && f.older.next === at ? { text: f.text, older: { rows: [...f.older.rows, ...page.rows], next: page.next, known: true } } : f)),
     [],
   )
-  const more = usePages(api, folder, found?.text ?? '', older, onPage)
+  const more = usePages(api, found?.text ?? '', older, onPage)
   if (wanted === '' || found === null) return null
   return { text: found.text, rows: found.older.rows, more, end: found.older.next === null }
 }

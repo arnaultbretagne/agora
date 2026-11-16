@@ -30,7 +30,7 @@ lines, read from its view's objects — its turns and their elements — and nev
 | Rule | Detail |
 | --- | --- |
 | Pattern | A regular expression, PostgreSQL's, `\b` being a word's edge as in ripgrep; case is matched unless `-i`. Options opening it — `(?i)` — and a director — `***=` for a literal — are read as PostgreSQL reads them, a line at a time still. An invalid one is refused. |
-| Searched | The `user` and `agent` lines of the caller's Workstreams — its own, sub-streams included, and its agents' folder's —, or of one of them; with `tools`, the `tool` lines too. Never a header. |
+| Searched | The `user` and `agent` lines of the caller's Workstreams, sub-streams included, or of one of them; with `tools`, the `tool` lines too. Never a header. |
 | Reading | A pattern with three characters in a row — `kube`, `oauth2` — reads only the elements whose text holds them, through an index of the trigrams of the `user`, `agent_message_chunk` and `tool` elements' texts (`log.md`, "Storage"); one without — `.`, `\d+` — reads them all. The lines found are the same. |
 | Output | `workstreams_with_matches`, the default: each Workstream with a match, the most recently changed first, with its row (`log.md`, "The list"), how many of its lines match, and its latest matching line. `content`: each matching line, its Workstream, number and text — `<workstream>:<line>:<text>` as grep writes it —, with `-A`, `-B` or `-C` lines of context around it, marked as context. `count`: each Workstream's title and how many of its lines match. |
 | Long lines | A line found or given as context is cut to 300 characters around its first match, the cuts marked `…`. |

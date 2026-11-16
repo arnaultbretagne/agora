@@ -7,7 +7,7 @@
 // log holds and sends once its Session is open. The thread shows it from then on.
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type Attachment, type CompleteAttachment, type ThreadMessageLike } from '@assistant-ui/react'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Account, Answer, Api, CommandKind, Pool } from './api.ts'
+import type { Account, Answer, Api, CommandKind, Config, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, composerAttachments, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
 import type { Json, ThreadState } from './objects.ts'
@@ -24,14 +24,16 @@ import {
   returnedOf,
   startBody,
   startingOf,
-  TEAM,
   waitingOf,
   withAccess,
+  withRole,
   workstreamOf,
   type AccessEntry,
   type AccountLimits,
   type AgentCommand,
   type Composer,
+  type Picks,
+  type Role,
   type Setting,
   type ListRow,
   type Waiting,
@@ -77,6 +79,12 @@ export interface Agora {
   readonly access: readonly string[]
   /** Gives an entry a choice: kept for the next Create, or sent at once (Scope) with the whole set. */
   chooseAccess(entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): void
+  /** The roles the role picker offers (docs/specs/assistant-ui.md, "Roles"): none once the Workstream has had an execution. */
+  readonly roles: readonly Role[]
+  /** The role picked for the Workstream's first Create, or none. */
+  readonly role: Role | null
+  /** Picks a role by its name, or none: its card's values show where the person picked nothing. */
+  chooseRole(role: string | null): void
   /** The reason of the last command refused in this Workstream, until its next one or until it is left. */
   readonly refusal: string | null
   /** What the agent accepts beyond text: the open or last execution's, or, when sending starts one, its pool's. */
@@ -90,14 +98,10 @@ export interface Agora {
   /** A permission answered to its agent, or a question answered to the log, with its note. */
   answer(permission: string, optionId: string, note?: string): Promise<void>
   open(id: string | null): void
-  /** Whether a team can be launched: the harness picker offers it. */
-  readonly teams: boolean
   /** Who the proxy says the person is. */
   readonly account: Account
-  /** The person's agents' folder: their runs' members. */
   /** Cancel, for the open Workstream's turn in progress or uncertain. */
   readonly cancel: () => Promise<void>
-  readonly agents: ListFeed
   /** The open Workstream's parents, its root first; none for a root (docs/specs/assistant-ui.md, "Header"). */
   readonly line: readonly ListRow[]
   /** The rows of the delegates its lines name, read live (docs/specs/assistant-ui.md, "A tool's line"). */
@@ -128,11 +132,8 @@ const REFUSALS: Record<string, string> = {
   unknown_pool: 'This harness is no longer available.',
   profile_not_offered: 'This access is no longer offered.',
   unknown_profile: 'This access is not known.',
-  teams_unavailable: 'Teams are not available here.',
-  teams_unreachable: 'The team could not be started: its orchestrator cannot be reached.',
-  team_deployment_missing: 'The team could not be started: its flow is not deployed.',
-  team_refused: 'The team could not be started.',
-  invalid_goal: 'Describe the goal in a message of at most 4,000 characters.',
+  unknown_role: 'This role is no longer available.',
+  role_set: 'This workstream already has its role.',
   prompt_unsupported: 'The agent does not take these attachments.',
   stale_message: 'This message has already gone.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
@@ -143,6 +144,10 @@ export const refusalText = (reason: string): string => REFUSALS[reason] ?? `Refu
 /** An attachment the adapter has prepared (one given back), not a file still to prepare. */
 const complete = (a: Attachment): a is CompleteAttachment => a.status.type === 'complete'
 
+const NO_ROLES: readonly Role[] = []
+const NOTHING: Readonly<Record<string, string>> = {}
+/** No setting picked, anywhere. */
+const UNCHOSEN: { for: string | null; pool: string | null; values: Record<string, string> } = { for: null, pool: null, values: {} }
 const POOL_KEY = 'agora:pool'
 const storedPool = (): string | null => {
   try {
@@ -153,25 +158,17 @@ const storedPool = (): string | null => {
 }
 
 export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: string | null; onOpen: (id: string | null) => void; children: ReactNode }) {
-  // Who the proxy says the person is; their agents' folder, read only behind it (docs/specs/assistant-ui.md, "Accounts").
+  // Who the proxy says the person is (docs/specs/assistant-ui.md, "Accounts").
   const [account, setAccount] = useState<Account>({ email: null })
   const list = useList(api)
-  const agents = useList(api, 'agents', account.email !== null)
   const line = useLine(api, id)
   useEffect(() => {
     void api.account().then(setAccount, () => undefined)
   }, [api])
-  // A team can be launched when the server says so (docs/specs/flows.md, "Launching from Agora").
-  const [teams, setTeams] = useState(false)
-  useEffect(() => {
-    void api.teams().then(setTeams, () => setTeams(false))
-  }, [api])
-  // The teams launched from this page whose lead has not written yet: their Workstream waits for it.
-  const [launched, setLaunched] = useState<ReadonlySet<string>>(new Set())
   const { state, connection } = useThread(api, id)
   // Its sub-streams' rows, read only once a line names a delegate.
   const delegating = useMemo(() => delegatesOf(state).length > 0, [state])
-  const delegates = useList(api, null, id !== null && delegating, id)
+  const delegates = useList(api, id !== null && delegating, id)
   // The reason of the last command refused, with the Workstream it was sent in: shown only there.
   const [refusal, setRefusal] = useState<{ for: string | null; text: string } | null>(null)
   const refuse = useCallback((text: string, workstream: string | null) => setRefusal({ for: workstream, text }), [])
@@ -182,38 +179,49 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   // The pool picked in this Workstream, or in the draft; a draft starts from the one picked last.
   const [picked, setPicked] = useState<{ for: string | null; pool: string } | null>(null)
   // Settings picked before a Create, for the Workstream and pool they were picked in.
-  const [chosenFor, setChosenFor] = useState<{ for: string | null; pool: string | null; values: Record<string, string> }>({ for: null, pool: null, values: {} })
+  const [chosenFor, setChosenFor] = useState(UNCHOSEN)
   // Put back into their Workstream's composer once that Workstream is shown, oldest first.
   const [returned, setReturned] = useState<readonly Returned[]>([])
   const giveBack = useCallback((message: Returned) => setReturned((r) => [...r, message]), [])
   // The access picked: for the next Create of this Workstream or draft (no execution), or sent to its
   // execution and shown until the view has it.
   const [pickedAccess, setPickedAccess] = useState<{ for: string | null; execution: string | null; profiles: readonly string[] } | null>(null)
-  const [offered, setOffered] = useState<string[]>([])
+  // The role picked for the first Create of this Workstream, or of the draft: never kept from one draft to the next.
+  const [pickedRole, setPickedRole] = useState<{ for: string | null; role: string } | null>(null)
+  // What Agora offers, read once the page opens: the access picker's profiles, and the roles.
+  const [{ offered, roles: cards }, setConfig] = useState<Config>({ offered: [], roles: [] })
   const view = useMemo(() => workstreamOf(state, id ?? ''), [state, id])
-  // A draft has no thread to wait for: sending is offered at once, and starts everything. A team just
-  // launched waits for its lead's first turn.
+  // A draft has no thread to wait for: sending is offered at once, and starts everything.
   const composer = useMemo<Composer>(() => {
     if (id === null) return { open: true, create: true, reason: null, running: false, cancellable: null, uncertain: null, pendingPermission: null, refuses: false, held: false, readOnly: false }
-    const own = composerOf(state, view)
-    const starting = launched.has(id) && state.complete && ![...state.objects.values()].some((o) => o.kind === 'turn')
-    return starting ? { ...own, open: false, create: false, reason: 'The team is starting…' } : own
-  }, [state, view, id, launched])
+    return composerOf(state, view)
+  }, [state, view, id])
 
   useEffect(() => {
-    void api.offered().then(setOffered, () => setOffered([]))
+    void api.config().then(setConfig, () => undefined)
   }, [api])
   // The catalogue, read again on each move: what a draft offers follows the Sessions just opened.
   useEffect(() => {
     void api.pools().then(setPools, () => setPools((p) => p ?? []))
   }, [api, id])
-  // The pool offered: the one picked here; else the Workstream's own, or one of its harness, so that it
-  // continues; else, in a draft, the one picked last; else the first.
-  const pool = useMemo(() => {
-    // A draft may launch a team, picked here or last.
-    if (id === null && teams && (picked?.for === null ? picked.pool : storedPool()) === TEAM) return TEAM
-    return poolOffered(pools ?? [], picked?.for === id ? picked.pool : null, id !== null ? view.pool : null, storedPool(), id !== null ? view.harness : null)
-  }, [pools, picked, view.pool, view.harness, id, teams])
+  // A role (docs/specs/assistant-ui.md, "Roles"): offered before the Workstream's first execution, and kept by it.
+  const roles = composer.create && view.execution === null ? cards : NO_ROLES
+  const role = useMemo(() => (pickedRole?.for === id ? (roles.find((r) => r.role === pickedRole.role) ?? null) : null), [pickedRole, id, roles])
+  const chooseRole = useCallback((next: string | null) => setPickedRole(next === null ? null : { for: id, role: next }), [id])
+  const accessKey = composer.create ? null : view.execution
+  // What the person picked here themselves, then with the role's card under it: its values only where they picked nothing.
+  const begin = useMemo(() => {
+    const own: Picks = {
+      pool: picked?.for === id ? picked.pool : null,
+      settings: chosenFor.for === id && Object.keys(chosenFor.values).length > 0 ? chosenFor : null,
+      access: pickedAccess !== null && pickedAccess.for === id && pickedAccess.execution === accessKey ? pickedAccess.profiles : null,
+    }
+    // The draft's own pool: the Workstream's, or one of its harness, so that it continues; else, in a draft, the one picked last; else the first.
+    const start = poolOffered(pools ?? [], null, id !== null ? view.pool : null, storedPool(), id !== null ? view.harness : null)
+    return { ...withRole(role, own, pools ?? [], offered, start), start }
+  }, [role, picked, chosenFor, pickedAccess, accessKey, pools, offered, view.pool, view.harness, id])
+  // The pool offered: the one picked here, or the role's; else the draft's own.
+  const pool = begin.pool ?? begin.start
   const choosePool = useCallback(
     (next: string) => {
       setPicked({ for: id, pool: next })
@@ -232,7 +240,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   }, [api])
   useEffect(refreshLimits, [refreshLimits])
   const limits = useMemo(() => poolLimits(pools?.find((p) => p.name === pool)?.baseProfiles, accounts), [pools, pool, accounts])
-  const chosen = useMemo(() => (chosenFor.for === id && chosenFor.pool === pool ? chosenFor.values : {}), [chosenFor, id, pool])
+  // Picked for the execution a message will start: an open Session shows its own.
+  const chosen = useMemo(() => (composer.create && begin.settings !== null && begin.settings.pool === pool ? begin.settings.values : NOTHING), [composer.create, begin.settings, pool])
   const settings = useMemo(
     () => (composer.create ? poolSettings(pools?.find((p) => p.name === pool)) : (view.settings ?? null)),
     [composer.create, pools, pool, view.settings],
@@ -254,12 +263,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     () => (composer.create ? (pools?.find((p) => p.name === pool)?.commands ?? []) : (view.commands ?? [])),
     [composer.create, pools, pool, view.commands],
   )
-  const accessKey = composer.create ? null : view.execution
-  // Before any execution, the Internet when it is offered.
-  const access = useMemo(
-    () => accessGranted(pickedAccess !== null && pickedAccess.for === id && pickedAccess.execution === accessKey ? pickedAccess.profiles : null, view, accessDefault(offered)),
-    [pickedAccess, id, accessKey, view, offered],
-  )
+  // Before any execution, the Internet when it is offered, and what a role's card adds.
+  const access = useMemo(() => accessGranted(begin.access, view, accessDefault(offered)), [begin.access, view, offered])
   // A Scope shown until the view has it: then the view's own again.
   useEffect(() => {
     if (pickedAccess === null || pickedAccess.execution === null || pickedAccess.execution !== view.execution) return
@@ -311,20 +316,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const start = useCallback(
     async (draft: Draft, prompt: readonly Block[]) => {
       if (pool === null) return refuse('No harness is available.', id)
-      // A team: its goal to the server, which creates the lead's Workstream and starts the run.
-      if (pool === TEAM) {
-        const workstream = crypto.randomUUID()
-        unrefuse(id)
-        const launchedTeam = await api.team(workstream, draft.text)
-        if (!launchedTeam.accepted) {
-          refuse(refusalText(launchedTeam.reason ?? 'unavailable'), id)
-          giveBack({ ...draft, for: id })
-          return
-        }
-        setLaunched((l) => new Set(l).add(workstream))
-        onOpen(workstream)
-        return
-      }
       let workstream = id
       if (workstream === null) {
         workstream = crypto.randomUUID()
@@ -334,22 +325,32 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
           return giveBack({ ...draft, for: id })
         }
       }
-      const created = await send('Create', {}, { ...startBody(pool, chosen, access), prompt: [...prompt] }, workstream)
+      const created = await send('Create', {}, { ...startBody(pool, chosen, access, role?.role ?? null), prompt: [...prompt] }, workstream)
       if (!created.accepted) giveBack({ ...draft, for: workstream })
-      if (id === null) onOpen(workstream)
+      if (id !== null) return
+      // The draft is this Workstream from here on. A refused Create is sent again as it was: what was picked goes
+      // with it. Accepted, the harness, the model and the access picked stay the next draft's, as before; a role
+      // is never kept from one draft to the next.
+      const moved = <P extends { for: string | null }>(pick: P | null): P | null => (pick === null || pick.for !== null || created.accepted ? pick : { ...pick, for: workstream })
+      setPicked(moved)
+      setChosenFor((c) => moved(c) ?? UNCHOSEN)
+      setPickedAccess(moved)
+      setPickedRole((r) => (r === null || r.for !== null ? r : created.accepted ? null : { ...r, for: workstream }))
+      onOpen(workstream)
     },
-    [api, id, pool, send, onOpen, chosen, access, refuse, unrefuse, giveBack],
+    [api, id, pool, send, onOpen, chosen, access, role, refuse, giveBack],
   )
 
   const chooseSetting = useCallback(
     (configId: string, value: string) => {
       if (composer.create) {
-        setChosenFor((c) => ({ for: id, pool, values: { ...(c.for === id && c.pool === pool ? c.values : {}), [configId]: value } }))
+        // With what shows beside it, a role's included: the picker stays as the person left it.
+        setChosenFor({ for: id, pool, values: { ...chosen, [configId]: value } })
         return
       }
       void send('Configure', { execution: view.execution, session: view.session }, { configId, value })
     },
-    [composer.create, id, pool, send, view.execution, view.session],
+    [composer.create, id, pool, chosen, send, view.execution, view.session],
   )
 
   const chooseAccess = useCallback(
@@ -498,6 +499,9 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     offered,
     access,
     chooseAccess,
+    roles,
+    role,
+    chooseRole,
     refusal: refusal?.for === id ? refusal.text : null,
     promptCapabilities,
     limits,
@@ -507,9 +511,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     answer,
     cancel,
     open,
-    teams,
     account,
-    agents,
     line,
     delegates: delegates.rows,
     messages,

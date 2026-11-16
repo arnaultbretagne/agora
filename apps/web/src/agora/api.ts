@@ -2,7 +2,7 @@
 // is given, for the tests.
 import { decode } from './stream.ts'
 import type { Json } from './objects.ts'
-import type { AccountLimits, AgentCommand, ListRow, Setting } from './view.ts'
+import type { AccountLimits, AgentCommand, ListRow, Role, Setting } from './view.ts'
 import type { PromptCapabilities } from './attachments.ts'
 
 export type CommandKind = 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
@@ -11,9 +11,6 @@ export type CommandKind = 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPe
 export interface Account {
   readonly email: string | null
 }
-
-/** A folder of the person's (docs/specs/log.md, "HTTP"): `agents`, the Workstreams of their runs' agents. */
-export type Folder = 'agents'
 
 /** The owner where the proxy passes no identity: the one the client creates with, and lists. */
 export const NOBODY = '00000000-0000-4000-8000-000000000000'
@@ -29,6 +26,12 @@ export interface Hit {
 export interface Page {
   readonly rows: readonly ListRow[]
   readonly next: string | null
+}
+
+/** What `GET /api/config` gives the screen: the profiles offered, and the roles. */
+export interface Config {
+  readonly offered: readonly string[]
+  readonly roles: readonly Role[]
 }
 
 export interface Answer {
@@ -75,20 +78,18 @@ export class Api {
   }
 
   /**
-   * The caller's list, one of its folders', or a Workstream's sub-streams, from a cursor (docs/specs/log.md,
-   * "The list"); the owner only counts without the proxy.
+   * The caller's list, or a Workstream's sub-streams, from a cursor (docs/specs/log.md, "The list"); the owner
+   * only counts without the proxy.
    */
-  listUrl(folder: Folder | null, cursor: string, parent: string | null = null): string {
+  listUrl(cursor: string, parent: string | null = null): string {
     const query = new URLSearchParams({ after: cursor, owner: NOBODY })
-    if (folder !== null) query.set('folder', folder)
     if (parent !== null) query.set('parent', parent)
     return `${this.base}/api/workstreams/list?${query.toString()}`
   }
 
   /** The rows of a list older than `before` — the most recent without it —, those whose title holds `title` when given. */
-  async page(folder: Folder | null, before: string | null, title = '', parent: string | null = null): Promise<Page> {
+  async page(before: string | null, title = '', parent: string | null = null): Promise<Page> {
     const query = new URLSearchParams({ owner: NOBODY })
-    if (folder !== null) query.set('folder', folder)
     if (parent !== null) query.set('parent', parent)
     if (before !== null) query.set('before', before)
     if (title.trim() !== '') query.set('title', title.trim())
@@ -130,30 +131,30 @@ export class Api {
     return { email: typeof body.email === 'string' ? body.email : null }
   }
 
-  /** Whether a team can be launched from here (docs/specs/flows.md, "Launching from Agora"). */
-  async teams(): Promise<boolean> {
-    const { status, body } = await this.read('/api/teams')
-    return status === 200 && body.available === true
-  }
-
-  /** A team on a goal, its lead's Workstream the id given: created by the server, which starts the run. */
-  async team(id: string, goal: string): Promise<Answer> {
-    try {
-      const { status, body } = await this.read('/api/teams', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, goal, owner: NOBODY }),
-      })
-      return status === 200 ? { accepted: true } : { accepted: false, reason: String(body.reason ?? 'unavailable') }
-    } catch {
-      return { accepted: false, reason: 'unreachable' }
+  /**
+   * What Agora offers (docs/specs/assistant-ui.md, "The exchanges"): the profiles of the access picker
+   * (docs/specs/credentials.md, "Offered profiles") and the roles a Workstream may start as (docs/specs/roles.md, "Cards").
+   */
+  async config(): Promise<Config> {
+    const { body } = await this.read('/api/config')
+    const credentials = body.credentials as { offered?: unknown } | null | undefined
+    return {
+      offered: Array.isArray(credentials?.offered) ? credentials.offered.filter((p): p is string => typeof p === 'string') : [],
+      roles: (Array.isArray(body.roles) ? body.roles : []).flatMap((r) => {
+        const card = r as { role?: unknown; summary?: unknown; harness?: unknown; model?: unknown; effort?: unknown; access?: unknown } | null
+        if (typeof card?.role !== 'string' || typeof card.harness !== 'string') return []
+        return [
+          {
+            role: card.role,
+            summary: typeof card.summary === 'string' ? card.summary : '',
+            harness: card.harness,
+            model: typeof card.model === 'string' ? card.model : null,
+            effort: typeof card.effort === 'string' ? card.effort : null,
+            access: Array.isArray(card.access) ? card.access.filter((p): p is string => typeof p === 'string') : [],
+          },
+        ]
+      }),
     }
-  }
-
-  /** The profiles the access picker offers (docs/specs/credentials.md, "Offered profiles"). */
-  async offered(): Promise<string[]> {
-    const credentials = (await this.read('/api/config')).body.credentials as { offered?: unknown } | null | undefined
-    return Array.isArray(credentials?.offered) ? credentials.offered.filter((p): p is string => typeof p === 'string') : []
   }
 
   async pools(): Promise<Pool[]> {

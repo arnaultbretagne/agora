@@ -69,7 +69,8 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
     state: view.state ?? null,
     harness: view.harness ?? null,
     question: view.question ?? null,
-    // A delegate's alone: any other row stays as it was written.
+    // Its role, when it has one; a delegate's state: any other row stays as it was written.
+    ...(typeof view.role === 'string' ? { role: view.role } : {}),
     ...(view.delegation ? { delegation: view.delegation } : {}),
     ...(view.subagent ? { subagent: view.subagent } : {}),
     below,

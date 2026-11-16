@@ -39,7 +39,7 @@ test('L86 a sub-stream, then one under it: the root\'s, depths 1 and 2, owned by
   assert.deepEqual(await lineOf(b, second), { owner: OWNER, parent: first, root, depth: 2 })
   // Sent again as it was: the same Workstream.
   assert.equal((await create(b.url, EMAIL, { id: second, parent: first })).status, 200)
-  // Without the proxy, as a flow creates: the parent's owner, whatever the body says.
+  // Without the proxy, as a script creates: the parent's owner, whatever the body says.
   const flows = randomUUID()
   const plain = await fetch(`${b.url}/api/workstreams`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: flows, parent: second, owner: randomUUID() }) })
   assert.equal(plain.status, 200)

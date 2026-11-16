@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
+import { Api } from '../src/agora/api.ts'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
 import { diffStats, foldable, foldOf, labelOf, type Artifact } from '../src/agora/tools.ts'
 import { acceptOf, blockOf, composerAttachments, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
@@ -39,8 +40,12 @@ import {
   waitingOf,
   windowName,
   withAccess,
+  withRole,
   workstreamOf,
   type AccountLimits,
+  type Picks,
+  type Role,
+  type Setting,
   type WorkstreamView,
 } from '../src/agora/view.ts'
 
@@ -761,6 +766,118 @@ test('U90 a native sub-stream’s view: no sending, read-only; Cancel for its tu
   assert.equal(workstreamOf(thread, 'w').native?.host, 'h')
   // Positive control: any other turn keeps its first message.
   assert.deepEqual(messagesOf(crafted([turnObject('done'), chunk(2, 'an answer')])).map((m) => m.role), ['user', 'assistant'])
+})
+
+// ---------------------------------------------------------------- roles
+
+// docs/specs/assistant-ui.md, "Roles": a catalogue as `GET /api/pools` gives it, each pool with what its last Session
+// offered — Codex's effort under its own id —, and cards as `GET /api/config` gives them.
+const offering = (models: readonly string[], efforts: readonly string[], effortId = 'effort'): Setting[] => {
+  const select = (id: string, category: string, values: readonly string[]): Setting => ({ id, name: id, category, type: 'select', currentValue: 'default', options: ['default', ...values].map((value) => ({ value, name: value, description: null })) })
+  return [select('mode', 'mode', ['full-access']), select('model', 'model', models), select(effortId, 'thought_level', efforts)]
+}
+const ROLE_POOLS = [
+  { name: 'mock-1', harness: 'mock', settings: offering(['mock-small', 'mock-large'], ['low', 'high']) },
+  { name: 'claude-1', harness: 'claude-code', settings: offering(['sonnet', 'opus'], ['low', 'medium', 'high']) },
+  { name: 'claude-2', harness: 'claude-code', settings: offering(['sonnet', 'opus'], ['low', 'medium', 'high']) },
+  { name: 'codex-1', harness: 'codex', settings: offering(['gpt-6.1-sol'], ['low', 'xhigh'], 'reasoning_effort') },
+  { name: 'opencode-kept', harness: 'opencode', testing: true, settings: offering(['glm'], ['high']) },
+  { name: 'unopened', harness: 'pi', settings: null },
+]
+const ROLE_OFFERED = ['github:o/a:write', 'internet', 'agora:delegate']
+const LEAD: Role = { role: 'lead', summary: 'Runs a small team on one goal.', harness: 'claude-code', model: 'opus', effort: 'high', access: ['agora:delegate'] }
+const NOTHING_PICKED: Picks = { pool: null, settings: null, access: null }
+/** The picks in effect for a role, in a draft whose own pool is the mock's unless said. */
+const picks = (role: Role | null, own: Partial<Picks> = {}, start: string | null = 'mock-1', offered: readonly string[] = ROLE_OFFERED) => withRole(role, { ...NOTHING_PICKED, ...own }, ROLE_POOLS, offered, start)
+
+test('U92 a role picked: its card’s harness, model and effort and its access where the person picked nothing, each when offered; what the person picked as they left it; No role, the draft’s own', () => {
+  // A draft nothing was picked in, a role of another harness: the card's harness, model and effort, its access beside the Internet.
+  assert.deepEqual(picks(LEAD), { pool: 'claude-1', settings: { pool: 'claude-1', values: { model: 'opus', effort: 'high' } }, access: ['internet', 'agora:delegate'] })
+  // The draft's own pool already one of the card's harness: that one, not the first of its harness.
+  assert.equal(picks(LEAD, {}, 'claude-2').pool, 'claude-2')
+  assert.deepEqual(picks(LEAD, {}, 'claude-2').settings, { pool: 'claude-2', values: { model: 'opus', effort: 'high' } })
+
+  // The harness the person picked stays; the card's model and effort are its own harness's: on another, none.
+  const otherHarness = picks(LEAD, { pool: 'mock-1' })
+  assert.deepEqual([otherHarness.pool, otherHarness.settings, otherHarness.access], ['mock-1', null, ['internet', 'agora:delegate']])
+  // Picked by the person and the card's own harness: the card's model and effort, the person having picked neither.
+  assert.deepEqual(picks(LEAD, { pool: 'claude-2' }).settings, { pool: 'claude-2', values: { model: 'opus', effort: 'high' } })
+
+  // The model with its effort is one pick: the person's effort alone, and the card sets neither.
+  const ownEffort = { pool: 'claude-1', values: { effort: 'low' } }
+  assert.deepEqual(picks(LEAD, { pool: 'claude-1', settings: ownEffort }).settings, ownEffort)
+  // A model the person picked keeps its harness with it, whatever the card's.
+  const ownModel = { pool: 'mock-1', values: { model: 'mock-large' } }
+  assert.deepEqual(picks(LEAD, { settings: ownModel }), { pool: 'mock-1', settings: ownModel, access: ['internet', 'agora:delegate'] })
+  assert.deepEqual(picks(LEAD, { settings: ownModel }, 'claude-1').pool, 'mock-1', 'wherever the draft started')
+  // One picked in a pool the person then left is that pool's: here they picked none, and the card's stand.
+  assert.deepEqual(picks(LEAD, { pool: 'claude-1', settings: ownModel }).settings, { pool: 'claude-1', values: { model: 'opus', effort: 'high' } })
+
+  // The access the person picked stays, nothing granted included.
+  assert.deepEqual(picks(LEAD, { access: [] }).access, [])
+  assert.deepEqual(picks(LEAD, { access: ['github:o/a:read'] }).access, ['github:o/a:read'])
+  // Every pick the person's own: the card sets nothing.
+  const all: Picks = { pool: 'mock-1', settings: ownModel, access: ['github:o/a:read'] }
+  assert.deepEqual(picks(LEAD, all), all)
+
+  // Only what is offered. No pool of the card's harness, or one kept for the tests: the draft's own harness, and that pool's own model.
+  for (const harness of ['gemini', 'opencode']) assert.deepEqual(picks({ ...LEAD, harness }), { pool: null, settings: null, access: ['internet', 'agora:delegate'] })
+  // A model or an effort its pool does not offer, or the card leaves to the pool: not set; the other is.
+  assert.deepEqual(picks({ ...LEAD, model: 'haiku' }).settings, { pool: 'claude-1', values: { effort: 'high' } })
+  assert.deepEqual(picks({ ...LEAD, effort: 'max' }).settings, { pool: 'claude-1', values: { model: 'opus' } })
+  assert.deepEqual(picks({ ...LEAD, model: null }).settings, { pool: 'claude-1', values: { effort: 'high' } })
+  assert.equal(picks({ ...LEAD, model: null, effort: null }).settings, null)
+  assert.equal(picks({ ...LEAD, model: 'default', effort: 'default' }).settings, null, 'never the value default')
+  // A pool no Session has opened in offers none yet.
+  assert.deepEqual(picks({ ...LEAD, harness: 'pi' }), { pool: 'unopened', settings: null, access: ['internet', 'agora:delegate'] })
+  // The effort under the id its pool gives it.
+  assert.deepEqual(picks({ ...LEAD, harness: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' }).settings, { pool: 'codex-1', values: { model: 'gpt-6.1-sol', reasoning_effort: 'xhigh' } })
+  // The access: the draft's own start and the card's, each when offered — a level under the one offered is —, in the order offered.
+  assert.deepEqual(picks({ ...LEAD, access: ['zai', 'agora:delegate', 'github:o/a:read', 'github:o/b:read'] }).access, ['github:o/a:read', 'internet', 'agora:delegate'])
+  assert.deepEqual(picks(LEAD, {}, 'mock-1', ['agora:delegate']).access, ['agora:delegate'], 'no Internet where none is offered')
+  assert.deepEqual(picks({ ...LEAD, access: [] }).access, ['internet'], 'a card with no access: the draft’s own start')
+  assert.deepEqual(picks(LEAD, {}, 'mock-1', []).access, [])
+
+  // No role, or back to it: what a card had set returns to the draft's own — nothing picked —, the person's picks kept.
+  assert.deepEqual(picks(null), NOTHING_PICKED)
+  assert.deepEqual(picks(null, all), all)
+  assert.deepEqual(picks(null, { settings: ownModel }), { pool: 'mock-1', settings: ownModel, access: null })
+  assert.deepEqual(accessGranted(picks(null).access, workstreamOf(empty, ''), accessDefault(ROLE_OFFERED)), ['internet'])
+  assert.equal(poolOffered(ROLE_POOLS, picks(null).pool, null, null), 'mock-1')
+  // What the pickers then show: the card's model and effort as the chosen ones, over the pool's own.
+  const shown = picks(LEAD)
+  assert.deepEqual(modelChoice(poolSettings(ROLE_POOLS[1]), shown.settings!.values).current, { model: 'opus', effort: 'high' })
+  assert.deepEqual(modelChoice(poolSettings(ROLE_POOLS[1])).current, { model: null, effort: null }, 'the control: none without the card')
+})
+
+test('U93 a role picked, a first message: the Create carries the role with the card’s settings and the profiles shown; the view gives the Workstream’s role', () => {
+  const shown = picks(LEAD)
+  assert.deepEqual(startBody(shown.pool!, shown.settings!.values, shown.access!, LEAD.role), {
+    pool: 'claude-1',
+    settings: { model: 'opus', effort: 'high' },
+    profiles: ['internet', 'agora:delegate'],
+    role: 'lead',
+  })
+  // The header's role is the view's, as the log projects it from the Workstream's first Create.
+  const created = (body: Record<string, unknown>) =>
+    logged([entryOf(1, 'command', { id: 'c1', kind: 'Create', target: {}, body: { pool: 'mock-test', harness: 'mock', execution: 'e1', ...body }, execution: 'e1', claimName: 'sbx-e1' }, { execution: 'e1', command: 'c1' })])
+  assert.equal(workstreamOf(created({ role: 'lead' }), ws).role, 'lead')
+  assert.equal(workstreamOf(created({}), ws).role, null, 'none without one')
+})
+
+test('U94 a message sent again: its Create names no role', () => {
+  assert.deepEqual(startBody('mock-test', {}, ['internet']), { pool: 'mock-test', profiles: ['internet'] })
+  assert.ok(!('role' in startBody('mock-test', { model: 'mock-large' }, [], null)))
+  assert.equal(startBody('mock-test', {}, [], 'dev').role, 'dev', 'the control: named when given')
+})
+
+test('U95 GET /api/config: its roles as the cards give them, none when it gives none; the profiles offered beside them', async () => {
+  const answering = (body: unknown) => new Api('', async () => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }))
+  const card = { role: 'lead', summary: 'Runs a small team on one goal.', harness: 'claude-code', model: 'opus', effort: null, access: ['agora:delegate'] }
+  assert.deepEqual(await answering({ testRoutes: false, credentials: { offered: ['internet'] }, roles: [card] }).config(), { offered: ['internet'], roles: [card] })
+  assert.deepEqual(await answering({ testRoutes: false, credentials: { offered: ['internet'] }, roles: [] }).config(), { offered: ['internet'], roles: [] })
+  // A server of before the roles, or without credentials: nothing offered.
+  assert.deepEqual(await answering({ testRoutes: false, credentials: null }).config(), { offered: [], roles: [] })
 })
 
 test('U62 an approval pending: sending open, no Create, what is sent refusing it; refused, sending as it was', () => {

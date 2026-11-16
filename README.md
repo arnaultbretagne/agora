@@ -7,7 +7,8 @@ first version, with no history shared with this one, is kept as the tag `archive
 | Folder | Content |
 | --- | --- |
 | `docs/` | Architecture (how it works), specs (what to implement) and ADRs (why). |
-| `apps/` | What gets deployed: the server, with the client; the workflows, run by Prefect. |
+| `apps/` | What gets deployed: the server, with the client. |
+| `roles/` | The role cards: who an agent started as a role is. |
 | `harnesses/` | The harness images Agent Sandbox starts in its pools. |
 | `packages/` | Shared code: executions, credentials, the bridge, the mock agent, test tools. |
 | `.github/workflows/` | CI: checks and image publishing. |

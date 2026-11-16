@@ -4,10 +4,9 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, loadRoles, logHttp, telemetry } from '@agora/log'
+import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, describeRoles, loadRoles, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
-import { teamFrom, teamHttp } from './team.ts'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -69,6 +68,8 @@ const executions = new ExecutionManager({
 // A fault point for tests (docs/reliability/README.md, rule 4): AGORA_FAULT=<point>[:<method>] kills
 // this process there, as a crash would.
 const faultSpec = process.env.AGORA_FAULT
+// docs/specs/roles.md, "Cards": the roles a Workstream may start as. A card that cannot be read stops the start, saying which.
+const roles = loadRoles(process.env.ROLES_DIR ?? join(import.meta.dirname, '..', '..', '..', 'roles'))
 const workstreams = new Workstreams({
   ...(faultSpec
     ? {
@@ -84,15 +85,13 @@ const workstreams = new Workstreams({
   maxActive: number('MAX_ACTIVE', 4),
   renewSeconds: number('RENEW_SECONDS', 60),
   sink,
+  roles,
   ...(credentials === undefined ? {} : { credentials }),
 })
 
-// The roles `spawn_agent` offers as `agent_type`: the cards the flows staff a team with. A card that cannot be read stops the start, saying so.
-const roles = loadRoles(process.env.ROLES_DIR ?? join(import.meta.dirname, '..', '..', 'flows', 'roles'))
-
 try {
   // docs/specs/delegation.md: the engine behind `spawn_agent`, `send_message`, `stop_agent` and `list_agents`; an approval held 4 min 30 s.
-  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000, roles })
+  new Delegations(workstreams, { approvalMs: number('APPROVAL_SECONDS', 270) * 1000 })
   // docs/specs/merge.md: the merge card, through the gateway from the server's own address, as the operator.
   // With the test routes, GITHUB_TEST_API stands in for GitHub behind the gateway (docs/specs/merge.md, G8).
   const githubTest = testRoutes && process.env.GITHUB_TEST_API ? process.env.GITHUB_TEST_API : null
@@ -121,15 +120,14 @@ try {
 }
 
 const client = serveClient(process.env.CLIENT_DIR ?? join(import.meta.dirname, '..', '..', 'web', 'dist'))
-// docs/specs/flows.md, "Launching from Agora": a team, when Prefect is configured.
-const teams = teamHttp(teamFrom(process.env), store)
 const server = createApi({
   manager: executions,
   testRoutes,
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
+  // docs/specs/roles.md, "Cards": what `GET /api/config` says of the roles, never a persona.
+  roles: describeRoles(roles),
   handle: async (req, res) =>
     (await limitsHttp(limits, req, res)) ||
-    (await teams(req, res)) ||
     (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) ||
     client(req, res),
   ...(credentials === undefined ? {} : { credentials }),

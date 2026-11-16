@@ -19,6 +19,8 @@ export interface HttpOptions {
   /** The test page, served at `/test/` with the test routes. */
   readonly testPage?: string
   readonly credentials?: CredentialSource
+  /** The roles a Workstream may start as, as the mounting deployable describes them (docs/specs/roles.md, "Cards"). */
+  readonly roles?: readonly unknown[]
   /** The test restart: `clean` drains like a SIGTERM, `kill` dies like a SIGKILL. */
   readonly onRestart?: (mode: 'clean' | 'kill') => void
 }
@@ -72,7 +74,7 @@ export function createApi(options: HttpOptions): Server {
     if (method === 'GET' && path === '/api/pools') return json(res, 200, { pools: await manager.pools() })
     if (method === 'GET' && path === '/api/executions') return json(res, 200, { executions: manager.views() })
     if (method === 'GET' && path === '/api/events') return events(req, res)
-    if (method === 'GET' && path === '/api/config') return json(res, 200, { testRoutes: options.testRoutes, credentials: options.credentials?.describe() ?? null })
+    if (method === 'GET' && path === '/api/config') return json(res, 200, { testRoutes: options.testRoutes, credentials: options.credentials?.describe() ?? null, roles: options.roles ?? [] })
 
     const command = /^\/api\/test\/executions\/([^/]+)\/([a-z-]+)$/.exec(path)
     if (method === 'POST' && command !== null && options.testRoutes) {

@@ -1414,8 +1414,8 @@ await check('D57', 'Delegation with a role, from Claude Code: judge on Codex, sr
     await stopDelegate(delegate)
     const current = fold(entries).current
     const startedAs = entries.find((e) => e.kind === 'delegation.started')?.content as Json
-    assert(startedAs?.agentType === role && startedAs?.harness === harness && current?.body.harness === harness, `${role}: started as ${JSON.stringify(startedAs)}`)
-    // Its card, in Agora's line of its first prompt.
+    assert(current?.body.role === role && startedAs?.harness === harness && current?.body.harness === harness, `${role}: started as ${JSON.stringify(startedAs)}, its Create's role ${String(current?.body.role)}`)
+    // Its card, in Agora's own block ahead of its first prompt.
     const first = entries.find((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt')
     const opening = String(((first?.content.params as Json)?.prompt as Json[] | undefined)?.[0]?.text ?? '')
     assert(opening.startsWith(`From Agora, not the person: your role, \`${role}\`.\n\n${heading}\n`), `${role}: its first prompt opens: ${opening.slice(0, 200)}`)
@@ -1437,6 +1437,63 @@ await check('D57', 'Delegation with a role, from Claude Code: judge on Codex, sr
     seen.push(`${role}: delegate ${delegate.slice(0, 8)} on ${harness}, ${wanted.map((setting) => `${setting.id}=${setting.value}`).join(', ')}; its card in its first prompt; its answer names its role, at ${message.position}; ${titled === undefined ? 'no title of its own' : `self-titled "${titled.slice(0, 60)}"`}`)
   }
   return seen.join(' | ')
+})
+
+// docs/specs/roles.md, P11: a person's Workstream started as `lead`, with the right to delegate and write access to a
+// repository of the cases' (GITHUB_A); its goal a one-line change. It plans and starts nobody; told to go, it starts a
+// `dev`, then a `judge`, each a sub-stream with its role; its last message names the pull request. Billed, and long:
+// the pull request it leaves is closed by hand.
+await check('P11', 'A lead on a one-line change: a plan first, then a dev and a judge by delegation', async () => {
+  assert(claude !== undefined && codex !== undefined, 'no claude-code or codex pool')
+  assert(process.env.GITHUB_A !== undefined, 'GITHUB_A names the repository the team works in')
+  const marker = `agora-p11-${randomUUID().slice(0, 8)}`
+  const w = new Workstream()
+  const goal =
+    `In the repository ${REPO_A}, add the file docs/${marker}.md holding the single line "${marker}", through a pull request to its default branch. ` +
+    'One feature, one dev, then a judge. Keep your plan to a few lines.'
+  await api('POST', '/api/workstreams', { id: w.id, owner: OWNER })
+  const created = await w.command('Create', {}, { pool: claude, role: 'lead', limits: { leaseSeconds: 900 }, profiles: ['internet', 'agora:delegate', `github:${REPO_A}:write`], prompt: [{ type: 'text', text: goal }] })
+  assert(created.status === 200, `Create refused: ${JSON.stringify(created)}`)
+  w.execution = String(created.execution)
+  /** Every delegate its tool lines say it started, in their order. */
+  const startedBy = async (): Promise<string[]> => {
+    const found: string[] = []
+    for (const x of await w.entries()) {
+      const update = x.kind === 'acp' && x.direction === 'in' && x.method === 'session/update' ? (x.content.params as Json)?.update : null
+      const m = update?.sessionUpdate === 'tool_call_update' ? /started ([0-9a-f-]{36}) · /.exec(JSON.stringify(update)) : null
+      if (m && !found.includes(m[1]!)) found.push(m[1]!)
+    }
+    return found
+  }
+  const entriesOf = async (id: string) => ((await (await fetch(`${base}/api/workstreams/${id}/entries`)).json()) as Entry[]) ?? []
+  // Its plan, and nobody started.
+  await w.turn('done', 600_000)
+  const plan = await w.said()
+  assert(plan.trim().length > 0 && (await startedBy()).length === 0, `before the word: ${String((await startedBy()).length)} delegates started; its plan: ${plan.trim().slice(0, 200)}`)
+  const first = (await w.entries()).find((e) => e.kind === 'acp' && e.direction === 'out' && e.method === 'session/prompt')
+  const opening = String(((first?.content.params as Json)?.prompt as Json[] | undefined)?.[0]?.text ?? '')
+  assert(opening.startsWith('From Agora, not the person: your role, `lead`.\n\n# Lead\n'), `its first prompt opens: ${opening.slice(0, 120)}`)
+  // The word.
+  w.session = String((await w.state()).current?.session)
+  assert((await w.write('Yes, go.')).status === 200, 'Write refused')
+  // Until it has nothing left to do: a dev, then a judge, each done, and its own last word.
+  const pull = new RegExp(`https://github\\.com/${REPO_A}/pull/\\d+`)
+  const done = await until('the team done', async () => {
+    const delegates = await startedBy()
+    if (delegates.length < 2) return null
+    const lead = await w.state()
+    if (lead.active !== null || lead.waiting.length > 0 || lead.steering !== null) return null
+    const states = await Promise.all(delegates.map(async (id) => fold(await entriesOf(id))))
+    if (states.some((state) => state.active !== null || state.waiting.length > 0)) return null
+    const said = await w.said()
+    return pull.test(said.slice(plan.length)) ? { delegates, states, said } : null
+  }, 3_000_000)
+  await w.stop()
+  for (const delegate of done.delegates) await stopDelegate(delegate)
+  const roles = done.states.map((state) => String([...state.executions.values()][0]?.body.role ?? 'none'))
+  assert(roles.includes('dev') && roles.includes('judge') && roles.indexOf('dev') < roles.indexOf('judge'), `its delegates' roles, in order: ${roles.join(', ')}`)
+  const harnesses = done.states.map((state) => String([...state.executions.values()][0]?.body.harness))
+  return `a plan of ${String(plan.trim().length)} characters, nobody started before the word; then ${roles.map((role, i) => `${role} on ${harnesses[i]!}`).join(', ')}; its last message names ${pull.exec(done.said.slice(plan.length))![0]}`
 })
 
 await check('C9', 'A warm Pod waiting beyond two thirds of its token', async () => {

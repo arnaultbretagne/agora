@@ -328,7 +328,7 @@ refuse it; nothing bound to `system:anonymous` or `system:unauthenticated` beyon
 
 A preview (infra-k8s ADR 0017 v4, §7) is served at `pr-<n>-<app>.preview.bretagne.dev`, behind a gate
 in `preview-system`: oauth2-proxy, which lets an `admin` through with a browser session. `previews`
-lets an execution — the flows' judge — reach a preview with no browser and no credential in the
+lets an execution — a `judge` — reach a preview with no browser and no credential in the
 sandbox: the gateway presents an identity of its own to a second gate beside the browser's, which
 takes that identity and no other.
 

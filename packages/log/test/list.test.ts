@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
-import { folderOwner, identity } from '../src/index.ts'
+import { identity } from '../src/index.ts'
 import { bench, EMAIL, page, readList, titles, views, type ListRead } from './lists.ts'
 
 test("L78 a row takes the owner's next position at each change of the row, none when a rebuild leaves it as it was", async (t) => {
@@ -23,16 +23,13 @@ test("L78 a row takes the owner's next position at each change of the row, none 
   assert.equal((await b.db.admin.query('SELECT last_position::text FROM lists WHERE owner=$1', [owner])).rows[0].last_position, '3')
 })
 
-test("L79 each owner's list holds its own rows, the agents' folder its own, each with its own positions", async (t) => {
+test("L79 each owner's list holds its own rows, each with its own positions", async (t) => {
   const b = await bench(t)
   const own = await b.workstream(identity('owner', EMAIL), { title: 'Mine' })
-  const folder = await b.workstream(folderOwner('agents', EMAIL), { title: 'My agent' })
   const other = await b.workstream(identity('owner', 'someone@example.org'), { title: 'Theirs' })
   const ids = (read: ListRead) => read.snapshot.map((r) => [r.id, r.position])
   assert.deepEqual(ids(await readList(b.url, 'after=0', { email: EMAIL })), [[own, '1']])
-  assert.deepEqual(ids(await readList(b.url, 'after=0&folder=agents', { email: EMAIL })), [[folder, '1']])
   assert.deepEqual(ids(await readList(b.url, 'after=0', { email: 'someone@example.org' })), [[other, '1']])
-  assert.deepEqual(await readList(b.url, 'after=0&folder=archive', { email: EMAIL }).then((r) => [r.status, r.body.reason]), [400, 'unknown_folder'])
 })
 
 test('L80 a list read from zero gives the 50 most recently changed rows, newest first, then the last position', async (t) => {

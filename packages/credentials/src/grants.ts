@@ -100,7 +100,7 @@ export function compileProfile(profile: string): Grant[] {
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
   if (profile === 'internet') return [{ host: '*' }]
-  // The previews, for the flows' judge: every method on every path of a preview's host, through its gate.
+  // The previews, for a judge: every method on every path of a preview's host, through its gate.
   if (profile === 'previews') return [{ host: PREVIEW_HOSTS, hostPattern: PREVIEW_HOST_PATTERN }]
   // The vault: its MCP endpoint only — POST for every message, GET for the server's stream, DELETE to end the
   // session. Read names its tools, which leaves out the others, the prompt included; write names none: the whole server.

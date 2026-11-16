@@ -1,13 +1,13 @@
 // The composer (docs/specs/assistant-ui.md, "Sending"), in assistant-ui's base skin: one bordered
-// field, the harness, model and access pickers inside it where their model picker sits, Send on the
+// field, the harness, model, role and access pickers inside it where their model picker sits, Send on the
 // right, Cancel beside it while the agent works. Above it, what the user must know before sending: a
 // refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits,
 // the messages waiting.
 // Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
-// "On a phone"): the harness's, the effort's bars, the key. Before them, the paperclip, when the agent
-// takes images or files; what is attached shows above the text ("Attachments").
+// "On a phone"): the harness's, the effort's bars, the role's mask, the key. Before them, the paperclip, when
+// the agent takes images or files; what is attached shows above the text ("Attachments").
 import { AuiIf, ComposerPrimitive, QueueItemPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, VenetianMaskIcon, XIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { Fragment, useState, type FC, type KeyboardEvent } from 'react'
 import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
@@ -15,7 +15,7 @@ import { ContextDisplay, Meter, severityOf, severityText } from '@/components/as
 import { cn } from '@/lib/utils'
 import { acceptOf } from '../agora/attachments.ts'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, TEAM, windowName, type AccountLimits } from '../agora/view.ts'
+import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
 import { HarnessMark } from './harness-mark.tsx'
 
 const menuContentClass =
@@ -33,9 +33,8 @@ const focusesItself = () => matchMedia('(any-pointer: fine)').matches
 
 /** The harness a new execution starts with; the running one, as a plain label, once started. */
 const HarnessPicker: FC = () => {
-  const { pools, pool, choosePool, composer, view, teams } = useAgora()
-  // A team stands beside the pools (docs/specs/assistant-ui.md, "Teams").
-  const current = pool === TEAM ? { name: TEAM, harness: TEAM } : pools?.find((p) => p.name === pool)
+  const { pools, pool, choosePool, composer, view } = useAgora()
+  const current = pools?.find((p) => p.name === pool)
   if (!composer.create)
     return view.harness ? (
       <span title={harnessName(view.harness)} className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-2 text-[13px]">
@@ -70,16 +69,6 @@ const HarnessPicker: FC = () => {
               </span>
             </DropdownMenu.Item>
           ))}
-          {teams && (
-            <DropdownMenu.Item className={menuItemClass} onSelect={() => choosePool(TEAM)}>
-              <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', pool === TEAM ? 'opacity-100' : 'opacity-0')} />
-              <HarnessMark harness={TEAM} className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
-              <span className="flex flex-col">
-                <span>{harnessName(TEAM)}</span>
-                <span className="text-muted-foreground text-[12px]">a lead and its team, on your goal</span>
-              </span>
-            </DropdownMenu.Item>
-          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -137,6 +126,44 @@ const ModelPicker: FC = () => {
               {choice.efforts.map((o) => item(choice.effort!.id, o.value, o.name, choice.current.effort))}
             </>
           )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
+/**
+ * Who the agent is to be (docs/specs/assistant-ui.md, "Roles"): No role, then each of Agora's roles by its name,
+ * its summary under it. Offered before the Workstream's first execution alone; what its card sets shows on
+ * the other pickers, where the person picked nothing.
+ */
+const RolePicker: FC = () => {
+  const { roles, role, chooseRole } = useAgora()
+  if (roles.length === 0) return null
+  const label = role?.role ?? 'No role'
+  const item = (name: string | null, text: string, summary?: string) => (
+    <DropdownMenu.Item key={name ?? ''} className={menuItemClass} onSelect={() => chooseRole(name)}>
+      <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', name === (role?.role ?? null) ? 'opacity-100' : 'opacity-0')} />
+      <span className="flex min-w-0 flex-col">
+        <span>{text}</span>
+        {summary && <span className="text-muted-foreground text-[12px]">{summary}</span>}
+      </span>
+    </DropdownMenu.Item>
+  )
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button type="button" aria-label="Role" title={label} className={cn(quietButton, 'flex min-w-0 items-center gap-1 @max-lg:shrink-0 @max-lg:px-2.5')}>
+          {/* Narrow, a mask alone: coral once a role is picked. */}
+          <VenetianMaskIcon className={cn('size-4 shrink-0', narrow, role !== null && 'text-primary')} />
+          <span className={cn('truncate', wide)}>{label}</span>
+          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={cn(menuContentClass, 'max-h-(--radix-dropdown-menu-content-available-height) max-w-[min(24rem,calc(100vw-1rem))] overflow-y-auto')}>
+          {item(null, 'No role')}
+          {roles.map((r) => item(r.role, r.role, r.summary))}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -368,8 +395,7 @@ export const Composer: FC<{ placeholder?: string }> = (props) => {
 
 const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
   const aui = useAui()
-  const { starting, composer, commands, promptCapabilities, pool } = useAgora()
-  const team = composer.create && pool === TEAM
+  const { starting, composer, commands, promptCapabilities } = useAgora()
   const attachable = acceptOf(promptCapabilities) !== null
   // The commands `/` lists, one of them highlighted; Escape hides them until the text changes.
   const text = useAuiState((s) => s.composer.text)
@@ -429,13 +455,7 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
           onKeyDown={onKeyDown}
           // Escape hides the commands listed; it cancels the turn only with none.
           cancelOnEscape={matches.length === 0}
-          placeholder={
-            team
-              ? 'Describe the goal for the team…'
-              : composer.refuses
-                ? 'Write to refuse, or to ask for a change'
-                : (placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…'))
-          }
+          placeholder={composer.refuses ? 'Write to refuse, or to ask for a change' : (placeholder ?? (composer.create ? 'Describe the task…' : 'Write to the agent…'))}
           className="placeholder:text-muted-foreground field-sizing-content max-h-48 min-h-11 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-base leading-6 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
@@ -444,8 +464,9 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
               <ComposerAddAttachment className={cn(quietButton, 'grid shrink-0 place-items-center px-0 disabled:opacity-50', 'w-7 pointer-coarse:w-9')} />
             )}
             <HarnessPicker />
-            {!team && <ModelPicker />}
-            {!team && <AccessPicker />}
+            <ModelPicker />
+            <RolePicker />
+            <AccessPicker />
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Usage />

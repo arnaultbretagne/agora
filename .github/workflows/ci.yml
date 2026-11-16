@@ -9,7 +9,7 @@ name: ci
 on:
   push:
     branches: [main, 'feat/**', 'fix/**', 'chore/**']
-    paths: [apps/**, harnesses/**, packages/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
+    paths: [apps/**, harnesses/**, packages/**, roles/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
   pull_request:
     branches: [main]
   workflow_dispatch:
