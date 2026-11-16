@@ -8,6 +8,8 @@ import { DELEGATION_META, FROM_META, isRole, REPORT_META, ROLE_META } from './ma
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 /** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
 export const STEERING = '_session/steering'
+/** ACP's notification withdrawing a request (ACP "Cancellation"). */
+export const CANCEL_REQUEST = '$/cancel_request'
 
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
 export interface Turn {
@@ -173,6 +175,8 @@ export interface State {
   active: Turn | null
   current: Execution | null
   permissions: Map<string, Entry>
+  /** The permissions their agent withdrew (`$/cancel_request`), by their request's position: Agora answers them `cancelled`. */
+  withdrawn: Set<string>
   /** The pending question: its Ask (docs/specs/log.md, "Commands"). */
   question: Entry | null
   /** Each approval's wait (docs/specs/delegation.md, "Approval"): from its Ask to its end, open while pending. */
@@ -285,6 +289,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     active: null,
     current: null,
     permissions: new Map(),
+    withdrawn: new Set(),
     question: null,
     waits: [],
     waiting: [],
@@ -480,6 +485,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             state.tools.clear()
           }
         }
+      }
+      // A permission its agent withdraws (ACP "Cancellation"): still pending, until Agora's `cancelled` answer is written.
+      if (entry.method === CANCEL_REQUEST && entry.direction === 'in') {
+        const withdrawn = state.permissions.get(`in:${idKey(object(content.params)?.requestId)}`)
+        if (withdrawn?.execution === entry.execution) state.withdrawn.add(withdrawn.position)
       }
       if (entry.method === 'session/cancel' && entry.direction === 'out' && !state.children.has(String(object(content.params)?.sessionId))) {
         state.unsteerable = true

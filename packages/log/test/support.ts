@@ -142,19 +142,27 @@ export class Relay {
  * A TCP relay in front of PostgreSQL that can lose the reply to one COMMIT, as a network drop would:
  * the transaction is committed on the server, and its client only sees its connection fail. Armed with
  * a fragment of SQL, it drops the connection at the next COMMIT reply of the transaction that sent it.
+ * `failCommit` drops it before that COMMIT reaches the server instead: the transaction is rolled back.
  */
 export class PgRelay {
   private readonly sockets = new Set<Socket>()
   private readonly target: { host: string; port: number }
   private server: NetServer | null = null
   private armed: string | null = null
+  private failing: string | null = null
   port = 0
   dropped = 0
+  /** Transactions rolled back by `failCommit`. */
+  failed = 0
   constructor(target: { host: string; port: number }) {
     this.target = target
   }
   arm(sql: string): void {
     this.armed = sql
+  }
+  /** The next transaction that sends this fragment loses its connection before its COMMIT is sent on. */
+  failCommit(fragment: string): void {
+    this.failing = fragment
   }
   async listen(): Promise<this> {
     this.server = createServer((client) => {
@@ -162,6 +170,7 @@ export class PgRelay {
       upstream.connect(this.target.port, this.target.host)
       this.sockets.add(client).add(upstream)
       let marked = false
+      let failing = false
       let pending = Buffer.alloc(0)
       const drop = () => {
         client.destroy()
@@ -171,6 +180,15 @@ export class PgRelay {
       }
       client.on('data', (chunk: Buffer) => {
         if (this.armed !== null && chunk.includes(this.armed)) marked = true
+        if (failing && chunk.includes('COMMIT')) {
+          this.failed++
+          drop()
+          return
+        }
+        if (this.failing !== null && chunk.includes(this.failing)) {
+          this.failing = null
+          failing = true
+        }
         upstream.write(chunk)
       })
       // The server's side is a stream of typed messages (no TLS here): forwarded one message at a time.
