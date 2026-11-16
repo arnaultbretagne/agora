@@ -23,6 +23,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R15 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. D57, its delegator on Claude Code, the role's block given by the log. |
 | R16 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, as R12: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that tells a delegator its delegate's request and gives it `answer_agent`: every case of R14 ran again; D46's test counting only the messages of its Cancel; D58 to D61 new, the delegates' requests the mock agent's `/permission`. On `523061a`, each guard of D58 to D60 removed in turn — `waiting` in the delegate's state, its place among the three, the request told once, the request named, the delegator's `from` —: its case failed each time; the refusal when the log itself answers `stale_permission` after the look, and `delegate_stopped` at that point, were dropped as no case could reach them. |
 | R17 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4, the log's tests all green, as R16: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that answers a permission its agent withdraws: every case of R16 ran again; D62 new. On `30d72de`, the withdrawn permission left unanswered: D62 failed. |
+| R18 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own, as R17: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that has the dispatcher answer a withdrawn permission at each run. |
 
 ## Cases
 
@@ -117,6 +118,7 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D59 | — | local | R17 | proven | As R16. |
 | D60 | — | local | R17 | proven | As R16. |
 | D61 | real: the delegator's claim expired, twice | local | R17 | proven | As R16. |
+| D62 | — | local | R18 | proven | As R17. |
 
 ## Not covered
 

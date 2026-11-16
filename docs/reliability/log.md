@@ -44,6 +44,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R36 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. L147, on the server that gives a role its block. |
 | R37 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/permission` asks one and waits. On the commit that makes a pending permission a request of its Workstream's. On `523061a`, each guard of the cases removed in turn — the row's count, the view's `request` and its being put, the native sub-agents left out, Agora's `from` kept and the person's left out, the element's `from` —: its case failed each time. |
 | R38 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the log's 306 tests green; in the browser suite U81 failed once (its next message 179 px lower after the hover), then green alone three times and in the whole suite run again on the same commit. On the commit that answers a permission its agent withdraws and moves the core projector to version 10; the mock agent's `/withdraw` sending `$/cancel_request`. On `30d72de`, the version put back to 9: L157 failed; the withdrawn permission left unanswered: L158 failed. |
+| R39 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the writer's connections through `PgRelay`, whose `failCommit` cuts the connection of the first transaction sending a fragment before its COMMIT reaches PostgreSQL. On the commit that has the dispatcher answer a withdrawn permission at each run. L159 run against the answer written once after capture (`fe1f37f`'s): failed, its turn never answered; the dispatcher's answer removed: L158 and L159 failed. |
 
 ## Cases
 
@@ -245,6 +246,8 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L154 | — | local | R38 | proven | As R37. |
 | L155 | — | local | R38 | proven | As R37. |
 | L156 | — | local | R38 | proven | As R37. |
+| L159 | real: the writer's connection cut before the answer's COMMIT, the transaction rolled back | local | R39 | proven | One failed write; then one answer to its request, `{ outcome: cancelled }`, and one `acp.sent` for it; no `request` and no permission pending; the agent's turn `done`. |
+| L158 | — | local | R39 | proven | As R38. |
 
 ## Not covered
 
