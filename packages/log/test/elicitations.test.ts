@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
-import { object, type Entry, type ListRow } from '../src/index.ts'
+import { core, object, type Entry, type ListRow } from '../src/index.ts'
 import { declinedBy, contentRefusal, fieldsOf } from '../src/forms.ts'
 import { database, expire, FakeKube, Lab, lines, until } from './support.ts'
 
@@ -150,18 +150,57 @@ test('L163 Codex’s form with a secret field: declined by Agora at once, one an
   assert.equal(declinedBy({ mode: 'form', requestedSchema: { type: 'object', properties: { q: field } } }), null)
 })
 
-test('L164 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: pending no more, cancelled, no answer written; a Write accepted after its turn', async (t) => {
+test('L164 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: one answer, cancel; pending no more, no request; a Write accepted after its turn', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
   assert.ok((await lab.write(ws, '/form auto')).accepted)
   const form = await asked(lab, ws)
+  await settled(lab, ws, form.position)
   await lab.turn(ws, 'done')
+  await until('its answer', async () => (await answersTo(lab, ws, form)).length > 0)
   await settled(lab, ws, null)
+  assert.deepEqual(await answersTo(lab, ws, form), [{ action: 'cancel' }])
   assert.equal((await lab.state(ws)).permissions.size, 0)
-  assert.equal((await elicitations(lab, ws))[0]?.status, 'cancelled')
-  assert.deepEqual(await answersTo(lab, ws, form), [])
+  assert.deepEqual((await elicitations(lab, ws))[0]?.answer, { action: 'cancel' })
   assert.ok((await lab.write(ws, 'after it')).accepted)
+})
+
+test('L167 Agora started once its core projector changed version, a form pending, its connection closed before and not open again, its objects as the version before left them — the form an `acp` line, no request —: rebuilt at start, no new connection: its `elicitation` element pending, its view’s and its row’s request; its checkpoint at the new version', async (t) => {
+  const db = await database()
+  const keys = generateKeyPairSync('ed25519')
+  const kube = new FakeKube(keys.publicKey)
+  let lab = await Lab.start({ db, kube, keys })
+  t.after(async () => {
+    await lab.close()
+    await kube.closeAll()
+    await db.drop()
+  })
+  const ws = await lab.workstream()
+  await lab.open(ws)
+  assert.ok((await lab.write(ws, '/question several')).accepted)
+  const form = await asked(lab, ws)
+  await settled(lab, ws, form.position)
+  // Stopped cleanly, everything projected; then as version 10 left it: the form no element of its own, no request.
+  await lab.workstreams.stop()
+  await lab.workstreams.projections.run(ws)
+  const connected = (await lab.entries(ws)).filter((x) => x.kind === 'execution.connected').length
+  await db.admin.query("UPDATE checkpoints SET version='10' WHERE projector='core' AND workstream=$1", [ws])
+  await db.admin.query("UPDATE objects SET object=jsonb_build_object('type','acp','line',object->'params'), type='acp' WHERE workstream=$1 AND kind='element' AND object->>'type'='elicitation'", [ws])
+  await db.admin.query("UPDATE objects SET object=object - 'request' WHERE workstream=$1 AND kind='workstream'", [ws])
+  await db.admin.query(`UPDATE listings SET "row"="row" - 'request' WHERE workstream=$1`, [ws])
+  lab = await lab.restart('halt', { executions: { bridgeAddress: () => '127.0.0.1:9' } })
+  const view = await until('rebuilt', async () => {
+    const found = await viewOf(lab, ws)
+    return found?.request !== undefined ? found : null
+  }, 10_000)
+  assert.equal(view.request, form.position)
+  assert.equal((await rowOf(lab, ws))?.request, form.position)
+  const [element] = await elicitations(lab, ws)
+  assert.deepEqual([element?.status, element?.requestPosition], ['pending', form.position])
+  const { rows } = await db.admin.query("SELECT version FROM checkpoints WHERE projector='core' AND workstream=$1", [ws])
+  assert.equal(rows[0].version, core.version)
+  assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'execution.connected').length, connected, 'no new connection')
 })
 
 test('L165 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {

@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
 import { join } from 'node:path'
-import { CALLER_HEADER, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
+import { CALLER_HEADER, core, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
 import { database, expire, FakeKube, grants, Lab, lines, sleep, until, type LabOptions } from './support.ts'
 
 type Text = { content: { type: string; text: string }[]; isError?: boolean }
@@ -1490,6 +1490,65 @@ test('D61 a delegate’s agent asking a permission while its delegator’s execu
     return state.executions.size === 3 && (await prompts(lab, ws)).length === 2 && [...state.turns.values()].at(-1)?.status === 'done'
   }, 30_000)
   assert.equal(blocksOf((await prompts(lab, ws)).at(-1)!).at(-1)!.text, requestNotice(delegate, '/sleep 4', request!.position))
+})
+
+test('D62 a delegate’s agent withdrawing its permission once told to its delegator: waiting no more; idle once its turn ends, its place free; answer_agent on it stale_permission, nothing pending; its last message back', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/withdraw 4', harness: 'mock' } })))
+  const [told] = await manyFromOthers(lab, ws, 1, 20_000)
+  const request = /its request (\d+):/.exec(wordsOf(told!))![1]!
+  assert.equal(text(await c.callTool({ name: 'list_agents', arguments: {} })), `${delegate} · /withdraw 4 · waiting`)
+  // Withdrawn: Agora answers it `cancelled`, and the delegate waits no more.
+  await lab.turn(delegate, 'done', 20_000)
+  const answers = lines(await lab.entries(delegate), 'out').filter((x) => x.request_position === request)
+  assert.deepEqual(answers.map((x) => x.content.result), [{ outcome: { outcome: 'cancelled' } }])
+  const row = await until('its row idle', async () => {
+    const found = (await lab.workstreams.projections.row(delegate, null)) as (ListRow & { request?: string }) | null
+    return found?.delegation === 'idle' ? found : null
+  })
+  assert.equal(row.request, undefined)
+  assert.equal(text(await c.callTool({ name: 'list_agents', arguments: {} })), `${delegate} · /withdraw 4 · idle`)
+  const late = (await c.callTool({ name: 'answer_agent', arguments: { to: delegate, request, option: 'allow-once' } })) as Text
+  assert.deepEqual([late.isError, text(late)], [true, `stale_permission: nothing pending in ${delegate} · /withdraw 4`])
+  const back = await until('its last message', async () => (await fromOthers(lab, ws)).find((u) => u.as === 'delegate'), 20_000)
+  assert.equal(wordsOf(back), 'Withdrawn: cancelled.')
+  // Its place among the three is free: three more start.
+  for (const n of [1, 2, 3]) delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: `/sleep 20 ${String(n)}`, harness: 'mock' } })))
+})
+
+test('L157 Agora started once its core projector changed version, a delegate’s permission pending, its connection closed before and not open again, its view and rows as the version before left them: rebuilt at start — the delegate’s view and row with its request, waiting; its delegator’s row counting it; list_agents saying waiting', async (t) => {
+  const context = await started(t, ['agora:delegate'])
+  const { db, url, ws, execution } = context
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/permission', harness: 'mock' } })))
+  const [request] = await until('its request', async () => ((await pendingIn(context.lab, delegate)).length > 0 ? pendingIn(context.lab, delegate) : null))
+  await until('its row waiting', async () => (await context.lab.workstreams.projections.row(delegate, null))?.delegation === 'waiting')
+  // Stopped cleanly: each connection's break written; everything projected, as the server before left it.
+  await context.lab.workstreams.stop()
+  for (const w of [ws, delegate]) await context.lab.workstreams.projections.run(w)
+  assert.ok((await context.lab.entries(delegate)).some((x) => x.kind === 'execution.break'), 'its connection closed')
+  const connected = (await context.lab.entries(delegate)).filter((x) => x.kind === 'execution.connected').length
+  // As the projector before left them, at its version: no request, `working`, nothing waiting under the delegator.
+  await db.admin.query("UPDATE checkpoints SET version='9' WHERE projector='core' AND workstream = ANY($1::uuid[])", [[ws, delegate]])
+  await db.admin.query(`UPDATE objects SET object=(object - 'request') || '{"delegation":"working"}'::jsonb WHERE workstream=$1 AND kind='workstream'`, [delegate])
+  await db.admin.query(`UPDATE listings SET "row"=("row" - 'request') || '{"delegation":"working"}'::jsonb WHERE workstream=$1`, [delegate])
+  await db.admin.query(`UPDATE listings SET "row"=jsonb_set("row", '{below,waiting}', '0') WHERE workstream=$1`, [ws])
+  // Started again, its bridges out of reach: no new connection, no entry to project.
+  context.lab = await context.lab.restart('halt', { executions: { bridgeAddress: () => '127.0.0.1:9' } })
+  const lab = context.lab
+  const view = await until('rebuilt', async () => {
+    const found = (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')?.object
+    return found?.request !== undefined ? found : null
+  }, 10_000)
+  assert.deepEqual([view.request, view.delegation], [request!.position, 'waiting'])
+  const row = (await lab.workstreams.projections.row(delegate, null)) as ListRow & { request?: string }
+  assert.deepEqual([row.request, row.delegation], [request!.position, 'waiting'])
+  assert.equal(Number((await lab.workstreams.projections.row(ws, null))!.below.waiting), 1)
+  assert.equal(await lab.workstreams.delegations!.list({ workstream: ws, execution, profiles: ['agora:delegate'] }), `${delegate} · /permission · waiting`)
+  const { rows } = await db.admin.query("SELECT version FROM checkpoints WHERE projector='core' AND workstream=$1", [delegate])
+  assert.equal(rows[0].version, core.version)
+  assert.equal((await lab.entries(delegate)).filter((x) => x.kind === 'execution.connected').length, connected, 'no new connection')
 })
 
 // ---------------------------------------------------------------- forms (docs/specs/delegation.md, "Requests")
