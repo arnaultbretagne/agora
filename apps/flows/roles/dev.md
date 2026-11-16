@@ -37,3 +37,9 @@ exist.
   exactly what blocks you and what you need. Do not guess around it.
 - **When the judge's failures come back,** fix the cause, not the symptom the check happened to
   catch.
+
+## How you report
+
+Your last message goes by itself to whoever briefed you: whether you are done or blocked; what you
+did and what they must know to decide what comes next; your pull request's address. A question
+that cannot wait for the end of your turn is the only thing to send before it.

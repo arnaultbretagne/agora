@@ -11,7 +11,8 @@
   does with one differs (ADR Log).
 - ACP has an extension for this, `_session/steering`: a message for the running turn. Claude's and
   Codex's adapters offer it; opencode does not.
-- A flow waits for a turn of its own for each prompt it writes (`flows.md`).
+- A caller of the API may wait for a turn of its own for each prompt it writes: the team flow did
+  (ADR Roles), and the cases' scripts do.
 
 ## Decision
 
@@ -42,8 +43,8 @@ flowchart LR
 - **One primitive, two ways out.** The queue works everywhere and needs nothing from the adapter;
   steering makes the answer come sooner where the adapter can. A failed steer loses nothing: the
   message is still in the log.
-- **A flow keeps its contract.** It reads its turn from what it wrote, so it never says `mayWait`, and
-  no code path of the flows or of the API's callers changes.
+- **A caller that waits keeps its contract.** It reads its turn from what it wrote, so it never says
+  `mayWait`, and no code path of the API's callers changes.
 - **A steer during a running tool disturbs Claude, not Codex.** Measured in real sandboxes through the
   gateway, 2026-11-04, claude-agent-acp 0.100.0 (Haiku) and codex-acp 2.5.0 with codex 0.165.0
   (gpt-6-luna):
@@ -76,7 +77,7 @@ flowchart LR
 | The queue alone | Works everywhere; a correction reaches the agent only when its turn ends, which can be an hour. | Kept as the way every harness has, not as the only one. |
 | Steering at once, whatever runs | Measured above: on Claude, the turn ends without the tool's result. | Dropped. |
 | A second `session/prompt` | The adapters disagree (ADR Log). opencode reads it at its next step, both requests answered at idle, with a window where a message goes unanswered (code read, 1.18.34). | Dropped. |
-| A Write that always waits | A flow's Write would be accepted with no turn to wait for: its `Thread.turn_written` needs the prompt's `user` element, and it loops until then. | Dropped: a Write says it may wait. |
+| A Write that always waits | A waiting caller's Write would be accepted with no turn to wait for: the team flow's read its turn from the prompt's `user` element, and looped until then. | Dropped: a Write says it may wait. |
 | Two gestures, as assistant-ui's lanes and Codex's terminal offer | A message saying "when you are done" is honoured by steering too (measured above): the second gesture adds a choice with nothing behind it. | Not now. |
 | The waiting messages back in the composer after a Cancel, as Claude Code and Codex's terminals do | Text from several messages in one field, in one tab only, with a draft already there. | Dropped: they stay in the log, as assistant-ui's own queue keeps them. |
 
@@ -92,4 +93,4 @@ flowchart LR
 - What an agent says after its turn's answer is shown, in that turn. Claude's own background tasks do
   this with no steer. The execution's deadline does not move for it.
 - A `session/prompt` line can now be written long after its Write: the catch-up is chosen when it goes.
-- A message held after a Cancel holds what comes after it: a flow's Write is refused `turn_active`, and it escalates after its 15 minutes, until the person sends or retracts.
+- A message held after a Cancel holds what comes after it: a Write that does not say it may wait is refused `turn_active`, until the person sends or retracts.

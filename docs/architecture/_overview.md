@@ -64,8 +64,9 @@ The server has three parts, each with its own document: the log (`log.md`), the 
 PostgreSQL and serves the client on `agora.bretagne.dev`, behind the identity proxy; with its test
 routes open, it also serves a page that plays every case, and the live cases drive it.
 
-Workflows chain agents outside the server (`flows.md`): Prefect runs them, and each of their
-steps is a Workstream it drives through the server's API, like the client does.
+An agent hands work to another through the server's own MCP (`delegation.md`), and may start it as
+a role (`roles.md`). A team is a `lead`, a role whose card has it start the others: nothing
+orchestrates from outside the server.
 
 ## The prerequisites
 

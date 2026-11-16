@@ -29,12 +29,12 @@ Workstream.
 
 | Exchange | Route | Content |
 | --- | --- | --- |
-| Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `folder=agents`, its agents' folder ("Accounts"); with `parent`, a Workstream's sub-streams, read while it is unfolded. Without the proxy, the list of the owner the client creates with. |
+| Workstreams | `GET /api/workstreams/list?after=C` | The signed-in identity's list (`log.md`, "The list"): its 50 most recently changed rows, then each change as it happens, read as the thread is — never fetched again whole. With `parent`, a Workstream's sub-streams, read while it is unfolded. Without the proxy, the list of the owner the client creates with. |
 | Older Workstreams | `GET /api/workstreams/page?before=B` | The next 50 older rows, when the end of the list comes into view. |
 | A search | `GET /api/workstreams/page?title=T`, `GET /api/search?pattern=P` | The search box's text, as typed and ignoring case: the rows whose title holds it, from every page, and the Workstreams whose exchanges hold it, each with its latest matching line (`search.md`). |
 | A sub-stream's parents | `GET /api/workstreams/{id}/row` | The rows of an open sub-stream's parents, one by one up to its root, when the list has not loaded them: for the header. |
 | The account | `GET /api/account` | Once the page opens: the identity the proxy passes (`log.md`, "HTTP"). |
-| Teams | `GET /api/teams`, `POST /api/teams` | Whether a team can be launched, once the page opens; a team's goal, on its first message ("Teams"; `flows.md`, "Launching from Agora"). |
+| Roles | `GET /api/config` | Once the page opens, with what Agora offers: the roles a Workstream may start as, each with its summary, harness, model, effort and access ("Roles"; `roles.md`, "Cards"). |
 | Harnesses | `GET /api/pools` | The catalogue: pool, harness, ready replicas (`executions.md`), and the settings and commands the pool's last Session gave (`log.md`, "HTTP"). The choice offered for a new execution. |
 | A new Workstream | `POST /api/workstreams` | On its first message, never before. Its id, chosen by the client; the owner is the identity the proxy passes. |
 | A Workstream's thread | `GET /api/workstreams/{id}/thread?after=C` | Server-sent events: `snapshot` rows, `snapshot-end`, then `live` rows (`log.md`, "The thread"). |
@@ -129,7 +129,7 @@ In the composer, as in every state:
 | --- | --- |
 | The keys | Enter starts a new line, on a phone as on a computer; Ctrl+Enter, or ⌘+Enter, sends, as **Send** does. |
 | A text not sent | Each Workstream, and the draft, keeps its own, its attachments with it: moving to another, or to the draft with **New workstream**, puts it away and shows the other's, empty if it has none; coming back shows it again, the attachments added again as when first attached. Kept in the page only: gone after a reload. |
-| A message given back | A draft's Workstream or a team refused, a refused Create or Write, or a message given back by the log ("Sending"): the message goes back into the composer of its own Workstream — of the draft for the first two —, with the reason above it, shown there when that Workstream is, never in another's. Several waiting there: all of them, one after the other, a blank line between their texts. A reason is said until that Workstream's next command, or until it is left. |
+| A message given back | A draft's Workstream refused, a refused Create or Write, or a message given back by the log ("Sending"): the message goes back into the composer of its own Workstream — of the draft for the first —, with the reason above it, shown there when that Workstream is, never in another's. Several waiting there: all of them, one after the other, a blank line between their texts. A reason is said until that Workstream's next command, or until it is left. |
 
 ## Messages during a turn
 
@@ -169,27 +169,26 @@ are the execution's (`log.md`, "The Workstream view": `profiles`).
 | Before an execution | The choice goes into the Create's `profiles`. In a draft, and in a Workstream that has had no execution, it starts with `internet` when offered, nothing else; when sending continues an ended or failed execution, from that execution's `profiles`. |
 | During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
 
-## Teams
+## Roles
 
-A lead and its team on a goal (`flows.md`), launched from the client when the server can.
+Who the agent is to be: one of Agora's roles (`roles.md`), picked before a Workstream's first
+execution and kept.
 
 | Element | Rule |
 | --- | --- |
-| The harness picker | **Team** after the pools, with its mark and "a lead and its team, on your goal", when `GET /api/teams` says available; remembered as a pool is. |
-| A draft with Team | No model picker, no access picker, no paperclip; "Describe the goal for the team…". Its first message is the goal. |
-| Sending | `POST /api/teams` with a new id and the goal; refused, the message back in the composer with the reason. Accepted, the Workstream opens: the lead's, the person's own. |
-| Starting | Until the Workstream's first turn, sending is closed: "The team is starting…". Then it is the lead's Workstream like any other: its questions answered there, a message written to the lead there. |
+| The role picker | In a draft, and in a Workstream that has had no execution, before the harness picker, when `GET /api/config` gives roles: **No role** first, then each role by its name, its summary under it. A draft starts with no role: the choice is not remembered. |
+| Picking a role | The harness picker takes the card's harness, the model picker its model and its effort, each when the catalogue offers it; the access becomes the draft's own start — `internet` when offered — and the card's `access`, each when offered. Every one of them stays the person's to change before sending. Back to **No role**: the draft's own defaults again. |
+| Sending | The Create carries `role`, with the settings and the profiles picked. Refused `unknown_role`: the message back in the composer with the reason. |
+| Once started | No role picker: the header names the role before the harness ("lead · Claude Code · ready"); sending again, in the same execution or a later one, names none. |
 
 ## Accounts
 
-Who the person is, and the folder that keeps their agents' Workstreams out of their list: those of
-their teams' members, theirs alone (`log.md`, "HTTP"; `flows.md`, "Launching from Agora").
+Who the person is (`log.md`, "HTTP").
 
 | Element | Rule |
 | --- | --- |
 | The account | At the foot of the sidebar, as assistant-ui's own demo has it: the person's e-mail, its initial on a plate. None without the proxy's identity. |
 | Opened | Upwards: **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
-| The agents' folder | Below the list, while it holds a Workstream: **Agents**, a folder's mark and their number, a + after it while older ones are unread; closed at first, opened or closed by a tap, remembered in the browser. Opened: its Workstreams as the list's; hidden while a search shows its results. Opening one, sending in it, answering in it: as in one's own. None without the proxy's identity. |
 
 ## Context and limits
 
@@ -367,10 +366,10 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Area | Element | Component |
 | --- | --- | --- |
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
-| Sidebar | **New workstream**: the draft at `/`; **Search**: 250 ms after the last key, the Workstreams whose title or exchanges hold the text — sub-streams and the agents' folder's included —, the most recently changed first, each a row of the list with the latest matching line of its exchanges under its title — from the word before the text, the text marked —, replace the list and the folder until the box is empty | **ours** |
-| Sidebar | The account, at its foot; the agents' folder, below the list ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
+| Sidebar | **New workstream**: the draft at `/`; **Search**: 250 ms after the last key, the Workstreams whose title or exchanges hold the text — sub-streams included —, the most recently changed first, each a row of the list with the latest matching line of its exchanges under its title — from the word before the text, the text marked —, replace the list until the box is empty | **ours** |
+| Sidebar | The account, at its foot ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
 | Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
-| Header | Title; in a sub-stream, its parents before it, each opening its Workstream; harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
+| Header | Title; in a sub-stream, its parents before it, each opening its Workstream; its role, when it has one, then harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Sidebar, header, composer | A native sub-stream: in the sidebar, a row among its parent's sub-streams, its title after a small "sub-agent" mark, a coral, pulsing dot while `working`, "waiting for you" while `waiting`, a red dot for `failed`, none otherwise; in the header, its parents, its title, its harness · its state label, **Cancel** while its turn is in progress and `native.cancel` is true, never **Stop**; no composer and no picker, the read-only line in their place | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
 | Thread | A draft: the mark, and "What shall we work on?" in Newsreader, over the composer | **ours** |
@@ -381,6 +380,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | Input, Send, Cancel; a spinner while a message waits for the Session of the execution it starts | `ComposerPrimitive` |
 | Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
 | Composer | The paperclip, and the attachments' tiles above the text | `Attachment` (registry), adapted |
+| Composer | The role picker, inside, before the harness picker, while the Workstream has had no execution | **ours** (Radix menu) |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
 | Composer | The access picker, after the model | **ours** (Radix menu) |
@@ -420,6 +420,7 @@ menu and in the button's tooltip; the harness menu shows the marks too.
 
 | Picker | Wide | Narrow |
 | --- | --- | --- |
+| Role | **No role**, or the role's name | A mask, coral when a role is picked |
 | Harness | Its name | Its mark: Claude Code's, Codex's or OpenCode's; a robot for any other |
 | Model | The model · the effort | The model; the effort as one to four bars, by its rank among the efforts offered |
 | Access | The key and what is granted | The key, with a coral dot when anything is granted |
@@ -495,8 +496,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U48 | A question pending on a Workstream with no execution, then answered | Sending closed, no execution offered, "Answer the question above."; once answered, sending open and starting an execution. |
 | U49 | The list with a Workstream in `none` whose question is pending | Listed, though not open; once answered, left out again. |
 | U50 | In a browser, a question pending on a Workstream opened by its address; a note written, an option chosen | One box holding the title, the text, "waiting for you", the note's field and the options; "waiting for you" in the list; "Answer the question above."; chosen: Answer sent with the option and the note, the field and options gone, the box's foot noting them, sending open. |
-| U51 | In a browser, teams available: Team picked in a draft, a goal sent | No model or access picker, "Describe the goal for the team…"; `POST /api/teams` with the goal: the run asked with it, the new Workstream as the lead's, the person's identity, their agents' folder for the members; the Workstream open, sending closed, "The team is starting…". |
-| U52 | In a browser, the proxy's identity: a Workstream of the person's, one of their agents' folder, one of someone else's folder; the account opened; the folder opened, its Workstream opened; the page reloaded | The person's e-mail at the sidebar's foot; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the folder closed, counting 1, the list the person's one Workstream; opened, the folder's Workstream, which opens; reloaded, the folder still open. |
+| U52 | In a browser, the proxy's identity: a Workstream of the person's, one of someone else's; the account opened | The person's e-mail at the sidebar's foot; opened, Sign out alone, to `/oauth2/sign_out?rd=%2F`; the list the person's one Workstream. |
 | U53 | In a browser, 60 Workstreams; the end of the list scrolled into view | The 50 most recent first; then the 10 older below them. |
 | U54 | In a browser, a Workstream of the list changed by another client; the network watched for 15 seconds | It moves to the top without a reload; no request fetches the list again whole. |
 | U55 | In a browser, the title of a Workstream not loaded typed in Search, in another case; then the box emptied | That Workstream listed; emptied, the list as before. |
@@ -507,6 +507,11 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U89 | In a browser, that Workstream's thread | One line for each sub-agent at its announcement, with its title, a link to its sub-stream and its state; none of their text or tools; the model picker and the context's ring the Workstream's own. |
 | U90 | In a browser, a native sub-stream opened: working, `cancel` advertised; then idle; one that advertises none; one with no task | Its parents in the header, its task shown as from its parent, its text and its tools; no composer, "Read-only: a sub-agent of …"; **Cancel**, which sends Cancel to its host for its turn; then "idle", no **Cancel**; never a **Cancel**; its response alone. No **Stop** and no picker in any. |
 | U91 | In a browser, a permission pending in a native sub-stream; an option chosen | Its card in the sub-stream's thread; RespondPermission sent to its host with that request; the option answered. |
+| U92 | In a browser, roles offered: a draft; `lead` picked; then its model changed; then **No role** | **No role** on the picker, the draft's own harness, model and access; picked: the card's harness, model and effort on their pickers, its `access` granted beside the Internet; the model changed stays changed; **No role**: the draft's own again. |
+| U93 | In a browser, `lead` picked in a draft, a first message sent | The Create carries `role`, the card's settings and the profiles shown; the Workstream opens with no role picker, its header naming the role before the harness. |
+| U94 | In a browser, a Workstream started with a role: a second message; its execution ended, then a message | Neither Create nor Write names a role; the header names it still. |
+| U95 | In a browser, no role offered; a Create refused `unknown_role` | No role picker; the message back in the composer with the reason. |
+| U96 | In a browser on a phone's screen, roles offered, one picked | The role picker as its mark, coral; its name in its menu and its tooltip. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
 | U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
 | U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |
