@@ -7,7 +7,7 @@
 //   node scripts/try-preview.ts <image>   exits with the cases' status; prints the image's output
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -32,10 +32,13 @@ try {
   docker(['network', 'create', '--internal', network])
   const init = mkdtempSync(join(tmpdir(), 'preview-init-'))
   writeFileSync(join(init, 'owner.sql'), `CREATE ROLE agora LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${password}';\nCREATE DATABASE agora OWNER agora;\n`)
+  // Read by the container's `postgres` user, not this one.
+  chmodSync(init, 0o755)
+  chmodSync(join(init, 'owner.sql'), 0o644)
   docker(['run', '-d', '--name', database, '--network', network, '-e', `POSTGRES_PASSWORD=${randomBytes(12).toString('hex')}`, '-v', `${init}:/docker-entrypoint-initdb.d:ro`, 'postgres:17'])
   // Ready on TCP only once its init scripts have run.
   for (let i = 0; spawnSync('docker', ['exec', database, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres']).status !== 0; i++) {
-    if (i > 60) throw new Error('PostgreSQL did not start')
+    if (i > 60) throw new Error(`PostgreSQL did not start:\n${spawnSync('docker', ['logs', database], { encoding: 'utf8' }).stderr}`)
     await sleep(1000)
   }
   docker([
