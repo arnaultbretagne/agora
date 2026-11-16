@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50–U59, U61–U65, U67, U69–U76, U78–U83, U85–U87: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U96: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -14,16 +14,13 @@ import { chromium, type Browser, type Locator, type Page } from 'playwright'
 import { mockBridge } from '@agora/testkit'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
-import { folderOwner, identity } from '../../../../packages/log/src/index.ts'
+import { identity } from '../../../../packages/log/src/index.ts'
 import { NOBODY } from '../../src/agora/api.ts'
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
 let server: Server
 let browser: Browser
-// A stand-in for Prefect's API (docs/specs/flows.md, "Launching from Agora"): what it was asked.
-const prefectAsked: { parameters: Record<string, unknown>; idempotency_key: string }[] = []
-let prefect: HttpServer
 const PERSON = 'person@example.org'
 /** GitHub, standing in for the merge card (docs/specs/merge.md): each pull request's state, every merge asked. */
 const pulls = new Map<number, { mergeable_state: string; merged: boolean }>()
@@ -44,17 +41,6 @@ before(async () => {
   const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
   writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet,agora:delegate' }
-  prefect = createServer((req, res) => {
-    const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-    if (req.url === '/api/deployments/name/lead/main') return reply(200, { id: 'deployment-1' })
-    let text = ''
-    req.on('data', (chunk: Buffer) => (text += chunk.toString()))
-    req.on('end', () => {
-      prefectAsked.push(JSON.parse(text) as (typeof prefectAsked)[number])
-      reply(201, { id: `run-${String(prefectAsked.length)}`, name: 'a-run' })
-    })
-  })
-  await new Promise<void>((resolve) => prefect.listen(0, '127.0.0.1', resolve))
   github = createServer((req, res) => {
     const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
     let text = ''
@@ -75,17 +61,26 @@ before(async () => {
   })
   await new Promise<void>((resolve) => github.listen(0, '127.0.0.1', resolve))
   const merge = { GITHUB_TEST_API: `http://127.0.0.1:${String((github.address() as AddressInfo).port)}`, POD_IP: '127.0.0.1' }
-  const team = { TEAM_PREFECT_API: `http://127.0.0.1:${String((prefect.address() as AddressInfo).port)}/api`, TEAM_DEPLOYMENT: 'lead/main' }
+  // Cards of the suite's own (docs/specs/roles.md, "Cards"), whose values are what the lab offers: its pools'
+  // harnesses, the mock agent's models and efforts, the profiles above. `judge`'s are offered by nothing here.
+  const roles = mkdtempSync(join(tmpdir(), 'roles-'))
+  for (const card of [
+    { role: 'dev', summary: 'Owns one feature end to end.', harness: 'mock', model: 'mock-small', effort: 'low', access: 'github:owner/b:read' },
+    { role: 'judge', summary: 'Says whether the work can ship.', harness: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh', access: 'zai' },
+    { role: 'lead', summary: 'Runs a small team on one goal.', harness: 'claude-code', model: 'mock-large', effort: 'high', access: 'agora:delegate' },
+  ]) {
+    const front = Object.entries(card).map(([key, value]) => `${key}: ${value}`).join('\n')
+    writeFileSync(join(roles, `${card.role}.md`), `---\n${front}\n---\n\n# The ${card.role}\n\nYou are the ${card.role} of the tests.\n`)
+  }
   // Room for every case's sandbox: a stopped one counts until its deadline.
   // Approvals of 12 s: one is answered at once, or left to expire (U61–U63).
-  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '100', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...team, ...merge } })
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: { MAX_ACTIVE: '100', MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '12', ...credentials, ...merge, ROLES_DIR: roles } })
   // The Pods push their anchor to the server's receiver, as in the cluster.
   c.kube.anchorUrl = server.anchorUrl
   browser = await chromium.launch()
 })
 
 after(async () => {
-  prefect?.close()
   github?.close()
   await browser?.close()
   await server?.stop()
@@ -976,36 +971,11 @@ test('U50 a question: one box, its text and options; waiting in the list; a note
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true)
 })
 
-test('U51 a team: Team in the harness picker, no model or access; the goal sent, the run asked of Prefect, its lead\'s Workstream open, waiting for it', async () => {
+test('U52 the proxy’s identity: the person’s e-mail at the sidebar’s foot; opened, Sign out alone; the list the person’s one Workstream, not someone else’s', async () => {
   const page = await proxied()
-  await page.goto(`${server.url}/`)
-  await pickHarness(page, 'Team')
-  await page.getByPlaceholder('Describe the goal for the team…').waitFor()
-  assert.equal(await modelPicker(page).count(), 0)
-  assert.equal(await accessPicker(page).count(), 0)
-  const asked = prefectAsked.length
-  await page.getByPlaceholder('Describe the goal for the team…').fill('Make uploads reliable')
-  await page.getByRole('button', { name: 'Send' }).click()
-  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
-  const id = idOf(page)
-  await until('the run asked', () => prefectAsked.length > asked)
-  const run = prefectAsked.at(-1)!
-  assert.deepEqual([run.parameters.goal, run.parameters.lead_workstream, run.parameters.owner, run.parameters.members_owner, run.idempotency_key], [
-    'Make uploads reliable',
-    id,
-    identity('owner', PERSON),
-    folderOwner('agents', PERSON),
-    `agora-team-${id}`,
-  ])
-  await page.getByText('The team is starting…').waitFor()
-  assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), false)
-})
-
-test('U52 the account at the sidebar\'s foot, Sign out; the agents\' folder below the list, closed, opened, remembered', async () => {
-  const page = await proxied()
-  // The person's Workstream, one of their folder's, one of someone else's folder's; listed for the question each waits on.
+  // The person's Workstream and one of someone else's; listed for the question each waits on.
   const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
-  const owners = { own: identity('owner', PERSON), folder: folderOwner('agents', PERSON), other: folderOwner('agents', 'someone@example.org') }
+  const owners = { own: identity('owner', PERSON), other: identity('owner', 'someone@example.org') }
   const made: Record<string, string> = {}
   for (const [name, owner] of Object.entries(owners)) {
     const id = crypto.randomUUID()
@@ -1020,22 +990,20 @@ test('U52 the account at the sidebar\'s foot, Sign out; the agents\' folder belo
   assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).getAttribute('href'), '/oauth2/sign_out?rd=%2F')
   assert.equal(await page.getByRole('menuitem').count(), 1)
   await page.keyboard.press('Escape')
-  // The folder: closed at first, the person's own only; its Workstream out of the list.
-  const folder = page.getByRole('region', { name: 'Agents' })
-  const toggle = folder.getByRole('button', { name: /Agents/ })
-  await toggle.waitFor()
-  assert.equal(await toggle.getAttribute('aria-expanded'), 'false')
-  assert.equal(await toggle.getByText('1', { exact: true }).count(), 1)
-  assert.equal(await page.locator('nav[aria-label="Workstreams"] button[title]').count(), 1)
-  await toggle.click()
-  assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
-  await folder.locator('button[title]').click()
-  await page.waitForURL(new RegExp(`/w/${made.folder!}$`))
-  // Opened it stays, across a reload.
-  await page.reload()
-  await page.getByRole('region', { name: 'Agents' }).locator('button[title]').waitFor()
-  assert.equal(await page.getByRole('region', { name: 'Agents' }).getByRole('button', { name: /Agents/ }).getAttribute('aria-expanded'), 'true')
+  // The list: the person's one Workstream, which opens.
+  await until('the person’s Workstream listed', async () => (await listItems(page).count()) === 1)
+  await listItems(page).click()
+  await page.waitForURL(new RegExp(`/w/${made.own!}$`))
+  assert.equal(await listItems(page).count(), 1, 'still the one')
+  await shot(page, 'U52-account')
   await page.context().close()
+  // The other's Workstream is listed for its own owner: it was there to be left out.
+  const theirs = await proxied('someone@example.org')
+  await theirs.goto(`${server.url}/`)
+  await until('the other’s Workstream listed for them', async () => (await listItems(theirs).count()) === 1)
+  await listItems(theirs).click()
+  await theirs.waitForURL(new RegExp(`/w/${made.other!}$`))
+  await theirs.context().close()
 })
 
 /** A question that keeps a Workstream with no execution in the list: one row of it. */
@@ -1054,12 +1022,12 @@ async function asked(owner: string, count: number): Promise<string[]> {
 }
 
 const listItems = (page: Page) => page.locator('nav[aria-label="Workstreams"] button[title]')
-/** The lists' requests, by what they read: the person's list, the agents' folder, a page. */
+/** The lists' requests, by what they read: the person's list, a page. */
 const listReads = (page: Page): string[] => {
   const reads: string[] = []
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (url.pathname === '/api/workstreams/list') reads.push(url.searchParams.has('folder') ? 'folder' : 'list')
+    if (url.pathname === '/api/workstreams/list') reads.push('list')
     else if (url.pathname === '/api/workstreams/page') reads.push('page')
   })
   return reads
@@ -1080,7 +1048,7 @@ test('U53 sixty Workstreams: the 50 most recent listed; the end of the list in v
   await until('the 10 older below', async () => (await listItems(page).count()) === 60)
   await listItems(page).nth(59).click()
   await page.waitForURL(new RegExp(`/w/${ids[0]!}$`))
-  assert.deepEqual([...reads].sort(), ['folder', 'list', 'page'])
+  assert.deepEqual([...reads].sort(), ['list', 'page'])
   await page.context().close()
 })
 
@@ -1102,7 +1070,7 @@ test('U54 a Workstream of the list changed by another client: at the top without
   // Longer than the 10 s the list was read again in.
   await new Promise((resolve) => setTimeout(resolve, 15_000))
   t.diagnostic(`list reads: ${reads.join(' ')}`)
-  assert.deepEqual([...reads].sort(), ['folder', 'list'])
+  assert.deepEqual([...reads].sort(), ['list'])
   await page.context().close()
 })
 
@@ -1185,7 +1153,7 @@ test('U57 a sub-stream under a folded root asks a question from another client: 
   assert.equal((await server.command(sub, 'Ask', {}, listed)).status, 200)
   await until('the root first', async () => (await listItems(page).nth(0).getAttribute('aria-current')) === 'page', 10_000)
   await until('the folded root waiting', async () => (await waiting.count()) === 2)
-  assert.deepEqual([...reads].sort(), ['folder', 'list'])
+  assert.deepEqual([...reads].sort(), ['list'])
   await page.context().close()
 })
 
@@ -1707,6 +1675,285 @@ test('U91 a permission pending in a native sub-stream; an option chosen: its car
   assert.equal((await entriesOf(child)).length, 0)
   await stateLabel(page, 'native').getByText('idle').waitFor()
   assert.equal(await thread(page).getByRole('button', { name: 'Allow', exact: true }).count(), 0)
+  await page.context().close()
+})
+
+// ---------------------------------------------------------------- roles (docs/specs/assistant-ui.md, "Roles")
+
+const rolePicker = (page: Page) => page.getByRole('button', { name: 'Role', exact: true })
+const harnessPicker = (page: Page) => page.getByRole('button', { name: 'Harness', exact: true })
+/** A role picked in its menu, by its name: `No role`, or a card's. */
+async function pickRole(page: Page, name: string): Promise<void> {
+  await rolePicker(page).click()
+  await page.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click()
+}
+/** What the three other pickers show: the harness, the model with its effort, the access. */
+const pickersOf = async (page: Page) => ({
+  harness: (await harnessPicker(page).innerText()).trim(),
+  model: (await modelPicker(page).innerText()).replace(/\s+/g, ' ').trim(),
+  access: (await accessPicker(page).innerText()).trim(),
+})
+/**
+ * A Session opened in each of the lab's pools, in a list of its own: a draft offers what a pool's last Session
+ * gave, its models and efforts (docs/specs/assistant-ui.md, "Settings and commands").
+ */
+async function sessionsOpened(): Promise<void> {
+  for (const pool of ['mock-test', 'claude-test']) {
+    const offers = async () => ((await (await fetch(`${server.url}/api/pools`)).json()) as { pools: { name: string; settings: unknown[] | null }[] }).pools.find((p) => p.name === pool)?.settings
+    if (await offers()) continue
+    const id = randomUUID()
+    assert.equal((await server.post('/api/workstreams', { id, owner: identity('owner', 'catalogue@example.org') })).status, 200)
+    assert.equal((await server.command(id, 'Create', {}, { pool })).status, 200)
+    await until(`${pool} offers its Session's settings`, offers)
+  }
+}
+/** The commands the page posts, whole: each one's kind and body. */
+function bodiesPosted(page: Page): { kind: string; body: Record<string, unknown> }[] {
+  const posted: { kind: string; body: Record<string, unknown> }[] = []
+  page.on('request', (request) => {
+    if (request.method() !== 'POST' || !/\/api\/workstreams\/[0-9a-f-]{36}\/commands$/.test(new URL(request.url()).pathname)) return
+    const command = request.postDataJSON() as { kind: string; body: Record<string, unknown> }
+    posted.push({ kind: command.kind, body: command.body })
+  })
+  return posted
+}
+/** The header's line after the title: the role when there is one, the harness, the state. */
+const headerLine = async (page: Page) => (await page.locator('header').innerText()).replace(/\s+/g, ' ')
+
+test('U92 roles offered: in a draft nothing was picked in, a role of another harness sets its card’s harness, model, effort and access; in one whose harness and model the person picked, its access alone; No role: back to the draft’s own, the person’s choices kept', async () => {
+  await sessionsOpened()
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  // The picker: after the model, before the access; No role first, then each role by its name, its summary under it.
+  for (const picker of [harnessPicker, modelPicker, rolePicker, accessPicker]) await picker(page).waitFor()
+  assert.deepEqual(
+    await page.locator('main form button[aria-haspopup="menu"]').evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label'))),
+    ['Harness', 'Model', 'Role', 'Access'],
+  )
+  assert.equal((await rolePicker(page).innerText()).trim(), 'No role', 'a draft starts with no role')
+  await rolePicker(page).click()
+  assert.deepEqual(
+    (await page.getByRole('menuitem').allInnerTexts()).map((text) => text.split('\n').map((line) => line.trim()).filter((line) => line !== '')),
+    [['No role'], ['dev', 'Owns one feature end to end.'], ['judge', 'Says whether the work can ship.'], ['lead', 'Runs a small team on one goal.']],
+  )
+  await shot(page, 'U92-menu')
+  await page.keyboard.press('Escape')
+  // Nothing picked: the draft's own harness is the mock's, its access the Internet.
+  const own = await pickersOf(page)
+  assert.deepEqual([own.harness, own.access], ['Mock agent', 'Internet'])
+  await shot(page, 'U92-draft')
+  // A role of another harness: its card's harness, model and effort on their pickers, its access beside the Internet.
+  await pickRole(page, 'lead')
+  assert.equal((await rolePicker(page).innerText()).trim(), 'lead')
+  assert.deepEqual(await pickersOf(page), { harness: 'Claude Code', model: 'mock-large · high', access: 'Internet, agora:delegate' })
+  await shot(page, 'U92-role')
+  // One of the draft's own harness: its model and effort there, its access in place of the other's.
+  await pickRole(page, 'dev')
+  assert.deepEqual(await pickersOf(page), { harness: 'Mock agent', model: 'mock-small · low', access: 'Internet, b' })
+  assert.equal(await accessPicker(page).getAttribute('title'), 'Internet, b · Read')
+  // One whose card names nothing offered here — no Codex pool, no such profile —: the draft's own.
+  await pickRole(page, 'judge')
+  assert.equal((await rolePicker(page).innerText()).trim(), 'judge')
+  assert.deepEqual(await pickersOf(page), own)
+  // No role: what a card had set, back to the draft's own.
+  await pickRole(page, 'lead')
+  assert.equal((await pickersOf(page)).harness, 'Claude Code')
+  await pickRole(page, 'No role')
+  assert.equal((await rolePicker(page).innerText()).trim(), 'No role')
+  assert.deepEqual(await pickersOf(page), own)
+
+  // Another draft, its harness and its model the person's: a role of another harness leaves both as they are.
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'mock-large' }).click()
+  const picked = await pickersOf(page)
+  assert.match(picked.model, /^mock-large/)
+  await pickRole(page, 'lead')
+  assert.deepEqual(await pickersOf(page), { ...picked, access: 'Internet, agora:delegate' }, 'the card’s access granted, its harness and model not set')
+  await shot(page, 'U92-own')
+  // One of that harness: the model the person picked stays, where the card's stood in the draft nothing was picked in.
+  await pickRole(page, 'dev')
+  assert.deepEqual(await pickersOf(page), { ...picked, access: 'Internet, b' })
+  // No role: the card's access gone, the person's harness and model kept.
+  await pickRole(page, 'No role')
+  assert.deepEqual(await pickersOf(page), picked)
+  assert.equal(picked.access, 'Internet')
+  await shot(page, 'U92-no-role')
+  // The access the person picked stays too, whatever role is picked after.
+  await accessPicker(page).click()
+  await internetSwitch(page).click()
+  await accessChoice(page, 'owner/a', 'Read').click()
+  await page.keyboard.press('Escape')
+  assert.equal((await pickersOf(page)).access, 'a · Read')
+  await pickRole(page, 'lead')
+  assert.deepEqual(await pickersOf(page), { ...picked, access: 'a · Read' })
+  await page.context().close()
+})
+
+test('U93 lead picked in a draft, a first message: the Create carries the role, the card’s settings and the profiles shown; the Workstream opens with no role picker, its header naming the role before the harness', async () => {
+  await sessionsOpened()
+  const page = await fresh()
+  const posted = bodiesPosted(page)
+  await page.goto(`${server.url}/`)
+  await pickRole(page, 'lead')
+  assert.deepEqual(await pickersOf(page), { harness: 'Claude Code', model: 'mock-large · high', access: 'Internet, agora:delegate' })
+  await shot(page, 'U93-draft')
+  await send(page, 'lead the first task')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const id = idOf(page)
+  // The agent was given the role's block ahead of the message; the person's bubble shows the message alone.
+  await thread(page).getByText('Echo #1: From Agora, not the person: your role, lead.').waitFor()
+  await thread(page).getByText('lead the first task.').waitFor()
+  assert.deepEqual(await page.locator('main [data-role="user"]').allInnerTexts(), ['lead the first task'])
+  // What the page sent, and what the log kept of it.
+  assert.deepEqual(posted, [{ kind: 'Create', body: { pool: 'claude-test', settings: { model: 'mock-large', effort: 'high' }, profiles: ['internet', 'agora:delegate'], role: 'lead', prompt: [{ type: 'text', text: 'lead the first task' }] } }])
+  const create = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
+  const kept = create.content.body as { pool: string; role: string; settings: unknown; profiles: unknown }
+  assert.deepEqual([kept.pool, kept.role, kept.settings, kept.profiles], ['claude-test', 'lead', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }], ['internet', 'agora:delegate']])
+  // Started: the role in the header, before the harness; no role picker, the other pickers the Session's own.
+  await stateLabel(page, 'ready').waitFor()
+  assert.equal(await page.locator('header [data-workstream-role]').innerText(), 'lead')
+  assert.match(await headerLine(page), /lead the first task · lead · Claude Code · ready/)
+  assert.equal(await rolePicker(page).count(), 0, 'no role picker once started')
+  assert.match(await modelPicker(page).innerText(), /mock-large\s*·\s*high/)
+  assert.equal(await accessPicker(page).innerText(), 'Internet, agora:delegate')
+  await shot(page, 'U93-started')
+  // The next draft starts with no role, and with its own harness.
+  await page.getByRole('button', { name: 'New workstream', exact: true }).click()
+  await page.waitForURL(`${server.url}/`)
+  assert.equal((await rolePicker(page).innerText()).trim(), 'No role')
+  assert.deepEqual([(await pickersOf(page)).harness, (await pickersOf(page)).access], ['Mock agent', 'Internet'])
+  await page.context().close()
+})
+
+test('U94 a Workstream started with a role: a second message, then one after its execution ended: neither the Write nor the Create names a role; the header names it still', async () => {
+  await sessionsOpened()
+  const page = await fresh()
+  const posted = bodiesPosted(page)
+  await page.goto(`${server.url}/`)
+  await pickRole(page, 'dev')
+  assert.deepEqual(await pickersOf(page), { harness: 'Mock agent', model: 'mock-small · low', access: 'Internet, b' })
+  await send(page, 'a first task for the dev')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const id = idOf(page)
+  await thread(page).getByText('a first task for the dev.').waitFor()
+  await stateLabel(page, 'ready').waitFor()
+  assert.match(await headerLine(page), /a first task for the dev · dev · Mock agent · ready/)
+  // A second message, in the same execution.
+  await send(page, 'a second message')
+  await thread(page).getByText(/Echo #2: a second message\./).waitFor()
+  assert.match(await headerLine(page), /· dev · Mock agent · ready/)
+  await shot(page, 'U94-second')
+  // Its execution ended: the harness picker is back, the role picker is not; the header names the role still.
+  const view = (await viewOf(server.url, id)) as { execution: string }
+  await page.locator('header').getByRole('button', { name: /Stop/ }).click()
+  await expire(c.kube, claimName(view.execution))
+  await stateLabel(page, 'ended').waitFor()
+  await harnessPicker(page).waitFor()
+  assert.equal(await rolePicker(page).count(), 0, 'no role picker once it has had an execution')
+  assert.match(await headerLine(page), /· dev · Mock agent · ended/)
+  await shot(page, 'U94-ended')
+  await send(page, 'a message after the end')
+  await thread(page).getByText(/Echo #3: a message after the end\./).waitFor()
+  await stateLabel(page, 'ready').waitFor()
+  assert.match(await headerLine(page), /· dev · Mock agent · ready/)
+  await shot(page, 'U94-continued')
+  // What the page sent: the first Create alone names the role.
+  const sent = posted.filter((command) => ['Create', 'Write'].includes(command.kind))
+  assert.deepEqual(sent.map((command) => [command.kind, command.body.role]), [['Create', 'dev'], ['Write', undefined], ['Create', undefined]])
+  for (const command of sent.slice(1)) assert.ok(!('role' in command.body), `${command.kind} names no role`)
+  assert.equal(((await viewOf(server.url, id)) as { role?: string }).role, 'dev', 'the Workstream’s role, kept')
+  await page.context().close()
+})
+
+test('U95 no role offered: no role picker; a Create refused unknown_role: the message back in the composer with the reason', async () => {
+  // A server that gives no role: its answer, its roles taken out.
+  const without = await fresh()
+  await without.route('**/api/config', async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...((await response.json()) as Record<string, unknown>), roles: [] } })
+  })
+  await without.goto(`${server.url}/`)
+  // What the same answer offers is there: the access picker.
+  await accessPicker(without).waitFor()
+  assert.equal(await rolePicker(without).count(), 0, 'no role picker')
+  await shot(without, 'U95-no-role-offered')
+  await without.context().close()
+  // The control, and a role the server holds no card of: its answer, one more role in it.
+  const page = await fresh()
+  const posted = bodiesPosted(page)
+  await page.route('**/api/config', async (route) => {
+    const response = await route.fetch()
+    const config = (await response.json()) as { roles: unknown[] }
+    await route.fulfill({ response, json: { ...config, roles: [...config.roles, { role: 'ghost', summary: 'A card the server no longer holds.', harness: 'mock', model: null, effort: null, access: [] }] } })
+  })
+  await page.goto(`${server.url}/`)
+  await rolePicker(page).waitFor()
+  await pickRole(page, 'ghost')
+  assert.equal((await harnessPicker(page).innerText()).trim(), 'Mock agent')
+  await send(page, 'words for a ghost')
+  await page.getByRole('alert').getByText('This role is no longer available.').waitFor()
+  await until('the text back', async () => (await composerInput(page).inputValue()) === 'words for a ghost')
+  // The server's own refusal, nothing written: the Workstream has had no execution, and offers the role picker still.
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  const id = idOf(page)
+  assert.deepEqual(posted.map((command) => [command.kind, command.body.role]), [['Create', 'ghost']])
+  assert.deepEqual((await entriesOf(id)).filter((e) => e.kind === 'command'), [])
+  assert.equal((await rolePicker(page).innerText()).trim(), 'ghost', 'as it was sent')
+  assert.equal(await thread(page).locator('[data-role="user"]').count(), 0, 'no message in the thread')
+  await shot(page, 'U95-refused')
+  // Sent again with no role: it starts.
+  await pickRole(page, 'No role')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await thread(page).getByText('Echo #1: words for a ghost.').waitFor()
+  assert.equal(await page.locator('header [data-workstream-role]').count(), 0)
+  await page.context().close()
+})
+
+test('U96 a phone, roles offered, one picked: the role picker as its mark, coral; its name in its menu and its tooltip; no picker cut', async () => {
+  await sessionsOpened()
+  const { page } = await phone()
+  await page.goto(`${server.url}/`)
+  const mask = rolePicker(page).locator('svg').first()
+  const colour = (of: Locator) => of.evaluate((element) => getComputedStyle(element).color)
+  // The page's coral, as any element in it has it.
+  const coral = await page.evaluate(() => {
+    const probe = document.body.appendChild(Object.assign(document.createElement('span'), { className: 'text-primary' }))
+    const colour = getComputedStyle(probe).color
+    probe.remove()
+    return colour
+  })
+  // No role: the mask alone, not coral; "No role" in its tooltip.
+  await mask.waitFor()
+  assert.equal((await rolePicker(page).innerText()).trim(), '', 'the mask without a name')
+  assert.equal(await rolePicker(page).getAttribute('title'), 'No role')
+  assert.notEqual(await colour(mask), coral)
+  await shot(page, 'U96-no-role')
+  // Its menu names the roles; one picked: the mask coral, its name in the tooltip, and marked in the menu.
+  await rolePicker(page).tap()
+  await page.getByRole('menuitem', { name: /^lead/ }).waitFor()
+  await shot(page, 'U96-menu')
+  await page.getByRole('menuitem', { name: /^lead/ }).tap()
+  assert.equal((await rolePicker(page).innerText()).trim(), '', 'still no name')
+  assert.equal(await mask.isVisible(), true)
+  assert.equal(await colour(mask), coral, 'coral once a role is picked')
+  assert.equal(await rolePicker(page).getAttribute('title'), 'lead')
+  // Its card's values on the other marks: Claude Code's, its model and its effort's bars, the key's dot.
+  assert.equal(await harnessPicker(page).getAttribute('title'), 'Claude Code')
+  assert.equal((await modelPicker(page).innerText()).trim(), 'mock-large')
+  assert.equal(await modelPicker(page).getByLabel('high').isVisible(), true)
+  assert.equal(await accessPicker(page).getAttribute('title'), 'Internet, agora:delegate')
+  assert.deepEqual(await cut(page, 'main form button'), [], 'no picker cut')
+  await shot(page, 'U96-role')
+  await rolePicker(page).tap()
+  const items = (await page.getByRole('menuitem').allInnerTexts()).map((text) => text.split('\n')[0]!.trim())
+  assert.deepEqual(items, ['No role', 'dev', 'judge', 'lead'], 'its name in its menu')
+  // Wide, the same draft: the role by its name.
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1400, height: 900 })
+  assert.equal((await rolePicker(page).innerText()).trim(), 'lead')
+  assert.equal(await mask.isVisible(), false, 'no mask beside the name')
   await page.context().close()
 })
 

@@ -5,7 +5,7 @@
 // at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
 // frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
-import { ChevronRightIcon, ChevronUpIcon, FolderIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
+import { ChevronRightIcon, ChevronUpIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
@@ -214,7 +214,7 @@ const Branch: FC<{ w: ListRow; folds: Folds; onNavigate: () => void }> = ({ w, f
 /** A Workstream's sub-streams, as its list gives them (docs/specs/log.md, "The list"), indented under it. */
 const SubStreams: FC<{ parent: string; folds: Folds; onNavigate: () => void }> = ({ parent, folds, onNavigate }) => {
   const { api } = useAgora()
-  const list = useList(api, null, true, parent)
+  const list = useList(api, true, parent)
   return (
     <div role="group" className="border-foreground/10 ml-[11px] flex flex-col gap-0.5 border-l pl-1">
       {list.rows.map((w) => (
@@ -292,86 +292,21 @@ const AccountMenu: FC = () => {
   )
 }
 
-const FOLDER_KEY = 'agora:agents-open'
-const storedFolder = (): boolean => {
-  try {
-    return localStorage.getItem(FOLDER_KEY) === 'true'
-  } catch {
-    return false
-  }
-}
-
-/**
- * The person's agents' folder (docs/specs/assistant-ui.md, "Accounts"), at the foot of the list: the
- * Workstreams of their runs' members, closed at first, its state remembered. None while it is empty.
- */
-const AgentsFolder: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
-  const { agents, id, open } = useAgora()
-  const [opened, setOpened] = useState(storedFolder)
-  const rows = agents.rows
-  const shown = useMemo(() => sections(rows, new Date(), '', id).flatMap((s) => s.workstreams), [rows, id])
-  const feed: ListFeed | null = agents
-  if (shown.length === 0) return null
-  const toggle = () => {
-    setOpened(!opened)
-    try {
-      localStorage.setItem(FOLDER_KEY, String(!opened))
-    } catch {
-      // Remembered for this page only.
-    }
-  }
-  return (
-    <section aria-label="Agents">
-      <button
-        type="button"
-        aria-expanded={opened}
-        onClick={toggle}
-        className="text-muted-foreground hover:text-foreground mt-5 mb-1 flex w-full items-center gap-1.5 px-2 text-xs font-medium transition-colors"
-      >
-        <ChevronRightIcon className={cn('size-3 transition-transform', opened && 'rotate-90')} />
-        <FolderIcon className="size-3.5" />
-        Agents
-        <span className="text-muted-foreground/70 ml-auto tabular-nums">
-          {shown.length}
-          {feed !== null && !feed.end ? '+' : ''}
-        </span>
-      </button>
-      {opened && (
-        <div className="flex flex-col gap-0.5 pl-3">
-          {shown.map((w) => (
-            <Item
-              key={w.id}
-              w={w}
-              active={w.id === id}
-              onOpen={() => {
-                open(w.id)
-                onNavigate()
-              }}
-            />
-          ))}
-          {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
-        </div>
-      )}
-    </section>
-  )
-}
-
 const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
-  const { api, list, id, open, line, account } = useAgora()
+  const { api, list, id, open, line } = useAgora()
   const folds = useFolds(line)
   const [search, setSearch] = useState('')
   const wanted = search.trim()
-  // A search (docs/specs/assistant-ui.md, "Sidebar"): the Workstreams whose title holds the text — the person's
-  // and their folder's — and those whose exchanges do, each with its latest matching line. Until both answer,
-  // the loaded rows whose title holds it.
-  const found = useSearch(api, null, search)
-  const foundInFolder = useSearch(api, 'agents', search, account.email !== null)
+  // A search (docs/specs/assistant-ui.md, "Sidebar"): the Workstreams whose title holds the text and those
+  // whose exchanges do, each with its latest matching line. Until both answer, the loaded rows whose title
+  // holds it.
+  const found = useSearch(api, search)
   const words = useWords(api, search)
   const answered = wanted !== '' && found?.text === wanted && words?.text === wanted
   const matches = useMemo(() => new Map((words?.hits ?? []).map((h) => [h.row.id, excerpt(h.text, words!.text)])), [words])
   const rows = useMemo(
-    () => (answered ? merged(found!.rows, foundInFolder?.rows ?? [], words!.hits.map((h) => h.row)) : list.rows),
-    [answered, found, foundInFolder, words, list.rows],
+    () => (answered ? merged(found!.rows, words!.hits.map((h) => h.row)) : list.rows),
+    [answered, found, words, list.rows],
   )
   const groups = useMemo(() => sections(rows, new Date(), answered ? '' : search, id, line.map((r) => r.id)), [rows, answered, search, id, line])
   const feed = feedOf(search, list, answered ? found : null)
@@ -430,7 +365,6 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
           </section>
         ))}
         {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
-        {wanted === '' && <AgentsFolder onNavigate={onNavigate} />}
       </nav>
       <AccountMenu />
     </div>
@@ -482,7 +416,14 @@ const Title: FC = () => {
       )}
       {STATE_LABEL[state] && (
         <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[12px]">
+          {/* Its role, when it has one, before the harness (docs/specs/assistant-ui.md, "Roles"). */}
           {/* On a phone the title needs the room; the composer shows the harness. */}
+          {view.role && (
+            <>
+              <span aria-hidden className="max-sm:hidden">·</span>
+              <span data-workstream-role className="max-sm:hidden">{view.role}</span>
+            </>
+          )}
           <span aria-hidden className="max-sm:hidden">·</span>
           <span className="max-sm:hidden">{harnessName(view.harness)}</span>
           <span aria-hidden>·</span>
