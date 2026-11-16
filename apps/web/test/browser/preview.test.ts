@@ -13,7 +13,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Page } from 'playwright'
-import { freePort, provisioning, until } from '../../../../packages/log/test/support.ts'
+import { freePort, provisioning, Relay, until } from '../../../../packages/log/test/support.ts'
 
 const IMAGE_URL = process.env.PREVIEW_URL
 const CONTAINER = process.env.PREVIEW_CONTAINER
@@ -48,13 +48,24 @@ const GATEWAY_GATE = {
 const SEEDED = { total: 11, mock: 8, harnesses: ['claude-code', 'codex', 'opencode'] }
 
 let browser: Browser
+/**
+ * The image reached on the loopback, as a gate forwards to it: a page served from the container's own address
+ * over plain HTTP is no secure context, which a preview's HTTPS host is, and the client needs one (`crypto.randomUUID`).
+ */
+let relay: Relay | undefined
+let imageUrl = ''
 
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)) || !local, 'the client is built first: npm run build -w @agora/web')
   browser = await chromium.launch()
+  if (!local) {
+    relay = await new Relay(() => new URL(IMAGE_URL!).host).listen()
+    imageUrl = `http://127.0.0.1:${String(relay.port)}`
+  }
 })
 after(async () => {
   await browser?.close()
+  await relay?.close()
 })
 
 /** An empty database whose one login owns it and may create no role, as CloudNativePG's `initdb` makes it. */
@@ -104,7 +115,7 @@ async function startPreview(env: Record<string, string>): Promise<{ url: string;
 
 /** The preview the browser cases run against: the image, or a process of the case's own on an empty database. */
 async function target(t: { after: (fn: () => Promise<void>) => void }): Promise<string> {
-  if (!local) return IMAGE_URL!
+  if (!local) return imageUrl
   const db = await emptyDatabase()
   const preview = await startPreview({ PREVIEW_DATABASE_URL: db.url })
   t.after(async () => {
