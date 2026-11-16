@@ -35,6 +35,8 @@ export interface LogHttpOptions {
   /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
   readonly testRoutes: boolean
   readonly credentials?: CredentialSource
+  /** One owner for every caller the proxy names (a preview, docs/specs/preview.md): its Workstreams are everyone's. */
+  readonly owner?: string
 }
 
 export async function logHttp(
@@ -92,7 +94,7 @@ export async function logHttp(
     // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
     // name-based UUID; none when Agora is reached without the proxy.
     const identityHeader = req.headers['x-forwarded-email']
-    const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
+    const caller = typeof identityHeader === 'string' && identityHeader !== '' ? (options.owner ?? identity('owner', identityHeader)) : undefined
     const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
     // What the caller owns: its own Workstreams; anything without the proxy.

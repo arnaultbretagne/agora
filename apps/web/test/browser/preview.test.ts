@@ -1,0 +1,257 @@
+// docs/specs/preview.md, acceptance cases V2 to V6: the server started as a preview, and its client in a real
+// browser (Playwright's Chromium) behind the headers of the previews' two gates.
+//
+// Two ways to run it:
+// - from the log package, which provisions PostgreSQL (`npm run test:browser`): each case starts the server's
+//   process from the repository, `PREVIEW=true`, on an empty database of its own whose one login owns it;
+// - against the image (CI, `.github/workflows/preview.yml`): `PREVIEW_URL` is the running image, on an empty
+//   database, `PREVIEW_CONTAINER` its container in a network that only lets its database through. The cases
+//   that start a process of their own are skipped; V6 runs only there.
+import assert from 'node:assert/strict'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { after, before, test } from 'node:test'
+import { chromium, type Browser, type Page } from 'playwright'
+import { freePort, provisioning, until } from '../../../../packages/log/test/support.ts'
+
+const IMAGE_URL = process.env.PREVIEW_URL
+const CONTAINER = process.env.PREVIEW_CONTAINER
+const local = IMAGE_URL === undefined
+const MAIN = new URL('../../../server/src/main.ts', import.meta.url).pathname
+/** agora_gateway_previews, the gateway's client at Pocket-ID: what the gateway gate names (infra-k8s ADR 0017, 2026-10-27). */
+const GATEWAY_CLIENT = 'client-f373fa14-edf1-435b-8949-537c02bb5d50'
+const HOST = 'pr-1-agora.preview.bretagne.dev'
+const basic = (user: string, password: string) => `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`
+
+/** What the browser gate (oauth2-proxy, OIDC, `ALLOWED_GROUPS=admin`) passes the app, behind Traefik. */
+const BROWSER_GATE = {
+  'x-forwarded-email': 'person@example.org',
+  'x-forwarded-user': 'b1f0c6a2-3f5e-4d8a-9c1e-2a7b9d4e6f10',
+  'x-forwarded-preferred-username': 'person',
+  'x-forwarded-groups': 'admin',
+  authorization: basic('b1f0c6a2-3f5e-4d8a-9c1e-2a7b9d4e6f10', ''),
+  'x-forwarded-proto': 'https',
+  'x-forwarded-host': HOST,
+}
+/** What the gateway gate passes the app for Agora's gateway: its mark, `Basic client-<id>:none`, the client as the user. */
+const GATEWAY_GATE = {
+  'x-agora-gate': 'gateway',
+  authorization: basic(GATEWAY_CLIENT, 'none'),
+  'x-forwarded-email': GATEWAY_CLIENT,
+  'x-forwarded-user': GATEWAY_CLIENT,
+  'x-forwarded-proto': 'https',
+  'x-forwarded-host': HOST,
+}
+
+/** The conversations an empty database gets: each mark of the mock's history, and the three real harnesses'. */
+const SEEDED = { total: 11, mock: 8, harnesses: ['claude-code', 'codex', 'opencode'] }
+
+let browser: Browser
+
+before(async () => {
+  assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)) || !local, 'the client is built first: npm run build -w @agora/web')
+  browser = await chromium.launch()
+})
+after(async () => {
+  await browser?.close()
+})
+
+/** An empty database whose one login owns it and may create no role, as CloudNativePG's `initdb` makes it. */
+async function emptyDatabase(): Promise<{ url: string; drop(): Promise<void> }> {
+  const admin = provisioning()
+  const name = `agora_preview_${randomBytes(4).toString('hex')}`
+  const password = randomBytes(12).toString('hex')
+  await admin.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${password}'`)
+  await admin.query(`CREATE DATABASE ${name} OWNER ${name}`)
+  const url = new URL(String(process.env.LOG_TEST_ADMIN_URL))
+  url.username = name
+  url.password = password
+  url.pathname = `/${name}`
+  return {
+    url: url.href,
+    async drop() {
+      await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+      await admin.query(`DROP ROLE IF EXISTS ${name}`)
+      await admin.end()
+    },
+  }
+}
+
+/** The server's process as a preview: only what a preview is given, nothing of this process's environment. */
+async function startPreview(env: Record<string, string>): Promise<{ url: string; child: ChildProcess; output: () => string; exited: Promise<number | null>; stop(): Promise<void> }> {
+  const [port, anchorPort, mcpPort] = [await freePort(), await freePort(), await freePort()]
+  const child = spawn(process.execPath, [MAIN], {
+    env: { PATH: String(process.env.PATH), HOME: String(process.env.HOME), PREVIEW: 'true', PORT: String(port), ANCHOR_PORT: String(anchorPort), MCP_PORT: String(mcpPort), ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()))
+  child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()))
+  const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
+  await until('the preview listening, or gone', () => output.includes('anchor receiver on') || child.exitCode !== null, 30_000)
+  return {
+    url: `http://127.0.0.1:${String(port)}`,
+    child,
+    output: () => output,
+    exited,
+    async stop() {
+      if (child.exitCode === null) child.kill('SIGTERM')
+      await exited
+    },
+  }
+}
+
+/** The preview the browser cases run against: the image, or a process of the case's own on an empty database. */
+async function target(t: { after: (fn: () => Promise<void>) => void }): Promise<string> {
+  if (!local) return IMAGE_URL!
+  const db = await emptyDatabase()
+  const preview = await startPreview({ PREVIEW_DATABASE_URL: db.url })
+  t.after(async () => {
+    await preview.stop()
+    await db.drop()
+  })
+  assert.equal(preview.child.exitCode, null, preview.output())
+  return preview.url
+}
+
+async function behind(gate: Record<string, string>): Promise<Page> {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, colorScheme: 'light', extraHTTPHeaders: gate })
+  const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  return page
+}
+
+const rows = (page: Page) => page.locator('nav[aria-label="Workstreams"] button[title]')
+const composer = (page: Page) => page.getByPlaceholder(/Describe the task|Write to the agent/)
+
+async function send(page: Page, text: string): Promise<void> {
+  await composer(page).fill(text)
+  await page.getByRole('button', { name: 'Send' }).click()
+}
+
+/** A list read as the client reads it, through a gate: its rows' harness, state and title. */
+async function listed(url: string, gate: Record<string, string>): Promise<{ id: string; harness: string; state: string; title: string }[]> {
+  const response = await fetch(`${url}/api/workstreams/page`, { headers: gate })
+  assert.equal(response.status, 200)
+  return ((await response.json()) as { rows: { id: string; harness: string; state: string; title: string }[] }).rows
+}
+
+/**
+ * The case itself, through one gate: the client on `/`, the conversations already there, a new one with the mock
+ * agent, a message, and its answer arriving while the turn runs.
+ */
+async function converse(url: string, gate: Record<string, string>, text: string): Promise<string> {
+  const page = await behind(gate)
+  try {
+    const home = await fetch(`${url}/`, { headers: gate })
+    assert.equal(home.status, 200)
+    assert.match(home.headers.get('content-type') ?? '', /^text\/html/)
+    assert.match(await home.text(), /<div id="root">/)
+    await page.goto(`${url}/`)
+    // The conversations of the first start, before anything is done.
+    await until('the conversations listed', async () => (await rows(page).count()) >= SEEDED.total)
+    const before = await listed(url, gate)
+    assert.ok(before.length >= SEEDED.total, `${String(before.length)} conversations`)
+    // A new one, with the mock agent: its first answer, then a turn whose answer arrives second by second.
+    await page.getByRole('button', { name: 'Harness' }).click()
+    await page.getByRole('menuitem', { name: /Mock agent/ }).click()
+    await send(page, text)
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    await page.locator('main').getByText(`Echo #1: ${text}.`).waitFor()
+    const id = /\/w\/([0-9a-f-]{36})$/.exec(new URL(page.url()).pathname)![1]!
+    await send(page, '/sleep 4')
+    await page.locator('main').getByText('… second 1/4').waitFor()
+    // Live: the first second is on the screen while the turn still runs, the end arrives without a reload.
+    assert.equal(await page.locator('main').getByText('Slept 4 s.').count(), 0, 'the turn still runs')
+    await page.locator('main').getByText('Slept 4 s.').waitFor({ timeout: 20_000 })
+    // In the list, through the same gate.
+    const after = await listed(url, gate)
+    const row = after.find((r) => r.id === id)
+    assert.ok(row, 'the new conversation is listed')
+    assert.equal(row.harness, 'mock')
+    return id
+  } finally {
+    await page.context().close()
+  }
+}
+
+test('V2 a preview given anything of production, or no database, does not start', { skip: !local }, async () => {
+  const none = await startPreview({})
+  assert.equal(await none.exited, 1)
+  assert.match(none.output(), /PREVIEW_DATABASE_URL is required/)
+  for (const [name, value] of [
+    ['SANDBOX_NAMESPACE', 'agora-sandboxes'],
+    ['SIGNING_KEY_FILE', '/etc/agora/signing/private.pem'],
+    ['LOG_WRITER_URL', 'postgresql://writer@agora-pg-rw/agora'],
+    ['FILES_ACCESS_KEY_ID', 'key'],
+    ['GATEWAY_PROXY', 'gateway.agora-gateway.svc.cluster.local:3000'],
+    ['GRANTS_KEY_FILE', '/etc/agora/grants/private.pem'],
+  ] as const) {
+    const refused = await startPreview({ PREVIEW_DATABASE_URL: 'postgresql://agora:agora@127.0.0.1:1/agora', [name]: value })
+    assert.equal(await refused.exited, 1, name)
+    assert.match(refused.output(), new RegExp(`PREVIEW excludes ${name}`))
+    assert.ok(!refused.output().includes('server ready'), name)
+  }
+})
+
+test('V3 the first start on an empty database writes the conversations once: every mark of the mock history, the three harnesses', { skip: !local }, async (t) => {
+  const db = await emptyDatabase()
+  t.after(() => db.drop())
+  const first = await startPreview({ PREVIEW_DATABASE_URL: db.url })
+  assert.equal(first.child.exitCode, null, first.output())
+  assert.match(first.output(), new RegExp(`- preview: ${String(SEEDED.total)} conversations written`))
+  const rowsOf = await until('the list', async () => {
+    const r = await listed(first.url, BROWSER_GATE)
+    return r.length === SEEDED.total ? r : undefined
+  })
+  const mock = rowsOf.filter((r) => r.harness === 'mock')
+  assert.equal(mock.length, SEEDED.mock)
+  // The states the mock history went through (its marks), as the list shows them.
+  assert.deepEqual([...new Set(mock.map((r) => r.state))].sort(), ['ended', 'interrupted', 'lost', 'ready', 'stopped'])
+  assert.deepEqual(rowsOf.filter((r) => r.harness !== 'mock').map((r) => r.harness).sort(), SEEDED.harnesses)
+  // Through the other gate: the same conversations, everyone's.
+  assert.deepEqual((await listed(first.url, GATEWAY_GATE)).map((r) => r.id).sort(), rowsOf.map((r) => r.id).sort())
+  await first.stop()
+  // A second start on the same database: nothing written again, nothing lost.
+  const second = await startPreview({ PREVIEW_DATABASE_URL: db.url })
+  t.after(() => second.stop())
+  assert.equal(second.child.exitCode, null, second.output())
+  assert.ok(!second.output().includes('conversations written'))
+  assert.deepEqual((await listed(second.url, BROWSER_GATE)).map((r) => r.id).sort(), rowsOf.map((r) => r.id).sort())
+})
+
+test('V4 behind the browser gate: the client on /, the conversations listed, a new one with the mock agent answered live', async (t) => {
+  const url = await target(t)
+  await converse(url, BROWSER_GATE, 'Hello from the browser gate')
+})
+
+test('V5 behind the gateway gate: the same, and what one gate made is listed through the other', async (t) => {
+  const url = await target(t)
+  const id = await converse(url, GATEWAY_GATE, 'Hello from the gateway gate')
+  assert.ok((await listed(url, BROWSER_GATE)).some((r) => r.id === id), 'listed through the browser gate')
+})
+
+test('V6 the image in a network that only lets its database through: no Internet, no Kubernetes API, no secret', { skip: CONTAINER === undefined }, () => {
+  const exec = (code: string) => spawnSync('docker', ['exec', CONTAINER!, 'node', '-e', code], { encoding: 'utf8', timeout: 60_000 })
+  // Positive control: what the preview is given, it reaches — its database.
+  const database = exec(`const u=new URL(process.env.PREVIEW_DATABASE_URL);require('net').connect(Number(u.port||5432),u.hostname).on('connect',()=>{console.log('reached');process.exit(0)}).on('error',(e)=>{console.log(e.code);process.exit(1)})`)
+  assert.equal(database.stdout.trim(), 'reached', database.stderr)
+  // The Internet, by name and by address: refused or unresolved.
+  for (const address of ['https://github.com/', 'https://1.1.1.1/', 'https://kubernetes.default.svc/']) {
+    const out = exec(`fetch(${JSON.stringify(address)},{signal:AbortSignal.timeout(10000)}).then(()=>{console.log('reached');process.exit(0)},(e)=>{console.log(String(e.cause?.code??e.name));process.exit(1)})`)
+    assert.notEqual(out.stdout.trim(), 'reached', address)
+    assert.notEqual(out.status, 0, address)
+  }
+  // No ServiceAccount token, no Kubernetes service in its environment, nothing of production's.
+  const environment = exec(`const fs=require('fs');console.log(JSON.stringify({token:fs.existsSync('/var/run/secrets/kubernetes.io'),kube:process.env.KUBERNETES_SERVICE_HOST??null,names:Object.keys(process.env).sort()}))`)
+  const seen = JSON.parse(environment.stdout) as { token: boolean; kube: string | null; names: string[] }
+  assert.equal(seen.token, false)
+  assert.equal(seen.kube, null)
+  for (const name of ['SANDBOX_NAMESPACE', 'SIGNING_KEY_FILE', 'LOG_WRITER_URL', 'FILES_ACCESS_KEY_ID', 'GATEWAY_PROXY', 'GRANTS_KEY_FILE']) assert.ok(!seen.names.includes(name), name)
+  const network = spawnSync('docker', ['inspect', CONTAINER!, '--format', '{{json .NetworkSettings.Networks}}'], { encoding: 'utf8' })
+  const networks = Object.keys(JSON.parse(network.stdout) as Record<string, unknown>)
+  assert.equal(networks.length, 1)
+  const internal = spawnSync('docker', ['network', 'inspect', networks[0]!, '--format', '{{.Internal}}'], { encoding: 'utf8' })
+  assert.equal(internal.stdout.trim(), 'true')
+})

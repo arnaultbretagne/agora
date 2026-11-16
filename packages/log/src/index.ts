@@ -13,3 +13,4 @@ export { APPROVAL_MS, Delegations, lastMessageOf, PROGRESS_MS } from './delegati
 export { describeRoles, loadRoles, parseRole, roleBlock, type Role } from './roles.ts'
 export { isRole, ROLE_META } from './marks.ts'
 export { Merges, Refused as MergeRefused, STATE_TEXT, type CardState, type MergesOptions } from './merges.ts'
+export { applyOwnerSchema, ownerSchema } from './owner.ts'

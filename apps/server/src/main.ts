@@ -1,12 +1,15 @@
 // The server: the execution mechanics (packages/executions) and the log (packages/log) mounted together,
 // serving the client (apps/web) at `/`; with TEST_ROUTES, the test routes and the page that plays the
 // cases of docs/specs/executions.md, credentials.md and log.md. Configuration comes from the environment.
+// With PREVIEW=true, a preview (docs/specs/preview.md): nothing of production, the mock agent in this process.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom } from '@agora/executions'
-import { Delegations, Files, LogStore, Merges, Workstreams, createMcpServer, describeRoles, loadRoles, logHttp, telemetry } from '@agora/log'
+import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type KubeApi } from '@agora/executions'
+import { Delegations, Files, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
+import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys } from './preview.ts'
+import { writeSeeds } from './seeds.ts'
 
 function number(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -23,14 +26,29 @@ function required(name: string): string {
 }
 
 const sink = (line: string): void => console.log(line)
-const namespace = required('SANDBOX_NAMESPACE')
+// docs/specs/preview.md: its database, migrated and given its conversations by the server itself; its key made here;
+// its sandboxes in this process, pushing their anchors to this server's receiver.
+const preview =
+  process.env.PREVIEW === 'true'
+    ? await (async () => {
+        const database = previewDatabase(process.env)
+        await applyOwnerSchema(database)
+        const written = await writeSeeds(database, SHARED_OWNER)
+        if (written > 0) console.log(`- preview: ${String(written)} conversations written`)
+        const keys = previewKeys()
+        return { database, keys, kube: new PreviewKube(keys.publicKey, `http://127.0.0.1:${String(number('ANCHOR_PORT', 8081))}/anchors`) }
+      })()
+    : null
+const namespace = preview === null ? required('SANDBOX_NAMESPACE') : NAMESPACE
 const audience = process.env.ANCHOR_AUDIENCE ?? 'agora-anchors'
 const testRoutes = process.env.TEST_ROUTES === 'true'
-const kube = new HttpKube({
-  apiBase: process.env.KUBE_API ?? 'https://kubernetes.default.svc',
-  namespace,
-  tokenFile: process.env.KUBE_TOKEN_FILE ?? '/var/run/secrets/kubernetes.io/serviceaccount/token',
-})
+const kube: KubeApi =
+  preview?.kube ??
+  new HttpKube({
+    apiBase: process.env.KUBE_API ?? 'https://kubernetes.default.svc',
+    namespace,
+    tokenFile: process.env.KUBE_TOKEN_FILE ?? '/var/run/secrets/kubernetes.io/serviceaccount/token',
+  })
 // docs/specs/credentials.md: without the gateway, executions have no credential and no way out.
 const credentials =
   process.env.GATEWAY_PROXY === undefined || process.env.GATEWAY_PROXY === ''
@@ -57,10 +75,13 @@ const limits =
         ...(process.env.GATEWAY_CA_FILE ? { ca: readFileSync(process.env.GATEWAY_CA_FILE, 'utf8') } : {}),
       })
 // docs/specs/files.md, "The server": the files' bucket; without it, the server does not start.
-const store = new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') }, 12, Files.fromEnv(process.env))
+const store =
+  preview === null
+    ? new LogStore({ writer: required('LOG_WRITER_URL'), projector: required('LOG_PROJECTOR_URL'), anchors: required('LOG_ANCHORS_URL') }, 12, Files.fromEnv(process.env))
+    : LogStore.owner(preview.database, 4, new MemoryFiles())
 const executions = new ExecutionManager({
   kube,
-  signingKey: privateKeyFrom(readFileSync(required('SIGNING_KEY_FILE'), 'utf8')),
+  signingKey: preview?.keys.privateKey ?? privateKeyFrom(readFileSync(required('SIGNING_KEY_FILE'), 'utf8')),
   bridgePort: number('BRIDGE_PORT', 8080),
   // docs/specs/credentials.md: the pools' Pods are warmed with their base profiles.
   ...(credentials === undefined ? {} : { credentials }),
@@ -128,7 +149,7 @@ const server = createApi({
   roles: describeRoles(roles),
   handle: async (req, res) =>
     (await limitsHttp(limits, req, res)) ||
-    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }) })) ||
+    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }), ...(preview === null ? {} : { owner: SHARED_OWNER }) })) ||
     client(req, res),
   ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process

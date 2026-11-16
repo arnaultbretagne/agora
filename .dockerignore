@@ -3,5 +3,7 @@
 **/node_modules
 docs
 **/test
+# The client's fixtures: a preview's first conversations (apps/server/Dockerfile).
+!apps/web/test/fixtures
 apps/*/scripts
 **/dist

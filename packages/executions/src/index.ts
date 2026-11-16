@@ -23,6 +23,6 @@ export {
   type CommandResult,
   type CredentialSource,
 } from './manager.ts'
-export { HttpKube, KubeError, type KubeApi, type Claim, type PodIdentity, type Sandbox } from './kube.ts'
+export { HttpKube, KubeError, type KubeApi, type Claim, type Json, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from './kube.ts'
 export { createApi, createAnchorReceiver } from './http.ts'
 export { privateKeyFrom } from '@agora/harness-bridge/token'
