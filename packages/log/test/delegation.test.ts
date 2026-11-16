@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
 import { join } from 'node:path'
-import { CALLER_HEADER, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, type Entry, type Role } from '../src/index.ts'
+import { CALLER_HEADER, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, ROLE_META, type Entry, type Role } from '../src/index.ts'
 import { database, expire, FakeKube, grants, Lab, lines, sleep, until, type LabOptions } from './support.ts'
 
 type Text = { content: { type: string; text: string }[]; isError?: boolean }
@@ -27,7 +27,9 @@ async function started(
   if (extra.noSteering) kube.bridgeFactory = (publicKey, pod) => mockBridge(publicKey, pod, { noSteering: true })
   extra.kube?.(kube)
   const db = await database()
-  const lab = await Lab.start({ db, kube, keys: pair, credentials: grants([]).source, workstreams: { maxActive: 8, ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...options } })
+  // The roles are the log's own (docs/specs/roles.md): the delegation engine reads them there.
+  const { roles, ...engine } = options
+  const lab = await Lab.start({ db, kube, keys: pair, credentials: grants([]).source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine } })
   const mcp = createMcpServer(lab.workstreams)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`
@@ -1209,12 +1211,12 @@ test('D52 a turn of the earlier contract, done with a submit in it; then a fresh
 
 /** Two roles as a card gives them: one of another harness with its model and effort, one that leaves them to its pool. */
 const ROLES = new Map<string, Role>([
-  ['scout', { name: 'scout', summary: 'Looks before anyone builds.', harness: 'other', model: 'mock-large', effort: 'high', persona: '# Scout\n\nYou look, and you say what you saw.' }],
-  ['plain', { name: 'plain', summary: 'Leaves its settings to its pool.', harness: 'mock', model: null, effort: null, persona: '# Plain\n\nNothing of your own.' }],
+  ['scout', { name: 'scout', summary: 'Looks before anyone builds.', harness: 'other', model: 'mock-large', effort: 'high', access: [], persona: '# Scout\n\nYou look, and you say what you saw.' }],
+  ['plain', { name: 'plain', summary: 'Leaves its settings to its pool.', harness: 'mock', model: null, effort: null, access: [], persona: '# Plain\n\nNothing of your own.' }],
 ])
 const otherPool = (k: FakeKube) => k.morePools.push(['other-test', 'other'])
 
-test('D53 spawn_agent with agent_type, a role of another harness with its model and effort; then a send_message; the agent titling itself with what it read first: that harness’s pool, the role’s settings; its first prompt the role’s line, its persona, then its delegator’s line, the instructions apart; its user element and its title the instructions alone; the next message with no persona', async (t) => {
+test('D53 spawn_agent with agent_type, a role of another harness with its model and effort; then a send_message; the agent titling itself with what it read first: that harness’s pool, the role’s settings, its Create carrying the role; its first prompt the role’s block, its delegator’s line, then the instructions; its user element and its title the instructions alone; the next message with no role’s block', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
   const c = await client(t, url, execution)
   const answer = text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'look at the tests\nand say what fails', agent_type: 'scout' } }))
@@ -1222,28 +1224,26 @@ test('D53 spawn_agent with agent_type, a role of another harness with its model 
   assert.equal(answer, `started ${delegate} · look at the tests`)
   await lab.turn(delegate, 'done')
   const current = (await lab.state(delegate)).current!
-  assert.deepEqual([current.body.pool, current.body.harness, current.body.settings], ['other-test', 'other', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }]])
-  const [opening, words, ...rest] = blocksOf((await prompts(lab, delegate))[0]!)
-  assert.equal(
-    opening!.text,
-    `From Agora, not the person: your role, \`scout\`.\n\n# Scout\n\nYou look, and you say what you saw.\n\n---\n\nFrom your delegator ${ws}, an agent, not the person. It receives your last message:`,
-  )
-  assert.deepEqual([words!.text, rest.length], ['look at the tests\nand say what fails', 0])
+  assert.deepEqual([current.body.pool, current.body.harness, current.body.settings, current.body.role], ['other-test', 'other', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }], 'scout'])
+  const from = `From your delegator ${ws}, an agent, not the person. It receives your last message:`
+  const [role, line, words, ...rest] = blocksOf((await prompts(lab, delegate))[0]!)
+  assert.deepEqual([role!.text, role!._meta?.[ROLE_META]], ['From Agora, not the person: your role, `scout`.\n\n# Scout\n\nYou look, and you say what you saw.', 'scout'])
+  assert.deepEqual([line!.text, words!.text, rest.length], [from, 'look at the tests\nand say what fails', 0])
   const [user] = await projected(lab, delegate, 'user')
-  assert.deepEqual([user?.from, user?.as, wordsOf(user!)], [ws, 'delegator', 'look at the tests\nand say what fails'])
-  const title = async () => (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')?.object.title
-  await until('its title', async () => (await title()) === 'look at the tests')
-  assert.equal((await kinds(lab, delegate, 'delegation.started'))[0]!.content.agentType, 'scout')
+  assert.deepEqual([user?.from, user?.as, user?.role, wordsOf(user!)], [ws, 'delegator', 'scout', 'look at the tests\nand say what fails'])
+  const view = async () => (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')?.object
+  await until('its title', async () => (await view())?.title === 'look at the tests')
+  assert.equal((await view())?.role, 'scout')
   // An agent titling itself with the first thing it read: the role's line is Agora's, not what it works on.
   const acp = current.acpId!
-  const titled = Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acp, update: { sessionUpdate: 'session_info_update', title: opening!.text.split('\n')[0] } } })).toString('base64')
+  const titled = Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: acp, update: { sessionUpdate: 'session_info_update', title: role!.text.split('\n')[0] } } })).toString('base64')
   assert.match(text(await c.callTool({ name: 'send_message', arguments: { to: delegate, message: `/raw ${titled}` } })), /^sent /)
   await until('its turn over', async () => (await lab.state(delegate)).turns.size === 2 && (await lab.state(delegate)).active === null)
   await sleep(500)
-  assert.equal(await title(), 'look at the tests')
-  // Its role is said once: the next message opens on its delegator's line alone.
-  const [line] = blocksOf((await prompts(lab, delegate))[1]!)
-  assert.equal(line!.text, `From your delegator ${ws}, an agent, not the person. It receives your last message:`)
+  assert.equal((await view())?.title, 'look at the tests')
+  // Its role is said once: the next message opens on its delegator's line.
+  const next = blocksOf((await prompts(lab, delegate))[1]!)
+  assert.deepEqual([next.length, next[0]!.text], [2, from])
 })
 
 test('D54 a role with harness naming another; with model given; a role that names no model and no effort; no agent_type: the pool named, none of the role’s settings, its persona all the same; that model, the role’s effort; its pool’s own; the delegator’s harness and its line alone', async (t) => {
@@ -1253,22 +1253,23 @@ test('D54 a role with harness naming another; with model given; a role that name
     const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', ...args } })))
     await lab.turn(delegate, 'done')
     const current = (await lab.state(delegate)).current!
-    return { pool: current.body.pool, settings: current.body.settings ?? [], opening: blocksOf((await prompts(lab, delegate))[0]!)[0]!.text }
+    return { pool: current.body.pool, settings: current.body.settings ?? [], opening: blocksOf((await prompts(lab, delegate))[0]!)[0]!.text, role: current.body.role }
   }
   const from = `From your delegator ${ws}, an agent, not the person. It receives your last message:`
   // On another harness than its own, a role's model and effort mean nothing: that pool's defaults stand.
   const elsewhere = await spawn({ agent_type: 'scout', harness: 'mock' })
   assert.deepEqual([elsewhere.pool, elsewhere.settings], ['mock-test', []])
   assert.match(elsewhere.opening, /^From Agora, not the person: your role, `scout`\.\n\n# Scout\n/)
+  assert.equal(elsewhere.role, 'scout')
   // What the call names wins over the role's.
   const chosen = await spawn({ agent_type: 'scout', model: 'mock-small' })
   assert.deepEqual([chosen.pool, chosen.settings], ['other-test', [{ id: 'model', value: 'mock-small' }, { id: 'effort', value: 'high' }]])
   const plain = await spawn({ agent_type: 'plain' })
   assert.deepEqual([plain.pool, plain.settings], ['mock-test', []])
-  assert.equal(plain.opening, `From Agora, not the person: your role, \`plain\`.\n\n# Plain\n\nNothing of your own.\n\n---\n\n${from}`)
+  assert.equal(plain.opening, 'From Agora, not the person: your role, `plain`.\n\n# Plain\n\nNothing of your own.')
   // The control: with no role, as before.
   const none = await spawn({})
-  assert.deepEqual([none.pool, none.settings, none.opening], ['mock-test', [], from])
+  assert.deepEqual([none.pool, none.settings, none.opening, none.role], ['mock-test', [], from, undefined])
 })
 
 test('D55 agent_type naming no role; not a string; null; with no role held at all; a role, rights beyond the delegator’s: unknown_agent_type; invalid_query; no role, as when absent; unknown_agent_type; no Workstream created by a refusal; the approval names the role', async (t) => {
@@ -1281,13 +1282,14 @@ test('D55 agent_type naming no role; not a string; null; with no role held at al
   assert.equal(Number(((await db.admin.query('SELECT count(*) AS n FROM workstreams WHERE parent=$1', [ws])).rows[0] as { n: string }).n), 0)
   // Null names nothing, as for any other parameter: a delegate with no role.
   const plain = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type: null } })))
-  assert.equal((await kinds(lab, plain, 'delegation.started'))[0]!.content.agentType, undefined)
+  await until('its execution', async () => (await lab.state(plain)).current)
+  assert.equal((await lab.state(plain)).current!.body.role, undefined)
   const call = c.callTool({ name: 'spawn_agent', arguments: { instructions: 'needs the internet', agent_type: 'scout', rights: ['internet'] } })
   await until('the approval', async () => (await lab.state(ws)).question)
   const [approval] = await projected(lab, ws, 'question')
   assert.match(String(approval?.text), /^Role `scout`: \*\*other\*\*, mock-large, effort high\n\nRights beyond the caller's: `internet`/)
   assert.equal((await lab.command(ws, 'Answer', { question: (await lab.state(ws)).question!.position }, { optionId: 'approve' })).accepted, true)
-  assert.equal((await kinds(lab, delegateOf(text(await call)), 'delegation.started'))[0]!.content.agentType, 'scout')
+  assert.equal((await lab.state(delegateOf(text(await call)))).current!.body.role, 'scout')
   // An Agora holding no role knows none.
   const bare = await started(t, ['agora:delegate'])
   const refused = (await (await client(t, bare.url, bare.execution)).callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', agent_type: 'scout' } })) as Text
@@ -1296,8 +1298,8 @@ test('D55 agent_type naming no role; not a string; null; with no role held at al
 
 test('D56 an effort, the call’s then a role’s, for a pool whose Sessions name it reasoning_effort; a role’s, for a pool no Session has opened in, whose defaults name it so: the delegate’s opening setting under that id, its Session set to it', async (t) => {
   const deep = new Map<string, Role>([
-    ['deep', { name: 'deep', summary: 'Thinks it through.', harness: 'mock', model: null, effort: 'high', persona: '# Deep\n\nYou think it through.' }],
-    ['far', { name: 'far', summary: 'Thinks it through, elsewhere.', harness: 'other', model: null, effort: 'high', persona: '# Far\n\nYou think it through.' }],
+    ['deep', { name: 'deep', summary: 'Thinks it through.', harness: 'mock', model: null, effort: 'high', access: [], persona: '# Deep\n\nYou think it through.' }],
+    ['far', { name: 'far', summary: 'Thinks it through, elsewhere.', harness: 'other', model: null, effort: 'high', access: [], persona: '# Far\n\nYou think it through.' }],
   ])
   const { lab, url, execution } = await started(t, ['agora:delegate'], { roles: deep }, {
     kube: (k) => {
@@ -1332,7 +1334,7 @@ test('M13 tools/list with roles held; with none; Agora’s own cards read; a car
   const without = (await (await client(t, bare.url, bare.execution)).listTools()).tools.find((tool) => tool.name === 'spawn_agent')!
   assert.deepEqual(Object.keys(without.inputSchema.properties ?? {}), ['instructions', 'harness', 'model', 'effort', 'rights'])
   // The cards the server is given: the flows' own.
-  const cards = loadRoles(join(import.meta.dirname, '..', '..', '..', 'apps', 'flows', 'roles'))
+  const cards = loadRoles(join(import.meta.dirname, '..', '..', '..', 'roles'))
   assert.deepEqual([...cards.keys()], ['dev', 'judge', 'lead', 'sre'])
   for (const card of cards.values()) {
     assert.ok(['claude-code', 'codex', 'opencode'].includes(card.harness) && card.summary !== '' && card.persona.startsWith('# '), card.name)
@@ -1340,7 +1342,7 @@ test('M13 tools/list with roles held; with none; Agora’s own cards read; a car
   }
   assert.deepEqual([cards.get('judge')!.harness, cards.get('judge')!.model, cards.get('judge')!.effort], ['codex', 'gpt-6.1-sol', 'xhigh'])  // A card that leaves its model to its pool, as the flows read it; one with no front matter is no card.
   assert.deepEqual(parseRole('---\nrole: reader\nsummary: Reads: and says so.\nharness: opencode\nmodel: default\n---\n\n# Reader\n\nYou read.\n'), {
-    name: 'reader', summary: 'Reads: and says so.', harness: 'opencode', model: null, effort: null, persona: '# Reader\n\nYou read.',
+    name: 'reader', summary: 'Reads: and says so.', harness: 'opencode', model: null, effort: null, access: [], persona: '# Reader\n\nYou read.',
   })
   assert.throws(() => parseRole('# Reader\n\nYou read.\n'), /front matter/)
   assert.throws(() => parseRole('---\nrole: reader\n---\n\n# Reader\n'), /its harness/)

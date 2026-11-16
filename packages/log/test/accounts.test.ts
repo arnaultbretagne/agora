@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
-import { folderOwner, identity } from '../src/index.ts'
+import { identity } from '../src/index.ts'
 import { cluster, database, Server, until, type Db } from './support.ts'
 
 const PERSON = 'person@example.org'
@@ -40,10 +40,10 @@ test('L75 the account: the identity the proxy passes; none without it', async ()
   assert.deepEqual(await get('/api/account', null), { status: 200, body: { email: null } })
 })
 
-test('L76 the agents\' folder: the caller\'s own, out of its list, nobody else\'s; an unknown folder refused; without the proxy, the owner given', async () => {
-  // The person's Workstream, their folder's, someone else's folder's; each with a question, so that it is listed.
+test('L76 a person\'s list: its own Workstreams, nobody else\'s; a folder asked for changes nothing; without the proxy, the owner given', async () => {
+  // The person's Workstream and someone else's; each with a question, so that it is listed.
   const ask = { title: 'Listed', text: '', options: [{ optionId: 'a', name: 'A', kind: 'allow_once' }, { optionId: 'b', name: 'B', kind: 'reject_once' }] }
-  const owners = { own: identity('owner', PERSON), folder: folderOwner('agents', PERSON), other: folderOwner('agents', SOMEONE) }
+  const owners = { own: identity('owner', PERSON), other: identity('owner', SOMEONE) }
   const made: Record<string, string> = {}
   for (const [name, owner] of Object.entries(owners)) {
     const id = randomUUID()
@@ -53,10 +53,10 @@ test('L76 the agents\' folder: the caller\'s own, out of its list, nobody else\'
   }
   // The views are projected after the commands: each list waited for.
   await until('the person\'s own', async () => same(await listed('', PERSON), [made.own]))
-  await until('their folder\'s', async () => same(await listed('folder=agents', PERSON), [made.folder]))
-  await until('someone else\'s folder\'s', async () => same(await listed('folder=agents', SOMEONE), [made.other]))
-  assert.deepEqual(await listed('folder=archive', PERSON), [400, 'unknown_folder'])
+  await until('someone else\'s', async () => same(await listed('', SOMEONE), [made.other]))
+  // No folder any more: the parameter names nothing, and the list is the caller's own.
+  assert.deepEqual(await listed('folder=agents', PERSON), [made.own])
   // Without the proxy, the owner given; none, refused.
-  assert.deepEqual(await listed(`owner=${owners.folder}`, null), [made.folder])
+  assert.deepEqual(await listed(`owner=${owners.other}`, null), [made.other])
   assert.deepEqual(await listed('', null), [400, 'invalid_identifier'])
 })

@@ -1,17 +1,20 @@
-// Agora's roles (docs/specs/delegation.md, "A delegation": a role): the cards of apps/flows/roles, read as the
-// flows read them (apps/flows/team.py, `parse_card`). A delegate started with `agent_type` is given one.
+// Agora's roles (docs/specs/roles.md): the cards of `roles/`, each who an agent is and what it works with by
+// default. A Workstream started as one is given its persona by the log, ahead of the first prompt of a new Session.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ROLE_META } from './marks.ts'
 
-/** A role's card: who the agent is, and the harness, model and effort it works with by default. */
+/** A role's card. */
 export interface Role {
   readonly name: string
-  /** What the role does, in a line: what an agent choosing it reads. */
+  /** What the role does, in a line: what a person or an agent choosing it reads. */
   readonly summary: string
   readonly harness: string
   /** Its harness's own; null when the card leaves it to the pool. */
   readonly model: string | null
   readonly effort: string | null
+  /** The profiles a person's draft starts with when the role is picked; a card gives no right by itself. */
+  readonly access: readonly string[]
   /** The card's text: the persona. */
   readonly persona: string
 }
@@ -32,17 +35,29 @@ export function parseRole(source: string): Role {
     const value = meta.get(key)
     return value === undefined || value === '' || value === 'default' ? null : value
   }
-  return { name, summary: meta.get('summary') ?? '', harness, model: own('model'), effort: own('effort'), persona: match[2]!.trim() }
+  const access = (meta.get('access') ?? '').split(',').map((profile) => profile.trim()).filter((profile) => profile !== '')
+  return { name, summary: meta.get('summary') ?? '', harness, model: own('model'), effort: own('effort'), access, persona: match[2]!.trim() }
 }
 
-/** The cards of a directory, by role; none when it does not exist. */
+/** The cards of a directory, by role; none when it does not exist. A file that is no card stops the reading, named. */
 export function loadRoles(directory: string): Map<string, Role> {
   const roles = new Map<string, Role>()
   if (!existsSync(directory)) return roles
   for (const file of readdirSync(directory).sort()) {
-    if (!file.endsWith('.md')) continue
-    const role = parseRole(readFileSync(join(directory, file), 'utf8'))
-    roles.set(role.name, role)
+    if (!file.endsWith('.md') || file === 'README.md') continue
+    try {
+      const role = parseRole(readFileSync(join(directory, file), 'utf8'))
+      roles.set(role.name, role)
+    } catch (error) {
+      throw new Error(`${join(directory, file)}: ${(error as Error).message}`)
+    }
   }
   return roles
 }
+
+/** What `GET /api/config` says of the roles (docs/specs/roles.md, "Cards"): never a persona. */
+export const describeRoles = (roles: ReadonlyMap<string, Role>) =>
+  [...roles.values()].map(({ name, summary, harness, model, effort, access }) => ({ role: name, summary, harness, model, effort, access }))
+
+/** A role's block, Agora's own, ahead of a prompt (docs/specs/roles.md, "The persona"). */
+export const roleBlock = (role: Role) => ({ type: 'text', text: `From Agora, not the person: your role, \`${role.name}\`.\n\n${role.persona}`, _meta: { [ROLE_META]: role.name } })

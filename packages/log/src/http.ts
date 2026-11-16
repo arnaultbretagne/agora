@@ -22,7 +22,6 @@ const VALIDATION = new Set([
   'invalid_identifier',
   'invalid_cursor',
   'future_cursor',
-  'unknown_folder',
   'invalid_pattern',
   'invalid_query',
   'control_refused',
@@ -37,14 +36,6 @@ export interface LogHttpOptions {
   readonly testRoutes: boolean
   readonly credentials?: CredentialSource
 }
-
-/**
- * The folders of an identity (docs/specs/log.md, "HTTP"): `agents` holds the Workstreams of the agents
- * a person's runs staff, owned by the name-based UUID of `agents` and the person's identity — theirs
- * alone, out of their own list.
- */
-export const FOLDERS = ['agents'] as const
-export const folderOwner = (folder: (typeof FOLDERS)[number], person: string): string => identity(folder, person)
 
 export async function logHttp(
   workstreams: Workstreams,
@@ -104,8 +95,8 @@ export async function logHttp(
     const caller = typeof identityHeader === 'string' && identityHeader !== '' ? identity('owner', identityHeader) : undefined
     const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
-    // What the caller owns: its own Workstreams and its agents' folder's; anything without the proxy.
-    const owned = email === null ? null : [caller!, folderOwner('agents', email)]
+    // What the caller owns: its own Workstreams; anything without the proxy.
+    const owned = email === null ? null : [caller!]
     if (file) {
       // docs/specs/files.md, "Reading a file": a file an entry of the caller's Workstreams names, streamed from R2.
       if (req.method !== 'GET') return reply(405, { reason: 'method_refused' }), true
@@ -127,16 +118,14 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
-      // docs/specs/log.md, "The list": the caller's own, its agents' folder, or one of its Workstreams'
-      // sub-streams; without the proxy, the owner or parent given.
-      const folder = url.searchParams.get('folder')
-      if (folder !== null && !(FOLDERS as readonly string[]).includes(folder)) throw new Error('unknown_folder')
+      // docs/specs/log.md, "The list": the caller's own, or one of its Workstreams' sub-streams; without the
+      // proxy, the owner or parent given.
       const parent = url.searchParams.get('parent')
       let list: string
       if (parent !== null) {
         list = uuid(parent)
         if (!(await workstreams.projections.belongs(list, owned))) throw new Error('unknown_workstream')
-      } else list = email === null ? uuid(url.searchParams.get('owner')) : folder === null ? caller! : folderOwner('agents', email)
+      } else list = email === null ? uuid(url.searchParams.get('owner')) : caller!
       if (url.pathname === '/api/workstreams/page')
         return reply(200, await workstreams.projections.listPage(list, url.searchParams.get('before'), url.searchParams.get('title'), parent === null)), true
       const after = url.searchParams.get('after') ?? '0'

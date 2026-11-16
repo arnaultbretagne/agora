@@ -3,7 +3,7 @@ import { identity, object, schemaValue, encode } from './json.ts'
 import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
 import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, noteAnchor } from './catch-up.ts'
-import { DELEGATION_META, FROM_META, REPORT_META } from './marks.ts'
+import { DELEGATION_META, FROM_META, isRole, REPORT_META, ROLE_META } from './marks.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 /** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
@@ -91,6 +91,12 @@ export const MAX_SUBAGENTS = 64
 export const MAX_SUBAGENT_DEPTH = 5
 /** A native sub-stream's id (docs/specs/log.md, "Native sub-agents", "Announced"). */
 export const childWorkstream = (host: string, acpId: string): string => identity(host, acpId, 'subagent')
+/** The Workstream's role (docs/specs/roles.md, "Naming a role"): its first Create's, kept. */
+export function roleOf(state: State): string | null {
+  const first = state.executions.values().next().value as Execution | undefined
+  return typeof first?.body.role === 'string' ? first.body.role : null
+}
+
 /** A native sub-stream's state: `working`, `waiting`, else its last turn's. */
 export function subagentOf(child: Child): 'working' | 'waiting' | 'idle' | 'failed' | 'cancelled' {
   const turn = child.turns.at(-1)
@@ -213,7 +219,7 @@ export function delegationOf(state: State): 'working' | 'idle' | 'failed' | 'can
 /** A message's blocks as its element holds them, and who wrote it, Agora's line left out (docs/specs/log.md, "Elements"). */
 function said(prompt: unknown): { content: unknown; from?: unknown; as?: unknown } {
   if (!Array.isArray(prompt)) return { content: prompt }
-  const blocks = (prompt as unknown[]).filter((b) => !isCatchUp(b))
+  const blocks = (prompt as unknown[]).filter((b) => !isCatchUp(b) && !isRole(b))
   const mark = object(object(object(blocks[0])?._meta)?.[FROM_META])
   if (mark !== null) return { content: blocks.slice(1), from: mark.workstream, as: mark.as }
   const earlier = blocks.map((b) => object(object(b)?._meta)?.[DELEGATION_META]).find((m) => m !== undefined)
@@ -803,6 +809,7 @@ export class CoreProjection {
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
             question: state.question?.position ?? null,
+            ...(roleOf(state) !== null ? { role: roleOf(state) } : {}),
             ...(this.delegate ? { delegation: delegationOf(state) } : {}),
             continuation,
             changedAt: entry.time,
@@ -952,6 +959,8 @@ export class CoreProjection {
         // The user's blocks only: Agora's catch-up is named, not shown (docs/specs/log.md, "Elements").
         const blocks = Array.isArray(params?.prompt) ? (params.prompt as unknown[]) : null
         const catchUp = blocks?.map((b) => object(object(b)?._meta)?.[CATCH_UP_META]).find((m) => m !== undefined)
+        // A role's block, Agora's too (docs/specs/roles.md, "The persona"): named, not shown.
+        const role = blocks?.map((b) => object(b)?._meta).map((meta) => object(meta)?.[ROLE_META]).find((m) => m !== undefined)
         // An earlier delegation's report of Agora's (docs/specs/log.md, "Elements").
         const report = blocks?.map((b) => object(object(b)?._meta)?.[REPORT_META]).find((m) => m !== undefined)
         put(
@@ -970,6 +979,7 @@ export class CoreProjection {
                 turn: turn?.id,
                 session: entry.session,
                 ...said(params?.prompt),
+                ...(typeof role === 'string' ? { role } : {}),
                 ...(catchUp !== undefined ? { catchUp } : {}),
               },
           entry.position,

@@ -25,7 +25,9 @@ import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
-import { acceptsPrompt, childWorking, isApproval, isMerge, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
+import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
+import { isRole } from './marks.ts'
+import { roleBlock, type Role } from './roles.ts'
 import { core, Projections } from './projection.ts'
 import { decode, encode, identity, object, schemaValue, uuid } from './json.ts'
 import { idKey, validate, type Reason } from './acp.ts'
@@ -61,6 +63,8 @@ export interface WorkstreamsOptions {
   readonly sink?: (line: string) => void
   /** Signs the executions' tokens (docs/specs/credentials.md); without it, no execution has a way out. */
   readonly credentials?: CredentialSource
+  /** The roles a Workstream may start as (docs/specs/roles.md): the cards the server read. */
+  readonly roles?: ReadonlyMap<string, Role>
   /** The database ownership connection failed (docs/specs/log.md, "Database ownership"). Default: exit. */
   readonly onOwnershipLost?: () => void
   /** Called at each fault point with what is at stake there; a test stops the process, or holds it, there. */
@@ -314,6 +318,16 @@ export class Workstreams implements Handler {
             if (!line.ok) return line.reason
             message = { id: randomUUID(), prompt: command.body.prompt }
           }
+          // docs/specs/roles.md, "Naming a role": the Workstream's first Create names it; a later one keeps it.
+          if (command.body.role !== undefined && typeof command.body.role !== 'string') return 'invalid_create'
+          let role: string | null
+          if (state.executions.size === 0) {
+            role = command.body.role ?? null
+            if (role !== null && !this.options.roles?.has(role)) return 'unknown_role'
+          } else {
+            role = roleOf(state)
+            if (command.body.role !== undefined && command.body.role !== role) return 'role_set'
+          }
           await tx.client.query('SELECT pg_advisory_xact_lock($1)', [QUOTA_LOCK])
           const active = await tx.client.query(
             "SELECT count(*)::text AS count FROM commands c WHERE c.kind='Create' AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.workstream=c.workstream AND e.execution=c.execution AND e.kind='execution.ended')",
@@ -348,6 +362,7 @@ export class Workstreams implements Handler {
               limits,
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
               ...(profiles.length > 0 ? { profiles } : {}),
+              ...(role !== null ? { role } : {}),
               ...(anchor ? { anchor } : {}),
               catchUp: { turns: catchUp.turns, omitted: catchUp.omitted },
               ...(settings.length > 0 ? { settings } : {}),
@@ -413,8 +428,7 @@ export class Workstreams implements Handler {
             const line = validate(encode({ jsonrpc: '2.0', id: 'waits', method: 'session/prompt', params: { sessionId: current.acpId, prompt: command.body.prompt } }), 'out')
             return line.ok ? { execution: current.id, session: current.session, waits: true } : line.reason
           }
-          const catchUp = this.catchUpFor(tx.entries, state, current, command.body.prompt)
-          const prompt = catchUp ? [catchUpBlock(catchUp), ...(command.body.prompt as unknown[])] : command.body.prompt
+          const prompt = this.opened(tx.entries, state, current, command.body.prompt, command.body.prompt)
           return {
             execution: current.id,
             session: current.session,
@@ -501,6 +515,34 @@ export class Workstreams implements Handler {
       await this.project(workstream)
       return answer
     })
+  }
+
+  /** A prompt as it goes: Agora's own blocks ahead of the message's — a role's, then the catch-up —, each when it is due. */
+  private opened(entries: readonly Entry[], state: State, e: Execution, prompt: unknown, given: unknown): unknown {
+    const role = this.roleFor(entries, state, e, prompt)
+    const catchUp = this.catchUpFor(entries, state, e, prompt)
+    if (role === null && catchUp === null) return given
+    return [...(role ? [roleBlock(role)] : []), ...(catchUp ? [catchUpBlock(catchUp)] : []), ...(given as unknown[])]
+  }
+
+  /**
+   * The role's block a prompt carries (docs/specs/roles.md, "The persona"): with the first prompt that is not a command of
+   * an execution whose Session is new, until one carrying it has been dispatched. A Session restored holds it already.
+   */
+  private roleFor(entries: readonly Entry[], state: State, e: Execution, prompt: unknown): Role | null {
+    const role = typeof e.body.role === 'string' ? this.options.roles?.get(e.body.role) : undefined
+    if (role === undefined || !Array.isArray(prompt)) return null
+    const first = prompt.map((b) => object(b)).find((b) => b?.type === 'text')
+    if (typeof first?.text === 'string' && first.text.trimStart().startsWith('/')) return null
+    const session = entries.find((x) => x.kind === 'session.opened' && x.execution === e.id && x.session === e.session)
+    if ((session?.content.origin ?? 'new') !== 'new') return null
+    const carried = (x: Entry) => {
+      const blocks = object(x.content.params)?.prompt
+      return Array.isArray(blocks) && blocks.some(isRole)
+    }
+    if (entries.some((x) => x.execution === e.id && x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt' && state.attempts.has(x.position) && carried(x)))
+      return null
+    return role
   }
 
   /**
@@ -778,9 +820,8 @@ export class Workstreams implements Handler {
       return
     }
     if (state.held) return
-    const catchUp = this.catchUpFor(await this.store.entries(workstream), state, e, blocks)
     const given = object((await this.store.expand(message)).body)?.prompt
-    const prompt = catchUp ? [catchUpBlock(catchUp), ...(given as unknown[])] : given
+    const prompt = this.opened(await this.store.entries(workstream), state, e, blocks, given)
     await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { method: 'session/prompt', params: { sessionId: e.acpId, prompt } }, session, message.command ?? undefined))
   }
 

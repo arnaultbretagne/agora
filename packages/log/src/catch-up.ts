@@ -2,7 +2,7 @@
 // exchanges that anchor does not hold, given to the agent as text with the execution's first prompt.
 // Pure: it reads the fold and the entries, nothing else.
 import { object } from './json.ts'
-import { FROM_META } from './marks.ts'
+import { FROM_META, isRole } from './marks.ts'
 import { STEERING, type Execution, type State } from './state.ts'
 import type { Entry } from './store.ts'
 
@@ -122,7 +122,7 @@ export function lacking(anchors: Anchors, state: State, anchor: string | null): 
 
 function blockText(block: unknown): string {
   const b = object(block)
-  if (!b || isCatchUp(b)) return ''
+  if (!b || isCatchUp(b) || isRole(b)) return ''
   if (b.type === 'text') return typeof b.text === 'string' ? b.text : ''
   if (b.type === 'resource_link') return `[link: ${String(b.name ?? b.uri ?? '')}]`
   if (b.type === 'resource') return `[resource: ${String(object(b.resource)?.uri ?? '')}]`
