@@ -249,7 +249,19 @@ export class LogStore {
       pool.on('connect', (client) => client.on('error', () => {}))
     }
   }
+  /** Whether the three logins hold the runtime roles: a log on its owner's one login (`owner`) has none to check. */
+  private roles = true
+  /**
+   * The log on one login, the database's owner (a preview, docs/specs/preview.md): the schema without its
+   * runtime roles (`ownerSchema`), every pool on that login.
+   */
+  static owner(url: string, max = 4, files?: Files): LogStore {
+    const store = new LogStore({ writer: url, projector: url, anchors: url }, max, files)
+    store.roles = false
+    return store
+  }
   async assertBoundaries(): Promise<void> {
+    if (!this.roles) return
     for (const [pool, role] of [
       [this.writer, 'writer'],
       [this.projector, 'projector'],

@@ -1,6 +1,8 @@
 # The CI: checks every workspace on each push and each PR to the base branch, then — on
-# pushes only — builds, tries and publishes the server and the harness images by digest. infra-k8s
-# pins the digests (apps/agora-sandboxes, apps/agora), never a tag.
+# pushes only — builds and tries the server and the harness images, and publishes them by digest from
+# the base branch or a run by hand. infra-k8s pins the digests (apps/agora-sandboxes, apps/agora), never
+# a tag. A pull request publishes no image here: one labelled `preview` gets the server's from
+# preview.yml.
 #
 # Nothing is done twice (README.md, "Check and build"): after a merge, a tree already checked at the
 # pull request's head is not checked again; an image whose inputs already have one is not built again.
@@ -75,6 +77,10 @@ jobs:
     needs: check
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # Published from the base branch or a run by hand; a branch's push builds and tries them only.
+    env:
+      PUBLISH: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
@@ -84,8 +90,6 @@ jobs:
           - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
           - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
           - { name: agora-harness-codex, dockerfile: harnesses/codex/Dockerfile, harness: true }
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -144,8 +148,17 @@ jobs:
           docker run --rm --read-only --cap-drop ALL agora-server:test 2>&1 | tee out.txt || true
           grep -q 'SANDBOX_NAMESPACE is required' out.txt
 
+      # apps/server/README.md, "Preview": the same image as a preview, in a network that lets only its
+      # database through, its client driven in a browser (docs/specs/preview.md, V4 to V6).
+      - name: Start the server as a preview, alone with its database, and drive its client
+        if: steps.existing.outputs.digest == '' && !matrix.harness
+        run: |
+          npm ci --no-audit --no-fund
+          npx -w @agora/web playwright install --only-shell chromium
+          node scripts/try-preview.ts agora-server:test
+
       - id: push
-        if: steps.existing.outputs.digest == ''
+        if: steps.existing.outputs.digest == '' && env.PUBLISH == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -158,7 +171,7 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
 
-      - if: steps.existing.outputs.digest == ''
+      - if: steps.existing.outputs.digest == '' && env.PUBLISH == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -166,6 +179,7 @@ jobs:
           push-to-registry: true
 
       - name: Record the digest
+        if: env.PUBLISH == 'true'
         env:
           DIGEST: ${{ steps.existing.outputs.digest || steps.push.outputs.digest }}
         run: |
@@ -179,7 +193,8 @@ jobs:
           mkdir -p digests && echo "$DIGEST" > "digests/${{ matrix.name }}"
 
       # For the infra proposal below: one file per image, named after it.
-      - uses: actions/upload-artifact@v4
+      - if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.name }}
           path: digests/${{ matrix.name }}

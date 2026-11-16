@@ -1,0 +1,70 @@
+# A preview's image (apps/server/README.md, "Preview"; docs/specs/preview.md, V1): for a pull request labelled
+# `preview` whose branch is in this repository, the server's image of its head commit, built, tried as a
+# preview, then published as ghcr.io/<owner>/agora-server:<full commit SHA> — when the label is set, then at
+# each push while it stays. infra-k8s's catalogue of previews (`source: main`) takes that tag. A pull request
+# without the label, or from a fork, publishes nothing.
+name: preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    # Labelled, from this repository; on `labeled`, only for this label.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'preview') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'preview')
+    runs-on: ubuntu-latest
+    # The pull request's last commit wins: a run for an older one is cancelled. A run this job skips takes no place here.
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/agora-server
+      # The pull request's head, not the merge commit GitHub makes for it: the commit the preview names.
+      SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          load: true
+          tags: agora-server:test
+          cache-from: type=gha,scope=agora-server
+      - name: Start it as a preview, alone with its database, and drive its client
+        run: |
+          npm ci --no-audit --no-fund
+          npx -w @agora/web playwright install --only-shell chromium
+          node scripts/try-preview.ts agora-server:test
+      # The image just tried, as it is.
+      - name: Publish it under the commit's SHA
+        run: |
+          docker tag agora-server:test "$IMAGE:$SHA"
+          docker push "$IMAGE:$SHA"
+          {
+            echo '### agora-server, preview'
+            echo ''
+            echo '```'
+            echo "$IMAGE:$SHA"
+            docker buildx imagetools inspect "$IMAGE:$SHA" --format '{{json .Manifest}}' | jq -r '"'"$IMAGE"'@" + .digest'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

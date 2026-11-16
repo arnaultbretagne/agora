@@ -1,5 +1,5 @@
 # The server: the execution mechanics (packages/executions), the log (packages/log), the client
-# (apps/web) and the test page. Built from the repository root (npm workspaces):
+# (apps/web) and the test page; with PREVIEW=true, a preview (apps/server/README.md, "Preview"). Built from the repository root (npm workspaces):
 #   docker build -f apps/server/Dockerfile .
 # Node 24 runs the server's TypeScript sources directly (type stripping); only the client is built.
 
@@ -32,6 +32,10 @@ COPY packages/mock-agent/package.json packages/mock-agent/
 COPY packages/testkit/package.json packages/testkit/
 RUN npm ci --omit=dev --workspace @agora/server --no-audit --no-fund && npm cache clean --force
 COPY packages/harness-bridge/src packages/harness-bridge/src
+# A preview's sandboxes run the mock agent in the server's container, and its first start writes the
+# client's fixtures as conversations (apps/server/README.md, "Preview").
+COPY packages/mock-agent/src packages/mock-agent/src
+COPY apps/web/test/fixtures apps/web/test/fixtures
 COPY packages/credentials/src packages/credentials/src
 COPY packages/executions/src packages/executions/src
 COPY packages/log/src packages/log/src
