@@ -9,6 +9,7 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/sleep N` | One chunk per second for N seconds. |
 | `/silence N` | Nothing for N seconds, then an answer. |
 | `/permission` | Asks for a permission and waits for the answer. |
+| `/withdraw N` | Asks for a permission, withdraws it N seconds on by `$/cancel_request`, then says the answer it still gets. |
 | `/tool` | A tool call with a diff. |
 | `/tool-open N [failed] [M]` | A tool call `pending`, then `in_progress` for N seconds, then closed, then the turn goes on M seconds (1 by default). |
 | `/tool-permission` | A tool call open, a permission asked, the tool closing while it is pending; the turn goes on 2 s once answered. |

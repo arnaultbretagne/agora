@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { object, type Entry, type ListRow } from '../src/index.ts'
-import { database, expire, FakeKube, Lab, until } from './support.ts'
+import { database, expire, FakeKube, Lab, lines, until } from './support.ts'
 
 type T = { after(fn: () => Promise<void>): void }
 
@@ -120,4 +120,37 @@ test('L156 a Respond to a permission naming who answers: Agora’s, kept and on 
   assert.equal(object((await responds())[1]!.content.body)?.from, undefined)
   const mine = await until('answered', async () => (await permissions(lab, ws)).find((p) => p.requestPosition === two.position && p.status === 'answered'))
   assert.deepEqual([mine.from, mine.as], [undefined, undefined])
+})
+
+/** Lines the mock agent writes byte for byte (packages/mock-agent, `/raw`). */
+const raw = (values: unknown[]) => `/raw ${Buffer.from(values.map((v) => JSON.stringify(v)).join('\n')).toString('base64')}`
+
+test('L158 an agent withdrawing its pending permission by $/cancel_request; then one naming no request pending: answered cancelled once, its request gone, its parent waiting 0, its turn going on to its end; then no answer written', async (t) => {
+  const lab = await bench(t)
+  const parent = await lab.workstream()
+  const ws = randomUUID()
+  await lab.store.create(ws, null, parent)
+  await lab.open(parent)
+  await lab.open(ws)
+  assert.ok((await lab.write(ws, '/withdraw 1')).accepted)
+  const request = await asked(lab, ws)
+  await settled(lab, ws, [parent], request.position)
+  await lab.turn(ws, 'done', 20_000)
+  await settled(lab, ws, [parent], null)
+  const entries = await lab.entries(ws)
+  assert.equal(lines(entries, 'in', '$/cancel_request').length, 1)
+  const answers = () => lines(entries, 'out').filter((x) => x.request_position === request.position)
+  assert.deepEqual(answers().map((x) => x.content.result), [{ outcome: { outcome: 'cancelled' } }])
+  const permission = await until('answered', async () => (await permissions(lab, ws)).find((p) => p.requestPosition === request.position && p.status === 'answered'))
+  assert.deepEqual(permission.answer, { outcome: { outcome: 'cancelled' } })
+  // The agent's turn went on, given the answer it still expects.
+  const said = lines(entries, 'in', 'session/update').map((x) => object(object(x.content.params)?.update)).filter((u) => u?.sessionUpdate === 'agent_message_chunk').map((u) => String(object(u!.content)?.text))
+  assert.ok(said.includes('Withdrawn: cancelled.'), said.join(' | '))
+  // A withdrawal naming no request pending: nothing answered.
+  const responses = async () => (await lab.entries(ws)).filter((x) => x.direction === 'out' && x.correlated_method === 'session/request_permission').length
+  const before = await responses()
+  assert.ok((await lab.write(ws, raw([{ jsonrpc: '2.0', method: '$/cancel_request', params: { requestId: 'mock-999' } }]))).accepted)
+  await lab.turn(ws, 'done', 20_000)
+  assert.equal(lines(await lab.entries(ws), 'in', '$/cancel_request').length, 2, 'the second withdrawal received')
+  assert.equal(await responses(), before)
 })
