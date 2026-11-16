@@ -45,7 +45,7 @@ const settled = (lab: Lab, ws: string, request: string | null) =>
     return (view?.request ?? null) === request && (row?.request ?? null) === request ? { view, row } : null
   })
 
-test('L157 Agora’s initialize declares form elicitation, and no url', async (t) => {
+test('L159 Agora’s initialize declares form elicitation, and no url', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -53,7 +53,7 @@ test('L157 Agora’s initialize declares form elicitation, and no url', async (t
   assert.deepEqual(object(object(initialize!.content.params)?.clientCapabilities)?.elicitation, { form: {} })
 })
 
-test('L158 Claude Code’s AskUserQuestion as a form, pending, then accepted: an elicitation element pending on its tool call; its view’s and row’s request; a message meanwhile refused; accepted with what fits: one answer, its content; the agent given it; answered, no request', async (t) => {
+test('L160 Claude Code’s AskUserQuestion as a form, pending, then accepted: an elicitation element pending on its tool call; its view’s and row’s request; a message meanwhile refused; accepted with what fits: one answer, its content; the agent given it; answered, no request', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -77,7 +77,7 @@ test('L158 Claude Code’s AskUserQuestion as a form, pending, then accepted: an
   assert.deepEqual([answered?.status, answered?.answer], ['answered', { action: 'accept', content }])
 })
 
-test('L159 RespondElicitation: an option the form does not offer, a field it does not have, a text for a list, a required field left out, an action it does not take; a permission’s Respond on it; then declined, then answered again: invalid_elicitation_content each time, nothing written; stale_permission; one decline; stale_elicitation', async (t) => {
+test('L161 RespondElicitation: an option the form does not offer, a field it does not have, a text for a list, a required field left out, an action it does not take; a permission’s Respond on it; then declined, then answered again: invalid_elicitation_content each time, nothing written; stale_permission; one decline; stale_elicitation', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -106,7 +106,7 @@ test('L159 RespondElicitation: an option the form does not offer, a field it doe
   assert.equal(await said(lab, ws), 'Elicitation: decline.')
 })
 
-test('L160 a form pending when its turn is cancelled; another when its execution ends: Agora answers the first cancel, once; the second gets no answer, cancelled; neither pending after', async (t) => {
+test('L162 a form pending when its turn is cancelled; another when its execution ends: Agora answers the first cancel, once; the second gets no answer, cancelled; neither pending after', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   const e = await lab.open(ws)
@@ -129,7 +129,7 @@ test('L160 a form pending when its turn is cancelled; another when its execution
   assert.equal((await elicitations(lab, ws)).find((x) => x.requestPosition === two.position)?.status, 'cancelled')
 })
 
-test('L161 Codex’s form with a secret field: declined by Agora at once, one answer; its element says why; never the view’s request; a Respond to it stale; and which forms Agora declines', async (t) => {
+test('L163 Codex’s form with a secret field: declined by Agora at once, one answer; its element says why; never the view’s request; a Respond to it stale; and which forms Agora declines', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -150,7 +150,7 @@ test('L161 Codex’s form with a secret field: declined by Agora at once, one an
   assert.equal(declinedBy({ mode: 'form', requestedSchema: { type: 'object', properties: { q: field } } }), null)
 })
 
-test('L162 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: pending no more, cancelled, no answer written; a Write accepted after its turn', async (t) => {
+test('L164 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: pending no more, cancelled, no answer written; a Write accepted after its turn', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -164,7 +164,7 @@ test('L162 a form its agent withdraws (`$/cancel_request`), as Codex past its au
   assert.ok((await lab.write(ws, 'after it')).accepted)
 })
 
-test('L163 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
+test('L165 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
   const params = {
     mode: 'form',
     requestedSchema: {
@@ -196,7 +196,7 @@ test('L163 a form’s fields, in order, and what fits them: a number within its 
 
 // The person answering in the delegate's thread uses the same command (docs/specs/assistant-ui.md, "Answering"):
 // covered by the client's cases. A Respond naming who answers is Agora's alone to keep, as for a permission.
-test('L164 a RespondElicitation whose body names a `from`: Agora’s, kept and on the elicitation answered; the person’s, left out', async (t) => {
+test('L166 a RespondElicitation whose body names a `from`: Agora’s, kept and on the elicitation answered; the person’s, left out', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)

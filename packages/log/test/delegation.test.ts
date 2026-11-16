@@ -1500,7 +1500,7 @@ const formIn = (lab: Lab, delegate: string) =>
 /** What its agent was answered. */
 const answersIn = async (lab: Lab, delegate: string, request: Entry) => lines(await lab.entries(delegate), 'out').filter((x) => x.request_position === request.position).map((x) => x.content.result)
 
-test('D62 a delegate’s agent asking a form — Claude Code’s AskUserQuestion, two questions —: one message of Agora’s in its delegator’s Workstream, the form’s message, each field in order with its options, how to answer; the delegate waiting; answer_agent with content that fits: answered; one RespondElicitation naming the delegator; the agent given that content; its last message back', async (t) => {
+test('D63 a delegate’s agent asking a form — Claude Code’s AskUserQuestion, two questions —: one message of Agora’s in its delegator’s Workstream, the form’s message, each field in order with its options, how to answer; the delegate waiting; answer_agent with content that fits: answered; one RespondElicitation naming the delegator; the agent given that content; its last message back', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/question several', harness: 'mock' } })))
@@ -1541,7 +1541,7 @@ test('D62 a delegate’s agent asking a form — Claude Code’s AskUserQuestion
   assert.equal(wordsOf(back), `Elicitation: accept ${JSON.stringify({ question_0: 'PostgreSQL', question_1: ['Lint', 'Unit tests'] })}.`)
 })
 
-test('D63 answer_agent on a delegate’s form: an option not offered, a field it has not, a required field left out, `option` instead of content, no content, then declined; then the person; and a Codex form left to the person: invalid_elicitation_content naming the field, invalid_query, nothing written; declined, one decline; the person’s stale; the person answering first, the delegator’s stale_permission', async (t) => {
+test('D64 answer_agent on a delegate’s form: an option not offered, a field it has not, a required field left out, `option` instead of content, no content, then declined; then the person; and a Codex form left to the person: invalid_elicitation_content naming the field, invalid_query, nothing written; declined, one decline; the person’s stale; the person answering first, the delegator’s stale_permission', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const call = async (args: Record<string, unknown>) => (await c.callTool({ name: 'answer_agent', arguments: args })) as Text
@@ -1576,7 +1576,7 @@ test('D63 answer_agent on a delegate’s form: an option not offered, a field it
   assert.deepEqual(await answersIn(lab, other, asked), [{ action: 'accept', content: { environment: 'Staging' } }])
 })
 
-test('D64 a delegate’s agent asking a form Agora declines — a secret field —: declined at once; nothing told to its delegator; the delegate never waiting', async (t) => {
+test('D65 a delegate’s agent asking a form Agora declines — a secret field —: declined at once; nothing told to its delegator; the delegate never waiting', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/form secret', harness: 'mock' } })))
