@@ -164,7 +164,7 @@ test('L162 a form its agent withdraws (`$/cancel_request`), as Codex past its au
   assert.ok((await lab.write(ws, 'after it')).accepted)
 })
 
-test('L163 a form’s fields and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
+test('L163 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
   const params = {
     mode: 'form',
     requestedSchema: {
@@ -179,10 +179,11 @@ test('L163 a form’s fields and what fits them: a number within its bounds, a y
     },
   }
   assert.deepEqual(fieldsOf(params).map((f) => [f.key, f.type, f.required, f.options?.map((o) => o.value) ?? null]), [
+    // The required first, then the others by name: the log keeps no member order.
     ['replicas', 'integer', true, null],
     ['canary', 'boolean', false, null],
-    ['db', 'string', false, ['pg']],
     ['checks', 'array', false, ['lint', 'test']],
+    ['db', 'string', false, ['pg']],
   ])
   assert.equal(contentRefusal(params, { replicas: 3, canary: true, db: 'pg', checks: ['lint', 'test'] }), null)
   assert.equal(contentRefusal(params, { replicas: 6 }), 'replicas: out of bounds')
