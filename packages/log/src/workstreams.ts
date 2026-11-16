@@ -490,10 +490,13 @@ export class Workstreams implements Handler {
           options = object(permission.content.params)?.options
         if (outcome?.outcome === 'selected' && (!Array.isArray(options) || !options.some((o) => object(o)?.optionId === outcome.optionId)))
           return 'invalid_permission_option'
+        // Who answers is Agora's alone to say: a delegator's `answer_agent` (docs/specs/delegation.md, "Requests").
+        const { from: by, ...rest } = command.body
         return {
           execution: current.id,
           session: permission.session ?? undefined,
           line: { id: permission.rpc_id, result: { outcome: command.body.outcome } },
+          ...(origin === 'agora' || by === undefined ? {} : { body: rest }),
         }
       })
       this.report({ operation: 'admission', outcome: answer.accepted ? 'accepted' : 'refused', workstream, command: command.id })

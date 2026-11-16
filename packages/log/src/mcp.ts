@@ -72,7 +72,7 @@ const READ: Tool = {
   annotations: { readOnlyHint: true },
 }
 
-// The four tools of delegation bear the names the harnesses give their own sub-agents' gestures (docs/specs/delegation.md).
+// The tools of delegation bear the names the harnesses give their own sub-agents' gestures (docs/specs/delegation.md).
 const SPAWN_AGENT: Tool = {
   name: 'spawn_agent',
   description:
@@ -137,9 +137,26 @@ const STOP_AGENT: Tool = {
 
 const LIST_AGENTS: Tool = {
   name: 'list_agents',
-  description: 'Your delegates and whether each is working: one line each, `<id> · <title> · <state>` — working, idle, failed or cancelled.',
+  description: 'Your delegates and whether each is working: one line each, `<id> · <title> · <state>` — working, waiting (for an answer to a request of its), idle, failed or cancelled.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true },
+}
+
+const ANSWER_AGENT: Tool = {
+  name: 'answer_agent',
+  description:
+    'Answer a request one of your delegates waits on — a permission its agent asked —, as Agora’s message about it names it: the request’s number and the option you choose. ' +
+    'Answer only what is yours to decide; otherwise ask the person, who can answer it in that delegate’s thread. The first answer counts: one given before yours makes yours stale.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      to: { type: 'string', format: 'uuid', description: 'The id of one of your delegates.' },
+      request: { type: 'string', description: 'The request’s number, as Agora’s message gives it.' },
+      option: { type: 'string', description: 'The id of the option you choose, one the request offers.' },
+    },
+    required: ['to', 'request', 'option'],
+    additionalProperties: false,
+  },
 }
 
 /** Listed to an execution holding a repository's write, for those repositories (docs/specs/merge.md). */
@@ -163,10 +180,10 @@ const PROPOSE_MERGE: Tool = {
 /** The tools each right opens (docs/specs/mcp.md, "The path"). */
 const RIGHTS: Readonly<Record<string, readonly Tool[]>> = {
   'agora:read': [SEARCH, READ],
-  'agora:delegate': [SPAWN_AGENT, SEND_MESSAGE, STOP_AGENT, LIST_AGENTS],
+  'agora:delegate': [SPAWN_AGENT, SEND_MESSAGE, STOP_AGENT, LIST_AGENTS, ANSWER_AGENT],
   'agora:submit': [SEND_MESSAGE],
 }
-const DELEGATION = new Set(['spawn_agent', 'send_message', 'stop_agent', 'list_agents'])
+const DELEGATION = new Set(['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent'])
 
 /** What a tool answers instead of its result: the reason, as the HTTP API gives it. */
 class Refused extends Error {}
@@ -307,6 +324,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
         if (tool.name === 'send_message') return { content: [{ type: 'text', text: await delegations!.send(who, args) }] }
         if (tool.name === 'stop_agent') return { content: [{ type: 'text', text: await delegations!.stop(who, args) }] }
         if (tool.name === 'list_agents') return { content: [{ type: 'text', text: await delegations!.list(who) }] }
+        if (tool.name === 'answer_agent') return { content: [{ type: 'text', text: await delegations!.answer(who, args) }] }
         // A held call hears progress, so that no harness gives up first (docs/specs/delegation.md, "Approval").
         const token = request.params._meta?.progressToken
         let progress = 0

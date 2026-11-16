@@ -641,7 +641,8 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     case '/spawn_agent':
     case '/send_message':
     case '/stop_agent':
-    case '/list_agents': {
+    case '/list_agents':
+    case '/answer_agent': {
       // /<tool> {json}: a call to one of Agora's delegation tools, as a harness makes one (docs/specs/delegation.md): its
       // tool line, the call to Agora's MCP server, then its answer on the line and in a message.
       const name = text.trim().split(/\s/)[0]!.slice(1)
@@ -657,7 +658,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
         rawOutput: answer.text,
         content: [{ type: 'content', content: { type: 'text', text: answer.text } }],
       })
-      const said = `${{ spawn_agent: 'Delegated', send_message: 'Sent', stop_agent: 'Stopped', list_agents: 'Listed' }[name] ?? name}: ${answer.text}`
+      const said = `${{ spawn_agent: 'Delegated', send_message: 'Sent', stop_agent: 'Stopped', list_agents: 'Listed', answer_agent: 'Answered' }[name] ?? name}: ${answer.text}`
       remember(session, 'agent', said)
       say(session.id, said)
       return 'end_turn'

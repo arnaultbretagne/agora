@@ -202,14 +202,21 @@ export function waited(state: State, since: string, now: number): number {
   return state.waits.filter((w) => Date.parse(w.from) >= start).reduce((sum, w) => sum + ((w.to === null ? now : Date.parse(w.to)) - Date.parse(w.from)), 0)
 }
 /**
- * A delegate's state (docs/specs/delegation.md, "A delegation"): `working` while its Session opens, a turn runs or a
- * message waits; else as its last turn ended; `failed` or `cancelled` when its execution failed, was lost or was stopped.
+ * The requests a Workstream's agent waits on (docs/specs/log.md, "The Workstream view"): the permissions its own Session
+ * asked and nobody has answered, oldest first; a native sub-agent's are its sub-stream's.
  */
-export function delegationOf(state: State): 'working' | 'idle' | 'failed' | 'cancelled' {
+export const requestsOf = (state: State): Entry[] => [...state.permissions.values()].filter((p) => !state.children.has(String(object(p.content.params)?.sessionId)))
+/**
+ * A delegate's state (docs/specs/delegation.md, "A delegation"): `waiting` while a request of its agent's is pending;
+ * `working` while its Session opens, a turn runs or a message waits; else as its last turn ended; `failed` or
+ * `cancelled` when its execution failed, was lost or was stopped.
+ */
+export function delegationOf(state: State): 'working' | 'waiting' | 'idle' | 'failed' | 'cancelled' {
   const e = state.current
   if (e?.failed || e?.lost) return 'failed'
   if (e?.stopped) return 'cancelled'
   if (e?.ended && !e.session) return 'failed'
+  if (requestsOf(state).length > 0) return 'waiting'
   if (state.active || (state.waiting.length > 0 && !state.held) || (e && !e.ended && !e.session)) return 'working'
   const turn = [...state.turns.values()].at(-1)
   if (!turn) return e?.ended || (e?.session && settled(state, e)) ? 'idle' : 'working'
@@ -624,6 +631,10 @@ export class CoreProjection {
   private readonly known = noAnchors()
   /** What the view last showed of the settings, to put it only when that changes. */
   private settingsCode = ''
+  /** The request the view last showed pending, to put it when that changes (docs/specs/log.md, "The Workstream view"). */
+  private asked: string | null = null
+  /** Who wrote each Respond to a permission that names its writer: a delegator's `answer_agent` (docs/specs/delegation.md, "Requests"). */
+  private readonly respondedBy = new Map<string, { from: unknown; as: unknown }>()
   /** What was last put of each native sub-agent — its turns, its view, its line in its parent's thread —, and the turn that announced it. */
   private readonly childCodes = new Map<string, string>()
   private readonly announcedIn = new Map<string, string | undefined>()
@@ -763,9 +774,18 @@ export class CoreProjection {
         : ''
       const settingsChanged = settingsCode !== this.settingsCode
       this.settingsCode = settingsCode
+      // A request its agent asked, answered or given up: the view, its row and those above it say it waits.
+      const asked = requestsOf(state)[0]?.position ?? null
+      const askedChanged = asked !== this.asked
+      this.asked = asked
+      if (entry.kind === 'command' && entry.content.kind === 'RespondPermission') {
+        const from = object(object(entry.content.body)?.from)
+        if (from !== null && typeof entry.command === 'string') this.respondedBy.set(entry.command, { from: from.workstream, as: from.as })
+      }
       if (
         titled ||
         settingsChanged ||
+        askedChanged ||
         entry.kind === 'command' ||
         entry.kind === 'anchor.received' ||
         (entry.kind === 'acp.dispatching' && state.requestPositions.get(String(entry.content.requestPosition))?.method === 'session/prompt') ||
@@ -809,6 +829,7 @@ export class CoreProjection {
             anchor: (execution && this.anchors.get(execution.id)) ?? null,
             exchanges: dispatched(state).length,
             question: state.question?.position ?? null,
+            ...(asked !== null ? { request: asked } : {}),
             ...(roleOf(state) !== null ? { role: roleOf(state) } : {}),
             ...(this.delegate ? { delegation: delegationOf(state) } : {}),
             continuation,
@@ -1062,10 +1083,12 @@ export class CoreProjection {
         ['response', 'error'].includes(entry.rpc_kind ?? '')
       ) {
         const id = identity(child?.workstream ?? request.session ?? entry.execution!, request.position, 'permission')
+        // Answered by a delegator's `answer_agent`: its Respond names it (docs/specs/delegation.md, "Requests").
+        const by = typeof entry.command === 'string' ? this.respondedBy.get(entry.command) : undefined
         put(
           'element',
           id,
-          { ...objects.get(id)?.object, status: 'answered', answer: entry.content.result ?? entry.content.error },
+          { ...objects.get(id)?.object, status: 'answered', answer: entry.content.result ?? entry.content.error, ...(by ? { from: by.from, as: by.as } : {}) },
           entry.position,
         )
       } else if ((entry.method ?? entry.correlated_method) === STEERING) {
