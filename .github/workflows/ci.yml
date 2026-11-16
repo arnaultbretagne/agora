@@ -80,6 +80,7 @@ jobs:
     # Published from the base branch or a run by hand; a branch's push builds and tries them only.
     env:
       PUBLISH: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +90,6 @@ jobs:
           - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
           - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
           - { name: agora-harness-codex, dockerfile: harnesses/codex/Dockerfile, harness: true }
-      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
