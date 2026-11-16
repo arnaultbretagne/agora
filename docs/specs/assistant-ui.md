@@ -176,8 +176,8 @@ execution and kept.
 
 | Element | Rule |
 | --- | --- |
-| The role picker | In a draft, and in a Workstream that has had no execution, before the harness picker, when `GET /api/config` gives roles: **No role** first, then each role by its name, its summary under it. A draft starts with no role: the choice is not remembered. |
-| Picking a role | The harness picker takes the card's harness, the model picker its model and its effort, each when the catalogue offers it; the access becomes the draft's own start — `internet` when offered — and the card's `access`, each when offered. Every one of them stays the person's to change before sending. Back to **No role**: the draft's own defaults again. |
+| The role picker | In a draft, and in a Workstream that has had no execution, after the model picker and before the access picker, when `GET /api/config` gives roles: **No role** first, then each role by its name, its summary under it. A draft starts with no role: the choice is not remembered. |
+| Picking a role | Its card's values are defaults, never set over what the person picked. The harness, the model with its effort, and the access each take the card's only while the person has not chosen theirs in that draft; one the person has chosen stays as they left it, whatever role is picked after. The access takes the draft's own start — `internet` when offered — and the card's `access`, each when offered. Back to **No role**: what a card had set returns to the draft's own. |
 | Sending | The Create carries `role`, with the settings and the profiles picked. Refused `unknown_role`: the message back in the composer with the reason. |
 | Once started | No role picker: the header names the role before the harness ("lead · Claude Code · ready"); sending again, in the same execution or a later one, names none. |
 
@@ -380,9 +380,9 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Composer | Input, Send, Cancel; a spinner while a message waits for the Session of the execution it starts | `ComposerPrimitive` |
 | Composer | Above it, the messages waiting, each with its cross | `ComposerPrimitive.Queue`, `QueueItemPrimitive` |
 | Composer | The paperclip, and the attachments' tiles above the text | `Attachment` (registry), adapted |
-| Composer | The role picker, inside, before the harness picker, while the Workstream has had no execution | **ours** (Radix menu) |
 | Composer | The harness picker, inside, when sending starts an execution; else the harness's name | **ours** (Radix menu) |
 | Composer | The model picker, with the effort, beside it | **ours** (Radix menu) |
+| Composer | The role picker, after the model, while the Workstream has had no execution | **ours** (Radix menu) |
 | Composer | The access picker, after the model | **ours** (Radix menu) |
 | Composer | The context's ring, or the limits' gauge, beside Send; opened, the context and the account's limits | `ContextDisplay` (registry), adapted: a popover |
 | Composer | The commands, over the composer while it starts with `/` | **ours** |
@@ -420,9 +420,9 @@ menu and in the button's tooltip; the harness menu shows the marks too.
 
 | Picker | Wide | Narrow |
 | --- | --- | --- |
-| Role | **No role**, or the role's name | A mask, coral when a role is picked |
 | Harness | Its name | Its mark: Claude Code's, Codex's or OpenCode's; a robot for any other |
 | Model | The model · the effort | The model; the effort as one to four bars, by its rank among the efforts offered |
+| Role | **No role**, or the role's name | A mask, coral when a role is picked |
 | Access | The key and what is granted | The key, with a coral dot when anything is granted |
 
 Below 40rem the header keeps the title and the state, not the harness, and **Stop** is its icon. On a
@@ -507,7 +507,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U89 | In a browser, that Workstream's thread | One line for each sub-agent at its announcement, with its title, a link to its sub-stream and its state; none of their text or tools; the model picker and the context's ring the Workstream's own. |
 | U90 | In a browser, a native sub-stream opened: working, `cancel` advertised; then idle; one that advertises none; one with no task | Its parents in the header, its task shown as from its parent, its text and its tools; no composer, "Read-only: a sub-agent of …"; **Cancel**, which sends Cancel to its host for its turn; then "idle", no **Cancel**; never a **Cancel**; its response alone. No **Stop** and no picker in any. |
 | U91 | In a browser, a permission pending in a native sub-stream; an option chosen | Its card in the sub-stream's thread; RespondPermission sent to its host with that request; the option answered. |
-| U92 | In a browser, roles offered: a draft; `lead` picked; then its model changed; then **No role** | **No role** on the picker, the draft's own harness, model and access; picked: the card's harness, model and effort on their pickers, its `access` granted beside the Internet; the model changed stays changed; **No role**: the draft's own again. |
+| U92 | In a browser, roles offered: a draft nothing was picked in, a role of another harness picked; a draft whose harness and model the person picked, then a role picked; then **No role** | The first: the card's harness, model and effort on their pickers, its `access` granted beside the Internet. The second: the person's harness and model as they left them, the card's `access` granted. **No role**: what the card had set back to the draft's own, the person's choices kept. |
 | U93 | In a browser, `lead` picked in a draft, a first message sent | The Create carries `role`, the card's settings and the profiles shown; the Workstream opens with no role picker, its header naming the role before the harness. |
 | U94 | In a browser, a Workstream started with a role: a second message; its execution ended, then a message | Neither Create nor Write names a role; the header names it still. |
 | U95 | In a browser, no role offered; a Create refused `unknown_role` | No role picker; the message back in the composer with the reason. |

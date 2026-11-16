@@ -50,6 +50,11 @@ ships. Every one of those is a delegation, under delegation's own rules and no o
 (`delegation.md`): rights within the lead's start at once, those beyond wait for the person's
 approval; three delegates at once; ten `send_message` to one delegate until the person writes again.
 
+A `judge` is a tool of the lead's as any other, and Agora makes none of its verdicts a condition.
+What a pull request needs before it merges is GitHub's rule (`merge.md`): the reviewer's approval,
+which a judge given the right to review that repository — `github:owner/repo:review`
+(`credentials.md`) — gives as its verdict, and nobody else on a team can.
+
 ## Acceptance cases
 
 | ID | Case | Expected |
@@ -72,4 +77,3 @@ approval; three delegates at once; ten `send_message` to one delegate until the 
 - A role changed in the course of a Workstream.
 - A Workstream's role on its row in the list, and on a delegate's line in its delegator's thread.
 - A team's bounds beyond delegation's own: how many verifications, how long a run.
-- What a `lead` is told of a judge it did not start fresh.

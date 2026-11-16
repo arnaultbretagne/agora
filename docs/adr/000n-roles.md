@@ -36,8 +36,10 @@
    that opens with no history. One way, whoever named the role.
 4. A team is a `lead`: a role whose card coordinates by delegation. Nothing orchestrates from
    outside: Prefect, the flows and the team's launcher are removed.
-5. What a team must respect is what delegation enforces. The rest — a plan before any work, a fresh
-   judge for each verification, nothing called finished that no judge passed — is the lead's card.
+5. What a team must respect is what delegation enforces, and GitHub for the end: a pull request
+   merges with the reviewer's approval, which a `judge` given the right to review gives as its
+   verdict. A judge is a tool of the lead's as any other; the rest — a plan before any work, a fresh
+   judge for each verification — is the lead's card.
 
 Decided on 2026-11-13 and 2026-11-16.
 
@@ -70,9 +72,9 @@ Decided on 2026-11-13 and 2026-11-16.
 
 ## Consequences
 
-- Nothing checks a team's course. A lead may start work before its plan is approved, call finished a
-  feature no judge passed, or brief its judge toward a verdict; the flow refused each. The person
-  reads the tree and the pull requests.
+- Agora checks nothing of a team's course: a lead may start work before its plan is approved, or
+  brief its judge toward a verdict, which the flow did not allow. The end is GitHub's: nothing
+  merges without the reviewer's approval, and the person merges.
 - A team's rights are the lead's own, or approved one call at a time: a lead given write access to a
   repository, so that its devs start at once, can write there itself.
 - A team has no budget of its own. Delegation's bounds are its only ones.
