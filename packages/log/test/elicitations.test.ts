@@ -346,3 +346,32 @@ test('L171 a form its agent withdraws, Agora’s cancel answer’s write failing
   await settled(lab, ws, null)
   assert.equal((await lab.state(ws)).permissions.size, 0)
 })
+
+test('L172 Respond to an elicitation whose read of the form, before its transaction, loses its connection to PostgreSQL: refused unavailable, nothing written; the store back, the same answer refused for its pattern, then a fitting one accepted, one answer', async (t) => {
+  const db = await database()
+  const keys = generateKeyPairSync('ed25519')
+  const kube = new FakeKube(keys.publicKey)
+  const lab = await Lab.start({ db, kube, keys, pgRelay: true })
+  t.after(async () => {
+    await lab.close()
+    await kube.closeAll()
+    await db.drop()
+  })
+  const ws = await lab.workstream()
+  await lab.open(ws)
+  assert.ok((await lab.write(ws, '/question ticket')).accepted)
+  const form = await asked(lab, ws)
+  await settled(lab, ws, form.position)
+  // The healthy control: refused for its pattern.
+  assert.deepEqual(await respond(lab, ws, form, { action: 'accept', content: { ticket: 'oops' } }), { accepted: false, reason: 'invalid_elicitation_content' })
+  // The next read of this Workstream's entries — the check before the transaction — loses its connection.
+  lab.pg!.cutNext('FROM entries WHERE workstream', ws)
+  assert.deepEqual(await respond(lab, ws, form, { action: 'accept', content: { ticket: 'oops' } }), { accepted: false, reason: 'unavailable' })
+  assert.equal(lab.pg!.cut, 1, 'that read cut')
+  assert.deepEqual(await answersTo(lab, ws, form), [], 'nothing written')
+  // The store back: refused for its pattern again; then a fitting answer, accepted once.
+  assert.deepEqual(await respond(lab, ws, form, { action: 'accept', content: { ticket: 'oops' } }), { accepted: false, reason: 'invalid_elicitation_content' })
+  assert.ok((await respond(lab, ws, form, { action: 'accept', content: { ticket: 'PROJ-7' } })).accepted)
+  await until('its answer said', async () => (await said(lab, ws))?.startsWith('Elicitation:'))
+  assert.deepEqual(await answersTo(lab, ws, form), [{ action: 'accept', content: { ticket: 'PROJ-7' } }])
+})

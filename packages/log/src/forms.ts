@@ -152,6 +152,14 @@ for (const c of workerData) {
 parentPort.postMessage(out)
 `
 
+/** The texts of a content that have a `pattern` to match: what `patternRefusal` checks, none when it needs no worker. */
+export function patternChecks(params: unknown, content: unknown): { key: string; pattern: string; value: string }[] {
+  const given = object(content) ?? {}
+  return fieldsOf(params)
+    .filter((f) => f.pattern !== null && typeof schemaValue(given[f.key]) === 'string')
+    .map((f) => ({ key: f.key, pattern: f.pattern!, value: schemaValue(given[f.key]) as string }))
+}
+
 /**
  * Why a content's texts do not match their fields' `pattern`, or null when they do (docs/specs/log.md, "Requests"). A
  * pattern is the agent's, from a hostile sandbox: never run on the server's thread, where a runaway one (ReDoS) would
@@ -159,10 +167,7 @@ parentPort.postMessage(out)
  * refused, never the server held.
  */
 export function patternRefusal(params: unknown, content: unknown): Promise<string | null> {
-  const given = object(content) ?? {}
-  const checks = fieldsOf(params)
-    .filter((f) => f.pattern !== null && typeof schemaValue(given[f.key]) === 'string')
-    .map((f) => ({ key: f.key, pattern: f.pattern!, value: schemaValue(given[f.key]) as string }))
+  const checks = patternChecks(params, content)
   if (checks.length === 0) return Promise.resolve(null)
   return new Promise((resolve) => {
     const worker = new Worker(PATTERNS, { eval: true, workerData: checks, resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4, stackSizeMb: 1 } })

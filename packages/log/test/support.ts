@@ -164,6 +164,13 @@ export class PgRelay {
   failCommit(fragment: string): void {
     this.failing = fragment
   }
+  private cutting: string[] | null = null
+  /** Reads cut by `cutNext`. */
+  cut = 0
+  /** The next message holding every one of these fragments loses its connection before it reaches the server. */
+  cutNext(...fragments: string[]): void {
+    this.cutting = fragments
+  }
   async listen(): Promise<this> {
     this.server = createServer((client) => {
       const upstream = new Socket()
@@ -179,6 +186,12 @@ export class PgRelay {
         this.sockets.delete(upstream)
       }
       client.on('data', (chunk: Buffer) => {
+        if (this.cutting !== null && this.cutting.every((fragment) => chunk.includes(fragment))) {
+          this.cutting = null
+          this.cut++
+          drop()
+          return
+        }
         if (this.armed !== null && chunk.includes(this.armed)) marked = true
         if (failing && chunk.includes('COMMIT')) {
           this.failed++
