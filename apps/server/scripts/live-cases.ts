@@ -1452,7 +1452,7 @@ await check('P11', 'A lead on a one-line change: a plan first, then a dev and a 
     `In the repository ${REPO_A}, add the file docs/${marker}.md holding the single line "${marker}", through a pull request to its default branch. ` +
     'One feature, one dev, then a judge. Keep your plan to a few lines.'
   await api('POST', '/api/workstreams', { id: w.id, owner: OWNER })
-  const created = await w.command('Create', {}, { pool: claude, role: 'lead', limits: { leaseSeconds: 900 }, profiles: ['internet', 'agora:delegate', `github:${REPO_A}:write`], prompt: [{ type: 'text', text: goal }] })
+  const created = await w.command('Create', {}, { pool: claude, role: 'lead', limits: { leaseSeconds: 600 }, profiles: ['internet', 'agora:delegate', `github:${REPO_A}:write`], prompt: [{ type: 'text', text: goal }] })
   assert(created.status === 200, `Create refused: ${JSON.stringify(created)}`)
   w.execution = String(created.execution)
   /** Every delegate its tool lines say it started, in their order. */
