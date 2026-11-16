@@ -42,6 +42,7 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | R34 | 2026-11-12 | `00c69f4` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:77e0922f…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. L147, played twice: the first time the case failed for its script's own doing, counting no sub-agent at the first level where the host's thread held two lines; corrected, the second run is the one cited. |
 | R35 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own. On the commit that removes the agents' folder: L76 and L79 as the contract now says them. |
 | R36 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. L147, on the server that gives a role its block. |
+| R37 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, whose `/permission` asks one and waits. On the commit that makes a pending permission a request of its Workstream's. On `523061a`, each guard of the cases removed in turn — the row's count, the view's `request` and its being put, the native sub-agents left out, Agora's `from` kept and the person's left out, the element's `from` —: its case failed each time. |
 
 ## Cases
 
@@ -235,6 +236,9 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | L151 | — | local | R33 | proven | A chain of seven: five sub-streams, of depths 1 to 5; `from too deep` in no object of the host's. 66 announced: 64 sub-streams, the host's row `count` 64. |
 | L152 | — | local | R33 | proven | `unknown_parent`; with its host as the parent, created. |
 | L153 | — | local | R33 | proven | With the sub-agents known: the exchange's agent text and the last message both `Sub-agents done.`. Without: the exchange holds `Working on: Count the files.` and `ls -1 \| wc -l`, the last message reads `Done: 7 files.Sub-agents done.`. |
+| L154 | real: the claim expired, then the execution ended | local | R37 | proven | A sub-stream two levels down, `/permission`: its view's and its row's `request` the request's position, `question` null, its parent's and its root's `below.waiting` 1. Answered: no `request`, 0, 0. Again, its turn cancelled: the permission `answered` by Agora, no `request`, 0, 0. Again, its claim expired: the execution ended, the permission `cancelled`, no `request`, 0, 0. |
+| L155 | — | local | R37 | proven | `/sub` with a permission: its host's row `below.waiting` 1, a permission pending in its host's log; its host's view and row with no `request`. |
+| L156 | — | local | R37 | proven | Agora's Respond with `from` `{ workstream, as: delegator }`: the command written with it; the permission `answered`, `from` that Workstream, `as` `delegator`. The person's with the same `from`: the command written without it; the permission with neither. |
 
 ## Not covered
 
@@ -248,3 +252,4 @@ The evidence behind the acceptance cases of `specs/log.md`.
 | A message an agent accepts as its turn ends: `injected`, and nothing said of it | #167 |
 | A steer reaching Claude Code in the milliseconds a tool starts, before Agora sees its line: the tool moved to the background | #167 |
 | A message that crosses to a harness that does not take its attachments: its turn fails at the agent, or its execution is lost | #167 |
+| A permission already pending when a server of this contract first starts: its view and row gain `request` only at their next change | — |

@@ -16,6 +16,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R8 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. M9, on the new harnesses (agora #204, infra-k8s #358). |
 | R9 | 2026-11-12 | `2a50031` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; M13 against the MCP server on a port of its own, the engine holding two roles of the test's own, then none; Agora's cards read from `apps/flows/roles`. |
 | R10 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; M13 as R9, the roles the log's own and Agora's cards read from `roles`. |
+| R11 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP SDK's own client, as R7. On the commit that adds `answer_agent`. |
 
 ## Cases
 
@@ -42,6 +43,8 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M12 | — | local | R7 | proven | From a delegate, `stop_agent` and `list_agents`: `not_allowed`; from its delegator, `delegate` and `submit`: `not_allowed`; the delegate still `in_progress`, one sub-stream. A delegate that delegated, scoped down to `agora:submit`: `send_message` alone listed; to its own delegate: `not_a_delegate`, one Write in it. |
 | M13 | — | local | R9 | proven | With roles: `spawn_agent`'s properties `instructions`, `harness`, `model`, `effort`, `rights`, `agent_type`, `instructions` alone required; `agent_type` an `enum`, `scout` and `plain`, its description ending on a line for each with its summary. With none: no `agent_type`. The cards: `dev`, `judge`, `lead`, `sre`, each on `claude-code`, `codex` or `opencode`, with a summary and a persona opening on its heading, no front matter in it; `judge` on `codex`, `gpt-6.1-sol`, `xhigh`. A card whose `model` is `default`: no model of its own; one with no front matter, one with no harness: not read. |
 | M13 | — | local | R10 | proven | As R9; a card's `access` read, none when it names none. |
+| M10 | — | local | R11 | proven | With `agora:delegate`: `spawn_agent`, `send_message`, `stop_agent`, `list_agents`, `answer_agent`, `list_agents` alone read-only; `answer_agent`'s `to`, `request`, `option`, all three required. A delegate with `agora:submit` alone, as its Session opens: `send_message` alone, `to`, `message`. One holding both: the five, each once. |
+| M12 | — | local | R11 | proven | From a delegate, `stop_agent`, `list_agents` and `answer_agent`: `not_allowed`; from its delegator, `delegate` and `submit`: `not_allowed`; the delegate still `in_progress`, one sub-stream. Scoped down to `agora:submit`: `send_message` listed alone, `not_a_delegate` to its own delegate, its one Write. |
 
 ## Not covered
 

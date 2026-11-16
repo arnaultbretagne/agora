@@ -9,6 +9,7 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R1 | 2026-11-16 | `42b7ab6` | local | CI's `check` job on the pull request (`ci.yml`, run 43891294091): GitHub's `ubuntu-latest`, Node 24, the `postgres:17` service, `npm run check`, all green. V2 to V5 on the server's process from the repository, `PREVIEW=true`, each on an empty database whose one login owns it, `NOCREATEROLE`; the client built, in Playwright's Chromium. |
 | R2 | 2026-11-16 | `42b7ab6` | local | `preview.yml`, run 43891294099, on the pull request labelled `preview`: the server's image built from the head commit, then `scripts/try-preview.ts` — a Docker network created `--internal`, `postgres:17` beside it with a login `agora` owning the database `agora`, `NOCREATEROLE`; the image with `--read-only`, `/tmp` on a tmpfs, `--cap-drop ALL`, `no-new-privileges`, given `PREVIEW` and `PREVIEW_DATABASE_URL` alone; the cases through a relay on the runner's loopback to the container's address. Then the image published. |
 | R3 | 2026-11-16 | `8363d98` | local | `preview.yml` on the same pull request: its label removed at 15:10:58 UTC, the commit pushed (run 43894688906), then the label set again at 15:17:46 (run 43894795904, created 15:17:48, no push between). As R2 otherwise. CI's `check` on that commit green (run 43894688936). |
+| R4 | 2026-11-16 | `986f1a5` | local | `npm run check` on g4, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; V2 to V5 and V8 on the server's process from the repository, `PREVIEW=true`, each on an empty database whose one login owns it, as R1; the conversations with the captured delegation (`apps/web/test/fixtures/delegation.json`). |
 
 ## Cases
 
@@ -24,6 +25,10 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V5 | — | local | R2 | proven | The same against the image. |
 | V6 | — | local | R2 | proven | Its database reached; `github.com`, `1.1.1.1`, `kubernetes.default.svc` not; no `/var/run/secrets/kubernetes.io`, no `KUBERNETES_SERVICE_HOST`, none of the production variables checked; one network, internal. |
 | V7 | — | local | R1 | proven | `CREATE ROLE` refused `42501`; the owner's part applied twice, the twelve tables and `pg_trgm`, no runtime role named; a Workstream written and read on `LogStore.owner`; the same login as runtime logins `invalid_runtime_role`; `owner_schema_unknown` for a table after the grants and for a schema without them. |
+| V3 | real: the server stopped, then started again on the same database | local | R4 | proven | `- preview: 13 conversations written`; twelve rows through each gate, the same ids; nine `mock`, states `ended`, `interrupted`, `lost`, `ready`, `stopped`; `claude-code`, `codex`, `opencode`. The second start: nothing written, the same twelve. |
+| V4 | — | local | R4 | proven | As R1, at least twelve rows before anything. |
+| V5 | — | local | R4 | proven | As R1. |
+| V8 | — | local | R4 | proven | The row `Ship the release notes` "waiting for you"; opened, Agora's message `it waits for an answer to its request <n>: a permission.` with `allow-once: Allow (allow_once)`; the delegate's line "waiting for you"; unfolded, its row "waiting for you". A draft, the Mock agent, `/permission`: the card, the new row "waiting for you"; Allow: `Permission: allow-once.`, the card gone, the row waiting no more. |
 
 ## Not covered
 
