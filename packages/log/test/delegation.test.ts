@@ -1059,7 +1059,7 @@ test('M12 stop_agent, list_agents and answer_agent from a delegate with agora:su
   assert.equal((await kinds(lab, bottom, 'command')).filter((x) => x.content.kind === 'Write').length, 1, 'its instructions alone')
 })
 
-test('D46 stop_agent on a delegate whose turn runs, a permission pending in it; then send_message to it: stopped; one session/cancel, the permission cancelled; the delegate cancelled, out of the three at once; nothing written to its delegator; then sent, and a turn', async (t) => {
+test('D46 stop_agent on a delegate whose turn runs, a permission pending in it; then send_message to it: stopped; one session/cancel, the permission cancelled; the delegate cancelled, out of the three at once; nothing written to its delegator of its Cancel; then sent, and a turn', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/permission', harness: 'mock' } })))
@@ -1076,16 +1076,18 @@ test('D46 stop_agent on a delegate whose turn runs, a permission pending in it; 
   assert.equal(delegationOf(await lab.state(delegate)), 'cancelled')
   // It counts no more among the three at once.
   for (const n of [1, 2, 3]) delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: `/sleep 20 ${String(n)}`, harness: 'mock' } })))
-  // The person's own Cancel is told to its delegator within a second (D27): none of this one is.
+  // The person's own Cancel is told to its delegator within a second (D27): none of this one is. Its permission may
+  // have been told before the Cancel, as any request is (D58): that message is not about the Cancel.
+  const ofTheCancel = async () => (await fromOthers(lab, ws)).filter((u) => !/: it waits for an answer to its request /.test(wordsOf(u)))
   await sleep(1_500)
-  assert.equal((await fromOthers(lab, ws)).length, 0, 'nothing written to its delegator')
+  assert.equal((await ofTheCancel()).length, 0, 'nothing written to its delegator of its Cancel')
   assert.match(text(await c.callTool({ name: 'send_message', arguments: { to: delegate, message: '/sleep 20' } })), new RegExp(`^sent ${delegate} · `))
   await until('its next turn', async () => (await prompts(lab, delegate)).length === 2, 20_000)
   // Its delegator's Cancel silenced that turn alone: the person's, on the next, is told.
   const next = await working(lab, delegate)
   assert.ok((await lab.command(delegate, 'Cancel', { execution: next.id, turn: (await lab.state(delegate)).active!.id })).accepted)
-  const told = (await manyFromOthers(lab, ws, 1, 20_000)).find((u) => u.from === delegate)
-  assert.deepEqual([told?.as, /: The person cancelled its turn\.$/.test(wordsOf(told!))], ['agora', true])
+  const told = await until('the person’s Cancel told', async () => (await ofTheCancel()).find((u) => u.from === delegate), 20_000)
+  assert.deepEqual([told.as, /: The person cancelled its turn\.$/.test(wordsOf(told))], ['agora', true])
 })
 
 test('D46 stop_agent on a delegate that takes its time to stop, two others working: from its Cancel on, a place among the three is free', async (t) => {
