@@ -1957,6 +1957,38 @@ test('U96 a phone, roles offered, one picked: the role picker as its mark, coral
   await page.context().close()
 })
 
+test('U97 a model picked in a draft, a role with it, a message sent, then New workstream; a role picked there: the model as the person left it on the new draft, No role on its role picker; the role’s model not set over it', async () => {
+  await sessionsOpened()
+  const page = await fresh()
+  await page.goto(`${server.url}/`)
+  await pickHarness(page, 'Mock agent')
+  await modelPicker(page).click()
+  await page.getByRole('menuitem', { name: 'mock-large' }).click()
+  await pickRole(page, 'dev')
+  assert.match((await pickersOf(page)).model, /^mock-large/, 'the person’s model, not the card’s mock-small')
+  await send(page, 'the first one')
+  await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+  await thread(page).getByText(/Echo #1/).waitFor()
+  // The next draft: what the person picked is theirs still; the role is not kept.
+  await page.getByRole('button', { name: 'New workstream', exact: true }).click()
+  await page.waitForURL((url) => url.pathname === '/')
+  await rolePicker(page).waitFor()
+  assert.match((await pickersOf(page)).model, /^mock-large/)
+  assert.equal((await rolePicker(page).innerText()).trim(), 'No role')
+  // The card's model, mock-small, is a default: never set over the person's.
+  await pickRole(page, 'dev')
+  assert.equal((await rolePicker(page).innerText()).trim(), 'dev')
+  assert.match((await pickersOf(page)).model, /^mock-large/)
+  await shot(page, 'U97-next-draft')
+  // The control: in a page where nothing was picked, the same role sets its card's model.
+  const other = await fresh()
+  await other.goto(`${server.url}/`)
+  await pickRole(other, 'dev')
+  assert.deepEqual((await pickersOf(other)).model, 'mock-small · low')
+  await other.context().close()
+  await page.context().close()
+})
+
 test('U80 Enter in the composer: a new line, nothing sent, on a computer and on a phone; Ctrl or Cmd with it, or Send: sent', async () => {
   const page = await fresh()
   const id = await started(page, 'before the lines')

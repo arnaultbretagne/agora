@@ -176,10 +176,10 @@ execution and kept.
 
 | Element | Rule |
 | --- | --- |
-| The role picker | In a draft, and in a Workstream that has had no execution, after the model picker and before the access picker, when `GET /api/config` gives roles: **No role** first, then each role by its name, its summary under it. A draft starts with no role: the choice is not remembered. |
-| Picking a role | Its card's values are defaults, never set over what the person picked. The harness, the model with its effort, and the access each take the card's only while the person has not chosen theirs in that draft; one the person has chosen stays as they left it, whatever role is picked after. The access takes the draft's own start — `internet` when offered — and the card's `access`, each when offered. Back to **No role**: what a card had set returns to the draft's own. |
+| The role picker | In a draft, and in a Workstream that has had no execution, after the model picker and before the access picker, when `GET /api/config` gives roles: **No role** first, then each role by its name, its summary under it. A draft starts with no role: the choice is not remembered, where the harness, the model and the access picked in a draft are the next draft's too, as the person's own. |
+| Picking a role | Its card's values are defaults, never set over what the person picked. The harness, the model with its effort, and the access each take the card's only while the person has not chosen theirs in that draft; one the person has chosen stays as they left it, whatever role is picked after — a model they chose keeps its harness with it, and a card's model and effort go with the card's own harness alone. The access takes the draft's own start — `internet` when offered — and the card's `access`, each when offered. Back to **No role**: what a card had set returns to the draft's own. |
 | Sending | The Create carries `role`, with the settings and the profiles picked. Refused `unknown_role`: the message back in the composer with the reason. |
-| Once started | No role picker: the header names the role before the harness ("lead · Claude Code · ready"); sending again, in the same execution or a later one, names none. |
+| Once started | No role picker: the header names the role before the harness ("lead · Claude Code · ready"); sending again, in the same execution or a later one, names none, and a later execution's model and effort are picked as any Workstream's, the card's not applied again. |
 
 ## Accounts
 
@@ -425,7 +425,7 @@ menu and in the button's tooltip; the harness menu shows the marks too.
 | Role | **No role**, or the role's name | A mask, coral when a role is picked |
 | Access | The key and what is granted | The key, with a coral dot when anything is granted |
 
-Below 40rem the header keeps the title and the state, not the harness, and **Stop** is its icon. On a
+Below 40rem the header keeps the title and the state, not the role nor the harness, and **Stop** is its icon. On a
 touch screen the composer's controls are 36 px high, and the search field's text is 16 px, under
 which iOS zooms the page in to type.
 
@@ -512,6 +512,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U94 | In a browser, a Workstream started with a role: a second message; its execution ended, then a message | Neither Create nor Write names a role; the header names it still. |
 | U95 | In a browser, no role offered; a Create refused `unknown_role` | No role picker; the message back in the composer with the reason. |
 | U96 | In a browser on a phone's screen, roles offered, one picked | The role picker as its mark, coral; its name in its menu and its tooltip. |
+| U97 | In a browser, a model picked in a draft, a role with it, a first message sent, then New workstream; a role picked there | The model as the person left it on the new draft, **No role** on its role picker; the role picked: its card's model not set over the person's. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
 | U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
 | U62 | An approval pending; the person writes "use the read-only rights" | Sending open while the turn runs, the composer saying "Write to refuse, or to ask for a change"; once sent, "Refused" and the words on the line; no new turn. |
