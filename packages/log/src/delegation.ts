@@ -99,9 +99,12 @@ function requestText(delegate: string, request: Entry): string {
   const options = (Array.isArray(params?.options) ? params.options : []).map((o) => object(o) ?? {})
   return [
     `it waits for an answer to its request ${request.position}: a permission.`,
+    '',
     `Asked: ${title}${kind}`,
+    '',
     'Options:',
     ...options.map((o) => `- \`${String(o.optionId)}\`: ${String(o.name)} (${String(o.kind)})`),
+    '',
     `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${request.position}, \`option\` the id of one of these options. If it is not, ask the person, who can answer it in that delegate's thread.`,
   ].join('\n')
 }
@@ -444,13 +447,11 @@ export class Delegations {
     const to = args.to.trim().toLowerCase()
     await this.mine(caller, to)
     const title = await this.titleOf(to)
-    /** Not that request: what waits there now, so that the caller knows where it stands. */
-    const stale = async () => {
-      const pending = requestsOf(await this.store.state(to)).map((r) => r.position)
-      return new Refused(`stale_permission: ${pending.length === 0 ? 'nothing pending' : `request ${pending.join(', ')} pending`} in ${to} · ${title}`)
-    }
-    const request = requestsOf(await this.store.state(to)).find((r) => r.position === named)
-    if (request === undefined) throw await stale()
+    const pending = requestsOf(await this.store.state(to))
+    const request = pending.find((r) => r.position === named)
+    // Not that request: what waits there now, so that the caller knows where it stands.
+    if (request === undefined)
+      throw new Refused(`stale_permission: ${pending.length === 0 ? 'nothing pending' : `request ${pending.map((r) => r.position).join(', ')} pending`} in ${to} · ${title}`)
     const answered = await this.workstreams.command(
       to,
       {
@@ -462,8 +463,6 @@ export class Delegations {
       'agora',
     )
     if (answered.accepted) return `answered ${to} · ${title}`
-    if (answered.reason === 'stale_permission') throw await stale()
-    if (answered.reason === 'stopped') throw new Refused('delegate_stopped')
     throw new Refused(String(answered.reason ?? 'unavailable'))
   }
 

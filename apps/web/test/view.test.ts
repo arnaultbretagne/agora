@@ -633,7 +633,7 @@ test('U47 a question pending, then answered with an option and a note', () => {
   assert.deepEqual([message.role, message.status], ['assistant', { type: 'requires-action', reason: 'tool-calls' }])
   const [part, call] = message.content as unknown as QuestionPart[]
   assert.deepEqual([part!.type, part!.text], ['text', `**Approve the envelope**\n\n${asked.text}`])
-  assert.deepEqual([call!.type, call!.toolName, call!.artifact!.title, call!.artifact!.note], ['tool-call', 'question', 'Approve the envelope', true])
+  assert.deepEqual([call!.type, call!.toolName, call!.artifact!.title], ['tool-call', 'question', 'Approve the envelope'])
   assert.deepEqual(call!.approval!.options, [
     { id: 'approve', kind: 'allow-once', label: 'Approve' },
     { id: 'revise', kind: 'reject-once', label: 'Revise' },
@@ -1080,4 +1080,52 @@ test('G8 a merge card: its own message, the pull request and its status; sending
   assert.deepEqual(card([...answered, factEntry(3, 'merge.merged', { question: '1', sha: 'f00d1234' })]).outcome, { merged: true, sha: 'f00d1234' })
   assert.deepEqual(card([...answered, factEntry(3, 'merge.refused', { question: '1', reason: 'waiting for a review' })]).outcome, { merged: false, reason: 'waiting for a review' })
   assert.equal(card([...pendingMerge, factEntry(2, 'question.cancelled', { question: '1' })]).status, 'cancelled')
+})
+
+test('U99 the approvals Agora asks, as assistant-ui holds them: a question taking a note, an approval on its line and at its place, a merge card, each pending then settled; a permission its delegator answered', () => {
+  type Held = { id: string; options?: { id: string; kind: string }[]; allowFreeform?: boolean; approved?: boolean; optionId?: string; text?: string; resolution?: string }
+  const approvalOf = (entries: readonly Entry[]) => ((messagesOf(stateOf(entries))[0]!.content as unknown as QuestionPart[]).find((p) => p.type === 'tool-call')!.approval as unknown as Held)
+  // A question: its note is the approval's free-form answer, recorded as its text.
+  const question = approvalOf(pendingQuestion)
+  assert.deepEqual([question.allowFreeform, question.optionId, question.text], [true, undefined, undefined])
+  const answered = approvalOf(answeredQuestion)
+  assert.deepEqual([answered.optionId, answered.approved, answered.text], ['revise', false, 'One criterion per behaviour.'])
+  const noNote = approvalOf([commandEntry(1, 'Ask', {}, { ...asked, note: false })])
+  assert.equal(noNote.allowFreeform, undefined)
+  // An approval at its place: Approve, once; then approved, refused or expired.
+  const gate = approvalOf(pendingApproval)
+  assert.deepEqual([gate.options, gate.approved, gate.resolution], [[{ id: 'approve', kind: 'allow-once', label: 'Approve' }], undefined, undefined])
+  assert.deepEqual([approvalOf(settled.answered).approved, approvalOf(settled.answered).optionId], [true, 'approve'])
+  assert.deepEqual([approvalOf(settled.refused).approved, approvalOf(settled.refused).optionId], [false, undefined])
+  assert.equal(approvalOf(settled.expired).resolution, 'expired')
+  // A merge card: Merge, once; then merged, or cancelled by a message.
+  const merge = approvalOf(pendingMerge)
+  assert.deepEqual([merge.options?.map((o) => [o.id, o.kind]), merge.approved], [[['merge', 'allow-once']], undefined])
+  assert.deepEqual(approvalOf([...pendingMerge, commandEntry(2, 'Answer', { question: '1' }, { optionId: 'merge' })]).optionId, 'merge')
+  assert.equal(approvalOf([...pendingMerge, factEntry(2, 'question.cancelled', { question: '1' })]).resolution, 'cancelled')
+  // An approval on the spawn_agent line it gates: that line's approval is Agora's, not the harness's.
+  const onLine = crafted([
+    turnObject('in_progress'),
+    { kind: 'element', id: 'tool', object: { type: 'tool', turn: 't', session: 's', toolCallId: 'call-1', title: 'mcp__agora__spawn_agent', kind: 'other', status: 'in_progress', firstPosition: '2' } },
+    { kind: 'element', id: 'gate', object: { type: 'question', kind: 'approval', toolCallId: 'call-1', position: '3', title: 'Review the change', text: 'proposal', options: [{ optionId: 'approve', name: 'Approve', kind: 'allow_once' }], status: 'pending', firstPosition: '3' } },
+  ])
+  const line = (messagesOf(onLine).find((m) => m.role === 'assistant')!.content as unknown as QuestionPart[]).find((p) => p.type === 'tool-call')!
+  assert.deepEqual([(line.approval as unknown as Held).id, (line.approval as unknown as Held).options?.map((o) => o.id)], ['gate', ['approve']])
+  // A permission its delegator answered: said on its line.
+  const byDelegator = crafted([
+    turnObject('done'),
+    { kind: 'element', id: 'tool', object: { type: 'tool', turn: 't', session: 's', toolCallId: 'call-2', title: 'Write demo.txt', kind: 'edit', status: 'completed', firstPosition: '2' } },
+    { kind: 'element', id: 'perm', object: { type: 'permission', turn: 't', session: 's', status: 'answered', from: 'd', as: 'delegator', answer: { outcome: { outcome: 'selected', optionId: 'allow-once' } }, params: { toolCall: { toolCallId: 'call-2' }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }] }, firstPosition: '3' } },
+  ])
+  const answeredLine = (messagesOf(byDelegator).find((m) => m.role === 'assistant')!.content as unknown as QuestionPart[]).find((p) => p.type === 'tool-call')!
+  assert.deepEqual([answeredLine.artifact!.answeredBy, (answeredLine.approval as unknown as Held).optionId], ['delegator', 'allow-once'])
+})
+
+test('U100 a list row with a request pending, and a delegate waiting on one: waiting, as a question is; a Workstream in none with one is listed', () => {
+  const row = { id: 'a', title: 'Sim', state: 'ready', harness: 'mock', question: null, request: '42', changedAt: '2026-11-16T10:00:00.000Z' } as const
+  const view = workstreamOf(crafted([{ kind: 'workstream', id: MESSAGES_WS, object: { state: 'ready', execution: 'e', session: 's', request: '42' } }]), MESSAGES_WS)
+  assert.equal(view.request, '42')
+  const now = new Date('2026-11-16T12:00:00.000Z')
+  assert.deepEqual(sections([{ ...row, state: 'none' }], now, '', null).flatMap((s) => s.workstreams.map((w) => w.id)), ['a'])
+  assert.deepEqual(sections([{ ...row, state: 'none', request: null }], now, '', null), [])
 })

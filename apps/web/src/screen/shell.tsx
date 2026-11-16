@@ -97,7 +97,7 @@ const Item: FC<{ w: ListRow; active: boolean; onOpen: () => void; fold?: { open:
   match,
 }) => {
   const folded = fold !== undefined && !fold.open && w.below !== undefined
-  const waiting = w.question || w.subagent === 'waiting' || (folded && w.below!.waiting > 0)
+  const waiting = w.question || w.request || w.subagent === 'waiting' || (folded && w.below!.waiting > 0)
   return (
     <div
       className={cn(

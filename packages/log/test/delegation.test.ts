@@ -1359,10 +1359,13 @@ test('M13 tools/list with roles held; with none; Agora’s own cards read; a car
 const requestNotice = (delegate: string, title: string, position: string) =>
   [
     `Your delegate ${delegate} "${title}": it waits for an answer to its request ${position}: a permission.`,
+    '',
     'Asked: Write demo.txt (edit)',
+    '',
     'Options:',
     '- `allow-once`: Allow (allow_once)',
     '- `reject-once`: Reject (reject_once)',
+    '',
     `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${position}, \`option\` the id of one of these options. If it is not, ask the person, who can answer it in that delegate's thread.`,
   ].join('\n')
 /** The delegate's permissions pending, as the log holds them. */

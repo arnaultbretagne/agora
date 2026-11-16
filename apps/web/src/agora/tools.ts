@@ -11,10 +11,11 @@ export type Artifact = {
   locations?: { path?: string }[]
   diffs?: Diff[]
   todos?: Todo[]
-  /** A question's: whether its answer may carry a note; the option answered and its note. */
-  note?: boolean
+  /** A question's: the option answered and its note. */
   answer?: string
   answerNote?: string | null
+  /** A permission its agent's delegator answered, by `answer_agent` (docs/specs/delegation.md, "Requests"). */
+  answeredBy?: string
   /** A delegate's line's: the delegate its call names; the approval it waits for or waited for. */
   delegate?: { id: string; title: string }
   /** A native sub-agent's line's: its state as its parent's thread holds it (docs/specs/log.md, "Native sub-agents"). */

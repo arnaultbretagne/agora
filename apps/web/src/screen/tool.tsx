@@ -1,8 +1,9 @@
 // A tool call, in the trace grammar (docs/specs/assistant-ui.md, "Parts"): one line with the agent's
 // own title, opening onto its diff, its output or its input; and, while the agent waits for it, the
 // permission it asks, with the options it offers. A delegate's line names its delegate and its state, and holds
-// the approval it waits for. Tools in a row fold under one line.
-import { useAuiState, type ToolCallMessagePartComponent } from '@assistant-ui/react'
+// the approval it waits for. Tools in a row fold under one line. Every card answers through assistant-ui: its
+// part's `respondToApproval`, which the runtime sends (docs/specs/assistant-ui.md, "Answering").
+import { useAuiState, type ToolApprovalResponse, type ToolCallMessagePartComponent } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, GitMergeIcon, LoaderCircleIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react'
 import { DiffViewer } from '@/components/ui/diff-viewer'
@@ -14,16 +15,33 @@ import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
 
 type Option = { id: string; kind: string; label: string }
-type Approval = { id: string; options?: Option[]; optionId?: string; approved?: boolean; resolution?: string }
+type Approval = { id: string; options?: Option[]; optionId?: string; approved?: boolean; resolution?: string; allowFreeform?: boolean }
+/** The part's own answer: assistant-ui checks it against the approval, then hands it to the runtime. */
+type Respond = (response: ToolApprovalResponse) => Promise<void>
 
-/** An answer worth a note: one that did not simply allow this once. */
-function answerNote(approval: Approval | undefined): string | null {
+/** An answer worth a note: one that did not simply allow this once, or that its delegator gave. */
+function answerNote(approval: Approval | undefined, by: string | undefined): string | null {
   if (!approval) return null
   if (approval.resolution === 'cancelled') return 'not answered'
   if (approval.optionId === undefined) return null
   const kind = approval.options?.find((o) => o.id === approval.optionId)?.kind ?? (approval.approved ? 'allow-once' : 'reject-once')
-  if (kind.startsWith('reject')) return 'rejected'
-  return kind === 'allow-always' ? 'allowed for the session' : null
+  const said = kind.startsWith('reject') ? 'rejected' : kind === 'allow-always' ? 'allowed for the session' : by ? 'allowed' : null
+  return said !== null && by ? `${said} by its delegator` : said
+}
+
+/** An answer sent, the button held until it is: a part answered already is not answered again. */
+function useRespond(respond: Respond): { busy: string | null; send: (optionId: string, text?: string) => void } {
+  const [busy, setBusy] = useState<string | null>(null)
+  return {
+    busy,
+    send: (optionId, text) => {
+      setBusy(optionId)
+      void Promise.resolve()
+        .then(() => respond(text === undefined ? { optionId } : { optionId, text }))
+        .catch(() => undefined)
+        .finally(() => setBusy(null))
+    },
+  }
 }
 
 const TodoList: FC<{ todos: readonly Todo[] }> = ({ todos }) => (
@@ -48,10 +66,11 @@ const TodoList: FC<{ todos: readonly Todo[] }> = ({ todos }) => (
  * of the question's own box, which holds its text: they answer the whole box. A question may take a
  * note with its answer.
  */
-export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNote?: boolean }> = ({ approval, question = false, withNote = false }) => {
-  const { answer, view } = useAgora()
-  const [busy, setBusy] = useState<string | null>(null)
+export const PermissionCard: FC<{ approval: Approval; respond: Respond; question?: boolean }> = ({ approval, respond, question = false }) => {
+  const { view } = useAgora()
+  const { busy, send } = useRespond(respond)
   const [note, setNote] = useState('')
+  const withNote = approval.allowFreeform === true
   return (
     <div className={cn('flex flex-col gap-2.5', !question && 'border-foreground/10 bg-background rounded-surface my-2 border p-3')}>
       {!question && <p className="text-[13px]">{harnessName(view.harness)} asks before it goes on.</p>}
@@ -71,10 +90,7 @@ export const PermissionCard: FC<{ approval: Approval; question?: boolean; withNo
             key={o.id}
             type="button"
             disabled={busy !== null}
-            onClick={() => {
-              setBusy(o.id)
-              void answer(approval.id, o.id, withNote && note.trim() !== '' ? note.trim() : undefined).finally(() => setBusy(null))
-            }}
+            onClick={() => send(o.id, withNote && note.trim() !== '' ? note.trim() : undefined)}
             className={cn(
               'rounded-control h-7 px-3 text-[13px] transition-colors disabled:opacity-50',
               o.kind === 'allow-once'
@@ -98,9 +114,8 @@ const DELEGATION: Record<string, string> = { working: 'working', waiting: 'waiti
 const SETTLED: Record<Exclude<Gate['status'], 'pending'>, string> = { answered: 'Approved', refused: 'Refused', expired: 'Expired before a decision' }
 
 /** An approval on the line it gates: while pending, the proposal, then Approve at its foot; once settled, how. */
-const ApprovalBox: FC<{ gate: Gate }> = ({ gate }) => {
-  const { answer } = useAgora()
-  const [busy, setBusy] = useState(false)
+const ApprovalBox: FC<{ gate: Gate; respond: Respond }> = ({ gate, respond }) => {
+  const { busy, send } = useRespond(respond)
   if (gate.status !== 'pending')
     return (
       <p data-approval={gate.status} className="border-foreground/10 text-muted-foreground ms-[5px] mb-1 flex flex-wrap items-baseline gap-x-1.5 border-s ps-4 text-[13px]">
@@ -114,11 +129,8 @@ const ApprovalBox: FC<{ gate: Gate }> = ({ gate }) => {
       <div className="border-foreground/10 flex items-center justify-end gap-2 border-t pt-2.5">
         <button
           type="button"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true)
-            void answer(gate.id, 'approve').finally(() => setBusy(false))
-          }}
+          disabled={busy !== null}
+          onClick={() => send('approve')}
           className="bg-primary text-primary-foreground rounded-control h-7 px-3 text-[13px] transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           Approve
@@ -146,10 +158,10 @@ const MERGE_STATE: Record<string, string> = {
  * A merge card (docs/specs/merge.md): the pull request and what GitHub says of it, read again every 20 s while it
  * waits; Merge at its foot, open only when GitHub would merge it. Then how it went.
  */
-const MergeBox: FC<{ card: MergeCard }> = ({ card }) => {
-  const { api, id, answer } = useAgora()
+const MergeBox: FC<{ card: MergeCard; respond: Respond }> = ({ card, respond }) => {
+  const { api, id } = useAgora()
   const [state, setState] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const { busy, send } = useRespond(respond)
   useEffect(() => {
     if (card.status !== 'pending' || id === null) return
     let stopped = false
@@ -213,11 +225,8 @@ const MergeBox: FC<{ card: MergeCard }> = ({ card }) => {
       <div className="border-foreground/10 flex items-center justify-end gap-2 border-t pt-2.5">
         <button
           type="button"
-          disabled={!ready || busy}
-          onClick={() => {
-            setBusy(true)
-            void answer(card.id, 'merge').finally(() => setBusy(false))
-          }}
+          disabled={!ready || busy !== null}
+          onClick={() => send('merge')}
           className="bg-primary text-primary-foreground rounded-control h-7 px-3 text-[13px] transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           Merge
@@ -228,13 +237,13 @@ const MergeBox: FC<{ card: MergeCard }> = ({ card }) => {
 }
 
 /** A delegate's line — `spawn_agent`, or a `send_message` or a `stop_agent` naming one: its title and harness, a link to it, the state its row gives; its approval. */
-const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isError: boolean; running: boolean }> = ({ artifact: a, args, isError, running }) => {
+const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isError: boolean; running: boolean; respond: Respond }> = ({ artifact: a, args, isError, running, respond }) => {
   const { delegates, open, view } = useAgora()
   const d = a.delegate
   const row = d ? delegates.find((r) => r.id === d.id) : undefined
   // A delegate's state, or a native sub-agent's: its row's, else what its line last said.
   const state = d ? (row?.delegation ?? row?.subagent ?? a.subagent ?? 'working') : null
-  const waiting = a.gate?.status === 'pending' || Boolean(row?.question) || state === 'waiting'
+  const waiting = a.gate?.status === 'pending' || Boolean(row?.question) || Boolean(row?.request) || state === 'waiting'
   const settled = a.gate !== undefined && a.gate.status !== 'pending' && d === undefined
   const tone: Tone = waiting ? 'attention' : state === 'failed' || (isError && !settled) ? 'error' : state === 'working' || (d === undefined && running) ? 'live' : 'quiet'
   // A native sub-agent's turn was cancelled; a delegate was stopped.
@@ -262,16 +271,16 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   return (
     <div data-delegate={d?.id ?? ''}>
       <TraceLine tone={tone} label={label} meta={meta} />
-      {a.gate && <ApprovalBox gate={a.gate} />}
+      {a.gate && <ApprovalBox gate={a.gate} respond={respond} />}
     </div>
   )
 }
 
-export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval }) => {
+export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval, respondToApproval }) => {
   const a = (artifact ?? {}) as Artifact
-  if (a.merge) return <MergeBox card={a.merge} />
+  if (a.merge) return <MergeBox card={a.merge} respond={respondToApproval} />
   if (a.delegate || a.gate)
-    return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} />
+    return <DelegateLine artifact={a} args={args as Record<string, unknown>} isError={isError === true} running={a.status === 'pending' || a.status === 'in_progress'} respond={respondToApproval} />
   const ask = approval as Approval | undefined
   const waiting = unanswered(ask)
   const running = a.status === 'pending' || a.status === 'in_progress'
@@ -288,7 +297,7 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
     ? 'waiting for you'
     : question
       ? (a.answer ? `${a.answer}${a.answerNote ? ` — ${a.answerNote}` : ''}` : undefined)
-      : (answerNote(ask) ?? (isError ? 'failed' : stats ? `+${String(stats.added)} −${String(stats.removed)}` : undefined))
+      : (answerNote(ask, a.answeredBy) ?? (isError ? 'failed' : stats ? `+${String(stats.added)} −${String(stats.removed)}` : undefined))
   const label = labelOf(a, toolName)
   const hasMore = diffs.length > 0 || output !== '' || todos.length > 0 || argsText.trim() !== ''
   // A question is its message's box (docs/specs/assistant-ui.md, "Parts of a response"): this is its foot.
@@ -298,7 +307,7 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
         {waiting ? (
           <>
             <p className="text-primary text-[12px] font-medium">waiting for you</p>
-            <PermissionCard approval={ask} question withNote={a.note === true} />
+            <PermissionCard approval={ask} respond={respondToApproval} question />
           </>
         ) : (
           <p className="text-muted-foreground flex items-center gap-1.5 text-[13px]">
@@ -329,7 +338,7 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
       ) : (
         <TraceLine tone={tone} label={label} meta={meta} />
       )}
-      {waiting && <PermissionCard approval={ask} question={question} withNote={question && a.note === true} />}
+      {waiting && <PermissionCard approval={ask} respond={respondToApproval} question={question} />}
     </div>
   )
 }

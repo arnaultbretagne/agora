@@ -95,8 +95,6 @@ export interface Agora {
   refreshLimits(): void
   choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
-  /** A permission answered to its agent, or a question answered to the log, with its note. */
-  answer(permission: string, optionId: string, note?: string): Promise<void>
   open(id: string | null): void
   /** Who the proxy says the person is. */
   readonly account: Account
@@ -284,13 +282,18 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     [api, id, refuse, unrefuse],
   )
 
+  /**
+   * An approval answered from its card (docs/specs/assistant-ui.md, "Answering"): assistant-ui's `respondToApproval` checks
+   * it against the part's approval and hands it here. A permission goes to its agent; a question of Agora's — an approval,
+   * a merge card, a question with its note as the answer's text — to the log.
+   */
   const answer = useCallback(
-    async (permissionId: string, optionId: string, note?: string) => {
-      const permission = state.objects.get(permissionId)?.object
-      if (!permission) return
+    async ({ approvalId, optionId, text }: { approvalId: string; optionId?: string; text?: string }) => {
+      const permission = state.objects.get(approvalId)?.object
+      if (!permission || optionId === undefined) return
       // A question to the person is answered to the log, not to an agent (docs/specs/log.md, "Commands").
       if (permission.type === 'question') {
-        await send('Answer', { question: permission.position }, { optionId, ...(note ? { note } : {}) })
+        await send('Answer', { question: permission.position }, { optionId, ...(text ? { note: text } : {}) })
         return
       }
       // A native sub-stream's permission is answered through its host (docs/specs/log.md, "Native sub-agents").
@@ -431,6 +434,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     queue,
     adapters: { attachments },
     onCancel: cancel,
+    onRespondToToolApproval: answer,
   })
 
   // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
@@ -508,7 +512,6 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     refreshLimits,
     choosePool,
     send: (kind, target, body) => send(kind, target, body),
-    answer,
     cancel,
     open,
     account,
