@@ -9,6 +9,8 @@ import { declinedBy, REQUEST_METHODS } from './forms.ts'
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 /** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
 export const STEERING = '_session/steering'
+/** ACP's notification withdrawing a request (ACP "Cancellation"). */
+export const CANCEL_REQUEST = '$/cancel_request'
 
 export type TurnStatus = 'saved' | 'in_progress' | 'done' | 'cancelled' | 'failed' | 'uncertain'
 export interface Turn {
@@ -175,6 +177,8 @@ export interface State {
   current: Execution | null
   /** The requests its agent waits on, by key (docs/specs/log.md, "Requests"): each `session/request_permission` and `elicitation/create` unanswered. */
   permissions: Map<string, Entry>
+  /** The requests their agent withdrew (`$/cancel_request`), by their position: Agora answers them — `cancelled`, `cancel`. */
+  withdrawn: Set<string>
   /** The pending question: its Ask (docs/specs/log.md, "Commands"). */
   question: Entry | null
   /** Each approval's wait (docs/specs/delegation.md, "Approval"): from its Ask to its end, open while pending. */
@@ -291,6 +295,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
     active: null,
     current: null,
     permissions: new Map(),
+    withdrawn: new Set(),
     question: null,
     waits: [],
     waiting: [],
@@ -486,6 +491,11 @@ export function fold(entries: readonly Entry[], initial?: State): State {
             state.tools.clear()
           }
         }
+      }
+      // A request its agent withdraws (ACP "Cancellation"): still pending, until Agora's answer is written — `cancelled`, `cancel`.
+      if (entry.method === CANCEL_REQUEST && entry.direction === 'in') {
+        const withdrawn = state.permissions.get(`in:${idKey(object(content.params)?.requestId)}`)
+        if (withdrawn?.execution === entry.execution) state.withdrawn.add(withdrawn.position)
       }
       if (entry.method === 'session/cancel' && entry.direction === 'out' && !state.children.has(String(object(content.params)?.sessionId))) {
         state.unsteerable = true

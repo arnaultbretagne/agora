@@ -44,8 +44,6 @@ const OPENING = ['session/new', 'session/resume', 'session/load']
 const CONTROL = new Set(['session/set_config_option'])
 // JSON-RPC's "Internal error".
 const INTERNAL_ERROR = -32603
-/** ACP's notification withdrawing a request (ACP "Cancellation"). */
-const CANCEL_REQUEST = '$/cancel_request'
 /** A burst of received lines is projected a few times a second, never once per line. */
 const PROJECT_EVERY_MS = 250
 
@@ -803,6 +801,15 @@ export class Workstreams implements Handler {
       if (asked.execution === e.id && asked.method === 'elicitation/create' && declinedBy(asked.content.params) !== null)
         await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { id: asked.rpc_id, result: { action: 'decline' } }, asked.session ?? undefined))
     state = await this.store.state(workstream)
+    // A request its agent withdrew (`$/cancel_request`) is answered — a permission `cancelled`, an elicitation `cancel` —,
+    // the one answer the agent still expects (docs/specs/log.md, "Requests"): read from the log at each run, so that a
+    // write that failed is made at the next.
+    const withdrawn = [...state.permissions.values()].filter((p) => p.execution === e.id && state.withdrawn.has(p.position))
+    for (const asked of withdrawn)
+      await this.store.transaction(workstream, (tx) =>
+        tx.outgoing(e.id, { id: asked.rpc_id, result: asked.method === 'elicitation/create' ? { action: 'cancel' } : { outcome: { outcome: 'cancelled' } } }, asked.session ?? undefined),
+      )
+    if (withdrawn.length > 0) state = await this.store.state(workstream)
     for (const entry of [...state.outbox.values()]) {
       if (entry.execution !== e.id) continue
       if (state.attempts.has(entry.position) || state.failures.has(entry.position)) continue
@@ -1194,19 +1201,6 @@ export class Workstreams implements Handler {
     const idle = update?.sessionUpdate === 'subagent_update' && object(update.state)?.state === 'idle' ? state.children.get(String(update.sessionId)) : undefined
     const connection = this.executions.connectionOf(execution)
     if (idle && connection !== null && e && !e.ended && !e.lost && !e.failed) await this.cancelPermissions(workstream, execution, connection, idle.acpId)
-    // A request its agent withdraws (`$/cancel_request`, ACP "Cancellation"): answered — a permission `cancelled`, an
-    // elicitation `cancel` —, the one answer the agent still expects, and pending no more (docs/specs/log.md, "Requests").
-    // The line goes as any, by `drive`.
-    const withdrawn =
-      entry?.direction === 'in' && entry.method === CANCEL_REQUEST ? state.permissions.get(`in:${idKey(object(entry.content.params)?.requestId)}`) : undefined
-    if (withdrawn?.execution === execution && e && !e.ended && !e.lost && !e.failed)
-      await this.store.transaction(workstream, (tx) =>
-        tx.outgoing(
-          execution,
-          { id: withdrawn.rpc_id, result: withdrawn.method === 'elicitation/create' ? { action: 'cancel' } : { outcome: { outcome: 'cancelled' } } },
-          withdrawn.session ?? undefined,
-        ),
-      )
     await this.drive(workstream)
     this.projectSoon(workstream)
   }
