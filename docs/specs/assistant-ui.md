@@ -56,8 +56,8 @@ What the client reads of each view object. Every object also carries `id`, `firs
 
 | Kind | Fields read |
 | --- | --- |
-| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation`, `native`, `subagent` |
-| a list row | `title`, `state`, `harness`, `question`, `subagent`, `changedAt` |
+| `workstream` | `title`, `state`, `pool`, `harness`, `execution`, `session`, `anchor`, `settings`, `commands`, `configuring`, `exchanges`, `continuation`, `question`, `request`, `native`, `subagent` |
+| a list row | `title`, `state`, `harness`, `question`, `request`, `delegation`, `subagent`, `below`, `changedAt` |
 | `turn` | `status`, `session`, `requestPosition`, `stopReason`, `failure` |
 | `element` | `type`, `turn`, `session`, and per type below |
 | `notice` | `type`, `reason`, `origin`, `harness` |
@@ -76,8 +76,8 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 | Write | `execution`, `session` | `prompt`: one `text` block; `mayWait`: true | When sending is open (below). |
 | Retract | `message`: the waiting message's position | — | For a message waiting ("Messages during a turn"). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
-| RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission. |
-| Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question, from its card. |
+| RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission, from its card ("Answering"). |
+| Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question — an approval, a merge card included —, from its card ("Answering"). |
 | Stop | `execution` | — | For an execution neither stopped nor ended. |
 
 In a native sub-stream (`log.md`, "Native sub-agents") the client offers two commands, both sent to its
@@ -235,9 +235,9 @@ The only point of contact between Agora's objects and assistant-ui.
 | `queue` | `items`: the `waiting` elements still waiting, but those shown in the thread while their execution starts ("Sending"), in position order, each by its id with its text blocks as `parts`; `steerItems`: none; `enqueue` and `steer`: as `onNew`; `remove`: **Retract**; `move` and `edit`: nothing. |
 | `adapters.attachments` | Agora's: what the agent accepts, prepared in the browser ("Attachments"). |
 | `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
+| `onRespondToToolApproval` | The answer a card gave its part's approval ("Answering"): **RespondPermission** with its `optionId`, for a permission — a native sub-stream's sent to its host —; **Answer** with its `optionId`, its `text` as the `note`, for a question. |
 
-The Workstream list and the permission card are the client's own: they call the server without
-the runtime (**RespondPermission** with the option chosen).
+The Workstream list is the client's own: it calls the server without the runtime.
 
 Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `setMessages`,
 `suggestions`, the thread list adapter, and the `feedback`, `speech`, `dictation` adapters.
@@ -251,7 +251,7 @@ Not provided, so absent from the interface: `onEdit`, `onReload`, `onDelete`, `s
 | A notice | A `system` message, id the notice's. | Its `firstPosition`. |
 | A native sub-stream's turn | As a turn; its `user` message, when it has a `user` element, shown as from its parent, by its title; without one, its `assistant` message alone. | The turn's `requestPosition`. |
 | A message of Agora's | A `user` element `as` `agora`, or an earlier delegation's `report` element, in place of its turn's `user` message: a `system` message, id `{turn}:report`, one line, "From Agora", opening on its text; its `assistant` message as any turn's. Sent into a turn, the same, at its place there. | The turn's `requestPosition`. |
-| A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options; `requires-action` while pending, `complete` once answered. | Its `position`. |
+| A question | An `assistant` message, id `{question}:question`: a `text` part, its title in bold then its text, as Markdown; then a `tool-call` part named `question`, its `artifact` the title, its `approval` the options ("Answering"); `requires-action` while pending, `complete` once answered. | Its `position`. |
 
 Elements with no turn, `waiting` elements, `user_message_chunk` elements and `acp` elements are not
 shown as messages. What an agent says after its turn's answer shows in that turn's response. A `user`
@@ -303,17 +303,34 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | `optionId` | `answer.outcome.optionId`, once `answered` |
 | `resolution` | `cancelled`, when its `status` is `cancelled`, or Agora answered it `cancelled` (a Cancel sent while it was pending) |
 
+The line of a permission its delegator answered (its element's `as` `delegator`) carries `answeredBy`
+`delegator` in its `artifact`.
+
 | A tool's line | Rule |
 | --- | --- |
 | Label | The tool's title, without the shell an agent wraps a command in (`bash -lc '…'`). A title that is a bare name or a path becomes the action and the file: "Edit fizzbuzz.js" (`read` Read, `edit` Edit, `delete` Delete, `move` Move, `search` Search, `execute` Run, `fetch` Fetch). |
 | Tone | Running (`pending`, `in_progress`): shimmer, coral marker. A permission pending: attention. `failed`: red. |
-| Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"); else "failed"; else, for a change, the lines added and removed. |
+| Note | "waiting for you"; else the answer when it was not a plain allow-once ("allowed for the session", "rejected", "not answered"), or when its delegator gave it ("allowed by its delegator", "rejected by its delegator"); else "failed"; else, for a change, the lines added and removed. |
 | Open | At first only while a permission is pending. |
-| A delegate's | The line of a `spawn_agent`, or of a `send_message` or a `stop_agent` naming a delegate — a line whose title is that tool's name alone, as a harness gives it (`mcp__agora__spawn_agent`, `mcp.agora.send_message`, `agora_stop_agent`), and whose answer names the delegate —: its label the delegate's title and harness — the harness its row gives; before that row, the one the call names, else the caller's, and none when the call names a role, whose card chose it —, a link to its Workstream; its note the delegation's state, read from the delegate's row: "waiting for you", "working", "idle", "failed", "stopped". A `delegate` line of an earlier contract is drawn the same. A `send_message` to `parent` and a `list_agents` are lines as any tool's. |
+| A delegate's | The line of a `spawn_agent`, or of a `send_message`, a `stop_agent` or an `answer_agent` naming a delegate — a line whose title is that tool's name alone, as a harness gives it (`mcp__agora__spawn_agent`, `mcp.agora.send_message`, `agora_stop_agent`), and whose answer names the delegate —: its label the delegate's title and harness — the harness its row gives; before that row, the one the call names, else the caller's, and none when the call names a role, whose card chose it —, a link to its Workstream; its note the delegation's state, read from the delegate's row: "waiting for you" — a question or a request pending there, or `waiting` —, "working", "idle", "failed", "stopped". A `delegate` line of an earlier contract is drawn the same. A `send_message` to `parent` and a `list_agents` are lines as any tool's. |
 | A merge card's | A box of its own at its position (`merge.md`): the pull request's title as a link, `owner/name#number`, its state as the card says it, and one button, Merge, open only when the state is `ready`; then "Merging…", and "Merged" with the sha or "Not merged" with the reason; a card a message cancelled, "Cancelled". |
 | An approval's | On the `spawn_agent` line it gates, open: the proposal — the delegate's role when it has one, harness, model, the rights beyond the caller's, the instructions — and one button, Approve; once settled, "Approved", "Refused" and the words, or "Expired before a decision". Matched to no line, the same box at the approval's position. |
 | A question's | No line of its own: the whole message is one box — its title and its text, then at its foot, while pending, "waiting for you", a field for the note when the question allows one and the options, in its order, by their names, answered with Answer; once answered, the option and the note. The options answer the whole box. The box's border is coral while pending. No line about an agent. |
 | A sub-agent's | A `subagent` element (`log.md`, "Native sub-agents"), drawn as a delegate's line is: its label the sub-agent's title, a link to its sub-stream; its note its state: "working", "waiting for you", "idle", "failed", "cancelled". Out of a fold, as a delegate's. What its host refuses of a Cancel or an answer made in its sub-stream shows there, above the read-only line. |
+
+#### Answering
+
+Every card answers through assistant-ui: its button calls the part's `respondToApproval`, which checks
+the answer against the part's `approval` and hands it to the runtime's `onRespondToToolApproval` ("The
+connection point"). assistant-ui 0.15.23 draws no approval of its own (it gives the types and
+`toolApprovalAcceptsText`): the cards are Agora's, as above.
+
+| Card | Its part's `approval` | Settled |
+| --- | --- | --- |
+| A permission | As above, from the `permission` element. | The option chosen; `cancelled`. |
+| A question | Its `options`, by dashed kind; `allowFreeform` true when the question takes a note. | `optionId` and `approved`; `text`, the note. |
+| An approval, on its line or at its place | One option, Approve, `allow-once`. Matched to a line, it is that line's `approval`, over a permission of the harness's. | `approved` and `optionId` once answered; `approved` false once refused by a message; `resolution` `expired`. |
+| A merge card | One option, Merge, `allow-once`. | `approved` and `optionId` once answered; `resolution` `cancelled`. |
 
 #### Folded tools
 
@@ -368,7 +385,7 @@ theme follows the system until the user toggles it; the choice is remembered in 
 | Sidebar | The brand: the first Agora's mark, a coral colonnade, thinner in the dark; "Agora" in Newsreader | **ours** |
 | Sidebar | **New workstream**: the draft at `/`; **Search**: 250 ms after the last key, the Workstreams whose title or exchanges hold the text — sub-streams included —, the most recently changed first, each a row of the list with the latest matching line of its exchanges under its title — from the word before the text, the text marked —, replace the list until the box is empty | **ours** |
 | Sidebar | The account, at its foot ("Accounts") | **ours**, the account after assistant-ui's demo `SidebarAccount` |
-| Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question waits | **ours** |
+| Sidebar | The list: roots only, Today, Yesterday, Previous 7 days, Older, by `changedAt`, which counts what happens under a root; the next 50 older rows when its end comes into view; a root with sub-streams has a chevron and is folded at first — folded, "waiting for you" while anything under it waits, else how many have an execution, else how many it holds; unfolded, its sub-streams below it, indented, each a row of the list, folded in turn; the line of the open Workstream unfolds by itself; a Workstream in `none` left out unless open, a parent of the one open, or a question or a request of its or under it waits; a dot for `starting` (coral, pulsing), `ready` (green), `interrupted` (amber), `lost` and `failed` (red); "waiting for you", in coral, in place of the dot while a question or a request of its waits (`log.md`, "The Workstream view") | **ours** |
 | Header | Title; in a sub-stream, its parents before it, each opening its Workstream; its role, when it has one, then harness · state label; **Stop** while an execution runs and is not stopped; "reconnecting to the server" while the stream is offline; the theme toggle | **ours** |
 | Sidebar, header, composer | A native sub-stream: in the sidebar, a row among its parent's sub-streams, its title after a small "sub-agent" mark, a coral, pulsing dot while `working`, "waiting for you" while `waiting`, a red dot for `failed`, none otherwise; in the header, its parents, its title, its harness · its state label, **Cancel** while its turn is in progress and `native.cancel` is true, never **Stop**; no composer and no picker, the read-only line in their place | **ours** |
 | Thread | Container, scrolling, scroll to the bottom | `ThreadPrimitive` |
@@ -540,6 +557,10 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U85 | In a browser, a first message sent from the draft, its Workstream left before its Session opens for one whose execution has ended, a message sent there | One Create each, carrying its message, and no Write; the first one's message goes while the other Workstream is on screen; both answered, each in its own. |
 | U86 | In a browser, a first message, the page reloaded while its execution starts | The message in the thread again, "waiting for the sandbox", the response "starting {harness}", a spinner in place of Send; then the agent's answer. |
 | U87 | In a browser, a first message with a text file attached, its Pod never starting, its execution ended at its deadline; the page reloaded; sent again | "The sandbox could not start. Your message is back in the composer."; the text and the file's tile back in the composer, the message no longer in the thread; after the reload, the same; sent again: one `session/prompt` holding the text and the file. |
+| U99 | The messages of a question taking a note, an approval at its place and on the `spawn_agent` line it gates, a merge card, each pending then settled; the line of a permission its delegator answered | Each part's `approval`: the question's options by dashed kind and `allowFreeform` true, none for a question taking no note; answered, its option, `approved` and the note as its `text`. The approval's one option `approve`, `allow-once`; answered, `approved` and `approve`; refused, `approved` false; expired, `resolution` `expired`; on its line, the line's `approval` its own. The merge card's one option `merge`; answered, `merge`; cancelled, `resolution` `cancelled`. The permission's line: `answeredBy` `delegator`, its option. |
+| U100 | A Workstream's view with a `request`; a row in `none` with one, then with none | The view's `request`; listed, then left out. |
+| U101 | In a browser, a delegate whose agent asks a permission, its delegator's Workstream open | The delegate's line "waiting for you"; Agora's message, "From Agora", saying the request's number, the tool call and its kind, each option and `answer_agent`; the delegator's row "waiting for you"; unfolded, the delegate's row "waiting for you"; opened, its card. |
+| U102 | In a browser, the delegator's agent calling `answer_agent` on that request | Its line naming the delegate, neither line of it "waiting for you"; in the delegate's thread no card, the agent's answer, its line "allowed by its delegator". |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

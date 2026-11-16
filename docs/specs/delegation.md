@@ -5,7 +5,8 @@ the gestures the harnesses give their own sub-agents: `spawn_agent`, `send_messa
 `list_agents`. A delegate is a sub-stream of its delegator's Workstream, and the two speak by one
 gesture: a message written in the other's Workstream. `spawn_agent` and `send_message` write in the
 delegate's; a delegate's turn, once done, sends its last message to its delegator's, and `send_message`
-to `parent` writes there before that.
+to `parent` writes there before that. What a delegate's agent blocks on — a permission it asks — goes to
+its delegator the same way, which answers it with `answer_agent`, or asks the person.
 
 **Nobody waits: a call answers as soon as its message is accepted, and the message goes as any message
 written in that Workstream goes, the person's included: into the running turn when its agent can take
@@ -25,6 +26,10 @@ sequenceDiagram
   end
   A->>D: the Workstream, its execution, its first message
   A-->>C: started, its id — or refused with the words, or expired
+  D->>A: its agent asks a permission, and waits
+  A->>C: the request, as a message: what is asked, its options
+  C->>A: answer_agent(to, request, option) — or the person answers in the delegate's thread
+  A->>D: the first answer given
   D->>A: its turn ends with its last message — send_message(parent, message) before, if it must
   A->>C: the message, into its running turn or as its next
   C->>A: send_message(to, message)
@@ -44,7 +49,7 @@ sequenceDiagram
 | Depth | A delegate sits at most three levels below the person's Workstream: a delegator at depth 3 is refused, `depth_exceeded`. |
 | At once | At most three of a delegator's delegates awaiting approval or working: another is refused, `too_many_delegates`. |
 | Rights | Each right given must be offered (`credentials.md`, "Offered profiles"; `profile_not_offered`). When every one is covered by one of the delegator execution's own profiles — as an offered profile covers a narrower one —, the delegate starts at once; otherwise the call waits for the person ("Approval"). |
-| States | `awaiting approval`; `working`: its Session opening, a turn running or a message waiting; `idle`: its last turn done; `failed`: its last turn failed, or its execution failed, was lost or ended with no Session; `cancelled`: its last turn cancelled, or the person stopped it. A call refused or expired starts no delegate. |
+| States | `awaiting approval`; `working`: its Session opening, a turn running or a message waiting; `waiting`: its agent waits on a request ("Requests"); `idle`: its last turn done; `failed`: its last turn failed, or its execution failed, was lost or ended with no Session; `cancelled`: its last turn cancelled, or the person stopped it. A call refused or expired starts no delegate. |
 | The handle | The delegate's Workstream id: what `send_message`, `stop_agent`, `read` and `search` take. |
 | Who stops one | The person, from the delegate's own Workstream: Stop, after which no agent reaches it (`delegate_stopped`), or Cancel on its turn. Its delegator, by `stop_agent`: its running turn alone ("Stopping and listing"). |
 
@@ -69,6 +74,7 @@ A delegator is told what its delegate cannot tell it, by the same gesture: a mes
 | A delegate's turn holding a message that is not the person's is done with no message | It ended its turn with nothing to say. |
 | A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
 | The person stops a delegate, or cancels its turn | That the person did. |
+| A delegate's agent asks a permission | The request ("Requests"). |
 
 Each, and a delegate's last message, is written once, a restart included. A delegator that stops its
 delegate itself is written nothing: its call's answer says it.
@@ -79,7 +85,24 @@ delegate itself is written nothing: its call's answer says it.
 | --- | --- |
 | `stop_agent` | `to` one of the caller's delegates. Agora cancels the delegate's turn in progress or uncertain, by a Cancel of its own (`log.md`, "Commands"), its body's `from` naming the delegator's Workstream, `as` `delegator`; as after the person's: its pending permissions answered `cancelled`, what waits there kept waiting until the next message written (`log.md`, "Messages during a turn"). Answered `stopped <id> · <title>` once that Cancel is accepted. With no such turn, nothing is done: `no turn to stop <id> · <title>`; a turn ended as its Cancel came, the next is looked for once. `not_a_delegate`, `delegate_stopped`: as for `send_message`, the person's Stop coming meanwhile included; any other refusal of the Cancel is the call's (`log.md`, "Commands"). |
 | After it | From its Cancel on, the delegate counts no more among the three at once; once its agent has answered, it is `cancelled`. It stays its delegator's: `send_message` reaches it, and starts its next turn. Its own delegates go on, and their last messages reach it as any. |
-| `list_agents` | No parameter. The caller's delegates, the most recently changed first, one line each: `<id> · <title> · <state>`, its state as "A delegation" names it — `working`, `idle`, `failed`, `cancelled`. With none: `no delegate`. A call still waiting for its approval has started no delegate, and is not listed. |
+| `list_agents` | No parameter. The caller's delegates, the most recently changed first, one line each: `<id> · <title> · <state>`, its state as "A delegation" names it — `working`, `waiting`, `idle`, `failed`, `cancelled`. With none: `no delegate`. A call still waiting for its approval has started no delegate, and is not listed. |
+
+## Requests
+
+A request is what a delegate's agent blocks on until someone answers: a `session/request_permission` of its
+own Session (`log.md`, "The Workstream view", `request`). It goes to its delegator, which answers it when it
+can and asks the person when it cannot; the person can answer it in the delegate's thread all the same. The
+first answer counts.
+
+| Element | Rule |
+| --- | --- |
+| Told | Once per request, a restart included: a message of Agora's in the delegator's Workstream ("What Agora writes"), going as any message goes — into its running turn, as its next, its execution continued when it has ended. |
+| What it says | `Your delegate <id> "<title>": it waits for an answer to its request <position>: a permission.`; then `Asked:`, the tool call's `title` and, in brackets, its `kind`; then `Options:`, one line each, its `optionId`, `name` and `kind`; then how to answer: `answer_agent` with `to`, `request` and the id of an option, if it is the delegator's to decide; if not, ask the person, who can answer it in the delegate's thread. |
+| While it waits | The delegate is `waiting`, in its view, its row and `list_agents`, and keeps its place among the three at once. |
+| `answer_agent` | `to` one of the caller's delegates; `request`, its number; `option`, one of its `optionId`s. Agora answers it by a Respond to a permission of its own on the delegate's execution (`log.md`, "Commands"), its body's `from` naming the delegator's Workstream, `as` `delegator`; answered `answered <id> · <title>`. |
+| Refused | `stale_permission`, nothing written, for a request not pending — answered first, by the person or anything else, cancelled, or never asked —, followed by what is: `nothing pending in <id> · <title>`, or `request <positions> pending in <id> · <title>`. `invalid_permission_option`: an option it does not offer. `invalid_query` naming `request`: not a number. `not_a_delegate`, `delegate_stopped`: as for `send_message`. |
+| The person | Answers it in the delegate's thread, as any permission (`assistant-ui.md`); after the delegator's answer, refused `stale_permission`. |
+| Not told | A native sub-agent's request (`log.md`, "Native sub-agents"): its sub-stream waits under the delegate, for the person. |
 
 ## Approval
 
@@ -147,6 +170,10 @@ delegate itself is written nothing: its call's answer says it.
 | D55 | `agent_type` naming no role; not a string; null; with no role held; a role, rights beyond the delegator's | `unknown_agent_type`; `invalid_query` naming it; a delegate with no role; `unknown_agent_type`; no Workstream created by a refusal; the approval's text opens on the role. |
 | D56 | An effort, the call's then a role's, for a pool whose Sessions name it `reasoning_effort`; a role's, for a pool no Session has opened in, whose defaults name it so | The delegate's opening setting `reasoning_effort`, its Session set to that value. |
 | D57 | Live, Claude Code delegating with `agent_type` `judge`, then with `sre`, each asked the name of its role | A delegate on Codex, then one on Claude Code: its role's block ahead of its first prompt; its model and effort the card's — an effort its pool's default is not —, as its Session says them; its answer naming its role. |
+| D58 | A delegate's agent asking a permission; another engine started, as after a restart; the person answering it; its next turn asking another | One message `as` `agora` in the delegator's Workstream, its prompt opening on Agora's line, saying the delegate's id and title, the request's position, the tool call's title and kind, each option's id, name and kind, and how to answer; the delegate's row `waiting` with its `request`, `list_agents` `<id> · <title> · waiting`; two more delegates, then a fourth refused `too_many_delegates`; no second message after the restart; once answered, `working`; for the next, one message more, naming it. |
+| D59 | `answer_agent` naming that request and an option it offers | `answered <id> · <title>`; one Respond to a permission in the delegate's Workstream, its body the request's id, that option and `from` the delegator, `as` `delegator`; one answer to the agent, that option; its permission `answered`, `from` the delegator; the delegate no longer `waiting`; its last message back to its delegator, saying that option. |
+| D60 | `answer_agent` with an option the request does not offer; a request that is not a number; on a Workstream that is not its delegate; once the person answered it; naming a request other than the one pending; the person answering after the delegator | `invalid_permission_option`; `invalid_query: request`; `not_a_delegate`; nothing written each time. `stale_permission: nothing pending in <id> · <title>`, the person's answer alone sent; `stale_permission: request <position> pending in <id> · <title>`, nothing written; the person's refused `stale_permission`. |
+| D61 | A delegate's agent asking a permission once its delegator's execution has ended | The delegator continued by a Create of Agora's, then a turn whose prompt is the message naming the request. |
 
 ## To be specified
 
@@ -159,3 +186,5 @@ delegate itself is written nothing: its call's answer says it.
 - A result of a shape its delegator gives: asked for in the instructions and read as any message; nothing
   checks it.
 - A role's persona given again once its harness has compacted its first message away.
+- A native sub-agent's request in a delegate, told to its delegator.
+- An elicitation (`elicitation/create`), ACP's other request: Agora declares none.
