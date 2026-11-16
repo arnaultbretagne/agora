@@ -1216,7 +1216,7 @@ const ROLES = new Map<string, Role>([
 ])
 const otherPool = (k: FakeKube) => k.morePools.push(['other-test', 'other'])
 
-test('D53 spawn_agent with agent_type, a role of another harness with its model and effort; then a send_message; the agent titling itself with what it read first: that harness’s pool, the role’s settings, its Create carrying the role; its first prompt the role’s block, its delegator’s line, then the instructions; its user element and its title the instructions alone; the next message with no role’s block', async (t) => {
+test('D53 spawn_agent with agent_type, a role of another harness with its model and effort; then a send_message; the agent titling itself with what it read first: that harness’s pool, the role’s settings, its Create carrying the role; its first prompt the role’s block, its delegator’s line, then the instructions; its user element and its title the instructions alone; its last message back to its delegator; the next message with no role’s block', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { roles: ROLES }, { kube: otherPool })
   const c = await client(t, url, execution)
   const answer = text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'look at the tests\nand say what fails', agent_type: 'scout' } }))
@@ -1231,6 +1231,9 @@ test('D53 spawn_agent with agent_type, a role of another harness with its model 
   assert.deepEqual([line!.text, words!.text, rest.length], [from, 'look at the tests\nand say what fails', 0])
   const [user] = await projected(lab, delegate, 'user')
   assert.deepEqual([user?.from, user?.as, user?.role, wordsOf(user!)], [ws, 'delegator', 'scout', 'look at the tests\nand say what fails'])
+  // Its turn is its delegator's all the same, the role's block ahead of the line or not: its last message goes back.
+  const [back] = await manyFromOthers(lab, ws, 1)
+  assert.deepEqual([back!.from, back!.as], [delegate, 'delegate'])
   const view = async () => (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')?.object
   await until('its title', async () => (await view())?.title === 'look at the tests')
   assert.equal((await view())?.role, 'scout')
