@@ -102,6 +102,7 @@ first answer counts.
 | `answer_agent` | `to` one of the caller's delegates; `request`, its number; `option`, one of its `optionId`s. Agora answers it by a Respond to a permission of its own on the delegate's execution (`log.md`, "Commands"), its body's `from` naming the delegator's Workstream, `as` `delegator`; answered `answered <id> · <title>`. |
 | Refused | `stale_permission`, nothing written, for a request not pending — answered first, by the person or anything else, cancelled, or never asked —, followed by what is: `nothing pending in <id> · <title>`, or `request <positions> pending in <id> · <title>`. `invalid_permission_option`: an option it does not offer. `invalid_query` naming `request`: not a number. `not_a_delegate`, `delegate_stopped`: as for `send_message`. |
 | The person | Answers it in the delegate's thread, as any permission (`assistant-ui.md`); after the delegator's answer, refused `stale_permission`. |
+| Withdrawn | By its agent, a `$/cancel_request`: Agora answers it `cancelled` (`log.md`, "Commands"); the delegate waits no more, and `answer_agent` on it is `stale_permission`. Nothing more is written to the delegator: the delegate's turn goes on, and its last message says what came of it. |
 | Not told | A native sub-agent's request (`log.md`, "Native sub-agents"): its sub-stream waits under the delegate, for the person. |
 
 ## Approval
@@ -174,6 +175,7 @@ first answer counts.
 | D59 | `answer_agent` naming that request and an option it offers | `answered <id> · <title>`; one Respond to a permission in the delegate's Workstream, its body the request's id, that option and `from` the delegator, `as` `delegator`; one answer to the agent, that option; its permission `answered`, `from` the delegator; the delegate no longer `waiting`; its last message back to its delegator, saying that option. |
 | D60 | `answer_agent` with an option the request does not offer; a request that is not a number; on a Workstream that is not its delegate; once the person answered it; naming a request other than the one pending; the person answering after the delegator | `invalid_permission_option`; `invalid_query: request`; `not_a_delegate`; nothing written each time. `stale_permission: nothing pending in <id> · <title>`, the person's answer alone sent; `stale_permission: request <position> pending in <id> · <title>`, nothing written; the person's refused `stale_permission`. |
 | D61 | A delegate's agent asking a permission once its delegator's execution has ended | The delegator continued by a Create of Agora's, then a turn whose prompt is the message naming the request. |
+| D62 | A delegate's agent withdrawing its permission once it is told to its delegator | `list_agents` `waiting`, then, its turn done, `idle`; one answer to the agent, `cancelled`; its row with no `request`; `answer_agent` on it `stale_permission: nothing pending in <id> · <title>`; its last message back; three more delegates started. |
 
 ## To be specified
 
