@@ -22,12 +22,12 @@ test('V7 the owner schema on a login that owns its database and may create no ro
   url.username = name
   url.password = password
   url.pathname = `/${name}`
-  // Positive control: the whole schema needs a role this login may not create.
+  // Positive control: this login may create no role, which the whole schema does where its roles are new.
   const pool = new Pool({ connectionString: url.href, max: 1 })
   pool.on('error', () => {})
   t.after(() => pool.end())
   const sql = await readFile(new URL('../sql/001.sql', import.meta.url), 'utf8')
-  await assert.rejects(pool.query(sql), (error: { code?: string }) => error.code === '42501')
+  await assert.rejects(pool.query(`CREATE ROLE ${name}_probe NOLOGIN`), (error: { code?: string }) => error.code === '42501')
   // Its owner's part, twice: every table, none of the runtime roles.
   await applyOwnerSchema(url.href)
   await applyOwnerSchema(url.href)
@@ -49,5 +49,5 @@ test('V7 the owner schema on a login that owns its database and may create no ro
   // A roles part that holds anything but grants: refused, nothing applied.
   const more = sql.replace('GRANT DELETE ON anchors TO agora_anchors;', 'GRANT DELETE ON anchors TO agora_anchors;\nCREATE TABLE late (id int);')
   assert.throws(() => ownerSchema(more), /owner_schema_unknown/)
-  assert.throws(() => ownerSchema(sql.replace(/^REVOKE ALL ON workstreams,.*$/m, '')), /owner_schema_unknown/)
+  assert.throws(() => ownerSchema(sql.replace(/^REVOKE ALL ON workstreams,.*\n/gm, '')), /owner_schema_unknown/)
 })

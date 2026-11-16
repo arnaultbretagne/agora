@@ -42,6 +42,7 @@ and it reaches nothing but its database.**
 | Which | `apps/web/test/fixtures/mock.json` cut at each of its marks — `opened`, `permissionPending`, `inProgress`, `uncertain`, `lost`, `ended`, `restored`, `stopped`: its entries up to that position — and `claude-code.json`, `codex.json`, `opencode.json` whole. Eleven Workstreams. |
 | How | Each a Workstream of its own, identified from its name; its entries as recorded, their times included, their connections renamed with the Workstream. No command, session or anchor row: no execution of theirs is followed, and their views are projected from their entries at the start. |
 | Owner | The shared owner below. |
+| Use | To be looked at. In one whose history ends with its execution not ended, a message is refused `stale_execution` and a new execution `execution_active`: no execution of theirs is followed. |
 
 ## Identity
 
@@ -71,7 +72,7 @@ and it reaches nothing but its database.**
 | V4 | Behind the browser gate's headers: `GET /`, then in a browser the client, the Mock agent picked, a message sent, then `/sleep 4` | `200`, the client's page; at least eleven conversations listed before anything is done; `Echo #1:` and the message; `… second 1/4` shown while the turn runs, `Slept 4 s.` not yet, then shown without a reload; the new conversation listed, harness `mock`. |
 | V5 | The same behind the gateway gate's headers; the list through the browser gate's | As V4; the conversation the gateway gate made listed through the browser gate. |
 | V6 | The image in a network that lets only its database through, a read-only root, `/tmp` on a tmpfs, every capability dropped, given `PREVIEW=true` and its database's URL alone | Its database reached; `github.com`, `1.1.1.1` and `kubernetes.default.svc` not; no ServiceAccount token, no `KUBERNETES_SERVICE_HOST`, none of production's variables; its one network internal; V4 and V5 pass against it. |
-| V7 | On a database whose one login owns it and may create no role: the whole schema; its owner's part, twice; the log on that login; the same login as runtime logins; a roles part holding a table, and a schema without one | The whole schema refused, `42501`; the owner's part applied twice, every table and `pg_trgm`, none of the runtime roles named; a Workstream written and read; `invalid_runtime_role`; `owner_schema_unknown` twice. |
+| V7 | On a database whose one login owns it and may create no role: a role created on that login; its owner's part of the schema, twice; the log on that login; the same login as runtime logins; a roles part holding a table, and a schema without one | The role refused, `42501`; the owner's part applied twice, every table and `pg_trgm`, none of the runtime roles named; a Workstream written and read; `invalid_runtime_role`; `owner_schema_unknown` twice. |
 
 ## To be specified
 

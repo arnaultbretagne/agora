@@ -40,7 +40,7 @@ Image: `docker build -f apps/server/Dockerfile .` from the root; it builds the c
 With `PREVIEW=true` the same image is a preview (`docs/specs/preview.md`): the server and the client of a
 pull request with nothing of production. Its one pool runs the mock agent (`packages/mock-agent`) inside the
 server's container, each sandbox a bridge on the loopback; at its first start on an empty database it writes
-the conversations of the client's fixtures (`apps/web/test/fixtures`). It calls no Kubernetes API, no gateway,
+the conversations of the client's fixtures (`apps/web/test/fixtures`), to be looked at: their executions are not followed. It calls no Kubernetes API, no gateway,
 no bucket, nothing on the Internet.
 
 CI publishes it as `ghcr.io/arnaultbretagne/agora-server:<full commit SHA>` for each commit of a pull request
@@ -73,4 +73,4 @@ What it expects of its environment:
 | User | The image's, `10001`: non-root, every capability dropped, `RuntimeDefault` seccomp. |
 | Replicas | One, `Recreate`: the log admits one owner, and a second server would exit on `dispatch_owner_exists`. |
 | Health | `GET /healthz` on 8080. |
-| Memory | The server and up to `MAX_ACTIVE` mock agents, in one container: a request of 256 Mi and a limit of 1 Gi, as in production. |
+| Memory | The server and up to `MAX_ACTIVE` mock agents, in one container. Measured on 2026-11-16, outside a container: the server 161 Mi with its conversations, each mock agent 46 to 85 Mi, 390 Mi with four. A request of 256 Mi and a limit of 1 Gi, as in production, hold the default `MAX_ACTIVE`. |
