@@ -13,7 +13,7 @@ import { createInterface } from 'node:readline'
 import { connect as tlsConnect } from 'node:tls'
 import { sessionsDir } from './storage.ts'
 import { mockFile } from './file.ts'
-import { ASKS, askTitle, askUserQuestion, mcpForm, QUESTIONS, requestUserInput } from './forms.ts'
+import { ASKS, askTitle, askUserQuestion, MCP_FORMS, mcpForm, QUESTIONS, requestUserInput } from './forms.ts'
 
 type Id = string | number
 interface Message {
@@ -399,7 +399,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       return 'end_turn'
     }
     // A form its harness asks (src/forms.ts, docs/specs/log.md, "Requests"): `/question` as Claude Code — AskUserQuestion
-    // with its tool line, `one`, `multi`, `several`; `mcp`, an MCP server's form —, `/form` as Codex — request_user_input,
+    // with its tool line, `one`, `multi`, `several`; `mcp`, `ticket`, `bounds`, an MCP server's form —, `/form` as Codex — request_user_input,
     // `one`, `text`, `secret`, `several`; `auto`, resolved without input after a second, the form withdrawn
     // (`$/cancel_request`) as Codex does past its `autoResolutionMs`. It waits for the answer, then says what came back.
     case '/question':
@@ -409,6 +409,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       let toolCallId: string | undefined
       let params: Record<string, unknown> | undefined
       if (claude && variant === 'mcp') params = mcpForm(session.id)
+      else if (claude && MCP_FORMS[variant]) params = MCP_FORMS[variant]!(session.id)
       else if (claude && ASKS[variant]) {
         const asks = ASKS[variant]!
         toolCallId = `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`

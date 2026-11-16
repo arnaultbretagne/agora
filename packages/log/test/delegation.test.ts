@@ -1646,3 +1646,21 @@ test('D65 a delegate’s agent asking a form Agora declines — a secret field �
   assert.equal(wordsOf(back), 'Elicitation: decline.')
   assert.equal((await fromOthers(lab, ws)).filter((u) => /: it waits for an answer to its request /.test(wordsOf(u))).length, 0)
 })
+
+test('D66 answer_agent on a delegate’s form of a pattern and an email: a text not matching, an email that is none: invalid_elicitation_content naming the field, nothing written; then fitting: answered', async (t) => {
+  const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
+  const c = await client(t, url, execution)
+  const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/question ticket', harness: 'mock' } })))
+  const [notice] = await manyFromOthers(lab, ws, 1, 20_000)
+  assert.match(wordsOf(notice!), /- `ticket` \(text, matching `\^\[A-Z\]\+-\[0-9\]\+\$`, required\): Ticket — Its key, as PROJ-123/)
+  assert.match(wordsOf(notice!), /- `email` \(text, email\): Reporter/)
+  const form = await formIn(lab, delegate)
+  const call = async (content: Record<string, unknown>) => (await c.callTool({ name: 'answer_agent', arguments: { to: delegate, request: form.position, content } })) as Text
+  const unmatched = await call({ ticket: 'oops' })
+  assert.deepEqual([unmatched.isError, text(unmatched)], [true, 'invalid_elicitation_content: ticket: does not match its pattern'])
+  const email = await call({ ticket: 'PROJ-1', email: 'not-an-email' })
+  assert.deepEqual([email.isError, text(email)], [true, 'invalid_elicitation_content: email: not an email'])
+  assert.equal((await kinds(lab, delegate, 'command')).filter((x) => x.content.kind === 'RespondElicitation').length, 0, 'nothing written')
+  assert.equal(text(await call({ ticket: 'PROJ-1' })), `answered ${delegate} · /question ticket`)
+  assert.deepEqual(await answersIn(lab, delegate, form), [{ action: 'accept', content: { ticket: 'PROJ-1' } }])
+})

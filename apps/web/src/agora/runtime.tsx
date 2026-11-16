@@ -99,6 +99,12 @@ export interface Agora {
   refreshLimits(): void
   choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
+  /**
+   * What became of the answer the next `resume` gives this form (docs/specs/assistant-ui.md, "Forms"): settled once the
+   * log accepts it, rejected with the reason when it refuses it or cannot be reached. assistant-ui's `resume` returns
+   * nothing: its outcome is read here.
+   */
+  answered(form: string): Promise<void>
   open(id: string | null): void
   /** Who the proxy says the person is. */
   readonly account: Account
@@ -138,6 +144,9 @@ const REFUSALS: Record<string, string> = {
   role_set: 'This workstream already has its role.',
   prompt_unsupported: 'The agent does not take these attachments.',
   stale_message: 'This message has already gone.',
+  invalid_elicitation_content: 'That answer does not fit the question.',
+  stale_elicitation: 'This question is no longer waiting.',
+  unavailable: 'Agora cannot take it now; try again.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
@@ -293,17 +302,22 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   const respondForm = useCallback(
     async (elementId: string, given: FormAnswer) => {
       const form = state.objects.get(elementId)?.object
-      if (!form) return
-      await send(
+      if (!form) throw new Error(refusalText('stale_elicitation'))
+      const sent = await send(
         'RespondElicitation',
         { execution: form.execution, session: form.session, requestPosition: form.requestPosition },
         { requestId: form.requestId, ...given },
         view.native?.host ?? id,
         id,
       )
+      // Refused or never delivered: the form waits still, and its box gives its controls back (docs/specs/assistant-ui.md, "Forms").
+      if (!sent.accepted) throw new Error(refusalText(sent.reason ?? 'unavailable'))
     },
     [state, send, view.native, id],
   )
+  /** The outcome of each form's answer given by `resume`, waited for by its box. */
+  const outcomes = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void }>())
+  const answered = useCallback((form: string) => new Promise<void>((resolve, reject) => void outcomes.current.set(form, { resolve, reject })), [])
 
   /**
    * An approval answered from its card (docs/specs/assistant-ui.md, "Answering"): assistant-ui's `respondToApproval` checks
@@ -341,8 +355,16 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     ({ toolCallId, payload }: { toolCallId: string; payload: unknown }) => {
       const form = formFor(state, toolCallId)
       const given = payload as FormAnswer
-      if (form === null || (given.action !== 'accept' && given.action !== 'decline')) return
-      void respondForm(form.id, given)
+      const outcome = form === null ? undefined : outcomes.current.get(form.id)
+      if (form !== null) outcomes.current.delete(form.id)
+      if (form === null || (given.action !== 'accept' && given.action !== 'decline')) {
+        outcome?.reject(new Error(refusalText('stale_elicitation')))
+        return
+      }
+      respondForm(form.id, given).then(
+        () => outcome?.resolve(),
+        (error: unknown) => outcome?.reject(error instanceof Error ? error : new Error(String(error))),
+      )
     },
     [state, respondForm],
   )
@@ -552,6 +574,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     refreshLimits,
     choosePool,
     send: (kind, target, body) => send(kind, target, body),
+    answered,
     cancel,
     open,
     account,

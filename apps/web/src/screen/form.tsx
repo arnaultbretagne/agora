@@ -1,7 +1,8 @@
 // A form an agent asks (docs/specs/assistant-ui.md, "Forms"): one box — who asks, its message, its questions and, at
 // its foot, its answer. Drawn with assistant-ui's OptionList and QuestionFlow (Tool UI's, as assistant-ui ships them),
 // answered through assistant-ui: one option, one text or nothing to fill by the part's `respondToApproval`; anything
-// else by its `resume`. Once answered, the same components as a receipt.
+// else by its `resume`. Once answered, the same components as a receipt — from the log's answer alone: refused or not
+// delivered, the box gives its controls back, the reason said.
 import type { ToolApprovalResponse } from '@assistant-ui/react'
 import { CheckIcon } from 'lucide-react'
 import { useState, type FC, type ReactNode } from 'react'
@@ -10,7 +11,7 @@ import { QuestionFlow } from '@/components/assistant-ui/elements/question-flow'
 import { field, ghostButton, inkButton } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { answerOf, formContent, harnessName, numberFits, type Form, type FormAnswer, type FormQuestion } from '../agora/view.ts'
+import { answerOf, formContent, harnessName, numberFits, textFits, type Form, type FormAnswer, type FormQuestion } from '../agora/view.ts'
 
 type Respond = (response: ToolApprovalResponse) => Promise<void>
 
@@ -25,7 +26,8 @@ const DECLINED: Record<string, string> = {
 const listOf = (q: FormQuestion) => ({
   options: q.options,
   selectionMode: q.kind === 'many' ? ('multiple' as const) : ('single' as const),
-  minSelections: q.required ? 1 : 0,
+  // A list's own bounds, `minItems` and `maxItems`; one option, when required.
+  minSelections: q.kind === 'many' ? (q.min ?? 0) : q.required ? 1 : 0,
   ...(q.kind === 'many' && q.max !== null ? { maxSelections: q.max } : {}),
   ...(q.other !== null ? { other: { label: 'Other', placeholder: 'Your own answer, or a note' } } : {}),
 })
@@ -37,7 +39,7 @@ const stepOf = (q: FormQuestion) => ({
   ...(q.label ? { description: q.label } : {}),
   required: q.required,
   ...(q.kind === 'text' || q.kind === 'number' || q.kind === 'integer'
-    ? { options: [], input: q.kind, ...(q.kind === 'text' ? {} : { fits: (typed: string) => numberFits(q, typed) }) }
+    ? { options: [], input: q.kind, fits: (typed: string) => (q.kind === 'text' ? textFits(q, typed) : numberFits(q, typed)) }
     : listOf(q)),
 })
 
@@ -47,10 +49,17 @@ const embedded = 'max-w-none border-0 bg-transparent p-0 dark:bg-transparent'
 const TextAnswer: FC<{ q: FormQuestion; respond: Respond }> = ({ q, respond }) => {
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // Held until the log's answer comes; given back, the reason said, when it refuses or cannot be reached.
   const go = (response: ToolApprovalResponse) => {
     setBusy(true)
-    void respond(response).catch(() => setBusy(false))
+    setError(null)
+    void respond(response).catch((refused: unknown) => {
+      setBusy(false)
+      setError(refused instanceof Error ? refused.message : String(refused))
+    })
   }
+  const fits = textFits(q, typed)
   return (
     <div className="flex flex-col gap-2">
       <textarea
@@ -61,17 +70,22 @@ const TextAnswer: FC<{ q: FormQuestion; respond: Respond }> = ({ q, respond }) =
         onChange={(event) => setTyped(event.target.value)}
         className={cn(field, 'rounded-control placeholder:text-muted-foreground resize-y px-2 py-1.5 text-[13px] outline-none')}
       />
+      {error !== null && (
+        <p role="alert" className="text-xs break-words text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
       <div className="flex items-center justify-end gap-1.5">
         <button type="button" disabled={busy} onClick={() => go({ approved: false })} className={cn(ghostButton, 'h-8 px-3 text-xs font-medium')}>
           Decline
         </button>
         <button
           type="button"
-          aria-disabled={busy || (q.required && typed.trim() === '') || undefined}
+          aria-disabled={busy || !fits || undefined}
           onClick={() => {
-            if (!busy && !(q.required && typed.trim() === '')) go({ text: typed.trim() })
+            if (!busy && fits) go({ text: typed.trim() })
           }}
-          className={cn(inkButton, 'flex h-8 items-center rounded-full px-3.5 text-xs font-medium', (busy || (q.required && typed.trim() === '')) && 'cursor-default opacity-40 hover:opacity-40')}
+          className={cn(inkButton, 'flex h-8 items-center rounded-full px-3.5 text-xs font-medium', (busy || !fits) && 'cursor-default opacity-40 hover:opacity-40')}
         >
           Send
         </button>
@@ -81,7 +95,7 @@ const TextAnswer: FC<{ q: FormQuestion; respond: Respond }> = ({ q, respond }) =
 }
 
 /** Its questions, open: by shape, the part's approval or its interrupt answering. */
-function Questions({ form, respond, resume }: { form: Form; respond: Respond; resume: (payload: FormAnswer) => void }): ReactNode {
+function Questions({ form, respond, resume }: { form: Form; respond: Respond; resume: (payload: FormAnswer) => Promise<void> }): ReactNode {
   const [only] = form.questions
   if (form.shape === 'select' && only)
     return (
@@ -118,10 +132,10 @@ function Questions({ form, respond, resume }: { form: Form; respond: Respond; re
     )
   return (
     <div className="flex items-center justify-end gap-1.5">
-      <button type="button" onClick={() => void respond({ approved: false })} className={cn(ghostButton, 'h-8 px-3 text-xs font-medium')}>
+      <button type="button" onClick={() => void respond({ approved: false }).catch(() => undefined)} className={cn(ghostButton, 'h-8 px-3 text-xs font-medium')}>
         Decline
       </button>
-      <button type="button" onClick={() => void respond({ approved: true })} className={cn(inkButton, 'flex h-8 items-center rounded-full px-3.5 text-xs font-medium')}>
+      <button type="button" onClick={() => void respond({ approved: true }).catch(() => undefined)} className={cn(inkButton, 'flex h-8 items-center rounded-full px-3.5 text-xs font-medium')}>
         Accept
       </button>
     </div>
@@ -148,7 +162,13 @@ function Receipt({ form }: { form: Form }): ReactNode {
 }
 
 export const FormCard: FC<{ form: Form; respond: Respond; resume: (payload: unknown) => void }> = ({ form, respond, resume }) => {
-  const { view } = useAgora()
+  const { view, answered } = useAgora()
+  // assistant-ui's `resume` returns nothing: what became of the answer is read back from Agora's context.
+  const answer = (payload: FormAnswer): Promise<void> => {
+    const outcome = answered(form.id)
+    resume(payload)
+    return outcome
+  }
   const open = form.status === 'pending' && form.declined === null
   const [only] = form.questions
   // A single question that is not the message itself is said under it (Codex says its question in its field).
@@ -184,7 +204,7 @@ export const FormCard: FC<{ form: Form; respond: Respond; resume: (payload: unkn
       {form.declined !== null ? (
         <p className="text-muted-foreground text-[13px]">Agora declined it: {DECLINED[form.declined] ?? DECLINED.mode}</p>
       ) : open ? (
-        <Questions form={form} respond={respond} resume={(payload) => resume(payload)} />
+        <Questions form={form} respond={respond} resume={answer} />
       ) : form.status === 'answered' ? (
         <Receipt form={form} />
       ) : null}

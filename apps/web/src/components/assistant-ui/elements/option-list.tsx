@@ -7,6 +7,8 @@
 //   selection waits for the confirm button, which a typed answer alone can open when no option is required;
 // - `onDecline`: a form can be refused, a button at the foot;
 // - `choiceText`: the receipt shows the text given with the options;
+// - the receipt is `choice` alone, the host's state: once `onConfirm` settles, the list stays held until it comes; a
+//   rejected `onConfirm` gives the list back, its error said;
 // - `useReceiptFocus` and `clamp` inlined; React's own `useLayoutEffect`, as surfaces.tsx.
 import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { CheckIcon, Loader2Icon } from "lucide-react";
@@ -126,7 +128,6 @@ export function OptionList({
   );
   const [typed, setTyped] = useState(other?.defaultValue ?? "");
   const [pending, setPending] = useState<readonly string[] | null>(null);
-  const [confirmed, setConfirmed] = useState<readonly string[] | undefined>();
   const [error, setError] = useState<string | null>(null);
   const { receiptRef, focusHandlers } = useReceiptFocus<HTMLDivElement>(props);
   const setReceiptRef = useCallback(
@@ -147,13 +148,9 @@ export function OptionList({
     className,
   );
 
-  const confirmedChoice = choice ?? confirmed;
-
-  if (confirmedChoice !== undefined) {
-    const chosen = options.filter((option) =>
-      confirmedChoice.includes(option.id),
-    );
-    const said = choiceText ?? (confirmed !== undefined ? typed.trim() : "");
+  if (choice !== undefined) {
+    const chosen = options.filter((option) => choice.includes(option.id));
+    const said = choiceText ?? "";
     return (
       <div
         data-slot="option-list"
@@ -228,8 +225,8 @@ export function OptionList({
     setError(null);
     void (async () => {
       try {
+        // Held until the host gives its `choice`.
         await onConfirm(ids, typed.trim());
-        setConfirmed(ids);
       } catch (commitError) {
         setPending(null);
         setError(
@@ -368,7 +365,11 @@ export function OptionList({
                 onClick={() => {
                   if (locked) return;
                   setPending([]);
-                  void Promise.resolve(onDecline()).catch(() => setPending(null));
+                  setError(null);
+                  void Promise.resolve(onDecline()).catch((declineError: unknown) => {
+                    setPending(null);
+                    setError(declineError instanceof Error ? declineError.message : String(declineError));
+                  });
                 }}
                 className={cn(ghostButton, "h-8 px-3 text-xs font-medium", locked && "cursor-default opacity-40")}
               >

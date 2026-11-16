@@ -380,6 +380,7 @@ export interface FormQuestion {
   readonly options: readonly { id: string; label: string; description?: string }[]
   /** Its "Other" field — the free text beside its options —, by its key, when it has one. */
   readonly other: string | null
+  /** A number's bounds; a list's, in options chosen (`minItems`, `maxItems`); a text's, in code points (`minLength`, `maxLength`). */
   readonly min: number | null
   readonly max: number | null
 }
@@ -452,8 +453,8 @@ export function formOf(element: ViewObject): Form {
         required: required.has(key),
         options,
         other: companionOf(key, p),
-        min: bound(array ? p.minItems : p.minimum),
-        max: bound(array ? p.maxItems : p.maximum),
+        min: bound(array ? p.minItems : kind === 'text' ? p.minLength : p.minimum),
+        max: bound(array ? p.maxItems : kind === 'text' ? p.maxLength : p.maximum),
       }
     })
   const [only] = questions
@@ -485,20 +486,35 @@ export function answerOf(question: FormQuestion, content: Readonly<Record<string
   return { chosen: (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String), text: other }
 }
 
-/** The content the answers give, each question's own: its options, its "Other" text, its value (docs/specs/assistant-ui.md, "Forms"). */
+/**
+ * The content the answers give, each question's own: its options, its "Other" text, its value (docs/specs/assistant-ui.md,
+ * "Forms"). A required list or text is given even empty — `[]`, `""` — where its minimum allows it; an optional one left
+ * empty is left out.
+ */
 export function formContent(form: Form, chosen: Readonly<Record<string, readonly string[]>>, texts: Readonly<Record<string, string>>): Record<string, unknown> {
   const content: Record<string, unknown> = {}
   for (const q of form.questions) {
     const ids = chosen[q.key] ?? []
     const typed = (texts[q.key] ?? '').trim()
     if (q.kind === 'one' && ids[0] !== undefined) content[q.key] = ids[0]
-    if (q.kind === 'many' && ids.length > 0) content[q.key] = [...ids]
+    if (q.kind === 'many' && (ids.length > 0 || q.required)) content[q.key] = [...ids]
     if (q.kind === 'yes-no' && ids[0] !== undefined) content[q.key] = ids[0] === 'true'
-    if (q.kind === 'text' && typed !== '') content[q.key] = typed
+    if (q.kind === 'text' && (typed !== '' || q.required)) content[q.key] = typed
     if ((q.kind === 'number' || q.kind === 'integer') && typed !== '') content[q.key] = Number(typed)
     if (q.other !== null && typed !== '' && (q.kind === 'one' || q.kind === 'many')) content[q.other] = typed
   }
   return content
+}
+
+/**
+ * Whether a text typed fits its question: its length in code points within `minLength` and `maxLength`; empty, left out
+ * when optional, given `""` when required and its minimum allows it. Its `pattern` and `format` are checked by Agora
+ * (docs/specs/log.md, "Requests"): the browser runs no pattern of an agent's.
+ */
+export function textFits(question: FormQuestion, typed: string): boolean {
+  const length = [...typed.trim()].length
+  if (length === 0) return !question.required || (question.min ?? 0) === 0
+  return (question.min === null || length >= question.min) && (question.max === null || length <= question.max)
 }
 
 /** Whether a number typed fits its question: a number, an integer when it asks one, within its bounds. */

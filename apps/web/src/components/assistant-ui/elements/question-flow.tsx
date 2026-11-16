@@ -7,7 +7,8 @@
 // - a step with no options, `input` `text`, `number` or `integer`: a field and Next, a number checked by `fits`;
 // - `required`: a step that cannot be left without an answer; any other may be;
 // - `onComplete` gives the texts beside the options, `onDecline` refuses the whole flow;
-// - the receipt shows each step's text, and a step's own value;
+// - the receipt shows each step's text, and a step's own value; it is `choice` alone, the host's state: once `onComplete`
+//   settles, the flow stays held until it comes, and a rejected one gives the flow back, its error said;
 // - React's own `useLayoutEffect`, as surfaces.tsx.
 import { useCallback, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
@@ -72,10 +73,8 @@ export function QuestionFlow({
   });
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [typed, setTyped] = useState("");
-  const [confirmedAnswers, setConfirmedAnswers] = useState<
-    { answers: Record<string, string[]>; texts: Record<string, string> } | undefined
-  >();
   const [isCompleting, setIsCompleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const questionPrefix = useId();
   const optionListRef = useRef<HTMLDivElement>(null);
   const { receiptRef, focusHandlers } = useReceiptFocus<HTMLDivElement>(props);
@@ -110,8 +109,8 @@ export function QuestionFlow({
     className,
   );
 
-  const completedChoice = choice ?? confirmedAnswers?.answers;
-  const completedTexts = choiceTexts ?? confirmedAnswers?.texts ?? {};
+  const completedChoice = choice;
+  const completedTexts = choiceTexts ?? {};
 
   if (completedChoice !== undefined) {
     return (
@@ -181,27 +180,25 @@ export function QuestionFlow({
       Object.entries(nextTexts).filter(([id, value]) => stepIds.has(id) && value !== ""),
     );
     setIsCompleting(true);
+    setError(null);
+    setAnswers(nextAnswers);
+    setTexts(nextTexts);
+    // Held until the host gives its `choice`; given back when it refuses.
     try {
-      return Promise.resolve(onComplete(completedAnswers, completedTexts)).then(
-        () => {
-          setAnswers(nextAnswers);
-          setConfirmedAnswers({ answers: completedAnswers, texts: completedTexts });
-        },
-        (error) => {
-          setIsCompleting(false);
-          throw error;
-        },
-      );
-    } catch (error) {
+      return Promise.resolve(onComplete(completedAnswers, completedTexts)).catch((completeError: unknown) => {
+        setIsCompleting(false);
+        throw completeError;
+      });
+    } catch (completeError) {
       setIsCompleting(false);
-      return Promise.reject(error);
+      return Promise.reject(completeError);
     }
   };
 
   const nextLabel = finalStep ? completeLabel : "Next";
   // A field of its own: its value, checked, then Next; left empty when the step allows it.
   const value = typed.trim();
-  const canGo = !isCompleting && (value === "" ? currentStep.required !== true : (currentStep.fits?.(value) ?? true));
+  const canGo = !isCompleting && (currentStep.fits?.(value) ?? (value !== "" || currentStep.required !== true));
 
   return (
     <div
@@ -240,7 +237,11 @@ export function QuestionFlow({
               disabled={isCompleting}
               onClick={() => {
                 setIsCompleting(true);
-                void Promise.resolve(onDecline()).catch(() => setIsCompleting(false));
+                setError(null);
+                void Promise.resolve(onDecline()).catch((declineError: unknown) => {
+                  setIsCompleting(false);
+                  setError(declineError instanceof Error ? declineError.message : String(declineError));
+                });
               }}
               className={cn(ghostButton, "h-7 px-2.5 text-xs font-medium", isCompleting && "cursor-default opacity-40")}
             >
@@ -272,6 +273,11 @@ export function QuestionFlow({
           </p>
         ) : null}
       </div>
+      {error ? (
+        <p role="alert" className="px-2 text-xs break-words text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      ) : null}
       <div ref={optionListRef}>
         {currentStep.input ? (
           <div className="flex flex-col gap-2 px-2 pb-1">
@@ -288,7 +294,10 @@ export function QuestionFlow({
                 type="button"
                 aria-disabled={!canGo || undefined}
                 onClick={() => {
-                  if (canGo) void confirm([], value);
+                  if (!canGo) return;
+                  void Promise.resolve(confirm([], value)).catch((completeError: unknown) =>
+                    setError(completeError instanceof Error ? completeError.message : String(completeError)),
+                  );
                 }}
                 className={cn(inkButton, "flex h-8 items-center rounded-full px-3.5 text-xs font-medium", !canGo && "cursor-default opacity-40 hover:opacity-40")}
               >

@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
-import { contentRefusal, fieldsText } from './forms.ts'
+import { contentRefusal, fieldsText, patternRefusal } from './forms.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
@@ -472,7 +472,7 @@ export class Delegations {
       const decline = args.decline === true
       if (!decline && object(args.content) === null) throw new Refused('invalid_query: content')
       if (decline && args.content !== undefined) throw new Refused('invalid_query: content')
-      const refusal = decline ? null : contentRefusal(request.content.params, args.content)
+      const refusal = decline ? null : (contentRefusal(request.content.params, args.content) ?? (await patternRefusal(request.content.params, args.content)))
       if (refusal !== null) throw new Refused(`invalid_elicitation_content: ${refusal}`)
       const given = await this.workstreams.command(
         to,

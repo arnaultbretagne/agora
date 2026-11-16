@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { core, object, type Entry, type ListRow } from '../src/index.ts'
-import { declinedBy, contentRefusal, fieldsOf } from '../src/forms.ts'
+import { declinedBy, contentRefusal, fieldsOf, patternRefusal } from '../src/forms.ts'
 import { database, expire, FakeKube, Lab, lines, until } from './support.ts'
 
 type T = { after(fn: () => Promise<void>): void }
@@ -45,7 +45,7 @@ const settled = (lab: Lab, ws: string, request: string | null) =>
     return (view?.request ?? null) === request && (row?.request ?? null) === request ? { view, row } : null
   })
 
-test('L159 Agora’s initialize declares form elicitation, and no url', async (t) => {
+test('L160 Agora’s initialize declares form elicitation, and no url', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -53,7 +53,7 @@ test('L159 Agora’s initialize declares form elicitation, and no url', async (t
   assert.deepEqual(object(object(initialize!.content.params)?.clientCapabilities)?.elicitation, { form: {} })
 })
 
-test('L160 Claude Code’s AskUserQuestion as a form, pending, then accepted: an elicitation element pending on its tool call; its view’s and row’s request; a message meanwhile refused; accepted with what fits: one answer, its content; the agent given it; answered, no request', async (t) => {
+test('L161 Claude Code’s AskUserQuestion as a form, pending, then accepted: an elicitation element pending on its tool call; its view’s and row’s request; a message meanwhile refused; accepted with what fits: one answer, its content; the agent given it; answered, no request', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -77,7 +77,7 @@ test('L160 Claude Code’s AskUserQuestion as a form, pending, then accepted: an
   assert.deepEqual([answered?.status, answered?.answer], ['answered', { action: 'accept', content }])
 })
 
-test('L161 RespondElicitation: an option the form does not offer, a field it does not have, a text for a list, a required field left out, an action it does not take; a permission’s Respond on it; then declined, then answered again: invalid_elicitation_content each time, nothing written; stale_permission; one decline; stale_elicitation', async (t) => {
+test('L162 RespondElicitation: an option the form does not offer, a field it does not have, a text for a list, a required field left out, an action it does not take; a permission’s Respond on it; then declined, then answered again: invalid_elicitation_content each time, nothing written; stale_permission; one decline; stale_elicitation', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -106,7 +106,7 @@ test('L161 RespondElicitation: an option the form does not offer, a field it doe
   assert.equal(await said(lab, ws), 'Elicitation: decline.')
 })
 
-test('L162 a form pending when its turn is cancelled; another when its execution ends: Agora answers the first cancel, once; the second gets no answer, cancelled; neither pending after', async (t) => {
+test('L163 a form pending when its turn is cancelled; another when its execution ends: Agora answers the first cancel, once; the second projected cancelled, no answer written — no peer left to read one —; neither pending after', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   const e = await lab.open(ws)
@@ -129,7 +129,7 @@ test('L162 a form pending when its turn is cancelled; another when its execution
   assert.equal((await elicitations(lab, ws)).find((x) => x.requestPosition === two.position)?.status, 'cancelled')
 })
 
-test('L163 Codex’s form with a secret field: declined by Agora at once, one answer; its element says why; never the view’s request; a Respond to it stale; and which forms Agora declines', async (t) => {
+test('L164 Codex’s form with a secret field: declined by Agora at once, one answer; its element says why; never the view’s request; a Respond to it stale; and which forms Agora declines', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -150,7 +150,7 @@ test('L163 Codex’s form with a secret field: declined by Agora at once, one an
   assert.equal(declinedBy({ mode: 'form', requestedSchema: { type: 'object', properties: { q: field } } }), null)
 })
 
-test('L164 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: one answer, cancel; pending no more, no request; a Write accepted after its turn', async (t) => {
+test('L165 a form its agent withdraws (`$/cancel_request`), as Codex past its autoResolutionMs: one answer, cancel; pending no more, no request; a Write accepted after its turn', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -166,7 +166,7 @@ test('L164 a form its agent withdraws (`$/cancel_request`), as Codex past its au
   assert.ok((await lab.write(ws, 'after it')).accepted)
 })
 
-test('L167 Agora started once its core projector changed version, a form pending, its connection closed before and not open again, its objects as the version before left them — the form an `acp` line, no request —: rebuilt at start, no new connection: its `elicitation` element pending, its view’s and its row’s request; its checkpoint at the new version', async (t) => {
+test('L168 Agora started once its core projector changed version, a form pending, its connection closed before and not open again, its objects as the version before left them — the form an `acp` line, no request —: rebuilt at start, no new connection: its `elicitation` element pending, its view’s and its row’s request; its checkpoint at the new version', async (t) => {
   const db = await database()
   const keys = generateKeyPairSync('ed25519')
   const kube = new FakeKube(keys.publicKey)
@@ -203,7 +203,7 @@ test('L167 Agora started once its core projector changed version, a form pending
   assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'execution.connected').length, connected, 'no new connection')
 })
 
-test('L165 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
+test('L166 a form’s fields, in order, and what fits them: a number within its bounds, a yes/no, options, a list of options, required fields', () => {
   const params = {
     mode: 'form',
     requestedSchema: {
@@ -236,7 +236,7 @@ test('L165 a form’s fields, in order, and what fits them: a number within its 
 
 // The person answering in the delegate's thread uses the same command (docs/specs/assistant-ui.md, "Answering"):
 // covered by the client's cases. A Respond naming who answers is Agora's alone to keep, as for a permission.
-test('L166 a RespondElicitation whose body names a `from`: Agora’s, kept and on the elicitation answered; the person’s, left out', async (t) => {
+test('L167 a RespondElicitation whose body names a `from`: Agora’s, kept and on the elicitation answered; the person’s, left out', async (t) => {
   const lab = await bench(t)
   const ws = await lab.workstream()
   await lab.open(ws)
@@ -260,4 +260,62 @@ test('L166 a RespondElicitation whose body names a `from`: Agora’s, kept and o
   await lab.workstreams.projections.run(ws)
   const answered = (await elicitations(lab, ws)).sort((a, b) => Number(a.requestPosition) - Number(b.requestPosition))
   assert.deepEqual(answered.map((x) => [x.from, x.as]), [[from.workstream, 'delegator'], [undefined, undefined]])
+})
+
+test('L169 a text against its schema: its length in code points, its format, its pattern; a pattern that runs away, cut in a worker, the server’s thread free meanwhile; one that is no regular expression', async () => {
+  const params = {
+    mode: 'form',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        emoji: { type: 'string', maxLength: 1 },
+        word: { type: 'string', minLength: 2, maxLength: 3 },
+        email: { type: 'string', format: 'email' },
+        site: { type: 'string', format: 'uri' },
+        day: { type: 'string', format: 'date' },
+        at: { type: 'string', format: 'date-time' },
+        ticket: { type: 'string', pattern: '^[A-Z]+-[0-9]+$' },
+      },
+    },
+  }
+  // Code points, not UTF-16 units: one emoji is one.
+  assert.equal(contentRefusal(params, { emoji: '😀' }), null)
+  assert.equal(contentRefusal(params, { emoji: '😀😀' }), 'emoji: its length is out of bounds')
+  assert.equal(contentRefusal(params, { word: '😀😀' }), null)
+  assert.equal(contentRefusal(params, { word: 'abcd' }), 'word: its length is out of bounds')
+  assert.equal(contentRefusal(params, { email: 'person@example.org', site: 'https://example.org/a', day: '2026-11-16', at: '2026-11-16T10:00:00Z' }), null)
+  assert.equal(contentRefusal(params, { email: 'not-an-email' }), 'email: not an email')
+  assert.equal(contentRefusal(params, { site: 'nowhere' }), 'site: not a uri')
+  assert.equal(contentRefusal(params, { day: '16/11/2026' }), 'day: not a date')
+  assert.equal(contentRefusal(params, { at: '2026-11-16' }), 'at: not a date-time')
+  assert.equal(await patternRefusal(params, { ticket: 'PROJ-123' }), null)
+  assert.equal(await patternRefusal(params, { ticket: 'oops' }), 'ticket: does not match its pattern')
+  assert.equal(await patternRefusal(params, { email: 'x' }), null, 'no pattern, no worker')
+  // A pattern that runs away: refused once its time is out, the server's own timers firing all along.
+  const runaway = { mode: 'form', requestedSchema: { type: 'object', properties: { x: { type: 'string', pattern: '^(a+)+$' } } } }
+  let ticks = 0
+  const timer = setInterval(() => ticks++, 50)
+  const started = Date.now()
+  const answer = await patternRefusal(runaway, { x: `${'a'.repeat(40)}!` })
+  clearInterval(timer)
+  assert.equal(answer, 'x: its pattern could not be checked in time')
+  assert.ok(Date.now() - started < 3_000, 'cut in time')
+  assert.ok(ticks >= 10, `the server's thread free meanwhile: ${String(ticks)} ticks`)
+  const broken = { mode: 'form', requestedSchema: { type: 'object', properties: { x: { type: 'string', pattern: '(' } } } }
+  assert.equal(await patternRefusal(broken, { x: 'a' }), 'x: its pattern is no regular expression')
+})
+
+test('L170 Respond to an elicitation on an MCP server’s form of a pattern and an email: a text not matching, an email that is none: invalid_elicitation_content, nothing written; then fitting: one answer', async (t) => {
+  const lab = await bench(t)
+  const ws = await lab.workstream()
+  await lab.open(ws)
+  assert.ok((await lab.write(ws, '/question ticket')).accepted)
+  const form = await asked(lab, ws)
+  const refused = { accepted: false, reason: 'invalid_elicitation_content' }
+  assert.deepEqual(await respond(lab, ws, form, { action: 'accept', content: { ticket: 'oops' } }), refused)
+  assert.deepEqual(await respond(lab, ws, form, { action: 'accept', content: { ticket: 'PROJ-1', email: 'not-an-email' } }), refused)
+  assert.deepEqual(await answersTo(lab, ws, form), [], 'nothing written')
+  assert.ok((await respond(lab, ws, form, { action: 'accept', content: { ticket: 'PROJ-1', email: 'person@example.org' } })).accepted)
+  await until('its answer said', async () => (await said(lab, ws))?.startsWith('Elicitation:'))
+  assert.deepEqual(await answersTo(lab, ws, form), [{ action: 'accept', content: { email: 'person@example.org', ticket: 'PROJ-1' } }])
 })

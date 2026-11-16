@@ -361,6 +361,18 @@ adapted: an "Other" field per question, a field for a text or a number, Decline,
 | Declined | "declined", "declined by its delegator"; the `approval` `approved` false. |
 | Cancelled — Agora's `cancel`, or the request `cancelled` | "not answered"; the `approval`'s `resolution` `cancelled`. |
 
+| Bounds | Rule |
+| --- | --- |
+| A list | Its `minItems` and `maxItems`, exactly; required with no minimum, answered empty: `[]`. |
+| A text | Its length in code points within `minLength` and `maxLength`; required and empty where its minimum allows it: `""`; optional and empty, left out. Its `format` and `pattern` are checked by Agora (`log.md`, "Requests"): the browser runs no pattern of an agent's. |
+| A number | Within its `minimum` and `maximum`, an integer when it asks one. |
+
+| Refused, or not delivered | Rule |
+| --- | --- |
+| The answer | RespondElicitation refused (`invalid_elicitation_content`, `stale_elicitation`…) or not reaching the server: `onRespondToToolApproval` rejects, so the part's `respondToApproval` does; for `resume`, which returns nothing, the box reads the outcome from Agora's context. |
+| The box | Its controls back, the reason said under them, Decline and another answer open; no receipt. |
+| The receipt | From the log's answer alone, as the projection gives it: `OptionList` and `QuestionFlow` show it from their `choice`, never from what was clicked. |
+
 While a form waits, sending is closed: "Answer the question above."
 
 #### Folded tools
@@ -599,6 +611,8 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U107 | In a browser, Codex's form with a secret field | Its box: "Agora declined it:" and why; no field, no button; the agent told `decline`. |
 | U108 | In a browser, Codex's question with options, then Decline | Answer held back until an option is chosen; Decline: the agent told `decline`; its box "declined". |
 | U109 | In a browser, a delegate's agent asking a form, its delegator's Workstream open; the delegator's `answer_agent` with its content | Agora's message: `a form.`, `Asked:`, each field with its kind and options, `answer_agent`. Answered: in the delegate's thread, the agent given that content, the box a receipt, "answered by its delegator". |
+| U110 | The bounds of a list, a text and an empty answer: a list of `minItems` 2, `maxItems` 3; a required list with no minimum; a required text with no minimum, one of `minLength` 2 and `maxLength` 3 counted in code points, an optional one | The list's step held back at one option chosen, open at two, never a fourth; the required list answered empty, `[]`; `""` for the required text left empty; a two-emoji text fits, one of four letters does not; the optional text left out. |
+| U111 | In a browser, RespondElicitation answered 503 once, for a select, then for a Question Flow; then answered again | Each time: the reason said in the box, its controls back — Answer, Decline —, no receipt; then accepted: the agent given the answer, the receipt. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

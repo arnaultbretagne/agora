@@ -2,6 +2,8 @@
 // fields — a text, a number, an integer, true or false, one option (`oneOf` or `enum`), several (`array`, its `items`
 // `anyOf` or `enum`). Agora shows it to whoever answers, checks what comes back against it, and declines itself what it
 // does not show.
+import { Worker } from 'node:worker_threads'
+import { fullFormats } from 'ajv-formats/dist/formats.js'
 import { object, schemaValue } from './json.ts'
 
 /** The requests an agent blocks on until someone answers: a permission, an elicitation. */
@@ -15,8 +17,12 @@ export interface Field {
   readonly required: boolean
   /** Its options' values, titles and descriptions: one of them for a choice, any of them for an `array`. */
   readonly options: readonly { value: string; title: string; description: string | null }[] | null
+  /** A number's or an integer's bounds; a list's, in items; a text's, in code points. */
   readonly minimum: number | null
   readonly maximum: number | null
+  /** A text's `format` (`email`, `uri`, `date`, `date-time`) and `pattern`, as its schema gives them. */
+  readonly format: string | null
+  readonly pattern: string | null
 }
 
 const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
@@ -64,6 +70,8 @@ export function fieldsOf(params: unknown): Field[] {
       options,
       minimum: bound(array ? p.minItems : p.type === 'string' ? p.minLength : p.minimum),
       maximum: bound(array ? p.maxItems : p.type === 'string' ? p.maxLength : p.maximum),
+      format: p.type === 'string' ? text(p.format) : null,
+      pattern: p.type === 'string' ? text(p.pattern) : null,
     }
   })
 }
@@ -85,6 +93,17 @@ export function declinedBy(params: unknown): 'mode' | 'async' | 'secret' | null 
 
 const quoted = (value: unknown): string => JSON.stringify(schemaValue(value))
 
+/** ACP's formats (`StringFormat`), checked as ajv-formats checks them: the same checks Agora validates its lines with. */
+const FORMATS: Readonly<Record<string, (value: string) => boolean>> = {
+  email: (v) => (fullFormats.email as RegExp).test(v),
+  uri: (v) => (fullFormats.uri as (value: string) => boolean)(v),
+  date: (v) => (fullFormats.date as { validate: (value: string) => boolean }).validate(v),
+  'date-time': (v) => (fullFormats['date-time'] as { validate: (value: string) => boolean }).validate(v),
+}
+
+/** A text's length as JSON Schema counts it: in code points, not UTF-16 units. */
+const length = (value: string): number => [...value].length
+
 /** Why this content does not fit the form, naming the field, or null when it does (docs/specs/log.md, "Commands"). */
 export function contentRefusal(params: unknown, content: unknown): string | null {
   const given = content === undefined || content === null ? {} : object(content)
@@ -98,7 +117,8 @@ export function contentRefusal(params: unknown, content: unknown): string | null
     if (field.type === 'string') {
       if (typeof value !== 'string') return `${key}: not a text`
       if (values && !values.includes(value)) return `${key}: ${quoted(value)} is not one of its options`
-      if ((field.minimum !== null && value.length < field.minimum) || (field.maximum !== null && value.length > field.maximum)) return `${key}: its length is out of bounds`
+      if ((field.minimum !== null && length(value) < field.minimum) || (field.maximum !== null && length(value) > field.maximum)) return `${key}: its length is out of bounds`
+      if (field.format !== null && !(FORMATS[field.format]?.(value) ?? true)) return `${key}: not ${field.format === 'email' ? 'an' : 'a'} ${field.format}`
     } else if (field.type === 'number' || field.type === 'integer') {
       if (typeof value !== 'number' || !Number.isFinite(value)) return `${key}: not a number`
       if (field.type === 'integer' && !Number.isInteger(value)) return `${key}: not an integer`
@@ -117,16 +137,58 @@ export function contentRefusal(params: unknown, content: unknown): string | null
   return missing === undefined ? null : `${missing.key}: required`
 }
 
+/** How long an agent's pattern may run, off the main thread, before the content it checks is refused. */
+const PATTERN_MS = 1_000
+
+/** What a worker runs: each value against its pattern, as JSON Schema means it — ECMAScript, Unicode, found anywhere. */
+const PATTERNS = `
+const { parentPort, workerData } = require('node:worker_threads')
+let out = null
+for (const c of workerData) {
+  let re
+  try { re = new RegExp(c.pattern, 'u') } catch { out = c.key + ': its pattern is no regular expression'; break }
+  if (!re.test(c.value)) { out = c.key + ': does not match its pattern'; break }
+}
+parentPort.postMessage(out)
+`
+
+/**
+ * Why a content's texts do not match their fields' `pattern`, or null when they do (docs/specs/log.md, "Requests"). A
+ * pattern is the agent's, from a hostile sandbox: never run on the server's thread, where a runaway one (ReDoS) would
+ * hold every Workstream. It runs in a worker of its own, 16 MB, cut after PATTERN_MS: past that, the content is
+ * refused, never the server held.
+ */
+export function patternRefusal(params: unknown, content: unknown): Promise<string | null> {
+  const given = object(content) ?? {}
+  const checks = fieldsOf(params)
+    .filter((f) => f.pattern !== null && typeof schemaValue(given[f.key]) === 'string')
+    .map((f) => ({ key: f.key, pattern: f.pattern!, value: schemaValue(given[f.key]) as string }))
+  if (checks.length === 0) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const worker = new Worker(PATTERNS, { eval: true, workerData: checks, resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4, stackSizeMb: 1 } })
+    const done = (answer: string | null) => {
+      clearTimeout(timer)
+      worker.removeAllListeners()
+      void worker.terminate()
+      resolve(answer)
+    }
+    const timer = setTimeout(() => done(`${checks[0]!.key}: its pattern could not be checked in time`), PATTERN_MS)
+    worker.once('message', (answer: string | null) => done(answer))
+    worker.once('error', () => done(`${checks[0]!.key}: its pattern could not be checked`))
+  })
+}
+
 const KIND: Record<string, string> = { string: 'text', number: 'a number', integer: 'an integer', boolean: 'true or false' }
 
 /** A form's fields as its delegator reads them (docs/specs/delegation.md, "Requests"): one line each, its options under it. */
 export function fieldsText(params: unknown): string[] {
   return fieldsOf(params).flatMap((f) => {
     const kind = f.options ? (f.type === 'array' ? 'any of the options below' : 'one of the options below') : (KIND[f.type] ?? f.type)
-    const range = f.minimum !== null || f.maximum !== null ? `, ${f.minimum ?? '…'} to ${f.maximum ?? '…'}` : ''
+    const range = f.minimum !== null || f.maximum !== null ? `, ${f.minimum ?? '…'} to ${f.maximum ?? '…'}${f.type === 'string' ? ' characters' : f.type === 'array' ? ' of them' : ''}` : ''
+    const shape = `${f.format !== null ? `, ${f.format}` : ''}${f.pattern !== null ? `, matching \`${f.pattern}\`` : ''}`
     const about = [f.title, f.description].filter((s) => s !== null).join(' — ')
     return [
-      `- \`${f.key}\` (${kind}${range}${f.required ? ', required' : ''})${about === '' ? '' : `: ${about}`}`,
+      `- \`${f.key}\` (${kind}${range}${shape}${f.required ? ', required' : ''})${about === '' ? '' : `: ${about}`}`,
       ...(f.options ?? []).map((o) => `  - \`${o.value}\`${o.title !== o.value ? ` "${o.title}"` : ''}${o.description ? `: ${o.description}` : ''}`),
     ]
   })

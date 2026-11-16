@@ -66,6 +66,41 @@ export const mcpForm = (sessionId: string): Record<string, unknown> => ({
   },
 })
 
+/**
+ * MCP servers' forms as Claude Code forwards them, for the schema's bounds: `ticket`, a pattern and an email's format,
+ * for `/question ticket`; `bounds`, lists of `minItems` and `maxItems` or none, texts of `minLength` and `maxLength` or none.
+ */
+export const MCP_FORMS: Readonly<Record<string, (sessionId: string) => Record<string, unknown>>> = {
+  ticket: (sessionId) => ({
+    mode: 'form',
+    sessionId,
+    message: 'Which ticket is this for?',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        ticket: { type: 'string', title: 'Ticket', description: 'Its key, as PROJ-123', pattern: '^[A-Z]+-[0-9]+$' },
+        email: { type: 'string', title: 'Reporter', format: 'email' },
+      },
+      required: ['ticket'],
+    },
+  }),
+  bounds: (sessionId) => ({
+    mode: 'form',
+    sessionId,
+    message: 'Set up the release.',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        tags: { type: 'array', title: 'Tags', description: 'The tags to add, if any', items: { anyOf: [{ const: 'beta', title: 'Beta' }, { const: 'lts', title: 'LTS' }] } },
+        code: { type: 'string', title: 'Code', description: 'A code name, empty for none' },
+        checks: { type: 'array', title: 'Checks', description: 'Two or three checks to run', minItems: 2, maxItems: 3, items: { anyOf: [{ const: 'lint', title: 'Lint' }, { const: 'unit', title: 'Unit' }, { const: 'browser', title: 'Browser' }, { const: 'live', title: 'Live' }] } },
+        short: { type: 'string', title: 'Short name', description: 'Two or three characters', minLength: 2, maxLength: 3 },
+      },
+      required: ['tags', 'code'],
+    },
+  }),
+}
+
 const ENVIRONMENT: CodexQuestion = {
   id: 'environment',
   header: 'Environment',

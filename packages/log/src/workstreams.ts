@@ -35,7 +35,7 @@ import { telemetry } from './telemetry.ts'
 import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled } from './settings.ts'
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
-import { contentRefusal, declinedBy } from './forms.ts'
+import { contentRefusal, declinedBy, patternRefusal } from './forms.ts'
 import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
 
 const LOCK = 194710501
@@ -292,6 +292,9 @@ export class Workstreams implements Handler {
     const catalogue = command.kind === 'Create' ? await this.executions.pools() : []
     // What each pool accepts in a prompt, for the message a Create carries.
     const offered = command.kind === 'Create' && command.body.prompt !== undefined ? await this.catalogue() : []
+    // docs/specs/log.md, "Requests": an answer's texts against their patterns, the agent's, off the server's thread — before
+    // the transaction, never under its lock. The form's line never changes: what is checked here is what admission sees.
+    const unmatched = command.kind === 'RespondElicitation' && command.body.action === 'accept' ? await this.patternChecked(workstream, command) : null
     return this.serial(workstream, async () => {
       if (this.blocked.has(workstream)) return { accepted: false, reason: 'unavailable' }
       // docs/specs/log.md, "Native sub-agents": a native sub-stream takes no command of its own; its host's reach it.
@@ -493,7 +496,7 @@ export class Workstreams implements Handler {
           const action = command.body.action
           if (action !== 'accept' && action !== 'decline') return 'invalid_elicitation_content'
           if (action === 'decline' && command.body.content !== undefined) return 'invalid_elicitation_content'
-          if (action === 'accept' && contentRefusal(asked.content.params, command.body.content) !== null) return 'invalid_elicitation_content'
+          if (action === 'accept' && (contentRefusal(asked.content.params, command.body.content) !== null || unmatched !== null)) return 'invalid_elicitation_content'
           const { from: by, ...rest } = command.body
           return {
             execution: current.id,
@@ -880,6 +883,12 @@ export class Workstreams implements Handler {
       const entry = (await this.store.entries(workstream)).find((x) => x.position === line.position)
       if (entry) await this.dispatch(workstream, entry, connection)
     }
+  }
+
+  /** Why an answer's texts do not match their form's patterns (docs/specs/log.md, "Requests"), for the form it names. */
+  private async patternChecked(workstream: string, command: Command): Promise<string | null> {
+    const asked = (await this.store.state(workstream).catch(() => null))?.permissions.get(`in:${idKey(command.body.requestId)}`)
+    return asked?.method === 'elicitation/create' ? patternRefusal(asked.content.params, command.body.content) : null
   }
 
   /** The execution's rights: its pool's base profiles and its own. */
