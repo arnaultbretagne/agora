@@ -24,6 +24,9 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | R16 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green, as R12: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that tells a delegator its delegate's request and gives it `answer_agent`: every case of R14 ran again; D46's test counting only the messages of its Cancel; D58 to D61 new, the delegates' requests the mock agent's `/permission`. On `523061a`, each guard of D58 to D60 removed in turn — `waiting` in the delegate's state, its place among the three, the request told once, the request named, the delegator's `from` —: its case failed each time; the refusal when the log itself answers `stale_permission` after the look, and `delegate_stopped` at that point, were dropped as no case could reach them. |
 | R17 | 2026-11-16 | `b5bd91f` | local | `npm run check` on g4, the log's tests all green, as R16: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that answers a permission its agent withdraws: every case of R16 ran again; D62 new. On `30d72de`, the withdrawn permission left unanswered: D62 failed. |
 | R18 | 2026-11-16 | `e81339a` | local | `npm run check` on g4, its tests green across passes: the first stopped on L20 (a port taken between its `freePort()` and the server's listen, `EADDRINUSE`); the second, the log's 307 tests green, U81 failing once in the browser suite (a layout race); the browser suite then green on its own, as R17: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. On the commit that has the dispatcher answer a withdrawn permission at each run. |
+| R19 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the delegates' forms the mock agent's `/question` and `/form`. On the commit where a delegate's form goes to its delegator and `answer_agent` answers it. Every case of R17 ran again. |
+| R20 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green; the delegates' forms the mock agent's `/question` and `/form`, `/question ticket` an MCP server's pattern and email. |
+| R21 | 2026-11-16 | `0b6315f` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; three passes: on `cf3dc14` the first stopped on L20 (`EADDRINUSE`, as R42), the second on D62 and D63 (`list_agents` saying `working`: it reads the delegate's row, which its projection had not yet written `waiting`); D63 then waits for that row, as D58 does; on `0b6315f` the third all green; as R20. |
 
 ## Cases
 
@@ -119,11 +122,29 @@ The evidence behind the acceptance cases of `specs/delegation.md`.
 | D60 | — | local | R17 | proven | As R16. |
 | D61 | real: the delegator's claim expired, twice | local | R17 | proven | As R16. |
 | D62 | — | local | R18 | proven | As R17. |
+| D63 | — | local | R19 | proven | One message `as` `agora`, `from` the delegate, its words the case's: `… "/question several": it waits for an answer to its request <n>: a form.`, `Asked: Please answer the following questions.`, `Fields:`, `question_0` (one of the options below) with `PostgreSQL` and `SQLite`, `question_0_custom` (text), `question_1` (any of the options below) with `Lint`, `Unit tests`, `Browser tests`, `question_1_custom` (text), then how to answer. `list_agents` `<id> · /question several · waiting`. `answered <id> · /question several`; one Respond to an elicitation, `accept`, that content, `from` the delegator `as` `delegator`; one answer, that content; the element `answered`, `from` the delegator; its last message back `Elicitation: accept {"question_0":"PostgreSQL","question_1":["Lint","Unit tests"]}.`. |
+| D64 | — | local | R19 | proven | `/form several`: `invalid_elicitation_content: environment: "Moon" is not one of its options`, `… region: not a field of the form`, `… branch: required`, `invalid_query: option`, `invalid_query: content`; no Respond written. `declined <id> · /form several`, one answer `{ action: decline }`; the person's then `stale_elicitation`. Another delegate's `/form` answered by the person first: `stale_permission: nothing pending in <id> · /form`, the person's answer alone sent. |
+| D65 | — | local | R19 | proven | `/form secret`: one answer, `{ action: decline }`; its last message back `Elicitation: decline.`; no message of Agora's about a request in the delegator's Workstream. |
+| D58 | simulated: a second engine on the same log, then the first again | local | R19 | proven | As R16. |
+| D59 | — | local | R19 | proven | As R16, `answer_agent` taking its `option` once the request is found a permission. |
+| D60 | — | local | R19 | proven | As R16. |
+| D61 | real: the delegator's claim expired, twice | local | R19 | proven | As R16. |
+| D62 | — | local | R19 | proven | As R17. |
+| D66 | — | local | R20 | proven | Agora's message: `` - `ticket` (text, matching `^[A-Z]+-[0-9]+$`, required): Ticket — Its key, as PROJ-123 ``, `` - `email` (text, email): Reporter ``. `invalid_elicitation_content: ticket: does not match its pattern`, `invalid_elicitation_content: email: not an email`; no Respond written; `answered <id> · /question ticket`, one answer, `{ ticket: PROJ-1 }`. |
+| D63 | — | local | R20 | proven | As R19. |
+| D64 | — | local | R20 | proven | As R19. |
+| D65 | — | local | R20 | proven | As R19. |
+| D62 | — | local | R20 | proven | As R18. |
+| D66 | — | local | R21 | proven | As R20, the command's own check of the pattern before the transaction as well. |
+| D63 | — | local | R21 | proven | As R19, its test waiting for the delegate's row `waiting` before `list_agents`, which reads that row. |
+| D64 | — | local | R21 | proven | As R19. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
+| `list_agents` read just after Agora's message about a request, before the delegate's row is projected `waiting`: it says `working` for a moment. D62 calls it at once and failed so under load once (R21's second pass); D58 and D63 wait for the row | — |
+| A delegate's form answered by a real delegator agent reading Agora's message — Claude Code, Codex —: run with the mock agent's `/answer_agent` alone | — |
 | A crash between a delegate's accepted Create and its `delegation.started`: a sub-stream that runs, never given its instructions, never reported | — |
 | A message of Agora's whose prompt fails before it is dispatched, a token or a deadline refused: gone from what waits, a failed turn in the thread, its agent never reading it | — |
 | A chain of new delegates, each started once the last has answered: nothing caps it but the person's Stop | — |

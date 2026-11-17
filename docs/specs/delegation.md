@@ -5,8 +5,8 @@ the gestures the harnesses give their own sub-agents: `spawn_agent`, `send_messa
 `list_agents`. A delegate is a sub-stream of its delegator's Workstream, and the two speak by one
 gesture: a message written in the other's Workstream. `spawn_agent` and `send_message` write in the
 delegate's; a delegate's turn, once done, sends its last message to its delegator's, and `send_message`
-to `parent` writes there before that. What a delegate's agent blocks on — a permission it asks — goes to
-its delegator the same way, which answers it with `answer_agent`, or asks the person.
+to `parent` writes there before that. What a delegate's agent blocks on — a permission or a form it asks —
+goes to its delegator the same way, which answers it with `answer_agent`, or asks the person.
 
 **Nobody waits: a call answers as soon as its message is accepted, and the message goes as any message
 written in that Workstream goes, the person's included: into the running turn when its agent can take
@@ -26,9 +26,9 @@ sequenceDiagram
   end
   A->>D: the Workstream, its execution, its first message
   A-->>C: started, its id — or refused with the words, or expired
-  D->>A: its agent asks a permission, and waits
-  A->>C: the request, as a message: what is asked, its options
-  C->>A: answer_agent(to, request, option) — or the person answers in the delegate's thread
+  D->>A: its agent asks a permission or a form, and waits
+  A->>C: the request, as a message: what is asked, its options or its fields
+  C->>A: answer_agent(to, request, option or content) — or the person answers in the delegate's thread
   A->>D: the first answer given
   D->>A: its turn ends with its last message — send_message(parent, message) before, if it must
   A->>C: the message, into its running turn or as its next
@@ -74,7 +74,7 @@ A delegator is told what its delegate cannot tell it, by the same gesture: a mes
 | A delegate's turn holding a message that is not the person's is done with no message | It ended its turn with nothing to say. |
 | A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
 | The person stops a delegate, or cancels its turn | That the person did. |
-| A delegate's agent asks a permission | The request ("Requests"). |
+| A delegate's agent asks a permission or a form | The request ("Requests"). |
 
 Each, and a delegate's last message, is written once, a restart included. A delegator that stops its
 delegate itself is written nothing: its call's answer says it.
@@ -89,8 +89,8 @@ delegate itself is written nothing: its call's answer says it.
 
 ## Requests
 
-A request is what a delegate's agent blocks on until someone answers: a `session/request_permission` of its
-own Session (`log.md`, "The Workstream view", `request`). It goes to its delegator, which answers it when it
+A request is what a delegate's agent blocks on until someone answers: a `session/request_permission` or an
+`elicitation/create` of its own Session (`log.md`, "Requests"). It goes to its delegator, which answers it when it
 can and asks the person when it cannot; the person can answer it in the delegate's thread all the same. The
 first answer counts.
 
@@ -98,12 +98,13 @@ first answer counts.
 | --- | --- |
 | Told | Once per request, a restart included: a message of Agora's in the delegator's Workstream ("What Agora writes"), going as any message goes — into its running turn, as its next, its execution continued when it has ended. |
 | What it says | `Your delegate <id> "<title>": it waits for an answer to its request <position>: a permission.`; then `Asked:`, the tool call's `title` and, in brackets, its `kind`; then `Options:`, one line each, its `optionId`, `name` and `kind`; then how to answer: `answer_agent` with `to`, `request` and the id of an option, if it is the delegator's to decide; if not, ask the person, who can answer it in the delegate's thread. |
+| For a form | `… its request <position>: a form.`; then `Asked:` and its `message`; then `Fields:`, in their order (`log.md`, "Requests"), one line each — its name, its kind (`text`, `a number`, `an integer`, `true or false`, `one of the options below`, `any of the options below`), its bounds, its format and its pattern, `required`, then its title and description —, each option on a line under it, its value, its title when another, its description; then how to answer: `answer_agent` with `to`, `request` and `content`, or `decline` true; if not, ask the person. |
 | While it waits | The delegate is `waiting`, in its view, its row and `list_agents`, and keeps its place among the three at once. |
-| `answer_agent` | `to` one of the caller's delegates; `request`, its number; `option`, one of its `optionId`s. Agora answers it by a Respond to a permission of its own on the delegate's execution (`log.md`, "Commands"), its body's `from` naming the delegator's Workstream, `as` `delegator`; answered `answered <id> · <title>`. |
-| Refused | `stale_permission`, nothing written, for a request not pending — answered first, by the person or anything else, cancelled, or never asked —, followed by what is: `nothing pending in <id> · <title>`, or `request <positions> pending in <id> · <title>`. `invalid_permission_option`: an option it does not offer. `invalid_query` naming `request`: not a number. `not_a_delegate`, `delegate_stopped`: as for `send_message`. |
-| The person | Answers it in the delegate's thread, as any permission (`assistant-ui.md`); after the delegator's answer, refused `stale_permission`. |
-| Withdrawn | By its agent, a `$/cancel_request`: Agora answers it `cancelled` (`log.md`, "Commands"); the delegate waits no more, and `answer_agent` on it is `stale_permission`. Nothing more is written to the delegator: the delegate's turn goes on, and its last message says what came of it. |
-| Not told | A native sub-agent's request (`log.md`, "Native sub-agents"): its sub-stream waits under the delegate, for the person. |
+| `answer_agent` | `to` one of the caller's delegates; `request`, its number. A permission: `option`, one of its `optionId`s; Agora answers it by a Respond to a permission of its own on the delegate's execution (`log.md`, "Commands"), its body's `from` naming the delegator's Workstream, `as` `delegator`; answered `answered <id> · <title>`. A form: `content`, its fields' values, or `decline` true; by a Respond to an elicitation of Agora's, `from` the delegator the same way; answered `answered <id> · <title>`, or `declined <id> · <title>`. |
+| Refused | `stale_permission`, nothing written, for a request not pending — answered first, by the person or anything else, cancelled, withdrawn, or never asked —, followed by what is: `nothing pending in <id> · <title>`, or `request <positions> pending in <id> · <title>`. `invalid_permission_option`: an option it does not offer. `invalid_elicitation_content`, followed by the field and why: content that does not fit the form (`log.md`, "Requests"). `invalid_query` naming `request`: not a number; naming `option`, `content` or `decline`: one not of the request's kind, or none given. `not_a_delegate`, `delegate_stopped`: as for `send_message`. |
+| The person | Answers it in the delegate's thread, as any request (`assistant-ui.md`); after the delegator's answer, refused `stale_permission` or `stale_elicitation`. |
+| Withdrawn | By its agent, a `$/cancel_request`: Agora answers it — a permission `cancelled`, a form `cancel` (`log.md`, "Requests") —; the delegate waits no more, and `answer_agent` on it is `stale_permission`. Nothing more is written to the delegator: the delegate's turn goes on, and its last message says what came of it. |
+| Not told | A native sub-agent's request (`log.md`, "Native sub-agents"): its sub-stream waits under the delegate, for the person. A form Agora declines itself (`log.md`, "Requests"): nothing waits. |
 
 ## Approval
 
@@ -176,6 +177,10 @@ first answer counts.
 | D60 | `answer_agent` with an option the request does not offer; a request that is not a number; on a Workstream that is not its delegate; once the person answered it; naming a request other than the one pending; the person answering after the delegator | `invalid_permission_option`; `invalid_query: request`; `not_a_delegate`; nothing written each time. `stale_permission: nothing pending in <id> · <title>`, the person's answer alone sent; `stale_permission: request <position> pending in <id> · <title>`, nothing written; the person's refused `stale_permission`. |
 | D61 | A delegate's agent asking a permission once its delegator's execution has ended | The delegator continued by a Create of Agora's, then a turn whose prompt is the message naming the request. |
 | D62 | A delegate's agent withdrawing its permission once it is told to its delegator | `list_agents` `waiting`, then, its turn done, `idle`; one answer to the agent, `cancelled`; its row with no `request`; `answer_agent` on it `stale_permission: nothing pending in <id> · <title>`; its last message back; three more delegates started. |
+| D63 | A delegate's agent asking a form — Claude Code's AskUserQuestion, two questions —; `answer_agent` with content that fits | One message `as` `agora` in the delegator's Workstream: the form's message, each field in order with its kind and options, and how to answer; `list_agents` `<id> · <title> · waiting`. `answered <id> · <title>`; one Respond to an elicitation in the delegate's Workstream, `accept`, that content, `from` the delegator, `as` `delegator`; one answer to the agent, that content; the element `answered`, `from` the delegator; its last message back, saying that content. |
+| D64 | `answer_agent` on a delegate's form with an option a field does not offer, a field it has not, a required one left out, `option`, nothing; then `decline`; then the person; on another delegate's form the person answered first | `invalid_elicitation_content` naming the field and why, three times; `invalid_query: option`; `invalid_query: content`; nothing written. `declined <id> · <title>`, one answer, `decline`. The person's refused `stale_elicitation`. `stale_permission: nothing pending in <id> · <title>`, the person's answer alone sent. |
+| D65 | A delegate's agent asking a form with a secret field | Declined by Agora at once, the agent told `decline`; no message about it in the delegator's Workstream; its last message back as any. |
+| D66 | `answer_agent` on a delegate's MCP form of a `pattern` and an `email`: a text not matching, an email that is none, then fitting | Agora's message saying the field's pattern and format; `invalid_elicitation_content: ticket: does not match its pattern`, `invalid_elicitation_content: email: not an email`, nothing written; then `answered <id> · <title>`, one answer, that content. |
 
 ## To be specified
 
@@ -189,4 +194,5 @@ first answer counts.
   checks it.
 - A role's persona given again once its harness has compacted its first message away.
 - A native sub-agent's request in a delegate, told to its delegator.
-- An elicitation (`elicitation/create`), ACP's other request: Agora declares none.
+- A question Codex asks without waiting (`request_user_input_async`), its answer steered into the turn that asked it:
+  declined by Agora.

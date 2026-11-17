@@ -172,13 +172,13 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
   // A native sub-stream takes no message: its turn can be cancelled where its adapter offers it, a permission it asks answered.
   if (view.state === 'native') {
     const working = turns.find((t) => status(t) === 'in_progress') ?? null
-    const asked = ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending') ?? null
+    const asked = ofKind(state, 'element').find((e) => isAsked(e) && e.object.status === 'pending') ?? null
     return { open: false, create: false, reason: null, running: working !== null, cancellable: view.native?.cancel === true ? working : null, uncertain: null, pendingPermission: asked, refuses: false, held: false, readOnly: true }
   }
   const active = turns.find((t) => ['saved', 'in_progress', 'uncertain'].includes(status(t))) ?? null
   const uncertain = active && status(active) === 'uncertain' ? active : null
   const pendingPermission =
-    ofKind(state, 'element').find((e) => e.object.type === 'permission' && e.object.status === 'pending' && e.object.session === view.session) ?? null
+    ofKind(state, 'element').find((e) => isAsked(e) && e.object.status === 'pending' && e.object.session === view.session) ?? null
   const pending = (approval: boolean) =>
     // A merge card waits for a click, not for an answer: sending stays open, and cancels it (docs/specs/merge.md).
     ofKind(state, 'element').some((e) => e.object.type === 'question' && e.object.status === 'pending' && e.object.kind !== 'merge' && (e.object.kind === 'approval') === approval)
@@ -194,7 +194,9 @@ export function composerOf(state: ThreadState, view: WorkstreamView): Composer {
       ? 'Answer the question above.'
       : STATE_REASON[view.state] ??
       (pendingPermission
-        ? 'Answer the permission request above.'
+        ? pendingPermission.object.type === 'elicitation'
+          ? 'Answer the question above.'
+          : 'Answer the permission request above.'
         : settling
           ? 'Applying the settings…'
           : uncertain
@@ -358,6 +360,206 @@ function approvalOf(permission: ViewObject, title: string): Approval {
   }
 }
 
+// ---------------------------------------------------------------- forms
+
+/** A request of an agent's the person answers: a permission, or a form (docs/specs/log.md, "Requests"). */
+const isAsked = (e: ViewObject): boolean => e.object.type === 'permission' || (e.object.type === 'elicitation' && !e.object.declined)
+
+/** The title of a form's own line, when it names no tool line. */
+export const FORM_TITLE = 'Asking for your input'
+
+/** A form's question as the screen draws it (docs/specs/assistant-ui.md, "Forms"). */
+export interface FormQuestion {
+  readonly key: string
+  /** `one` of its options, `many` of them, a `text`, a `number`, an `integer`, `yes-no` for true or false. */
+  readonly kind: 'one' | 'many' | 'text' | 'number' | 'integer' | 'yes-no'
+  /** What it asks: the longer of its title and its description; the other, its label. */
+  readonly question: string
+  readonly label: string | null
+  readonly required: boolean
+  readonly options: readonly { id: string; label: string; description?: string }[]
+  /** Its "Other" field — the free text beside its options —, by its key, when it has one. */
+  readonly other: string | null
+  /** A number's bounds; a list's, in options chosen (`minItems`, `maxItems`); a text's, in code points (`minLength`, `maxLength`). */
+  readonly min: number | null
+  readonly max: number | null
+}
+
+/** A form an agent asks, from its `elicitation` element (docs/specs/assistant-ui.md, "Forms"). */
+export interface Form {
+  readonly id: string
+  readonly message: string
+  readonly questions: readonly FormQuestion[]
+  /** `select`, `text`, `confirm`: answered as an approval; `list`, `flow`: as an interrupt, by `resume`. */
+  readonly shape: 'select' | 'text' | 'confirm' | 'list' | 'flow'
+  readonly status: 'pending' | 'answered' | 'declined' | 'cancelled'
+  /** Why Agora declined it itself: `secret`, `async`, `mode` (docs/specs/log.md, "Requests"). */
+  readonly declined: string | null
+  /** What it was answered: its fields' values. */
+  readonly content: Readonly<Record<string, unknown>> | null
+  /** Who answered it, when not the person: its delegator. */
+  readonly by: string | null
+}
+
+/** What answers a form: accepted with its fields' values, or declined. */
+export type FormAnswer = { readonly action: 'accept'; readonly content: Record<string, unknown> } | { readonly action: 'decline' }
+
+const bound = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+
+/**
+ * A form's questions: each field, its "Other" companion folded into it — the free text Claude Code names
+ * `question_<n>_custom`, Codex marks `_meta.codex.questionId`.
+ */
+export function formOf(element: ViewObject): Form {
+  const o = element.object
+  const params = json(o.params) ?? {}
+  const schema = json(params.requestedSchema) ?? {}
+  const listed = list(schema.required).map(text)
+  const required = new Set(listed)
+  // The log keeps no member order: those `required` names first, in its order, then the others by name, numbers as numbers.
+  const rank = (key: string) => (required.has(key) ? listed.indexOf(key) : listed.length)
+  const fields = Object.entries(json(schema.properties) ?? {})
+    .map(([key, raw]) => ({ key, p: json(raw) ?? {} }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key, 'en', { numeric: true }))
+  const optionsOf = (p: Json) => {
+    const items = json(p.items)
+    const raw = list(p.type === 'array' ? (items?.anyOf ?? items?.enum) : (p.oneOf ?? p.enum))
+    return raw.map((r) => {
+      const v = json(r)
+      return v ? { id: text(v.const), label: text(v.title) || text(v.const), ...(text(v.description) ? { description: text(v.description) } : {}) } : { id: String(r), label: String(r) }
+    })
+  }
+  const choice = (p: Json) => optionsOf(p).length > 0
+  const companionOf = (key: string, p: Json): string | null => {
+    if (!choice(p)) return null
+    return fields.find((f) => f.p.type === 'string' && !choice(f.p) && (f.key === `${key}_custom` || text(json(json(f.p._meta)?.codex)?.questionId) === key))?.key ?? null
+  }
+  const companions = new Set(fields.map((f) => companionOf(f.key, f.p)).filter((k): k is string => k !== null))
+  const questions: FormQuestion[] = fields
+    .filter((f) => !companions.has(f.key))
+    .map(({ key, p }) => {
+      const title = text(p.title),
+        description = text(p.description)
+      const [question, label] = description.length > title.length ? [description, title || null] : [title || key, description || null]
+      const kind: FormQuestion['kind'] =
+        p.type === 'array' ? 'many' : choice(p) ? 'one' : p.type === 'boolean' ? 'yes-no' : p.type === 'number' ? 'number' : p.type === 'integer' ? 'integer' : 'text'
+      const options = kind === 'yes-no' ? [{ id: 'true', label: 'Yes' }, { id: 'false', label: 'No' }] : optionsOf(p)
+      const array = p.type === 'array'
+      return {
+        key,
+        kind,
+        question,
+        label,
+        required: required.has(key),
+        options,
+        other: companionOf(key, p),
+        min: bound(array ? p.minItems : kind === 'text' ? p.minLength : p.minimum),
+        max: bound(array ? p.maxItems : kind === 'text' ? p.maxLength : p.maximum),
+      }
+    })
+  const [only] = questions
+  const shape: Form['shape'] =
+    questions.length === 0 ? 'confirm' : questions.length > 1 ? 'flow' : only!.kind === 'one' ? 'select' : only!.kind === 'text' ? 'text' : only!.kind === 'many' ? 'list' : 'flow'
+  const answer = json(o.answer)
+  const action = text(answer?.action)
+  const status: Form['status'] =
+    o.status === 'pending' ? 'pending' : o.status === 'cancelled' || action === 'cancel' || action === '' ? 'cancelled' : action === 'accept' ? 'answered' : 'declined'
+  return {
+    id: element.id,
+    message: text(params.message),
+    questions,
+    shape,
+    status,
+    declined: text(o.declined) || null,
+    content: action === 'accept' ? (json(answer?.content) ?? {}) : null,
+    by: o.as === 'delegator' ? 'delegator' : null,
+  }
+}
+
+/** A question's answer, as its form's content holds it: the options chosen, its text. */
+export function answerOf(question: FormQuestion, content: Readonly<Record<string, unknown>> | null): { chosen: string[]; text: string } {
+  const value = content?.[question.key]
+  const other = question.other === null ? '' : text(content?.[question.other])
+  if (question.kind === 'yes-no') return { chosen: typeof value === 'boolean' ? [String(value)] : [], text: '' }
+  if (question.kind === 'number' || question.kind === 'integer') return { chosen: [], text: typeof value === 'number' ? String(value) : '' }
+  if (question.kind === 'text') return { chosen: [], text: text(value) }
+  return { chosen: (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String), text: other }
+}
+
+/**
+ * The content the answers give, each question's own: its options, its "Other" text, its value (docs/specs/assistant-ui.md,
+ * "Forms"). A required list or text is given even empty — `[]`, `""` — where its minimum allows it; an optional one left
+ * empty is left out.
+ */
+export function formContent(form: Form, chosen: Readonly<Record<string, readonly string[]>>, texts: Readonly<Record<string, string>>): Record<string, unknown> {
+  const content: Record<string, unknown> = {}
+  for (const q of form.questions) {
+    const ids = chosen[q.key] ?? []
+    const typed = (texts[q.key] ?? '').trim()
+    if (q.kind === 'one' && ids[0] !== undefined) content[q.key] = ids[0]
+    if (q.kind === 'many' && (ids.length > 0 || q.required)) content[q.key] = [...ids]
+    if (q.kind === 'yes-no' && ids[0] !== undefined) content[q.key] = ids[0] === 'true'
+    if (q.kind === 'text' && (typed !== '' || q.required)) content[q.key] = typed
+    if ((q.kind === 'number' || q.kind === 'integer') && typed !== '') content[q.key] = Number(typed)
+    if (q.other !== null && typed !== '' && (q.kind === 'one' || q.kind === 'many')) content[q.other] = typed
+  }
+  return content
+}
+
+/**
+ * Whether a text typed fits its question: its length in code points within `minLength` and `maxLength`; empty, left out
+ * when optional, given `""` when required and its minimum allows it. Its `pattern` and `format` are checked by Agora
+ * (docs/specs/log.md, "Requests"): the browser runs no pattern of an agent's.
+ */
+export function textFits(question: FormQuestion, typed: string): boolean {
+  const length = [...typed.trim()].length
+  if (length === 0) return !question.required || (question.min ?? 0) === 0
+  return (question.min === null || length >= question.min) && (question.max === null || length <= question.max)
+}
+
+/** Whether a number typed fits its question: a number, an integer when it asks one, within its bounds. */
+export function numberFits(question: FormQuestion, typed: string): boolean {
+  if (typed.trim() === '') return !question.required
+  const n = Number(typed)
+  if (!Number.isFinite(n) || (question.kind === 'integer' && !Number.isInteger(n))) return false
+  return (question.min === null || n >= question.min) && (question.max === null || n <= question.max)
+}
+
+/** A form answered by an approval — one option, one text, or nothing to fill — as assistant-ui holds it. */
+function formApproval(form: Form): Approval {
+  const [q] = form.questions
+  const settled = (() => {
+    if (form.declined !== null || form.status === 'declined') return { approved: false }
+    if (form.status === 'pending') return {}
+    if (form.status === 'cancelled') return { resolution: 'cancelled' as const }
+    const answer = q ? answerOf(q, form.content) : { chosen: [], text: '' }
+    return { approved: true, ...(answer.chosen[0] !== undefined ? { optionId: answer.chosen[0] } : {}), ...(answer.text !== '' ? { text: answer.text } : {}) }
+  })()
+  return {
+    id: form.id,
+    prompt: form.message,
+    display: form.shape === 'select' ? 'select' : form.shape === 'text' ? 'text' : 'decision',
+    // An option is an answer, no decision: a custom kind, never resolved by assistant-ui itself.
+    ...(form.shape === 'select' ? { options: q!.options.map((o) => ({ id: o.id, kind: '_option', label: o.label, ...(o.description ? { description: o.description } : {}) })) } : {}),
+    ...(form.shape === 'select' && q!.other !== null ? { allowFreeform: true } : {}),
+    dismissible: true,
+    ...settled,
+  }
+}
+
+/** What an approval's answer gives its form (docs/specs/assistant-ui.md, "Forms"): its option and its text; declined when dismissed. */
+export function approvalAnswer(form: Form, response: { approved: boolean; optionId?: string; text?: string }): FormAnswer {
+  const [q] = form.questions
+  if (!response.approved) return { action: 'decline' }
+  if (q === undefined) return { action: 'accept', content: {} }
+  return { action: 'accept', content: formContent(form, { [q.key]: response.optionId === undefined ? [] : [response.optionId] }, { [q.key]: response.text ?? '' }) }
+}
+
+/** The pending form a part answers by `resume`: by the tool call it names, or its own. */
+export function formFor(state: ThreadState, toolCallId: string): ViewObject | null {
+  return ofKind(state, 'element').find((e) => e.object.type === 'elicitation' && e.object.status === 'pending' && (text(json(e.object.params)?.toolCallId) === toolCallId || e.id === toolCallId)) ?? null
+}
+
 function contentText(content: unknown): string {
   return list(content)
     .map((c) => json(json(c)?.content))
@@ -471,7 +673,7 @@ function mergeMessage(question: ViewObject): ThreadMessageLike {
  * text alone or inside the JSON of its result.
  */
 export function startedDelegate(output: string): { id: string; title: string } | null {
-  const m = /(?:started|sent|stopped|no turn to stop|answered) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
+  const m = /(?:started|sent|stopped|no turn to stop|answered|declined) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
   return m ? { id: m[1]!, title: m[2]!.trim() } : null
 }
 
@@ -499,7 +701,7 @@ export function delegatesOf(state: ThreadState): string[] {
 
 const diffsOf = (content: unknown): Json[] => list(content).map((c) => json(c)).filter((c): c is Json => c?.type === 'diff')
 
-function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObject): Part {
+function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObject, elicitation?: ViewObject): Part {
   const done = tool.status === 'completed' || tool.status === 'failed'
   const title = text(tool.title) || text(tool.kind) || 'Tool'
   const input = json(tool.rawInput)
@@ -509,6 +711,7 @@ function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObj
   const asked = diffs.length === 0 && permission ? diffsOf(json(json(permission.object.params)?.toolCall)?.content) : []
   const todos = list(input?.todos).map((t) => json(t)).filter((t): t is Json => typeof t?.content === 'string')
   const delegate = delegating(tool) ? startedDelegate(output) : null
+  const form = elicitation ? formOf(elicitation) : undefined
   return {
     type: 'tool-call',
     toolCallId: text(tool.toolCallId),
@@ -529,9 +732,19 @@ function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObj
       ...(gate ? { gate: gateOf(gate) } : {}),
       // Answered by its delegator's `answer_agent` (docs/specs/delegation.md, "Requests").
       ...(permission?.object.as === 'delegator' ? { answeredBy: 'delegator' } : {}),
+      ...(form ? { form } : {}),
     },
-    // What waits for the person on this line: the approval Agora asks, or the permission its agent asks.
-    ...(gate ? { approval: askedOf(gate) } : permission ? { approval: approvalOf(permission, title) } : {}),
+    // What waits for the person on this line: the approval Agora asks, the permission its agent asks, or its form —
+    // an approval, or an interrupt that `resume` answers (docs/specs/assistant-ui.md, "Forms").
+    ...(gate
+      ? { approval: askedOf(gate) }
+      : permission
+        ? { approval: approvalOf(permission, title) }
+        : form && ['select', 'text', 'confirm'].includes(form.shape)
+          ? { approval: formApproval(form) }
+          : form && form.status === 'pending' && form.declined === null
+            ? { interrupt: { type: 'human' as const, payload: { form: form.id } } }
+            : {}),
   }
 }
 
@@ -559,18 +772,25 @@ function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>)
   const permissions = new Map<string, ViewObject>()
   for (const e of elements)
     if (e.object.type === 'permission') permissions.set(text(json(json(e.object.params)?.toolCall)?.toolCallId), e)
+  // A form names the tool call it asks for, when it asks for one (Claude Code's AskUserQuestion).
+  const forms = new Map<string, ViewObject>()
+  for (const e of elements) if (e.object.type === 'elicitation' && text(json(e.object.params)?.toolCallId)) forms.set(text(json(e.object.params)?.toolCallId), e)
   const tools = new Set(elements.filter((e) => e.object.type === 'tool').map((e) => text(e.object.toolCallId)))
   const parts: Part[] = []
   for (const e of elements) {
     const o = e.object
     if (o.type === 'agent_message_chunk') parts.push({ type: 'text', text: text(o.text) })
     else if (o.type === 'agent_thought_chunk') parts.push({ type: 'reasoning', text: text(o.text) })
-    else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId)), gates.get(text(o.toolCallId))))
+    else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId)), gates.get(text(o.toolCallId)), forms.get(text(o.toolCallId))))
     else if (o.type === 'plan') parts.push({ type: 'data', name: 'plan', data: { entries: list(o.entries) } as never })
     else if (o.type === 'subagent') parts.push(subagentPart(e))
     else if (o.type === 'permission') {
       const call = json(json(o.params)?.toolCall) ?? {}
       if (!tools.has(text(call.toolCallId))) parts.push(toolPart(call, e))
+    } else if (o.type === 'elicitation') {
+      // A form on no tool line of this thread (Codex's request_user_input, an MCP server's): a tool call of its own.
+      const call = text(json(o.params)?.toolCallId)
+      if (!tools.has(call)) parts.push(toolPart({ toolCallId: call || e.id, title: FORM_TITLE, kind: 'other', status: o.status === 'pending' ? 'pending' : 'completed' }, undefined, undefined, e))
     }
   }
   return parts
@@ -645,13 +865,13 @@ function failureOf(turn: Json): string {
   return message || 'The execution ended before the answer.'
 }
 
-function assistantStatus(turn: ViewObject, pending: boolean): Status {
+function assistantStatus(turn: ViewObject, pending: boolean, interrupted = false): Status {
   switch (status(turn)) {
     case 'saved':
       return { type: 'running' }
     case 'in_progress':
-      // A pending permission is what makes ToolFallback show its buttons.
-      return pending ? { type: 'requires-action', reason: 'tool-calls' } : { type: 'running' }
+      // A pending permission is what makes ToolFallback show its buttons; a form answered by `resume`, an interrupt.
+      return pending ? { type: 'requires-action', reason: interrupted ? 'interrupt' : 'tool-calls' } : { type: 'running' }
     case 'done':
       return { type: 'complete', reason: 'stop' }
     case 'cancelled':
@@ -1087,7 +1307,8 @@ export function messagesOf(state: ThreadState, view?: WorkstreamView): ThreadMes
     const report = own.find((e) => e.object.type === 'report')
     const from = text(prompt?.object.from)
     const custom = { turnStatus: status(turn), turn: turn.id }
-    const pending = own.some((e) => e.object.type === 'permission' && e.object.status === 'pending')
+    const pending = own.some((e) => isAsked(e) && e.object.status === 'pending')
+    const interrupted = own.some((e) => e.object.type === 'elicitation' && e.object.status === 'pending' && ['flow', 'list'].includes(formOf(e).shape))
     // The response, cut at each message sent into the turn (docs/specs/assistant-ui.md, "Messages").
     /** A message of Agora's, in a line of its own (docs/specs/assistant-ui.md, "Messages"). */
     const agoras = (id: string, e: ViewObject): ThreadMessageLike => ({ id, role: 'system', content: [{ type: 'text', text: textOf(e) }], metadata: { custom: { ...custom, fromAgora: true } } })
@@ -1143,7 +1364,7 @@ export function messagesOf(state: ThreadState, view?: WorkstreamView): ThreadMes
                     id: `${turn.id}:assistant${at}`,
                     role: 'assistant' as const,
                     content: partsOf(parts, gates),
-                    status: last ? assistantStatus(turn, pending) : ({ type: 'complete', reason: 'stop' } as const),
+                    status: last ? assistantStatus(turn, pending, interrupted) : ({ type: 'complete', reason: 'stop' } as const),
                     metadata: { custom },
                   },
                 ]

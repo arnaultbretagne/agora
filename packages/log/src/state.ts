@@ -4,6 +4,7 @@ import { commandsOf, configuring, settingsOf, settled } from './settings.ts'
 import type { Entry } from './store.ts'
 import { CATCH_UP_META, dispatched, isCatchUp, lacking, lastAnchor, noAnchors, noteAnchor } from './catch-up.ts'
 import { DELEGATION_META, FROM_META, isRole, REPORT_META, ROLE_META } from './marks.ts'
+import { declinedBy, REQUEST_METHODS } from './forms.ts'
 
 const OPENING_METHODS = ['session/new', 'session/resume', 'session/load']
 /** The ACP extension that gives a running turn a message (docs/specs/log.md, "Messages during a turn"). */
@@ -174,8 +175,9 @@ export interface State {
   turns: Map<string, Turn>
   active: Turn | null
   current: Execution | null
+  /** The requests its agent waits on, by key (docs/specs/log.md, "Requests"): each `session/request_permission` and `elicitation/create` unanswered. */
   permissions: Map<string, Entry>
-  /** The permissions their agent withdrew (`$/cancel_request`), by their request's position: Agora answers them `cancelled`. */
+  /** The requests their agent withdrew (`$/cancel_request`), by their position: Agora answers them — `cancelled`, `cancel`. */
   withdrawn: Set<string>
   /** The pending question: its Ask (docs/specs/log.md, "Commands"). */
   question: Entry | null
@@ -206,10 +208,14 @@ export function waited(state: State, since: string, now: number): number {
   return state.waits.filter((w) => Date.parse(w.from) >= start).reduce((sum, w) => sum + ((w.to === null ? now : Date.parse(w.to)) - Date.parse(w.from)), 0)
 }
 /**
- * The requests a Workstream's agent waits on (docs/specs/log.md, "The Workstream view"): the permissions its own Session
- * asked and nobody has answered, oldest first; a native sub-agent's are its sub-stream's.
+ * The requests a Workstream's agent waits on (docs/specs/log.md, "Requests"): the permissions and the elicitations its own
+ * Session asked and nobody has answered, oldest first; a native sub-agent's are its sub-stream's; an elicitation Agora
+ * declines itself is nobody else's.
  */
-export const requestsOf = (state: State): Entry[] => [...state.permissions.values()].filter((p) => !state.children.has(String(object(p.content.params)?.sessionId)))
+export const requestsOf = (state: State): Entry[] =>
+  [...state.permissions.values()].filter(
+    (p) => !state.children.has(String(object(p.content.params)?.sessionId)) && (p.method !== 'elicitation/create' || declinedBy(p.content.params) === null),
+  )
 /**
  * A delegate's state (docs/specs/delegation.md, "A delegation"): `waiting` while a request of its agent's is pending;
  * `working` while its Session opens, a turn runs or a message waits; else as its last turn ended; `failed` or
@@ -412,7 +418,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
       if (entry.rpc_kind === 'request') {
         state.requests.set(key, entry)
         state.requestPositions.set(entry.position, entry)
-        if (entry.method === 'session/request_permission' && entry.direction === 'in') state.permissions.set(key, entry)
+        if (REQUEST_METHODS.includes(entry.method ?? '') && entry.direction === 'in') state.permissions.set(key, entry)
         if (entry.method === 'session/set_config_option' && entry.direction === 'out' && execution && entry.session === execution.session) {
           const id = object(content.params)?.configId
           if (typeof id === 'string') execution.configSent.push(id)
@@ -486,7 +492,7 @@ export function fold(entries: readonly Entry[], initial?: State): State {
           }
         }
       }
-      // A permission its agent withdraws (ACP "Cancellation"): still pending, until Agora's `cancelled` answer is written.
+      // A request its agent withdraws (ACP "Cancellation"): still pending, until Agora's answer is written — `cancelled`, `cancel`.
       if (entry.method === CANCEL_REQUEST && entry.direction === 'in') {
         const withdrawn = state.permissions.get(`in:${idKey(object(content.params)?.requestId)}`)
         if (withdrawn?.execution === entry.execution) state.withdrawn.add(withdrawn.position)
@@ -788,7 +794,7 @@ export class CoreProjection {
       const asked = requestsOf(state)[0]?.position ?? null
       const askedChanged = asked !== this.asked
       this.asked = asked
-      if (entry.kind === 'command' && entry.content.kind === 'RespondPermission') {
+      if (entry.kind === 'command' && (entry.content.kind === 'RespondPermission' || entry.content.kind === 'RespondElicitation')) {
         const from = object(object(entry.content.body)?.from)
         if (from !== null && typeof entry.command === 'string') this.respondedBy.set(entry.command, { from: from.workstream, as: from.as })
       }
@@ -874,7 +880,7 @@ export class CoreProjection {
       )
         for (const item of objects.values())
           if (
-            item.object.type === 'permission' &&
+            (item.object.type === 'permission' || item.object.type === 'elicitation') &&
             item.object.status === 'pending' &&
             (entry.kind === 'session.ended'
               ? item.object.session === entry.session
@@ -1070,12 +1076,16 @@ export class CoreProjection {
           target,
         )
         runs.delete(scope)
-      } else if (entry.method === 'session/request_permission') {
+      } else if (REQUEST_METHODS.includes(entry.method ?? '') && entry.rpc_kind === 'request' && entry.direction === 'in') {
+        // A request its agent blocks on (docs/specs/log.md, "Requests"): a permission, or an elicitation — with why Agora
+        // declines it itself, when it does.
+        const elicitation = entry.method === 'elicitation/create'
+        const declined = elicitation ? declinedBy(entry.content.params) : null
         put(
           'element',
-          identity(scoped, entry.position, 'permission'),
+          identity(scoped, entry.position, elicitation ? 'elicitation' : 'permission'),
           {
-            type: 'permission',
+            type: elicitation ? 'elicitation' : 'permission',
             execution: entry.execution,
             turn: turn?.id,
             session: entry.session,
@@ -1083,16 +1093,19 @@ export class CoreProjection {
             requestPosition: entry.position,
             params: entry.content.params,
             status: 'pending',
+            ...(declined !== null ? { declined } : {}),
           },
           entry.position,
           target,
         )
       } else if (
-        request?.method === 'session/request_permission' &&
+        request !== undefined &&
+        REQUEST_METHODS.includes(request.method ?? '') &&
+        request.direction === 'in' &&
         entry.direction === 'out' &&
         ['response', 'error'].includes(entry.rpc_kind ?? '')
       ) {
-        const id = identity(child?.workstream ?? request.session ?? entry.execution!, request.position, 'permission')
+        const id = identity(child?.workstream ?? request.session ?? entry.execution!, request.position, request.method === 'elicitation/create' ? 'elicitation' : 'permission')
         // Answered by a delegator's `answer_agent`: its Respond names it (docs/specs/delegation.md, "Requests").
         const by = typeof entry.command === 'string' ? this.respondedBy.get(entry.command) : undefined
         put(

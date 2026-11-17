@@ -96,8 +96,10 @@ The screen follows assistant-ui's base skin, with the first Agora's colours and 
 response's steps — reasoning, tools, the plan — are one line each, opened on demand; a permission
 the agent waits for is a card under its tool, with the agent's own options. Every card — a permission,
 a question of Agora's, an approval, a merge card — is assistant-ui's approval on its part, answered by
-its `respondToApproval`, which the runtime turns into the command; only the look is Agora's. A
-Workstream whose agent waits on a permission says "waiting for you" in the list, as one waiting on a
+its `respondToApproval`, which the runtime turns into the command; only the look is Agora's. A form the
+agent asks is one box of its questions, drawn by assistant-ui's `OptionList` and `QuestionFlow`: one
+option or one text is its part's approval, anything else its part's interrupt, answered by `resume`. A
+Workstream whose agent waits on a permission or a form says "waiting for you" in the list, as one waiting on a
 question does, and the rows above it count it.
 
 ## Open questions

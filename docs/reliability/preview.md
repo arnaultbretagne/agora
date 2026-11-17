@@ -11,6 +11,9 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R3 | 2026-11-16 | `8363d98` | local | `preview.yml` on the same pull request: its label removed at 15:10:58 UTC, the commit pushed (run 43894688906), then the label set again at 15:17:46 (run 43894795904, created 15:17:48, no push between). As R2 otherwise. CI's `check` on that commit green (run 43894688936). |
 | R4 | 2026-11-16 | `986f1a5` | local | `npm run check` on g4, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; V2 to V5 and V8 on the server's process from the repository, `PREVIEW=true`, each on an empty database whose one login owns it, as R1; the conversations with the captured delegation (`apps/web/test/fixtures/delegation.json`). |
 | R5 | 2026-11-16 | `70cfdc1` | local | `preview.yml`, run 43915132946, on pull request #214 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R2, its conversations with the captured delegation; then `ghcr.io/arnaultbretagne/agora-server:70cfdc1a85244d9dc275192b5e7df06d5190c7b4` published, `sha256:a8f3e9214c5b512b3ff657e282d48dee6e76463731f361f24a85f130cfb31f54`. CI's `check` on that commit green (runs 43915089724, push, and 43915117047, pull request). |
+| R6 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own, Playwright's Chromium; the server started as a preview from the source, as R4, its conversations with the captured forms. |
+| R7 | 2026-11-16 | `754f907` | local | `preview.yml`, run 43931922712, on pull request #215 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R5, its conversations with the captured forms; then `ghcr.io/arnaultbretagne/agora-server:754f907ed5707d8ddaa370ccca2a562c4f82ab28` published, `sha256:c33a1befbe199a73f9edd09af39b7d9e2f4fe7c5e14972c66dfca634e998675d`. CI's `check` on that commit green (run 43931810206, push). |
+| R8 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green, Playwright's Chromium; the server started as a preview from the source, as R6. |
 
 ## Cases
 
@@ -34,6 +37,21 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V5 | — | local | R5 | proven | The same against the image. |
 | V6 | — | local | R5 | proven | As R2, against this image. |
 | V8 | — | local | R5 | proven | The same against the image: the delegator `Ship the release notes` and its delegate "waiting for you", Agora's message naming the request; a live `/permission` waiting, then allowed through its card, waiting no more. |
+| V3 | real: the server stopped, then started again on the same database | local | R6 | proven | `- preview: 15 conversations written`; fourteen rows through each gate, the same ids; eleven `mock`, states `ended`, `interrupted`, `lost`, `ready`, `stopped`; `claude-code`, `codex`, `opencode`. The second start: nothing written, the same fourteen. |
+| V4 | — | local | R6 | proven | As R4, at least fourteen rows before anything is done. |
+| V5 | — | local | R6 | proven | As R4. |
+| V8 | — | local | R6 | proven | As R4. |
+| V9 | — | local | R6 | proven | `Pick the service's database` "waiting for you": its select box pending, the question, `PostgreSQL`, `SQLite`; `Plan the release checks` "waiting for you": its Question Flow pending, "1 of 2". A draft, the Mock agent, `/question`: the box; `PostgreSQL`, Answer: `Elicitation: accept {"question_0":"PostgreSQL"}.`, the box `answered`. |
+| V4 | — | local | R7 | proven | As R5, against the image: at least fourteen conversations listed. |
+| V5 | — | local | R7 | proven | As R5. |
+| V6 | — | local | R7 | proven | As R5, against this image. |
+| V8 | — | local | R7 | proven | As R5. |
+| V9 | — | local | R7 | proven | The same as R6 against the image: the two forms' conversations "waiting for you", the select box and the Question Flow pending; a live `/question` answered through its box, `Elicitation: accept {"question_0":"PostgreSQL"}.`. |
+| V3 | real: the server stopped, then started again on the same database | local | R8 | proven | As R6. |
+| V4 | — | local | R8 | proven | As R6. |
+| V5 | — | local | R8 | proven | As R6. |
+| V8 | — | local | R8 | proven | As R6. |
+| V9 | — | local | R8 | proven | As R6, the receipt shown once the projection gives the answer. |
 
 ## Not covered
 

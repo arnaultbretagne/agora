@@ -198,7 +198,7 @@ export async function logHttp(
       const input = await body(),
         target = object(input.target),
         content = object(input.body)
-      if (!['Create', 'Write', 'Retract', 'Cancel', 'RespondPermission', 'Configure', 'Scope', 'Stop', 'Ask', 'Answer'].includes(String(input.kind)) || !target || !content)
+      if (!['Create', 'Write', 'Retract', 'Cancel', 'RespondPermission', 'RespondElicitation', 'Configure', 'Scope', 'Stop', 'Ask', 'Answer'].includes(String(input.kind)) || !target || !content)
         throw new Error('invalid_body')
       const answer = await workstreams.command(workstream, { id: uuid(input.id), kind: input.kind as Command['kind'], target, body: content })
       reply(answer.accepted ? 200 : answer.reason === 'unavailable' || answer.reason === 'files_unavailable' ? 503 : 409, answer)

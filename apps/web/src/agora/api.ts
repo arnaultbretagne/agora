@@ -5,7 +5,7 @@ import type { Json } from './objects.ts'
 import type { AccountLimits, AgentCommand, ListRow, Role, Setting } from './view.ts'
 import type { PromptCapabilities } from './attachments.ts'
 
-export type CommandKind = 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
+export type CommandKind = 'Create' | 'Write' | 'Retract' | 'Cancel' | 'RespondPermission' | 'RespondElicitation' | 'Configure' | 'Scope' | 'Stop' | 'Answer'
 
 /** The identity the proxy passes, or none (docs/specs/log.md, "HTTP"). */
 export interface Account {

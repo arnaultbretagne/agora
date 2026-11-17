@@ -1,8 +1,8 @@
 // A preview's conversations at its first start (docs/specs/preview.md, "The conversations"): the client's
 // fixtures, written into the empty log as Workstreams of the shared owner — the mock agent's history cut at
 // each of its marks, so that every state it went through has its conversation, the real harnesses'
-// histories whole, and a delegation, its delegate waiting on a permission. Nothing is invented beyond them:
-// their entries as recorded, under a Workstream of their own.
+// histories whole, a delegation, its delegate waiting on a permission, and two conversations waiting on a form.
+// Nothing is invented beyond them: their entries as recorded, under a Workstream of their own.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Pool } from 'pg'
@@ -14,12 +14,14 @@ export const FIXTURES = join(import.meta.dirname, '..', '..', 'web', 'test', 'fi
 export const HARNESSES = ['claude-code', 'codex', 'opencode'] as const
 /** A delegator and its delegate, each under the id it was captured with: their entries name each other. */
 export const DELEGATION = 'delegation'
+/** Conversations waiting on a form, each under the id it was captured with (docs/specs/preview.md, "The conversations"). */
+export const FORMS = 'forms'
 /** Held while the conversations are written: two servers starting at once write them once. */
 const LOCK = 7_301_734_662
 
 export interface Seed {
   readonly id: string
-  /** What it shows: a mark of the mock agent's history, a harness, or a delegation's Workstream. */
+  /** What it shows: a mark of the mock agent's history, a harness, a delegation's Workstream, or a form waiting. */
   readonly name: string
   readonly entries: Entry[]
   /** A sub-stream's parent, written before it. */
@@ -34,8 +36,10 @@ export async function seeds(dir = FIXTURES): Promise<Seed[]> {
   for (const [mark, position] of Object.entries(mock.marks ?? {}))
     out.push(under(`mock:${mark}`, mock.entries.filter((e) => BigInt(e.position) <= BigInt(position))))
   for (const harness of HARNESSES) out.push(under(harness, (await read(harness)).entries))
-  const delegation = decode(await readFile(join(dir, `${DELEGATION}.json`), 'utf8')) as { workstreams: { id: string; parent: string | null; entries: Entry[] }[] }
-  for (const w of delegation.workstreams) out.push({ id: w.id, name: DELEGATION, entries: w.entries, ...(w.parent === null ? {} : { parent: w.parent }) })
+  for (const name of [DELEGATION, FORMS]) {
+    const captured = decode(await readFile(join(dir, `${name}.json`), 'utf8')) as { workstreams: { id: string; parent: string | null; entries: Entry[] }[] }
+    for (const w of captured.workstreams) out.push({ id: w.id, name, entries: w.entries, ...(w.parent === null ? {} : { parent: w.parent }) })
+  }
   return out
 }
 

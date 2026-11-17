@@ -25,7 +25,8 @@ export interface Projector {
   version: string
   create(): Projection
 }
-export const core: Projector = { name: 'core', version: '10', create: () => new CoreProjection() }
+// 11: an agent's forms, `elicitation` elements and requests (docs/specs/log.md, "Requests").
+export const core: Projector = { name: 'core', version: '11', create: () => new CoreProjection() }
 
 /** What lies under a Workstream, at every depth (docs/specs/log.md, "Sub-streams"). */
 export type Below = { count: number; live: number; waiting: number }

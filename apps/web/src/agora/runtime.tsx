@@ -15,8 +15,11 @@ import type { Connection } from './stream.ts'
 import {
   accessDefault,
   accessGranted,
+  approvalAnswer,
   composerOf,
   delegatesOf,
+  formFor,
+  formOf,
   messagesOf,
   poolOffered,
   poolLimits,
@@ -32,6 +35,7 @@ import {
   type AccountLimits,
   type AgentCommand,
   type Composer,
+  type FormAnswer,
   type Picks,
   type Role,
   type Setting,
@@ -95,6 +99,12 @@ export interface Agora {
   refreshLimits(): void
   choosePool(pool: string): void
   send(kind: CommandKind, target: Json, body: Json): Promise<Answer>
+  /**
+   * What became of the answer the next `resume` gives this form (docs/specs/assistant-ui.md, "Forms"): settled once the
+   * log accepts it, rejected with the reason when it refuses it or cannot be reached. assistant-ui's `resume` returns
+   * nothing: its outcome is read here.
+   */
+  answered(form: string): Promise<void>
   open(id: string | null): void
   /** Who the proxy says the person is. */
   readonly account: Account
@@ -134,6 +144,9 @@ const REFUSALS: Record<string, string> = {
   role_set: 'This workstream already has its role.',
   prompt_unsupported: 'The agent does not take these attachments.',
   stale_message: 'This message has already gone.',
+  invalid_elicitation_content: 'That answer does not fit the question.',
+  stale_elicitation: 'This question is no longer waiting.',
+  unavailable: 'Agora cannot take it now; try again.',
   startup: 'The sandbox could not start. Your message is back in the composer.',
 }
 
@@ -283,29 +296,77 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   )
 
   /**
+   * A form answered (docs/specs/assistant-ui.md, "Forms"): RespondElicitation, accepted with its content or declined; a
+   * native sub-stream's sent to its host.
+   */
+  const respondForm = useCallback(
+    async (elementId: string, given: FormAnswer) => {
+      const form = state.objects.get(elementId)?.object
+      if (!form) throw new Error(refusalText('stale_elicitation'))
+      const sent = await send(
+        'RespondElicitation',
+        { execution: form.execution, session: form.session, requestPosition: form.requestPosition },
+        { requestId: form.requestId, ...given },
+        view.native?.host ?? id,
+        id,
+      )
+      // Refused or never delivered: the form waits still, and its box gives its controls back (docs/specs/assistant-ui.md, "Forms").
+      if (!sent.accepted) throw new Error(refusalText(sent.reason ?? 'unavailable'))
+    },
+    [state, send, view.native, id],
+  )
+  /** The outcome of each form's answer given by `resume`, waited for by its box. */
+  const outcomes = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void }>())
+  const answered = useCallback((form: string) => new Promise<void>((resolve, reject) => void outcomes.current.set(form, { resolve, reject })), [])
+
+  /**
    * An approval answered from its card (docs/specs/assistant-ui.md, "Answering"): assistant-ui's `respondToApproval` checks
-   * it against the part's approval and hands it here. A permission goes to its agent; a question of Agora's — an approval,
-   * a merge card, a question with its note as the answer's text — to the log.
+   * it against the part's approval and hands it here. A permission goes to its agent; a form of one option or one text,
+   * as its content; a question of Agora's — an approval, a merge card, a question with its note as the answer's text —
+   * to the log.
    */
   const answer = useCallback(
-    async ({ approvalId, optionId, text }: { approvalId: string; optionId?: string; text?: string }) => {
-      const permission = state.objects.get(approvalId)?.object
+    async ({ approvalId, approved, optionId, text }: { approvalId: string; approved: boolean; optionId?: string; text?: string }) => {
+      const permission = state.objects.get(approvalId)
+      if (permission?.object.type === 'elicitation') {
+        await respondForm(approvalId, approvalAnswer(formOf(permission), { approved, ...(optionId !== undefined ? { optionId } : {}), ...(text !== undefined ? { text } : {}) }))
+        return
+      }
       if (!permission || optionId === undefined) return
       // A question to the person is answered to the log, not to an agent (docs/specs/log.md, "Commands").
-      if (permission.type === 'question') {
-        await send('Answer', { question: permission.position }, { optionId, ...(text ? { note: text } : {}) })
+      if (permission.object.type === 'question') {
+        await send('Answer', { question: permission.object.position }, { optionId, ...(text ? { note: text } : {}) })
         return
       }
       // A native sub-stream's permission is answered through its host (docs/specs/log.md, "Native sub-agents").
       await send(
         'RespondPermission',
-        { execution: permission.execution, session: permission.session, requestPosition: permission.requestPosition },
-        { requestId: permission.requestId, outcome: { outcome: 'selected', optionId } },
+        { execution: permission.object.execution, session: permission.object.session, requestPosition: permission.object.requestPosition },
+        { requestId: permission.object.requestId, outcome: { outcome: 'selected', optionId } },
         view.native?.host ?? id,
         id,
       )
     },
-    [state, send, view.native, id],
+    [state, send, respondForm, view.native, id],
+  )
+
+  /** A form answered by its part's `resume` (docs/specs/assistant-ui.md, "Forms"): the tool call it names gives the form. */
+  const resume = useCallback(
+    ({ toolCallId, payload }: { toolCallId: string; payload: unknown }) => {
+      const form = formFor(state, toolCallId)
+      const given = payload as FormAnswer
+      const outcome = form === null ? undefined : outcomes.current.get(form.id)
+      if (form !== null) outcomes.current.delete(form.id)
+      if (form === null || (given.action !== 'accept' && given.action !== 'decline')) {
+        outcome?.reject(new Error(refusalText('stale_elicitation')))
+        return
+      }
+      respondForm(form.id, given).then(
+        () => outcome?.resolve(),
+        (error: unknown) => outcome?.reject(error instanceof Error ? error : new Error(String(error))),
+      )
+    },
+    [state, respondForm],
   )
 
   /** Cancel, for the turn in progress or uncertain: a native sub-stream's goes through its host, with that turn's execution. */
@@ -435,6 +496,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     adapters: { attachments },
     onCancel: cancel,
     onRespondToToolApproval: answer,
+    onResumeToolCall: resume,
   })
 
   // A text typed and not sent stays with its Workstream, or the draft, its attachments with it
@@ -512,6 +574,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
     refreshLimits,
     choosePool,
     send: (kind, target, body) => send(kind, target, body),
+    answered,
     cancel,
     open,
     account,

@@ -77,12 +77,13 @@ network failure: replayed, it runs once. The answer is *accepted*, or *refused* 
 | Retract | `message`: the waiting message's position | — | For a message waiting ("Messages during a turn"). |
 | Cancel | `execution`, `turn` | — | For the turn in progress or uncertain. |
 | RespondPermission | `execution`, `session`, `requestPosition` | `requestId`, and `outcome`: `selected` with the `optionId` | For the pending permission, from its card ("Answering"). |
+| RespondElicitation | `execution`, `session`, `requestPosition` | `requestId`, and `action`: `accept` with `content`, or `decline` | For the pending form, from its box ("Forms"). |
 | Answer | `question`: the pending question's position | `optionId`, and `note` when the question allows one and the person wrote it | For the pending question — an approval, a merge card included —, from its card ("Answering"). |
 | Stop | `execution` | — | For an execution neither stopped nor ended. |
 
-In a native sub-stream (`log.md`, "Native sub-agents") the client offers two commands, both sent to its
-host, `native.host`: RespondPermission, for a permission asked there; Cancel, for its turn in progress,
-while `native.cancel` is true. It offers no other.
+In a native sub-stream (`log.md`, "Native sub-agents") the client offers its host's commands, sent to its
+host, `native.host`: RespondPermission and RespondElicitation, for a request asked there; Cancel, for its
+turn in progress, while `native.cancel` is true. It offers no other.
 
 ## The Workstream's state
 
@@ -235,7 +236,8 @@ The only point of contact between Agora's objects and assistant-ui.
 | `queue` | `items`: the `waiting` elements still waiting, but those shown in the thread while their execution starts ("Sending"), in position order, each by its id with its text blocks as `parts`; `steerItems`: none; `enqueue` and `steer`: as `onNew`; `remove`: **Retract**; `move` and `edit`: nothing. |
 | `adapters.attachments` | Agora's: what the agent accepts, prepared in the browser ("Attachments"). |
 | `onCancel` | **Cancel**, targeting the turn in progress or uncertain. |
-| `onRespondToToolApproval` | The answer a card gave its part's approval ("Answering"): **RespondPermission** with its `optionId`, for a permission — a native sub-stream's sent to its host —; **Answer** with its `optionId`, its `text` as the `note`, for a question. |
+| `onRespondToToolApproval` | The answer a card gave its part's approval ("Answering"): **RespondPermission** with its `optionId`, for a permission — a native sub-stream's sent to its host —; **RespondElicitation**, for a form answered as an approval, its content made of the `optionId` and the `text`, `decline` when not `approved` ("Forms"); **Answer** with its `optionId`, its `text` as the `note`, for a question. |
+| `onResumeToolCall` | A form's part's `resume` ("Forms"): its payload, `accept` with the content or `decline`, sent as **RespondElicitation** for the form the part's `toolCallId` names — a native sub-stream's to its host. |
 
 The Workstream list is the client's own: it calls the server without the runtime.
 
@@ -284,6 +286,7 @@ when the line opens, a shimmer while it runs, a quiet note on the right.
 | `agent_thought_chunk` | `reasoning`: its `text`; consecutive ones grouped | a "reasoning" line ("thinking" while it runs), opening onto the text |
 | `tool` | `tool-call` (below) | its line (below), opening onto its todo list, its diffs (`DiffViewer`, registry), its output, or else its command or input |
 | `permission` | the `approval` of the tool call with the same `toolCallId`; a tool call of its own, from `params.toolCall`, when there is none | while pending, a card under the tool's line: the agent's options, in its order, by its names |
+| `elicitation` | the tool call its `params.toolCallId` names — Claude Code's AskUserQuestion —, its `artifact`'s `form`, and its `approval` or its `interrupt` ("Forms"); a tool call of its own, titled "Asking for your input", when there is none | its box, in place of the tool's line |
 | `plan` | `data` named `plan`: its `entries` | a "plan" line noted done/total, open, onto the entries |
 
 | `tool-call` field | From the `tool` element |
@@ -332,6 +335,46 @@ connection point"). assistant-ui 0.15.23 draws no approval of its own (it gives 
 | An approval, on its line or at its place | One option, Approve, `allow-once`. Matched to a line, it is that line's `approval`, over a permission of the harness's. | `approved` and `optionId` once answered; `approved` false once refused by a message; `resolution` `expired`. |
 | A merge card | One option, Merge, `allow-once`. | `approved` and `optionId` once answered; `resolution` `cancelled`. |
 
+#### Forms
+
+A form an agent asks (`log.md`, "Requests") is one box: who asks, its message, its questions, and at its foot
+the answer's controls, then its receipt. Its questions are its fields, each "Other" field folded into the
+question it goes with — Claude Code's `question_<n>_custom`, a field Codex marks `_meta.codex.questionId` —,
+in their order. What it holds decides how it is answered, on assistant-ui's two seams: an `approval`
+where `display` can say it, else an `interrupt` that `resume` answers, as assistant-ui's `ToolApprovalDisplay`
+says of a request its modes cannot express. The questions are drawn by assistant-ui's `OptionList` and
+`QuestionFlow` (its registry's elements, Tool UI's Option List and Question Flow; copied into the client,
+adapted: an "Other" field per question, a field for a text or a number, Decline, the text in the receipt).
+
+| The form | Seam | Drawn | Its answer |
+| --- | --- | --- | --- |
+| One question of options, an "Other" field or not | `approval`, `display` `select`: its options, kind `_option`; `allowFreeform` with an "Other" field; `dismissible` | An `OptionList`, one choice, the "Other" field under it; Answer and Decline | `{ approved: true, optionId, text }`: the option and the text, as its fields' values; dismissed, `decline` |
+| One text | `approval`, `display` `text`, `dismissible` | A field, Send and Decline | `{ text }`: its value |
+| No field | `approval`, `display` `decision`, `dismissible` | Accept and Decline | `accept` with nothing; `decline` |
+| One question of several options | `interrupt` `{ type: human }`; the message `requires-action`, reason `interrupt` | An `OptionList`, several choices, the "Other" field; Answer and Decline | `resume` with `accept` and the content, or `decline` |
+| Several questions, a number, a yes/no | The same | A `QuestionFlow`, one step a question — a field for a text, a number held back until it fits its bounds, Yes and No for true or false —; Back, Next, Answer; Decline | The same |
+| Declined by Agora (`declined`) | None | Why: a secret, which Agora's log would keep in clear; a question Codex asks without waiting; not a form | — |
+
+| Settled | Shown |
+| --- | --- |
+| Accepted | The same component as a receipt — the options chosen, the text given, each question with its answer —, "answered", "answered by its delegator" when its delegator gave it. The `approval`: `approved`, the `optionId`, the `text`. |
+| Declined | "declined", "declined by its delegator"; the `approval` `approved` false. |
+| Cancelled — Agora's `cancel`, or the request `cancelled` | "not answered"; the `approval`'s `resolution` `cancelled`. |
+
+| Bounds | Rule |
+| --- | --- |
+| A list | Its `minItems` and `maxItems`, exactly; required with no minimum, answered empty: `[]`. |
+| A text | Its length in code points within `minLength` and `maxLength`; required and empty where its minimum allows it: `""`; optional and empty, left out. Its `format` and `pattern` are checked by Agora (`log.md`, "Requests"): the browser runs no pattern of an agent's. |
+| A number | Within its `minimum` and `maximum`, an integer when it asks one. |
+
+| Refused, or not delivered | Rule |
+| --- | --- |
+| The answer | RespondElicitation refused (`invalid_elicitation_content`, `stale_elicitation`…) or not reaching the server: `onRespondToToolApproval` rejects, so the part's `respondToApproval` does; for `resume`, which returns nothing, the box reads the outcome from Agora's context. |
+| The box | Its controls back, the reason said under them, Decline and another answer open; no receipt. |
+| The receipt | From the log's answer alone, as the projection gives it: `OptionList` and `QuestionFlow` show it from their `choice`, never from what was clicked. |
+
+While a form waits, sending is closed: "Answer the question above."
+
 #### Folded tools
 
 Tool calls in a row fold under one trace line.
@@ -339,7 +382,7 @@ Tool calls in a row fold under one trace line.
 | A fold | Rule |
 | --- | --- |
 | What it holds | Adjacent tool calls, with the reasoning between them; at least two tool calls, a tool call alone keeping its own line. A text or a plan ends it. |
-| What stays out | A tool call whose permission is pending, until it is answered; a delegate's line; a question. |
+| What stays out | A tool call whose permission is pending, until it is answered; a delegate's line; a question; a form. |
 | Open | Closed at first; only the person opens or closes it, whatever its tools do. Opened: each tool's own line, in order. |
 | Label | Its tool calls counted by kind, in the order the kinds first appear: "3 commands, 2 reads". `read` read, `edit` edit, `delete` deletion, `move` move, `search` search, `execute` command, `fetch` fetch, any other "other tool". |
 | While it runs | A tool in it running, or its response running with nothing after it: shimmer, coral marker; its label the running tool's, or else its last tool's; its note its number of tool calls, "5 tools". |
@@ -561,6 +604,15 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U100 | A Workstream's view with a `request`; a row in `none` with one, then with none | The view's `request`; listed, then left out. |
 | U101 | In a browser, a delegate whose agent asks a permission, its delegator's Workstream open | The delegate's line "waiting for you"; Agora's message, "From Agora", saying the request's number, the tool call and its kind, each option and `answer_agent`; the delegator's row "waiting for you"; unfolded, the delegate's row "waiting for you"; opened, its card. |
 | U102 | In a browser, the delegator's agent calling `answer_agent` on that request | Its line naming the delegate, neither line of it "waiting for you"; in the delegate's thread no card, the agent's answer, its line "allowed by its delegator". |
+| U103 | The forms of the real adapters, as the mock agent sends them: Claude Code's one question, its multi-select, its two questions, an MCP server's integer and yes/no; Codex's one question, its text, its two questions, its secret; then settled | One question: on its tool line, `approval` `select`, options `_option`, `allowFreeform`, `dismissible`, `requires-action` `tool-calls`; its answers' contents, its dismissal `decline`. Codex's: its question, required, "None of the above", its note folded. The text: `approval` `text`. The others: `interrupt` `human`, `requires-action` `interrupt`; their questions in order, each with its "Other" field; their contents, a number checked against its bounds. Accepted: `approved`, `optionId`, `text`; declined: `approved` false; cancelled: `resolution` `cancelled`. The secret: `declined` `secret`, no interrupt, no question waiting. The part's form by its `toolCallId`; "Answer the question above." |
+| U104 | In a browser, Claude Code's AskUserQuestion with one question; an option chosen and a note typed, then Answer | One box: "Mock agent asks you.", "waiting for you", the question, its options with their descriptions, "Other", Answer and Decline; "Answer the question above.". The agent given that option and that note; the box a receipt: "answered", the option, "Other: " and the note, no button. |
+| U105 | In a browser, Claude Code's AskUserQuestion with two questions; the first answered by an option, the second by two and a typed answer | A Question Flow, "1 of 2" then "2 of 2", Next then Answer; the agent given each; its receipt, each question with its answer. |
+| U106 | In a browser, one multi-select question; an MCP server's form of an integer from 1 to 5 and a yes/no, 9 then 3 typed; Codex's one text | An Option List, its option checked, then Answer: the agent given it. A Question Flow: Next held back at 9, open at 3; Yes; the agent given `3` and `true`. A field and Send: the agent given the text. |
+| U107 | In a browser, Codex's form with a secret field | Its box: "Agora declined it:" and why; no field, no button; the agent told `decline`. |
+| U108 | In a browser, Codex's question with options, then Decline | Answer held back until an option is chosen; Decline: the agent told `decline`; its box "declined". |
+| U109 | In a browser, a delegate's agent asking a form, its delegator's Workstream open; the delegator's `answer_agent` with its content | Agora's message: `a form.`, `Asked:`, each field with its kind and options, `answer_agent`. Answered: in the delegate's thread, the agent given that content, the box a receipt, "answered by its delegator". |
+| U110 | The bounds of a list, a text and an empty answer: a list of `minItems` 2, `maxItems` 3; a required list with no minimum; a required text with no minimum, one of `minLength` 2 and `maxLength` 3 counted in code points, an optional one | The list's step held back at one option chosen, open at two, never a fourth; the required list answered empty, `[]`; `""` for the required text left empty; a two-emoji text fits, one of four letters does not; the optional text left out. |
+| U111 | In a browser, RespondElicitation answered 503 once, for a select, then for a Question Flow; then answered again | Each time: the reason said in the box, its controls back — Answer, Decline —, no receipt; then accepted: the agent given the answer, the receipt. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

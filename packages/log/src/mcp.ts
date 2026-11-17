@@ -145,16 +145,18 @@ const LIST_AGENTS: Tool = {
 const ANSWER_AGENT: Tool = {
   name: 'answer_agent',
   description:
-    'Answer a request one of your delegates waits on — a permission its agent asked —, as Agora’s message about it names it: the request’s number and the option you choose. ' +
+    'Answer a request one of your delegates waits on — a permission or a form its agent asked —, as Agora’s message about it names it: the request’s number, then for a permission the option you choose, for a form its content or `decline`. ' +
     'Answer only what is yours to decide; otherwise ask the person, who can answer it in that delegate’s thread. The first answer counts: one given before yours makes yours stale.',
   inputSchema: {
     type: 'object',
     properties: {
       to: { type: 'string', format: 'uuid', description: 'The id of one of your delegates.' },
       request: { type: 'string', description: 'The request’s number, as Agora’s message gives it.' },
-      option: { type: 'string', description: 'The id of the option you choose, one the request offers.' },
+      option: { type: 'string', description: 'A permission’s answer: the id of the option you choose, one the request offers.' },
+      content: { type: 'object', description: 'A form’s answer: each field you fill, by its name, and its value — a text, a number, true or false, an option’s value, or a list of them for a field taking several. Every required field.' },
+      decline: { type: 'boolean', description: 'True to refuse a form, instead of its content.' },
     },
-    required: ['to', 'request', 'option'],
+    required: ['to', 'request'],
     additionalProperties: false,
   },
 }

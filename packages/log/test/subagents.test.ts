@@ -67,7 +67,8 @@ const oneHosted = (lab: Lab, ws: string, count = 1) => until(`${String(count)} s
 test('L133 Agora’s initialize: clientCapabilities holds subagents, an empty object, beside fs and terminal', async (t) => {
   const { lab, ws } = await started(t)
   const [initialize] = lines(await lab.entries(ws), 'out', 'initialize')
-  assert.deepEqual(object(initialize!.content.params)?.clientCapabilities, { fs: { readTextFile: false, writeTextFile: false }, terminal: false, subagents: {} })
+  const capabilities = object(object(initialize!.content.params)?.clientCapabilities)
+  assert.deepEqual([capabilities?.fs, capabilities?.terminal, capabilities?.subagents], [{ readTextFile: false, writeTextFile: false }, false, {}])
 })
 
 test('L134 an agent announcing a sub-agent during its turn, then its task, a text, a tool and idle under its own session id: a sub-stream, one level deeper, native; one turn done in its thread; a subagent element in its host’s, none of its text or tool', async (t) => {

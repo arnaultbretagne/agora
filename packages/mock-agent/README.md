@@ -10,6 +10,8 @@ under `$HOME/.mock-agent/sessions/`, read back at `session/resume` and `session/
 | `/silence N` | Nothing for N seconds, then an answer. |
 | `/permission` | Asks for a permission and waits for the answer. |
 | `/withdraw N` | Asks for a permission, withdraws it N seconds on by `$/cancel_request`, then says the answer it still gets. |
+| `/question [one\|multi\|several\|mcp\|ticket\|bounds]` | Asks a form as Claude Code does (`src/forms.ts`, after claude-agent-acp 0.106.0): AskUserQuestion — its tool line, then one question of options, one of several options, or two —, each with its "Other" field; `mcp`, an MCP server's form of an integer and a yes/no; `ticket`, a pattern and an email; `bounds`, lists and texts with and without their bounds. Waits, then says `Elicitation:`, the action and the content it got. |
+| `/form [one\|text\|secret\|several\|auto]` | Asks a form as Codex does (after codex-acp 2.6.0): request_user_input — one question of options with "None of the above" and its note, one text, one secret, or two —, every question required. `auto`: withdrawn after a second by `$/cancel_request`, as Codex does past its `autoResolutionMs`. Then as `/question`. |
 | `/tool` | A tool call with a diff. |
 | `/tool-open N [failed] [M]` | A tool call `pending`, then `in_progress` for N seconds, then closed, then the turn goes on M seconds (1 by default). |
 | `/tool-permission` | A tool call open, a permission asked, the tool closing while it is pending; the turn goes on 2 s once answered. |

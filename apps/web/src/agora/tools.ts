@@ -1,6 +1,6 @@
 // What a tool call's line says (docs/specs/assistant-ui.md, "Parts"): the agent's title made readable,
 // and the size of its change; and what the line of a fold says. Pure, like view.ts.
-import type { Gate, MergeCard } from './view.ts'
+import type { Form, Gate, MergeCard } from './view.ts'
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
 export type Todo = { content: string; status: string }
@@ -23,6 +23,8 @@ export type Artifact = {
   gate?: Gate
   /** A merge card's (docs/specs/merge.md). */
   merge?: MergeCard
+  /** A form its agent asks, on the tool line it names or on its own (docs/specs/assistant-ui.md, "Forms"). */
+  form?: Form
 }
 
 const basename = (path: string | undefined): string => (path ? (path.split('/').at(-1) ?? path) : '')
@@ -76,10 +78,10 @@ export const unanswered = <A extends { optionId?: string; resolution?: string }>
 /** A tool call as a fold reads it (docs/specs/assistant-ui.md, "Folded tools"). */
 type FoldedTool = { toolName: string; artifact?: unknown; approval?: unknown; isError?: boolean | undefined }
 
-/** Whether a tool call goes in its fold: what waits for the person, a delegate and a question stay on the page. */
+/** Whether a tool call goes in its fold: what waits for the person, a delegate, a question and a form stay on the page. */
 export function foldable(tool: FoldedTool): boolean {
   const a = (tool.artifact ?? {}) as Artifact
-  return tool.toolName !== 'question' && a.delegate === undefined && a.gate === undefined && !unanswered(tool.approval as { optionId?: string; resolution?: string } | undefined)
+  return tool.toolName !== 'question' && a.delegate === undefined && a.gate === undefined && a.form === undefined && !unanswered(tool.approval as { optionId?: string; resolution?: string } | undefined)
 }
 
 const NOUN: Record<string, readonly [string, string]> = {
