@@ -1,4 +1,4 @@
-// docs/specs/preview.md, acceptance cases V2 to V6: the server started as a preview, and its client in a real
+// docs/specs/preview.md, acceptance cases V2 to V6, V8: the server started as a preview, and its client in a real
 // browser (Playwright's Chromium) behind the headers of the previews' two gates.
 //
 // Two ways to run it:
@@ -44,8 +44,13 @@ const GATEWAY_GATE = {
   'x-forwarded-host': HOST,
 }
 
-/** The conversations an empty database gets: each mark of the mock's history, and the three real harnesses'. */
-const SEEDED = { total: 11, mock: 8, harnesses: ['claude-code', 'codex', 'opencode'] }
+/**
+ * The conversations an empty database gets: each mark of the mock's history, the three real harnesses', and a
+ * delegation — its delegator listed, its delegate under it.
+ */
+const SEEDED = { total: 13, listed: 12, mock: 9, harnesses: ['claude-code', 'codex', 'opencode'] }
+/** The delegation's delegator, by its title. */
+const DELEGATOR = 'Ship the release notes'
 
 let browser: Browser
 /**
@@ -161,9 +166,9 @@ async function converse(url: string, gate: Record<string, string>, text: string)
     assert.match(await home.text(), /<div id="root">/)
     await page.goto(`${url}/`)
     // The conversations of the first start, before anything is done.
-    await until('the conversations listed', async () => (await rows(page).count()) >= SEEDED.total)
+    await until('the conversations listed', async () => (await rows(page).count()) >= SEEDED.listed)
     const before = await listed(url, gate)
-    assert.ok(before.length >= SEEDED.total, `${String(before.length)} conversations`)
+    assert.ok(before.length >= SEEDED.listed, `${String(before.length)} conversations`)
     // A new one, with the mock agent: its first answer, then a turn whose answer arrives second by second.
     await page.getByRole('button', { name: 'Harness' }).click()
     await page.getByRole('menuitem', { name: /Mock agent/ }).click()
@@ -214,7 +219,7 @@ test('V3 the first start on an empty database writes the conversations once: eve
   assert.match(first.output(), new RegExp(`- preview: ${String(SEEDED.total)} conversations written`))
   const rowsOf = await until('the list', async () => {
     const r = await listed(first.url, BROWSER_GATE)
-    return r.length === SEEDED.total ? r : undefined
+    return r.length === SEEDED.listed ? r : undefined
   })
   const mock = rowsOf.filter((r) => r.harness === 'mock')
   assert.equal(mock.length, SEEDED.mock)
@@ -241,6 +246,40 @@ test('V5 behind the gateway gate: the same, and what one gate made is listed thr
   const url = await target(t)
   const id = await converse(url, GATEWAY_GATE, 'Hello from the gateway gate')
   assert.ok((await listed(url, BROWSER_GATE)).some((r) => r.id === id), 'listed through the browser gate')
+})
+
+test('V8 the delegation among the conversations: its delegator waiting for you, its delegate waiting for you under it, Agora’s message naming its request; a permission the mock agent asks: its row waiting for you, its card; Allow: answered, waiting no more', async (t) => {
+  const url = await target(t)
+  const page = await behind(BROWSER_GATE)
+  try {
+    await page.goto(`${url}/`)
+    const nav = page.getByRole('navigation', { name: 'Workstreams' })
+    const delegator = nav.locator('button[title]').filter({ hasText: DELEGATOR })
+    await delegator.getByText('waiting for you').waitFor()
+    await delegator.click()
+    const agora = page.locator('main [data-agora]').last()
+    await agora.getByText('From Agora', { exact: true }).click()
+    await agora.getByText(/it waits for an answer to its request \d+: a permission\./).waitFor()
+    assert.match(await agora.innerText(), /allow-once: Allow \(allow_once\)/)
+    await page.locator('main [data-delegate]').getByText('waiting for you').waitFor()
+    await nav.getByRole('button', { name: 'Unfold' }).click()
+    await nav.getByRole('group').locator('button[title]').getByText('waiting for you').waitFor()
+    // A permission asked live, in a conversation of the person's.
+    await page.goto(`${url}/`)
+    await page.getByRole('button', { name: 'Harness' }).click()
+    await page.getByRole('menuitem', { name: /Mock agent/ }).click()
+    await send(page, '/permission')
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    await page.getByText('asks before it goes on').waitFor()
+    const mine = nav.locator('button[aria-current="page"]')
+    await mine.getByText('waiting for you').waitFor()
+    await page.getByRole('button', { name: 'Allow', exact: true }).click()
+    await page.locator('main').getByText('Permission: allow-once.').waitFor()
+    await until('waiting no more', async () => (await mine.getByText('waiting for you').count()) === 0)
+    assert.equal(await page.getByText('asks before it goes on').count(), 0)
+  } finally {
+    await page.context().close()
+  }
 })
 
 test('V6 the image in a network that only lets its database through: no Internet, no Kubernetes API, no secret', { skip: CONTAINER === undefined }, () => {

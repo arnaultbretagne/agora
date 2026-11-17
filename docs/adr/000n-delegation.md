@@ -1,7 +1,7 @@
 # ADR 000n — Delegation
 
 - **Status:** accepted
-- **Date:** 2026-11-12
+- **Date:** 2026-11-16
 
 ## Context
 
@@ -37,6 +37,12 @@
   a Markdown file's name.
 - Agora already has such a catalogue: its role cards — a persona, a harness, a model, an effort each
   (ADR Roles).
+- ACP has two requests that hold an agent until someone answers: `session/request_permission` and
+  `elicitation/create` (read on 2026-11-16, `@agentclientprotocol/sdk` 2.6.0). A permission arrives even in
+  a pool given full access: claude-agent-acp 0.106.0 forwards those a bypass mode does not cover — a
+  delete-class shell command, a tool that needs the user, an explicit ask rule. On 2026-11-16 a delegate
+  sat 55 minutes on one (a `rm -rf` in a scratch folder): its row did not say it waited, `list_agents` said
+  `working`, and its delegator told the person the delegate was still at work.
 
 ## Decision
 
@@ -65,6 +71,10 @@
    roles. The role is the delegate's Workstream's (ADR Roles): Agora gives it its persona, and its
    card the harness, model and effort it works with unless the call names others. Decided on
    2026-11-12.
+9. A delegate's request goes to its delegator: Agora tells it once, as a message of its own, and it
+   answers with `answer_agent` when it can, or asks the person when it cannot; the person can answer in
+   the delegate's thread all the same, and the first answer counts. A Workstream waiting on a request
+   says so wherever its state shows, as one waiting on a question does. Decided on 2026-11-16.
 
 ## Why
 
@@ -87,6 +97,9 @@
   name the tool (`reliability/delegation.md`, R7).
 - **Nothing invented.** Each gesture is one four harnesses already run, with the meaning they give it;
   what none of them does — a tool to hand a result in, a typed message — Agora does not do either.
+- **A delegator answers for its delegates.** That is what delegating means: the delegator knows what it
+  asked, and the person hears only what it cannot decide. Told as a message, the request reaches it by the
+  path every other word does; it is an agent, and cannot click a card.
 - **One catalogue of roles.** A delegate started as a `judge` is the judge a person starts: the same card,
   the same model. A role is written once, and what improves it improves both.
 
@@ -109,6 +122,8 @@
 | An envelope approved once, the Prefect team flow (ADR Roles) | A fixed plan; delegations compose instead, each call under its own rule. |
 | MCP's `outputSchema` | It types a tool's own answer; `spawn_agent` answers before the work is done. |
 | MCP elicitation | It asks the person, not the model. |
+| A delegate's permission shown to the person alone, as the client showed it before 2026-11-16 | Nothing said it waited: the person saw it only by opening the delegate's thread, and its delegator, asked, said it was working. |
+| The request answered by Agora itself, a full-access pool allowing everything | The asks that still come are the ones a harness keeps from its own bypass mode on purpose. |
 
 ## Consequences
 
@@ -146,3 +161,6 @@
   shows and `list_agents` says.
 - A call Agora holds answers in an SSE stream; every other message stays one JSON answer.
 - A team is a composition of delegations, under a `lead` (ADR Roles).
+- `answer_agent` names a request by its position in the delegate's log, as Agora's message gives it: an
+  answer meant for one request never answers the next. A native sub-agent's request is not told: its
+  sub-stream waits under the delegate, for the person.

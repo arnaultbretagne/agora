@@ -490,10 +490,13 @@ export class Workstreams implements Handler {
           options = object(permission.content.params)?.options
         if (outcome?.outcome === 'selected' && (!Array.isArray(options) || !options.some((o) => object(o)?.optionId === outcome.optionId)))
           return 'invalid_permission_option'
+        // Who answers is Agora's alone to say: a delegator's `answer_agent` (docs/specs/delegation.md, "Requests").
+        const { from: by, ...rest } = command.body
         return {
           execution: current.id,
           session: permission.session ?? undefined,
           line: { id: permission.rpc_id, result: { outcome: command.body.outcome } },
+          ...(origin === 'agora' || by === undefined ? {} : { body: rest }),
         }
       })
       this.report({ operation: 'admission', outcome: answer.accepted ? 'accepted' : 'refused', workstream, command: command.id })
@@ -774,6 +777,12 @@ export class Workstreams implements Handler {
         )
       state = await this.store.state(workstream)
     }
+    // A permission its agent withdrew (`$/cancel_request`) is answered `cancelled`, the one answer the agent still expects
+    // (docs/specs/log.md, "Commands"): read from the log at each run, so that a write that failed is made at the next.
+    const withdrawn = [...state.permissions.values()].filter((p) => p.execution === e.id && state.withdrawn.has(p.position))
+    for (const permission of withdrawn)
+      await this.store.transaction(workstream, (tx) => tx.outgoing(e.id, { id: permission.rpc_id, result: { outcome: { outcome: 'cancelled' } } }, permission.session ?? undefined))
+    if (withdrawn.length > 0) state = await this.store.state(workstream)
     for (const entry of [...state.outbox.values()]) {
       if (entry.execution !== e.id) continue
       if (state.attempts.has(entry.position) || state.failures.has(entry.position)) continue

@@ -423,6 +423,36 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
       }
       return 'end_turn'
     }
+    // A permission asked, then withdrawn N seconds on by `$/cancel_request`, as an adapter whose tool was aborted
+    // (ACP "Cancellation"): the answer it still gets is said (docs/specs/log.md, L158).
+    case '/withdraw': {
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: 'Write demo.txt', kind: 'edit', status: 'pending' })
+      const id = `mock-${String(nextOutgoing++)}`
+      const answered = new Promise<Message>((resolve) => outgoing.set(id, resolve))
+      send({
+        id,
+        method: 'session/request_permission',
+        params: {
+          sessionId: session.id,
+          toolCall: { toolCallId, title: 'Write demo.txt', kind: 'edit', status: 'pending' },
+          options: [
+            { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+          ],
+        },
+      })
+      if (await pause(turn, n * 1000)) return 'cancelled'
+      send({ method: '$/cancel_request', params: { requestId: id } })
+      const answer = await Promise.race([answered, new Promise<null>((resolve) => (turn.wake = () => resolve(null)))])
+      if (answer === null || turn.cancelled) return 'cancelled'
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' })
+      const outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome
+      const said = `Withdrawn: ${outcome?.outcome === 'selected' ? String(outcome.optionId) : String(outcome?.outcome ?? 'no answer')}.`
+      remember(session, 'agent', said)
+      say(session.id, said)
+      return 'end_turn'
+    }
     // A running tool (docs/specs/log.md, L110): `pending`, then `in_progress`, open that many seconds, then closed as
     // asked; then the turn goes on, a second unless told: `/tool-open 2 failed 4`.
     case '/tool-open': {
@@ -641,7 +671,8 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     case '/spawn_agent':
     case '/send_message':
     case '/stop_agent':
-    case '/list_agents': {
+    case '/list_agents':
+    case '/answer_agent': {
       // /<tool> {json}: a call to one of Agora's delegation tools, as a harness makes one (docs/specs/delegation.md): its
       // tool line, the call to Agora's MCP server, then its answer on the line and in a message.
       const name = text.trim().split(/\s/)[0]!.slice(1)
@@ -657,7 +688,7 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
         rawOutput: answer.text,
         content: [{ type: 'content', content: { type: 'text', text: answer.text } }],
       })
-      const said = `${{ spawn_agent: 'Delegated', send_message: 'Sent', stop_agent: 'Stopped', list_agents: 'Listed' }[name] ?? name}: ${answer.text}`
+      const said = `${{ spawn_agent: 'Delegated', send_message: 'Sent', stop_agent: 'Stopped', list_agents: 'Listed', answer_agent: 'Answered' }[name] ?? name}: ${answer.text}`
       remember(session, 'agent', said)
       say(session.id, said)
       return 'end_turn'

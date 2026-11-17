@@ -36,6 +36,8 @@ export interface WorkstreamView {
   readonly continuation?: Readonly<Record<string, { readonly anchor: string; readonly exchanges: number }>>
   /** The pending question's position, or null (docs/specs/log.md, "The Workstream view"). */
   readonly question?: string | null
+  /** The oldest request its agent waits on — a permission —, or null (docs/specs/log.md, "The Workstream view"). */
+  readonly request?: string | null
   /**
    * On a native sub-stream alone (docs/specs/log.md, "Native sub-agents"): its host, whose log holds its lines and takes
    * the commands that reach it; its description; whether its turn can be cancelled. And its state: `working`, `waiting`,
@@ -104,6 +106,7 @@ export function workstreamOf(state: ThreadState, id: string): WorkstreamView {
     promptCapabilities: promptCapabilitiesOf(o.promptCapabilities),
     exchanges: typeof o.exchanges === 'number' ? o.exchanges : 0,
     question: text(o.question) || null,
+    request: text(o.request) || null,
     native: json(o.native) && text(json(o.native)!.host) ? { host: text(json(o.native)!.host), description: text(json(o.native)!.description) || null, cancel: json(o.native)!.cancel === true } : null,
     subagent: text(o.subagent) || null,
     role: text(o.role) || null,
@@ -334,7 +337,9 @@ export function noticeText(notice: Json, first: boolean): string {
 /** ACP spells permission kinds with an underscore, assistant-ui with a dash. */
 export const optionKind = (kind: unknown): string => text(kind).replace(/_/g, '-')
 
-function approvalOf(permission: ViewObject, title: string): NonNullable<Extract<Part, { type: 'tool-call' }>['approval']> {
+type Approval = NonNullable<Extract<Part, { type: 'tool-call' }>['approval']>
+
+function approvalOf(permission: ViewObject, title: string): Approval {
   const p = permission.object
   const params = json(p.params) ?? {}
   const options = list(params.options).map((o) => json(o) ?? {})
@@ -370,6 +375,27 @@ export interface Gate {
   readonly text: string
   /** A refusing Write's words. */
   readonly words: string | null
+}
+
+/** A question's own options as assistant-ui's approval holds them: ACP's kinds, with a dash (docs/specs/assistant-ui.md, "Answering"). */
+const optionsOf = (question: Json) => list(question.options).map((o) => json(o) ?? {}).map((o) => ({ id: text(o.optionId), kind: optionKind(o.kind), label: text(o.name) }))
+
+/** An approval's or a merge card's question as assistant-ui's approval: Approve, or Merge, once; settled, how. */
+function askedOf(question: ViewObject): Approval {
+  const q = question.object
+  const chosen = q.status === 'answered' ? text(json(q.answer)?.optionId) : ''
+  return {
+    id: question.id,
+    prompt: text(q.title),
+    options: optionsOf(q),
+    ...(chosen !== ''
+      ? { approved: true, optionId: chosen }
+      : q.status === 'refused'
+        ? { approved: false }
+        : q.status === 'expired' || q.status === 'cancelled'
+          ? { resolution: q.status as 'expired' | 'cancelled' }
+          : {}),
+  }
 }
 
 function gateOf(question: ViewObject): Gate {
@@ -430,6 +456,7 @@ function mergeMessage(question: ViewObject): ThreadMessageLike {
         argsText: '',
         ...(card.status === 'pending' ? {} : { result: card.status }),
         artifact: { title: card.title, kind: 'other', status: card.status === 'pending' ? 'pending' : 'completed', merge: card },
+        approval: askedOf(question),
       },
     ],
     status: { type: 'complete', reason: 'stop' },
@@ -439,11 +466,12 @@ function mergeMessage(question: ViewObject): ThreadMessageLike {
 
 /**
  * The delegate a call's answer names (docs/specs/mcp.md, "Tools"): `started <id> · <title>` for `spawn_agent`, `sent <id> ·
- * <title>` for `send_message`, `stopped` or `no turn to stop <id> · <title>` for `stop_agent` — as a harness gives it, the
+ * <title>` for `send_message`, `stopped` or `no turn to stop <id> · <title>` for `stop_agent`, `answered <id> · <title>` for
+ * `answer_agent` — as a harness gives it, the
  * text alone or inside the JSON of its result.
  */
 export function startedDelegate(output: string): { id: string; title: string } | null {
-  const m = /(?:started|sent|stopped|no turn to stop) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
+  const m = /(?:started|sent|stopped|no turn to stop|answered) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) · ([^\n"\\]*)/.exec(output)
   return m ? { id: m[1]!, title: m[2]!.trim() } : null
 }
 
@@ -456,7 +484,7 @@ const outputOf = (tool: Json): string =>
  * `agora_stop_agent`…: the tool's name alone, `spawn_agent`, `send_message`, `stop_agent`, or the `delegate` of an earlier
  * contract. A command that merely names one, with words around it, is no such line.
  */
-const delegating = (tool: Json): boolean => /^\S*?(?<![a-z0-9])(?:spawn_agent|send_message|stop_agent|delegate)$/i.test(text(tool.title).trim())
+const delegating = (tool: Json): boolean => /^\S*?(?<![a-z0-9])(?:spawn_agent|send_message|stop_agent|answer_agent|delegate)$/i.test(text(tool.title).trim())
 
 /** The delegates this Workstream's lines name: whose rows their lines read. */
 export function delegatesOf(state: ThreadState): string[] {
@@ -499,8 +527,11 @@ function toolPart(tool: Json, permission: ViewObject | undefined, gate?: ViewObj
       ...(todos.length > 0 ? { todos: todos.map((t) => ({ content: text(t.content), status: text(t.status) })) } : {}),
       ...(delegate ? { delegate } : {}),
       ...(gate ? { gate: gateOf(gate) } : {}),
+      // Answered by its delegator's `answer_agent` (docs/specs/delegation.md, "Requests").
+      ...(permission?.object.as === 'delegator' ? { answeredBy: 'delegator' } : {}),
     },
-    ...(permission ? { approval: approvalOf(permission, title) } : {}),
+    // What waits for the person on this line: the approval Agora asks, or the permission its agent asks.
+    ...(gate ? { approval: askedOf(gate) } : permission ? { approval: approvalOf(permission, title) } : {}),
   }
 }
 
@@ -556,6 +587,7 @@ function questionMessage(question: ViewObject): ThreadMessageLike {
   const chosen = q.status === 'answered' ? options.find((o) => o.optionId === answer?.optionId) : undefined
   const title = text(q.title)
   const note = typeof answer?.note === 'string' && answer.note !== '' ? answer.note : null
+  // Its note is the approval's free-form answer: allowed when the question takes one, recorded as its text.
   return {
     id: `${question.id}:question`,
     role: 'assistant',
@@ -568,12 +600,13 @@ function questionMessage(question: ViewObject): ThreadMessageLike {
         args: {} as never,
         argsText: '',
         ...(chosen ? { result: note ? `${text(chosen.name)}: ${note}` : text(chosen.name) } : {}),
-        artifact: { title, kind: 'question', status: chosen ? 'completed' : 'pending', note: q.note === true, ...(chosen ? { answer: text(chosen.name), answerNote: note } : {}) },
+        artifact: { title, kind: 'question', status: chosen ? 'completed' : 'pending', ...(chosen ? { answer: text(chosen.name), answerNote: note } : {}) },
         approval: {
           id: question.id,
           prompt: title,
-          options: options.map((o) => ({ id: text(o.optionId), kind: optionKind(o.kind), label: text(o.name) })),
-          ...(chosen ? { approved: optionKind(chosen.kind).startsWith('allow'), optionId: text(chosen.optionId) } : {}),
+          options: optionsOf(q),
+          ...(q.note === true ? { allowFreeform: true } : {}),
+          ...(chosen ? { approved: optionKind(chosen.kind).startsWith('allow'), optionId: text(chosen.optionId), ...(note !== null ? { text: note } : {}) } : {}),
         },
       },
     ],
@@ -597,6 +630,7 @@ function gateMessage(question: ViewObject): ThreadMessageLike {
         argsText: '',
         ...(gate.status === 'pending' ? {} : { result: gate.status }),
         artifact: { title: `delegate · ${gate.title}`, kind: 'other', status: gate.status === 'pending' ? 'pending' : 'completed', gate },
+        approval: askedOf(question),
       },
     ],
     status: { type: 'complete', reason: 'stop' },
@@ -954,13 +988,13 @@ export function resetIn(resetsAt: string | null, now: number): string | null {
 // ---------------------------------------------------------------- the list
 
 /** A Workstream as the list holds it (docs/specs/log.md, "The list"): a few of its view's fields. */
-export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' | 'question' | 'changedAt'> & {
+export type ListRow = Pick<WorkstreamView, 'id' | 'title' | 'state' | 'harness' | 'question' | 'request' | 'changedAt'> & {
   /** Its line (docs/specs/log.md, "Sub-streams"): absent on a row written before the tree. */
   readonly parent?: string | null
   readonly depth?: number
   /** What lies under it, at every depth: the sub-streams, those live, those waiting for the person. */
   readonly below?: { readonly count: number; readonly live: number; readonly waiting: number }
-  /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `idle`, `failed`, `cancelled`; an earlier delegate's may say `completed`. */
+  /** A delegate's state (docs/specs/log.md, "The Workstream view"): `working`, `waiting`, `idle`, `failed`, `cancelled`; an earlier delegate's may say `completed`. */
   readonly delegation?: string
   /** A native sub-stream's state (docs/specs/log.md, "Native sub-agents"): `working`, `waiting`, `idle`, `failed`, `cancelled`. */
   readonly subagent?: string | null
@@ -989,7 +1023,7 @@ export function sections(workstreams: readonly ListRow[], now: Date, search: str
   ]
   const out = groups.map((g) => ({ label: g.label, workstreams: [] as ListRow[] }))
   for (const w of workstreams) {
-    if (w.state === 'none' && w.id !== current && !line.includes(w.id) && !w.question && !w.below?.waiting) continue
+    if (w.state === 'none' && w.id !== current && !line.includes(w.id) && !w.question && !w.request && !w.below?.waiting) continue
     if (wanted !== '' && !w.title.toLowerCase().includes(wanted)) continue
     const at = w.changedAt ? Date.parse(w.changedAt) : now.getTime()
     out[groups.findIndex((g) => at >= g.from)]!.workstreams.push(w)

@@ -12,6 +12,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `recovery.test.ts` | Agora stopped, killed, cut from PostgreSQL; the claim and the bridge against the record: L8, L15, L17–L21, L29–L32, L36, L38, L39, L77. |
 | `views.test.ts` | Folds, rebuilds, the thread, the Workstream view and list, the Session notices: L22–L24, L42–L46. |
 | `questions.test.ts` | A question to the person: Ask, Answer, and what they hold back: L69–L74. |
+| `requests.test.ts` | A request an agent waits on — a permission — in its view, its row and the rows above it; who answered it: L154–L156. |
 | `accounts.test.ts` | The caller's account and its list, on the real server: L75, L76. |
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |

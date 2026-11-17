@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U96: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U97, U101, U102: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -293,9 +293,11 @@ test('U19 a permission: the card with the agent options; Allow: the agent goes o
   await page.getByText('asks before it goes on').waitFor()
   assert.deepEqual(await page.locator('main button').filter({ hasText: /^(Allow|Reject)$/ }).allInnerTexts(), ['Allow', 'Reject'])
   await page.getByText('Answer the permission request above.').waitFor()
+  await shot(page, 'u19-permission')
   await page.getByRole('button', { name: 'Allow', exact: true }).click()
   await thread(page).getByText('Permission: allow-once.').waitFor()
   assert.equal(await page.getByText('asks before it goes on').count(), 0)
+  await shot(page, 'u19-answered')
   await composerInput(page).fill('after the permission')
   assert.equal(await page.getByRole('button', { name: 'Send' }).isEnabled(), true)
 })
@@ -1292,6 +1294,58 @@ test('U63 an approval left unanswered: “Expired before a decision” on its li
   await line.locator('[data-approval="expired"]').getByText('Expired before a decision').waitFor({ timeout: 40_000 })
   await thread(page).getByText('Delegated: expired').waitFor()
   await shot(page, 'u63-expired')
+})
+
+test('U101 a delegate whose agent asks a permission: its delegator’s row waiting for you, the delegate’s too once unfolded; the delegate’s line waiting for you; Agora’s message naming the request, the tool call and each option; in the delegate’s thread, its card', async () => {
+  const page = await proxied('requests@example.org')
+  await delegating(page, 'before the request')
+  await send(page, delegateCall({ instructions: '/permission', harness: 'mock' }))
+  const line = delegateLine(page, '/permission · Mock agent')
+  await line.getByText('waiting for you').waitFor()
+  const agora = thread(page).locator('[data-agora]').last()
+  await agora.getByText('From Agora', { exact: true }).click()
+  await agora.getByText(/it waits for an answer to its request \d+: a permission\./).waitFor()
+  const said = await agora.innerText()
+  assert.match(said, /Asked: Write demo\.txt \(edit\)/)
+  assert.match(said, /allow-once: Allow \(allow_once\)/)
+  assert.match(said, /reject-once: Reject \(reject_once\)/)
+  assert.match(said, /answer_agent/)
+  const nav = page.getByRole('navigation', { name: 'Workstreams' })
+  await nav.locator('button[aria-current="page"]').getByText('waiting for you').waitFor()
+  await shot(page, 'u101-delegator')
+  await nav.getByRole('button', { name: 'Unfold' }).click()
+  const row = nav.getByRole('group').locator('button[title]')
+  await row.getByText('waiting for you').waitFor()
+  assert.match(await row.innerText(), /^\/permission/)
+  await shot(page, 'u101-tree')
+  await row.click()
+  await page.getByText('asks before it goes on').waitFor()
+  await page.getByRole('navigation', { name: 'Workstreams' }).locator('button[aria-current="page"]').getByText('waiting for you').waitFor()
+  await shot(page, 'u101-delegate')
+  await page.context().close()
+})
+
+test('U102 a delegate’s permission answered by its delegator’s answer_agent: the delegator’s line naming the delegate; in the delegate’s thread, no card, its line noting “allowed by its delegator”, the agent going on', async () => {
+  const page = await proxied('answered@example.org')
+  await delegating(page, 'before answering')
+  await send(page, delegateCall({ instructions: '/permission', harness: 'mock' }))
+  const line = delegateLine(page, '/permission · Mock agent').first()
+  await line.getByText('waiting for you').waitFor()
+  const delegate = /\/w\/([0-9a-f-]{36})$/.exec(String(await line.getByRole('link').getAttribute('href')))![1]!
+  // The request's number, as Agora's message gives it to the delegator.
+  const agora = thread(page).locator('[data-agora]').last()
+  await agora.getByText('From Agora', { exact: true }).click()
+  const request = /its request (\d+):/.exec(await agora.innerText())![1]!
+  await send(page, `/answer_agent ${JSON.stringify({ to: delegate, request, option: 'allow-once' })}`)
+  await thread(page).getByText(`Answered: answered ${delegate} · /permission`).waitFor()
+  await until('both lines naming it, neither waiting', async () => (await delegateLine(page, '/permission · Mock agent').count()) === 2 && (await delegateLine(page, '/permission · Mock agent').getByText('waiting for you').count()) === 0)
+  await shot(page, 'u102-delegator')
+  await line.getByRole('link').click()
+  await thread(page).getByText('Permission: allow-once.').waitFor()
+  assert.equal(await page.getByText('asks before it goes on').count(), 0)
+  await thread(page).getByText('allowed by its delegator').waitFor()
+  await shot(page, 'u102-delegate')
+  await page.context().close()
 })
 
 test('U64 a delegate’s Workstream opened: its first message shown as from its delegator, by its title, not as the person’s', async () => {

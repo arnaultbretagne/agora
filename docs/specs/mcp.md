@@ -17,7 +17,7 @@ execution's rights open, and answers within that person's Workstreams.**
 | The route | The gateway's route `agora` (`credentials.md`, "Agora's MCP"): the token checked, a grant covering the host, the path and the method; the token's subject set as `x-agora-execution`, over whatever the sandbox sent; then the server's port 8082. |
 | The server | Port 8082, `POST /mcp`: MCP over Streamable HTTP, stateless — no `mcp-session-id`, one JSON answer per message, but a `spawn_agent` call's: an SSE stream, a progress notification every 30 s while Agora holds it (`delegation.md`, "Approval"), then its answer; `GET` and `DELETE` answered 405. Of the cluster's Pods, only the gateway reaches the port; the node reaches it, as it reaches every Pod's ports. |
 | The caller | `x-agora-execution`, `agora <execution>`: the execution, the Workstream its Create started, that Workstream's owner — the person, a sub-stream's owner being its root's. A message without it, or naming an execution Agora does not know: 401, nothing read. |
-| Rights | The execution's own profiles as the log records them (`log.md`, "The Workstream view": `profiles`), not the token's: `agora:read` opens `search` and `read`; `agora:delegate`, `spawn_agent`, `send_message`, `stop_agent` and `list_agents`; Agora's own `agora:submit`, given to every delegate (`credentials.md`), `send_message`, toward its delegator alone; a repository's write, `github:owner/repo:write`, `propose_merge` for that repository (`merge.md`). `tools/list` lists what they open; a call to another tool is refused (`not_allowed`). |
+| Rights | The execution's own profiles as the log records them (`log.md`, "The Workstream view": `profiles`), not the token's: `agora:read` opens `search` and `read`; `agora:delegate`, `spawn_agent`, `send_message`, `stop_agent`, `list_agents` and `answer_agent`; Agora's own `agora:submit`, given to every delegate (`credentials.md`), `send_message`, toward its delegator alone; a repository's write, `github:owner/repo:write`, `propose_merge` for that repository (`merge.md`). `tools/list` lists what they open; a call to another tool is refused (`not_allowed`). |
 | Reach | The person's Workstreams and their sub-streams, as the person's own search reaches them. Never another person's. |
 
 ## Tools
@@ -25,7 +25,7 @@ execution's rights open, and answers within that person's Workstreams.**
 `search`, `read` and `list_agents` are marked read-only (`readOnlyHint`). The parameters of `search` and
 `read` are the search's and the read's (`search.md`, "HTTP"); they answer in text, as grep and Read
 answer. The four tools of delegation bear the names the harnesses give their own sub-agents' gestures
-(`delegation.md`); the server's name tells them apart.
+(`delegation.md`), and `answer_agent` a name after theirs; the server's name tells them apart.
 
 | Tool | Parameters | Answer |
 | --- | --- | --- |
@@ -36,6 +36,7 @@ answer. The four tools of delegation bear the names the harnesses give their own
 | `send_message` | `to`, required: one of the caller's delegates, or `parent`, the caller's own delegator; `message`, required: the words. Listed to every delegate. | `sent <id> · <title>` to a delegate; `sent` to `parent`; else a refusal. |
 | `stop_agent` | `to`, required: one of the caller's delegates. | `stopped <id> · <title>`, or `no turn to stop <id> · <title>`; else a refusal. |
 | `list_agents` | None. | One line for each of the caller's delegates, `<id> · <title> · <state>`, the most recently changed first; `no delegate`. |
+| `answer_agent` | `to`, required: one of the caller's delegates; `request`, required: the request's number, as Agora's message gives it, a string or an integer; `option`, required: the id of the option chosen. | `answered <id> · <title>`; else a refusal (`delegation.md`, "Requests"). |
 
 | Description | What it tells the agent |
 | --- | --- |
@@ -44,7 +45,8 @@ answer. The four tools of delegation bear the names the harnesses give their own
 | `spawn_agent` | It starts another agent of Agora's, a delegate: not a sub-agent of the caller's own harness, but an agent in an execution of its own — its harness, its model, its rights —, a sub-stream of the caller's Workstream where the person sees it and can write to it. The call answers once it has started, and the delegate's last message comes back later as a message, into the caller's running turn or as its next — no waiting, no polling. Rights beyond the caller's wait for the person's approval. |
 | `send_message` | It writes to another agent of Agora's. To one of the caller's delegates, whatever it is doing: its next message. To `parent`, the agent that started the caller: what cannot wait for the end of the turn, a question or news — the turn's last message goes to it by itself, so the result is not sent this way. |
 | `stop_agent` | It stops what one of the caller's delegates is doing now. The delegate stays: `send_message` reaches it. |
-| `list_agents` | The caller's delegates, and whether each is working. |
+| `list_agents` | The caller's delegates, and whether each is working or waiting for an answer to a request of its. |
+| `answer_agent` | It answers a request one of the caller's delegates waits on — a permission its agent asked —, as Agora's message about it names it. Only what is the caller's to decide; otherwise the person, who can answer it in the delegate's thread. The first answer counts. |
 
 | Refusal | Answer |
 | --- | --- |
@@ -52,7 +54,7 @@ answer. The four tools of delegation bear the names the harnesses give their own
 | A parameter out of its range, or of another type | A tool error, `invalid_query`, naming the parameter. |
 | A Workstream that is not the person's, or unknown | A tool error, `unknown_workstream`. |
 | A tool the execution's rights do not open | A protocol error, `not_allowed`. |
-| `spawn_agent`, `send_message` or `stop_agent` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `profile_not_offered`, `unknown_harness`, `unknown_agent_type`, `not_a_delegate`, `no_delegator`, `delegate_stopped`, `too_many_exchanges`; `refused` with the person's words; `expired`. |
+| `spawn_agent`, `send_message`, `stop_agent` or `answer_agent` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `profile_not_offered`, `unknown_harness`, `unknown_agent_type`, `not_a_delegate`, `no_delegator`, `delegate_stopped`, `too_many_exchanges`, `stale_permission` with what is pending, `invalid_permission_option`; `refused` with the person's words; `expired`. |
 
 ## Acceptance cases
 
@@ -67,7 +69,7 @@ answer. The four tools of delegation bear the names the harnesses give their own
 | M7 | `search` with the pattern `(`; with `head_limit` 500 | `invalid_pattern`; `invalid_query` naming `head_limit`. |
 | M8 | Through the gateway: an execution with `agora:read`, sending `x-agora-execution` itself or not; one without it — `anthropic`, `internet` —, one from another address, one on another path | The message reaches Agora with the token's own execution, whatever the sandbox sent; 403 at the gateway for the others, nothing reaching Agora. |
 | M9 | Live: a turn of Claude Code, of Codex and of opencode, each asked to find a past conversation by a word and quote it | Each calls `search`, then `read`, through the gateway, and quotes the line. |
-| M10 | `tools/list` from an execution with `agora:delegate`; from a delegate, with `agora:submit` alone, as its Session opens, before its instructions; from a delegate holding both | `spawn_agent`, `send_message`, `stop_agent` and `list_agents`, the last alone read-only, each with its parameters; `send_message` alone, with `to` and `message`; the four, each once. |
+| M10 | `tools/list` from an execution with `agora:delegate`; from a delegate, with `agora:submit` alone, as its Session opens, before its instructions; from a delegate holding both | `spawn_agent`, `send_message`, `stop_agent`, `list_agents` and `answer_agent`, `list_agents` alone read-only, each with its parameters — `answer_agent`'s `to`, `request` and `option`, all required; `send_message` alone, with `to` and `message`; the five, each once. |
 | M11 | A `spawn_agent` call Agora holds, the client reading the answer | An SSE stream: progress notifications every 30 s, then the answer; every other message, one JSON answer. |
-| M12 | `stop_agent` and `list_agents` from a delegate with `agora:submit` alone; `delegate` and `submit`, the names of an earlier contract, called by an execution with `agora:delegate`; `send_message` to a delegate of its own, from an execution scoped down to `agora:submit` alone | `not_allowed` each time, nothing done; `tools/list` giving `send_message` alone, and `not_a_delegate`, nothing written. |
+| M12 | `stop_agent`, `list_agents` and `answer_agent` from a delegate with `agora:submit` alone; `delegate` and `submit`, the names of an earlier contract, called by an execution with `agora:delegate`; `send_message` to a delegate of its own, from an execution scoped down to `agora:submit` alone | `not_allowed` each time, nothing done; `tools/list` giving `send_message` alone, and `not_a_delegate`, nothing written. |
 | M13 | `tools/list` from an execution with `agora:delegate`, Agora holding roles; holding none; Agora's own cards read; a card whose `model` is `default` | `spawn_agent` takes `agent_type`, an `enum` of the roles, its description naming each with its summary; no `agent_type`; `dev`, `judge`, `lead` and `sre`, each with a harness, a summary and its persona, its front matter left out; no model of its own. |

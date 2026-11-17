@@ -196,7 +196,7 @@ approval (`delegation.md`), a merge (`merge.md`) —, and the interface answers.
 | Configure | Carries the Session, a setting's id and a value. Accepted on the conditions of a Write without `mayWait`, a message waiting aside, and only for a setting the Session offers with a value it lists (`unknown_setting`). Its `session/set_config_option` commits with it. |
 | Scope | Carries the execution and the whole set of its own profiles (`profiles`, a list of strings). Accepted while the execution is neither stopped, lost nor failed and no turn is saved, in progress or uncertain; its profiles checked as the Create's (`credentials.md`, "On Agora's side"). It replaces the execution's own profiles; no line goes to the agent. |
 | Cancel | Carries the target turn id. Right before dispatch, the dispatcher checks that this turn is still in progress or uncertain; otherwise `request.failed` (`stopped`) and no line leaves. Agora writes one of its own for a delegator's `stop_agent` (`delegation.md`, "Stopping and listing"): the same command, its body's `from` naming the delegator's Workstream; a `from` in the person's is left out. |
-| Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself. |
+| Respond to a permission | Carries the Session and the request's position. Accepted while that exact request is pending. Once a `session/cancel` is sent, Agora answers every pending permission of the execution `cancelled` itself; likewise a permission its agent withdraws, by a `$/cancel_request` naming its request's id: the one answer the agent still expects (ACP, "Cancellation"), written by the dispatcher at each of its runs while that permission is pending, so that a write that fails is made at the next. Agora writes one of its own for a delegator's `answer_agent` (`delegation.md`, "Requests"): the same command, its body's `from` naming the delegator's Workstream; a `from` in the person's is left out. |
 | Ask | Carries no target. Its body: `title`, one line of 1 to 200 characters; `text`, Markdown, at most 100,000 characters; `options`, 2 to 4, each an `optionId` of 1 to 64 characters unique among them, a `name` of 1 to 80 characters and a `kind` among `allow_once`, `allow_always`, `reject_once`, `reject_always`; `note`, true when the answer may carry a text, false when absent. Accepted whatever the Workstream's execution, none included, while no question is pending. No line goes to any agent. An approval is an Ask of Agora's own, `kind` `approval` (`delegation.md`, "Approval"): one option, `allow_once`; the gated tool line's `toolCallId`, when matched; its `expiresAt`. A merge card is an Ask of Agora's own, `kind` `merge` (`merge.md`): one option, `allow_once`; `repo`, `number`, `url`; no expiry. |
 | Answer | Carries the pending question's position (`question`). Its body: the `optionId` chosen and, when the question allows one, a `note` of at most 10,000 characters. Accepted while that question is pending. No line goes to any agent. |
 | Stop | Accepted while the execution exists, lost included. Committed before admission closes; after it, no dispatch other than the turn's `session/cancel` and the `cancelled` answers to pending permissions, and no renewal, even after a restart. |
@@ -277,7 +277,7 @@ depth: whatever starts a sub-stream checks its own. A sub-stream belongs to the 
 | Root and depth | The parent's root, and the parent's depth plus one. |
 | Owner | The parent's, whoever creates it: a sub-stream belongs to the person who owns its root. |
 | Its row | In its parent's list, not in its owner's ("The list"). |
-| What comes up | A Workstream's row counts what lies under it, at every depth: the sub-streams; those in state `starting`, `ready` or `interrupted`, and the native ones working or waiting ("Native sub-agents"); those with a question pending, and the native ones waiting. Its `changedAt` is the latest of its own and theirs. |
+| What comes up | A Workstream's row counts what lies under it, at every depth: the sub-streams; those in state `starting`, `ready` or `interrupted`, and the native ones working or waiting ("Native sub-agents"); those with a question or a request pending ("The Workstream view"), and the native ones waiting. Its `changedAt` is the latest of its own and theirs. |
 
 ## Native sub-agents
 
@@ -344,7 +344,7 @@ the client shows them is `assistant-ui.md`.
 | `tool` | `tool_call`, then each `tool_call_update` with its id, merged member by member | `turn`, `session`, and the ACP members: `toolCallId`, `title`, `kind`, `status`, `content`, `locations`, `rawInput`, `rawOutput` |
 | `plan` | The turn's last `plan` | `turn`, `session`, `entries` |
 | `subagent` | A `subagent_update` announcing a sub-agent, then each one naming it ("Native sub-agents") | `turn`, `session`, `workstream`: the sub-stream's id; `title` and `description`, the last given; `state`: the sub-stream's `subagent`; `cancel`: its `native.cancel` |
-| `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer` |
+| `permission` | `session/request_permission`, then Agora's answer | `execution`, `turn`, `session`, `requestId`, `requestPosition`, `params`, `status` (`pending`, `answered`, `cancelled`), `answer`; `from` and `as`, when the Respond to a permission that answered it named them (`delegation.md`, "Requests") |
 | `question` | An Ask, then its Answer, a refusing Write, its expiry or its cancellation | `position`: the Ask's; `title`, `text`, `options`, `note`, and for an approval `kind` `approval`, `toolCallId` and `expiresAt`, for a merge card `kind` `merge`, `repo`, `number` and `url`: the Ask's; `status` (`pending`, `answered`, `refused`, `expired`, `cancelled`); `answer`: the Answer's `optionId` and its `note`, or a refusing Write's text; for a merge card, `outcome`: `merged` and its `sha`, or `refused` and its `reason` |
 | `acp` | Any other line, except `initialize`, the Session openings, `session/prompt`, `session/cancel`, `_session/steering` and their answers | `turn`, `session`, `line`: the line whole |
 
@@ -357,7 +357,7 @@ ends.
 ### The Workstream view
 
 One object per Workstream, changed by its commands, its execution entries, its Sessions, its
-anchors, the dispatch of its prompts, the agent's title, and a delegate's turns' ends.
+anchors, the dispatch of its prompts, the agent's title, its requests, and a delegate's turns' ends.
 
 | Field | Value |
 | --- | --- |
@@ -376,7 +376,8 @@ anchors, the dispatch of its prompts, the agent's title, and a delegate's turns'
 | `promptCapabilities` | What the last execution's agent accepts in a prompt beyond text and resource links, from its `initialize` answer: `image`, `audio` and `embeddedContext`, each true only when it says so; kept once it has ended; null before it has answered. |
 | `exchanges` | The Workstream's turns whose prompt was dispatched. |
 | `question` | The pending question's position, or null. |
-| `delegation` | A delegate's state (`delegation.md`, "A delegation"): `working`, `idle`, `failed` or `cancelled`. Absent on any other Workstream. |
+| `request` | A request its agent waits on, the oldest: the position of a `session/request_permission` its own Session asked and nobody has answered — a native sub-agent's is its sub-stream's ("Native sub-agents"). It goes once answered — Agora's `cancelled` included, after a Cancel or once its agent withdraws it ("Commands") —, or once its Session or its execution ends ("Elements"). Absent when none. |
+| `delegation` | A delegate's state (`delegation.md`, "A delegation"): `working`, `waiting`, `idle`, `failed` or `cancelled`. Absent on any other Workstream. |
 | `native` | On a native sub-stream ("Native sub-agents") alone: `host`, the Workstream whose log holds its lines; `description`, its last one, or null; `cancel`, true while the last `capabilities` its `subagent_update` gave hold `cancel`. Its `title` is its own last `session_info_update` title, otherwise its last `subagent_update` title, otherwise "Sub-agent"; its `harness` its host's; `exchanges` its turns; every other field null or empty. |
 | `subagent` | A native sub-stream's state: `working`, a turn in progress; `waiting`, while its last state is `requires_action`; else its last turn's: `idle` for `done`, `failed`, `cancelled`. Absent on any other Workstream. |
 | `continuation` | For each harness with an anchor a Create would restore: that anchor, and the number of exchanges it does not hold ("Continuing"). |
@@ -426,7 +427,7 @@ changes instead of fetching every view again.
 
 | Rule | Detail |
 | --- | --- |
-| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question`, its `role` when it has one, a delegate's `delegation` and a native sub-stream's `subagent`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
+| Row | The Workstream's id, `parent` and `depth`; of its view `title`, `state`, `harness`, `question`, its `request` and its `role` when it has one, a delegate's `delegation` and a native sub-stream's `subagent`; `below`, what lies under it ("Sub-streams"): `count`, `live`, `waiting`; and `changedAt`, the latest of its view's and of theirs. Written in the transaction that writes the view, once the Workstream has one. |
 | List | A root's row is in its owner's list, the person's identity ("HTTP"). A sub-stream's row is in its parent's list. |
 | Positions | Per list, strictly increasing and never reused: each row written takes its list's next position, and waits for the row before it to be committed. A row equal to the one stored is not written. |
 | Up the line | A row written writes its parent's row again in the same transaction, then its parent's, up to the root, each with what lies under it, each in its own list. Lists are taken from the sub-stream up, so that two lines never wait on each other. |
@@ -675,6 +676,12 @@ exception message.
 | L151 | A chain of sub-agents two levels deeper than the bound, the deepest speaking; two more announced than a Workstream hosts | A sub-stream for each level within the bound, none beyond, none of its words in the host's thread; 64 sub-streams, the host's row counting 64. |
 | L152 | A native sub-stream given as the parent of a new Workstream | `unknown_parent`. |
 | L153 | A host's exchange read for a catch-up, and a delegate's last message, a sub-agent's text and tool among its lines | The host's own words alone in each. |
+| L154 | A permission pending in a sub-stream two levels down, then answered; another, then its turn cancelled; another, then its execution ended | Its view's and its row's `request` the request's position, its `question` null; its parent's and its root's rows `waiting` 1. Once answered, once Agora answers it `cancelled`, once its execution has ended: no `request`, `waiting` 0 each time. |
+| L155 | A native sub-agent asking a permission | Its host's row counting it waiting; its host's own view and row with no `request`. |
+| L156 | A Respond to a permission whose body names a `from`: Agora's; the person's | Agora's kept in the command written, its permission `answered` with that `from` and `as`; the person's left out, its permission with neither. |
+| L157 | Agora started after its core projector changed version, a delegate's permission pending, its connection closed before and not open again, its view and the rows as the version before left them — no `request`, `delegation` `working`, nothing waiting under its delegator | Rebuilt at start, no new connection: the delegate's view and row with its `request`, `delegation` `waiting`; its delegator's row `waiting` 1; `list_agents` saying `waiting`; its checkpoint at the new version. |
+| L158 | An agent withdrawing its pending permission by a `$/cancel_request` naming its id; then one naming no request pending | One answer to it, `cancelled`; its permission `answered`, that outcome; the view's and the row's `request` gone, its parent's `waiting` 0; the agent's turn going on to its end. Then no answer written. |
+| L159 | A withdrawal whose `cancelled` answer's first write fails, its connection to PostgreSQL cut before its COMMIT | That write rolled back; the answer written at a later run, once, and sent once; the request gone; the agent's turn going on to its end. |
 | L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
 | L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 

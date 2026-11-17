@@ -9,7 +9,7 @@ import { isCatchUp } from './catch-up.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
-import { delegationOf, STEERING, type Execution, type State, type Turn } from './state.ts'
+import { delegationOf, requestsOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
 import type { Workstreams } from './workstreams.ts'
 
@@ -86,6 +86,28 @@ export function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn 
 /** What the end of an execution says to its delegate's delegator, when it says something. */
 const endOf = (e: Execution): string | null =>
   e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
+
+/**
+ * What a delegate's request asks, as its delegator reads it (docs/specs/delegation.md, "Requests"): its number, the
+ * tool call and its kind, each option, and how to answer it.
+ */
+function requestText(delegate: string, request: Entry): string {
+  const params = object(request.content.params)
+  const call = object(params?.toolCall)
+  const title = typeof call?.title === 'string' && call.title.trim() !== '' ? call.title.trim() : 'a tool call'
+  const kind = typeof call?.kind === 'string' && call.kind !== '' ? ` (${call.kind})` : ''
+  const options = (Array.isArray(params?.options) ? params.options : []).map((o) => object(o) ?? {})
+  return [
+    `it waits for an answer to its request ${request.position}: a permission.`,
+    '',
+    `Asked: ${title}${kind}`,
+    '',
+    'Options:',
+    ...options.map((o) => `- \`${String(o.optionId)}\`: ${String(o.name)} (${String(o.kind)})`),
+    '',
+    `If it is yours to decide, answer it with \`answer_agent\` — \`to\` ${delegate}, \`request\` ${request.position}, \`option\` the id of one of these options. If it is not, ask the person, who can answer it in that delegate's thread.`,
+  ].join('\n')
+}
 
 /** A message that needs no writing again: written, by now or a run before — its title may have changed since (`command_conflict`) — or nothing to write. */
 const written = (answer: Answer | null): boolean => answer === null || answer.accepted || answer.reason === 'command_conflict'
@@ -414,6 +436,37 @@ export class Delegations {
   }
 
   /**
+   * docs/specs/delegation.md, "Requests": a request one of the caller's delegates waits on, answered with the option the
+   * caller chose, by a Respond to a permission of Agora's that names it. Whoever answers first, the person included, wins.
+   */
+  async answer(caller: Caller, args: Readonly<Record<string, unknown>>): Promise<string> {
+    if (typeof args.to !== 'string' || args.to.trim() === '') throw new Refused('invalid_query: to')
+    const named = typeof args.request === 'number' && Number.isSafeInteger(args.request) ? String(args.request) : typeof args.request === 'string' ? args.request.trim() : ''
+    if (!/^[1-9][0-9]*$/.test(named)) throw new Refused('invalid_query: request')
+    if (typeof args.option !== 'string' || args.option === '') throw new Refused('invalid_query: option')
+    const to = args.to.trim().toLowerCase()
+    await this.mine(caller, to)
+    const title = await this.titleOf(to)
+    const pending = requestsOf(await this.store.state(to))
+    const request = pending.find((r) => r.position === named)
+    // Not that request: what waits there now, so that the caller knows where it stands.
+    if (request === undefined)
+      throw new Refused(`stale_permission: ${pending.length === 0 ? 'nothing pending' : `request ${pending.map((r) => r.position).join(', ')} pending`} in ${to} · ${title}`)
+    const answered = await this.workstreams.command(
+      to,
+      {
+        id: randomUUID(),
+        kind: 'RespondPermission',
+        target: { execution: request.execution, session: request.session, requestPosition: request.position },
+        body: { requestId: request.rpc_id, outcome: { outcome: 'selected', optionId: args.option }, from: { workstream: caller.workstream, as: 'delegator' } },
+      },
+      'agora',
+    )
+    if (answered.accepted) return `answered ${to} · ${title}`
+    throw new Refused(String(answered.reason ?? 'unavailable'))
+  }
+
+  /**
    * docs/specs/delegation.md, "Stopping and listing": the caller's delegates, the most recently changed first, each as its
    * row says it; one just started has no row yet, and is read from the log.
    */
@@ -454,8 +507,8 @@ export class Delegations {
     for (const [delegate, known] of this.followed) {
       if (known.delegator !== caller) continue
       const state = await this.store.state(delegate)
-      // From its Cancel on, a turn holds no place: its agent may take its time to say it stopped.
-      if (delegationOf(state) === 'working' && !(state.held && state.active)) count++
+      // From its Cancel on, a turn holds no place: its agent may take its time to say it stopped. Waiting for an answer, it holds one.
+      if (['working', 'waiting'].includes(delegationOf(state)) && !(state.held && state.active)) count++
     }
     return count
   }
@@ -574,6 +627,13 @@ export class Delegations {
       const id = identity(delegate, e.id, 'its end')
       if (what === null || known.seen.has(id)) continue
       if (written(await this.notice(known.delegator, delegate, id, what))) known.seen.add(id)
+      else said = false
+    }
+    // Each request its agent waits on, told once to its delegator: it answers, or asks the person (docs/specs/delegation.md, "Requests").
+    for (const request of requestsOf(state)) {
+      const id = identity(delegate, request.position, 'request')
+      if (known.seen.has(id)) continue
+      if (written(await this.notice(known.delegator, delegate, id, requestText(delegate, request)))) known.seen.add(id)
       else said = false
     }
     // A next execution, whoever asks for it, is followed again.

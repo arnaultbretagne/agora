@@ -25,7 +25,7 @@ export interface Projector {
   version: string
   create(): Projection
 }
-export const core: Projector = { name: 'core', version: '9', create: () => new CoreProjection() }
+export const core: Projector = { name: 'core', version: '10', create: () => new CoreProjection() }
 
 /** What lies under a Workstream, at every depth (docs/specs/log.md, "Sub-streams"). */
 export type Below = { count: number; live: number; waiting: number }
@@ -38,6 +38,8 @@ export type ListRow = {
   state: unknown
   harness: unknown
   question: unknown
+  /** The oldest request its agent waits on (docs/specs/log.md, "The Workstream view"). */
+  request?: unknown
   delegation?: unknown
   /** A native sub-stream's state (docs/specs/log.md, "Native sub-agents"). */
   subagent?: unknown
@@ -58,7 +60,7 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
     below.count += 1 + under.count
     // A native sub-stream has no execution of its own: it counts while it works, and waits while a permission of its is pending.
     below.live += (LIVE.has(String(child.state)) || ['working', 'waiting'].includes(String(child.subagent)) ? 1 : 0) + under.live
-    below.waiting += (child.question || child.subagent === 'waiting' ? 1 : 0) + under.waiting
+    below.waiting += (child.question || child.request || child.subagent === 'waiting' ? 1 : 0) + under.waiting
     if (Date.parse(child.changedAt) > Date.parse(changedAt)) changedAt = child.changedAt
   }
   return {
@@ -69,7 +71,8 @@ function listRow(workstream: string, line: { parent: string | null; depth: numbe
     state: view.state ?? null,
     harness: view.harness ?? null,
     question: view.question ?? null,
-    // Its role, when it has one; a delegate's state: any other row stays as it was written.
+    // A request pending, its role, a delegate's state, each when it has one: any other row stays as it was written.
+    ...(typeof view.request === 'string' ? { request: view.request } : {}),
     ...(typeof view.role === 'string' ? { role: view.role } : {}),
     ...(view.delegation ? { delegation: view.delegation } : {}),
     ...(view.subagent ? { subagent: view.subagent } : {}),
