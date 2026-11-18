@@ -1,7 +1,8 @@
 // Captures the delegation a preview shows (test/fixtures/delegation.json; docs/specs/preview.md, "The conversations"):
 // a real run of the log, its delegation engine and Agora's MCP server, real bridges and the mock agent. A delegator
-// starts a delegate by `spawn_agent`; the delegate's agent asks a permission and waits; Agora tells the delegator,
-// whose turn on it is done. Both Workstreams' entries, at that point. Run from the log package:
+// starts a delegate by `spawn_agent`, then runs a command; the delegate's last message comes into it. The delegator
+// sends it more by `send_message`: its agent asks a permission and waits; Agora tells the delegator, whose turn on it
+// is done. Both Workstreams' entries, at that point. Run from the log package:
 //   cd packages/log && node test/run.ts ../../apps/web/scripts/capture.delegation.ts
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
@@ -27,9 +28,21 @@ test('capture the delegation fixture', async (t) => {
   await lab.open(delegator, { profiles: ['agora:delegate'] })
   assert.ok((await lab.write(delegator, 'Ship the release notes')).accepted)
   await lab.turn(delegator, 'done')
-  assert.ok((await lab.write(delegator, `/spawn_agent ${JSON.stringify({ instructions: '/permission\nWrite the release notes into demo.txt.', harness: 'mock' })}`)).accepted)
+  /** The delegator's turns, once it has that many and the last is done. */
+  const turns = (n: number) => until(`turn ${String(n)} done`, async () => [...(await lab.state(delegator)).turns.values()].length === n && (await lab.state(delegator)).active === null, 30_000)
+  assert.ok((await lab.write(delegator, `/spawn_agent ${JSON.stringify({ instructions: '/sleep 3', harness: 'mock' })}`)).accepted)
   const delegate = await until('the delegate', async () => (await lab.store.writer.query('SELECT id FROM workstreams WHERE parent=$1', [delegator])).rows[0]?.id as string | undefined)
-  await until('its permission', async () => (await lab.state(delegate)).permissions.size === 1)
+  await turns(2)
+  // A command of the delegator's, during which the delegate's last message comes (docs/specs/assistant-ui.md, "Folded tools").
+  assert.ok((await lab.write(delegator, '/tool-open 6')).accepted)
+  await turns(3)
+  await lab.workstreams.projections.run(delegator)
+  const folded = (await lab.workstreams.projections.objects(delegator)).find((o) => o.object.type === 'user' && o.object.as === 'delegate')
+  assert.equal(folded?.object.steered, true, 'the last message came into the command’s turn')
+  const turn = folded!.object.turn
+  assert.ok((await lab.workstreams.projections.objects(delegator)).some((o) => o.object.type === 'tool' && o.object.turn === turn), 'beside the command')
+  assert.ok((await lab.write(delegator, `/send_message ${JSON.stringify({ to: delegate, message: '/permission\nWrite the release notes into demo.txt.' })}`)).accepted)
+  await until('its permission', async () => (await lab.state(delegate)).permissions.size === 1, 30_000)
   // Agora's message, then the delegator's turn on it, done.
   await until('the delegator told', async () => {
     const state = await lab.state(delegator)

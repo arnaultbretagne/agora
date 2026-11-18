@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { CoreProjection, decode, project, type Entry } from '@agora/log'
 import { Api } from '../src/agora/api.ts'
 import { apply, empty, type ThreadRow, type ThreadState } from '../src/agora/objects.ts'
-import { diffStats, foldable, foldOf, labelOf, type Artifact } from '../src/agora/tools.ts'
+import { diffStats, firstLine, foldable, foldOf, labelOf, messageLabel, type Artifact } from '../src/agora/tools.ts'
 import { acceptOf, blockOf, composerAttachments, prepare, promptOf, refusalOf, TEXT_MAX } from '../src/agora/attachments.ts'
 import { ASKS, askUserQuestion, mcpForm, QUESTIONS, requestUserInput } from '../../../packages/mock-agent/src/forms.ts'
 import {
@@ -52,6 +52,7 @@ import {
   type Picks,
   type Role,
   type Setting,
+  type Received,
   type WorkstreamView,
 } from '../src/agora/view.ts'
 
@@ -984,29 +985,93 @@ test('U69 waiting elements: those waiting, in position order, with their text an
   assert.equal(composerOf(cancelled, workstreamOf(cancelled, MESSAGES_WS)).held, true)
 })
 
-test('U76 a delegate’s message sent into a running turn; one of Agora’s; one waiting: at their place, the first as the delegate’s, the second a line of Agora’s; the third saying who wrote it', () => {
-  const another = (position: number, words: string, as: string) => ({
-    kind: 'element',
-    id: `said-${String(position)}`,
-    object: { type: 'user', turn: 't', session: 's', firstPosition: String(position), content: [{ type: 'text', text: words }], steered: true, from: 'd', as },
-  })
+/** A message of another's than the person's, `as` its writer stands, from `d` (docs/specs/delegation.md, "Messages"). */
+const another = (position: number, words: string, as: string, steered = true, turn = 't') => ({
+  kind: 'element',
+  id: `said-${String(position)}`,
+  object: { type: 'user', turn, session: 's', firstPosition: String(position), content: [{ type: 'text', text: words }], ...(steered ? { steered: true } : {}), from: 'd', as },
+})
+type MessagePart = { type: string; toolName?: string; toolCallId?: string; result?: unknown; text?: string; artifact?: { kind?: string; status?: string; message?: unknown } }
+const partsIn = (message: { content: unknown }) => message.content as MessagePart[]
+/** A response's parts as the thread draws them: a message received by its writer and its text, any other by its type. */
+const drawn = (message: { content: unknown }) => partsIn(message).map((p) => (p.type === 'tool-call' ? (p.toolName === 'message' ? ['message', p.artifact?.message] : ['tool', p.toolName]) : [p.type, p.text]))
+
+test('U76 a delegate’s message sent into a running turn; one of Agora’s; one waiting: each a line of the response at its place, the response not split; the third saying who wrote it', () => {
   const messages = messagesOf(crafted([turnObject('in_progress'), said(1, 'first'), chunk(2, 'before'), another(3, 'the result', 'delegate'), chunk(4, 'between'), another(5, 'it failed', 'agora'), chunk(6, 'after')]))
   assert.deepEqual(messages.map((m) => [m.id, m.role]), [
     ['t:user', 'user'],
     ['t:assistant', 'assistant'],
-    ['t:user:3', 'user'],
-    ['t:assistant:3', 'assistant'],
-    ['t:report:5', 'system'],
-    ['t:assistant:5', 'assistant'],
   ])
-  assert.equal(messages[2]!.metadata?.custom?.from, 'd')
-  assert.deepEqual(messages[4]!.content, [{ type: 'text', text: 'it failed' }])
-  assert.equal(messages[4]!.metadata?.custom?.fromAgora, true)
-  // A message of Agora's opening its turn: its line, in place of the person's.
-  const opening = messagesOf(crafted([turnObject('done'), { kind: 'element', id: 'a', object: { type: 'user', turn: 't', session: 's', firstPosition: '1', content: [{ type: 'text', text: 'it failed' }], from: 'd', as: 'agora' } }]))
-  assert.deepEqual(opening.map((m) => [m.id, m.role]), [['t:report', 'system'], ['t:assistant', 'assistant']])
+  assert.deepEqual(drawn(messages[1]!), [
+    ['text', 'before'],
+    ['message', { from: 'd', as: 'delegate', text: 'the result' }],
+    ['text', 'between'],
+    ['message', { from: null, as: 'agora', text: 'it failed' }],
+    ['text', 'after'],
+  ])
+  assert.deepEqual(messages[1]!.status, { type: 'running' }, 'the response going on under them')
   const waiting = crafted([turnObject('in_progress'), { kind: 'element', id: 'w', object: { type: 'waiting', position: '7', firstPosition: '7', status: 'waiting', content: [{ type: 'text', text: 'later' }], from: 'd', as: 'delegate' } }])
   assert.deepEqual(waitingOf(waiting), [{ id: 'w', position: '7', text: 'later', attachments: 0, from: 'd', as: 'delegate' }])
+})
+
+test('U112 messages received — sent into a running command’s turn, opening a turn, a report, a task —: each a `message` part at its place in its response, no message of its own; folded with the command, alone its own line; the person’s message still splitting', () => {
+  const command = (position: number, status = 'completed') => ({
+    kind: 'element',
+    id: `tool-${String(position)}`,
+    object: { type: 'tool', turn: 't', session: 's', firstPosition: String(position), lastPosition: String(position + 10), toolCallId: `call-${String(position)}`, title: 'npm test', kind: 'execute', status },
+  })
+  /** The folds of a response, as U77 reads them: each run of foldable tools between the other parts, by its count and label. */
+  const runs = (message: { content: unknown }) => {
+    const out: MessagePart[][] = [[]]
+    for (const p of partsIn(message)) {
+      if (p.type === 'tool-call' && foldable(p as never)) out.at(-1)!.push(p)
+      else if (p.type !== 'reasoning') out.push([])
+    }
+    return out.filter((run) => run.length > 0).map((run) => (run.length < 2 ? { alone: run[0]!.toolName } : { count: foldOf(run as never).count, summary: foldOf(run as never).summary, size: foldOf(run as never).size }))
+  }
+
+  // A command running, a delegate's last message and one of Agora's sent into its turn, then the agent's text.
+  const during = messagesOf(crafted([turnObject('in_progress'), said(1, 'go'), command(2, 'in_progress'), another(3, '## Done\n\nAll **tests** pass.', 'delegate'), another(4, 'Your delegate d "the task": The person stopped it.', 'agora'), chunk(5, 'Both heard.')]))
+  assert.deepEqual(during.map((m) => [m.id, m.role]), [['t:user', 'user'], ['t:assistant', 'assistant']], 'no user or system message of theirs, the response not split')
+  assert.deepEqual(drawn(during[1]!), [
+    ['tool', 'execute'],
+    ['message', { from: 'd', as: 'delegate', text: '## Done\n\nAll **tests** pass.' }],
+    ['message', { from: null, as: 'agora', text: 'Your delegate d "the task": The person stopped it.' }],
+    ['text', 'Both heard.'],
+  ])
+  const [, first, second] = partsIn(during[1]!)
+  assert.deepEqual([first!.toolCallId, first!.result, first!.artifact?.kind, first!.artifact?.status], ['said-3', '## Done\n\nAll **tests** pass.', 'message', 'completed'])
+  // Its line: who wrote it, then its first line without the marks of Markdown.
+  assert.equal(messageLabel(first!.artifact!.message as Received, 'the task'), 'From the task · Done')
+  assert.equal(messageLabel(second!.artifact!.message as Received, 'Agora'), 'From Agora · Your delegate d "the task": The person stopped it.')
+  assert.equal(firstLine('\n\n> - **All** `tests` pass\nthen more'), 'All tests pass')
+  assert.deepEqual(runs(during[1]!), [{ count: 3, summary: '1 command, 2 messages', size: '1 tool, 2 messages' }], 'one fold, the text after it out of it')
+  // Beside a delegate's line, which stays out of folds: alone.
+  const spawn = { kind: 'element', id: 'spawn', object: { type: 'tool', turn: 't', session: 's', firstPosition: '2', lastPosition: '2', toolCallId: 'call-spawn', title: 'mcp__agora__spawn_agent', kind: 'other', status: 'completed', rawOutput: 'started 7f1c9a52-3b1e-4c8e-9d61-2a4b5c6d7e8f · the task' } }
+  assert.deepEqual(runs(messagesOf(crafted([turnObject('done'), said(1, 'go'), spawn, another(3, 'Your delegate d "the task": It ended its turn with nothing to say.', 'agora')]))[1]!), [{ alone: 'message' }])
+
+  // Turns opened by a delegate's last message, by one of Agora's, by an earlier delegation's report: their response alone, the message first.
+  for (const [opening, message] of [
+    [another(1, 'Slept 3 s.', 'delegate', false), { from: 'd', as: 'delegate', text: 'Slept 3 s.' }],
+    [another(1, 'Your delegate d "x": Its turn failed.', 'agora', false), { from: null, as: 'agora', text: 'Your delegate d "x": Its turn failed.' }],
+    [{ kind: 'element', id: 'report', object: { type: 'report', turn: 't', session: 's', firstPosition: '1', text: 'Two outcomes.', delegates: ['a', 'b'] } }, { from: null, as: 'agora', text: 'Two outcomes.', outcomes: 2 }],
+    // A delegate's task from its delegator, in the delegate's own thread.
+    [another(1, 'Review the change.', 'delegator', false), { from: 'd', as: 'delegator', text: 'Review the change.' }],
+  ] as const) {
+    const opened = messagesOf(crafted([turnObject('done'), opening, chunk(2, 'An answer.')]))
+    assert.deepEqual(opened.map((m) => [m.id, m.role]), [['t:assistant', 'assistant']])
+    assert.deepEqual(drawn(opened[0]!), [['message', message], ['text', 'An answer.']])
+    assert.deepEqual(runs(opened[0]!), [{ alone: 'message' }], 'alone, its own line')
+  }
+  // A native sub-stream's task from its parent: its response alone, the task first.
+  const native = crafted([{ kind: 'turn', id: 't', object: { status: 'done', requestPosition: '1', session: 's', native: true } }, another(1, 'Count the files.', 'parent', false), chunk(2, '3 files.')])
+  assert.deepEqual(messagesOf(native).map((m) => m.role), ['assistant'])
+  assert.deepEqual(drawn(messagesOf(native)[0]!), [['message', { from: 'd', as: 'parent', text: 'Count the files.' }], ['text', '3 files.']])
+
+  // The control: the person's message, opening the turn and sent into it, a bubble of its own that splits the response, as in U68.
+  const person = messagesOf(crafted([turnObject('in_progress'), said(1, 'go'), command(2), said(3, 'also this', true), command(4)]))
+  assert.deepEqual(person.map((m) => [m.id, m.role]), [['t:user', 'user'], ['t:assistant', 'assistant'], ['t:user:3', 'user'], ['t:assistant:3', 'assistant']])
+  assert.deepEqual(runs(person[1]!), [{ alone: 'execute' }])
 })
 
 test('U77 tools in a row, the reasoning in them, one fold each; a pending permission, a delegate, an approval and a question out', async () => {

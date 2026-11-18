@@ -1,16 +1,14 @@
 // The messages (docs/specs/assistant-ui.md, "Messages" and "The screen"), in assistant-ui's base skin:
-// the user's in a bubble on the right, the agent's bare on the page, its steps as trace lines, and the
-// notices between them as quiet lines; a message of Agora's as a line opening on its text.
+// the user's in a bubble on the right, the agent's bare on the page, its steps as trace lines — what it
+// received from another than the person among them —, and the notices between them as quiet lines.
 import { ActionBarPrimitive, AuiIf, MessagePrimitive, useAuiState, type PartState } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, CopyIcon, LoaderCircleIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { UserMessageAttachments } from '@/components/assistant-ui/elements/attachment'
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text'
 import { cn } from '@/lib/utils'
-import { useAgora } from '../agora/runtime.tsx'
-import { foldable } from '../agora/tools.ts'
+import { foldable, type Artifact } from '../agora/tools.ts'
 import { harnessName, planItems } from '../agora/view.ts'
-import { Markdown } from './markdown.tsx'
 import { ToolCall, ToolFold } from './tool.tsx'
 import { TraceDisclosure, TraceLine } from './trace.tsx'
 
@@ -28,34 +26,7 @@ export const UserMessage: FC = () => {
   const status = useAuiState((s) => String(custom(s).turnStatus ?? ''))
   // A message of attachments alone has no bubble (docs/specs/assistant-ui.md, "Attachments").
   const said = useAuiState((s) => s.message.content.some((p) => p.type === 'text' && p.text.trim() !== ''))
-  // A message of another Workstream's: its writer's, by its title, not the person's.
-  const from = useAuiState((s) => String(custom(s).from ?? ''))
-  const words = useAuiState((s) => s.message.content.map((p) => (p.type === 'text' ? p.text : '')).join(''))
-  const { line, delegates, open } = useAgora()
   const note = TURN_NOTE[status]
-  if (from !== '')
-    return (
-      <MessagePrimitive.Root
-        data-role="user"
-        data-from={from}
-        className="animate-in fade-in slide-in-from-bottom-1 mx-auto flex w-full max-w-(--thread-max-width) flex-col items-start duration-150"
-      >
-        <a
-          href={`/w/${from}`}
-          onClick={(event) => {
-            event.preventDefault()
-            open(from)
-          }}
-          className="text-muted-foreground hover:text-foreground mb-1 px-1 text-[12px]"
-        >
-          From {[...line, ...delegates].find((r) => r.id === from)?.title ?? 'another agent'}
-        </a>
-        <div className="border-foreground/15 rounded-thread max-w-[80%] border px-4 py-2 text-[15px] leading-relaxed wrap-break-word">
-          <Markdown text={words} />
-        </div>
-        {note && <span className="text-muted-foreground/70 mt-1 px-1 font-mono text-[11px]">{note}</span>}
-      </MessagePrimitive.Root>
-    )
   return (
     <MessagePrimitive.Root
       data-role="user"
@@ -116,7 +87,8 @@ export const AssistantMessage: FC = () => {
   const pending = useAuiState((s) => custom(s).turnStatus === 'pending')
   const harness = useAuiState((s) => String(custom(s).harness ?? ''))
   const running = useAuiState((s) => s.message.status?.type === 'running')
-  const empty = useAuiState((s) => s.message.parts.length === 0)
+  // Nothing of the agent's own yet: no part, or only messages it received (docs/specs/assistant-ui.md, "Messages").
+  const empty = useAuiState((s) => s.message.parts.every((p) => p.type === 'tool-call' && (p.artifact as Artifact | undefined)?.message !== undefined))
   // A question to the person is one box: its title and text, then its answer at its foot.
   const question = useAuiState((s) => custom(s).question !== undefined)
   const waiting = useAuiState((s) => s.message.status?.type === 'requires-action')
@@ -190,25 +162,6 @@ export const Notice: FC = () => {
     return first?.type === 'text' ? first.text : ''
   })
   const type = useAuiState((s) => String(custom(s).notice ?? ''))
-  // A message of Agora's (docs/specs/assistant-ui.md, "Messages"): one line, opening on its text; an earlier delegation's report counts its outcomes.
-  const outcomes = useAuiState((s) => custom(s).report)
-  const agora = useAuiState((s) => custom(s).fromAgora === true)
-  if (agora)
-    return (
-      <MessagePrimitive.Root data-agora className="mx-auto w-full max-w-(--thread-max-width)">
-        <TraceDisclosure tone="quiet" label="From Agora">
-          <Markdown text={text} />
-        </TraceDisclosure>
-      </MessagePrimitive.Root>
-    )
-  if (typeof outcomes === 'number')
-    return (
-      <MessagePrimitive.Root data-report={outcomes} className="mx-auto w-full max-w-(--thread-max-width)">
-        <TraceDisclosure tone="quiet" label="From Agora" meta={outcomes === 0 ? 'a reminder' : `${String(outcomes)} outcome${outcomes === 1 ? '' : 's'}`}>
-          <Markdown text={text} />
-        </TraceDisclosure>
-      </MessagePrimitive.Root>
-    )
   return (
     <MessagePrimitive.Root
       role="note"

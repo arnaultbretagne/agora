@@ -84,7 +84,10 @@ and the composer of its Workstream holds it again, with its attachments.
 A turn becomes the user's message and the agent's response; the response's parts are the turn's
 elements — text, reasoning, tools with their permissions, the plan — in the order the log holds
 them. A notice becomes a line of its own between turns: a Session that starts or ends, a
-connection lost, a request that failed, an execution that ends.
+connection lost, a request that failed, an execution that ends. What the agent receives from
+another than the person — a delegate's message, its delegator's, Agora's — is one of the
+response's parts, at its place, folded with the tools beside it; for the agent it stays a message.
+The thread's bubbles are what the person and the agent say to each other.
 
 The Workstream view's state decides what the composer offers: writing when the execution is
 ready, a turn running or not; a reason when it is not; and with no execution running, starting one
