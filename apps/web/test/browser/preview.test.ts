@@ -1,4 +1,4 @@
-// docs/specs/preview.md, acceptance cases V2 to V6, V8, V9: the server started as a preview, and its client in a real
+// docs/specs/preview.md, acceptance cases V2 to V6, V8 to V10: the server started as a preview, and its client in a real
 // browser (Playwright's Chromium) behind the headers of the previews' two gates.
 //
 // Two ways to run it:
@@ -311,6 +311,39 @@ test('V9 the forms among the conversations: one waiting on a question of options
     await card.getByRole('button', { name: 'Answer' }).click()
     await page.locator('main').getByText('Elicitation: accept {"question_0":"PostgreSQL"}.').waitFor()
     await page.locator('main [data-form="select"][data-form-status="answered"]').waitFor()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('V10 the fixed offer: GET /api/config offers one of each kind of right and signs for none; the access picker shows them; a Create carries what was picked and is answered', async (t) => {
+  const url = await target(t)
+  const config = (await (await fetch(`${url}/api/config`, { headers: BROWSER_GATE })).json()) as { credentials: { proxy: unknown; offered: unknown } }
+  assert.equal(config.credentials.proxy, null, 'no gateway')
+  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:review', 'github:example/site:read'])
+  const page = await behind(BROWSER_GATE)
+  try {
+    const creates: unknown[] = []
+    page.on('request', (request) => {
+      if (request.method() !== 'POST' || !/\/api\/workstreams\/[0-9a-f-]{36}\/commands$/.test(new URL(request.url()).pathname)) return
+      const command = request.postDataJSON() as { kind: string; body?: { profiles?: unknown } }
+      if (command.kind === 'Create') creates.push(command.body?.profiles)
+    })
+    await page.goto(`${url}/`)
+    await page.getByRole('button', { name: 'Harness' }).click()
+    await page.getByRole('menuitem', { name: /Mock agent/ }).click()
+    // The key alone on the composer, the Internet granted by default.
+    await page.getByRole('button', { name: 'Access: Internet', exact: true }).click()
+    const panel = page.getByRole('dialog', { name: 'Access' })
+    for (const name of ['Internet', 'z.ai', 'ChatGPT']) await panel.getByRole('switch', { name, exact: true }).waitFor()
+    for (const name of ['example/app', 'example/docs', 'example/site']) await panel.getByRole('radiogroup', { name, exact: true }).waitFor()
+    await panel.getByRole('radiogroup', { name: 'example/app' }).getByRole('radio', { name: 'Write' }).click()
+    await page.keyboard.press('Escape')
+    await send(page, 'Hello with access')
+    await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
+    await page.locator('main').getByText('Echo #1: Hello with access.').waitFor()
+    assert.deepEqual(creates, [['internet', 'github:example/app:write']])
+    await page.getByRole('button', { name: 'Access: Internet, app · Write', exact: true }).waitFor()
   } finally {
     await page.context().close()
   }
