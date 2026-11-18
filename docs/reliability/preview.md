@@ -14,6 +14,8 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R6 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own, Playwright's Chromium; the server started as a preview from the source, as R4, its conversations with the captured forms. |
 | R7 | 2026-11-16 | `754f907` | local | `preview.yml`, run 43931922712, on pull request #215 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R5, its conversations with the captured forms; then `ghcr.io/arnaultbretagne/agora-server:754f907ed5707d8ddaa370ccca2a562c4f82ab28` published, `sha256:c33a1befbe199a73f9edd09af39b7d9e2f4fe7c5e14972c66dfca634e998675d`. CI's `check` on that commit green (run 43931810206, push). |
 | R8 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green, Playwright's Chromium; the server started as a preview from the source, as R6. |
+| R9 | 2026-11-18 | `a6768ad` | local | `npm run check`, with `npm run test:browser`, on g4, as R44 of `client.md`: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own, Playwright's Chromium; the server started as a preview from the source, as R8, its conversations with the delegation captured again by `scripts/capture.delegation.ts` — the delegate's last message come into a `/tool-open 6` of its delegator's, then a `send_message` asking the permission. |
+| R10 | 2026-11-18 | `f5a3752` | local | `preview.yml`, run 44329646987, on pull request #219 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R7, its conversations with the delegation captured again; then `ghcr.io/arnaultbretagne/agora-server:f5a37527d3d6ea0f83dc92c4a07a969688038da2` published, `sha256:666aa12569b3e8b2fa263ee2fd860e9013aec2c417b269351c037fda0c2c8b7d`. Its first run, on `14b4cf4` (44328892553), failed V8: two lines now name the delegate, and the test's locator took one alone; fixed in the test. |
 
 ## Cases
 
@@ -52,6 +54,16 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V5 | — | local | R8 | proven | As R6. |
 | V8 | — | local | R8 | proven | As R6. |
 | V9 | — | local | R8 | proven | As R6, the receipt shown once the projection gives the answer. |
+| V3 | real: the server stopped, then started again on the same database | local | R9 | proven | As R8. |
+| V4 | — | local | R9 | proven | As R8. |
+| V5 | — | local | R9 | proven | As R8. |
+| V8 | — | local | R9 | proven | The row `Ship the release notes` "waiting for you"; its fold `1 command, 1 message`; Agora's message the line `From Agora · …`, opened: `it waits for an answer to its request <n>: a permission.` with `allow-once: Allow (allow_once)`; two delegate lines "waiting for you"; unfolded, its row "waiting for you". A draft, the live `/permission` allowed through its card, waiting no more. |
+| V9 | — | local | R9 | proven | As R8. |
+| V4 | — | local | R10 | proven | As R7. |
+| V5 | — | local | R10 | proven | As R7. |
+| V6 | — | local | R10 | proven | As R7. |
+| V8 | — | local | R10 | proven | As R9, against the image. |
+| V9 | — | local | R10 | proven | As R7. |
 
 ## Not covered
 
