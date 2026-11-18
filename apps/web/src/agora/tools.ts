@@ -1,6 +1,7 @@
 // What a tool call's line says (docs/specs/assistant-ui.md, "Parts"): the agent's title made readable,
-// and the size of its change; and what the line of a fold says. Pure, like view.ts.
-import type { Form, Gate, MergeCard } from './view.ts'
+// and the size of its change; a message the agent received, who wrote it and its first line; and what the
+// line of a fold says. Pure, like view.ts.
+import type { Form, Gate, MergeCard, Received } from './view.ts'
 
 export type Diff = { path?: string; oldText?: string | null; newText?: string }
 export type Todo = { content: string; status: string }
@@ -25,6 +26,8 @@ export type Artifact = {
   merge?: MergeCard
   /** A form its agent asks, on the tool line it names or on its own (docs/specs/assistant-ui.md, "Forms"). */
   form?: Form
+  /** A message the agent received from another than the person (docs/specs/assistant-ui.md, "Messages"). */
+  message?: Received
 }
 
 const basename = (path: string | undefined): string => (path ? (path.split('/').at(-1) ?? path) : '')
@@ -49,6 +52,19 @@ export function labelOf(artifact: Artifact, toolName: string): string {
   if (where === '') return title
   return `${VERB[artifact.kind ?? ''] ?? (title.includes('/') ? 'Use' : title)} ${where}`
 }
+
+/** A message's first line, as a trace line holds it: its first words, without the marks of Markdown that open a line or set its words. */
+export function firstLine(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? ''
+  return line.replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, '').replace(/\*\*|__|`/g, '')
+}
+
+/** Who wrote a message the agent received: Agora, or the Workstream of its writer by its title, among the rows the thread reads. */
+export const senderOf = (message: Received, rows: readonly { readonly id: string; readonly title: string }[]): string =>
+  message.as === 'agora' ? 'Agora' : (rows.find((r) => r.id === message.from)?.title ?? 'another agent')
+
+/** A message's line: who wrote it, then its first line. */
+export const messageLabel = (message: Received, sender: string): string => `From ${sender} · ${firstLine(message.text)}`
 
 const lines = (text: string): string[] => (text === '' ? [] : text.replace(/\n$/, '').split('\n'))
 
@@ -93,12 +109,21 @@ const NOUN: Record<string, readonly [string, string]> = {
   execute: ['command', 'commands'],
   fetch: ['fetch', 'fetches'],
   other: ['other tool', 'other tools'],
+  message: ['message', 'messages'],
 }
 
 const isRunning = (a: Artifact): boolean => a.status === 'pending' || a.status === 'in_progress'
 
-/** What a fold's line says: its tools counted by kind in their order, how they ended, and the step it is at. */
-export function foldOf(tools: readonly FoldedTool[]): { count: number; summary: string; note: string | undefined; latest: string; running: boolean } {
+const counted = (n: number, [one, many]: readonly [string, string]): string => `${String(n)} ${n === 1 ? one : many}`
+
+/**
+ * What a fold's line says: its tools counted by kind in their order, how they ended, and the step it is at — a message's
+ * step said by `label`, which knows its writer's title —; while it runs, how many tool calls and messages it holds.
+ */
+export function foldOf(
+  tools: readonly FoldedTool[],
+  label: (tool: FoldedTool) => string = (tool) => labelOf((tool.artifact ?? {}) as Artifact, tool.toolName),
+): { count: number; summary: string; note: string | undefined; latest: string; running: boolean; size: string } {
   const kinds = new Map<string, number>()
   const diffs: Diff[] = []
   let failed = 0
@@ -111,15 +136,17 @@ export function foldOf(tools: readonly FoldedTool[]): { count: number; summary: 
     diffs.push(...(a.diffs ?? []))
     if (tool.isError === true) failed++
     if (isRunning(a)) running = true
-    if (isRunning(a) || !running) latest = labelOf(a, tool.toolName)
+    if (isRunning(a) || !running) latest = label(tool)
   }
+  const messages = kinds.get('message') ?? 0
   const stats = diffs.length > 0 ? diffStats(diffs) : null
   const note = [failed > 0 ? `${String(failed)} failed` : '', stats ? `+${String(stats.added)} −${String(stats.removed)}` : ''].filter((n) => n !== '').join(' · ')
   return {
     count: tools.length,
-    summary: [...kinds].map(([kind, n]) => `${String(n)} ${NOUN[kind]![n === 1 ? 0 : 1]}`).join(', '),
+    summary: [...kinds].map(([kind, n]) => counted(n, NOUN[kind]!)).join(', '),
     note: note === '' ? undefined : note,
     latest,
     running,
+    size: [tools.length > messages ? counted(tools.length - messages, ['tool', 'tools']) : '', messages > 0 ? counted(messages, NOUN.message!) : ''].filter((s) => s !== '').join(', '),
   }
 }

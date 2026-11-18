@@ -1,16 +1,17 @@
 // A tool call, in the trace grammar (docs/specs/assistant-ui.md, "Parts"): one line with the agent's
 // own title, opening onto its diff, its output or its input; and, while the agent waits for it, the
 // permission it asks, with the options it offers. A delegate's line names its delegate and its state, and holds
-// the approval it waits for. Tools in a row fold under one line. Every card answers through assistant-ui: its
-// part's `respondToApproval`, which the runtime sends (docs/specs/assistant-ui.md, "Answering").
+// the approval it waits for. A message the agent received from another than the person is a line too, opening onto
+// its text. Tools in a row fold under one line. Every card answers through assistant-ui: its part's
+// `respondToApproval`, which the runtime sends (docs/specs/assistant-ui.md, "Answering").
 import { useAuiState, type ToolApprovalResponse, type ToolCallMessagePartComponent } from '@assistant-ui/react'
 import { CheckIcon, CircleIcon, GitMergeIcon, LoaderCircleIcon } from 'lucide-react'
-import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FC, type ReactNode } from 'react'
 import { DiffViewer } from '@/components/ui/diff-viewer'
 import { cn } from '@/lib/utils'
 import { useAgora } from '../agora/runtime.tsx'
-import { diffStats, foldOf, labelOf, unanswered, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
-import { harnessName, type Gate, type MergeCard } from '../agora/view.ts'
+import { diffStats, foldOf, labelOf, messageLabel, senderOf, unanswered, unwrap, type Artifact, type Todo } from '../agora/tools.ts'
+import { harnessName, type Gate, type MergeCard, type Received } from '../agora/view.ts'
 import { FormCard } from './form.tsx'
 import { Markdown } from './markdown.tsx'
 import { Output, TraceDisclosure, TraceLine, type Tone } from './trace.tsx'
@@ -277,8 +278,51 @@ const DelegateLine: FC<{ artifact: Artifact; args: Record<string, unknown>; isEr
   )
 }
 
+/** Who wrote a message the agent received, by the titles of the rows the thread reads: its parents and its delegates. */
+function useSender(): (message: Received) => string {
+  const { line, delegates } = useAgora()
+  return useCallback((message: Received) => senderOf(message, [...line, ...delegates]), [line, delegates])
+}
+
+/**
+ * A message the agent received from another than the person (docs/specs/assistant-ui.md, "Messages"): one line, closed —
+ * who wrote it and its first line —, opening onto its writer, a link to its Workstream, and its whole text.
+ */
+const MessageLine: FC<{ message: Received }> = ({ message }) => {
+  const { open } = useAgora()
+  const sender = useSender()(message)
+  const outcomes = message.outcomes
+  const from = message.from
+  return (
+    <div data-message={message.as ?? ''} {...(from !== null ? { 'data-from': from } : { 'data-agora': '' })}>
+      <TraceDisclosure
+        tone="quiet"
+        label={messageLabel(message, sender)}
+        meta={outcomes === undefined ? undefined : outcomes === 0 ? 'a reminder' : `${String(outcomes)} outcome${outcomes === 1 ? '' : 's'}`}
+      >
+        {from !== null && (
+          <a
+            href={`/w/${from}`}
+            onClick={(event) => {
+              event.preventDefault()
+              open(from)
+            }}
+            className="text-muted-foreground hover:text-foreground self-start text-[12px]"
+          >
+            From {sender}
+          </a>
+        )}
+        <div data-message-text>
+          <Markdown text={message.text} />
+        </div>
+      </TraceDisclosure>
+    </div>
+  )
+}
+
 export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsText, result, isError, artifact, approval, respondToApproval, resume }) => {
   const a = (artifact ?? {}) as Artifact
+  if (a.message) return <MessageLine message={a.message} />
   if (a.merge) return <MergeBox card={a.merge} respond={respondToApproval} />
   // A form is its own box, its tool line's place included (docs/specs/assistant-ui.md, "Forms").
   if (a.form) return <FormCard form={a.form} respond={respondToApproval} resume={resume} />
@@ -353,12 +397,23 @@ export const ToolCall: ToolCallMessagePartComponent = ({ toolName, args, argsTex
 export const ToolFold: FC<{ indices: readonly number[]; children: ReactNode }> = ({ indices, children }) => {
   const parts = useAuiState((s) => s.message.parts)
   const atTheEnd = useAuiState((s) => s.message.status?.type === 'running' && indices.at(-1) === s.message.parts.length - 1)
-  const fold = useMemo(() => foldOf(indices.flatMap((i) => (parts[i]?.type === 'tool-call' ? [parts[i]] : []))), [parts, indices])
+  const sender = useSender()
+  const fold = useMemo(
+    () =>
+      foldOf(
+        indices.flatMap((i) => (parts[i]?.type === 'tool-call' ? [parts[i]] : [])),
+        (tool) => {
+          const a = (tool.artifact ?? {}) as Artifact
+          return a.message ? messageLabel(a.message, sender(a.message)) : labelOf(a, tool.toolName)
+        },
+      ),
+    [parts, indices, sender],
+  )
   if (fold.count < 2) return <>{children}</>
   const live = atTheEnd || fold.running
   return (
     <div data-tool-fold>
-      <TraceDisclosure lines tone={live ? 'live' : 'quiet'} label={live ? fold.latest : fold.summary} meta={live ? `${String(fold.count)} tools` : fold.note}>
+      <TraceDisclosure lines tone={live ? 'live' : 'quiet'} label={live ? fold.latest : fold.summary} meta={live ? fold.size : fold.note}>
         {children}
       </TraceDisclosure>
     </div>

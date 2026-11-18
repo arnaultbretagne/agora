@@ -259,11 +259,17 @@ test('V8 the delegation among the conversations: its delegator waiting for you, 
     const delegator = nav.locator('button[title]').filter({ hasText: DELEGATOR })
     await delegator.getByText('waiting for you').waitFor()
     await delegator.click()
+    // The delegate's last message, come during a command of its delegator's: folded with it.
+    await page.locator('main [data-tool-fold]').getByText('1 command, 1 message', { exact: true }).waitFor()
+    // Agora's message, a line of the delegator's response: opened, what it says.
     const agora = page.locator('main [data-agora]').last()
-    await agora.getByText('From Agora', { exact: true }).click()
-    await agora.getByText(/it waits for an answer to its request \d+: a permission\./).waitFor()
-    assert.match(await agora.innerText(), /allow-once: Allow \(allow_once\)/)
-    await page.locator('main [data-delegate]').getByText('waiting for you').waitFor()
+    await agora.getByText(/^From Agora · /).waitFor()
+    await agora.locator('button[aria-expanded]').first().click()
+    await agora.locator('[data-message-text]').getByText(/it waits for an answer to its request \d+: a permission\./).waitFor()
+    assert.match(await agora.locator('[data-message-text]').innerText(), /allow-once: Allow \(allow_once\)/)
+    // Its lines naming the delegate — its `spawn_agent`, then its `send_message` —, each waiting for you.
+    await page.locator('main [data-delegate]').first().getByText('waiting for you').waitFor()
+    assert.equal(await page.locator('main [data-delegate]').getByText('waiting for you').count(), 2)
     await nav.getByRole('button', { name: 'Unfold' }).click()
     await nav.getByRole('group').locator('button[title]').getByText('waiting for you').waitFor()
     // A permission asked live, in a conversation of the person's.
