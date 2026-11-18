@@ -8,12 +8,14 @@ The evidence behind the acceptance cases of `specs/roles.md`.
 | --- | --- | --- | --- | --- |
 | R1 | 2026-11-16 | `f114962` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11, each test on a database of its own; the lab's executions on FakeKube, real bridges and the mock agent, which repeats what it is given; two roles of the tests' own; P1 on the real server process, reading the repository's cards. Nineteen guards were removed in turn, and each time one of P1 to P7, P9, P10, P12, D53 to D55 failed; a twentieth shows nowhere — a Workstream's role read from its last Create, which every Create records the same. |
 | R2 | 2026-11-16 | `808df67` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3cf14450…`; the pools `claude-code-8d9e19335569` (claude-agent-acp 0.106.0, claude-code 2.1.322) and `codex-0b925b298579` (codex-acp 2.6.0, codex 0.166.0), each harness with its pool's default model; the cases' owner. P11, its repository `arnaultbretagne/agora`; played twice: the first Create was refused `invalid_create` for the script's own doing, a lease beyond the 600 s allowed. The pull request it left, #210, closed without merging. |
+| R3 | 2026-11-18 | `e1ddf46` | local | `npm run check`, with `npm run test:browser`, all green, on g4 — V6 skipped, no Docker there: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. P1 on the real server process, reading the repository's cards of this commit: the dev's and the sre's opening their pull requests ready for review, the lead's proposing the merge. |
 
 ## Cases
 
 | Case | Failure | Level | Run | Verdict | Observed |
 | --- | --- | --- | --- | --- | --- |
 | P1 | — | local | R1 | proven | `GET /api/config`: `dev`, `judge`, `lead`, `sre`, each `role`, `summary`, `harness`, `model`, `effort`, `access` and nothing else, a harness among the three; `lead`'s `access` `agora:delegate`, `judge`'s none, `codex`, `gpt-6.1-sol`, `xhigh`; no word of a persona. `ROLES_DIR` holding `broken.md` with no front matter: the server exits, `broken.md: a role card starts with its front matter`. |
+| P1 | — | local | R3 | proven | As R1, on this commit's cards. |
 | P2 | — | local | R1 | proven | One prompt, two blocks: `` From Agora, not the person: your role, `scout`. ``, a blank line, the persona, marked `scout`; then the message. The `user` element: the message alone, `role` `scout`, no `from`. The title its first line; `role` in the view and in the row. A Workstream started with none: its message alone, no `role` in its view nor its element. |
 | P3 | — | local | R1 | proven | `judge`, a role no card has there: `unknown_role`; 7: `invalid_create`; 0 entries, no execution. |
 | P4 | — | local | R1 | proven | Two prompts: the block with the first alone. A Workstream whose first message is `/sleep 3`: one `_session/steering` during it, its prompt the message alone; then a plain message: the block with its prompt. |

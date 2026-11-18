@@ -87,8 +87,9 @@ Decided on 2026-11-13, 2026-11-16 and 2026-11-18.
 - A team's rights are the lead's own, or approved one call at a time: a lead given write access to a
   repository, so that its devs start at once, can write there itself.
 - Every execution with `agora:delegate` lists `propose_merge` from its Session's start: a harness
-  lists its tools as its Session opens, before it delegates, and Agora's server, stateless, tells it
-  of no change. A call on a repository whose write it gave no delegate is refused.
+  lists its tools as its Session opens, before it delegates (Codex, seen live on 2026-11-03 for a
+  delegate's tool), and Agora's server, stateless, tells it of no change. A call on a repository
+  whose write it gave no delegate is refused.
 - A team has no budget of its own. Delegation's bounds are its only ones.
 - Nothing retries a team. A lead whose execution ended is continued by the next message written to
   it — the person's, or a delegate's last message.
