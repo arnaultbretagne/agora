@@ -1,7 +1,8 @@
 # Merge
 
-Contract to implement: the merge card. An agent that wrote a pull request proposes its merge; the
-person merges it from the card, in one click. Written against GitHub's REST API (2022-11-28).
+Contract to implement: the merge card. An agent that wrote a pull request, or its delegator that
+gave it the repository's write, proposes its merge; the person merges it from the card, in one
+click. Written against GitHub's REST API (2022-11-28).
 
 **GitHub holds the rule, Agora only the click. `agora-contributor` writes, `agora-reviewer` approves —
 its approval is the one review `main` requires — and only the operator may update `main`
@@ -27,7 +28,7 @@ sequenceDiagram
 
 | Element | Rule |
 | --- | --- |
-| The tool | `propose_merge` on Agora's MCP server (`mcp.md`): `repo`, `owner/name`; `number`, the pull request's. Listed to an execution holding a repository's write (`github:owner/repo:write`), for those repositories only: another is `not_allowed`. |
+| The tool | `propose_merge` on Agora's MCP server (`mcp.md`): `repo`, `owner/name`; `number`, the pull request's. Listed to an execution holding a repository's write (`github:owner/repo:write`) or `agora:delegate`, from its Session's start. Accepted on a repository whose write the execution holds, or whose write its Workstream gave one of its delegates — in the `rights` of a `delegation.started` of a sub-stream of that Workstream (`log.md`, "Entries"), whichever of its executions calls: a write asked and refused was never given. Another repository is `not_allowed`. The caller gains no right by it: its execution's profiles, token and grants stay as they were, and only the person's click merges ("The merge"). |
 | What Agora reads | The pull request, through the gateway, with its own grant (`credentials.md`, "Agora's own profiles": `merge`): open, its title, URL, base and head. Not found: `not_found`; closed or merged: `not_open`. Nothing the card shows comes from the agent. |
 | The card | An Ask of Agora's own, `kind` `merge`, in the caller's Workstream (`log.md`, "Commands"): its title the pull request's; its text the link, `base ← head` and its author; one option, Merge (`allow_once`); `repo`, `number`, `url`. No expiry. Another question pending: `question_pending`. |
 | The answer | At once: `proposed <owner/name>#<number>: the person merges it from the card; what happens comes back to you as a message from Agora`. The agent goes on or ends its turn: nothing holds the call. |
@@ -74,3 +75,6 @@ sequenceDiagram
 | G7 | The server restarted between the Answer and its outcome, the pull request merged meanwhile, then not | `merge.merged` once; then the merge carried out. |
 | G8 | In a browser: the card pending, its state `review`, then `ready`; Merge; then a card cancelled by a message | The title as a link, the state, Merge closed then open; Merging…, then Merged with the sha; then Cancelled. |
 | G9 | Live: an execution with `github:A:write` opens a pull request, one with `github:A:review` approves it, the first proposes its merge; the person clicks Merge | The card `ready` once approved; the pull request squash-merged by the operator; the agent told. |
+| G10 | An execution with `agora:delegate` alone: `tools/list`; `propose_merge` on A's open pull request; its Workstream then giving `github:A:write` to a delegate and `github:C:review` to another, `github:D:write` asked and refused by the person, another Workstream of the person's giving `github:B:write` to its own; from a later execution of the first Workstream, `propose_merge` on D's, C's and B's, then on A's | The delegation's tools and `propose_merge`; `not_allowed`, no card; `not_allowed` three times, no card; `proposed …`, the card pending in the first Workstream with the pull request's title, URL, `repo`, `number`, and none in its delegates'. |
+| G11 | An execution with `agora:delegate` alone giving `github:A:write` to a delegate, then proposing A's pull request | Its profiles `agora:delegate` alone; every token signed for it the same, its one grant Agora's MCP endpoint; the delegate's token `github:A:write` and `agora:submit`, GitHub's API as the contributor. |
+| G12 | Live: a `lead` with `agora:delegate` alone starts a `dev` with `github:A:write` and a `judge` with `github:A:review`; the judge approves the dev's pull request; the person clicks Merge | The pull request opened ready for review; the lead proposes its merge, the card in the lead's Workstream, `ready` once approved; the pull request squash-merged by the operator; the lead told. |

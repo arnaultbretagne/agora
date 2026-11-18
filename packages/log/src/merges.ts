@@ -1,7 +1,7 @@
-// The merge card (docs/specs/merge.md): an agent proposes the merge of a pull request it wrote; the person merges it
-// from the card. GitHub holds the rule — who approves, who may update `main` —; Agora reads the pull request through
-// the gateway with its own grant, shows what GitHub says of it, and merges it, squash, as the operator, when the
-// person clicks and GitHub would merge it without the operator's bypass.
+// The merge card (docs/specs/merge.md): an agent proposes the merge of a pull request it wrote, or a delegate of its
+// wrote with the write it gave; the person merges it from the card. GitHub holds the rule — who approves, who may
+// update `main` —; Agora reads the pull request through the gateway with its own grant, shows what GitHub says of it,
+// and merges it, squash, as the operator, when the person clicks and GitHub would merge it without the operator's bypass.
 import { randomUUID } from 'node:crypto'
 import type { GitHub, MergeState } from '@agora/credentials'
 import type { Caller } from './delegation.ts'
@@ -65,7 +65,7 @@ export class Merges {
     const number = args.number
     if (typeof repo !== 'string' || !REPO.test(repo)) throw new Refused('invalid_query: repo')
     if (typeof number !== 'number' || !Number.isInteger(number) || number < 1) throw new Refused('invalid_query: number')
-    if (!caller.profiles.includes(`github:${repo}:write`)) throw new Refused('not_allowed')
+    if (!(await this.mayPropose(caller, repo))) throw new Refused('not_allowed')
     const pull = await this.options.github.pull(repo, number)
     if (pull === null) throw new Refused('not_found')
     if (!pull.open) throw new Refused('not_open')
@@ -90,6 +90,21 @@ export class Merges {
     )
     if (!asked.accepted) throw new Refused(String(asked.reason ?? 'unavailable'))
     return `proposed ${repo}#${String(number)}: the person merges it from the card; what happens comes back to you as a message from Agora`
+  }
+
+  /**
+   * Whether the caller may propose a merge on a repository (docs/specs/merge.md, "The proposal"): it holds the
+   * repository's write, or its Workstream gave that write to one of its delegates — the rights `spawn_agent` recorded
+   * in the delegate's `delegation.started`. Neither gives the caller anything more than the card.
+   */
+  private async mayPropose(caller: Caller, repo: string): Promise<boolean> {
+    const write = `github:${repo}:write`
+    if (caller.profiles.includes(write)) return true
+    const delegated = await this.workstreams.options.store.writer.query(
+      "SELECT 1 FROM workstreams w WHERE w.parent = $1 AND EXISTS (SELECT 1 FROM entries e WHERE e.workstream = w.id AND e.kind = 'delegation.started' AND e.content->'rights' ? $2)",
+      [caller.workstream, write],
+    )
+    return (delegated.rowCount ?? 0) > 0
   }
 
   // ---------------------------------------------------------------- the card

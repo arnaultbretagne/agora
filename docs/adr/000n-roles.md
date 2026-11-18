@@ -40,8 +40,11 @@
    merges with the reviewer's approval, which a `judge` given the right to review gives as its
    verdict. A judge is a tool of the lead's as any other; the rest — a plan before any work, a fresh
    judge for each verification — is the lead's card.
+6. The lead proposes the merge of each feature a judge approved: `propose_merge` opens to a
+   delegator on a repository whose write it gave a delegate, as a card in its own thread, with no
+   right there of its own. Devs and sres open their pull requests ready for review.
 
-Decided on 2026-11-13 and 2026-11-16.
+Decided on 2026-11-13, 2026-11-16 and 2026-11-18.
 
 ## Why
 
@@ -54,6 +57,10 @@ Decided on 2026-11-13 and 2026-11-16.
   other.
 - **A role for anyone.** The same card serves a person who wants a judge on a pull request and a
   lead that starts one.
+- **The merge where the person reads.** The lead knows when a judge has approved, and its thread
+  is where the person follows the team. A dev ends its turn on its pull request, before any verdict,
+  and a card of its would wait in a sub-stream. A draft adds nothing: the required review already
+  holds the merge.
 - **Less to run.** Prefect's server, its PostgreSQL, its worker and its gate held about 435 MiB
   (`kubectl top`, 2026-10-07), with a second language in the repository and a database to back up.
 
@@ -68,6 +75,8 @@ Decided on 2026-11-13 and 2026-11-16.
 | A role's persona in the delegator's own words, at the head of its instructions | The delegate's title and its first message in its thread would be the card's, not the task's. |
 | The persona in Agora's line of a delegate's first message | Built, live from 2026-11-12. A person's Workstream has no such line, and a Session opened anew after a lost anchor had the persona only through its catch-up, which leaves the oldest exchanges out of a long thread. Moved to a block of Agora's own. |
 | The persona as the harness's system prompt | Each harness has its own way in — an agent file, a configuration layer, a field of its adapter — and Agora's executions are warm: their Pods start before anyone knows who they will be. Not built. |
+| Pull requests opened as drafts, the merge proposed by whoever holds the write | The person, on 2026-11-18: a team's pull requests came as drafts, which GitHub does not merge, and no card came. The dev, holding the write, ended its turn before the verdict; the lead, which knew it, could not propose. |
+| The lead given the repository's write, to propose | It could push there itself. |
 | A role prefixed to its Workstream's title | Observed live on 2026-11-12: an agent given a role titles itself after its card ("Senior code review judge role"). Decided on 2026-11-13: a Workstream names itself as any other. |
 
 ## Consequences
@@ -77,6 +86,9 @@ Decided on 2026-11-13 and 2026-11-16.
   merges without the reviewer's approval, and the person merges.
 - A team's rights are the lead's own, or approved one call at a time: a lead given write access to a
   repository, so that its devs start at once, can write there itself.
+- Every execution with `agora:delegate` lists `propose_merge` from its Session's start: a harness
+  lists its tools as its Session opens, before it delegates, and Agora's server, stateless, tells it
+  of no change. A call on a repository whose write it gave no delegate is refused.
 - A team has no budget of its own. Delegation's bounds are its only ones.
 - Nothing retries a team. A lead whose execution ended is continued by the next message written to
   it — the person's, or a delegate's last message.

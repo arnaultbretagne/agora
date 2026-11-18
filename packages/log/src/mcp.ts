@@ -161,13 +161,16 @@ const ANSWER_AGENT: Tool = {
   },
 }
 
-/** Listed to an execution holding a repository's write, for those repositories (docs/specs/merge.md). */
+/**
+ * Listed to an execution holding a repository's write or `agora:delegate`, from its Session's start: a harness lists its
+ * tools once, before it delegates. Accepted on a repository whose write it holds or gave a delegate (docs/specs/merge.md).
+ */
 const PROPOSE_MERGE: Tool = {
   name: 'propose_merge',
   description:
-    'Ask the person to merge a pull request you wrote: Agora shows them a card with its state as GitHub gives it, and they merge it from there. ' +
+    'Ask the person to merge a pull request — yours, or one a delegate of yours wrote: Agora shows them a card in your thread with its state as GitHub gives it, and they merge it from there. ' +
     'Propose it once it is ready — reviewed, its checks green; the card waits for them and the call answers at once. ' +
-    'Do not wait or poll: what happens comes back to you as a message from Agora. Your repositories with write only.',
+    'Do not wait or poll: what happens comes back to you as a message from Agora. Only on a repository whose write you hold or gave a delegate.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -310,7 +313,7 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
   ]
     .map((tool) => (tool === SPAWN_AGENT ? spawnAgent(delegations!.roles) : tool))
     .concat([
-    ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p)) ? [PROPOSE_MERGE] : []),
+    ...(workstreams.merges !== null && caller.profiles.some((p) => GITHUB_WRITE.test(p) || (delegations !== null && p === 'agora:delegate')) ? [PROPOSE_MERGE] : []),
   ])
   const execution = subject![1]!
   const server = new Server({ name: 'agora', version: '1.0.0' }, { capabilities: { tools: {} } })
