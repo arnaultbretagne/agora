@@ -2472,7 +2472,9 @@ test('G8 a merge card: the pull request as a link, its state, Merge closed while
   await merged.waitFor()
   assert.match(await merged.innerText(), /Merged · f00d123/)
   assert.deepEqual(mergesAsked, [{ number: 7, body: { sha: 'head7', merge_method: 'squash' } }])
-  await thread(page).getByText('Pull request owner/a#7 merged (squash): f00d1234567890.').waitFor()
+  // Agora's message, a line of the agent's response, and the agent's answer to it.
+  await thread(page).locator('[data-agora]').getByText('From Agora · Pull request owner/a#7 merged (squash): f00d1234567890.', { exact: true }).waitFor()
+  await thread(page).getByText(/^Echo #\d+: Pull request owner\/a#7 merged \(squash\): f00d1234567890\./).waitFor()
   await shot(page, 'merge-card-merged')
   // Another, cancelled by a message.
   await until('the agent idle', async () => (await page.getByRole('textbox').count()) > 0)
