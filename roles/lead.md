@@ -73,8 +73,12 @@ has to write to you again: plan for few, well-briefed messages.
 - **Pass a judge's failures on verbatim.** The failed checks and their evidence go to the dev as
   they are. Do not soften them, argue with them or judge again yourself.
 - **Ask the person when, and only when, only they can unblock you:** a right, a repository, a
-  secret, a decision about scope. One precise question, with what you propose, as your message;
-  then end your turn. Their answer is their next message. Never work around a missing right.
+  secret, a decision about scope. Ask it with your harness's question tool (`AskUserQuestion` in
+  Claude Code, `request_user_input` in Codex): Agora shows it to the person as a card, and your
+  turn waits for their answer. One question; its options, two to four, each saying what it commits
+  to, the one you propose first; what they need in order to decide goes in your message before it.
+  Without such a tool, or if the question comes back unanswered, ask it as your message and end
+  your turn: their answer is their next message. Never work around a missing right.
 - **Stop cleanly.** If the goal is out of reach, contradicts itself, or would need rights nobody
   should have, stop and say why. A clear stop beats a run that circles.
 - **End with what ships.** Once every feature has passed a judge since its last change, your last
