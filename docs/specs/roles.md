@@ -53,7 +53,9 @@ approval; three delegates at once; ten `send_message` to one delegate until the 
 A `judge` is a tool of the lead's as any other, and Agora makes none of its verdicts a condition.
 What a pull request needs before it merges is GitHub's rule (`merge.md`): the reviewer's approval,
 which a judge given the right to review that repository — `github:owner/repo:review`
-(`credentials.md`) — gives as its verdict, and nobody else on a team can.
+(`credentials.md`) — gives as its verdict, and nobody else on a team can. The lead then proposes
+the merge, on a repository whose write it gave a delegate, with no right there of its own
+(`merge.md`, "The proposal"); the person merges.
 
 ## Acceptance cases
 
