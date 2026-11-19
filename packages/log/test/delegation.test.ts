@@ -10,8 +10,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
 import { join } from 'node:path'
-import { CALLER_HEADER, core, createMcpServer, delegationOf, Delegations, loadRoles, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
-import { database, expire, FakeKube, grants, Lab, lines, sleep, until, type LabOptions } from './support.ts'
+import { CALLER_HEADER, core, createMcpServer, delegationOf, Delegations, loadRoles, LogStore, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
+import { cluster, database, expire, FakeKube, freePort, grants, Lab, lines, PgRelay, Server, sleep, until, type LabOptions } from './support.ts'
 
 type Text = { content: { type: string; text: string }[]; isError?: boolean }
 type T = { after(fn: () => Promise<void>): void }
@@ -20,7 +20,7 @@ async function started(
   t: T,
   profiles: string[],
   options: { approvalMs?: number; progressMs?: number; manual?: boolean; roles?: ReadonlyMap<string, Role> } = {},
-  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void } = {},
+  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void; pgRelay?: boolean } = {},
 ) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
@@ -29,7 +29,7 @@ async function started(
   const db = await database()
   // The roles are the log's own (docs/specs/roles.md): the delegation engine reads them there.
   const { roles, ...engine } = options
-  const lab = await Lab.start({ db, kube, keys: pair, credentials: grants([]).source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine } })
+  const lab = await Lab.start({ db, kube, keys: pair, credentials: grants([]).source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine }, pgRelay: extra.pgRelay ?? false })
   const mcp = createMcpServer(lab.workstreams)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`
@@ -208,6 +208,140 @@ test('D17 a restart while an approval waits, in a delegator with no delegate yet
   // The call before, its engine's clock aside: answered expired, the fact not written twice.
   assert.equal(text(await call), 'expired')
   assert.equal((await kinds(lab, ws, 'question.expired')).length, 1)
+})
+
+/** What a call settles to — its answer, or its refusal's reason —, or null once `ms` have passed with the call still held. */
+function within(call: Promise<string>, ms: number): Promise<string | null> {
+  let timer: NodeJS.Timeout | undefined
+  return Promise.race([
+    call.then(
+      (answer) => answer,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    ),
+    new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), ms))),
+  ]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * The rejections nothing handles while a test runs, taken from the runner, which would end the test at the first one
+ * and leave it running behind its cleanup: the server's process has no handler, and one ends it (D67).
+ */
+function unhandledRejections(t: T): string[] {
+  const seen: string[] = []
+  const runner = process.listeners('unhandledRejection')
+  const listener = (reason: unknown) => void seen.push(String(reason))
+  process.removeAllListeners('unhandledRejection')
+  process.on('unhandledRejection', listener)
+  t.after(async () => {
+    process.off('unhandledRejection', listener)
+    for (const l of runner) process.on('unhandledRejection', l)
+  })
+  return seen
+}
+
+/**
+ * D67 in this process: the call made as Agora's MCP server makes it, its progress counted, its abort in the test's hand;
+ * the first transaction writing the approval's expiry loses its connection before its COMMIT reaches PostgreSQL.
+ */
+async function expiryNotWritten(t: T, at: 'expiry' | 'abort'): Promise<void> {
+  // Its expiry far off when the call is aborted: an answer within 2 s is the abort's.
+  const approvalMs = at === 'expiry' ? 2_000 : 8_000
+  const { lab, db, ws, execution, delegations } = await started(t, ['agora:delegate'], { approvalMs, progressMs: 200 }, { pgRelay: true })
+  const rejections = unhandledRejections(t)
+  lab.pg!.failCommit('question.expired')
+  const abort = new AbortController()
+  let progress = 0
+  const caller = { workstream: ws, execution, profiles: ['agora:delegate'] }
+  const args = { instructions: 'nobody answers', harness: 'mock', rights: ['internet'] }
+  const call = delegations.spawn(caller, args, { progress: () => progress++, aborted: abort.signal, toolUseId: 'toolu_d67' })
+  try {
+    const ask = await until('the approval', async () => (await lab.state(ws)).question)
+    const asked = Date.now()
+    if (at === 'abort') {
+      await sleep(1_000)
+      abort.abort()
+    }
+    // Null: the call still held, 3 s after its expiry or 2 s after its abort.
+    const answer = await within(call, at === 'expiry' ? approvalMs + 3_000 : 2_000)
+    assert.deepEqual({ answer, unhandled: [...rejections] }, { answer: 'expired', unhandled: [] })
+    if (at === 'expiry') assert.ok(Date.now() - asked >= approvalMs - 200, `answered ${String(Date.now() - asked)} ms after the approval`)
+    assert.equal(lab.pg!.failed, 1, 'the expiry’s write failed')
+    // Heard while held; nothing once answered.
+    const heard = progress
+    assert.ok(heard >= 3, `${String(heard)} progress notifications`)
+    await sleep(1_000)
+    assert.equal(progress, heard, 'progress after the answer')
+    // The log as the failed write left it: the approval pending.
+    assert.equal((await kinds(lab, ws, 'question.expired')).length, 0)
+    assert.equal((await lab.state(ws)).question?.position, ask.position)
+    assert.equal((await projected(lab, ws, 'question'))[0]?.status, 'pending')
+    // Another call beyond the delegator's rights meanwhile: one approval at a time.
+    assert.equal(await within(delegations.spawn(caller, args, { progress: () => {}, aborted: new AbortController().signal, toolUseId: 'toolu_d67_next' }), 5_000), 'approval_pending')
+    // The person's Approve, no call holding the approval any more: accepted, and nothing starts (D6: held, it would).
+    assert.equal((await lab.command(ws, 'Answer', { question: ask.position }, { optionId: 'approve' })).accepted, true)
+    await projected(lab, ws, 'question', (q) => q.status === 'answered')
+    await sleep(500)
+    assert.equal(Number((await db.admin.query('SELECT count(*) FROM workstreams WHERE parent=$1', [ws])).rows[0].count), 0)
+    assert.deepEqual(rejections, [])
+  } finally {
+    // A call left held ends by its abort, or its expiry: nothing of it outlives the test.
+    abort.abort()
+    await within(call, approvalMs + 2_000)
+  }
+}
+
+test('D67 an approval’s expiry not written, the writer’s connection cut before its COMMIT, at its time: expired all the same; no progress after; the approval pending, the person’s Approve starting nothing; no unhandled rejection', async (t) => {
+  await expiryNotWritten(t, 'expiry')
+})
+
+test('D67 the same at its call’s abort, its expiry far off: expired within 2 s; no progress after; the approval pending, the person’s Approve starting nothing; no unhandled rejection', async (t) => {
+  await expiryNotWritten(t, 'abort')
+})
+
+test('D67 the same in the server’s own process: the call answered expired through Agora’s MCP server; the process still running and serving', async (t) => {
+  const db = await database()
+  const c = await cluster()
+  // The server's writer login through a relay that can cut a connection before its COMMIT reaches PostgreSQL.
+  const target = new URL(db.urls.writer)
+  const pg = await new PgRelay({ host: target.hostname, port: Number(target.port || 5432) }).listen()
+  const writer = new URL(db.urls.writer)
+  writer.hostname = '127.0.0.1'
+  writer.port = String(pg.port)
+  const mcpPort = await freePort()
+  const server = await Server.start({ db: { ...db, urls: { ...db.urls, writer: writer.href } }, api: c.api, keys: c.keys, env: { MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '2' } })
+  c.kube.anchorUrl = server.anchorUrl
+  const reader = new LogStore(db.urls)
+  t.after(async () => {
+    await server.stop('SIGKILL')
+    await pg.close()
+    await c.close()
+    await reader.close()
+    await db.drop()
+  })
+  const ws = randomUUID()
+  assert.equal((await server.post('/api/workstreams', { id: ws, owner: randomUUID() })).status, 200)
+  assert.equal((await server.command(ws, 'Create', {}, { pool: 'mock-test', profiles: ['agora:delegate'] })).status, 200)
+  const e = await until('Session open', async () => {
+    const current = (await reader.state(ws)).current
+    return current?.session && current.connection ? current : null
+  })
+  pg.failCommit('question.expired')
+  const call = (await client(t, `http://127.0.0.1:${String(mcpPort)}/mcp`, e.id)).callTool(
+    { name: 'spawn_agent', arguments: { instructions: 'nobody answers', harness: 'mock', rights: ['internet'] } },
+    undefined,
+    { timeout: 15_000 },
+  )
+  const outcome = await Promise.race([call.then((answer) => ({ answer: answer as Text }), (error: unknown) => ({ error })), server.exited.then((exit) => ({ exit }))])
+  if (!('answer' in outcome)) {
+    const exit = 'exit' in outcome ? outcome.exit : await Promise.race([server.exited, sleep(2_000).then(() => null)])
+    const why = server.output.split('\n').find((l) => /^\w*Error: /.test(l.trim())) ?? ''
+    assert.fail(`no answer${'error' in outcome ? ` (${String(outcome.error)})` : ''}; the server ${exit ? `exited ${JSON.stringify(exit)}` : 'still running'}: ${why}`)
+  }
+  assert.deepEqual([outcome.answer.isError, text(outcome.answer)], [true, 'expired'])
+  assert.equal(pg.failed, 1, 'the expiry’s write failed')
+  await sleep(500)
+  assert.deepEqual([server.child.exitCode, server.child.signalCode], [null, null])
+  assert.equal((await server.post('/api/workstreams', { id: randomUUID(), owner: randomUUID() })).status, 200)
 })
 
 test('D18 a delegate’s send_message to parent, its delegator free: sent; a turn of the delegator’s, its prompt Agora’s line then the words; its user element from the delegate, without the line', async (t) => {
