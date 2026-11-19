@@ -216,8 +216,9 @@ jobs:
     needs: image
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    # Only to check out this repository: infra-k8s is written with its own token, held by the steps that
-    # use it alone. The branch's name reaches the scripts as REF.
+    # Only to check out this repository: infra-k8s is written with its own token, given only to the steps
+    # that need it — though the infra checkout keeps it in infra/.git/config for the push, so later steps
+    # of this job can read it there. The branch's name reaches the scripts as REF.
     permissions:
       contents: read
     env:
