@@ -1018,83 +1018,91 @@ export function poolOffered(
 
 // ---------------------------------------------------------------- access
 
-/** One thing the access picker offers: a repository, or a service, with what it may be given. */
+/**
+ * One line of the access picker: a service, or what folds several profiles into one right. On, it gives
+ * `profiles`; off, it takes back every profile it `covers`, at any level.
+ */
 export interface AccessEntry {
   readonly key: string
   readonly name: string
-  readonly repository: boolean
-  /** None first (no profile), then each profile it may be given, narrowest first. */
-  readonly choices: readonly { readonly label: string; readonly profile: string | null }[]
+  readonly profiles: readonly string[]
+  readonly covers: readonly string[]
+  /** For GitHub: the repositories it gives, by `owner/repo`, each with its level when it is not a write. */
+  readonly detail?: string
 }
 
 /** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
 export const INTERNET = 'internet'
 
-const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity', [INTERNET]: 'Internet' }
+const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet', anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity' }
+const REPOSITORY = /^github:([^:]+):(read|review|write)$/
+const LEVELS = ['read', 'review', 'write'] as const
+/** What a profile is a level of: its repository, the vault, or itself. */
+const familyOf = (profile: string): string => {
+  const repo = REPOSITORY.exec(profile)?.[1]
+  return repo !== undefined ? `github:${repo}` : profile.startsWith('vault:') ? 'vault' : profile
+}
+const single = (profile: string, name: string): AccessEntry => ({ key: profile, name, profiles: [profile], covers: [profile] })
 
 /**
- * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), in the order offered:
- * each offered repository with None, Read and, when offered, Review and Write; each offered service off or on.
+ * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), folded, write giving read: the
+ * Internet, then each other service; "GitHub", every offered repository at the widest level it is offered;
+ * "vault", its write, else its read; "k8s", `kubernetes:read`; "agora", `agora:delegate`; then any other
+ * profile offered, as itself.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
-  return offered.map((profile) => {
-    const repo = /^github:([^:]+):(read|review|write)$/.exec(profile)
-    if (repo === null) return { key: profile, name: SERVICE_NAMES[profile] ?? profile, repository: false, choices: [{ label: 'Off', profile: null }, { label: 'On', profile }] }
-    const level = (label: string) => ({ label, profile: `github:${repo[1]!}:${label.toLowerCase()}` })
-    const levels = repo[2] === 'write' ? ['Read', 'Review', 'Write'] : repo[2] === 'review' ? ['Read', 'Review'] : ['Read']
-    return { key: `github:${repo[1]!}`, name: repo[1]!, repository: true, choices: [{ label: 'None', profile: null }, ...levels.map(level)] }
-  })
+  const has = (p: string) => offered.includes(p)
+  const services = offered.filter((p) => SERVICE_NAMES[p] !== undefined).sort((x, y) => Number(y === INTERNET) - Number(x === INTERNET))
+  const repositories = [...new Set(offered.flatMap((p) => REPOSITORY.exec(p)?.[1] ?? []))]
+  // Each repository's widest level offered, and the levels under it, which it takes back off.
+  const widest = (repo: string) => LEVELS.findLastIndex((l) => has(`github:${repo}:${l}`))
+  const level = (repo: string, i: number) => `github:${repo}:${LEVELS[i]!}`
+  const out = services.map((p) => single(p, SERVICE_NAMES[p]!))
+  if (repositories.length > 0)
+    out.push({
+      key: 'github',
+      name: 'GitHub',
+      profiles: repositories.map((r) => level(r, widest(r))),
+      covers: repositories.flatMap((r) => LEVELS.slice(0, widest(r) + 1).map((_, i) => level(r, i))),
+      detail: repositories.map((r) => (LEVELS[widest(r)] === 'write' ? r : `${r} (${LEVELS[widest(r)]!})`)).join(', '),
+    })
+  const vault = has('vault:write') ? 'vault:write' : has('vault:read') ? 'vault:read' : null
+  if (vault !== null) out.push({ key: 'vault', name: 'vault', profiles: [vault], covers: vault === 'vault:write' ? ['vault:read', 'vault:write'] : ['vault:read'] })
+  if (has('kubernetes:read')) out.push(single('kubernetes:read', 'k8s'))
+  if (has('agora:delegate')) out.push(single('agora:delegate', 'agora'))
+  const folded = new Set(out.flatMap((e) => e.covers))
+  for (const p of offered) if (!folded.has(p)) out.push(single(p, p))
+  return out
 }
 
-const belongs = (entry: AccessEntry, profile: string) => entry.choices.some((c) => c.profile === profile)
-
-/** The profile granted for an entry, or null. */
-export const accessOf = (granted: readonly string[], entry: AccessEntry): string | null => granted.find((p) => belongs(entry, p)) ?? null
+/** An entry's state: all it gives granted, none of what it covers, or some of it — as a role's card may give. */
+export function accessState(granted: readonly string[], entry: AccessEntry): 'on' | 'off' | 'partial' {
+  if (entry.profiles.every((p) => granted.includes(p))) return 'on'
+  return granted.some((p) => entry.covers.includes(p)) ? 'partial' : 'off'
+}
 
 /**
- * The whole set once an entry is given a choice: the entries' in the order offered, then what was
- * granted beyond them, kept.
+ * The whole set once an entry is switched: on, what it gives in place of what it covered; off, none of it.
+ * In the order offered, each profile with its repository's or the vault's; then what was granted beyond them, kept.
  */
-export function withAccess(granted: readonly string[], entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): string[] {
-  const out: string[] = []
-  for (const e of entries) {
-    const value = e.key === entry.key ? profile : accessOf(granted, e)
-    if (value !== null) out.push(value)
-  }
-  return [...out, ...granted.filter((p) => !entries.some((e) => belongs(e, p)))]
+export function withAccess(granted: readonly string[], offered: readonly string[], entry: AccessEntry, on: boolean): string[] {
+  return inOfferedOrder([...granted.filter((p) => !entry.covers.includes(p)), ...(on ? entry.profiles : [])], offered)
 }
 
-/**
- * The rights as the menu lists them: the services first, the Internet first among them, each a switch;
- * then the repositories. Other kinds of rights take their place in this list as they come.
- */
-export function accessDisplay(entries: readonly AccessEntry[]): AccessEntry[] {
-  const rank = (e: AccessEntry) => (e.repository ? 2 : e.key === INTERNET ? 0 : 1)
-  return [...entries].sort((a, b) => rank(a) - rank(b))
+/** Profiles once each, in the order offered, each with its repository's or the vault's; then the others, as they came. */
+function inOfferedOrder(profiles: readonly string[], offered: readonly string[]): string[] {
+  const all = [...new Set(profiles)]
+  const ordered = [...new Set(offered.map(familyOf))].flatMap((f) => all.filter((p) => familyOf(p) === f))
+  return [...ordered, ...all.filter((p) => !ordered.includes(p))]
 }
 
-/** Each right granted, in the menu's order, with its short name and its access. */
-function given(granted: readonly string[], entries: readonly AccessEntry[]): { name: string; full: string }[] {
-  return accessDisplay(entries).flatMap((e) => {
-    const profile = accessOf(granted, e)
-    if (profile === null) return []
-    if (!e.repository) return [{ name: e.name, full: e.name }]
-    const name = e.name.split('/').at(-1)!
-    return [{ name, full: `${name} · ${e.choices.find((c) => c.profile === profile)!.label}` }]
-  })
-}
-
-/** The picker's button: "No access", the one right granted and how ("agora · Write"), or their names ("Internet, agora"). */
-export function accessLabel(granted: readonly string[], entries: readonly AccessEntry[]): string {
-  const rights = given(granted, entries)
-  if (rights.length === 0) return 'No access'
-  return rights.length === 1 ? rights[0]!.full : rights.map((r) => r.name).join(', ')
-}
-
-/** Its title: each right granted with its access. */
+/** The key's name and tooltip: each entry granted, in the menu's order, "partly" where only some of it is; or "No access". */
 export function accessTitle(granted: readonly string[], entries: readonly AccessEntry[]): string {
-  const rights = given(granted, entries)
-  return rights.length === 0 ? 'No access' : rights.map((r) => r.full).join(', ')
+  const rights = entries.flatMap((e) => {
+    const state = accessState(granted, e)
+    return state === 'off' ? [] : [state === 'on' ? e.name : `${e.name} (partly)`]
+  })
+  return rights.length === 0 ? 'No access' : rights.join(', ')
 }
 
 /** The access a Workstream starts with, before any execution: the Internet, when it is offered. */
@@ -1181,7 +1189,7 @@ export function withRole(
   return {
     pool: pool?.name ?? null,
     settings: picked ?? (on && Object.keys(values).length > 0 ? { pool: on.name, values } : null),
-    access: own.access ?? accessEntries(offered).flatMap((entry) => accessOf(granted, entry) ?? []),
+    access: own.access ?? inOfferedOrder(granted.filter((p) => accessEntries(offered).some((entry) => entry.covers.includes(p))), offered),
   }
 }
 

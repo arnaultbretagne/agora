@@ -12,7 +12,6 @@ import { acceptOf, blockOf, composerAttachments, prepare, promptOf, refusalOf, T
 import { ASKS, askUserQuestion, mcpForm, QUESTIONS, requestUserInput } from '../../../packages/mock-agent/src/forms.ts'
 import {
   accessDefault,
-  accessDisplay,
   approvalAnswer,
   formContent,
   formFor,
@@ -21,9 +20,8 @@ import {
   accessEntries,
   harnessName,
   accessGranted,
-  accessLabel,
   accessTitle,
-  accessOf,
+  accessState,
   commandsMatching,
   composerOf,
   excerpt,
@@ -461,40 +459,47 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the rights: each offered repository with None, Read and, when offered, Review and Write; a service off or on; the services first, the Internet first; the button', () => {
-  const entries = accessEntries(['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
+test('U31 the rights folded: the Internet, the other services, GitHub with every repository at its widest, vault, k8s, agora, the rest as themselves; their states; the key\'s name', () => {
+  const offered = ['github:o/a:write', 'github:o/b:read', 'zai', 'vault:write', 'internet', 'kubernetes:read', 'agora:delegate', 'github:o/c:review', 'agora:read', 'previews']
+  const entries = accessEntries(offered)
   assert.deepEqual(
-    entries.map((e) => [e.name, e.choices.map((c) => c.label)]),
+    entries.map((e) => [e.name, e.profiles]),
     [
-      ['o/a', ['None', 'Read', 'Review', 'Write']],
-      ['o/b', ['None', 'Read']],
-      ['z.ai', ['Off', 'On']],
-      ['Internet', ['Off', 'On']],
+      ['Internet', ['internet']],
+      ['z.ai', ['zai']],
+      ['GitHub', ['github:o/a:write', 'github:o/b:read', 'github:o/c:review']],
+      ['vault', ['vault:write']],
+      ['k8s', ['kubernetes:read']],
+      ['agora', ['agora:delegate']],
+      ['agora:read', ['agora:read']],
+      ['previews', ['previews']],
     ],
   )
-  assert.deepEqual(accessDisplay(entries).map((e) => e.name), ['Internet', 'z.ai', 'o/a', 'o/b'], 'the services first, the Internet first')
-  assert.equal(accessLabel([], entries), 'No access')
-  assert.equal(accessLabel(['internet'], entries), 'Internet')
-  assert.equal(accessLabel(['github:o/a:read'], entries), 'a · Read')
-  assert.equal(accessLabel(['github:o/a:read', 'internet'], entries), 'Internet, a', 'their names, in the menu\'s order')
-  assert.equal(accessTitle(['github:o/a:read', 'internet'], entries), 'Internet, a · Read', 'each with its access')
-  assert.equal(accessLabel(['github:o/a:write', 'github:o/b:read'], entries), 'a, b')
-  assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'zai'], entries), 'z.ai, a · Write, b · Read')
+  const github = entries[2]!
+  assert.equal(github.detail, 'o/a, o/b (read), o/c (review)')
+  assert.deepEqual(github.covers, ['github:o/a:read', 'github:o/a:review', 'github:o/a:write', 'github:o/b:read', 'github:o/c:read', 'github:o/c:review'], 'each level up to the widest offered, never above')
+  assert.deepEqual(entries[3]!.covers, ['vault:read', 'vault:write'])
+  assert.deepEqual(accessEntries(['vault:read']).map((e) => [e.name, e.profiles]), [['vault', ['vault:read']]], 'the read alone offered: the vault gives it')
+  assert.equal(accessState([], github), 'off')
+  assert.equal(accessState(['github:o/a:write', 'github:o/b:read', 'github:o/c:review'], github), 'on')
+  assert.equal(accessState(['github:o/b:read'], github), 'partial', 'one repository, as a card may give it')
+  assert.equal(accessState(['github:o/a:read', 'github:o/b:read', 'github:o/c:review'], github), 'partial', 'a narrower level')
   assert.equal(accessTitle([], entries), 'No access')
-  assert.equal(accessOf(['github:o/a:read'], entries[0]!), 'github:o/a:read')
-  assert.deepEqual(entries[0]!.choices.map((c) => c.profile), [null, 'github:o/a:read', 'github:o/a:review', 'github:o/a:write'])
-  assert.equal(accessTitle(['github:o/a:review'], entries), 'a · Review')
-  assert.deepEqual(accessEntries(['github:o/c:review'])[0]!.choices.map((c) => c.profile), [null, 'github:o/c:read', 'github:o/c:review'], 'a review offered: its read under it, never a write')
+  assert.equal(accessTitle(['internet'], entries), 'Internet')
+  assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'github:o/c:review', 'internet', 'agora:delegate'], entries), 'Internet, GitHub, agora', "in the menu's order")
+  assert.equal(accessTitle(['github:o/b:read', 'vault:write'], entries), 'GitHub (partly), vault')
   assert.deepEqual(accessEntries([]), [])
 })
 
-test('U32 an access choice gives the whole set: the entries in the order offered, then what was granted beyond them', () => {
-  const entries = accessEntries(['github:o/a:write', 'github:o/b:read'])
-  const [a] = entries
-  const granted = withAccess(['github:o/b:read'], entries, a!, 'github:o/a:write')
-  assert.deepEqual(granted, ['github:o/a:write', 'github:o/b:read'])
-  assert.deepEqual(withAccess(granted, entries, a!, null), ['github:o/b:read'])
-  assert.deepEqual(withAccess(['github:x/y:read'], entries, a!, 'github:o/a:read'), ['github:o/a:read', 'github:x/y:read'])
+test('U32 an entry switched gives the whole set: on, what it gives in place of what it covered; off, none of it; in the order offered, then what was granted beyond', () => {
+  const offered = ['github:o/a:write', 'github:o/b:read', 'internet', 'vault:write']
+  const [internet, github, vault] = accessEntries(offered)
+  const all = withAccess(['internet'], offered, github!, true)
+  assert.deepEqual(all, ['github:o/a:write', 'github:o/b:read', 'internet'])
+  assert.deepEqual(withAccess(all, offered, github!, false), ['internet'])
+  assert.deepEqual(withAccess(['github:o/a:read', 'internet'], offered, github!, true), ['github:o/a:write', 'github:o/b:read', 'internet'], 'a partial entry ticked: the whole of it')
+  assert.deepEqual(withAccess(['github:x/y:read', 'vault:read'], offered, vault!, true), ['vault:write', 'github:x/y:read'], 'the read replaced by the write; what no entry covers kept')
+  assert.deepEqual(withAccess(['internet', 'agora:delegate'], offered, internet!, false), ['agora:delegate'])
 })
 
 test('U33 an ended Workstream whose execution had profiles: its Create carries them; another access picked, that one; a draft: the Internet when offered', () => {
@@ -1282,7 +1287,7 @@ test('U103 the forms of Claude Code and Codex, as assistant-ui holds them: one q
   assert.equal(composerOf(one.state, { ...workstreamOf(one.state, MESSAGES_WS), state: 'ready' }).reason, 'Answer the question above.')
 })
 
-test('U118 harnesses as people name them, each with its mark: Claude Code, Codex, OpenCode, Antigravity; the mock and another by name, with no mark', () => {
+test('U119 harnesses as people name them, each with its mark: Claude Code, Codex, OpenCode, Antigravity; the mock and another by name, with no mark', () => {
   const named = ['claude-code', 'codex', 'opencode', 'antigravity', 'mock', 'other-harness'].map((h) => [h, harnessName(h)])
   assert.deepEqual(named, [['claude-code', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode'], ['antigravity', 'Antigravity'], ['mock', 'Mock agent'], ['other-harness', 'other-harness']])
   assert.equal(harnessName(null), 'the agent')

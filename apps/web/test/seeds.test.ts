@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { FIXTURES, HARNESSES, NOT_CAPTURED, seeds } from '../../server/src/seeds.ts'
 
-test('V10 the fixtures without antigravity.json: 15 conversations, none of antigravity; with it: 16, its own; another harness’s fixture missing: refused', async (t) => {
+test('V11 the fixtures without antigravity.json: 15 conversations, none of antigravity; with it: 16, its own; another harness’s fixture missing: refused', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'seeds-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   cpSync(FIXTURES, dir, { recursive: true })

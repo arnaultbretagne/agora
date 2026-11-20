@@ -8,7 +8,7 @@ import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKey
 import { Delegations, Files, Identity, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
-import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys } from './preview.ts'
+import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys, previewOffer } from './preview.ts'
 import { writeSeeds } from './seeds.ts'
 
 function number(name: string, fallback: number): number {
@@ -149,13 +149,14 @@ const server = createApi({
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
   // docs/specs/roles.md, "Cards": what `GET /api/config` says of the roles, never a persona.
   roles: describeRoles(roles),
+  // docs/specs/preview.md, "The offer": a preview's configuration offers its fixed rights; nothing else is given them.
+  ...(preview !== null ? { credentials: previewOffer() } : credentials === undefined ? {} : { credentials }),
   // docs/specs/log.md, "Identity": every route of the port asks for a proof, the health check alone excepted.
   handle: async (req, res) =>
     (new URL(req.url ?? '/', 'http://agora').pathname !== '/healthz' && (await refuseUnproven(identity, req, res))) ||
     (await limitsHttp(limits, req, res)) ||
     (await logHttp(workstreams, req, res, { testRoutes, identity, ...(credentials === undefined ? {} : { credentials }), ...(preview === null ? {} : { owner: SHARED_OWNER }) })) ||
     client(req, res),
-  ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process
   // on the spot, nothing drained or written. In a container the server is PID 1, which cannot SIGKILL
   // itself: it exits at once instead, with the status a kill leaves.
