@@ -16,7 +16,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { FakeS3, keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
-import { Delegations, Files, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
+import { Delegations, Files, Identity, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
 
 export const POOL = 'mock-test'
 
@@ -345,7 +345,7 @@ export class Lab {
       throw error
     }
     lab.api = createHttpServer((req, res) => {
-      void logHttp(lab.workstreams, req, res, { testRoutes: true }).then((handled) => {
+      void logHttp(lab.workstreams, req, res, { testRoutes: true, identity: Identity.none() }).then((handled) => {
         if (!handled) res.writeHead(404).end()
       })
     })
@@ -473,6 +473,8 @@ export class Server {
         ANCHOR_PORT: String(anchorPort),
         MCP_PORT: String(mcpPort),
         TEST_ROUTES: 'true',
+        // docs/specs/log.md, "Identity": the proxy's header as it comes, and with none every owner open.
+        IDENTITY: 'none',
         ...s3.env(),
         ...options.env,
       },

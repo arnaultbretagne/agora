@@ -1,5 +1,5 @@
-// The log's HTTP surface (docs/specs/log.md, "HTTP"). Who may read and write a Workstream is not
-// decided yet: the lab is behind its own authentication, and owners are what the client says.
+// The log's HTTP surface (docs/specs/log.md, "HTTP"). Who calls is what the request proves
+// (docs/specs/log.md, "Identity"): the caller's own Workstreams, or, with no identity at all, any owner's.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
@@ -9,10 +9,11 @@ import { parseBundle } from '@agora/harness-bridge/anchor'
 import type { Workstreams } from './workstreams.ts'
 import type { Command } from './store.ts'
 import type { ThreadRow } from './projection.ts'
-import { uuid, object, decode, encode, cursor, identity } from './json.ts'
+import { uuid, object, decode, encode, cursor } from './json.ts'
 import { MAX_LINE } from './acp.ts'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode } from './search.ts'
 import { isDigest } from './files.ts'
+import { refuseUnproven, type Identity } from './identity.ts'
 
 /** The types a file is served as (docs/specs/files.md, "Reading a file"); any other is an attachment. */
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -31,9 +32,10 @@ const VALIDATION = new Set([
 ])
 
 export interface LogHttpOptions {
-  /** Opens the lab-only routes: control, credentials, entries, anchors. */
   /** The test routes (docs/specs/log.md, "HTTP"): open only while TEST_ROUTES is true. */
   readonly testRoutes: boolean
+  /** Who calls (docs/specs/log.md, "Identity"): `none` or `oidc`, always named. */
+  readonly identity: Identity
   readonly credentials?: CredentialSource
   /** One owner for every caller the proxy names (a preview, docs/specs/preview.md): its Workstreams are everyone's. */
   readonly owner?: string
@@ -46,14 +48,16 @@ export async function logHttp(
   options: LogHttpOptions,
 ): Promise<boolean> {
   const url = new URL(req.url ?? '/', 'http://agora')
+  const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
+  const file = /^\/api\/files\/([^/]+)$/.exec(url.pathname)
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !file && !['/api/pools', '/api/account', '/api/search', '/api/log-json.js'].includes(url.pathname)) return false
+  // docs/specs/log.md, "Identity": a request that proves nobody gets nothing of the log.
+  if (await refuseUnproven(options.identity, req, res)) return true
   if (url.pathname === '/api/log-json.js' && req.method === 'GET') {
     res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'public, max-age=3600' })
     res.end(await readFile(createRequire(import.meta.url).resolve('lossless-json')))
     return true
   }
-  const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
-  const file = /^\/api\/files\/([^/]+)$/.exec(url.pathname)
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !file && !['/api/pools', '/api/account', '/api/search'].includes(url.pathname)) return false
   const store = workstreams.options.store
   const reply = (status: number, value: unknown) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -91,14 +95,15 @@ export async function logHttp(
       res.end(bundle.files.map((file) => `===== ${file.path}\n${Buffer.from(file.content, 'base64').toString('utf8')}`).join('\n'))
       return true
     }
-    // The identity the proxy in front passes (oauth2-proxy sets it and drops a client's own), as a
-    // name-based UUID; none when Agora is reached without the proxy.
-    const identityHeader = req.headers['x-forwarded-email']
-    const caller = typeof identityHeader === 'string' && identityHeader !== '' ? (options.owner ?? identity('owner', identityHeader)) : undefined
-    const email = typeof identityHeader === 'string' && identityHeader !== '' ? identityHeader : null
+    // The caller the request proved (docs/specs/log.md, "Identity"), or nobody in particular: `none` without
+    // the proxy's header.
+    const proof = await options.identity.prove(req)
+    const who = proof.kind === 'caller' ? proof.caller : null
+    const caller = who === null ? undefined : (options.owner ?? who.owner)
+    const email = who?.email ?? null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
-    // What the caller owns: its own Workstreams; anything without the proxy.
-    const owned = email === null ? null : [caller!]
+    // What the caller owns: its own Workstreams; anything with no identity.
+    const owned = who === null ? null : [caller!]
     if (file) {
       // docs/specs/files.md, "Reading a file": a file an entry of the caller's Workstreams names, streamed from R2.
       if (req.method !== 'GET') return reply(405, { reason: 'method_refused' }), true
@@ -120,14 +125,14 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && (url.pathname === '/api/workstreams/list' || url.pathname === '/api/workstreams/page')) {
-      // docs/specs/log.md, "The list": the caller's own, or one of its Workstreams' sub-streams; without the
-      // proxy, the owner or parent given.
+      // docs/specs/log.md, "The list": the caller's own, or one of its Workstreams' sub-streams; with no
+      // identity, the owner or parent given.
       const parent = url.searchParams.get('parent')
       let list: string
       if (parent !== null) {
         list = uuid(parent)
         if (!(await workstreams.projections.belongs(list, owned))) throw new Error('unknown_workstream')
-      } else list = email === null ? uuid(url.searchParams.get('owner')) : caller!
+      } else list = who === null ? uuid(url.searchParams.get('owner')) : caller!
       if (url.pathname === '/api/workstreams/page')
         return reply(200, await workstreams.projections.listPage(list, url.searchParams.get('before'), url.searchParams.get('title'), parent === null)), true
       const after = url.searchParams.get('after') ?? '0'
@@ -140,7 +145,7 @@ export async function logHttp(
       return true
     }
     if (req.method === 'GET' && url.pathname === '/api/search') {
-      // docs/specs/search.md, "Search": the caller's Workstreams; without the proxy, the owner given.
+      // docs/specs/search.md, "Search": the caller's Workstreams; with no identity, the owner given.
       const q = url.searchParams
       const number = (name: string, fallback: number, max: number) => {
         const raw = q.get(name)

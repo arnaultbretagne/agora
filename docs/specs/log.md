@@ -1,7 +1,8 @@
 # The log
 
 Contract to implement — PostgreSQL **17** (CloudNativePG), ACP protocol version **1**, schema of
-`@agentclientprotocol/sdk` **1.5.1**. How it fits together is explained in `architecture/log.md`;
+`@agentclientprotocol/sdk` **1.5.1**; ID tokens as Pocket-ID **2.18.0** signs them, passed by oauth2-proxy
+**7.15.5**, checked with `jose` **6.2.12**. How it fits together is explained in `architecture/log.md`;
 why, in the log ADR.
 
 **Every command and every ACP line is written whole, at its Workstream's next position, before
@@ -461,12 +462,12 @@ changes instead of fetching every view again.
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list") — the owner its identity gives, as for a Create: `snapshot` rows, `snapshot-end`, then `live` rows. With `parent`, a Workstream's list, its sub-streams: the caller's, 404 `unknown_workstream` otherwise. Without the proxy, the list of the `owner` or `parent` given; 400 `invalid_identifier` without either. A Workstream's whole view is read in its thread. |
+| `GET /api/workstreams/list?after=C` | Server-sent events of the caller's list ("The list") — the owner its identity gives, as for a Create: `snapshot` rows, `snapshot-end`, then `live` rows. With `parent`, a Workstream's list, its sub-streams: the caller's, 404 `unknown_workstream` otherwise. With no identity ("Identity"), the list of the `owner` or `parent` given; 400 `invalid_identifier` without either. A Workstream's whole view is read in its thread. |
 | `GET /api/workstreams/page?before=B&title=T` | JSON: `rows`, the caller's rows older than page cursor B — the most recent without one —, whose title holds T when given; `next`, the following page's cursor, or null. `parent` and `owner` as for the list; 400 `invalid_cursor` for a malformed cursor. |
 | `GET /api/workstreams/{id}/row` | The Workstream's row ("The list"), the caller's: its parent and depth, so that a client climbs its line one row at a time. 404 `unknown_workstream` before its first entry or for another's. |
 | `GET /api/workstreams/{id}/merge` | The pending merge card's state, read from GitHub (`merge.md`, "The card"): `question`, its position; `state`; `head`, the head's sha. 404 `no_merge` without one; the caller's Workstreams only. |
-| `GET /api/account` | `email`: the identity the proxy passes, as it passes it, or null without one. |
-| `POST /api/workstreams` | Creates a Workstream: `id`, and `parent`, the Workstream it is started from, if any ("Sub-streams"). The owner is a name-based UUID of the identity the proxy passes (`X-Forwarded-Email`, which it sets and drops from the client's request), or the body's `owner` without one; with a parent, the parent's: 404 `unknown_parent` for a parent that does not exist or is not the caller's. 409 if the id belongs to another owner or has another parent. |
+| `GET /api/account` | `email`: the caller's e-mail ("Identity"), as its proof gives it; null for a caller without one, and with no identity. |
+| `POST /api/workstreams` | Creates a Workstream: `id`, and `parent`, the Workstream it is started from, if any ("Sub-streams"). The owner is the caller's ("Identity"), or the body's `owner` with no identity; with a parent, the parent's: 404 `unknown_parent` for a parent that does not exist or is not the caller's. 409 if the id belongs to another owner or has another parent. |
 | `GET /api/pools` | The catalogue (`executions.md`), each pool with the `settings`, `commands` and `promptCapabilities` the last Session opened in it gave; a pool none has opened in yet, as a harness's newer image is, with its harness's last Session's; else null and empty. |
 | `POST /api/workstreams/{id}/commands` | A command: `id`, `kind`, `target`, `body`. 200 accepted, 409 refused, with the reason. |
 | `GET /api/log-json.js` | The lossless JSON parser the test page reads the thread with. |
@@ -480,6 +481,28 @@ The test routes answer only while `TEST_ROUTES` is `true`; otherwise 404.
 
 Bodies are UTF-8 JSON of at most 16 MiB, parsed losslessly. A malformed body is 400; a storage
 failure is 503; no answer carries an exception message.
+
+### Identity
+
+Who calls port 8080 is what the request proves, in one of two modes the server is given, never
+left out: `IDENTITY` `oidc` in production; `none` for tests, local runs and previews (`preview.md`),
+which take no other. A caller has an owner, whose Workstreams it reads and creates, and an e-mail or
+none. The owner of an e-mail is a name-based UUID of it, the same whatever proof gave the e-mail.
+
+| Mode | Proof taken | Caller | Without it |
+| --- | --- | --- | --- |
+| `oidc` | `Authorization: Bearer` and an ID token of the issuer for Agora's client, which the proxy in front passes (oauth2-proxy, `--pass-authorization-header`): signed by a key the issuer publishes, with an algorithm its discovery document lists (asymmetric ones only), `iss` the issuer, `aud` holding the audience, an `exp`, not past by more than 30 s, a non-empty `email` | The `email` claim and its owner | 401 `unauthenticated`, `WWW-Authenticate: Bearer` |
+| `oidc` | `Authorization: Bearer` and a service token of the server's list, compared in constant time with each | The e-mail or the owner it stands for: with an owner, no e-mail | As above |
+| `none` | `X-Forwarded-Email`, as the proxy passes it | That e-mail and its owner | No identity: every owner open, each route taking the `owner` or `parent` it is given |
+
+| Rule | Detail |
+| --- | --- |
+| What asks for a proof | In `oidc`, every route of port 8080 — the API, the client's files, the test page — but `GET /healthz`, which the kubelet probes. A request without a valid proof gets nothing: no route reached, nothing read or written. `X-Forwarded-Email` grants nothing. |
+| The issuer's keys | Found through its discovery document, `<issuer>/.well-known/openid-configuration`, whose `issuer` must be the issuer itself: its `jwks_uri` and its `id_token_signing_alg_values_supported`. The keys are kept 10 minutes, and read again at once, at most every 30 s, for a key id they lack. |
+| The issuer out of reach | Its discovery document or its keys not answering 200 JSON within 5 s, or the document naming another issuer: a token that needs them gets 503 `identity_unavailable`, nothing granted; they are asked again at the next such token. Service tokens do not need them. |
+| When | At the request's start: a stream opened with a valid token goes on after the token expires. |
+| Service tokens | One file per caller in the folder `IDENTITY_TOKENS_DIR` (a mounted Secret), named after it, read at start: a JSON object with `token`, at least 32 printable characters, and `email` or `owner`, a UUID. A file that does not fit, or two with one token, stops the start, naming the file, never its content. |
+| Environment | `IDENTITY`: `none` or `oidc`. With `oidc`, `IDENTITY_ISSUER` (the issuer, as its tokens' `iss` names it) and `IDENTITY_AUDIENCE` (Agora's client id at the issuer) are required, `IDENTITY_TOKENS_DIR` optional; with `none`, none of the three. Anything else stops the start, saying which. |
 
 ## An execution's memory
 
@@ -595,7 +618,7 @@ exception message.
 | L42 | Workstreams of one owner listed, one of them with no entry; then another changes | The one with no entry not listed; the one changed last first, with its new title. |
 | L43 | A Workstream through Create, a Session, a break and its reconnection, Stop, the end with an anchor | No view before its first entry; then the view's `state`: `starting`, `ready`, `interrupted`, `ready`, `stopped`, `ended`; its `pool`, `harness`, `session` and `anchor`; its `title` from the first Write, then the agent's. |
 | L44 | A Session opened new, restored from an anchor, then ended | A `session.opened` notice with origin `new`, one with the anchor, then a `session.ended` notice with its reason. |
-| L45 | A Workstream created with the proxy's identity and another `owner` in the body, again, then with another identity | Owned by the identity's name-based UUID; the second accepted; the third 409. |
+| L45 | With IDENTITY `none`: a Workstream created with the proxy's identity and another `owner` in the body, again, then with another identity | Owned by the identity's name-based UUID; the second accepted; the third 409. |
 | L46 | Agora started after its core projector changed version, with a Workstream whose execution has ended | That Workstream's objects rebuilt at start, its view under the new version; its checkpoint at the new version. |
 | L47 | A Create with `settings`, in a pool that declares others | The Create's body records the pool's, each replaced by the Create's own, then its others; once the Session opens, one `session/set_config_option` at a time for each not current, before any prompt; the view `starting` until the last is answered, then `ready` with the new `settings`. |
 | L48 | Opening settings the Session does not offer, with a value it does not list, or already current; one answered with an error | None sent for the first three; the error's sent once; the Session ready. |
@@ -625,15 +648,15 @@ exception message.
 | L72 | An Answer with an option and a note | Accepted; the element `answered`, its `answer` the option and the note; the view's `question` null; another Ask accepted next. |
 | L73 | Answers to another position, to an answered question, with an option not offered, with a note the question does not allow | `stale_question` for the first two, `invalid_question_option`, `invalid_answer`; nothing written. |
 | L74 | The same Ask again under its id, once answered | Its first answer; no second question. |
-| L75 | The account, with the proxy's identity and without | The e-mail; null. |
-| L76 | A Workstream of the person's, one of someone else's: each one's list; without the proxy, with an owner and with none | The person's list its own only; someone else's theirs only; without the proxy, the given owner's, 400 `invalid_identifier` without one. |
+| L75 | With IDENTITY `none`: the account, with the proxy's identity and without | The e-mail; null. |
+| L76 | With IDENTITY `none`: a Workstream of the person's, one of someone else's: each one's list; without the proxy, with an owner and with none | The person's list its own only; someone else's theirs only; without the proxy, the given owner's, 400 `invalid_identifier` without one. |
 | L77 | The agent answers a prompt with an internal error (JSON-RPC `-32603`), its adapter still running; before it, a turn answered normally | The normal turn grants a lease and the execution goes on. Then the turn failed with that error; `execution.lost` (`agent_failed`); Write refused; the deadline moved to now, the last one set; `execution.ended` naming the anchor received; the next execution restores that anchor. |
 | L78 | A Workstream's view changes its title, then its state; then its views are rebuilt | A row with the owner's next position each time; none for the rebuild, its row unchanged. |
 | L79 | Two owners, each list read | Each list holds its owner's rows only, each with its own positions. |
 | L80 | 60 Workstreams of one owner, its list read from zero | The 50 most recently changed, newest first, then `snapshot-end` with the owner's last position. |
 | L81 | The list read from zero, then a Workstream changes; then read again from the last cursor received | The change arrives live, once; read again, nothing more until the next change, which arrives once. |
 | L82 | 60 Workstreams of one owner, pages; a title filter in another case | The first page the 50 most recent, then the 10 others and no next cursor; the filter the rows whose title holds the text, from every page. |
-| L83 | A list cursor beyond the last position, a negative one; a malformed page cursor; no owner without the proxy | `future_cursor`; `invalid_cursor`; `invalid_cursor`; `invalid_identifier`. |
+| L83 | A list cursor beyond the last position, a negative one; a malformed page cursor; no owner without the proxy (IDENTITY `none`) | `future_cursor`; `invalid_cursor`; `invalid_cursor`; `invalid_identifier`. |
 | L84 | Agora started on a log whose Workstreams have views and no rows | Each gets its row once; started again, none is written. |
 | L85 | Two Workstreams of one owner projected at the same time, the list read live | Both rows arrive, with distinct positions, in the order of their positions. |
 | L86 | A Workstream created with a parent, then one with that one as its parent; through the proxy, each body naming another `owner` | Their root the first's, their depths 1 then 2; both owned by the root's owner. |
@@ -716,6 +739,12 @@ exception message.
 | L170 | Respond to an elicitation on an MCP server's form of a `pattern` and an `email`: a text not matching, an email that is none, then both fitting | `invalid_elicitation_content` twice, nothing written; then one answer, that content. |
 | L171 | A form its agent withdraws, Agora's `cancel` answer's first write failing, its connection to PostgreSQL cut before its COMMIT | As L159: that write rolled back; the answer, `cancel`, written at a later run, once, and sent once; the form pending no more; the agent's turn going on to its end. |
 | L172 | Respond to an elicitation whose read of its form, before the transaction, loses its connection to PostgreSQL; then the same answer, not matching its `pattern`; then a fitting one | `unavailable`, nothing written; then `invalid_elicitation_content`; then accepted, one answer. |
+| L173 | With IDENTITY `oidc`, an ID token of the issuer for the person: the account; the list's stream opened, then a Workstream created with it, the body naming another owner, and one with someone else's token | The person's e-mail. The stream: an empty snapshot, then the person's Workstream live, not the other. Each Workstream owned by its token's e-mail's owner; each list its own only. |
+| L174 | With IDENTITY `oidc`, the account, a page, the list, a Create and a command, each with: no `Authorization`; `X-Forwarded-Email` alone; that header and an unsigned token; a token expired 2 min ago; one without `exp`; another audience; another issuer; another key under the issuer's key id; a token whose payload was changed; one signed HS256 with the issuer's public key; `Basic`; an unknown service token. Then a Create with a valid token, and one with a token 10 s past its `exp` | Each 401 `unauthenticated`, `WWW-Authenticate: Bearer`; none of those Workstreams written. The two Creates accepted, owned by the person's owner. |
+| L175 | With IDENTITY `oidc`, without a proof: the client's page, a Workstream's address and a file of the client; `/api/config`, `/api/pools`, `/api/executions`, `/api/events`, the account, a search, `/api/log-json.js`, the anchors, a file, a thread, a row, the entries, the test page, a restart that kills; then `/healthz`; then three of them with a service token | Each 401 `unauthenticated`, `WWW-Authenticate: Bearer`, the server still running; `/healthz` 200 `ok`; with the token, 200. |
+| L176 | With IDENTITY `oidc`, a service token standing for the person's e-mail, one for an owner, and the person's ID token: the account, a Create each, the lists | The e-mail's: the account that e-mail, its Create the person's; the owner's: the account null, its Create that owner's whatever the body names. The e-mail's token and the ID token list the same two Workstreams; the owner's its own alone. |
+| L177 | With IDENTITY `oidc`, the issuer's discovery document and keys answering 503: the account and a Create with a valid ID token, the account with a service token; then the issuer back, the same two | 503 `identity_unavailable` twice, nothing written; the service token's account its e-mail. Then the account 200 and the Create written. |
+| L178 | The server started with `IDENTITY` left out, another word, `oidc` without `IDENTITY_ISSUER`, without `IDENTITY_AUDIENCE`, `none` with `IDENTITY_ISSUER`; with a token file not JSON, a token of 5 characters, a file without `email` or `owner`, two files with one token; a preview with `IDENTITY` `oidc`, then `none` | Each exits 1 before listening: `IDENTITY must be none or oidc` twice; `IDENTITY_ISSUER is required with IDENTITY=oidc`; `IDENTITY_AUDIENCE is required with IDENTITY=oidc`; `IDENTITY_ISSUER: only with IDENTITY=oidc`; `service token <file>:` and why, the token never in the output; the preview `PREVIEW excludes IDENTITY`, with `none` no exclusion. |
 | L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
 | L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 

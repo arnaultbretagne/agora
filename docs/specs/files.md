@@ -49,7 +49,7 @@ Any other string stays in the entry as it is.
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/files/{sha256}?type=T` | The object's bytes, streamed from R2, when an entry of one of the caller's Workstreams names it — the owner its identity gives, or `owner` without the proxy, as for the list (`log.md`, "HTTP"). Otherwise 404 `unknown_file`, the same for an object that does not exist. Type `T` when it is `image/jpeg`, `image/png`, `image/gif` or `image/webp`; any other, `application/octet-stream` with `Content-Disposition: attachment`. Always `X-Content-Type-Options: nosniff` and `Cache-Control: private, max-age=31536000, immutable`. |
+| `GET /api/files/{sha256}?type=T` | The object's bytes, streamed from R2, when an entry of one of the caller's Workstreams names it — the owner its identity gives, or `owner` with no identity, as for the list (`log.md`, "HTTP" and "Identity"). Otherwise 404 `unknown_file`, the same for an object that does not exist. Type `T` when it is `image/jpeg`, `image/png`, `image/gif` or `image/webp`; any other, `application/octet-stream` with `Content-Disposition: attachment`. Always `X-Content-Type-Options: nosniff` and `Cache-Control: private, max-age=31536000, immutable`. |
 
 ## The sweep
 

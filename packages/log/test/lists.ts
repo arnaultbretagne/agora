@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { decode, encode, fromFold, logHttp, LogStore, object, Projections, type Entry, type ProjectedObject, type ThreadRow, type Workstreams } from '../src/index.ts'
+import { decode, encode, fromFold, Identity, logHttp, LogStore, object, Projections, type Entry, type ProjectedObject, type ThreadRow, type Workstreams } from '../src/index.ts'
 import { database, type Db } from './support.ts'
 
 export const EMAIL = 'person@example.org'
@@ -47,7 +47,7 @@ export async function bench(t: { after(fn: () => Promise<void>): void }): Promis
   const store = new LogStore(db.urls)
   const projections = new Projections(store, [views])
   const server = createServer((req, res) => {
-    void logHttp({ options: { store }, projections } as unknown as Workstreams, req, res, { testRoutes: false }).then((handled) => {
+    void logHttp({ options: { store }, projections } as unknown as Workstreams, req, res, { testRoutes: false, identity: Identity.none() }).then((handled) => {
       if (!handled) res.writeHead(404).end()
     })
   })
@@ -102,14 +102,14 @@ export interface ListRead {
 export async function readList(
   url: string,
   query: string,
-  options: { email?: string; during?: () => Promise<void>; more?: (live: readonly ThreadRow[]) => boolean } = {},
+  options: { email?: string; headers?: Record<string, string>; during?: () => Promise<void>; more?: (live: readonly ThreadRow[]) => boolean } = {},
 ): Promise<ListRead> {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), 15_000)
   try {
     const response = await fetch(`${url}/api/workstreams/list?${query}`, {
       signal: abort.signal,
-      headers: options.email ? { 'x-forwarded-email': options.email } : {},
+      headers: { ...(options.email ? { 'x-forwarded-email': options.email } : {}), ...options.headers },
     })
     if (!response.headers.get('content-type')?.startsWith('text/event-stream'))
       return { status: response.status, body: object(decode(await response.text())) ?? {}, snapshot: [], end: null, live: [] }
