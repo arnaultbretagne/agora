@@ -12,6 +12,7 @@ import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
 import { delegationOf, requestsOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
+import { telemetry } from './telemetry.ts'
 import type { Workstreams } from './workstreams.ts'
 
 /** An approval lives this long on Agora's clock; the call it holds hears progress this often. */
@@ -603,10 +604,15 @@ export class Delegations {
         this.held.delete(caller.workstream)
         resolve(s)
       }
-      const timer = setTimeout(() => void this.expire(caller.workstream, position).then(() => finish({ outcome: 'expired' })), this.approvalMs)
+      // Expired whether or not the log takes its expiry: the approval it leaves pending is the next start's ("A restart").
+      const expired = () =>
+        void this.expire(caller.workstream, position)
+          .catch(() => telemetry({ operation: 'delegation', outcome: 'blocked', workstream: caller.workstream, errorClass: 'database' }, this.workstreams.options.sink ?? (() => {})))
+          .then(() => finish({ outcome: 'expired' }))
+      const timer = setTimeout(expired, this.approvalMs)
       this.held.set(caller.workstream, { position, settle: finish })
       // A call its client gave up: nothing it asked may start.
-      hold.aborted.addEventListener('abort', () => void this.expire(caller.workstream, position).then(() => finish({ outcome: 'expired' })), { once: true })
+      hold.aborted.addEventListener('abort', expired, { once: true })
     })
     return { settled, position }
   }
