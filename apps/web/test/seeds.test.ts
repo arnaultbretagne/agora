@@ -1,11 +1,11 @@
-// A preview's conversations, read from the client's fixtures (docs/specs/preview.md, "The conversations"):
-// a harness not captured yet is left out until its fixture is there, and nothing stands in for it.
+// The server's seeds for a preview (apps/server/src/seeds.ts, docs/specs/preview.md, "The conversations"), read
+// from these fixtures: a harness not captured yet is left out until its fixture is there, nothing standing in for it.
 import assert from 'node:assert/strict'
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { FIXTURES, HARNESSES, NOT_CAPTURED, seeds } from '../src/seeds.ts'
+import { FIXTURES, HARNESSES, NOT_CAPTURED, seeds } from '../../server/src/seeds.ts'
 
 test('V10 the fixtures without antigravity.json: 15 conversations, none of antigravity; with it: 16, its own; another harness’s fixture missing: refused', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'seeds-'))

@@ -38,7 +38,7 @@ a host, an anchored regular expression on the path and query, the methods.
 | `github:OWNER/REPO:write` | The same, plus `git push`, and every method under `https://api.github.com/repos/OWNER/REPO` — a pull request is `POST /repos/OWNER/REPO/pulls`. You act as `agora-contributor[bot]`. |
 | `github:OWNER/REPO:review` | Clone, fetch, and every method under `https://api.github.com/repos/OWNER/REPO`, as `agora-reviewer[bot]`: review, comment on and approve pull requests — a review is `POST /repos/OWNER/REPO/pulls/N/reviews`. No `git push`, no merge. |
 | `internet` | Any other `https://` host on port 443, with no credential: what anyone on the Internet may do there. On GitHub, what anyone may read: `git clone` and `git fetch` a public repository, `GET` on the REST API. Never a write or a push without the repository's profile. |
-| `anthropic`, `zai`, `chatgpt`, `antigravity` | Nothing for you to do: the model you run on. |
+| `anthropic`, `zai`, `chatgpt` | Nothing for you to do: the model you run on. |
 
 Without `internet`, nothing else on GitHub is open — not `/user`, not `/search`. GraphQL never
 is, so the REST API is the way, and `gh` would fail. Writing to a repository missing from your
