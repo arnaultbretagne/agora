@@ -19,6 +19,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R11 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP SDK's own client, as R7. On the commit that adds `answer_agent`. |
 | R12 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 as R11. On the commit where `answer_agent` takes a form's `content` or `decline`. |
 | R13 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green; M10 and M12 as R11. |
+| R14 | 2026-11-20 | `d746257` | local | `npm test`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own. M2–M7 and M10–M13 against the MCP server on a port of its own, the lab's executions behind it, each message carrying the grant the execution's bridge holds (`Authorization: Bearer`), the server given that signer's key; M14 on the real server (`apps/server/src/main.ts`) given its grants' key (`GATEWAY_PROXY`, `GRANTS_KEY_FILE`), the forged grants made with `jose` 6.2.12; M8 and M15 through agentgateway 1.6.0 (sha256 `496ed27e…`) on `packages/credentials/test/fixtures/agora-gateway.yaml`, which forwards the CONNECT's JWT. In a copy of that commit, `x-agora-execution` taken when no grant is: M14 failed, a proof without a grant served; the key id not checked: M14 failed. The fixture without its `authorization` line: M15 failed, the stand-in receiving the sandbox's own `Authorization` or none. |
 
 ## Cases
 
@@ -51,9 +52,23 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M12 | — | local | R12 | proven | As R11. |
 | M10 | — | local | R13 | proven | As R12. |
 | M12 | — | local | R13 | proven | As R11. |
+| M2 | — | local | R14 | proven | As R1, the messages with the execution's grant. |
+| M3 | — | local | R14 | proven | As R1, the messages with the execution's grant. |
+| M4 | — | local | R14 | proven | As R1, the messages with the execution's grant. |
+| M5 | — | local | R14 | proven | A grant of the server's signer for `agora <a random id>`, and one for the execution's id without `agora `: 401 `{"reason":"unknown_caller"}` each; the same message with the execution's own grant: 200; a `GET` with it: 405. |
+| M6 | — | local | R14 | partial | As R1, with the execution's grant. One scoped out of `agora:read` is not run. |
+| M7 | — | local | R14 | proven | As R1, with the execution's grant. |
+| M8 | — | local | R14 | proven | As R1, on the route that also forwards the JWT. |
+| M10 | — | local | R14 | proven | As R12, each execution's messages with its own grant. |
+| M11 | — | local | R14 | proven | As R7, the messages with the execution's grant. |
+| M12 | — | local | R14 | proven | As R11, each execution's messages with its own grant. |
+| M13 | — | local | R14 | proven | As R10, with the execution's grant. |
+| M14 | — | local | R14 | proven | 12 proofs, each on a `spawn_agent` call: 401 `{"reason":"unauthenticated"}` each, no sub-stream of either Workstream written; a `GET` with none: 401. The server's grant for the first execution: 200, `started <id> · /sleep 1`, its one sub-stream under the first's Workstream. |
+| M15 | — | local | R14 | proven | Three messages — plain; with `Authorization: Bearer` and another execution's grant; with `Authorization: Basic` and an `x-agora-execution` of the sandbox's —: 200 each; at the stand-in, each `POST /mcp` with `Authorization: Bearer` and its own CONNECT's token, byte for byte, and `x-agora-execution` its subject; never the other grant. |
 
 ## Not covered
 
 | Failure | Issue |
 | --- | --- |
 | The server's port 8082 reached from a Pod other than the gateway's: no case asserts it. Observed on R2's deployment from Prefect's worker: 8080 answered, 8082 not reached; from the node, 8082 answered 401, as the spec says | — |
+| The route forwarding the JWT in the cluster, and the server checking it there: no cluster or live run shows it; M14 and M15 are local | — |
