@@ -409,6 +409,12 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
     setHighlighted(0)
   }
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The Enter that confirms an IME conversion is the IME's, never a send: Safari fires it once
+    // `isComposing` is false again, its keyCode 229 (assistant-ui #8319).
+    if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) {
+      e.preventDefault()
+      return
+    }
     if (matches.length === 0) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
@@ -449,8 +455,11 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
         <ComposerAttachments />
         <ComposerPrimitive.Input
           rows={1}
-          // Enter starts a new line, on a phone as on a computer; Ctrl or Cmd with it sends.
-          submitMode="ctrlEnter"
+          // With a mouse or a trackpad, Enter sends and Shift+Enter starts a new line. On a touch screen
+          // alone — `(pointer: coarse) and (not (any-pointer: fine))`, as assistant-ui tells it —, whose
+          // keyboard is the screen's, Enter starts a new line and Send sends. Ctrl or Cmd with Enter sends on both.
+          submitMode="enter"
+          unstable_insertNewlineOnTouchEnter
           autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
           // Escape hides the commands listed; it cancels the turn only with none.

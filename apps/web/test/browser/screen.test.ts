@@ -1,4 +1,4 @@
-// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U97, U101, U102, U104–U111: the built client in a real browser (Playwright's
+// docs/specs/assistant-ui.md, acceptance cases U16–U24, U27–U29, U34–U41, U43, U44, U46, U50, U52–U59, U61–U65, U67, U69–U76, U78–U83, U85–U97, U101, U102, U104–U111, U115–U117: the built client in a real browser (Playwright's
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
@@ -2152,37 +2152,118 @@ test('U97 a model picked in a draft, a role with it, a message sent, then New wo
   await page.context().close()
 })
 
-test('U80 Enter in the composer: a new line, nothing sent, on a computer and on a phone; Ctrl or Cmd with it, or Send: sent', async () => {
+/** Whether the page's pointers match a media query, as the composer asks it. */
+const pointerMatches = (page: Page, query: string) => page.evaluate((q) => matchMedia(q).matches, query)
+/** assistant-ui's query for a touch screen alone (`unstable_insertNewlineOnTouchEnter`). */
+const TOUCH_ALONE = '(pointer: coarse) and (not (any-pointer: fine))'
+
+test('U80 Enter in the composer with a mouse or a trackpad: sent; Shift+Enter a new line, nothing sent; Ctrl+Enter and Cmd+Enter: sent', async () => {
   const page = await fresh()
-  const id = await started(page, 'before the lines')
+  assert.equal(await pointerMatches(page, '(any-pointer: fine)'), true, 'a fine pointer')
+  assert.equal(await pointerMatches(page, TOUCH_ALONE), false, 'not a touch screen alone')
+  await started(page, 'before the lines')
   const said = page.locator('main [data-role="user"]')
   await composerInput(page).fill('first line')
-  await composerInput(page).press('Enter')
+  await composerInput(page).press('Shift+Enter')
   await composerInput(page).pressSequentially('second line')
   assert.equal(await composerInput(page).inputValue(), 'first line\nsecond line')
   await page.waitForTimeout(500)
-  assert.equal(await said.count(), 1, 'Enter sent nothing')
-  await composerInput(page).press('ControlOrMeta+Enter')
+  assert.equal(await said.count(), 1, 'Shift+Enter sent nothing')
+  await composerInput(page).press('Enter')
   await thread(page).getByText(/Echo #2: first line\s+second line\./).waitFor()
   assert.equal(await said.count(), 2)
   assert.match(await said.last().innerText(), /^first line\s+second line$/)
   assert.equal(await composerInput(page).inputValue(), '')
+  await composerInput(page).fill('with Ctrl')
+  await composerInput(page).press('Control+Enter')
+  await thread(page).getByText('Echo #3: with Ctrl.').waitFor()
+  assert.equal(await composerInput(page).inputValue(), '')
+  await composerInput(page).fill('with Cmd')
+  await composerInput(page).press('Meta+Enter')
+  await thread(page).getByText('Echo #4: with Cmd.').waitFor()
+  assert.equal(await said.count(), 4)
+  assert.equal(await composerInput(page).inputValue(), '')
+})
 
-  const { page: small } = await phone()
-  await small.goto(`${server.url}/w/${id}`)
-  await thread(small).getByText(/Echo #2: first line/).waitFor()
-  const saidThere = small.locator('main [data-role="user"]')
-  await composerInput(small).tap()
-  await composerInput(small).fill('on the phone')
-  await composerInput(small).press('Enter')
-  await composerInput(small).pressSequentially('too')
-  assert.equal(await composerInput(small).inputValue(), 'on the phone\ntoo')
-  await small.waitForTimeout(500)
-  assert.equal(await saidThere.count(), 2, 'Enter sent nothing on the phone')
-  await sendButton(small).tap()
-  await thread(small).getByText(/Echo #3: on the phone\s+too\./).waitFor()
-  assert.equal(await saidThere.count(), 3)
-  assert.equal(await composerInput(small).inputValue(), '')
+test('U115 Enter on a touch screen alone: a new line, nothing sent; Send, Ctrl+Enter and Cmd+Enter: sent', async () => {
+  const { page } = await phone()
+  assert.equal(await pointerMatches(page, TOUCH_ALONE), true, 'a touch screen alone')
+  await started(page, 'before the phone lines')
+  const said = page.locator('main [data-role="user"]')
+  await composerInput(page).tap()
+  await composerInput(page).fill('on the phone')
+  await composerInput(page).press('Enter')
+  await composerInput(page).pressSequentially('too')
+  assert.equal(await composerInput(page).inputValue(), 'on the phone\ntoo')
+  await page.waitForTimeout(500)
+  assert.equal(await said.count(), 1, 'Enter sent nothing on the phone')
+  await sendButton(page).tap()
+  await thread(page).getByText(/Echo #2: on the phone\s+too\./).waitFor()
+  assert.equal(await said.count(), 2)
+  assert.equal(await composerInput(page).inputValue(), '')
+  await composerInput(page).fill('with Ctrl')
+  await composerInput(page).press('Control+Enter')
+  await thread(page).getByText('Echo #3: with Ctrl.').waitFor()
+  await composerInput(page).fill('with Cmd')
+  await composerInput(page).press('Meta+Enter')
+  await thread(page).getByText('Echo #4: with Cmd.').waitFor()
+  assert.equal(await said.count(), 4)
+  assert.equal(await composerInput(page).inputValue(), '')
+})
+
+test('U116 Enter on a touch screen with a fine pointer too, as an iPad with a Magic Keyboard: sent', async () => {
+  // Chromium's touch emulation takes the fine pointer away (U115); the page's matchMedia gives it back
+  // for any query on `any-pointer: fine`, the touch screen and the coarse primary pointer kept.
+  const context = await browser.newContext({ viewport: { width: 820, height: 1180 }, isMobile: true, hasTouch: true, colorScheme: 'light' })
+  await context.addInitScript(() => {
+    const real = window.matchMedia.bind(window)
+    window.matchMedia = (query: string) => real(query.replace(/any-pointer:\s*fine/g, 'min-width: 0px'))
+  })
+  const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  await page.goto(`${server.url}/`)
+  assert.equal(await page.evaluate(() => navigator.maxTouchPoints > 0), true, 'a touch screen')
+  assert.equal(await pointerMatches(page, '(pointer: coarse)'), true, 'its primary pointer coarse')
+  assert.equal(await pointerMatches(page, '(any-pointer: fine)'), true, 'a fine pointer too')
+  assert.equal(await pointerMatches(page, TOUCH_ALONE), false, 'not a touch screen alone')
+  await started(page, 'before the tablet line')
+  const said = page.locator('main [data-role="user"]')
+  await composerInput(page).tap()
+  await composerInput(page).fill('on the tablet')
+  await composerInput(page).press('Enter')
+  await thread(page).getByText('Echo #2: on the tablet.').waitFor()
+  assert.equal(await said.count(), 2)
+  assert.equal(await composerInput(page).inputValue(), '')
+  await context.close()
+})
+
+test('U117 Enter during an IME composition, and as Safari sends the one that ends it: nothing sent; a plain Enter sends; on an empty composer, nothing', async () => {
+  const page = await fresh()
+  await started(page, 'before the conversion')
+  const said = page.locator('main [data-role="user"]')
+  // A keydown as an IME gives it, which Playwright's keyboard cannot type.
+  const enter = (init: { isComposing: boolean; keyCode: number }) =>
+    composerInput(page).evaluate((input, { isComposing, keyCode }) => {
+      const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', isComposing, bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'keyCode', { value: keyCode })
+      Object.defineProperty(event, 'which', { value: keyCode })
+      input.dispatchEvent(event)
+    }, init)
+  await composerInput(page).fill('日本語')
+  await enter({ isComposing: true, keyCode: 229 })
+  await enter({ isComposing: false, keyCode: 229 })
+  await page.waitForTimeout(500)
+  assert.equal(await said.count(), 1, 'the conversion’s Enter sent nothing')
+  assert.equal(await composerInput(page).inputValue(), '日本語')
+  // The control: the same keydown, outside a composition, sends.
+  await enter({ isComposing: false, keyCode: 13 })
+  await thread(page).getByText('Echo #2: 日本語.').waitFor()
+  assert.equal(await said.count(), 2)
+  assert.equal(await composerInput(page).inputValue(), '')
+  await composerInput(page).press('Enter')
+  await page.waitForTimeout(500)
+  assert.equal(await said.count(), 2, 'Enter on the empty composer sent nothing')
+  assert.equal(await composerInput(page).inputValue(), '')
 })
 
 test('U81 Copy shown on hover over an earlier response: the thread under it does not move', async () => {
