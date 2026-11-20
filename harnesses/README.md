@@ -7,7 +7,7 @@ from the root.
 What differs between harnesses is declared by the image, not coded in the bridge: the adapter
 (`BRIDGE_ADAPTER`), the native directory an anchor saves (`BRIDGE_NATIVE_DIR`), and whether the
 adapter opens it at start and must be restarted to receive an anchor (`BRIDGE_RESTART_ON_ANCHOR`).
-claude-code, opencode and codex also carry kubectl 1.36.5, for `kubernetes:read`: its configuration is
+claude-code, opencode, codex and antigravity also carry kubectl 1.36.5, for `kubernetes:read`: its configuration is
 the bridge's (`KUBECONFIG`).
 
 | Folder | Image | Harness |
@@ -16,3 +16,4 @@ the bridge's (`KUBECONFIG`).
 | `claude-code/` | `agora-harness-claude-code` | claude-code 2.1.322 and claude-agent-acp 0.106.0, no credential in the image. |
 | `opencode/` | `agora-harness-opencode` | opencode 1.19.5 and its own ACP server, on z.ai's Coding Plan; no credential in the image. |
 | `codex/` | `agora-harness-codex` | codex 0.166.0 and codex-acp 2.6.0, on the ChatGPT subscription; a placeholder login in the image. |
+| `antigravity/` | `agora-harness-antigravity` | agy 1.5.13 and its own ACP server, on the cluster's own Google login; a placeholder login in the image. |
