@@ -9,13 +9,24 @@ import { join } from 'node:path'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { crc32, deflateSync } from 'node:zlib'
 import type { AddressInfo } from 'node:net'
-import { after, before, test } from 'node:test'
+import { after, before, test as nodeTest } from 'node:test'
 import { chromium, type Browser, type Locator, type Page } from 'playwright'
 import { mockBridge } from '@agora/testkit'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
 import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
 import { identity } from '../../../../packages/log/src/index.ts'
 import { NOBODY } from '../../src/agora/api.ts'
+
+// TEMPORARY, to be reverted: each failure as a GitHub annotation, the job's log being out of reach from the dev's sandbox.
+const test = (name: string, fn: () => Promise<void>) =>
+  nodeTest(name, async () => {
+    try {
+      await fn()
+    } catch (error) {
+      if (process.env.GITHUB_ACTIONS) console.log(`::error title=${name.slice(0, 60).replace(/[,:]/g, ' ')}::${String((error as Error)?.stack ?? error).slice(0, 3000).replace(/%/g, '%25').replace(/\r?\n/g, '%0A')}`)
+      throw error
+    }
+  })
 
 let db: Db
 let c: Awaited<ReturnType<typeof cluster>>
