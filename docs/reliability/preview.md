@@ -16,6 +16,7 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R8 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green, Playwright's Chromium; the server started as a preview from the source, as R6. |
 | R9 | 2026-11-18 | `a6768ad` | local | `npm run check`, with `npm run test:browser`, on g4, as R44 of `client.md`: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own, Playwright's Chromium; the server started as a preview from the source, as R8, its conversations with the delegation captured again by `scripts/capture.delegation.ts` — the delegate's last message come into a `/tool-open 6` of its delegator's, then a `send_message` asking the permission. |
 | R10 | 2026-11-18 | `f5a3752` | local | `preview.yml`, run 44329646987, on pull request #219 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R7, its conversations with the delegation captured again; then `ghcr.io/arnaultbretagne/agora-server:f5a37527d3d6ea0f83dc92c4a07a969688038da2` published, `sha256:666aa12569b3e8b2fa263ee2fd860e9013aec2c417b269351c037fda0c2c8b7d`. Its first run, on `14b4cf4` (44328892553), failed V8: two lines now name the delegate, and the test's locator took one alone; fixed in the test. |
+| R11 | 2026-11-20 | `e5f8871` | unit | `npm test -w @agora/server`, all green: Node 24.22.3; the fixtures copied into a folder of the test's own, codex's history standing in for antigravity's there alone. |
 
 ## Cases
 
@@ -64,6 +65,7 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V6 | — | local | R10 | proven | As R7. |
 | V8 | — | local | R10 | proven | As R9, against the image. |
 | V9 | — | local | R10 | proven | As R7. |
+| V10 | — | unit | R11 | proven | Without `antigravity.json`: 15 conversations, 14 listed, harnesses `claude-code`, `codex`, `opencode`; with it: 16, one `antigravity` of its own Workstream with all the fixture's entries; without `opencode.json`: refused, `ENOENT` naming it. |
 
 ## Not covered
 

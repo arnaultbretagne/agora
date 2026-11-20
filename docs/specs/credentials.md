@@ -49,6 +49,7 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `anthropic` | `api.anthropic.com`, everything. |
 | `zai` | `api.z.ai`, everything: z.ai's OpenAI- and Anthropic-compatible APIs. |
 | `chatgpt` | `chatgpt.com`, only `/backend-api/codex…` and `/backend-api/wham…`: what codex uses. The session reaches the whole ChatGPT account, conversations included. |
+| `antigravity` | `daily-cloudcode-pa.googleapis.com`, only `/v1internal:…`, every method; `www.googleapis.com`, only `GET /oauth2/v2/userinfo`: what agy uses ("Antigravity"). The login reaches the account's whole Google Cloud. |
 | `internet` | `*`, everything: any host with no route of its own, with no credential set. Public addresses, HTTPS on port 443. On GitHub, what no `github` profile covers, read only: the public routes below. |
 | `github:owner/repo:read` | REST API `/repos/owner/repo…` with `GET` and `HEAD`; git `git-upload-pack` only (a clone also sends a `POST`). |
 | `github:owner/repo:write` | REST API `/repos/owner/repo…`, all methods; git `git-upload-pack` and `git-receive-pack`. And Agora's MCP endpoint, as `agora:read`'s grant: Agora opens `propose_merge` to it (`merge.md`). |
@@ -106,6 +107,7 @@ service — never a repository, nor `internet`, nor the vault.
 | `anthropic` | Yes |
 | `zai` | Yes |
 | `chatgpt` | Yes |
+| `antigravity` | Yes |
 | `internet` | No |
 | `github:…` | No |
 | `vault:read`, `vault:write` | No |
@@ -131,7 +133,7 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `internet`, `kubernetes:read`, `previews`, `agora:read`, `agora:delegate` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`, `kubernetes:read`, `previews`, `agora:read`, `agora:delegate` | Itself |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
@@ -215,6 +217,8 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `anthropic` | `api.anthropic.com` | `Authorization: Bearer` + the operator's Claude setup-token. |
 | `zai` | `api.z.ai` | `Authorization: Bearer` + the operator's z.ai API key. |
 | `chatgpt` | `chatgpt.com` | `Authorization: Bearer` + the access token of the cluster's own ChatGPT session; the sandbox's `chatgpt-account-id` removed. |
+| `antigravity-userinfo` | `www.googleapis.com`, `GET /oauth2/v2/userinfo` only ("Antigravity") | `Authorization: Bearer` + the access token of the cluster's own Google login. |
+| `antigravity` | `daily-cloudcode-pa.googleapis.com` ("Antigravity") | `Authorization: Bearer` + the access token of the cluster's own Google login. |
 | `github-api` | `api.github.com`, `x-gateway-grant: contributor` | `Authorization: Bearer` + the contributor's installation token. |
 | `github-git` | `github.com`, `x-gateway-grant: contributor` | `Authorization: Basic` + `x-access-token:` and the contributor's token, in base64. |
 | `github-api-reviewer` | `api.github.com`, `x-gateway-grant: reviewer` | As `github-api`, with the reviewer's token. |
@@ -318,7 +322,7 @@ refuse it; nothing bound to `system:anonymous` or `system:unauthenticated` beyon
 
 | Element | Rule |
 | --- | --- |
-| The binary | kubectl 1.36.5, within one minor of the cluster's (k0s 1.36), in the claude-code, codex and opencode images: the release binary, checked against its sha256 at the build, which runs `kubectl version --client`. Not in the mock's. |
+| The binary | kubectl 1.36.5, within one minor of the cluster's (k0s 1.36), in the claude-code, codex, opencode and antigravity images: the release binary, checked against its sha256 at the build, which runs `kubectl version --client`. Not in the mock's. |
 | Its configuration | `KUBECONFIG`, set by the bridge in the adapter's environment, names `kubeconfig.yaml`, shipped with the bridge (`packages/harness-bridge/src`), which every image copies — not `~/.kube/config`: `HOME` is a `tmpfs` in the cluster. One cluster, `server: https://kubernetes.agora.internal`, `certificate-authority: /etc/agora/credential-proxy/ca.pem`; one user, `username: agora`; one context, current. |
 | No credential | No token, no client certificate, no password, no `exec` or `auth-provider`. The user name is there only because kubectl asks for credentials on stdin for a user it cannot identify (client-go 1.36.5, `canIdentifyUser`): kubectl then sends `Authorization: Basic` of `agora:`, which the gateway replaces. |
 | The way out | No `proxy-url`: client-go then takes `HTTPS_PROXY` (`http.ProxyFromEnvironment`, read in client-go 1.36.5, `transport/cache.go`), the bridge's outbound proxy, which adds the token to the `CONNECT`. |
@@ -499,8 +503,76 @@ once, so inference stays on the setup-token — the gateway sees a new token onl
 syncs the Secret, about a minute later. The login ends on a fixed date, about 28 days after it,
 which refreshes do not move; from five days before, the job fails, for a new login in time.
 
+The cluster's Google login, for agy, is renewed too, from its own login, never the operator's; how
+long its tokens live and whether its refresh token rotates are not measured yet ("Antigravity").
+
 Every request leaves a log line: execution (`jwt.sub`), `jti`, method, host, path, status, and
 the reason for a refusal.
+
+### Antigravity
+
+`antigravity` runs agy, the Antigravity CLI, on the cluster's own Google login: a Google account
+dedicated to the cluster, holding its own Google AI subscription, never the operator's — as the
+ChatGPT session and the Claude login are the cluster's own. The gateway sets the login's access
+token; the sandbox holds a placeholder.
+
+**What agy does.** Measured on 2026-11-20 on agy 1.5.13, the release binary, behind a local stand-in
+for Google that answered its login and logged each request it sent; Google itself answered 401 to the
+stand-in's tokens.
+
+| Element | agy 1.5.13 |
+| --- | --- |
+| Inference | `POST daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`, its body naming the project `loadCodeAssist` gave. `daily-cloudcode-pa` is agy's default endpoint (`--cloud_code_endpoint`). |
+| Before and beside it | On the same host, `POST /v1internal:loadCodeAssist` (the account's tier and project), `fetchAvailableModels`, `fetchUserInfo`, `retrieveUserQuotaSummary`, `fetchAdminControls`, `listExperiments`, `writeTrajectoryAcls`; and `GET www.googleapis.com/oauth2/v2/userinfo`. |
+| Its credential | `Authorization: Bearer` and the access token of its token file, on each of those requests; no other credential header, no `x-goog-user-project`. |
+| Telemetry | `POST play.googleapis.com/log`, with the same Bearer. None with `--disable-telemetry`, which the image passes. |
+| Refreshing | `POST oauth2.googleapis.com/token`, `grant_type=refresh_token`, the client's id and secret in the body; only once the token file's `expiry` has passed. Never on a 401: Google's 401 ends the turn, written in the answer, and the file is left as it is. |
+| Its token store | Without a D-Bus session bus, as in a Pod, a file instead of a keyring: `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`, JSON `{"token": {"access_token", "token_type", "refresh_token", "expiry"}, "auth_method"}`, as agy writes it at a login. |
+| Without a browser | With the file, `session/new` and `authenticate` (`oauth-personal`) succeed without opening a browser, whatever Google answers. Without it, `session/new` fails `Authentication required` and `authenticate` at once, -32603 "No browser is available here". Agora never calls `authenticate`. |
+| The way out | `HTTPS_PROXY`, the bridge's; the root, from `SSL_CERT_FILE` — a Go binary, which does not read `NODE_EXTRA_CA_CERTS`. |
+
+**The placeholder.** The image writes the token file at start (`harnesses/antigravity`): `access_token`
+and `refresh_token` `agora-placeholder`, `expiry` 2099-01-01, `auth_method` `consumer`. agy then sends
+`Bearer agora-placeholder`, which the gateway replaces, and never refreshes.
+
+**The OAuth client.** agy's own, Google's: id `1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com`,
+its secret in the binary, as an installed application's is, the string beginning `GOCSPX-K58F` — public, no
+credential (measured: Google
+answers this pair `invalid_grant` to an unknown refresh token, and `invalid_client` to the two other
+secrets the binary holds). PKCE, redirect `https://antigravity.google/oauth-callback`. Scopes
+`cloud-platform`, `userinfo.email`, `userinfo.profile`, `cclog`, `experimentsandconfigs`, `aicode`,
+`openid`: the access token reaches the account's whole Google Cloud. The account owns no Cloud project,
+and the grants open two paths of Google and nothing else.
+
+| Element | The routes |
+| --- | --- |
+| `antigravity` | `hostnames: [daily-cloudcode-pa.googleapis.com]`, on the internal bind's HTTPS listener with the other routes. Rule: the rule of every route with a credential — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method; the grant's path `^/v1internal:[A-Za-z]+(\?.*)?$`. |
+| `antigravity-userinfo` | `hostnames: [www.googleapis.com]`, the exact path `/oauth2/v2/userinfo` alone; the same rule, the grant's path `^/oauth2/v2/userinfo$`, `GET`. Any other path of that host is not this route's: it falls to the `internet` route, which sets no credential — 403 without `internet`. |
+| Credential | `backendAuth.key`: `Authorization: Bearer` + the file `/etc/agentgateway/antigravity/access_token`, watched, on both routes; whatever `Authorization` agy sent is replaced. |
+| No route | `oauth2.googleapis.com`, `play.googleapis.com`: hosts with no route of their own, 403 without `internet`; with it, the request leaves as the sandbox sent it, a placeholder — nothing in the sandbox can refresh the login. |
+
+**The login and its renewal.**
+
+| Step | What |
+| --- | --- |
+| The login | Once, by the operator, with the dedicated account, in a throwaway Linux environment with no D-Bus session bus, so that the token goes to the file: `HOME=$(mktemp -d) agy acp --login` prints a URL; opened in a browser signed into that account, its code pasted back. The refresh token is the file's `token.refresh_token`; the throwaway HOME is deleted after. Each login mints a new refresh token. |
+| The renewal | `antigravity-refresher`, a CronJob in `agora-gateway`, every 15 minutes: `POST https://oauth2.googleapis.com/token` with the client's id and secret, `grant_type=refresh_token` and the refresh token; it writes `access_token` into the Secret `antigravity-token`, mounted optional on the gateway at `/etc/agentgateway/antigravity`: until its first run, Google answers 401. The gateway watches the file, and the next request carries the new token. |
+| The refresh token | Where it lives follows from whether it rotates. If a refresh gives no new one and the first stays good: in the SOPS Secret `upstream-credentials`, key `antigravity-refresh-token`, a rotation then being a commit. If it rotates: a Secret infra-k8s keeps out of git, `antigravity-session`, which the refresher rewrites with each new one, as `chatgpt-session`. The client's id and secret are public and may sit in the refresher's configuration. |
+| Network | `antigravity-refresher`: egress to `oauth2.googleapis.com` on 443, and the API server for `antigravity-token`. The gateway: public addresses on 443, as for every route. |
+
+**What is not measured yet.** Nothing above was seen with a real login: these come from Google's
+documentation, or are assumed, and the operator measures them on the cluster's login.
+
+| Fact | Source | How it is measured |
+| --- | --- | --- |
+| The access token lives 1 hour (`expires_in` 3599) | Google's documentation | The refresher's answer. |
+| The refresh token does not rotate: a refresh gives no new one, and the first stays good | Google's documentation | Right after the login, two refreshes: whether either answer holds a `refresh_token`, and whether the first refresh token still works after the second. Settles where it lives (above). |
+| The refresh token ends when revoked, after six months unused, or once the account holds more than 100 of this client's | Google's documentation | — |
+| An access token stays good until its expiry after a refresh | Assumed | The previous token used once after a refresh. |
+| What `loadCodeAssist` answers for the account: tier, project, and whether the subscription gives agy its quota | Not seen: the stand-in answered it | The first real turn (E34). |
+| agy loading the workspace's `AGENTS.md` | Not seen: in the stand-in's runs no rule reached the model's request, in a git repository or not, nor `~/.gemini/GEMINI.md` | The first real turn (E33). |
+
+Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, its answer never seen.
 
 ## On Agora's side
 
@@ -623,7 +695,7 @@ call. The test page does it itself when the agent offers the option.
 | C51 | Through the gateway, kubectl with that kubeconfig and `HTTPS_PROXY` alone, the execution with `kubernetes:read`: `version`, `get pods`, `get pod`, a watch; `delete`, `patch`, `create`; a read with `--password` | The reads answered by the API server, the watch's event printed. The writes refused by the gateway, 403, the API server receiving none. Every request the API server receives carries the gateway's credential, never kubectl's. |
 | C52 | kubectl, the execution with `anthropic` alone, with `internet` alone, and with `kubernetes:read` from another address than the token's | 403 from the gateway each time; the API server receives nothing. |
 | C53 | In the cluster, the `kubernetes` route deployed, an execution with `kubernetes:read`: `kubectl get pods -A`, `get nodes`, `logs`; then `get secrets -A`, `exec`, `attach`, `port-forward`, `get --raw` of a node's `proxy/`, `create token`, `get pods --as=system:admin` | The reads answered. Each of the others refused: by the API server, 403 Forbidden, for those sent as a `GET`; by the gateway, 403, for the `POST`s. |
-| C54 | `kubectl version --client` in the claude-code, codex and opencode images | 1.36.5. |
+| C54 | `kubectl version --client` in the claude-code, codex, opencode and antigravity images | 1.36.5. |
 | C55 | The grants of `previews`; a pool declaring it; neighbouring hosts | `pr-<n>-<app>.preview.bretagne.dev` covered, every method and path; the neighbours listed in "Previews" not; no other route's rule and no `internet` grant covers it; not a base profile, the pool refused. |
 | C56 | Through the gateway and a gateway gate, `previews` with the judge's other profiles: a `GET` with a query and a `POST` with a body, the sandbox sending its own `Authorization` and `X-Forwarded-User` | Both answered by the app, the body passed. The app receives `X-Forwarded-User` and `X-Forwarded-Email` `client-<id>`, `Authorization: Basic` of `client-<id>:none`, `x-agora-gate: gateway`; never the gateway's token, nor what the sandbox sent. |
 | C57 | `previews` alone to `a.b.preview.bretagne.dev`, `pr-42-demo.x.preview.bretagne.dev`, `x.preview.bretagne.dev`, `x.bretagne.dev`, `preview.bretagne.dev.evil.com`, `pr-42-demo.preview.bretagne.dev.evil.com`; a preview with `anthropic` alone, with `internet` and a repository, and with `previews` from another address | 403 from the gateway each time; the app receives nothing; `previews` from its own address: answered. |
@@ -643,3 +715,6 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C68 | `github:A:write` offered, then `github:A:review`; Creates naming A's review, read, write | Write offered: all three accepted; review offered: review and read, the write `profile_not_offered`. |
 | C69 | The gateway as deployed, a stand-in GitHub: write on A, review on B, `internet`, each request with forged `x-gateway-grant` values too | A's requests reach GitHub with the contributor's token, B's review with the reviewer's, a public read with the public token; a review grant never sends the contributor's token, nor a write grant the reviewer's; the forged header changes nothing; no request carries the operator's credential. |
 | C70 | In a real execution: `github:A:write`, a branch pushed and a pull request opened; another with `github:A:review` approving it; then the contributor merging | The commit and the pull request by `agora-contributor[bot]`, the approval by `agora-reviewer[bot]`, which makes it mergeable; the merge refused by GitHub to both Apps; the operator's accepted. |
+| C71 | The grants of `antigravity`; requests on Cloud Code, `www.googleapis.com`, Google's token endpoint, its telemetry and its other APIs | `daily-cloudcode-pa.googleapis.com` on `/v1internal:<method>`, any query; `GET www.googleapis.com/oauth2/v2/userinfo` exactly; every other path, method and host refused — `/v1internal`, `/v1internal:loadCodeAssist/x`, a `POST` or a query on the user info, `/oauth2/v3/tokeninfo`, `/drive/v3/files`, `oauth2.googleapis.com/token`, `play.googleapis.com/log`, `cloudcode-pa.googleapis.com`, `generativelanguage.googleapis.com`; no grant on `*`. A base profile. |
+| C72 | In the cluster, the routes deployed and the login renewed: the mock's `/fetch POST https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` and `/fetch https://www.googleapis.com/oauth2/v2/userinfo` with `antigravity`; `/fetch POST https://oauth2.googleapis.com/token` and `/fetch https://www.googleapis.com/drive/v3/about` with `antigravity` alone, then with `internet` too | 200 from Google for the first two, the account's tier and its email, with the token the gateway set; the others 403 from the gateway, then answered by Google without the credential: never the login's token on them. |
+| C73 | agy on the placeholder, a Session open: `antigravity-token` replaced; then emptied, a turn; then filled again, a turn | The next request carries the new token; emptied, the turn ends on Google's 401, no request to `oauth2.googleapis.com`, no browser, the token file unchanged; filled again, the turn answered. |
