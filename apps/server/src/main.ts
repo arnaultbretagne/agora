@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type KubeApi } from '@agora/executions'
-import { Delegations, Files, Identity, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, refuseUnproven, telemetry } from '@agora/log'
+import { Delegations, Files, Identity, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys } from './preview.ts'
@@ -155,6 +155,8 @@ const server = createApi({
     (await limitsHttp(limits, req, res)) ||
     (await logHttp(workstreams, req, res, { testRoutes, identity, ...(credentials === undefined ? {} : { credentials }), ...(preview === null ? {} : { owner: SHARED_OWNER }) })) ||
     client(req, res),
+  // docs/specs/log.md, "HTTP": the executions of the caller's Workstreams; with no identity, every one.
+  owns: async (req, execution) => workstreams.belongsTo(execution, await ownersOf(identity, req, preview === null ? undefined : SHARED_OWNER)),
   ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process
   // on the spot, nothing drained or written. In a container the server is PID 1, which cannot SIGKILL
@@ -168,8 +170,8 @@ const receiver = createAnchorReceiver({
   verify: (token) => kube.reviewToken(token, audience),
 })
 receiver.listen(number('ANCHOR_PORT', 8081), () => console.log(`- anchor receiver on :${String(number('ANCHOR_PORT', 8081))}`))
-// docs/specs/mcp.md: Agora's MCP server, on a port only the gateway reaches.
-const mcp = createMcpServer(workstreams)
+// docs/specs/mcp.md: Agora's MCP server, on a port only the gateway reaches, taking only the grants this server signs.
+const mcp = createMcpServer(workstreams, credentials === undefined ? null : await credentials.grantKey())
 mcp.listen(number('MCP_PORT', 8082), () => console.log(`- MCP server on :${String(number('MCP_PORT', 8082))}`))
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {

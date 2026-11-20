@@ -1,7 +1,8 @@
 // Agora's MCP server (docs/specs/mcp.md): the person's Workstreams, searched and read, for the agents the gateway lets
-// through. Its port is the gateway's alone; the gateway's route `agora` names the execution that calls, and nothing
-// else here says who calls.
+// through. Who calls is what the message proves: the grant Agora signed for the execution, which the gateway's route
+// `agora` checked and forwards; no header names a caller here, and the network that leads here vouches for nobody.
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
+import { jwtVerify } from 'jose'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
@@ -12,10 +13,11 @@ import type { Workstreams } from './workstreams.ts'
 import { Refused as DelegationRefused } from './delegation.ts'
 import type { Role } from './roles.ts'
 import { Refused as MergeRefused } from './merges.ts'
-import { GITHUB_WRITE } from '@agora/credentials'
+import { GITHUB_WRITE, type GrantKey } from '@agora/credentials'
+import { bearerOf } from '@agora/harness-bridge/token'
+import { LEEWAY_SECONDS } from './identity.ts'
 
-/** The header the gateway sets from the token's subject, over whatever the sandbox sent. */
-export const CALLER_HEADER = 'x-agora-execution'
+/** The grant's subject: the execution it was signed for. */
 const SUBJECT = /^agora ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A message larger than this is no tool call of ours: `send_message` carries what a line of a prompt can hold. */
@@ -292,11 +294,37 @@ async function body(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-async function serve(workstreams: Workstreams, req: IncomingMessage, res: ServerResponse): Promise<void> {
+/**
+ * The subject of the grant a message carries (docs/specs/mcp.md, "The caller"): `Authorization: Bearer` and a JWT signed
+ * with Agora's own key, under its key id, with an EdDSA signature, for its audience, from its issuer, with an `exp` not
+ * past by more than 30 s; null for anything else. Without a key, no grant is taken.
+ */
+async function grantSubject(key: GrantKey | null, req: IncomingMessage): Promise<string | null> {
+  const token = bearerOf(req.headers.authorization)
+  if (key === null || token === undefined || token === '') return null
+  try {
+    const { payload, protectedHeader } = await jwtVerify(token, key.publicKey, {
+      algorithms: ['EdDSA'],
+      issuer: key.issuer,
+      audience: key.audience,
+      clockTolerance: LEEWAY_SECONDS,
+      requiredClaims: ['exp', 'sub'],
+    })
+    return protectedHeader.kid === key.keyId && typeof payload.sub === 'string' ? payload.sub : null
+  } catch {
+    return null
+  }
+}
+
+async function serve(workstreams: Workstreams, grants: GrantKey | null, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // docs/specs/mcp.md, "The caller": a grant of Agora's on every request, then an execution Agora knows; nothing is
+  // read before both.
+  const granted = await grantSubject(grants, req)
+  if (granted === null) return reply(res, 401, 'unauthenticated')
   if (new URL(req.url ?? '/', 'http://mcp').pathname !== '/mcp') return reply(res, 404, 'not_found')
   // Stateless: no stream to open, no session to end.
   if (req.method !== 'POST') return reply(res, 405, 'method_not_allowed', { allow: 'POST' })
-  const subject = SUBJECT.exec(String(req.headers[CALLER_HEADER] ?? ''))
+  const subject = SUBJECT.exec(granted)
   const caller = subject === null ? undefined : await workstreams.caller(subject[1]!)
   const owner = caller === undefined ? null : await workstreams.projections.ownerOf(caller.workstream)
   if (caller === undefined || owner === null) return reply(res, 401, 'unknown_caller')
@@ -365,10 +393,13 @@ async function serve(workstreams: Workstreams, req: IncomingMessage, res: Server
   await transport.handleRequest(req, res, message)
 }
 
-/** docs/specs/mcp.md: the server on its own port, `POST /mcp`. */
-export function createMcpServer(workstreams: Workstreams): HttpServer {
+/**
+ * docs/specs/mcp.md: the server on its own port, `POST /mcp`. `grants`: what checks the grants Agora signs; without it
+ * — no gateway, no key —, every message is refused.
+ */
+export function createMcpServer(workstreams: Workstreams, grants: GrantKey | null): HttpServer {
   return createServer((req, res) => {
-    serve(workstreams, req, res).catch((error: unknown) => {
+    serve(workstreams, grants, req, res).catch((error: unknown) => {
       console.error('mcp:', error instanceof Error ? error.message : error)
       if (!res.headersSent) reply(res, 500, 'internal')
       else res.end()

@@ -224,7 +224,7 @@ covers the path with the query, and the method. It sets no credential: the reque
 | `vault` | `vault.bretagne.dev`; an MCP backend, the tools the grants name ("The vault") | `Authorization: Bearer` + an access token of the Pocket-ID machine client `agora_gateway_vault`. |
 | `kubernetes` | `kubernetes.agora.internal`, to the cluster's API server ("Kubernetes") | `Authorization: Bearer` + the token of the gateway's own ServiceAccount, projected, read only by its RBAC. |
 | `previews` | `*.preview.bretagne.dev`, the hosts a grant's `hostPattern` covers ("Previews") | `Authorization: Bearer` + a token of the Pocket-ID client `agora_gateway_previews`; `x-agora-gate: gateway`. |
-| `agora` | `mcp.agora.internal`, to Agora's server, port 8082 ("Agora's MCP") | None; `x-agora-execution` set to the JWT's `sub`. |
+| `agora` | `mcp.agora.internal`, to Agora's server, port 8082 ("Agora's MCP") | None; `Authorization: Bearer` + the JWT the CONNECT carried, which Agora checks again; `x-agora-execution` set to the JWT's `sub`. |
 | `internet` | Any other | None. |
 
 ### GitHub identities
@@ -462,15 +462,16 @@ the server refuses (401). Once the route exists, `internet` never opens it: the 
 ### Agora's MCP
 
 Agora's own MCP server (`mcp.md`) is a host of the gateway like any other. The gateway checks the
-token and the grant and tells Agora who calls; it sets no credential and reads no MCP message:
-Agora opens its tools by the rights it recorded.
+token and the grant and forwards the token to Agora, which checks it again and takes the caller
+from it; it sets no credential and reads no MCP message: Agora opens its tools by the rights it
+recorded.
 
 | Element | The `agora` route |
 | --- | --- |
 | Host | `hostnames: [mcp.agora.internal]`, on the internal bind's HTTPS listener with the other routes: the sandbox sends `CONNECT mcp.agora.internal:443`, then its MCP messages to `https://mcp.agora.internal/mcp`. The name resolves nowhere: only this route knows it. |
 | Backend | `http://server.agora.svc.cluster.local:8082`, an HTTP backend: the messages pass as the sandbox sent them. |
 | HTTP rule | `authorization`: the rule of every route with a grant — from the JWT's `ip`, no path tricks, a grant covering host, path with query, and method. With `agora:read`'s grant: `GET`, `POST` and `DELETE` on `/mcp` exactly; any other path refused (403). |
-| The caller | `x-agora-execution`, set from the JWT's `sub` — `agora <execution>` — over whatever the sandbox sent. |
+| The caller | `Authorization: Bearer` and the JWT the CONNECT carried — the one `jwtAuth` verified, read by the same expression —, over whatever the sandbox sent: the proof Agora checks (`mcp.md`, "The caller"). And `x-agora-execution`, set from the JWT's `sub` — `agora <execution>` — over whatever the sandbox sent: Agora reads it no more; set, no header of the sandbox's reaches any server under that name. |
 | Credential | None. |
 | Network | The gateway: egress to the `agora` Pods `app: server`, port 8082. The server: ingress on port 8082 from the `agora-gateway` Pods `app: gateway`, and from no other Pod — the node reaches it, as Cilium lets a node reach every port of its Pods; its Service gains port `mcp`, 8082. |
 

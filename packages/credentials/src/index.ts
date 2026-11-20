@@ -22,6 +22,7 @@ export {
   offers,
   type GitHubIdentity,
   type Grant,
+  type GrantKey,
   type GrantSignerOptions,
   type McpServer,
 } from './grants.ts'

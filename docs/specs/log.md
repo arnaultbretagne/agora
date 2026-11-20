@@ -479,6 +479,17 @@ changes instead of fetching every view again.
 
 The test routes answer only while `TEST_ROUTES` is `true`; otherwise 404.
 
+What a caller reaches ("Identity"): its own, and nothing else; with no identity, any owner's.
+
+| What | Rule |
+| --- | --- |
+| A Workstream named | Every route `/api/workstreams/{id}/…` — `commands`, `thread`, `row`, `read`, `merge`, and the test routes `control`, `credentials`, `entries` — acts on the caller's Workstream alone, a sub-stream being its root's owner's. Another owner's is answered as one that does not exist, 404 `unknown_workstream`, nothing read or written: an id tells nothing. With no identity, each route answers as it does for any owner's. |
+| A Workstream created | A Create's id that another owner holds is 409 `workstream_conflict` ("HTTP"): the id is taken, nothing of it read. |
+| A file | `GET /api/files/{sha256}`: a file an entry of the caller's Workstreams names (`files.md`, "Reading a file"); another's is 404 `unknown_file`, as an unknown digest. |
+| An anchor | Test only: `GET /api/anchors` lists the anchors of the caller's Workstreams; `GET /api/anchors/{id}/content` of another owner's is 404 `unknown_anchor`, as an unknown id. |
+| An execution | `GET /api/executions` and `GET /api/events` (`executions.md`, "The API") show the executions of the caller's Workstreams alone: another owner's never in the snapshot nor in a change sent. The test routes that name an execution (`executions.md`, "The server") act on the caller's alone; another owner's is answered as one Agora does not know, 404, nothing done. |
+| What is no owner's | The catalogue, `GET /api/config`, `GET /api/limits` (`credentials.md`, "Limits"), the client's files, the test page and `POST /api/test/restart`, which stops the server — the work of every owner surviving it, as any restart —: every proven caller. |
+
 Bodies are UTF-8 JSON of at most 16 MiB, parsed losslessly. A malformed body is 400; a storage
 failure is 503; no answer carries an exception message.
 
@@ -486,8 +497,8 @@ failure is 503; no answer carries an exception message.
 
 Who calls port 8080 is what the request proves, in one of two modes the server is given, never
 left out: `IDENTITY` `oidc` in production; `none` for tests, local runs and previews (`preview.md`),
-which take no other. A caller has an owner, whose Workstreams it reads and creates, and an e-mail or
-none. The owner of an e-mail is a name-based UUID of it, the same whatever proof gave the e-mail.
+which take no other. A caller has an owner, whose Workstreams it reads, creates and acts on, and
+nothing else ("HTTP"), and an e-mail or none. The owner of an e-mail is a name-based UUID of it, the same whatever proof gave the e-mail.
 
 | Mode | Proof taken | Caller | Without it |
 | --- | --- | --- | --- |
@@ -745,6 +756,12 @@ exception message.
 | L176 | With IDENTITY `oidc`, a service token standing for the person's e-mail, one for an owner, and the person's ID token: the account, a Create each, the lists | The e-mail's: the account that e-mail, its Create the person's; the owner's: the account null, its Create that owner's whatever the body names. The e-mail's token and the ID token list the same two Workstreams; the owner's its own alone. |
 | L177 | With IDENTITY `oidc`, the issuer's discovery document and keys answering 503: the account and a Create with a valid ID token, the account with a service token; then the issuer back, the same two | 503 `identity_unavailable` twice, nothing written; the service token's account its e-mail. Then the account 200 and the Create written. |
 | L178 | The server started with `IDENTITY` left out, another word, `oidc` without `IDENTITY_ISSUER`, without `IDENTITY_AUDIENCE`, `none` with `IDENTITY_ISSUER`; with a token file not JSON, a token of 5 characters, a file without `email` or `owner`, two files with one token; a preview with `IDENTITY` `oidc`, then `none` | Each exits 1 before listening: `IDENTITY must be none or oidc` twice; `IDENTITY_ISSUER is required with IDENTITY=oidc`; `IDENTITY_AUDIENCE is required with IDENTITY=oidc`; `IDENTITY_ISSUER: only with IDENTITY=oidc`; `service token <file>:` and why, the token never in the output; the preview `PREVIEW excludes IDENTITY`, with `none` no exclusion. |
+| L179 | With IDENTITY `oidc`, caller A, a Write to B's execution and a Stop of it, in B's Workstream; the same in a Workstream that does not exist; then A's own Write, and B's Stop | 404 `unknown_workstream` each time, both alike; B's Workstream not written, its execution running. A's Write accepted; B's Stop accepted. |
+| L180 | With IDENTITY `oidc`, caller A reading B's Workstream: its thread, its row, its transcript, its merge card; the same of a Workstream that does not exist; B's file, and an unknown digest; then B reading its own | 404 `unknown_workstream` for each of the four, both alike; 404 `unknown_file` twice. B: its thread's stream, its row, its transcript, `no_merge`, its file's bytes. |
+| L181 | With IDENTITY `oidc`, caller A on B's Workstream and its execution, then on a Workstream that does not exist: the entries, a `session/set_config_option`, a credential handed over; then A on its own | 404 `unknown_workstream` for each, both alike; B's Workstream not written, its bridge's credential unchanged. A's own: its entries, the request's id, the credential accepted. |
+| L182 | With IDENTITY `oidc`, an anchor stored for A's Workstream and one for B's: each caller's list; A reading B's anchor, and an unknown one; B reading its own | Each list its own Workstream's anchors alone. 404 `unknown_anchor` twice; B's: its native files. |
+| L183 | With IDENTITY `oidc`, an execution of A's and one of B's: each caller's executions; A's events, B cutting its own bridge, then A its own; A cutting and probing B's execution, and an unknown one | Each caller's list its own execution alone. A's events: its own in the snapshot, then changes of its own alone, none of B's. 404 for B's as for the unknown one, `unknown execution: <id>` and `unknown execution or no Pod`, B's connection kept; A's own cut and probe accepted. |
+| L184 | With IDENTITY `none`: Workstreams of two owners, each with an execution, the requests without the proxy's header; then with A's header | Without it: a Write, the thread and the entries of each, both executions listed; for an id of no Workstream, the entries empty and the thread 404, as before. With it: A's execution alone listed; a Stop in B's Workstream 404 `unknown_workstream`, in A's accepted. |
 | L121 | On each real harness, a Write with `mayWait` during a turn generating text, naming a word to add | Claude Code and Codex: `injected`, one answer, the word said in that turn. OpenCode: no `_session/steering`; its own turn next. |
 | L122 | On Claude Code and Codex, such a Write during a long shell command | The message waits until the tool closes; on Claude Code, the command's own result in its line, not moved to the background; `injected`, the word said in that turn; nothing said after its answer. |
 
