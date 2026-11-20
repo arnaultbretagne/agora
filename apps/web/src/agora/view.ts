@@ -70,7 +70,7 @@ export interface AgentCommand {
   readonly hint: string | null
 }
 
-const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent' }
+const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', antigravity: 'Antigravity', mock: 'Mock agent' }
 
 /** A harness as people name it. */
 export const harnessName = (harness: string | null | undefined): string => (harness ? (HARNESS_NAMES[harness] ?? harness) : 'the agent')
@@ -1030,7 +1030,7 @@ export interface AccessEntry {
 /** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
 export const INTERNET = 'internet'
 
-const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', [INTERNET]: 'Internet' }
+const SERVICE_NAMES: Record<string, string> = { anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity', [INTERNET]: 'Internet' }
 
 /**
  * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), in the order offered:

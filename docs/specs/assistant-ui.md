@@ -416,7 +416,7 @@ the screen.
 | `execution.ended` | "The sandbox has ended." |
 
 Harnesses are named as people name them: `claude-code` Claude Code, `codex` Codex, `opencode`
-OpenCode, `mock` Mock agent; another by its own name.
+OpenCode, `antigravity` Antigravity, `mock` Mock agent; another by its own name.
 
 ## The screen
 
@@ -482,7 +482,7 @@ menu and in the button's tooltip; the harness menu shows the marks too.
 
 | Picker | Wide | Narrow |
 | --- | --- | --- |
-| Harness | Its name | Its mark: Claude Code's, Codex's or OpenCode's; a robot for any other |
+| Harness | Its name | Its mark: Claude Code's, Codex's, OpenCode's or Antigravity's, from @lobehub/icons-static-svg 1.95.1; a robot for any other |
 | Model | The model · the effort | The model; the effort as one to four bars, by its rank among the efforts offered |
 | Role | **No role**, or the role's name | A mask, coral when a role is picked |
 | Access | The key and what is granted | The key, with a coral dot when anything is granted |
@@ -621,6 +621,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U115 | In a browser on a phone's screen, a touch screen alone (`(pointer: coarse) and (not (any-pointer: fine))`), an open Workstream: a line typed, Enter, another line, then **Send**; a line, then Ctrl+Enter; another, then ⌘+Enter | Enter: both lines in the composer, nothing sent; **Send**: one message of the two lines, the agent's answer, the composer empty. Ctrl+Enter, then ⌘+Enter: each sent. |
 | U116 | In a browser on a touch screen with a fine pointer too (`any-pointer: fine`), as an iPad with a Magic Keyboard: a line typed, then Enter | Sent, as with a mouse: the message, the agent's answer, the composer empty. |
 | U117 | In a browser with a mouse or a trackpad, a text typed: Enter during an IME composition (`isComposing`); Enter as Safari sends the one that confirms it, `isComposing` false and keyCode 229; then a plain Enter; then Enter on the empty composer | The first two send nothing, the text kept; the plain Enter sends it, the agent's answer, the composer empty; on the empty composer, nothing sent. |
+| U118 | The harnesses `claude-code`, `codex`, `opencode`, `antigravity`, `mock` and another; `antigravity` offered as an access | Named Claude Code, Codex, OpenCode, Antigravity, Mock agent, and the other by its own name; a mark each for the first four, all different, none for the mock nor the other, which get the robot; the access named Antigravity. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements
