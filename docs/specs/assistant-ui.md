@@ -145,6 +145,23 @@ the turn or after it (`log.md`, "Messages during a turn").
 | Held | While messages wait with no turn running and sending open, as after a Cancel or with no execution running, above them: "These go with your next message." |
 | Refused | The reason above the composer, the text and attachments back in it. |
 
+## The pickers
+
+Inside the composer, after the paperclip: the harness, the model, the role and the access, as light as
+the composer itself. No arrow beside any; the same wide and on a phone.
+
+| Picker | Its trigger | Its accessible name and tooltip |
+| --- | --- | --- |
+| Harness | Its mark alone: Claude Code's, Codex's or OpenCode's; a robot for any other. Once the Workstream has an execution, the same mark, not a button. | `Harness:` and the harness's name; the name alone in its tooltip. |
+| Model | The model's full name, ` · `, the effort ("Opus 5.5 · High"); the name alone when no effort is offered or picked; "Model" while the agent has given no current one. | `Model:` and what it shows. |
+| Role | A person alone, coral once a role is picked. | `Role:` and the role's name, or **No role**; the same alone in its tooltip. |
+| Access | A key alone, coral once anything is granted; no text and no count. | `Access:` and what is granted ("Access"). |
+
+| Element | Rule |
+| --- | --- |
+| Where a list opens | Below its trigger, from its start. Upward only where it does not fit below, as from the composer at the foot of the screen. Never wider than the screen, nor taller than the room it has, which it scrolls. |
+| Its names | Each value by its name in its list; the harness list shows the marks too. |
+
 ## Settings and commands
 
 What an agent offers to change, and the commands it runs, come from its Session (`log.md`, "The
@@ -166,7 +183,11 @@ are the execution's (`log.md`, "The Workstream view": `profiles`).
 
 | Element | Rule |
 | --- | --- |
-| The picker | After the model, when anything is offered: a key, and the rights the agent is given in its menu, one list for every kind of right. The services first, the Internet first among them — `internet` as "Internet" —, each one line with a switch; then each offered repository by its `owner/repo`, with **None**, **Read** and, when offered, **Review** and **Write** — a write offered offers the review. Rights of other kinds, MCP servers among them, take their place in the same list. The choices stay open in the menu, one after the other. The button: "No access", the one right granted ("Internet", "agora · Write"), or their names in the menu's order ("Internet, agora"); its title, each with its access ("Internet, agora · Write"). |
+| The picker | After the role, when anything is offered: the key ("The pickers"), and its menu, one line per right, each ticked on or off where it is; the menu stays open from one to the next. No line per repository and no level to pick. |
+| Its entries | Folded, a write giving the read, from what is offered, in this order: the services, the Internet first — `internet` as "Internet", `anthropic` "Anthropic", `zai` "z.ai", `chatgpt` "ChatGPT" —; **GitHub**, every offered repository at the widest level it is offered, their `owner/repo` under it, a level below write named after its repository ("o/b (read)"); **vault**, `vault:write`, else `vault:read` when only the read is offered; **k8s**, `kubernetes:read`; **agora**, `agora:delegate`; then any other offered profile — `agora:read`, `previews` among them, MCP servers as they come — by its own name. |
+| On and off | An entry on gives what it folds; off, it takes back every profile it covers, each level up to the one offered. Partly granted — a role's card or an earlier execution gave a part of it, one repository or a narrower level — it shows a dash; ticked, it gives the whole entry. Granted profiles no entry covers are kept. The set sent is in the order offered, each profile with its repository's or the vault's, then the others. |
+| The key's name | "No access", or the entries granted in the menu's order, "(partly)" after one partly granted ("Internet, GitHub (partly)"); the same in its tooltip. |
+| Delegation | Not folded: the menu is the person's alone. An agent delegating names any single profile it may give (`delegation.md`), one repository at one level among them. |
 | Before an execution | The choice goes into the Create's `profiles`. In a draft, and in a Workstream that has had no execution, it starts with `internet` when offered, nothing else; when sending continues an ended or failed execution, from that execution's `profiles`. |
 | During an execution | Each choice sends **Scope** with the whole set; shown at once, until the view has it, or back as it was if refused. Closed while a turn runs or is uncertain, and once the execution is stopped or lost. |
 
@@ -477,15 +498,8 @@ indicator. A phone's keyboard covers the page without resizing it, so the screen
 viewport: it fills what the keyboard leaves, and the composer rests on the keyboard, the home
 indicator's margin dropped while it is up.
 
-Narrower than 32rem, the composer's pickers give their names up for marks. Each name stays in its
-menu and in the button's tooltip; the harness menu shows the marks too.
-
-| Picker | Wide | Narrow |
-| --- | --- | --- |
-| Harness | Its name | Its mark: Claude Code's, Codex's or OpenCode's; a robot for any other |
-| Model | The model · the effort | The model; the effort as one to four bars, by its rank among the efforts offered |
-| Role | **No role**, or the role's name | A mask, coral when a role is picked |
-| Access | The key and what is granted | The key, with a coral dot when anything is granted |
+The composer's pickers are the same as on a wide screen ("The pickers"): three marks and the model's
+name, which fit at 390 px; each value stays in its list, its tooltip and its accessible name.
 
 Below 40rem the header keeps the title and the state, not the role nor the harness, and **Stop** is its icon. On a
 touch screen the composer's controls are 36 px high, and the search field's text is 16 px, under
@@ -538,20 +552,20 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U28 | In a browser, another model picked in an open Workstream | Configure sent; the picker shows the new model once answered. |
 | U29 | In a browser, `/` typed in the composer | The Session's commands listed; one chosen with Tab, one with Enter: `/{name} ` in the composer, the list gone, nothing sent; sent: the agent receives it. |
 | U30 | A catalogue with a pool kept for the tests; an ended Workstream of that pool; one whose pool is gone with an older image | The pool not offered; the ended Workstream's harness offered first is another; the other's, a pool of its harness. |
-| U31 | Offered `github:o/a:write`, `github:o/b:read`, `zai` and `internet`; none granted, then `internet`, then `github:o/a:read`, then both, then two repositories, then two and `zai`; `github:o/a:review` granted; `github:o/c:review` offered | `o/a` with None, Read, Review, Write; `o/b` with None, Read; z.ai and Internet off or on; listed Internet, z.ai, `o/a`, `o/b`; the button "No access", "Internet", "a · Read", "Internet, a" titled "Internet, a · Read", "a, b"; the last titled "z.ai, a · Write, b · Read"; the review titled "a · Review"; `o/c` with None, Read, Review; nothing offered: no picker. |
-| U32 | An access choice: Write for `o/a`, then None for it, with `github:o/b:read` granted | The whole set each time: `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`. |
+| U31 | Offered `github:o/a:write`, `github:o/b:read`, `zai`, `vault:write`, `internet`, `kubernetes:read`, `agora:delegate`, `github:o/c:review`, `agora:read` and `previews`; GitHub's states with none, all, `o/b` alone, a narrower level; the key's name; `vault:read` alone offered; nothing offered | Internet, z.ai, GitHub giving `github:o/a:write`, `github:o/b:read`, `github:o/c:review`, "o/a, o/b (read), o/c (review)" under it, covering each level up to the one offered; vault giving `vault:write`, covering its read; k8s; agora; `agora:read`; `previews`. GitHub off, on, partly, partly. "No access", "Internet", "Internet, GitHub, agora", "GitHub (partly), vault". vault giving `vault:read`. No entry. |
+| U32 | Offered two repositories, `internet` and `vault:write`: GitHub on, then off, with `internet` granted; GitHub on with `github:o/a:read` granted; vault on with `vault:read` and `github:x/y:read`; the Internet off with `agora:delegate` | The whole set each time: both repositories and `internet`, then `internet`; both repositories at their widest and `internet`; `vault:write`, then `github:x/y:read` kept; `agora:delegate`. |
 | U33 | An ended Workstream whose execution had profiles, a message sent; one whose execution had none; a draft, `internet` offered or not | The Create carries its `profiles`; another chosen before sending: those instead. The one without: none, `internet` not added. The draft: `internet` when offered, nothing when not, nothing once turned off. |
-| U34 | In a browser, `internet` offered with two repositories, an access picked in the draft, then a first message | "Internet" on the key, its switch on in the menu; Write picked for a repository: "Internet, a", titled "Internet, a · Write"; the Create carries both; the picker shows them once the Session is ready. |
-| U35 | In a browser, another access picked in an open Workstream | Scope sent with the whole set; the picker shows it at once, and still once the view has it. |
+| U34 | In a browser, `internet` offered with two repositories and `agora:delegate`, GitHub ticked in the draft, then a first message | "Access: Internet" on the key, the Internet on in the menu; GitHub one line, "owner/a, owner/b (read)" under it, off, no level anywhere; ticked: "Access: Internet, GitHub"; the Create carries `github:owner/a:write`, `github:owner/b:read` and `internet`; the key names them once the Session is ready. |
+| U35 | In a browser, GitHub then agora ticked in an open Workstream | A Scope for each, with the whole set — both repositories and `internet`, then `agora:delegate` too —, the menu open between them; the key names them at once, and still once the view has them. |
 | U36 | In a browser, a Workstream whose Pod ended without its anchor, then a message | Before sending, "No saved Mock agent session: the 1 exchange above goes to the agent as text."; sent, the new Session's notice says so; the prompt carries the exchange, then the message; the user's message shows the message alone. |
-| U37 | In a browser on a phone's screen (390 × 844, touch, a 34 px home indicator), a draft whose pool offers models and efforts, the Internet switched off, a repository granted; then the same draft on a wide screen | Narrow: the harness as its mark, the model by name with its effort as bars, the key with its dot, no name — the Internet alone, on by default, gives the dot; switched off, none —; no picker's text cut; the composer 34 px above the bottom. Wide: the harness's name, the model · the effort, what is granted. |
+| U37 | In a browser on a phone's screen (390 × 844, touch, a 34 px home indicator), a draft whose pool offers models and efforts, the Internet switched off, GitHub ticked; then the same draft on a wide screen | Narrow and wide alike: the harness's mark, "mock-large · high", a person and the key, no text beside the marks, no arrow, no picker cut; the key coral with the Internet on by default, not once it is off, coral again with GitHub; each list opened below its trigger; the composer 34 px above the bottom. |
 | U38 | In a browser, the page's home-screen tags and files; then the theme toggled against the system's | The manifest (Agora, standalone, from `/`) and the 180 px icon served; an opaque status bar asked; the page covering the display; the status bar's colour the page's, then the toggled theme's. |
 | U39 | In a browser on a phone's screen, a draft, then a Workstream opened from the list, the theme toggled in each; then the page loaded without its client | At the top and the bottom, the edge element as WebKit finds it is not one covering the screen and has the page's colour, the toggled theme's each time; the list open, the one covering it; the page without its client already in the theme picked. |
 | U40 | In a browser on a phone's screen, two Workstreams taller than it: one opened from the list, the other from it, the first by its address; scrolled up, then **Scroll to the bottom**; on another phone, nothing kept and the network slow, the first from the list; then on a wide screen with a mouse | Each opened on its last message, the composer not focused; nor after the button. Wide: the composer focused on opening. |
 | U41 | In a browser, a Workstream answered, then reloaded | Kept in the browser once read whole; reloaded, read with `EventSource` from that cursor, not from zero. |
 | U42 | A view with the agent's context, malformed ones; accounts read, failed, empty; windows starting again in minutes, hours, days, or past | The context, or none; a pool's account by its first base profile with limits or a reason, none otherwise; "45m", "2h", "2h 10m", "3d", "3d 4h", nothing. |
 | U43 | In a browser, a draft whose pool draws from an account with limits; then a Workstream whose agent reports 150k of a 200k context; then on a phone's screen | The gauge, opened: **Subscription**, the plan, each window's percentage, the time until it starts again; no context. Then the ring at 75 % instead of the gauge, opened: "75% of the context", "150k / 200k", then the same windows. On the phone: the ring beside Send, nothing cut, opened by a touch. |
-| U44 | In a browser, `internet` offered: a draft; the Internet switched off, a repository picked, a first message; then switched on in the open Workstream, and a message | The menu lists the Internet, then the repositories; the switch on, then off, the menu still open; the Create without `internet`; switched on: shown at once, **Scope** with the repository and `internet`; "Internet, b" once the view has it. |
+| U44 | In a browser, `internet` offered: a draft; the Internet switched off, GitHub ticked, a first message; then the Internet switched on in the open Workstream, and a message | The menu lists Internet, GitHub, agora; the Internet on, then off, the menu still open; the Create without `internet`; switched on: shown at once, **Scope** with the repositories and `internet`; "Internet, GitHub" once the view has it. |
 | U45 | Files for an agent accepting images and embedded resources: an image, a UTF-8 text file, one with a NUL, one over 256 KiB, one not UTF-8; then images alone, nothing, or not known; a prompt of text and two attachments; a `user` element of text, an image, an embedded resource, a resource link and an audio block | The image an image; the text file a resource with its name, type and text; the others refused with why; images alone: the text file refused; nothing or not known: no paperclip. The prompt: the text block, then the attachments in order. The message: its text, and four attachments — the image's, the resource and the link by their `uri`, the audio by its type. |
 | U46 | In a browser, a draft whose agent accepts images and embedded resources: a 3000 × 2000 PNG and a Markdown file attached, then a binary file; a first message sent; the page reloaded | The paperclip; two tiles; the binary refused, "{name} can't be attached: …"; the Write's prompt: the text, a JPEG 2048 px wide, the Markdown as a resource with its name and text; the agent saying it received them; reloaded, their two tiles above the bubble, the image opening whole. |
 | U47 | A question pending, then answered with an option and a note | An `assistant` message at its position, `requires-action`: the title in bold and the text; the `question` part, its approval the options, none chosen. Answered: `complete`, the approval its option, the line's note the option and the note. |
@@ -573,7 +587,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U93 | In a browser, `lead` picked in a draft, a first message sent | The Create carries `role`, the card's settings and the profiles shown; the Workstream opens with no role picker, its header naming the role before the harness. |
 | U94 | In a browser, a Workstream started with a role: a second message; its execution ended, then a message | Neither Create nor Write names a role; the header names it still. |
 | U95 | In a browser, no role offered; a Create refused `unknown_role` | No role picker; the message back in the composer with the reason. |
-| U96 | In a browser on a phone's screen, roles offered, one picked | The role picker as its mark, coral; its name in its menu and its tooltip. |
+| U96 | In a browser on a phone's screen, roles offered, one picked; then wide | A person alone, coral once picked, narrow and wide; the role's name in its menu, its tooltip and its accessible name ("Role: lead"); the card's model · effort on the model picker; no picker cut. |
 | U97 | In a browser, a model picked in a draft, a role with it, a first message sent, then New workstream; a role picked there; in a draft nothing was picked in, an effort changed while a card's model and effort show, then **No role** | The model as the person left it on the new draft, **No role** on its role picker; the role picked: its card's model not set over the person's. The model with its effort the person's from the change on, kept with **No role**. |
 | U59 | In a browser, a word said only in an exchange of a Workstream not loaded, and far into a long one of a sub-stream's, typed in Search; then the box emptied | Both listed, each with the line that holds the word under its title, from the word before it, the word marked; emptied, the list as before. |
 | U61 | An approval pending on that line; Approve | The proposal and one button; the list's row "waiting for you"; after Approve, "Approved" and the delegate working. |
