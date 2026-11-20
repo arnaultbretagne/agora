@@ -30,6 +30,8 @@ const narrow = '@lg:hidden'
 // touched. With a mouse or a trackpad it takes the focus itself — on opening, on Scroll to the bottom, as
 // a turn starts.
 const focusesItself = () => matchMedia('(any-pointer: fine)').matches
+// A touch screen alone, as assistant-ui's `unstable_insertNewlineOnTouchEnter` tells it: there Enter starts a new line.
+const touchAlone = () => matchMedia('(pointer: coarse) and (not (any-pointer: fine))').matches
 
 /** The harness a new execution starts with; the running one, as a plain label, once started. */
 const HarnessPicker: FC = () => {
@@ -409,6 +411,19 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
     setHighlighted(0)
   }
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The Enter that confirms an IME conversion is the IME's, never a send: Safari fires it once
+    // `isComposing` is false again, its keyCode 229 (assistant-ui #8319).
+    if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) {
+      e.preventDefault()
+      return
+    }
+    // assistant-ui turns every Enter into a new line on a touch screen alone, Ctrl's and Cmd's too: those
+    // still send there, through the composer's form as its own Enter does.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && matches.length === 0 && touchAlone()) {
+      e.preventDefault()
+      if (composer.open && !empty) e.currentTarget.form?.requestSubmit()
+      return
+    }
     if (matches.length === 0) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
@@ -449,8 +464,11 @@ const Writing: FC<{ placeholder?: string }> = ({ placeholder }) => {
         <ComposerAttachments />
         <ComposerPrimitive.Input
           rows={1}
-          // Enter starts a new line, on a phone as on a computer; Ctrl or Cmd with it sends.
-          submitMode="ctrlEnter"
+          // With a mouse or a trackpad, Enter sends and Shift+Enter starts a new line. On a touch screen
+          // alone — `(pointer: coarse) and (not (any-pointer: fine))`, as assistant-ui tells it —, whose
+          // keyboard is the screen's, Enter starts a new line and Send sends. Ctrl or Cmd with Enter sends on both.
+          submitMode="enter"
+          unstable_insertNewlineOnTouchEnter
           autoFocus={focusesItself()}
           onKeyDown={onKeyDown}
           // Escape hides the commands listed; it cancels the turn only with none.
