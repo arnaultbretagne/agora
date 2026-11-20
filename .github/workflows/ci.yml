@@ -16,18 +16,19 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-  attestations: write
-  # To find the pull request a merge comes from, and whether its head passed.
-  actions: read
-  pull-requests: read
+# None by default: each job declares the least it needs. No value a branch's author or an event chooses
+# (a ref's name, a payload's field, an input) is written into a `run:` script: it reaches it through
+# `env:`, as a variable the shell never parses as code.
+permissions: {}
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To find the pull request a merge comes from, and whether its head passed.
+      actions: read
+      pull-requests: read
     services:
       postgres:
         image: postgres:17
@@ -77,9 +78,17 @@ jobs:
     needs: check
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To read and push the images on ghcr.io.
+      packages: write
+      # To sign and store the build's provenance (actions/attest-build-provenance).
+      id-token: write
+      attestations: write
     # Published from the base branch or a run by hand; a branch's push builds and tries them only.
     env:
       PUBLISH: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+      NAME: ${{ matrix.name }}
       IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -106,7 +115,7 @@ jobs:
       - name: Its image, if its inputs already have one
         id: existing
         run: |
-          inputs=$(node scripts/inputs.ts ${{ matrix.name }})
+          inputs=$(node scripts/inputs.ts "$NAME")
           echo "inputs=$inputs" >> "$GITHUB_OUTPUT"
           if manifest=$(docker buildx imagetools inspect "$IMAGE:inputs-$inputs" --format '{{json .Manifest}}' 2>/dev/null); then
             echo "digest=$(jq -r .digest <<<"$manifest")" >> "$GITHUB_OUTPUT"
@@ -136,7 +145,7 @@ jobs:
           openssl pkey -in key.pem -pubout -out pub.pem
           docker run -d --name harness --read-only --tmpfs /home/harness:uid=10001,gid=10001 --tmpfs /tmp \
             --cap-drop ALL -e POD_NAME=sbx-ci -e BRIDGE_PUBLIC_KEY="$(cat pub.pem)" -p 8080:8080 \
-            ${{ matrix.name }}:test
+            "$NAME:test"
           for i in $(seq 1 60); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
           curl -fsS http://localhost:8080/healthz
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
@@ -184,13 +193,13 @@ jobs:
           DIGEST: ${{ steps.existing.outputs.digest || steps.push.outputs.digest }}
         run: |
           {
-            echo '### ${{ matrix.name }}'
+            echo "### $NAME"
             echo ''
             echo '```'
             echo "$IMAGE@$DIGEST"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p digests && echo "$DIGEST" > "digests/${{ matrix.name }}"
+          mkdir -p digests && echo "$DIGEST" > "digests/$NAME"
 
       # For the infra proposal below: one file per image, named after it.
       - if: env.PUBLISH == 'true'
@@ -207,13 +216,18 @@ jobs:
     needs: image
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    # Only to check out this repository: infra-k8s is written with its own token, given only to the steps
+    # that need it — though the infra checkout keeps it in infra/.git/config for the push, so later steps
+    # of this job can read it there. The branch's name reaches the scripts as REF.
     permissions:
       contents: read
     env:
-      INFRA_K8S_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
+      REF: ${{ github.ref_name }}
     steps:
       - name: Check the token
         id: token
+        env:
+          INFRA_K8S_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
         run: |
           if [ -z "$INFRA_K8S_TOKEN" ]; then
             echo "::notice::INFRA_K8S_TOKEN is not set: no infra-k8s pull request proposed."
@@ -242,14 +256,14 @@ jobs:
       - name: Write the digests into infra-k8s
         id: propose
         if: steps.token.outputs.ok == 'true'
-        run: node scripts/propose-infra.ts --infra infra --digests digests --ref "${{ github.ref_name }}" --sha "${{ github.sha }}" > body.md
+        run: node scripts/propose-infra.ts --infra infra --digests digests --ref "$REF" --sha "$GITHUB_SHA" > body.md
       - name: Open or update the pull request
         if: steps.token.outputs.ok == 'true' && steps.propose.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.INFRA_K8S_TOKEN }}
         run: |
-          if [ "${{ github.ref_name }}" = main ]; then branch=agora/images; else branch="agora/images-$(printf '%s' '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9-' '-')"; fi
-          title="feat(agora): images from ${{ github.ref_name }} ${GITHUB_SHA::7}"
+          if [ "$REF" = main ]; then branch=agora/images; else branch="agora/images-$(printf '%s' "$REF" | tr -c 'a-zA-Z0-9-' '-')"; fi
+          title="feat(agora): images from $REF ${GITHUB_SHA::7}"
           cd infra
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

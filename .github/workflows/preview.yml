@@ -9,9 +9,9 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
 
-permissions:
-  contents: read
-  packages: write
+# None by default: the job declares the least it needs. No value of the event (a branch's name, a pull
+# request's title) is written into a `run:` script: what one needs reaches it through `env:`.
+permissions: {}
 
 jobs:
   image:
@@ -21,6 +21,10 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'preview') &&
       (github.event.action != 'labeled' || github.event.label.name == 'preview')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To push the image to ghcr.io.
+      packages: write
     # The pull request's last commit wins: a run for an older one is cancelled. A run this job skips takes no place here.
     concurrency:
       group: preview-${{ github.event.pull_request.number }}
