@@ -1,12 +1,17 @@
-// docs/specs/merge.md: the merge card — proposed by an agent holding a repository's write, its state read from GitHub,
-// merged from its Answer as the operator, cancelled by the person's message, carried out again after a restart.
-// GitHub stands in: each pull request's state and every merge asked.
+// docs/specs/merge.md: the merge card — proposed by an agent holding a repository's write, or by its delegator, its
+// state read from GitHub, merged from its Answer as the operator, cancelled by the person's message, carried out again
+// after a restart. GitHub stands in: each pull request's state and every merge asked.
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import type { GitHub, MergeOutcome, MergeState, PullRequest } from '@agora/credentials'
-import { Merges, MergeRefused, project, type Entry } from '../src/index.ts'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { compileProfiles, type GitHub, type MergeOutcome, type MergeState, type PullRequest } from '@agora/credentials'
+import { keys } from '@agora/testkit'
+import { CALLER_HEADER, createMcpServer, Merges, MergeRefused, project, type Entry } from '../src/index.ts'
 import { FROM_META } from '../src/marks.ts'
-import { opened, until, type Lab } from './support.ts'
+import { database, expire, FakeKube, grants, Lab, opened, until } from './support.ts'
 
 const REPO = 'octo/app'
 
@@ -183,4 +188,107 @@ test('G7 an Answer with no outcome, carried out as the server starts: merged onc
   await third.start()
   await until('the second merge', async () => (await lab.entries(ws)).filter((e) => e.kind === 'merge.merged').length === 2)
   assert.deepEqual(github.merges, [{ repo: REPO, number: 9, sha: 'head9' }])
+})
+
+type T = { after(fn: () => Promise<void>): void }
+type Text = { content: { type: string; text: string }[]; isError?: boolean }
+const said = (result: unknown) => (result as Text).content.map((c) => c.text).join('\n')
+
+/**
+ * A lead: a Workstream whose execution holds `agora:delegate` alone, calling Agora's MCP server as its harness does —
+ * the SDK's client, the execution named as the gateway names it —, with the delegation engine and the merge card; every
+ * token signed recorded. `delegate` makes a `spawn_agent` call with rights beyond the lead's, which the person approves,
+ * or refuses by writing.
+ */
+async function leading(t: T) {
+  const pair = keys()
+  const db = await database()
+  const signer = grants([])
+  const lab = await Lab.start({ db, kube: new FakeKube(pair.publicKey), keys: pair, credentials: signer.source, workstreams: { maxActive: 8 }, delegations: { approvalMs: 10_000, progressMs: 500 } })
+  const github = new FakeGitHub()
+  new Merges(lab.workstreams, { github, maxAgeMs: 0 })
+  const mcp = createMcpServer(lab.workstreams)
+  await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
+  const url = new URL(`http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`)
+  t.after(async () => {
+    await new Promise((resolve) => mcp.close(resolve))
+    await lab.close()
+    await db.drop()
+  })
+  const owner = randomUUID()
+  const ws = await lab.workstream(owner)
+  const e = await lab.open(ws, { profiles: ['agora:delegate'] })
+  const client = async (execution: string) => {
+    const c = new Client({ name: 'harness', version: '1.0.0' })
+    await c.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { [CALLER_HEADER]: `agora ${execution}` } } }))
+    t.after(() => c.close())
+    return c
+  }
+  const delegate = async (c: Client, rights: string[], refusal?: string, from = ws) => {
+    const call = c.callTool({ name: 'spawn_agent', arguments: { instructions: `work with ${rights.join(', ')}`, harness: 'mock', rights } })
+    const ask = await until('the approval', async () => (await lab.state(from)).question)
+    const settled = refusal === undefined ? await lab.command(from, 'Answer', { question: ask.position }, { optionId: 'approve' }) : await lab.write(from, refusal)
+    assert.ok(settled.accepted, JSON.stringify(settled))
+    return said(await call)
+  }
+  const id = (answer: string) => /^started ([0-9a-f-]{36}) · /.exec(answer)?.[1] ?? assert.fail(`not started: ${answer}`)
+  return { lab, owner, ws, e, github, signer, client, delegate, id }
+}
+
+test('G10 a lead with agora:delegate alone: propose_merge listed, not_allowed until it gave a delegate the write; then accepted on that repository alone, from a later execution, the card in its Workstream', async (t) => {
+  const { lab, owner, ws, e, github, client, delegate, id } = await leading(t)
+  github.add(7, 'review')
+  const first = await client(e.id)
+  assert.deepEqual((await first.listTools()).tools.map((tool) => tool.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent', 'propose_merge'])
+  const early = (await first.callTool({ name: 'propose_merge', arguments: { repo: REPO, number: 7 } })) as Text
+  assert.deepEqual([said(early), early.isError], ['not_allowed', true])
+  assert.equal((await lab.state(ws)).question, null, 'no card')
+  // A write asked and refused by the person: no delegation.
+  assert.equal(await delegate(first, ['github:octo/refused:write'], 'not that one'), 'refused: not that one')
+  const dev = id(await delegate(first, [`github:${REPO}:write`]))
+  const judge = id(await delegate(first, ['github:octo/infra:review']))
+  // Another Workstream of the person's, giving its own delegate another repository's write.
+  const elsewhere = await lab.workstream(owner)
+  const theirs = await lab.open(elsewhere, { profiles: ['agora:delegate'] })
+  id(await delegate(await client(theirs.id), ['github:octo/other:write'], undefined, elsewhere))
+  // A later execution of the lead's Workstream, as when its lease ends between two turns.
+  assert.ok((await lab.command(ws, 'Stop', { execution: e.id })).accepted)
+  await expire(lab.kube, (await lab.state(ws)).current!.claimName)
+  await until('the lead ended', async () => (await lab.state(ws)).current?.ended, 30_000)
+  const later = await lab.open(ws, { profiles: ['agora:delegate'] })
+  assert.notEqual(later.id, e.id)
+  const c = await client(later.id)
+  for (const repo of ['octo/refused', 'octo/infra', 'octo/other']) {
+    const refused = (await c.callTool({ name: 'propose_merge', arguments: { repo, number: 7 } })) as Text
+    assert.deepEqual([said(refused), refused.isError], ['not_allowed', true], repo)
+  }
+  assert.equal((await lab.state(ws)).question, null, 'no card')
+  assert.match(said(await c.callTool({ name: 'propose_merge', arguments: { repo: REPO, number: 7 } })), /^proposed octo\/app#7: the person merges it from the card/)
+  const q = question(await lab.entries(ws))!
+  assert.deepEqual([q.kind, q.status, q.title, q.repo, q.number, q.url], ['merge', 'pending', 'Add feature 7', REPO, 7, 'https://github.com/octo/app/pull/7'])
+  for (const other of [dev, judge]) assert.equal((await lab.state(other)).question, null, 'no card in a delegate’s Workstream')
+})
+
+test('G11 a lead that gave a delegate a write and proposed its merge: its profiles and every token signed for it agora:delegate alone, Agora’s MCP endpoint its only grant; its delegate’s token the write', async (t) => {
+  const { lab, ws, e, github, signer, client, delegate, id } = await leading(t)
+  github.add(7, 'review')
+  const c = await client(e.id)
+  const dev = id(await delegate(c, [`github:${REPO}:write`]))
+  assert.match(said(await c.callTool({ name: 'propose_merge', arguments: { repo: REPO, number: 7 } })), /^proposed octo\/app#7:/)
+  assert.equal(question(await lab.entries(ws))?.status, 'pending')
+  assert.deepEqual((await lab.state(ws)).current!.profiles, ['agora:delegate'])
+  const leads = signer.minted.filter((m) => m.label === `agora ${e.id}`)
+  assert.ok(leads.length > 0, 'the lead’s token signed')
+  for (const minted of leads) {
+    assert.deepEqual(minted.profiles, ['agora:delegate'])
+    assert.deepEqual(compileProfiles(minted.profiles).map((g) => [g.host, g.path]), [['mcp.agora.internal', '^/mcp$']])
+  }
+  // The control: a write given shows in the token signed for it.
+  const devExecution = await until('the delegate’s execution', async () => (await lab.state(dev)).current)
+  const devs = await until('the delegate’s token', () => {
+    const found = signer.minted.filter((m) => m.label === `agora ${devExecution.id}`)
+    return found.length > 0 ? found : null
+  })
+  for (const minted of devs) assert.deepEqual(minted.profiles, [`github:${REPO}:write`, 'agora:submit'])
+  assert.ok(compileProfiles(devs[0]!.profiles).some((g) => g.host === 'api.github.com' && g.identity === 'contributor'))
 })

@@ -3,6 +3,7 @@
 import type { ThreadMessageLike } from '@assistant-ui/react'
 import { attachmentsOf, promptCapabilitiesOf, type PromptCapabilities } from './attachments.ts'
 import { after, ofKind, type Json, type ThreadState, type ViewObject } from './objects.ts'
+import { firstLine } from './tools.ts'
 
 type Part = Exclude<ThreadMessageLike['content'], string>[number]
 type Status = NonNullable<ThreadMessageLike['status']>
@@ -768,6 +769,41 @@ function subagentPart(e: ViewObject): Part {
   }
 }
 
+/**
+ * A message the agent receives from another than the person (docs/specs/assistant-ui.md, "Messages"): a `user` element
+ * that names its writer — a delegate's, its delegator's, its parent's, Agora's —, or an earlier delegation's report.
+ */
+const received = (e: ViewObject): boolean => e.object.type === 'report' || (e.object.type === 'user' && (text(e.object.from) !== '' || text(e.object.as) !== ''))
+
+/** Such a message as its line shows it: who wrote it, and its whole text. */
+export interface Received {
+  /** Its writer's Workstream; null for Agora's. */
+  readonly from: string | null
+  /** How its writer stands to the agent: `delegate`, `delegator`, `parent`, `agora`; null as an earlier delegation wrote it. */
+  readonly as: string | null
+  readonly text: string
+  /** An earlier delegation's report: how many outcomes it gave. */
+  readonly outcomes?: number
+}
+
+/** A message received, as a tool call of its response: what lets it fold with the agent's tools (docs/specs/assistant-ui.md, "Folded tools"). */
+function receivedPart(e: ViewObject): Part {
+  const o = e.object
+  const message: Received =
+    o.type === 'report'
+      ? { from: null, as: 'agora', text: text(o.text), outcomes: list(o.delegates).length }
+      : { from: o.as === 'agora' ? null : text(o.from) || null, as: text(o.as) || null, text: textOf(e) }
+  return {
+    type: 'tool-call',
+    toolCallId: e.id,
+    toolName: 'message',
+    args: {} as never,
+    argsText: '',
+    result: message.text,
+    artifact: { title: firstLine(message.text), kind: 'message', status: 'completed', message },
+  }
+}
+
 function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>): Part[] {
   const permissions = new Map<string, ViewObject>()
   for (const e of elements)
@@ -784,6 +820,7 @@ function partsOf(elements: ViewObject[], gates: ReadonlyMap<string, ViewObject>)
     else if (o.type === 'tool') parts.push(toolPart(o, permissions.get(text(o.toolCallId)), gates.get(text(o.toolCallId)), forms.get(text(o.toolCallId))))
     else if (o.type === 'plan') parts.push({ type: 'data', name: 'plan', data: { entries: list(o.entries) } as never })
     else if (o.type === 'subagent') parts.push(subagentPart(e))
+    else if (received(e)) parts.push(receivedPart(e))
     else if (o.type === 'permission') {
       const call = json(json(o.params)?.toolCall) ?? {}
       if (!tools.has(text(call.toolCallId))) parts.push(toolPart(call, e))
@@ -1302,61 +1339,45 @@ export function messagesOf(state: ThreadState, view?: WorkstreamView): ThreadMes
   const gates = new Map(elements.filter((e) => isGate(e) && tools.has(text(e.object.toolCallId))).map((e) => [text(e.object.toolCallId), e]))
   for (const turn of turnsOf(state)) {
     const own = elements.filter((e) => e.object.turn === turn.id)
-    const prompt = own.find((e) => e.object.type === 'user' && e.object.steered !== true)
-    // An earlier delegation's report of Agora's, in place of the person's message.
-    const report = own.find((e) => e.object.type === 'report')
-    const from = text(prompt?.object.from)
+    const prompt = own.find((e) => (e.object.type === 'user' && e.object.steered !== true) || e.object.type === 'report')
     const custom = { turnStatus: status(turn), turn: turn.id }
     const pending = own.some((e) => isAsked(e) && e.object.status === 'pending')
     const interrupted = own.some((e) => e.object.type === 'elicitation' && e.object.status === 'pending' && ['flow', 'list'].includes(formOf(e).shape))
-    // The response, cut at each message sent into the turn (docs/specs/assistant-ui.md, "Messages").
-    /** A message of Agora's, in a line of its own (docs/specs/assistant-ui.md, "Messages"). */
-    const agoras = (id: string, e: ViewObject): ThreadMessageLike => ({ id, role: 'system', content: [{ type: 'text', text: textOf(e) }], metadata: { custom: { ...custom, fromAgora: true } } })
+    // The response, cut at each message of the person's sent into the turn; what another wrote — its prompt
+    // included — is a line of the response at its place (docs/specs/assistant-ui.md, "Messages").
     const responses: { said: ViewObject | null; parts: ViewObject[] }[] = [{ said: null, parts: [] }]
     for (const e of own) {
-      if (e.object.steered === true) responses.push({ said: e, parts: [] })
-      else if (e.object.type !== 'user' && e.object.type !== 'report') responses.at(-1)!.parts.push(e)
+      if (received(e)) responses.at(-1)!.parts.push(e)
+      else if (e.object.steered === true) responses.push({ said: e, parts: [] })
+      else if (e.object.type !== 'user') responses.at(-1)!.parts.push(e)
     }
-    // A native sub-agent's turn answers no prompt of Agora's: with no task reported, its response alone.
-    const unprompted = prompt === undefined && report === undefined && turn.object.native === true
-    const opening: ThreadMessageLike =
-        report
-          ? {
-              id: `${turn.id}:report`,
-              role: 'system',
-              content: [{ type: 'text', text: text(report.object.text) }],
-              metadata: { custom: { ...custom, report: list(report.object.delegates).length } },
-            }
-          : prompt?.object.as === 'agora'
-            ? agoras(`${turn.id}:report`, prompt)
-            : {
-              id: `${turn.id}:user`,
-              role: 'user',
-              content: [{ type: 'text', text: textOf(prompt) }],
-              attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
-              // A delegate's message from its caller is the caller's, not the person's.
-              metadata: { custom: from ? { ...custom, from } : custom },
-            }
+    // The person's message opens its turn. None: a native sub-agent's turn answers no prompt of Agora's, its response alone.
+    const opens = prompt === undefined ? turn.object.native !== true : !received(prompt)
+    const opening: ThreadMessageLike = {
+      id: `${turn.id}:user`,
+      role: 'user',
+      content: [{ type: 'text', text: textOf(prompt) }],
+      attachments: attachmentsOf(list(prompt?.object.content), prompt?.object),
+      metadata: { custom },
+    }
     placed.push({
       position: text(turn.object.requestPosition),
       messages: [
-        ...(unprompted ? [] : [opening]),
+        ...(opens ? [opening] : []),
         ...responses.flatMap(({ said, parts }, i): ThreadMessageLike[] => {
           const at = said ? `:${text(said.object.firstPosition)}` : ''
           const last = i === responses.length - 1
           return [
             ...(said
-              ? said.object.as === 'agora'
-                ? [agoras(`${turn.id}:report${at}`, said)]
-                : [
-                    {
-                      id: `${turn.id}:user${at}`,
-                      role: 'user' as const,
-                      content: [{ type: 'text' as const, text: textOf(said) }],
-                      attachments: attachmentsOf(list(said.object.content), said.object),
-                      metadata: { custom: { turn: turn.id, steered: true, ...(text(said.object.from) ? { from: text(said.object.from) } : {}) } },
-                    },
-                  ]
+              ? [
+                  {
+                    id: `${turn.id}:user${at}`,
+                    role: 'user' as const,
+                    content: [{ type: 'text' as const, text: textOf(said) }],
+                    attachments: attachmentsOf(list(said.object.content), said.object),
+                    metadata: { custom: { turn: turn.id, steered: true } },
+                  },
+                ]
               : []),
             ...(last || parts.length > 0
               ? [
