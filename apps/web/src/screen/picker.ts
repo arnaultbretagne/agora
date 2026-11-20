@@ -16,5 +16,3 @@ export const iconButton = cn(quietButton, 'grid w-7 shrink-0 place-items-center 
 export const below = { side: 'bottom', align: 'start', sideOffset: 6, collisionPadding: 8 } as const
 /** A list that keeps to the room it has: never wider than the screen, nor taller than the room. */
 export const fitted = 'max-h-(--radix-dropdown-menu-content-available-height) max-w-[min(24rem,calc(100vw-1rem))] overflow-y-auto'
-/** The same for a popover's panel. */
-export const fittedPanel = 'max-h-(--radix-popover-content-available-height) max-w-[calc(100vw-1rem)] overflow-y-auto'
