@@ -81,8 +81,8 @@ export interface Agora {
   readonly offered: readonly string[]
   /** The access shown: picked for the next Create, sent and not yet in the view, or the execution's own. */
   readonly access: readonly string[]
-  /** Gives an entry a choice: kept for the next Create, or sent at once (Scope) with the whole set. */
-  chooseAccess(entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null): void
+  /** Switches an entry on or off: kept for the next Create, or sent at once (Scope) with the whole set. */
+  chooseAccess(entry: AccessEntry, on: boolean): void
   /** The roles the role picker offers (docs/specs/assistant-ui.md, "Roles"): none once the Workstream has had an execution. */
   readonly roles: readonly Role[]
   /** The role picked for the Workstream's first Create, or none. */
@@ -418,8 +418,8 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   )
 
   const chooseAccess = useCallback(
-    (entries: readonly AccessEntry[], entry: AccessEntry, profile: string | null) => {
-      const profiles = withAccess(access, entries, entry, profile)
+    (entry: AccessEntry, on: boolean) => {
+      const profiles = withAccess(access, offered, entry, on)
       setPickedAccess({ for: id, execution: accessKey, profiles })
       if (accessKey === null) return
       void send('Scope', { execution: accessKey }, { profiles }).then((answer) => {
@@ -427,7 +427,7 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
         if (!answer.accepted) setPickedAccess((p) => (p?.profiles === profiles ? null : p))
       })
     },
-    [access, id, accessKey, send],
+    [access, offered, id, accessKey, send],
   )
 
   // The messages the log gave back, their execution not having started (docs/specs/assistant-ui.md,
