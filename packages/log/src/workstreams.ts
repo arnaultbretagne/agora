@@ -36,7 +36,7 @@ import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
 import { contentRefusal, declinedBy, patternChecks, patternRefusal } from './forms.ts'
-import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile } from '@agora/credentials'
+import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile, withDefaults } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -348,9 +348,11 @@ export class Workstreams implements Handler {
           const own = ownSettings(command.body.settings)
           if (own === null) return 'invalid_create'
           const settings = resolveSettings(pool.sessionConfig, own)
-          const profiles = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles, origin, current?.profiles)
-          if (profiles === 'invalid') return 'invalid_create'
-          if (typeof profiles === 'string') return profiles
+          const named = this.checkProfiles(command.body.profiles === undefined ? [] : command.body.profiles, origin, current?.profiles)
+          if (named === 'invalid') return 'invalid_create'
+          if (typeof named === 'string') return named
+          // What every new execution holds, unnamed (docs/specs/credentials.md, "Default profiles"), recorded with the rest.
+          const profiles = withDefaults(named)
           // docs/specs/log.md, "Continuing": the anchor given, else the Workstream's last of this harness;
           // then the exchanges it does not hold, chosen now and given with the execution's first prompt.
           const anchors = anchorsOf(tx.entries, state)
@@ -372,7 +374,7 @@ export class Workstreams implements Handler {
               harness: pool.harness,
               limits,
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
-              ...(profiles.length > 0 ? { profiles } : {}),
+              profiles,
               ...(role !== null ? { role } : {}),
               ...(anchor ? { anchor } : {}),
               catchUp: { turns: catchUp.turns, omitted: catchUp.omitted },

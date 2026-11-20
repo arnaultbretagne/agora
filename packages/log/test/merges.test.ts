@@ -239,7 +239,7 @@ test('G10 a lead with agora:delegate alone: propose_merge listed, not_allowed un
   const { lab, owner, ws, e, github, client, delegate, id } = await leading(t)
   github.add(7, 'review')
   const first = await client(e.id)
-  assert.deepEqual((await first.listTools()).tools.map((tool) => tool.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent', 'propose_merge'])
+  assert.deepEqual((await first.listTools()).tools.map((tool) => tool.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent', 'search', 'read', 'propose_merge'])
   const early = (await first.callTool({ name: 'propose_merge', arguments: { repo: REPO, number: 7 } })) as Text
   assert.deepEqual([said(early), early.isError], ['not_allowed', true])
   assert.equal((await lab.state(ws)).question, null, 'no card')
@@ -269,19 +269,19 @@ test('G10 a lead with agora:delegate alone: propose_merge listed, not_allowed un
   for (const other of [dev, judge]) assert.equal((await lab.state(other)).question, null, 'no card in a delegate’s Workstream')
 })
 
-test('G11 a lead that gave a delegate a write and proposed its merge: its profiles and every token signed for it agora:delegate alone, Agora’s MCP endpoint its only grant; its delegate’s token the write', async (t) => {
+test('G11 a lead that gave a delegate a write and proposed its merge: its profiles and every token signed for it agora:delegate and the default profiles, Agora’s MCP endpoint and the previews its only grants; its delegate’s token the write', async (t) => {
   const { lab, ws, e, github, signer, client, delegate, id } = await leading(t)
   github.add(7, 'review')
   const c = await client(e.id)
   const dev = id(await delegate(c, [`github:${REPO}:write`]))
   assert.match(said(await c.callTool({ name: 'propose_merge', arguments: { repo: REPO, number: 7 } })), /^proposed octo\/app#7:/)
   assert.equal(question(await lab.entries(ws))?.status, 'pending')
-  assert.deepEqual((await lab.state(ws)).current!.profiles, ['agora:delegate'])
+  assert.deepEqual((await lab.state(ws)).current!.profiles, ['agora:delegate', 'agora:read', 'previews'])
   const leads = signer.minted.filter((m) => m.label === `agora ${e.id}`)
   assert.ok(leads.length > 0, 'the lead’s token signed')
   for (const minted of leads) {
-    assert.deepEqual(minted.profiles, ['agora:delegate'])
-    assert.deepEqual(compileProfiles(minted.profiles).map((g) => [g.host, g.path]), [['mcp.agora.internal', '^/mcp$']])
+    assert.deepEqual(minted.profiles, ['agora:delegate', 'agora:read', 'previews'])
+    assert.deepEqual(compileProfiles(minted.profiles).map((g) => [g.host, g.path]), [['mcp.agora.internal', '^/mcp$'], ['mcp.agora.internal', '^/mcp$'], ['*.preview.bretagne.dev', undefined]])
   }
   // The control: a write given shows in the token signed for it.
   const devExecution = await until('the delegate’s execution', async () => (await lab.state(dev)).current)
@@ -289,6 +289,6 @@ test('G11 a lead that gave a delegate a write and proposed its merge: its profil
     const found = signer.minted.filter((m) => m.label === `agora ${devExecution.id}`)
     return found.length > 0 ? found : null
   })
-  for (const minted of devs) assert.deepEqual(minted.profiles, [`github:${REPO}:write`, 'agora:submit'])
+  for (const minted of devs) assert.deepEqual(minted.profiles, [`github:${REPO}:write`, 'agora:submit', 'agora:read', 'previews'])
   assert.ok(compileProfiles(devs[0]!.profiles).some((g) => g.host === 'api.github.com' && g.identity === 'contributor'))
 })

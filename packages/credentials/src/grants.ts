@@ -83,6 +83,17 @@ const AGORA_PROFILES: ReadonlySet<string> = new Set(['agora:read', 'agora:delega
  * (docs/specs/delegation.md, "A delegation") —: never offered, never named by a Create or a Scope.
  */
 export const AGORA_OWN_PROFILES: ReadonlySet<string> = new Set(['agora:submit'])
+/**
+ * The profiles Agora gives every new execution, a person's or a delegate's, without anyone naming them
+ * (docs/specs/credentials.md, "Default profiles"): Agora's MCP server read, and the previews. Never offered;
+ * a Create or a Scope may name them, offered or not.
+ */
+export const DEFAULT_PROFILES: readonly string[] = ['agora:read', 'previews']
+
+/** A Create's profiles with the defaults it lacks, after its own: what its execution holds. */
+export function withDefaults(profiles: readonly string[]): string[] {
+  return [...profiles, ...DEFAULT_PROFILES.filter((profile) => !profiles.includes(profile))]
+}
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -181,11 +192,11 @@ export function offeredProfiles(value: string | undefined): string[] {
 }
 
 /**
- * Whether a profile may be named, given those offered: itself; the read or the review of a repository under its write,
- * its read under its review; the vault's read under its write.
+ * Whether a profile may be named, given those offered: itself; a default profile, always; the read or the review of a
+ * repository under its write, its read under its review; the vault's read under its write.
  */
 export function offers(offered: readonly string[], profile: string): boolean {
-  if (offered.includes(profile)) return true
+  if (offered.includes(profile) || DEFAULT_PROFILES.includes(profile)) return true
   const github = /^(github:[^:]+):(read|review)$/.exec(profile)
   if (github !== null) return offered.includes(`${github[1]!}:write`) || (github[2] === 'read' && offered.includes(`${github[1]!}:review`))
   return profile === 'vault:read' && offered.includes('vault:write')
@@ -198,7 +209,10 @@ export interface GrantSignerOptions {
   readonly keyId: string
   readonly issuer: string
   readonly audience: string
-  /** What an execution may be given beyond its pool's base profiles; any profile when empty. */
+  /**
+   * What an execution may be given beyond its pool's base profiles; any profile when empty. A default profile listed
+   * here is not offered again (`describe`), and still keeps the list from being empty.
+   */
   readonly offered?: readonly string[]
 }
 
@@ -220,7 +234,8 @@ export class GrantSigner {
       proxy: this.options.proxy,
       profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
-      offered: [...this.offered],
+      // The defaults are every execution's already: never offered (docs/specs/credentials.md, "Default profiles").
+      offered: this.offered.filter((profile) => !DEFAULT_PROFILES.includes(profile)),
     }
   }
 
