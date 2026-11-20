@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type KubeApi } from '@agora/executions'
-import { Delegations, Files, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, telemetry } from '@agora/log'
+import { Delegations, Files, Identity, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys } from './preview.ts'
@@ -40,6 +40,8 @@ const preview =
       })()
     : null
 const namespace = preview === null ? required('SANDBOX_NAMESPACE') : NAMESPACE
+// docs/specs/log.md, "Identity": who calls port 8080, `oidc` or `none`, named; a preview's is `none`.
+const identity = preview === null ? Identity.fromEnv(process.env) : Identity.none()
 const audience = process.env.ANCHOR_AUDIENCE ?? 'agora-anchors'
 const testRoutes = process.env.TEST_ROUTES === 'true'
 const kube: KubeApi =
@@ -147,9 +149,11 @@ const server = createApi({
   testPage: join(import.meta.dirname, '..', 'public', 'index.html'),
   // docs/specs/roles.md, "Cards": what `GET /api/config` says of the roles, never a persona.
   roles: describeRoles(roles),
+  // docs/specs/log.md, "Identity": every route of the port asks for a proof, the health check alone excepted.
   handle: async (req, res) =>
+    (new URL(req.url ?? '/', 'http://agora').pathname !== '/healthz' && (await refuseUnproven(identity, req, res))) ||
     (await limitsHttp(limits, req, res)) ||
-    (await logHttp(workstreams, req, res, { testRoutes, ...(credentials === undefined ? {} : { credentials }), ...(preview === null ? {} : { owner: SHARED_OWNER }) })) ||
+    (await logHttp(workstreams, req, res, { testRoutes, identity, ...(credentials === undefined ? {} : { credentials }), ...(preview === null ? {} : { owner: SHARED_OWNER }) })) ||
     client(req, res),
   ...(credentials === undefined ? {} : { credentials }),
   // docs/specs/executions.md, "The server": a clean stop drains like a SIGTERM; a kill ends the process

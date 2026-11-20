@@ -3,26 +3,32 @@
 // Agent Sandbox at their deadline. C3 is a real, billed prompt: on haiku, one short answer. C4
 // writes a dated file to GITHUB_A. C8–C13 look into the Pods and the gateway through KUBECTL
 // (default `kubectl`), as the operator: a warm Pod has no execution to speak for it.
-// Usage: node apps/server/scripts/live-cases.ts http://<server>:8080 [case IDs…] (the receiver is on port 8081).
+// Usage: AGORA_TOKEN=<the cases' service token> node apps/server/scripts/live-cases.ts http://<server>:8080 [case IDs…]
+// (the receiver is on port 8081). The token proves who calls (docs/specs/log.md, "Identity"): it stands for the
+// cases' owner below; a server with IDENTITY `none` takes no token.
 // Each check's output is evidence for docs/reliability (docs/reliability/README.md).
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { canonical, fold, subagentOf, type Entry, type State, type Turn } from '@agora/log'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8080'
-// Every Workstream the cases create belongs to this owner: no identity lists it, and purge-live-cases.sql removes them.
+// Every Workstream the cases create belongs to this owner — the one their service token stands for, the one the body
+// names with IDENTITY `none`: no e-mail lists it, and purge-live-cases.sql removes them.
 const OWNER = 'c45e0000-0000-4000-8000-000000000000'
 const receiver = base.replace(/:8080$/, ':8081')
+/** What every request to port 8080 carries: the cases' service token, when given. */
+const auth: Record<string, string> = process.env.AGORA_TOKEN ? { authorization: `Bearer ${process.env.AGORA_TOKEN}` } : {}
 const only = new Set(process.argv.slice(3).map((id) => id.toUpperCase()))
 type Json = Record<string, any>
 
 async function api(method: string, path: string, body?: unknown): Promise<Json> {
   const response = await fetch(`${base}${path}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...auth },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(90_000),
   })
+  if (response.status === 401) throw new Error(`${method} ${path}: 401, the server asks for a proof — set AGORA_TOKEN to the cases' service token`)
   const text = await response.text()
   // Plain JSON: the runner compares numbers, and needs no integer beyond 2^53.
   return { status: response.status, ...((text === '' ? {} : JSON.parse(text)) as Json) }
@@ -44,7 +50,7 @@ async function until<T>(what: string, find: () => Promise<T | undefined | null |
 
 /** The mechanics' view of an execution: claim, deadline, Pod, launch type, connection. */
 const view = async (execution: string) => ((await api('GET', '/api/executions')).executions as Json[]).find((v) => v.execution === execution)
-const anchorText = async (id: string) => (await fetch(`${base}/api/anchors/${id}/content`)).text()
+const anchorText = async (id: string) => (await fetch(`${base}/api/anchors/${id}/content`, { headers: auth })).text()
 
 /** A Workstream of the lab, read through its entries and the log's own fold. */
 class Workstream {
@@ -52,7 +58,7 @@ class Workstream {
   execution = ''
   session = ''
   async entries(): Promise<Entry[]> {
-    return ((await (await fetch(`${base}/api/workstreams/${this.id}/entries`)).json()) as Entry[]) ?? []
+    return ((await (await fetch(`${base}/api/workstreams/${this.id}/entries`, { headers: auth })).json()) as Entry[]) ?? []
   }
   async state(): Promise<State> {
     return fold(await this.entries())
@@ -1041,7 +1047,7 @@ const delegatedTo = async (w: Workstream): Promise<string | null> => {
 }
 /** A delegate left running holds a place among the executions until its deadline: each case stops its own. */
 const stopDelegate = async (delegate: string) => {
-  const current = fold((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]).current
+  const current = fold((await (await fetch(`${base}/api/workstreams/${delegate}/entries`, { headers: auth })).json()) as Entry[]).current
   if (current && !current.ended) await api('POST', `/api/workstreams/${delegate}/commands`, { id: randomUUID(), kind: 'Stop', target: { execution: current.id }, body: {} })
 }
 const toolLines = async (w: Workstream) =>
@@ -1304,7 +1310,7 @@ const threadOf = async (workstream: string): Promise<Json[]> => {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), 30_000)
   try {
-    const response = await fetch(`${base}/api/workstreams/${workstream}/thread?after=0`, { signal: abort.signal })
+    const response = await fetch(`${base}/api/workstreams/${workstream}/thread?after=0`, { headers: auth, signal: abort.signal })
     if (!response.headers.get('content-type')?.startsWith('text/event-stream')) throw new Error(`thread ${workstream}: ${String(response.status)}`)
     const rows: Json[] = []
     const decoder = new TextDecoder()
@@ -1410,7 +1416,7 @@ await check('D57', 'Delegation with a role, from Claude Code: judge on Codex, sr
     const message = await until('its message', () => messageFrom(w, delegate), 600_000)
     await drained(w, 300_000)
     await w.stop()
-    const entries = ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`)).json()) as Entry[]) ?? []
+    const entries = ((await (await fetch(`${base}/api/workstreams/${delegate}/entries`, { headers: auth })).json()) as Entry[]) ?? []
     await stopDelegate(delegate)
     const current = fold(entries).current
     const startedAs = entries.find((e) => e.kind === 'delegation.started')?.content as Json
@@ -1465,7 +1471,7 @@ await check('P11', 'A lead on a one-line change: a plan first, then a dev and a 
     }
     return found
   }
-  const entriesOf = async (id: string) => ((await (await fetch(`${base}/api/workstreams/${id}/entries`)).json()) as Entry[]) ?? []
+  const entriesOf = async (id: string) => ((await (await fetch(`${base}/api/workstreams/${id}/entries`, { headers: auth })).json()) as Entry[]) ?? []
   // Its plan, and nobody started.
   await w.turn('done', 600_000)
   const plan = await w.said()

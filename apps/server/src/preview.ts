@@ -39,11 +39,16 @@ export const PRODUCTION = [
   'POD_IP',
   'GATEWAY_CA_FILE',
   'GITHUB_TEST_API',
+  'IDENTITY_ISSUER',
+  'IDENTITY_AUDIENCE',
+  'IDENTITY_TOKENS_DIR',
 ] as const
 
 /** The preview's database: `PREVIEW_DATABASE_URL`, its owner's login; refused beside anything of production. */
 export function previewDatabase(env: NodeJS.ProcessEnv): string {
-  const set = PRODUCTION.filter((name) => env[name] !== undefined && env[name] !== '')
+  const set: string[] = PRODUCTION.filter((name) => env[name] !== undefined && env[name] !== '')
+  // A preview's identity is `none` (docs/specs/log.md, "Identity"): IDENTITY, when given, says so.
+  if (env.IDENTITY !== undefined && env.IDENTITY !== '' && env.IDENTITY !== 'none') set.push('IDENTITY')
   if (set.length > 0) throw new Error(`PREVIEW excludes ${set.join(', ')}`)
   const url = env.PREVIEW_DATABASE_URL
   if (url === undefined || url === '') throw new Error('PREVIEW_DATABASE_URL is required')

@@ -23,6 +23,9 @@ only port open to sandboxes).
 | `APPROVAL_SECONDS` | 270 | How long an approval of a `spawn_agent` call waits for the person (`docs/specs/delegation.md`, "Approval"). |
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
 | `TEST_ROUTES` | — | `true` to open the test routes and page. |
+| `IDENTITY` | required | Who calls port 8080 (`docs/specs/log.md`, "Identity"): `oidc` in production, `none` for tests and local runs. A preview's is `none`. |
+| `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE` | required with `oidc` | The issuer of the ID tokens, as their `iss` names it (`https://id.bretagne.dev`), and Agora's client id there, their `aud`. |
+| `IDENTITY_TOKENS_DIR` | — | With `oidc`: the service tokens' folder, a mounted Secret, one file per caller, read at start. |
 | `CLIENT_DIR` | `apps/web/dist` | The client's built files. |
 | `ROLES_DIR` | `roles` | The role cards (`docs/specs/roles.md`, "Cards"). A file there that is no card stops the start. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Expected audience of the Pods' projected token. |
@@ -32,6 +35,18 @@ only port open to sandboxes).
 | `AGORA_FAULT` | — | Tests only: `<point>[:<method>]` kills the process at that fault point (`packages/log/src/workstreams.ts`). |
 
 It exits non-zero when it cannot take the database's ownership, or loses it.
+
+## Calling the server
+
+Every request to port 8080 but `GET /healthz` proves who calls (`docs/specs/log.md`, "Identity"):
+
+| Caller | Proof |
+| --- | --- |
+| The browser | None of its own: oauth2-proxy, in front, passes the ID token Pocket-ID signed, `Authorization: Bearer`, refreshed before it expires. |
+| A script or a tool | `Authorization: Bearer <token>`, its service token: one file of `IDENTITY_TOKENS_DIR`, a JSON object with `token`, and `email` — it then reads and writes as that person — or `owner`, a UUID that no e-mail gives. `X-Forwarded-Email` grants nothing. |
+| With `IDENTITY` `none` | `X-Forwarded-Email` as it comes; without it, any owner, named by the request's `owner`. |
+
+`scripts/live-cases.ts` takes its token from `AGORA_TOKEN`: one that stands for the cases' owner.
 
 Image: `docker build -f apps/server/Dockerfile .` from the root; it builds the client too.
 
@@ -58,8 +73,8 @@ no pull secret.
 A preview given any variable that only production sets does not start: it exits 1 with
 `PREVIEW excludes <names>`. They are `SANDBOX_NAMESPACE`, `SIGNING_KEY_FILE`, `KUBE_API`, `KUBE_TOKEN_FILE`,
 `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`, `LOG_ANCHORS_URL`, `FILES_ENDPOINT`, `FILES_BUCKET`, `FILES_ACCESS_KEY_ID`,
-`FILES_SECRET_ACCESS_KEY`, `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, `OFFERED_PROFILES`, `POD_IP`, `GATEWAY_CA_FILE`
-and `GITHUB_TEST_API`. Without `PREVIEW_DATABASE_URL`, it exits 1 with `PREVIEW_DATABASE_URL is required`.
+`FILES_SECRET_ACCESS_KEY`, `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, `OFFERED_PROFILES`, `POD_IP`, `GATEWAY_CA_FILE`,
+`GITHUB_TEST_API`, `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE` and `IDENTITY_TOKENS_DIR`, and `IDENTITY` other than `none`. Without `PREVIEW_DATABASE_URL`, it exits 1 with `PREVIEW_DATABASE_URL is required`.
 
 What it expects of its environment:
 

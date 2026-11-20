@@ -9,7 +9,7 @@ message waiting for its sandbox. It runs in the browser, served by the server at
 
 | Actor | Role |
 | --- | --- |
-| The identity proxy | Pocket-ID in front of the server: only the operator gets through, and the server learns who. |
+| The identity proxy | Pocket-ID, through oauth2-proxy in front of the server: only the operator gets through. The proxy passes the ID token Pocket-ID signed, and the server checks it before it answers: who calls is what the token proves, never where the call comes from. |
 | The server | Serves the client and its API. Projects the log into objects — the Workstream view, turns, elements, notices — each stored with the position of its last change in the Workstream's thread. Applies the commands. |
 | The client | Reads a Workstream's thread from a cursor, keeps its objects, converts them into assistant-ui messages, and sends the commands. Keeps the objects and the cursor in the browser, together. |
 | assistant-ui | Renders the messages, the composer and the list, and hands the user's actions back. |

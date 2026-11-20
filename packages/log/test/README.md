@@ -14,7 +14,8 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `questions.test.ts` | A question to the person: Ask, Answer, and what they hold back: L69–L74. |
 | `elicitations.test.ts` | A form an agent asks: declared, pending, answered once, refused when it does not fit, cancelled, declined by Agora, withdrawn, rebuilt at an upgrade, checked against its schema, a check that cannot complete refusing it: L160–L172. |
 | `requests.test.ts` | A request an agent waits on — a permission — in its view, its row and the rows above it; who answered it: L154–L156. |
-| `accounts.test.ts` | The caller's account and its list, on the real server: L75, L76. |
+| `accounts.test.ts` | The caller's account and its list, on the real server, with IDENTITY `none`: L75, L76. |
+| `identity.test.ts` | Who calls the real server with IDENTITY `oidc`: an issuer's ID token, service tokens, what proves nobody, the issuer out of reach, a configuration refused: L173–L178. |
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |

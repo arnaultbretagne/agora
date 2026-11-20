@@ -5,8 +5,12 @@
 Sandbox. From g4, the server Pod's IP is reachable:
 
 ```sh
-node apps/server/scripts/live-cases.ts http://<server ip>:8080 [case IDs, e.g. E14 L18 C3]
+AGORA_TOKEN=<the cases' service token> node apps/server/scripts/live-cases.ts http://<server ip>:8080 [case IDs, e.g. E14 L18 C3]
 ```
+
+`AGORA_TOKEN` is the service token that stands for the cases' owner (`docs/specs/log.md`, "Identity"),
+sent as `Authorization: Bearer` on every request to port 8080; without it, a server with `IDENTITY`
+`oidc` answers 401 and the run stops at its first request, saying so.
 
 C3 is a billed prompt; M9 is one per real harness — Claude Code, Codex, opencode —, with `agora:read` offered. C4 targets public stand-in repos unless `GITHUB_A`, `GITHUB_B` (and
 `GITHUB_C`) name repos the gateway's PAT can write to. L17 and L18 restart the server.
@@ -20,8 +24,8 @@ on g4, `KUBECTL="sudo -n k0s kubectl"`): a warm Pod has no execution to speak fo
 bridges' and the gateway's logs, and send requests from a Pod through its bridge. C9 waits for a
 warm token's renewal: about ten minutes, last.
 
-Every Workstream the cases create has one owner, `c45e0000-0000-4000-8000-000000000000`: no
-identity lists it, so they stay out of the interface. `purge-live-cases.sql` removes them all, once
+Every Workstream the cases create has one owner, `c45e0000-0000-4000-8000-000000000000`, the one
+their token stands for: no e-mail gives it, so they stay out of the interface. `purge-live-cases.sql` removes them all, once
 no claim is left; then restart the server. On g4:
 
 ```sh
