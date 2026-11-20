@@ -587,6 +587,50 @@ test('U37 a phone: the pickers as marks, no arrow, nothing cut, each list below 
   assert.equal(await composerMargin(page), 20, 'without a home indicator, the usual margin')
 })
 
+test('U118 every picker\'s list, in a draft and in an open Workstream, at 1280 and 390 px: its top below its trigger\'s bottom; above its trigger only where it does not fit below', async (t) => {
+  const contexts = [
+    { screen: '1280 × 800', make: () => browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'light' }) },
+    { screen: '390 × 844', make: () => browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light' }) },
+  ]
+  for (const { screen, make } of contexts) {
+    const page = await (await make()).newPage()
+    page.setDefaultTimeout(30_000)
+    // Each list opened from its trigger, measured, and told: where it opened, and the room it had below.
+    const measure = async (where: string, picker: Locator) => {
+      // Measured before it opens: an open list hides the rest of the page from the accessibility tree.
+      const [trigger, name] = [(await picker.boundingBox())!, (await picker.getAttribute('aria-label'))!.split(':')[0]!]
+      await picker.click()
+      const list = page.locator('[role="menu"][data-state="open"]')
+      await list.waitFor()
+      const opened = (await list.boundingBox())!
+      const bottom = trigger.y + trigger.height
+      const room = page.viewportSize()!.height - bottom
+      const below = opened.y >= bottom
+      t.diagnostic(`${screen}, ${where}, ${name}: list top ${Math.round(opened.y)}, height ${Math.round(opened.height)}; trigger top ${Math.round(trigger.y)}, bottom ${Math.round(bottom)}; room below ${Math.round(room)}: ${below ? 'below' : 'above'}`)
+      if (!below) {
+        assert.ok(opened.y + opened.height <= trigger.y, `${screen}, ${where}: ${name}'s list either below its trigger or wholly above it`)
+        assert.ok(opened.height > room, `${screen}, ${where}: ${name}'s list above only where it does not fit below`)
+      }
+      await page.keyboard.press('Escape')
+      await list.waitFor({ state: 'detached' })
+    }
+    const id = await started(page, `a workstream for the lists at ${screen}`)
+    // The open Workstream: its harness a mark with no list, no role picker; the model and the access.
+    assert.equal(await harnessPicker(page).count(), 0, `${screen}: once started, the harness is no picker`)
+    assert.equal(await rolePicker(page).count(), 0)
+    // Its composer at the foot of the screen: there a list that does not fit below opens above.
+    for (const picker of [modelPicker(page), accessPicker(page)]) await measure('open Workstream', picker)
+    await shot(page, `U118-${screen.split(' ')[0]}-open`)
+    // The draft: the four pickers.
+    await page.goto(`${server.url}/`)
+    await pickHarness(page, 'Mock agent')
+    for (const picker of [harnessPicker(page), modelPicker(page), rolePicker(page), accessPicker(page)]) await measure('draft', picker)
+    assert.ok(id)
+    await shot(page, `U118-${screen.split(' ')[0]}-draft`)
+    await page.context().close()
+  }
+})
+
 test('U38 the home-screen frame: the manifest and icon, an opaque status bar, the page covering the display, the status bar in the theme colour', async () => {
   const manifest = await fetch(`${server.url}/manifest.webmanifest`)
   assert.equal(manifest.headers.get('content-type'), 'application/manifest+json')
