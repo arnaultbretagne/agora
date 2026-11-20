@@ -322,11 +322,11 @@ test('V9 the forms among the conversations: one waiting on a question of options
   }
 })
 
-test('V10 the fixed offer: GET /api/config offers one of each kind of right and signs for none; the access picker shows them, a choice made in its panel', async (t) => {
+test('V10 the fixed offer: GET /api/config offers what each entry of the access picker folds and signs for none; the picker shows them, an entry ticked in its menu', async (t) => {
   const url = await target(t)
   const config = (await (await fetch(`${url}/api/config`, { headers: BROWSER_GATE })).json()) as { credentials: { proxy: unknown; offered: unknown } }
   assert.equal(config.credentials.proxy, null, 'no gateway')
-  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:review', 'github:example/site:read'])
+  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:read', 'agora:delegate', 'previews'])
   // Nothing is sent: against the image, the cases before this one hold every place a Create may take (MAX_ACTIVE).
   const page = await behind(BROWSER_GATE)
   try {
@@ -335,11 +335,22 @@ test('V10 the fixed offer: GET /api/config offers one of each kind of right and 
     await page.getByRole('menuitem', { name: /Mock agent/ }).click()
     // The key alone on the composer, the Internet granted by default.
     await page.getByRole('button', { name: 'Access: Internet', exact: true }).click()
-    const panel = page.getByRole('dialog', { name: 'Access' })
-    for (const name of ['Internet', 'z.ai', 'ChatGPT']) await panel.getByRole('switch', { name, exact: true }).waitFor()
-    for (const name of ['example/app', 'example/docs', 'example/site']) await panel.getByRole('radiogroup', { name, exact: true }).waitFor()
-    await panel.getByRole('radiogroup', { name: 'example/app' }).getByRole('radio', { name: 'Write' }).click()
-    await page.getByRole('button', { name: 'Access: Internet, app · Write', exact: true }).waitFor()
+    const menu = page.getByRole('menu', { name: 'Access' })
+    assert.deepEqual(await menu.getByRole('menuitemcheckbox').allInnerTexts(), [
+      'Internet',
+      'z.ai',
+      'ChatGPT',
+      'GitHub\nexample/app, example/docs, example/site (read)',
+      'vault',
+      'k8s',
+      'agora',
+      'agora:read',
+      'previews',
+    ])
+    await menu.getByRole('menuitemcheckbox', { name: /^GitHub/ }).click()
+    await menu.getByRole('menuitemcheckbox', { name: /^GitHub/, checked: true }).waitFor()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Access: Internet, GitHub', exact: true }).waitFor()
   } finally {
     await page.context().close()
   }
