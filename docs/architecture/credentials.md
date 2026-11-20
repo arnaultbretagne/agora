@@ -49,7 +49,8 @@ Grants add up: any mix of profiles is just a longer list.
 
 Which repositories an execution may reach, and whether it may reach the Internet, is declared by
 the operator — the **offered** profiles, each at its widest access — and picked by the user,
-before the execution or between its turns.
+before the execution or between its turns. Two profiles are every execution's without being picked:
+`agora:read`, Agora's own MCP server read, and `previews`.
 
 Grants are the only restriction, so they stop at what the gateway can check: a host, a path, a
 method — and on an MCP server, where every call is a `POST` to the same path, the tool named, which
