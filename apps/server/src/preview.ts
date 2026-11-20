@@ -10,7 +10,7 @@ import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { startBridge, pushBundle, type Bridge } from '@agora/harness-bridge'
 import { sessionsDir } from '@agora/mock-agent/storage'
-import { HARNESS_LABEL, KubeError, SESSION_CONFIG_ANNOTATION, type Claim, type Json, type KubeApi, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from '@agora/executions'
+import { HARNESS_LABEL, KubeError, SESSION_CONFIG_ANNOTATION, type Claim, type CredentialSource, type Json, type KubeApi, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from '@agora/executions'
 import { Files } from '@agora/log'
 
 /** The owner of every Workstream of a preview: the client's own when no proxy names anyone. */
@@ -306,4 +306,21 @@ export class PreviewKube implements KubeApi {
 /** The preview's signing key: made at start, its public half handed to its own bridges. */
 export function previewKeys(): { privateKey: KeyObject; publicKey: KeyObject } {
   return generateKeyPairSync('ed25519')
+}
+
+/**
+ * What a preview's access picker offers (docs/specs/preview.md, "The offer"): what each of its entries folds,
+ * the repositories invented. Said by `GET /api/config` alone: nothing signs for it, and an execution
+ * given any of them reaches no more than one given none. Never the default profiles, every execution's already
+ * (docs/specs/credentials.md, "Default profiles").
+ */
+export const PREVIEW_OFFERED = ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'] as const
+
+/** The offer as the configuration says it: no proxy, no profile of its own, and never a token. */
+export function previewOffer(): CredentialSource {
+  return {
+    offered: PREVIEW_OFFERED,
+    describe: () => ({ proxy: null, profiles: [], base: [], offered: [...PREVIEW_OFFERED] }),
+    mint: () => Promise.reject(new Error('preview_signs_nothing')),
+  }
 }

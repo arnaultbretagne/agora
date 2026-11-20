@@ -1,4 +1,4 @@
-// docs/specs/preview.md, acceptance cases V2 to V6, V8, V9: the server started as a preview, and its client in a real
+// docs/specs/preview.md, acceptance cases V2 to V6, V8 to V10: the server started as a preview, and its client in a real
 // browser (Playwright's Chromium) behind the headers of the previews' two gates.
 //
 // Two ways to run it:
@@ -317,6 +317,38 @@ test('V9 the forms among the conversations: one waiting on a question of options
     await card.getByRole('button', { name: 'Answer' }).click()
     await page.locator('main').getByText('Elicitation: accept {"question_0":"PostgreSQL"}.').waitFor()
     await page.locator('main [data-form="select"][data-form-status="answered"]').waitFor()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('V10 the fixed offer: GET /api/config offers what each entry of the access picker folds and signs for none; the picker shows them, an entry ticked in its menu', async (t) => {
+  const url = await target(t)
+  const config = (await (await fetch(`${url}/api/config`, { headers: BROWSER_GATE })).json()) as { credentials: { proxy: unknown; offered: unknown } }
+  assert.equal(config.credentials.proxy, null, 'no gateway')
+  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'])
+  // Nothing is sent: against the image, the cases before this one hold every place a Create may take (MAX_ACTIVE).
+  const page = await behind(BROWSER_GATE)
+  try {
+    await page.goto(`${url}/`)
+    await page.getByRole('button', { name: 'Harness' }).click()
+    await page.getByRole('menuitem', { name: /Mock agent/ }).click()
+    // The key alone on the composer, the Internet granted by default.
+    await page.getByRole('button', { name: 'Access: Internet', exact: true }).click()
+    const menu = page.getByRole('menu', { name: 'Access' })
+    assert.deepEqual(await menu.getByRole('menuitemcheckbox').allInnerTexts(), [
+      'Internet',
+      'z.ai',
+      'ChatGPT',
+      'GitHub\nexample/app, example/docs, example/site (read)',
+      'vault',
+      'k8s',
+      'agora',
+    ])
+    await menu.getByRole('menuitemcheckbox', { name: /^GitHub/ }).click()
+    await menu.getByRole('menuitemcheckbox', { name: /^GitHub/, checked: true }).waitFor()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Access: Internet, GitHub', exact: true }).waitFor()
   } finally {
     await page.context().close()
   }

@@ -3,29 +3,23 @@
 // right, Cancel beside it while the agent works. Above it, what the user must know before sending: a
 // refusal, what the agent will be given of the conversation, an uncertain turn, why sending waits,
 // the messages waiting.
-// Narrower than 32rem, as on a phone, the pickers give their names up for marks (docs/specs/assistant-ui.md,
-// "On a phone"): the harness's, the effort's bars, the role's mask, the key. Before them, the paperclip, when
-// the agent takes images or files; what is attached shows above the text ("Attachments").
+// The pickers are light (docs/specs/assistant-ui.md, "The pickers"): the harness's mark, the model · its
+// effort, a person, a key; no arrow. Each opens its list below it, upward only where it does not fit. Before
+// them, the paperclip, when the agent takes images or files; what is attached shows above the text ("Attachments").
 import { AuiIf, ComposerPrimitive, QueueItemPrimitive, useAui, useAuiState } from '@assistant-ui/react'
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ClockIcon, GaugeIcon, KeyRoundIcon, LoaderCircleIcon, PaperclipIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SquareIcon, VenetianMaskIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, ClockIcon, GaugeIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, UserRoundIcon, XIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
-import { Fragment, useState, type FC, type KeyboardEvent } from 'react'
+import { useState, type FC, type KeyboardEvent } from 'react'
 import { ComposerAddAttachment, ComposerAttachments } from '@/components/assistant-ui/elements/attachment'
 import { ContextDisplay, Meter, severityOf, severityText } from '@/components/assistant-ui/elements/context-display'
 import { cn } from '@/lib/utils'
 import { acceptOf } from '../agora/attachments.ts'
 import { useAgora } from '../agora/runtime.tsx'
-import { accessDisplay, accessEntries, accessLabel, accessOf, accessTitle, commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
+import { commandsMatching, continuationNote, harnessName, modelChoice, offeredPools, resetIn, windowName, type AccountLimits } from '../agora/view.ts'
+import { AccessPicker } from './access.tsx'
 import { HarnessMark } from './harness-mark.tsx'
+import { below, fitted, iconButton, menuContentClass, menuItemClass, quietButton } from './picker.ts'
 
-const menuContentClass =
-  'bg-popover text-popover-foreground border-foreground/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 rounded-surface z-50 min-w-56 overflow-hidden border p-1'
-const menuItemClass =
-  'hover:bg-muted focus:bg-muted flex cursor-pointer items-start gap-2 rounded-sm px-2 py-1.5 text-[13px] outline-none select-none'
-const quietButton = 'text-muted-foreground hover:text-foreground rounded-control h-7 px-2 text-[13px] transition-colors pointer-coarse:h-9'
-// Inside the composer: what only shows when it is wide enough, and what replaces it when it is not.
-const wide = '@max-lg:hidden'
-const narrow = '@lg:hidden'
 // A touch screen's keyboard comes up with the focus, over half the thread: there the field waits to be
 // touched. With a mouse or a trackpad it takes the focus itself — on opening, on Scroll to the bottom, as
 // a turn starts.
@@ -39,9 +33,8 @@ const HarnessPicker: FC = () => {
   const current = pools?.find((p) => p.name === pool)
   if (!composer.create)
     return view.harness ? (
-      <span title={harnessName(view.harness)} className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-2 text-[13px]">
-        <HarnessMark harness={view.harness} className={cn('size-4 shrink-0', narrow)} />
-        <span className={wide}>{harnessName(view.harness)}</span>
+      <span role="img" aria-label={`Harness: ${harnessName(view.harness)}`} title={harnessName(view.harness)} className="text-muted-foreground grid w-7 shrink-0 place-items-center pointer-coarse:w-9">
+        <HarnessMark harness={view.harness} className="size-4" />
       </span>
     ) : null
   if (pools === null) return <span className="text-muted-foreground px-2 text-[13px]">…</span>
@@ -52,14 +45,12 @@ const HarnessPicker: FC = () => {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" aria-label="Harness" title={harnessName(current?.harness)} className={cn(quietButton, 'flex shrink-0 items-center gap-1 @max-lg:px-2.5')}>
-          <HarnessMark harness={current?.harness} className={cn('size-4 shrink-0', narrow)} />
-          <span className={wide}>{harnessName(current?.harness)}</span>
-          <ChevronDownIcon className={cn('size-3.5', wide)} />
+        <button type="button" aria-label={`Harness: ${harnessName(current?.harness)}`} title={harnessName(current?.harness)} className={iconButton}>
+          <HarnessMark harness={current?.harness} className="size-4" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
+        <DropdownMenu.Content {...below} className={cn(menuContentClass, fitted)}>
           {offered.map((p) => (
             <DropdownMenu.Item key={p.name} className={menuItemClass} onSelect={() => choosePool(p.name)}>
               <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', p.name === pool ? 'opacity-100' : 'opacity-0')} />
@@ -77,8 +68,6 @@ const HarnessPicker: FC = () => {
   )
 }
 
-const EFFORT_BARS = [SignalLowIcon, SignalMediumIcon, SignalHighIcon, SignalIcon]
-
 /**
  * The model and its effort (docs/specs/assistant-ui.md, "Settings and commands"): the real values
  * only. Before a Session, kept for its Create; in one, sent at once, between turns.
@@ -90,9 +79,7 @@ const ModelPicker: FC = () => {
   const name = (options: typeof choice.models, value: string | null) => options.find((o) => o.value === value)?.name ?? null
   const model = name(choice.models, choice.current.model) ?? 'Model'
   const effort = name(choice.efforts, choice.current.effort)
-  // The effort's rank among its options, as one to four bars.
-  const rank = choice.efforts.findIndex((o) => o.value === choice.current.effort)
-  const Bars = EFFORT_BARS[choice.efforts.length < 2 ? 3 : Math.round((3 * rank) / (choice.efforts.length - 1))]
+  const shown = effort ? `${model} · ${effort}` : model
   const changing = !composer.create && view.configuring === true
   const closed = !composer.create && (!composer.open || composer.running || changing)
   const item = (setting: string, value: string, label: string, current: string | null) => (
@@ -106,19 +93,16 @@ const ModelPicker: FC = () => {
       <DropdownMenu.Trigger asChild disabled={closed}>
         <button
           type="button"
-          aria-label="Model"
-          title={effort ? `${model} · ${effort}` : model}
+          aria-label={`Model: ${shown}`}
+          title={shown}
           className={cn(quietButton, 'flex min-w-0 items-center gap-1 disabled:opacity-50')}
         >
           {changing && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" />}
-          <span className="truncate">{model}</span>
-          {effort && <span className={cn('text-muted-foreground/70 shrink-0', wide)}>· {effort}</span>}
-          {effort && Bars && <Bars aria-label={effort} className={cn('size-3.5 shrink-0', narrow)} />}
-          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
+          <span className="truncate">{shown}</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
+        <DropdownMenu.Content {...below} className={cn(menuContentClass, fitted)}>
           <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">Model</DropdownMenu.Label>
           {choice.models.map((o) => item(choice.model!.id, o.value, o.name, choice.current.model))}
           {choice.effort && choice.efforts.length > 0 && (
@@ -155,15 +139,13 @@ const RolePicker: FC = () => {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" aria-label="Role" title={label} className={cn(quietButton, 'flex min-w-0 items-center gap-1 @max-lg:shrink-0 @max-lg:px-2.5')}>
-          {/* Narrow, a mask alone: coral once a role is picked. */}
-          <VenetianMaskIcon className={cn('size-4 shrink-0', narrow, role !== null && 'text-primary')} />
-          <span className={cn('truncate', wide)}>{label}</span>
-          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
+        <button type="button" aria-label={`Role: ${label}`} title={label} className={iconButton}>
+          {/* A person alone: coral once a role is picked. */}
+          <UserRoundIcon className={cn('size-4', role !== null && 'text-primary')} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={cn(menuContentClass, 'max-h-(--radix-dropdown-menu-content-available-height) max-w-[min(24rem,calc(100vw-1rem))] overflow-y-auto')}>
+        <DropdownMenu.Content {...below} className={cn(menuContentClass, fitted)}>
           {item(null, 'No role')}
           {roles.map((r) => item(r.role, r.role, r.summary))}
         </DropdownMenu.Content>
@@ -171,86 +153,6 @@ const RolePicker: FC = () => {
     </DropdownMenu.Root>
   )
 }
-
-/**
- * The rights the agent is given beyond its harness's own service (docs/specs/assistant-ui.md, "Access"):
- * the services first, the Internet first among them, each one line with a switch; then the offered
- * repositories, each with None, Read and Write. The menu stays open from one choice to the next.
- */
-const AccessPicker: FC = () => {
-  const { offered, access, chooseAccess, composer, view } = useAgora()
-  const all = accessEntries(offered)
-  if (all.length === 0) return null
-  const entries = accessDisplay(all)
-  const closed = !composer.create && (composer.running || composer.uncertain !== null || view.state === 'stopped' || view.state === 'lost')
-  const label = accessLabel(access, all)
-  const granted = all.some((entry) => accessOf(access, entry) !== null)
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild disabled={closed}>
-        <button
-          type="button"
-          aria-label="Access"
-          title={accessTitle(access, all)}
-          className={cn(quietButton, 'relative flex min-w-0 items-center gap-1 disabled:opacity-50 @max-lg:shrink-0 @max-lg:px-2.5')}
-        >
-          <KeyRoundIcon className="size-3.5 shrink-0" />
-          <span className={cn('truncate', wide)}>{label}</span>
-          {/* Narrow, the key alone: a dot says something is granted. */}
-          {granted && <span aria-hidden data-granted className={cn('bg-primary absolute top-1 right-1 size-1.5 rounded-full pointer-coarse:top-1.5', narrow)} />}
-          <ChevronDownIcon className={cn('size-3.5 shrink-0', wide)} />
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content side="top" align="start" sideOffset={6} className={menuContentClass}>
-          {entries.map((entry, i) => {
-            const current = accessOf(access, entry) ?? ''
-            // The switches sit together; each repository is set apart, under its name.
-            const separator = i > 0 && (entry.repository || entries[i - 1]!.repository) && <DropdownMenu.Separator className="bg-foreground/10 my-1 h-px" />
-            if (!entry.repository) {
-              const on = current !== ''
-              return (
-                <Fragment key={entry.key}>
-                  {separator}
-                  <DropdownMenu.CheckboxItem
-                    checked={on}
-                    onCheckedChange={(checked) => chooseAccess(all, entry, checked ? entry.choices.at(-1)!.profile : null)}
-                    onSelect={(e) => e.preventDefault()}
-                    className={cn(menuItemClass, 'items-center justify-between gap-6')}
-                  >
-                    <span>{entry.name}</span>
-                    <Switch on={on} />
-                  </DropdownMenu.CheckboxItem>
-                </Fragment>
-              )
-            }
-            return (
-              <Fragment key={entry.key}>
-                {separator}
-                <DropdownMenu.Label className="text-muted-foreground px-2 pt-1 pb-0.5 text-[11px] font-medium">{entry.name}</DropdownMenu.Label>
-                <DropdownMenu.RadioGroup aria-label={entry.name} value={current} onValueChange={(value) => chooseAccess(all, entry, value === '' ? null : value)}>
-                  {entry.choices.map((c) => (
-                    <DropdownMenu.RadioItem key={c.label} value={c.profile ?? ''} className={menuItemClass} onSelect={(e) => e.preventDefault()}>
-                      <CheckIcon className={cn('mt-0.5 size-3.5 shrink-0', (c.profile ?? '') === current ? 'opacity-100' : 'opacity-0')} />
-                      <span>{c.label}</span>
-                    </DropdownMenu.RadioItem>
-                  ))}
-                </DropdownMenu.RadioGroup>
-              </Fragment>
-            )
-          })}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  )
-}
-
-/** A switch's look, for a menu line that is itself the control. */
-const Switch: FC<{ on: boolean }> = ({ on }) => (
-  <span aria-hidden className={cn('relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors', on ? 'bg-primary' : 'bg-foreground/20')}>
-    <span className={cn('bg-primary-foreground absolute top-0.5 size-3 rounded-full shadow-sm transition-transform', on ? 'translate-x-3.5' : 'translate-x-0.5')} />
-  </span>
-)
 
 /** An account's windows: how much of each is used, and when it starts again. */
 const Limits: FC<{ limits: AccountLimits }> = ({ limits }) => {
