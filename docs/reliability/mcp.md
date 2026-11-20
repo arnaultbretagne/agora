@@ -19,6 +19,7 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | R11 | 2026-11-16 | `986f1a5` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 against the MCP server on a port of its own, the lab's executions behind it, through the MCP SDK's own client, as R7. On the commit that adds `answer_agent`. |
 | R12 | 2026-11-16 | `2970cd7` | local | `npm run check`, with `npm run test:browser`, all green, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; M10 and M12 as R11. On the commit where `answer_agent` takes a form's `content` or `decline`. |
 | R13 | 2026-11-16 | `3ae57a4` | local | `npm run check`, with `npm run test:browser`, on g4: Node 24.20.0, PostgreSQL 17.12, each test on a database of its own; the first pass stopped on L20 (`EADDRINUSE`: a port taken between its `freePort()` and the lab's listen, as R39 saw), the second all green; M10 and M12 as R11. |
+| R15 | 2026-11-20 | `3463a8e` | local | The `check` job of pull request #229 (GitHub Actions job 136477061123), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell 153. M1 with real bridges and a real signer; M6, M10 and M12 against the MCP server on a port of its own, the lab's executions behind it. |
 
 ## Cases
 
@@ -51,6 +52,10 @@ The evidence behind the acceptance cases of `specs/mcp.md`.
 | M12 | — | local | R12 | proven | As R11. |
 | M10 | — | local | R13 | proven | As R12. |
 | M12 | — | local | R13 | proven | As R11. |
+| M1 | — | local | R15 | proven | Named `agora:read`; named `internet` and `github:owner/repo:read`: `session/new`'s `mcpServers` `[{ type: http, name: agora, url: https://mcp.agora.internal/mcp, headers: [] }]` each time. |
+| M6 | — | local | R15 | partial | Given `internet`: `search` and `read` listed; scoped to `internet`: no tool, `search` refused `not_allowed`. One never given `agora:read` is not run: no execution is created without it. |
+| M10 | — | local | R15 | proven | With `agora:delegate`: the five, `list_agents` alone read-only, with their parameters, then `search` and `read`; a delegate given no right, as its Session opens: `send_message`, then `search` and `read`; a delegate holding both, its profiles `agora:delegate`, `agora:submit`, `agora:read`, `previews`: the five, then `search` and `read`. |
+| M12 | — | local | R15 | proven | As R11, from a delegate given no right. |
 
 ## Not covered
 
