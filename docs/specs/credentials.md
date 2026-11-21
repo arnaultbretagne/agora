@@ -57,8 +57,8 @@ may name; for many hosts, a regular expression on the host. The catalogue lives 
 | `vault:read` | `vault.bretagne.dev`, `/mcp` exactly, `GET`, `POST` and `DELETE`; `tools`: `read_note`, `search_content`, `search_properties`, `get_backlinks`, `list_properties`, `get_property_values`. No prompt, no resource. |
 | `vault:write` | The same host, path and methods, no `tools`: the whole server — its twelve tools, the six of `vault:read` and `create_note`, `update_note`, `delete_note`, `move_note`, `update_schema`, `clip_url` — and its prompt `clip-to-vault`. |
 | `kubernetes:read` | `kubernetes.agora.internal`, `GET` and `HEAD` on the API's paths: `/api`, `/apis`, `/openapi`, `/version` and what lies under them, any query. A watch is a `GET`: covered. What may be read is the credential's RBAC ("Kubernetes"). |
-| `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). |
-| `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). |
+| `previews` | The hosts `pr-<n>-<app>.preview.bretagne.dev` — one DNS label, `<n>` a pull request's number, `<app>` lowercase letters, digits and dashes —, every path and every method. Through the preview's gateway gate ("Previews"). Every execution's ("Default profiles"). |
+| `agora:read` | `mcp.agora.internal`, `/mcp` exactly, `GET`, `POST` and `DELETE`: Agora's own MCP server ("Agora's MCP"). No `tools`: Agora tells its tools apart itself, by the rights it recorded (`mcp.md`). Every execution's ("Default profiles"). |
 | `agora:delegate` | The same grant as `agora:read`; Agora opens `spawn_agent`, `send_message`, `stop_agent` and `list_agents` to it (`delegation.md`). |
 | `agora:submit` | The same grant as `agora:read`; Agora opens `send_message` to it, toward its delegator alone. Agora's own: given by Agora to every delegate, never offered, never named by a Create or a Scope (`unknown_profile`) but one keeping what its Workstream's last execution holds. |
 
@@ -119,6 +119,21 @@ service — never a repository, nor `internet`, nor the vault.
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
 
+### Default profiles
+
+Every new execution holds `agora:read` and `previews` without anyone naming them, whether a person's
+Create starts it, a `spawn_agent` (`delegation.md`) or Agora continuing a Workstream: Agora gives
+every agent Agora's MCP server, read (`mcp.md`), and the previews. Each can then read the person's
+Workstreams, an execution holding `internet` too.
+
+| Element | Rule |
+| --- | --- |
+| The Create | Its profiles checked as before ("Offered profiles"), then the defaults it does not name added after its own. Recorded so, with the command: they are among the execution's own profiles, in the log's `profiles`, its token's `profiles` and grants, `~/.agora/access.json` and its Session's `mcpServers` ("MCP servers"). |
+| Naming one | A Create, a Scope or a delegate's `rights` may name a default, whatever `OFFERED_PROFILES` says: never `profile_not_offered`, and never a right beyond its delegator's (`delegation.md`, "Approval"). |
+| Offered | Never: `GET /api/config` leaves them out of `offered`. `OFFERED_PROFILES` may still list them: they are left out there too, and the list still restricts what else may be named, as any list does. |
+| A Scope | Replaces the execution's own profiles with the set it gives, as before: a default it leaves out is taken from that execution, until its Workstream's next Create. |
+| Base | Neither: a warm Pod holds neither before its claim. |
+
 ### Offered profiles
 
 What an execution may be given beyond its pool's base profiles is declared on Agora, in
@@ -133,7 +148,8 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`, `kubernetes:read`, `previews`, `agora:read`, `agora:delegate` | Itself |
+| `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`, `kubernetes:read`, `agora:delegate` | Itself |
+| Anything, or nothing | `agora:read` and `previews`, the default profiles ("Default profiles") |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
@@ -425,7 +441,7 @@ Only the gates' identities cut those.
 | `client-<its id>` taken out of `preview-gateway-identities` | Every token of the client, at every gateway gate, whatever secret minted it: each carries that `sub`, and no other identity is named. | Once the kubelet has updated the mounted ConfigMap — its sync, not measured for this ConfigMap —, oauth2-proxy reloads the file (`pkg/watcher/watcher.go`): 2 to 5 ms after a swap as the kubelet makes it (C59). |
 | A secret deleted (`DELETE /api/oidc/clients/{id}/secrets/{secretId}`) | Every new token asked with that secret. | From the next token request. Tokens it already minted: valid at the gates until they expire, 15 minutes at most, unless the identity is taken out too. |
 | The client deleted (`DELETE /api/oidc/clients/{id}`) | Every new token of the client, whatever the secret. | From the next token request. Tokens already issued: as above. |
-| `previews` taken out of `OFFERED_PROFILES` | No new execution is given it. | Tokens already handed expire with them. |
+| `previews` taken out of the default profiles, in Agora's code ("Default profiles"), and out of `OFFERED_PROFILES` | No new execution is given it. | From the start of a server built with that code. Tokens already handed expire with them. |
 
 A secret leaked: take the identity out of the gates, which cuts every token, then delete that secret —
 or the client —, which stops new ones; creating a new secret alone cuts nothing.
@@ -582,12 +598,12 @@ Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, it
 | Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready, has an address and is still owned by a pool declaring base profiles, it hands a warm token bound to that address (`PUT /credentials`), and a new one when less than a third of its life remains. |
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the execution's own. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
 | Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute, or names other profiles than the execution's; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt. |
-| The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); recorded with the command. |
+| The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); the default profiles it does not name added after them ("Default profiles"); recorded with the command. |
 | Scope | The execution's own profiles replaced, between turns (`log.md`, "Commands"): the whole set, checked as the Create's, recorded with the command. If the execution is connected, its new token is handed at once, its tunnels closed — a turn has nothing in flight then; if that fails, before the next prompt, as above. |
 | `POST /api/workstreams/{id}/credentials` | Test only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
-| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), or nothing. |
+| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), never a default profile, or nothing. |
 | Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`, `OFFERED_PROFILES`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
 
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
@@ -652,7 +668,7 @@ call. The test page does it itself when the agent offers the option.
 | C7 | A host with no route of its own, the execution without `internet`: the mock's `/fetch https://example.com/` | 403 from the gateway. |
 | C8 | A pool declaring `anthropic`, a pool declaring none | A warm Pod of the first can reach `api.anthropic.com` before any claim, and nothing else (403); its token names the Pod. The second's Pod has no way out (503). |
 | C9 | A warm Pod waiting beyond two thirds of its token's life | A new token before the old one expires; no request refused in between. |
-| C10 | A claim on a warm Pod, the Create naming `github:A:read` | Before `initialize`, a token naming the execution, with `anthropic` and `github:A:read`; the tunnels of the warm token closed. |
+| C10 | A claim on a warm Pod, the Create naming `github:A:read` | Before `initialize`, a token naming the execution, with `anthropic`, `github:A:read`, `agora:read` and `previews`; the tunnels of the warm token closed. |
 | C11 | A warm token being handed over when the claim binds the Pod | The execution's token is the one in place; no warm token after it. |
 | C12 | An execution whose token would expire during the next turn | A new token before the prompt leaves; the previous tunnels closed; no request refused for an expired token during the turn. |
 | C13 | claude-code, from the Create to a Session open | Under 5 s, with no refused connection. |
@@ -685,7 +701,7 @@ call. The test page does it itself when the agent offers the option.
 | C40 | A real git client with `internet` alone: `git ls-remote` and `git clone --depth 1` of a public repository, of an offered one not granted; then `git push` to it | The refs and the clones; the push refused, 403 from the gateway, no branch on GitHub. |
 | C41 | The grants of `vault:read` and `vault:write`; a pool declaring either; `vault`, `vault:admin` | Only `vault.bretagne.dev`, `POST`, `GET` and `DELETE` on `/mcp` exactly: another path, method or host not covered, no grant on `*`; neither a base profile, the pool refused; the others `unknown_profile`. |
 | C42 | Each of the vault's tools, and its prompt, under `vault:read` then `vault:write`, replayed with the `vault` route's two rules; a tool the server would add; `tools/list` | Read: the six read tools covered, the six write tools and the prompt not. Write: all twelve and the prompt. The added tool: write only. The list filtered to what each covers. No other profile names a tool. |
-| C43 | An execution with `vault:read`, one with `vault:write`; one with other profiles, one with none | `session/new` names one MCP server, `http`, `https://vault.bretagne.dev/mcp`, no header; for the other two, `mcpServers` is `[]`. |
+| C43 | An execution with `vault:read`, one with `vault:write`; one with other profiles, one with none | `session/new` names the vault's server, `http`, `https://vault.bretagne.dev/mcp`, no header, then Agora's, the default profiles' ("MCP servers"); for the other two, Agora's alone. |
 | C44 | Through the gateway, an MCP client dialing the server `mcpServers` names, with the `Authorization` a sandbox could send itself: with `vault:read`, `initialize`, `tools/list`, `read_note`, `create_note`, `prompts/list`, `prompts/get` of `clip-to-vault`; with `vault:write`, `tools/list`, `create_note`, `delete_note`, the prompt | Read: the six read tools listed, `read_note` answered by the server; `create_note` and the prompt refused by the gateway, HTTP 400, `-32602`, the server receiving neither; no prompt listed. Write: twelve tools; `create_note`, `delete_note` and the prompt reach the server. Every message the server receives carries the gateway's credential, never the execution's token nor the sandbox's `Authorization`. |
 | C45 | `POST https://vault.bretagne.dev/mcp` with `internet` alone, with `anthropic` alone, and with `vault:write` from another address than the token's | 403 from the gateway each time; the server sees none of them. |
 | C46 | `vault:read` and `vault:write` in one token, the read grant first, then the write grant first: the prompt `clip-to-vault`, `clip_url`, `delete_note`, `read_note`, with the `vault` route's tool rule | Each let through, in both orders: the grants add up. With the rule lacking `has(mcp.tool)`, the prompt is refused when the read grant comes first. |
@@ -719,3 +735,5 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C71 | The grants of `antigravity`; requests on Cloud Code, `www.googleapis.com`, Google's token endpoint, its telemetry and its other APIs | `daily-cloudcode-pa.googleapis.com` on `/v1internal:<method>`, any query; `GET www.googleapis.com/oauth2/v2/userinfo` exactly; every other path, method and host refused — `/v1internal`, `/v1internal:loadCodeAssist/x`, a `POST` or a query on the user info, `/oauth2/v3/tokeninfo`, `/drive/v3/files`, `oauth2.googleapis.com/token`, `play.googleapis.com/log`, `cloudcode-pa.googleapis.com`, `generativelanguage.googleapis.com`; no grant on `*`. A base profile. |
 | C72 | In the cluster, the routes deployed and the login renewed: the mock's `/fetch POST https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` and `/fetch https://www.googleapis.com/oauth2/v2/userinfo` with `antigravity`; `/fetch POST https://oauth2.googleapis.com/token` and `/fetch https://www.googleapis.com/drive/v3/about` with `antigravity` alone, then with `internet` too | 200 from Google for the first two, the account's tier and its email, with the token the gateway set; the others 403 from the gateway, then answered by Google without the credential: never the login's token on them. |
 | C73 | agy on the placeholder, a Session open: `antigravity-token` replaced; then emptied, a turn; then filled again, a turn | The next request carries the new token; emptied, the turn ends on Google's 401, no request to `oauth2.googleapis.com`, no browser, the token file unchanged; filled again, the turn answered. |
+| C74 | A person's Create naming `github:A:read`, one naming no profile; a `spawn_agent` giving `internet`, within its delegator's rights | Each execution's profiles its own, then `agora:read` and `previews`, each once: recorded with its Create, in the log's `profiles`, in its token's `profiles` beside its pool's base profiles, and in its bridge's `~/.agora/access.json`; the delegate's `internet`, `agora:submit`, `agora:read`, `previews`. |
+| C75 | `OFFERED_PROFILES` listing `previews` and `agora:read` with others, then the others alone: the server started each time; Creates and Scopes naming the defaults, then one beside a profile not offered, one beside a profile the catalogue does not know | The server starts both times; `GET /api/config` offers the others alone, the same both times; the defaults accepted as named; then `profile_not_offered` and `unknown_profile` as before, nothing written. |

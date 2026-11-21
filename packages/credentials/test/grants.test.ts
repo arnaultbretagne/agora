@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { AGORA_MCP_HOST, ANTIGRAVITY_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, type Grant } from '../src/index.ts'
+import { AGORA_MCP_HOST, ANTIGRAVITY_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, DEFAULT_PROFILES, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, withDefaults, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -487,6 +487,26 @@ describe('GrantSigner', () => {
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     assert.throws(() => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered: ['dropbox'] }), /unknown profile/)
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
+  })
+
+  it('C75 agora:read and previews, listed in the offer or not: never offered, always nameable; the other profiles as before', () => {
+    assert.deepEqual(DEFAULT_PROFILES, ['agora:read', 'previews'])
+    const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+    const signer = (offered: string[]) => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered })
+    // As production's OFFERED_PROFILES lists them, and without them: the same offer.
+    for (const offered of [offeredProfiles('github:o/a:write,previews,internet,agora:read'), offeredProfiles('github:o/a:write,internet')]) {
+      assert.deepEqual(signer(offered).describe().offered, ['github:o/a:write', 'internet'], offered.join(','))
+      for (const profile of DEFAULT_PROFILES) assert.equal(offers(offered, profile), true, profile)
+      for (const profile of ['github:o/a:read', 'internet']) assert.equal(offers(offered, profile), true, profile)
+      for (const profile of ['github:o/b:read', 'kubernetes:read', 'agora:delegate', 'vault:read', 'anthropic']) assert.equal(offers(offered, profile), false, profile)
+    }
+    // Listed alone, they leave nothing offered, and the list still restricts: it is not empty.
+    assert.deepEqual(signer(['previews', 'agora:read']).describe().offered, [])
+    assert.deepEqual(signer(['previews', 'agora:read']).offered, ['previews', 'agora:read'])
+    // A Create's profiles: the defaults it does not name, after its own, each once.
+    assert.deepEqual(withDefaults(['internet']), ['internet', 'agora:read', 'previews'])
+    assert.deepEqual(withDefaults([]), ['agora:read', 'previews'])
+    assert.deepEqual(withDefaults(['previews', 'github:o/a:read']), ['previews', 'github:o/a:read', 'agora:read'])
   })
 
   it('C68 a repository’s write offered lets a Create or a Scope name its review, and its review its read; never a write under a review', () => {

@@ -326,7 +326,7 @@ test('V10 the fixed offer: GET /api/config offers what each entry of the access 
   const url = await target(t)
   const config = (await (await fetch(`${url}/api/config`, { headers: BROWSER_GATE })).json()) as { credentials: { proxy: unknown; offered: unknown } }
   assert.equal(config.credentials.proxy, null, 'no gateway')
-  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:read', 'agora:delegate', 'previews'])
+  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'])
   // Nothing is sent: against the image, the cases before this one hold every place a Create may take (MAX_ACTIVE).
   const page = await behind(BROWSER_GATE)
   try {
@@ -345,8 +345,6 @@ test('V10 the fixed offer: GET /api/config offers what each entry of the access 
       'vault',
       'k8s',
       'agora',
-      'agora:read',
-      'previews',
     ])
     await menu.getByRole('menuitemcheckbox', { name: /^GitHub/ }).click()
     await menu.getByRole('menuitemcheckbox', { name: /^GitHub/, checked: true }).waitFor()
