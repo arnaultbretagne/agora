@@ -39,6 +39,7 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R29 | 2026-11-20 | `e5f8871` | unit | `npm test -w @agora/credentials`, all green: Node 24.22.3. The gateway is not run. |
 | R30 | 2026-11-21 | `0cf2560` | local | `ci.yml` run 44897745908, job `try (agora-harness-antigravity, harnesses/antigravity/Dockerfile, true)`, on GitHub's runner: the image built from that commit — the tarball checked against its sha256 and sha512, `agy --version` 1.5.13 —, then started read-only, non-root, HOME on a tmpfs, every capability dropped: `/healthz` "adapter alive", `/info` 401. |
 | R31 | 2026-11-20 | `3463a8e` | unit, local | C74 and C75 were then numbered C71 and C72, their tests named so. The `check` job of pull request #229 (GitHub Actions job 136477061123), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell 153. C71 with real bridges and the mock agent, a real signer with a key of its own, the delegate through Agora's MCP server on a port of its own; C72 in the lab, and the server's own process (`apps/server/src/main.ts`) started twice. The gateway is not run. |
+| R32 | 2026-11-21 | `1eea30a` | unit, local | The `check` job of pull request #229 (GitHub Actions job 136895244488), all green — V6 skipped, no Docker there: Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell; on the merge of `main` with #228, #230 and #231. C74 and C75 under their names, as R31; the MCP server checking each grant (#228). |
 
 ## Cases
 
@@ -173,6 +174,9 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C74 | — | local | R31 | proven | A person's Create naming `github:owner/repo:read`, then one naming nothing: the recorded Create, the state and the Workstream view `[…named, agora:read, previews]`; one token `anthropic` and the same; the bridge's `access.json` its `sub`, the same profiles. A `spawn_agent` giving `internet`: the delegate's Create, state, view, token and `access.json` `internet`, `agora:submit`, `agora:read`, `previews`. |
 | C75 | — | unit | R31 | proven | `OFFERED_PROFILES` `github:o/a:write,previews,internet,agora:read` and `github:o/a:write,internet`: `describe().offered` `github:o/a:write`, `internet` both times; `offers` true for `agora:read`, `previews`, the read under the write and `internet`, false for another repository, `kubernetes:read`, `agora:delegate`, `vault:read`, `anthropic`; the defaults alone listed: nothing offered, the list kept. |
 | C75 | — | local | R31 | proven | In the lab, both offers: a Create naming `previews`, `agora:read`, `internet` accepted, its profiles as named; a Scope to `agora:read` accepted; beside a default, `github:owner/b:read` and `kubernetes:read` `profile_not_offered`, `dropbox:everything` `unknown_profile`, by a Create and by a Scope, nothing written. The server started with each `OFFERED_PROFILES`: `GET /api/config` `offered` `github:owner/a:write`, `internet` both times. |
+| C74 | — | local | R32 | proven | As R31: the person's two Creates and the delegate's, their recorded Create, state, view, token and `access.json` their own profiles then `agora:read`, `previews`. |
+| C75 | — | unit | R32 | proven | As R31. |
+| C75 | — | local | R32 | proven | As R31, the server started with each `OFFERED_PROFILES`, `offered` `github:owner/a:write`, `internet` both times. |
 
 The partial verdicts are tracked in #107.
 

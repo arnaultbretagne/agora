@@ -18,6 +18,7 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | R10 | 2026-11-18 | `f5a3752` | local | `preview.yml`, run 44329646987, on pull request #219 labelled `preview`: the server's image built from the head commit and tried by `scripts/try-preview.ts`, as R7, its conversations with the delegation captured again; then `ghcr.io/arnaultbretagne/agora-server:f5a37527d3d6ea0f83dc92c4a07a969688038da2` published, `sha256:666aa12569b3e8b2fa263ee2fd860e9013aec2c417b269351c037fda0c2c8b7d`. Its first run, on `14b4cf4` (44328892553), failed V8: two lines now name the delegate, and the test's locator took one alone; fixed in the test. |
 | R11 | 2026-11-20 | `08f2c9c` | unit | `npm test -w @agora/web`, all green: Node 24.22.3; the fixtures copied into a folder of the test's own, codex's history standing in for antigravity's there alone. |
 | R12 | 2026-11-20 | `3bc2451` | local | The `check` job of pull request #229 (GitHub Actions job 136569971272), all green — V6 skipped, no Docker there: Node 24, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell, on the merge of `main` with the access picker (#216). V10 against the preview server started in the job's own process, behind the browser gate's headers. |
+| R13 | 2026-11-21 | `1eea30a` | local | The `check` job of pull request #229 (GitHub Actions job 136895244488), all green — V6 skipped, no Docker there: Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell; on the merge of `main` with #228, #230 and #231. V10 against the preview server started in the job, behind the browser gate's headers. |
 
 ## Cases
 
@@ -68,6 +69,7 @@ The evidence behind the acceptance cases of `specs/preview.md`.
 | V9 | — | local | R10 | proven | As R7. |
 | V11 | — | unit | R11 | proven | Without `antigravity.json`: 15 conversations, 14 listed, harnesses `claude-code`, `codex`, `opencode`; with it: 16, one `antigravity` of its own Workstream with all the fixture's entries; without `opencode.json`: refused, `ENOENT` naming it. |
 | V10 | — | local | R12 | proven | `proxy` null; `offered` `internet`, `zai`, `chatgpt`, `github:example/app:write`, `github:example/docs:write`, `github:example/site:read`, `vault:write`, `kubernetes:read`, `agora:delegate`; the menu Internet, z.ai, ChatGPT, GitHub with `example/app, example/docs, example/site (read)`, vault, k8s, agora; GitHub ticked, the key "Internet, GitHub". |
+| V10 | — | local | R13 | proven | `proxy` null; `offered` `internet`, `zai`, `chatgpt`, `antigravity`, `github:example/app:write`, `github:example/docs:write`, `github:example/site:read`, `vault:write`, `kubernetes:read`, `agora:delegate`; the menu Internet, z.ai, ChatGPT, Antigravity, GitHub with `example/app, example/docs, example/site (read)`, vault, k8s, agora; GitHub ticked, the key "Internet, GitHub". |
 
 ## Not covered
 
