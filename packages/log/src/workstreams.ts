@@ -273,6 +273,16 @@ export class Workstreams implements Handler {
     return e === undefined ? undefined : { workstream, profiles: e.profiles }
   }
 
+  /**
+   * Whether an execution serves a Workstream of one of `owners` (docs/specs/log.md, "HTTP"): an execution of another
+   * owner's, or one Agora does not know, does not; with no owner named, any execution does.
+   */
+  async belongsTo(execution: string, owners: readonly string[] | null): Promise<boolean> {
+    if (owners === null) return true
+    const workstream = this.workstreamOf(execution)
+    return workstream !== undefined && (await this.projections.belongs(workstream, owners))
+  }
+
   // ---------------------------------------------------------------- commands
 
   /**

@@ -2,7 +2,7 @@
 // Chromium), against the real server — the log on PostgreSQL, the mechanics on FakeKube, real bridges and
 // the mock agent. Run from the log package, which provisions the database: `npm run test:browser`.
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { after, before, test } from 'node:test'
 import { chromium, type Browser, type Locator, type Page } from 'playwright'
 import { mockBridge } from '@agora/testkit'
 import { claimName } from '../../../../packages/executions/src/manager.ts'
-import { cluster, database, expire, freePort, Server, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
+import { cluster, database, expire, freePort, gatewayStandIn, Server, serverGrants, until, view as viewOf, type Db } from '../../../../packages/log/test/support.ts'
 import { identity } from '../../../../packages/log/src/index.ts'
 import { NOBODY } from '../../src/agora/api.ts'
 
@@ -26,21 +26,23 @@ const PERSON = 'person@example.org'
 const pulls = new Map<number, { mergeable_state: string; merged: boolean }>()
 const mergesAsked: { number: number; body: Record<string, unknown> }[] = []
 let github: HttpServer
+let gateway: Awaited<ReturnType<typeof gatewayStandIn>> | undefined
 
 before(async () => {
   assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'the client is built first: npm run build -w @agora/web')
   db = await database()
-  // Agora's MCP server where the mock agent's `/spawn_agent` calls it: the lab has no gateway (packages/mock-agent).
+  // Agora's MCP server where the mock agent's `/spawn_agent` calls it: the lab has no gateway (packages/mock-agent), a
+  // stand-in for its route forwards each call with a grant of the server's key for the execution, as the gateway does.
   const mcpPort = await freePort()
-  process.env.AGORA_MOCK_MCP = `http://127.0.0.1:${String(mcpPort)}/mcp`
+  const grants = serverGrants()
+  gateway = await gatewayStandIn(`http://127.0.0.1:${String(mcpPort)}/mcp`, grants.grant)
+  process.env.AGORA_MOCK_MCP = gateway.url
   c = await cluster()
   // As the pools in the cluster: every Session starts with full access.
   c.kube.sessionConfig['mock-test'] = 'mode=full-access'
   // A signer of its own, two repositories, the Internet and delegating offered, as in the cluster
   // (docs/specs/credentials.md, "Offered profiles"); the gateway is never reached.
-  const grants = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
-  writeFileSync(grants, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
-  const credentials = { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: grants, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet,agora:delegate' }
+  const credentials = { ...grants.env, OFFERED_PROFILES: 'github:owner/a:write,github:owner/b:read,internet,agora:delegate' }
   github = createServer((req, res) => {
     const reply = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
     let text = ''
@@ -82,6 +84,7 @@ before(async () => {
 
 after(async () => {
   github?.close()
+  await gateway?.close()
   await browser?.close()
   await server?.stop()
   await c?.close()

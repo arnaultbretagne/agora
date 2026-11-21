@@ -714,8 +714,12 @@ export class LogStore {
     })
   }
   /** An anchor's metadata and bytes, read from R2 — or from its record, for one stored before its bytes moved. */
-  async anchorBytes(id: string): Promise<{ metadata: Record<string, unknown>; content: Buffer } | null> {
-    const result = await this.anchors.query('SELECT metadata::text,file,content FROM anchors WHERE id=$1', [uuid(id)])
+  /** An anchor and its bytes; with `owners`, only one of their Workstreams' (docs/specs/log.md, "HTTP"). */
+  async anchorBytes(id: string, owners: readonly string[] | null = null): Promise<{ metadata: Record<string, unknown>; content: Buffer } | null> {
+    const result = await this.anchors.query(
+      'SELECT a.metadata::text,a.file,a.content FROM anchors a WHERE a.id=$1 AND ($2::uuid[] IS NULL OR EXISTS (SELECT 1 FROM workstreams w WHERE w.id=a.workstream AND w.owner = ANY($2::uuid[])))',
+      [uuid(id), owners],
+    )
     if (!result.rowCount) return null
     const r = result.rows[0]
     if (r.file === null) return { metadata: object(decode(r.metadata)) ?? {}, content: r.content as Buffer }
@@ -749,9 +753,11 @@ export class LogStore {
     if (!this.files) throw new Error('files_unavailable')
     return this.files.sweep(this.anchors, ageMs)
   }
-  async anchorList(): Promise<{ id: string; workstream: string; execution: string; metadata: unknown }[]> {
+  /** The 200 latest anchors; with `owners`, of their Workstreams only (docs/specs/log.md, "HTTP"). */
+  async anchorList(owners: readonly string[] | null = null): Promise<{ id: string; workstream: string; execution: string; metadata: unknown }[]> {
     const result = await this.writer.query(
-      'SELECT id,workstream,execution,metadata::text FROM anchors ORDER BY time DESC, id LIMIT 200',
+      'SELECT a.id,a.workstream,a.execution,a.metadata::text FROM anchors a WHERE $1::uuid[] IS NULL OR EXISTS (SELECT 1 FROM workstreams w WHERE w.id=a.workstream AND w.owner = ANY($1::uuid[])) ORDER BY a.time DESC, a.id LIMIT 200',
+      [owners],
     )
     return result.rows.map((r) => ({ id: r.id, workstream: r.workstream, execution: r.execution, metadata: decode(r.metadata) }))
   }

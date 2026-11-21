@@ -11,8 +11,8 @@ import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { CALLER_HEADER, core, createMcpServer, delegationOf, Delegations, loadRoles, LogStore, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
-import { cluster, database, expire, FakeKube, freePort, grants, Lab, lines, PgRelay, Server, sleep, until, type LabOptions } from './support.ts'
+import { core, createMcpServer, delegationOf, Delegations, loadRoles, LogStore, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
+import { cluster, database, expire, FakeKube, freePort, grants, Lab, lines, PgRelay, Server, serverGrants, sleep, until, type LabOptions } from './support.ts'
 
 type Text = { content: { type: string; text: string }[]; isError?: boolean }
 type T = { after(fn: () => Promise<void>): void }
@@ -32,9 +32,10 @@ async function started(
   const { roles, ...engine } = options
   const signer = grants([])
   const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine }, pgRelay: extra.pgRelay ?? false })
-  const mcp = createMcpServer(lab.workstreams)
+  const mcp = createMcpServer(lab.workstreams, signer.key)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`
+  granting.set(url, async (execution) => signer.grantOf(execution))
   // The Lab in `lab` when the test ends is closed: a test that restarts Agora puts the new one there.
   const context = { lab, db, url, signer, ws: '', execution: '', delegations: lab.workstreams.delegations! }
   t.after(async () => {
@@ -47,9 +48,14 @@ async function started(
   return context
 }
 
+/** For each MCP server of a test, the grant the gateway would forward for an execution: the one its bridge holds. */
+const granting = new Map<string, (execution: string) => Promise<string>>()
+
+/** An MCP client, as an execution's harness: its messages carry the execution's grant, as the gateway forwards it. */
 async function client(t: T, url: string, execution: string): Promise<Client> {
   const c = new Client({ name: 'harness', version: '1.0.0' })
-  await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { [CALLER_HEADER]: `agora ${execution}` } } }))
+  const grant = await granting.get(url)!(execution)
+  await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: `Bearer ${grant}` } } }))
   t.after(() => c.close())
   return c
 }
@@ -151,7 +157,7 @@ test('D6 rights beyond the delegator’s, then Approve: the call held, an approv
   assert.deepEqual((await lab.state(delegate)).current?.profiles, ['internet', 'agora:submit', 'agora:read', 'previews'])
 })
 
-test('C71 a spawn_agent giving internet, within the delegator’s rights: the delegate’s execution holds agora:read and previews after internet and agora:submit, in the log, its token and its bridge’s access.json', async (t) => {
+test('C74 a spawn_agent giving internet, within the delegator’s rights: the delegate’s execution holds agora:read and previews after internet and agora:submit, in the log, its token and its bridge’s access.json', async (t) => {
   const { lab, url, signer, execution } = await started(t, ['agora:delegate', 'internet'])
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: 'any', harness: 'mock', rights: ['internet'] } })))
   const own = ['internet', 'agora:submit', 'agora:read', 'previews']
@@ -328,7 +334,10 @@ test('D67 the same in the server’s own process: the call answered expired thro
   writer.hostname = '127.0.0.1'
   writer.port = String(pg.port)
   const mcpPort = await freePort()
-  const server = await Server.start({ db: { ...db, urls: { ...db.urls, writer: writer.href } }, api: c.api, keys: c.keys, env: { MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '2' } })
+  // The server's own grants: its MCP server takes only what it signed (docs/specs/mcp.md, "The caller").
+  const g = serverGrants()
+  granting.set(`http://127.0.0.1:${String(mcpPort)}/mcp`, g.grant)
+  const server = await Server.start({ db: { ...db, urls: { ...db.urls, writer: writer.href } }, api: c.api, keys: c.keys, env: { ...g.env, MCP_PORT: String(mcpPort), APPROVAL_SECONDS: '2' } })
   c.kube.anchorUrl = server.anchorUrl
   const reader = new LogStore(db.urls)
   t.after(async () => {
@@ -1174,8 +1183,9 @@ test('M10 tools/list with agora:delegate; from a delegate given no right, as its
 
 test('M11 a spawn_agent call Agora holds: an SSE stream, progress then the answer; another message, one JSON answer', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 1_500, progressMs: 300 })
+  const grant = await granting.get(url)!(execution)
   const post = (body: unknown) =>
-    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', [CALLER_HEADER]: `agora ${execution}` }, body: JSON.stringify(body) })
+    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${grant}` }, body: JSON.stringify(body) })
   const listed = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
   assert.match(String(listed.headers.get('content-type')), /application\/json/)
   const held = await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'spawn_agent', arguments: { instructions: 'held', harness: 'mock', rights: ['internet'] }, _meta: { progressToken: 7 } } })

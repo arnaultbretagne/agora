@@ -182,7 +182,7 @@ function access(lab: Lab, execution: string): { sub?: string; profiles?: string[
   return JSON.parse(readFileSync(join(bridge.home, '.agora', 'access.json'), 'utf8')) as { sub?: string; profiles?: string[] }
 }
 
-test('C71 a person’s Create naming github:A:read, then one naming nothing: each execution holds agora:read and previews after its own, in the log, its token and its bridge’s access.json', async (t) => {
+test('C74 a person’s Create naming github:A:read, then one naming nothing: each execution holds agora:read and previews after its own, in the log, its token and its bridge’s access.json', async (t) => {
   const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
   for (const [workstream, named] of [[ws, ['github:owner/repo:read']], [await lab.workstream(), []]] as const) {
     const e = await lab.open(workstream, { pool: 'claude-test', profiles: [...named] })
@@ -206,7 +206,7 @@ test('C71 a person’s Create naming github:A:read, then one naming nothing: eac
   }
 })
 
-test('C72 previews and agora:read in OFFERED_PROFILES or not: the offer leaves both out; a Create and a Scope may name them; another profile not offered, profile_not_offered; an unknown one, unknown_profile', async (t) => {
+test('C75 previews and agora:read in OFFERED_PROFILES or not: the offer leaves both out; a Create and a Scope may name them; another profile not offered, profile_not_offered; an unknown one, unknown_profile', async (t) => {
   for (const offered of [['github:owner/a:write', 'internet', 'previews', 'agora:read'], ['github:owner/a:write', 'internet']]) {
     const { lab, signer, ws } = await started(t, {}, offered)
     assert.deepEqual(signer.source.describe?.().offered, ['github:owner/a:write', 'internet'], offered.join(','))
@@ -231,7 +231,7 @@ test('C72 previews and agora:read in OFFERED_PROFILES or not: the offer leaves b
   }
 })
 
-test('C72 the server started with OFFERED_PROFILES listing previews and agora:read, then without them: it starts each time, and GET /api/config offers neither', async (t) => {
+test('C75 the server started with OFFERED_PROFILES listing previews and agora:read, then without them: it starts each time, and GET /api/config offers neither', async (t) => {
   const db = await database()
   const c = await cluster()
   const dir = mkdtempSync(join(tmpdir(), 'grants-'))

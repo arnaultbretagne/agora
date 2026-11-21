@@ -9,7 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { compileProfiles, type GitHub, type MergeOutcome, type MergeState, type PullRequest } from '@agora/credentials'
 import { keys } from '@agora/testkit'
-import { CALLER_HEADER, createMcpServer, Merges, MergeRefused, project, type Entry } from '../src/index.ts'
+import { createMcpServer, Merges, MergeRefused, project, type Entry } from '../src/index.ts'
 import { FROM_META } from '../src/marks.ts'
 import { database, expire, FakeKube, grants, Lab, opened, until } from './support.ts'
 
@@ -207,7 +207,7 @@ async function leading(t: T) {
   const lab = await Lab.start({ db, kube: new FakeKube(pair.publicKey), keys: pair, credentials: signer.source, workstreams: { maxActive: 8 }, delegations: { approvalMs: 10_000, progressMs: 500 } })
   const github = new FakeGitHub()
   new Merges(lab.workstreams, { github, maxAgeMs: 0 })
-  const mcp = createMcpServer(lab.workstreams)
+  const mcp = createMcpServer(lab.workstreams, signer.key)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
   const url = new URL(`http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`)
   t.after(async () => {
@@ -220,7 +220,8 @@ async function leading(t: T) {
   const e = await lab.open(ws, { profiles: ['agora:delegate'] })
   const client = async (execution: string) => {
     const c = new Client({ name: 'harness', version: '1.0.0' })
-    await c.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { [CALLER_HEADER]: `agora ${execution}` } } }))
+    // The grant the execution's bridge holds, as the gateway forwards it (docs/specs/mcp.md, "The caller").
+    await c.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: `Bearer ${signer.grantOf(execution)}` } } }))
     t.after(() => c.close())
     return c
   }

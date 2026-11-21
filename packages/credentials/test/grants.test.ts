@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { AGORA_MCP_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, DEFAULT_PROFILES, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, withDefaults, type Grant } from '../src/index.ts'
+import { AGORA_MCP_HOST, ANTIGRAVITY_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, DEFAULT_PROFILES, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, withDefaults, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -202,6 +202,39 @@ describe('profiles', () => {
       ['api.z.ai', 'POST', '/api/paas/v4/chat/completions', false],
     ]
     for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+  })
+
+  it('C71 antigravity opens Cloud Code’s internal API and the account’s user info, nothing else of Google; it is a base profile', () => {
+    const grants = compileProfile('antigravity')
+    assert.equal(ANTIGRAVITY_HOST, 'daily-cloudcode-pa.googleapis.com')
+    const cases: [string, string, string, boolean][] = [
+      // What agy 1.5.13 sent, measured against a stand-in for Google.
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:streamGenerateContent?alt=sse', true],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:loadCodeAssist', true],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:fetchAvailableModels', true],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:retrieveUserQuotaSummary', true],
+      ['www.googleapis.com', 'GET', '/oauth2/v2/userinfo', true],
+      // Neighbours on the same hosts.
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:', false],
+      [ANTIGRAVITY_HOST, 'POST', '/v1internal:loadCodeAssist/x', false],
+      [ANTIGRAVITY_HOST, 'GET', '/v1/projects', false],
+      [ANTIGRAVITY_HOST, 'GET', '/', false],
+      ['www.googleapis.com', 'POST', '/oauth2/v2/userinfo', false],
+      ['www.googleapis.com', 'GET', '/oauth2/v2/userinfo?alt=json', false],
+      ['www.googleapis.com', 'GET', '/oauth2/v3/tokeninfo', false],
+      ['www.googleapis.com', 'GET', '/drive/v3/files', false],
+      // The token endpoint, telemetry, Cloud Code's other endpoint and the Gemini API: no grant.
+      ['oauth2.googleapis.com', 'POST', '/token', false],
+      ['play.googleapis.com', 'POST', '/log', false],
+      ['cloudcode-pa.googleapis.com', 'POST', '/v1internal:loadCodeAssist', false],
+      ['generativelanguage.googleapis.com', 'POST', '/v1beta/models/gemini:generateContent', false],
+    ]
+    for (const [host, method, path, expected] of cases) assert.equal(allowed(grants, host, method, path), expected, `${method} ${host}${path}`)
+    assert.equal(allowedOnline(grants, 'POST', '/token'), false, 'no grant on the Internet')
+    assert.equal(BASE_PROFILES.has('antigravity'), true)
+    assert.deepEqual(baseProfiles('antigravity'), { profiles: ['antigravity'], refused: null })
+    assert.equal(grants.every((g) => g.tools === undefined && g.identity === undefined && g.hostPattern === undefined), true)
   })
 
   it('C55 previews opens the hosts pr-<n>-<app>.preview.bretagne.dev and nothing else; it is not a base profile', () => {
@@ -456,7 +489,7 @@ describe('GrantSigner', () => {
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
   })
 
-  it('C72 agora:read and previews, listed in the offer or not: never offered, always nameable; the other profiles as before', () => {
+  it('C75 agora:read and previews, listed in the offer or not: never offered, always nameable; the other profiles as before', () => {
     assert.deepEqual(DEFAULT_PROFILES, ['agora:read', 'previews'])
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     const signer = (offered: string[]) => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered })

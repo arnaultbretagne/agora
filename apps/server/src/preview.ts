@@ -314,7 +314,7 @@ export function previewKeys(): { privateKey: KeyObject; publicKey: KeyObject } {
  * given any of them reaches no more than one given none. Never the default profiles, every execution's already
  * (docs/specs/credentials.md, "Default profiles").
  */
-export const PREVIEW_OFFERED = ['internet', 'zai', 'chatgpt', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'] as const
+export const PREVIEW_OFFERED = ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'] as const
 
 /** The offer as the configuration says it: no proxy, no profile of its own, and never a token. */
 export function previewOffer(): CredentialSource {

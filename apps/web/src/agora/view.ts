@@ -70,7 +70,7 @@ export interface AgentCommand {
   readonly hint: string | null
 }
 
-const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock agent' }
+const HARNESS_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', antigravity: 'Antigravity', mock: 'Mock agent' }
 
 /** A harness as people name it. */
 export const harnessName = (harness: string | null | undefined): string => (harness ? (HARNESS_NAMES[harness] ?? harness) : 'the agent')
@@ -1034,7 +1034,7 @@ export interface AccessEntry {
 /** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
 export const INTERNET = 'internet'
 
-const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet', anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT' }
+const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet', anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity' }
 const REPOSITORY = /^github:([^:]+):(read|review|write)$/
 const LEVELS = ['read', 'review', 'write'] as const
 /** What a profile is a level of: its repository, the vault, or itself. */

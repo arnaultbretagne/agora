@@ -113,6 +113,8 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E33 | — | live | R10 | proven | claude-code "`/home/harness/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each, and each answer held `agora <execution>` — codex's after a preface, "I’ll read the file and return only its `sub` claim". opencode first asked permission to read outside its workspace, answered allow once; claude-code and codex asked none. |
 | E33 | — | live | R13 | proven | claude-code "`~/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each, and each answer held `agora <execution>`. |
 | E33 | — | live | R14 | proven | claude-code "`~/.agora/access.json`", opencode and codex "~/.agora/access.json", none with a tool call. The control, "read that file and give me its `sub` claim": one tool call each (opencode asked one permission), and each answer held `agora <execution>`. |
+| E34 | — | live | — | not verified | No run: no antigravity pool, no cluster Google login, no gateway route. |
+| E35 | — | live | — | not verified | As E34. Behind a stand-in for Google, agy 1.5.13 put no rule from the workspace's `AGENTS.md` into the model's request (`specs/credentials.md`, "Antigravity"). |
 
 The partial verdicts are tracked in #107.
 

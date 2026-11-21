@@ -10,6 +10,7 @@ export {
   PREVIEW_HOST_PATTERN,
   KUBERNETES_HOST,
   AGORA_MCP_HOST,
+  ANTIGRAVITY_HOST,
   AGORA_OWN_PROFILES,
   DEFAULT_PROFILES,
   ProfileRefused,
@@ -24,6 +25,7 @@ export {
   withDefaults,
   type GitHubIdentity,
   type Grant,
+  type GrantKey,
   type GrantSignerOptions,
   type McpServer,
 } from './grants.ts'

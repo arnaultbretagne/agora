@@ -151,7 +151,12 @@ when it starts (`BRIDGE_RESTART_ON_ANCHOR`): the bridge has no list of harnesses
 | claude-code | `$HOME/.claude/projects/<workspace slug>/` | No | `session/resume` |
 | opencode | `$HOME/.local/share/opencode/agora/`: its SQLite database (`OPENCODE_DB`) | Yes | `session/resume` |
 | codex | `$HOME/.codex/sessions/`: its rollouts; `auth.json` stays outside | No | `session/resume` |
+| antigravity | `$HOME/.gemini/antigravity-cli/conversations/`: one SQLite file per conversation; the token file stays outside | No | `session/resume` |
 | mock (tests) | `$HOME/.mock-agent/sessions/<workspace slug>/` | No | `session/resume` or `session/load` |
+
+antigravity's, measured on 2026-11-20 on agy 1.5.13 behind a stand-in for Google: a conversation's file
+copied alone into the empty `conversations/` of a running agy is listed at once and resumed by
+`session/resume`, the model's next request carrying the earlier exchange.
 
 The slug is claude-code's: every character outside `[A-Za-z0-9-]` becomes `-`.
 That is why the workspace is the same path in every image.
@@ -166,7 +171,7 @@ That is why the workspace is the same path in every image.
 
 | Element | Rule |
 | --- | --- |
-| `AGENTS.md` | Written into the workspace by the bridge as it starts, before the adapter: the text of `packages/harness-bridge/src/agent-instructions.md`, the same for every harness. claude-code, opencode and codex load it as project instructions, with no setting. |
+| `AGENTS.md` | Written into the workspace by the bridge as it starts, before the adapter: the text of `packages/harness-bridge/src/agent-instructions.md`, the same for every harness. claude-code, opencode and codex load it as project instructions, with no setting. agy 1.5.13 was not seen to (`credentials.md`, "Antigravity"). |
 | What it says | The workspace starts empty; the conversation outlives the Pod, files do not, so work is pushed before a task is called done and cloned again into an empty workspace. Everything goes out through the gateway; what its 403 and 404 mean. Where the agent's access is written and how each profile reads. Its tools: Node and git, git's identity. |
 | `~/.agora/access.json` | The claims of the token the agent goes out with (`credentials.md`). |
 
@@ -220,11 +225,11 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | Route | Role |
 | --- | --- |
 | `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles and their Session settings: the annotation `agora.bretagne.dev/session-config`, `id=value` pairs separated by commas, in order (a malformed pair is left out). Each Session of the pool starts with them (`log.md`, "Sessions"). A pool annotated `agora.bretagne.dev/purpose: testing` is listed with `testing`: kept for the tests, it is not offered by the screen. |
-| `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
-| `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
+| `GET /api/executions` | The executions followed of the caller's Workstreams (`log.md`, "HTTP"): claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
+| `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full; the caller's alone, as the list. |
 | `GET /api/config` | Whether the test routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
-| `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone. |
+| `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone, each message proving its caller by the grant the gateway forwards. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
 (`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 3,600 s for
@@ -317,7 +322,9 @@ The `apps/server` deployable mounts the mechanics and the log, with PostgreSQL, 
 client (`assistant-ui.md`) on `agora.bretagne.dev`, behind Pocket-ID (admin group). With its test
 routes open (`TEST_ROUTES` `true`), it also serves the test page at `/test/`: a Workstream per
 execution, the commands, the thread, credentials, deadlines, anchors and ends. Besides the log's
-test routes (`log.md`, "HTTP"), three actions are reserved for tests:
+test routes (`log.md`, "HTTP"), three actions are reserved for tests. The two that name an execution,
+by its claim's name or its id, act only on an execution of the caller's Workstreams; another owner's
+is answered as one Agora does not know (`log.md`, "HTTP").
 
 | Route | Effect |
 | --- | --- |
@@ -356,6 +363,8 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E31 | Real harness (codex) | Real `initialize` and `session/new` on a warm Pod; a turn on the ChatGPT subscription through the gateway, its only way out `chatgpt.com`; anchor pushed, then restored, the agent remembers. |
 | E32 | A Pod starting | `AGENTS.md` in the workspace, byte for byte the bridge's text, there when the adapter starts. |
 | E33 | claude-code, opencode and codex, each in a new Session, asked where their access is written | Each answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
+| E34 | Real harness (antigravity) | Real `initialize` and `session/new` on a warm Pod; a turn on the cluster's Google login through the gateway, its only ways out `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com`; anchor pushed, then restored, the agent remembers. |
+| E35 | antigravity in a new Session, asked where its access is written | It answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).

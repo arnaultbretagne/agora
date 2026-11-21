@@ -157,8 +157,9 @@ function readSession(sessionId: string, cwd: string): Session | null {
 
 /**
  * A tool of Agora's MCP server called as a harness calls it (docs/specs/mcp.md), at AGORA_MOCK_MCP — the lab has no
- * gateway —, the execution named as the gateway names it: its token's `sub`, which the bridge writes in
- * ~/.agora/access.json. One JSON answer, or an SSE stream whose last event is the answer.
+ * gateway: a stand-in for its route, which forwards the call with the execution's grant —, the execution named to that
+ * stand-in by its token's `sub`, which the bridge writes in ~/.agora/access.json. One JSON answer, or an SSE stream
+ * whose last event is the answer.
  */
 async function callAgora(name: string, args: Record<string, unknown>, turn: Turn): Promise<{ text: string; isError: boolean }> {
   const url = process.env.AGORA_MOCK_MCP

@@ -2,16 +2,16 @@
 // process or as a real lab process, real bridges with the mock agent, and real failures — a killed
 // process, a terminated connection, a cut socket.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { randomBytes, randomUUID, type KeyObject } from 'node:crypto'
+import { createPublicKey, randomBytes, randomUUID, type KeyObject } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer, Socket, type Server as NetServer } from 'node:net'
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Pool } from 'pg'
 import { createAnchorReceiver, ExecutionManager, type CredentialSource, type ManagerOptions } from '@agora/executions'
-import { GrantSigner } from '@agora/credentials'
+import { GrantSigner, type GrantKey } from '@agora/credentials'
 import { generateKeyPairSync } from 'node:crypto'
 import { FakeS3, keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
@@ -685,6 +685,8 @@ export async function expire(kube: FakeKube, claimName: string): Promise<void> {
 
 export interface Minted {
   readonly label: string
+  /** The token itself, as the bridge presents it on CONNECT and the gateway forwards it to Agora's MCP server. */
+  readonly token: string
   readonly profiles: readonly string[]
   readonly sub: string
   /** The address the token is bound to (its `ip` claim). */
@@ -695,14 +697,22 @@ export interface Minted {
 
 /**
  * A real signer (a key of its own) that records what it signs. `fail` makes it refuse, as a signer
- * that cannot sign would.
+ * that cannot sign would. `key` checks what it signs, as Agora's MCP server does; `grantOf` is the token an
+ * execution's bridge holds now — what the gateway forwards to that server for it (docs/specs/mcp.md, "The caller").
  */
-export function grants(offered: readonly string[] = []): { source: CredentialSource; minted: Minted[]; fail: boolean } {
+export function grants(offered: readonly string[] = []): { source: CredentialSource; minted: Minted[]; fail: boolean; key: GrantKey; grantOf(execution: string): string } {
   const dir = mkdtempSync(join(tmpdir(), 'grants-'))
-  writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  const pair = generateKeyPairSync('ed25519')
+  writeFileSync(join(dir, 'key.pem'), pair.privateKey.export({ type: 'pkcs8', format: 'pem' }))
   const real = new GrantSigner({ proxy: '127.0.0.1:9', keyFile: join(dir, 'key.pem'), keyId: 'k', issuer: 'agora', audience: 'agora-gateway', offered })
   const state = { minted: [] as Minted[], fail: false }
   return Object.assign(state, {
+    key: { publicKey: createPublicKey(pair.privateKey), keyId: 'k', issuer: 'agora', audience: 'agora-gateway' },
+    grantOf(execution: string): string {
+      const latest = state.minted.filter((m) => m.label === `agora ${execution}`).at(-1)
+      if (latest === undefined) throw new Error(`no grant minted for ${execution}`)
+      return latest.token
+    },
     source: {
       offered: real.offered,
       describe: () => real.describe(),
@@ -710,9 +720,64 @@ export function grants(offered: readonly string[] = []): { source: CredentialSou
         if (state.fail) throw new Error('signer unavailable')
         const credentials = await real.mint(input)
         const payload = JSON.parse(Buffer.from(credentials.token.split('.')[1]!, 'base64url').toString()) as { sub: string; ip: string }
-        state.minted.push({ label: input.label, profiles: input.profiles ?? [], sub: payload.sub, ip: payload.ip, expiresAt: credentials.expiresAt, at: Date.now() })
+        state.minted.push({ label: input.label, token: credentials.token, profiles: input.profiles ?? [], sub: payload.sub, ip: payload.ip, expiresAt: credentials.expiresAt, at: Date.now() })
         return credentials
       },
     },
   })
+}
+
+/**
+ * The server's grants in the lab (docs/specs/credentials.md): a key of its own and the environment that gives it to the
+ * real server — the gateway named but never reached —, and a signer on that key with the server's own key id, issuer and
+ * audience, which signs what the gateway would forward to its MCP server for an execution (docs/specs/mcp.md, "The caller").
+ */
+export function serverGrants(): { env: Record<string, string>; keyFile: string; privateKey: KeyObject; grant(execution: string): Promise<string> } {
+  const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+  const { privateKey } = generateKeyPairSync('ed25519')
+  writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  const signer = new GrantSigner({ proxy: '127.0.0.1:9', keyFile, keyId: 'agora-grants-1', issuer: 'agora', audience: 'agora-gateway' })
+  return {
+    env: { GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: keyFile },
+    keyFile,
+    privateKey,
+    grant: async (execution) => (await signer.mint({ label: `agora ${execution}`, ttlSeconds: 600, address: '127.0.0.1' })).token,
+  }
+}
+
+/**
+ * A stand-in for the gateway's route `agora` (docs/specs/mcp.md, "The path"), where the mock agent calls Agora's MCP
+ * server in the lab (packages/mock-agent): the lab has no gateway. It takes the execution the mock names in
+ * `x-agora-execution` — the `sub` of its token —, and sends the message on to the server's port 8082 with a grant for it,
+ * `Authorization: Bearer`, as the gateway forwards the one it checked; the answer, an SSE stream included, comes back as
+ * it comes.
+ */
+export async function gatewayStandIn(target: string, grant: (execution: string) => Promise<string>): Promise<{ url: string; close(): Promise<void> }> {
+  const to = new URL(target)
+  const server = createHttpServer((req, res) => {
+    const named = /^agora ([0-9a-f-]{36})$/.exec(String(req.headers['x-agora-execution'] ?? ''))
+    if (named === null) return void res.writeHead(403, { 'content-type': 'application/json' }).end('{"reason":"no grant"}')
+    void grant(named[1]!).then(
+      (token) => {
+        const { 'x-agora-execution': _named, authorization: _own, host: _host, ...headers } = req.headers
+        const upstream = httpRequest({ host: to.hostname, port: to.port, path: to.pathname, method: req.method, headers: { ...headers, authorization: `Bearer ${token}` } }, (answer) => {
+          res.writeHead(answer.statusCode ?? 502, answer.headers)
+          answer.pipe(res)
+        })
+        upstream.on('error', () => res.destroy())
+        res.on('close', () => upstream.destroy())
+        req.pipe(upstream)
+      },
+      () => res.writeHead(503).end(),
+    )
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    url: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/mcp`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      }),
+  }
 }

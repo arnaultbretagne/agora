@@ -2,7 +2,7 @@
 // profiles, compiled here into grants — host, anchored regex on path and query, methods — and signed
 // by Agora into a short JWT. The gateway checks each request against those grants, then sets the
 // broad credential it holds for the host. No entity per combination: the set lives in the JWT.
-import { createPrivateKey, randomUUID, sign, type KeyObject } from 'node:crypto'
+import { createPrivateKey, createPublicKey, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import type { Credentials } from '@agora/harness-bridge/outbound'
@@ -72,6 +72,8 @@ export const KUBERNETES_HOST = 'kubernetes.agora.internal'
  * gateway's `agora` route knows it, which sends it to the server's port for the gateway alone.
  */
 export const AGORA_MCP_HOST = 'mcp.agora.internal'
+/** Cloud Code's endpoint, the one agy 1.5.13 calls by default (its `--cloud_code_endpoint`). */
+export const ANTIGRAVITY_HOST = 'daily-cloudcode-pa.googleapis.com'
 const AGORA: McpServer = { type: 'http', name: 'agora', url: `https://${AGORA_MCP_HOST}/mcp`, headers: [] }
 const AGORA_MCP_GRANT: Grant = { host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }
 /** A repository's write, which opens `propose_merge` for it (docs/specs/merge.md). */
@@ -107,6 +109,14 @@ export function compileProfile(profile: string): Grant[] {
   // ChatGPT, for codex: only its backend's codex and account paths — the session reaches the whole
   // account, conversations included.
   if (profile === 'chatgpt') return [{ host: 'chatgpt.com', path: '^/backend-api/(codex|wham)(/[^?]*)?(\\?.*)?$' }]
+  // Google's Antigravity, for agy, on the cluster's own Google login: Cloud Code's internal API, where agy infers and
+  // reads its tier, models and quota, and the account's user info. The login's token reaches the account's whole
+  // Google Cloud: nothing else of googleapis.com, and never the token endpoint, so nothing in the sandbox refreshes it.
+  if (profile === 'antigravity')
+    return [
+      { host: ANTIGRAVITY_HOST, path: '^/v1internal:[A-Za-z]+(\\?.*)?$' },
+      { host: 'www.googleapis.com', path: '^/oauth2/v2/userinfo$', methods: ['GET'] },
+    ]
   // The Internet: `*` stands for any host the gateway has no route of its own for, reached with no
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
@@ -156,7 +166,7 @@ const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
 }
 
 /** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
-export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt'])
+export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt', 'antigravity'])
 
 /** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
 export const BASE_PROFILES_ANNOTATION = 'agora.bretagne.dev/base-profiles'
@@ -216,6 +226,17 @@ export interface GrantSignerOptions {
   readonly offered?: readonly string[]
 }
 
+/**
+ * What checks a grant Agora signed (docs/specs/mcp.md, "The caller"): the public half of its key, and the key id,
+ * issuer and audience it signs with. The gateway checks the grant first; Agora's MCP server checks it again.
+ */
+export interface GrantKey {
+  readonly publicKey: KeyObject
+  readonly keyId: string
+  readonly issuer: string
+  readonly audience: string
+}
+
 export class GrantSigner {
   private readonly options: GrantSignerOptions
   private key: KeyObject | null = null
@@ -232,11 +253,17 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'antigravity', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
       // The defaults are every execution's already: never offered (docs/specs/credentials.md, "Default profiles").
       offered: this.offered.filter((profile) => !DEFAULT_PROFILES.includes(profile)),
     }
+  }
+
+  /** What checks the grants this signer signs: its key's public half, read from its file. */
+  async grantKey(): Promise<GrantKey> {
+    this.key ??= createPrivateKey(await readFile(this.options.keyFile))
+    return { publicKey: createPublicKey(this.key), keyId: this.options.keyId, issuer: this.options.issuer, audience: this.options.audience }
   }
 
   /**

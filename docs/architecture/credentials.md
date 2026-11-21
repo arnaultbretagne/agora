@@ -27,7 +27,7 @@ takes it from there only (below, "The token").
 
 ## Profiles and grants
 
-A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `internet`,
+A **profile** is a right expressed for humans: `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`,
 `github:owner/repo:read`, `github:owner/repo:write`, `vault:read`, `vault:write`, `kubernetes:read`,
 `previews`. Agora compiles each profile into **grants**, which the gateway can check on a request: a host, a
 pattern on the path, the allowed methods, and for an MCP server the tools a call may name.
@@ -37,6 +37,7 @@ pattern on the path, the allowed methods, and for an MCP server the tools a call
 | `anthropic` | `api.anthropic.com`, everything |
 | `zai` | `api.z.ai`, everything |
 | `chatgpt` | `chatgpt.com` on `/backend-api/codex…` and `/backend-api/wham…` |
+| `antigravity` | `daily-cloudcode-pa.googleapis.com` on `/v1internal:…`, and `GET www.googleapis.com/oauth2/v2/userinfo` |
 | `internet` | `*`, everything: any host without a credential of its own |
 | `github:o/app:write` | `api.github.com` on `/repos/o/app…`, every method; `github.com` git fetch and push on `o/app` |
 | `github:o/docs:read` | `api.github.com` on `/repos/o/docs…`, `GET` and `HEAD` only; `github.com` git fetch on `o/docs` |
@@ -69,7 +70,7 @@ Obsidian vault's server; without, none.
 A harness may need its services before anyone uses it: claude-code's SDK initializes against
 Anthropic, and without a way out it retries for some twenty seconds. So the pool says which
 services its harness needs from the start — its **base profiles**, `anthropic` for claude-code,
-`zai` for opencode, `chatgpt` for codex, none for the mock — and Agora treats every pool alike.
+`zai` for opencode, `chatgpt` for codex, `antigravity` for agy, none for the mock — and Agora treats every pool alike.
 
 | Moment | The bridge's token |
 | --- | --- |

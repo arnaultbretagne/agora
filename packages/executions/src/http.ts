@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { PodIdentity } from './kube.ts'
-import type { CommandResult, CredentialSource, ExecutionManager } from './manager.ts'
+import type { CommandResult, CredentialSource, ExecutionManager, ExecutionView } from './manager.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, type Bundle } from '@agora/harness-bridge/anchor'
 import { bearerOf } from '@agora/harness-bridge/token'
 
@@ -23,6 +23,11 @@ export interface HttpOptions {
   readonly roles?: readonly unknown[]
   /** The test restart: `clean` drains like a SIGTERM, `kill` dies like a SIGKILL. */
   readonly onRestart?: (mode: 'clean' | 'kill') => void
+  /**
+   * Whether the request's caller may see an execution, as the mounting deployable knows who owns it (the log's
+   * Workstreams): what the routes show and act on. Every execution when absent.
+   */
+  readonly owns?: (req: IncomingMessage, execution: string) => Promise<boolean>
 }
 const NAME = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/
 
@@ -50,6 +55,12 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 export function createApi(options: HttpOptions): Server {
   const { manager } = options
+  const owns = options.owns ?? (async () => true)
+  /** The executions the caller may see, in the mechanics' order. */
+  const visible = async (req: IncomingMessage, views: readonly ExecutionView[]): Promise<ExecutionView[]> => {
+    const shown = await Promise.all(views.map((view) => owns(req, view.execution)))
+    return views.filter((_, i) => shown[i])
+  }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (options.handle !== undefined && (await options.handle(req, res))) return
@@ -72,7 +83,7 @@ export function createApi(options: HttpOptions): Server {
       return
     }
     if (method === 'GET' && path === '/api/pools') return json(res, 200, { pools: await manager.pools() })
-    if (method === 'GET' && path === '/api/executions') return json(res, 200, { executions: manager.views() })
+    if (method === 'GET' && path === '/api/executions') return json(res, 200, { executions: await visible(req, manager.views()) })
     if (method === 'GET' && path === '/api/events') return events(req, res)
     if (method === 'GET' && path === '/api/config') return json(res, 200, { testRoutes: options.testRoutes, credentials: options.credentials?.describe() ?? null, roles: options.roles ?? [] })
 
@@ -80,6 +91,11 @@ export function createApi(options: HttpOptions): Server {
     if (method === 'POST' && command !== null && options.testRoutes) {
       const [, name, verb] = command
       if (!NAME.test(name!) && !/^[0-9a-f-]{36}$/.test(name!)) return json(res, 400, { accepted: false, reason: 'invalid name' })
+      // Another owner's execution is answered as one Agora does not know (docs/specs/executions.md, "The server").
+      const named = manager.views().find((view) => view.claimName === name || view.execution === name)
+      const unknown = named === undefined || !(await owns(req, named.execution))
+      if (unknown && verb === 'drop-bridge') return json(res, 404, { accepted: false, reason: `unknown execution: ${name!}` })
+      if (unknown && verb === 'probe-auth') return json(res, 404, { accepted: false, reason: 'unknown execution or no Pod' })
       if (verb === 'drop-bridge') return reply(res, manager.lab.dropBridge(name!, Number((await body(req)).pauseSeconds ?? 0)))
       if (verb === 'probe-auth') {
         const result = await manager.lab.probeAuth(name!)
@@ -95,13 +111,23 @@ export function createApi(options: HttpOptions): Server {
     json(res, 404, { accepted: false, reason: 'unknown route' })
   }
 
-  function events(req: IncomingMessage, res: ServerResponse): void {
+  async function events(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const snapshot = await visible(req, manager.views())
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' })
     const send = (data: unknown): void => {
       res.write(`data: ${JSON.stringify(data)}\n\n`)
     }
-    send({ type: 'snapshot', executions: manager.views() })
-    const unsubscribe = manager.subscribe((execution) => send({ type: 'execution', execution }))
+    send({ type: 'snapshot', executions: snapshot })
+    // The caller's executions alone, in the order they change. An execution's owner never changes: once one is the
+    // caller's, it is not asked again.
+    const mine = new Set<string>(snapshot.map((view) => view.execution))
+    let order = Promise.resolve()
+    const unsubscribe = manager.subscribe((execution) => {
+      order = order.then(async () => {
+        if (!mine.has(execution.execution) && (await owns(req, execution.execution).catch(() => false))) mine.add(execution.execution)
+        if (mine.has(execution.execution)) send({ type: 'execution', execution })
+      })
+    })
     const keepAlive = setInterval(() => res.write(': ping\n\n'), 20_000)
     req.on('close', () => {
       clearInterval(keepAlive)
