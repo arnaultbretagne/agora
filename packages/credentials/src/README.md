@@ -2,6 +2,6 @@
 
 | File | Role |
 | --- | --- |
-| `grants.ts` | The profile catalogue, their compilation into grants, the MCP servers they open, and `GrantSigner`, which signs them into an EdDSA JWT. |
+| `grants.ts` | The profile catalogue, their compilation into grants, the MCP servers they open, and `GrantSigner`, which signs them into an EdDSA JWT and gives the public half of its key, which checks them (`grantKey`). |
 | `limits.ts` | The accounts' limits: each provider's usage endpoint, read through the gateway with the grant Agora gives itself (`limits`), kept a few minutes; `GET /api/limits`. |
 | `index.ts` | What the package exports. |

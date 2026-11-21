@@ -2,7 +2,7 @@
 // profiles, compiled here into grants — host, anchored regex on path and query, methods — and signed
 // by Agora into a short JWT. The gateway checks each request against those grants, then sets the
 // broad credential it holds for the host. No entity per combination: the set lives in the JWT.
-import { createPrivateKey, randomUUID, sign, type KeyObject } from 'node:crypto'
+import { createPrivateKey, createPublicKey, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import type { Credentials } from '@agora/harness-bridge/outbound'
@@ -202,6 +202,17 @@ export interface GrantSignerOptions {
   readonly offered?: readonly string[]
 }
 
+/**
+ * What checks a grant Agora signed (docs/specs/mcp.md, "The caller"): the public half of its key, and the key id,
+ * issuer and audience it signs with. The gateway checks the grant first; Agora's MCP server checks it again.
+ */
+export interface GrantKey {
+  readonly publicKey: KeyObject
+  readonly keyId: string
+  readonly issuer: string
+  readonly audience: string
+}
+
 export class GrantSigner {
   private readonly options: GrantSignerOptions
   private key: KeyObject | null = null
@@ -222,6 +233,12 @@ export class GrantSigner {
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }
+  }
+
+  /** What checks the grants this signer signs: its key's public half, read from its file. */
+  async grantKey(): Promise<GrantKey> {
+    this.key ??= createPrivateKey(await readFile(this.options.keyFile))
+    return { publicKey: createPublicKey(this.key), keyId: this.options.keyId, issuer: this.options.issuer, audience: this.options.audience }
   }
 
   /**

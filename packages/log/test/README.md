@@ -16,6 +16,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `requests.test.ts` | A request an agent waits on — a permission — in its view, its row and the rows above it; who answered it: L154–L156. |
 | `accounts.test.ts` | The caller's account and its list, on the real server, with IDENTITY `none`: L75, L76. |
 | `identity.test.ts` | Who calls the real server with IDENTITY `oidc`: an issuer's ID token, service tokens, what proves nobody, the issuer out of reach, a configuration refused: L173–L178. |
+| `ownership.test.ts` | What a caller reaches on the real server: its own Workstreams, files, anchors, executions and events, another owner's answered as none, with IDENTITY `oidc`; with `none`, as before: L179–L184. |
 | `storage.test.ts` | Roles and migrations: L25, L27. |
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |
@@ -25,7 +26,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `restore.test.ts` | An anchor placed before `initialize`, onto an adapter restarted to read it: E29. |
 | `files.test.ts` | Files in R2: references, the bucket failing, anchors, the route, the sweep, the move: B1–B10. |
 | `continuing.test.ts` | A Workstream continued: the anchor found by harness, the exchanges it lacks given with the first prompt, a command left alone, the length bound, a restore refused: L57–L64. |
-| `support.ts` | A database per test; Agora in this process (`Lab`) or as the real lab process (`Server`); relays that cut a bridge connection or lose a COMMIT's reply. |
+| `support.ts` | A database per test; Agora in this process (`Lab`) or as the real lab process (`Server`); relays that cut a bridge connection or lose a COMMIT's reply; signers whose grants an MCP server takes, and a stand-in for the gateway's route `agora` where the mock agent calls it. |
 | `run.ts` | Provisions the template database and the three logins, runs the tests four files at once (`LOG_TEST_CONCURRENCY`, 1 for one by one), removes everything. |
 | `fixtures/` | The histories the tests replay. |
 
