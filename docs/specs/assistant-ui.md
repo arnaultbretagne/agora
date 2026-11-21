@@ -210,7 +210,7 @@ Who the person is (`log.md`, "HTTP").
 | Element | Rule |
 | --- | --- |
 | The account | At the foot of the sidebar, as assistant-ui's own demo has it: the person's e-mail, its initial on a plate. None without the proxy's identity. |
-| Opened | Upwards: **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
+| Opened | Upwards: **Notifications**, on or off (`notifications.md`, "The client"); **Sign out**, to `/oauth2/sign_out?rd=%2F`. |
 
 ## Context and limits
 
