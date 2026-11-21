@@ -2,7 +2,9 @@
 
 The harness images Agent Sandbox starts in its pools: each puts the bridge
 (`packages/harness-bridge`) in front of an ACP adapter. Each folder produces its own image, built
-from the root.
+from the root. A folder holding a Dockerfile is a harness for CI: it builds, tries and publishes its
+image as `agora-harness-<folder>` with nothing to add to a workflow. Its name is lowercase letters,
+digits and dashes.
 
 What differs between harnesses is declared by the image, not coded in the bridge: the adapter
 (`BRIDGE_ADAPTER`), the native directory an anchor saves (`BRIDGE_NATIVE_DIR`), and whether the

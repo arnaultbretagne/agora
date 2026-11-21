@@ -41,6 +41,15 @@ export interface LogHttpOptions {
   readonly owner?: string
 }
 
+/**
+ * The owners a request reaches (docs/specs/log.md, "Identity"): the one its caller has — `owner` for every caller, a
+ * preview's —; null, every owner, when it proves nobody in particular.
+ */
+export async function ownersOf(identity: Identity, req: IncomingMessage, owner?: string): Promise<readonly string[] | null> {
+  const proof = await identity.prove(req)
+  return proof.kind === 'caller' ? [owner ?? proof.caller.owner] : null
+}
+
 export async function logHttp(
   workstreams: Workstreams,
   req: IncomingMessage,
@@ -81,13 +90,16 @@ export async function logHttp(
     if (!value) throw new Error('invalid_body')
     return value
   }
+  // What the caller owns: its own Workstreams; anything with no identity.
+  const owned = await ownersOf(options.identity, req, options.owner)
   try {
     if (anchors) {
+      // Test only: the anchors of the caller's Workstreams; another's is one that does not exist.
       if (!options.testRoutes || req.method !== 'GET') return reply(404, { reason: 'unknown_route' }), true
-      if (url.pathname === '/api/anchors') return reply(200, { anchors: await store.anchorList() }), true
+      if (url.pathname === '/api/anchors') return reply(200, { anchors: await store.anchorList(owned) }), true
       const content = /^\/api\/anchors\/([^/]+)\/content$/.exec(url.pathname)
       if (!content) return reply(404, { reason: 'unknown_route' }), true
-      const anchor = await store.anchorBytes(uuid(content[1]))
+      const anchor = await store.anchorBytes(uuid(content[1]), owned)
       if (!anchor) return reply(404, { reason: 'unknown_anchor' }), true
       // The native files one after the other, readable in a browser tab.
       const bundle = parseBundle(new Uint8Array(anchor.content))
@@ -102,8 +114,6 @@ export async function logHttp(
     const caller = who === null ? undefined : (options.owner ?? who.owner)
     const email = who?.email ?? null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
-    // What the caller owns: its own Workstreams; anything with no identity.
-    const owned = who === null ? null : [caller!]
     if (file) {
       // docs/specs/files.md, "Reading a file": a file an entry of the caller's Workstreams names, streamed from R2.
       if (req.method !== 'GET') return reply(405, { reason: 'method_refused' }), true
@@ -199,6 +209,10 @@ export async function logHttp(
     if (!route) return reply(404, { reason: 'unknown_route' }), true
     const workstream = uuid(decodeURIComponent(route[1]!)),
       verb = route[2]
+    // docs/specs/log.md, "HTTP": a route naming a Workstream acts on the caller's alone, and answers another's as one
+    // that does not exist, so that an id tells nothing; with no identity, on any owner's.
+    const known = await workstreams.projections.belongs(workstream, owned)
+    if (owned !== null && !known) throw new Error('unknown_workstream')
     if (req.method === 'POST' && verb === 'commands') {
       const input = await body(),
         target = object(input.target),
@@ -212,7 +226,7 @@ export async function logHttp(
     if (req.method === 'GET' && verb === 'thread') return (await thread(workstreams, workstream, url, res), true)
     if (req.method === 'GET' && verb === 'read') {
       // docs/specs/search.md, "Read": a window of one of the caller's Workstreams' transcript.
-      if (!(await workstreams.projections.belongs(workstream, owned))) throw new Error('unknown_workstream')
+      if (!known) throw new Error('unknown_workstream')
       const value = (name: string, fallback: number, min: number, max: number) => {
         const raw = url.searchParams.get(name)
         if (raw === null || raw === '') return fallback
@@ -225,7 +239,7 @@ export async function logHttp(
     }
     if (req.method === 'GET' && verb === 'merge') {
       // docs/specs/merge.md, "The card": the pending card's state, read from GitHub.
-      if (!(await workstreams.projections.belongs(workstream, owned))) throw new Error('unknown_workstream')
+      if (!known) throw new Error('unknown_workstream')
       const state = workstreams.merges === null ? null : await workstreams.merges.state(workstream)
       return state === null ? reply(404, { reason: 'no_merge' }) : reply(200, state), true
     }

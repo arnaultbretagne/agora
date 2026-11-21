@@ -12,7 +12,8 @@ also opens the test routes and serves at `/test/` a bare page that plays the cas
 | `scripts/` | The live cases, played against the deployed server. |
 
 Ports: **8080** for the client, the API and the test page, **8081** for the anchor receiver (the
-only port open to sandboxes).
+only port open to sandboxes), **8082** for Agora's MCP server, which the gateway alone reaches and
+which takes only the grants this server signs (`docs/specs/mcp.md`, "The caller").
 
 | Variable | Default | Role |
 | --- | --- | --- |
@@ -30,8 +31,8 @@ only port open to sandboxes).
 | `ROLES_DIR` | `roles` | The role cards (`docs/specs/roles.md`, "Cards"). A file there that is no card stops the start. |
 | `ANCHOR_AUDIENCE` | `agora-anchors` | Expected audience of the Pods' projected token. |
 | `GATEWAY_PROXY` | — | The gateway as sandboxes see it, `host:port`. Without it, no credential can be attached. |
-| `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants. |
-| `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway. |
+| `GRANTS_KEY_FILE` | required with the gateway | Ed25519 private key that signs an execution's grants; its public half checks the grant every message to port 8082 carries. Without the gateway, port 8082 refuses every message. |
+| `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE` | `agora-grants-1`, `agora`, `agora-gateway` | The JWT's `kid` header, `iss` and `aud`, expected by the gateway and by port 8082. |
 | `AGORA_FAULT` | — | Tests only: `<point>[:<method>]` kills the process at that fault point (`packages/log/src/workstreams.ts`). |
 
 It exits non-zero when it cannot take the database's ownership, or loses it.
@@ -45,6 +46,9 @@ Every request to port 8080 but `GET /healthz` proves who calls (`docs/specs/log.
 | The browser | None of its own: oauth2-proxy, in front, passes the ID token Pocket-ID signed, `Authorization: Bearer`, refreshed before it expires. |
 | A script or a tool | `Authorization: Bearer <token>`, its service token: one file of `IDENTITY_TOKENS_DIR`, a JSON object with `token`, and `email` — it then reads and writes as that person — or `owner`, a UUID that no e-mail gives. `X-Forwarded-Email` grants nothing. |
 | With `IDENTITY` `none` | `X-Forwarded-Email` as it comes; without it, any owner, named by the request's `owner`. |
+
+A caller reaches its own Workstreams, their executions, files and anchors, and nothing of another owner's,
+answered as what does not exist (`docs/specs/log.md`, "HTTP").
 
 `scripts/live-cases.ts` takes its token from `AGORA_TOKEN`: one that stands for the cases' owner.
 

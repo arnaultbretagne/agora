@@ -225,11 +225,11 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | Route | Role |
 | --- | --- |
 | `GET /api/pools` | The catalogue: the `SandboxWarmPool`s carrying the `agora.bretagne.dev/harness` label, with their base profiles and their Session settings: the annotation `agora.bretagne.dev/session-config`, `id=value` pairs separated by commas, in order (a malformed pair is left out). Each Session of the pool starts with them (`log.md`, "Sessions"). A pool annotated `agora.bretagne.dev/purpose: testing` is listed with `testing`: kept for the tests, it is not offered by the screen. |
-| `GET /api/executions` | The executions followed: claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
-| `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full. |
+| `GET /api/executions` | The executions followed of the caller's Workstreams (`log.md`, "HTTP"): claim, readiness, deadline, Pod, launch type, bridge connection, bytes waiting. |
+| `GET /api/events` | SSE stream: the full state at the start, then each changed execution, in full; the caller's alone, as the list. |
 | `GET /api/config` | Whether the test routes are open, and the credential profiles on offer. |
 | `POST /anchors`, port **8081** | Receive the anchor pushed by a Pod. The only port open to sandboxes. |
-| `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone. |
+| `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone, each message proving its caller by the grant the gateway forwards. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
 (`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 3,600 s for
@@ -322,7 +322,9 @@ The `apps/server` deployable mounts the mechanics and the log, with PostgreSQL, 
 client (`assistant-ui.md`) on `agora.bretagne.dev`, behind Pocket-ID (admin group). With its test
 routes open (`TEST_ROUTES` `true`), it also serves the test page at `/test/`: a Workstream per
 execution, the commands, the thread, credentials, deadlines, anchors and ends. Besides the log's
-test routes (`log.md`, "HTTP"), three actions are reserved for tests:
+test routes (`log.md`, "HTTP"), three actions are reserved for tests. The two that name an execution,
+by its claim's name or its id, act only on an execution of the caller's Workstreams; another owner's
+is answered as one Agora does not know (`log.md`, "HTTP").
 
 | Route | Effect |
 | --- | --- |

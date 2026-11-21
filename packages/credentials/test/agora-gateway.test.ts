@@ -2,7 +2,7 @@
 // agentgateway 1.6.0, its release binary checked against its sha256, on fixtures/agora-gateway.yaml; tokens signed by
 // Agora's GrantSigner; the bridge's outbound proxy, which adds the token to each CONNECT; MCP messages sent as a
 // harness sends them to the server `mcpServers` names; and a stand-in for Agora's port 8082, which records every
-// message and the caller the gateway named.
+// message, the grant the gateway forwarded and the caller it named.
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
@@ -66,6 +66,8 @@ interface Seen {
   readonly method: string
   readonly path: string
   readonly execution: string | undefined
+  /** The `Authorization` the message reached Agora with: the grant the server checks (docs/specs/mcp.md, "The caller"). */
+  readonly authorization: string | undefined
   readonly body: string
 }
 
@@ -78,7 +80,8 @@ async function agora(): Promise<{ address: string; seen: Seen[]; close(): Promis
     req.on('data', (chunk: string) => (body += chunk))
     req.on('end', () => {
       const execution = req.headers['x-agora-execution']
-      seen.push({ method: req.method ?? '', path: req.url ?? '', execution: typeof execution === 'string' ? execution : undefined, body })
+      const authorization = req.headers.authorization
+      seen.push({ method: req.method ?? '', path: req.url ?? '', execution: typeof execution === 'string' ? execution : undefined, authorization, body })
       const id = (JSON.parse(body || '{}') as { id?: unknown }).id ?? null
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, result: { tools: [] } }))
     })
@@ -102,7 +105,8 @@ describe('Agora’s MCP server through agentgateway 1.6.0', { skip }, () => {
    */
   async function send(profiles: readonly string[], options: { address?: string; path?: string; headers?: Record<string, string> } = {}) {
     const label = `agora ${randomUUID()}`
-    outbound.set(await signer.mint({ label, ttlSeconds: 600, profiles, address: options.address ?? '127.0.0.1' }))
+    const credentials = await signer.mint({ label, ttlSeconds: 600, profiles, address: options.address ?? '127.0.0.1' })
+    outbound.set(credentials)
     const url = new URL(mcpServers(['agora:read'])[0]!.url)
     const proxy = new URL(outbound.url)
     const authority = `${url.hostname}:443`
@@ -134,7 +138,7 @@ describe('Agora’s MCP server through agentgateway 1.6.0', { skip }, () => {
       req.once('error', reject)
       req.end(body)
     })
-    return { label, status }
+    return { label, status, token: credentials.token }
   }
 
   before(async () => {
@@ -193,6 +197,24 @@ describe('Agora’s MCP server through agentgateway 1.6.0', { skip }, () => {
       ],
     )
     assert.ok(seen.every((s) => s.body.includes('"tools/list"')))
+  })
+
+  it('M15 with agora:read: the message reaches Agora with the grant its CONNECT carried as Authorization: Bearer, over an Authorization of the sandbox’s own, and its subject as x-agora-execution', async () => {
+    const count = server.seen.length
+    // Another execution's grant, as an agent that read one would send it, and a word of its own.
+    const other = (await signer.mint({ label: `agora ${randomUUID()}`, ttlSeconds: 600, profiles: ['agora:read'], address: '127.0.0.1' })).token
+    const sent = [
+      await send(['agora:read']),
+      await send(['agora:read'], { headers: { authorization: `Bearer ${other}` } }),
+      await send(['agora:read'], { headers: { authorization: 'Basic eDp5', 'x-agora-execution': `agora ${randomUUID()}` } }),
+    ]
+    assert.deepEqual(sent.map((s) => s.status), [200, 200, 200], output)
+    const seen = server.seen.slice(count)
+    assert.deepEqual(
+      seen.map((s) => [s.method, s.path, s.authorization, s.execution]),
+      sent.map((s) => ['POST', '/mcp', `Bearer ${s.token}`, s.label]),
+    )
+    assert.ok(seen.every((s) => s.authorization !== `Bearer ${other}`))
   })
 
   it('M8 without agora:read — anthropic, internet —, from another address, or on another path: 403 at the gateway, nothing reaches Agora', async () => {

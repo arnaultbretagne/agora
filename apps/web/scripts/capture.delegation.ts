@@ -9,17 +9,21 @@ import { writeFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import { createMcpServer, encode } from '../../../packages/log/src/index.ts'
-import { database, freePort, grants, Lab, until } from '../../../packages/log/test/support.ts'
+import { database, freePort, gatewayStandIn, grants, Lab, until } from '../../../packages/log/test/support.ts'
 
 test('capture the delegation fixture', async (t) => {
-  // Where the mock agent's `/spawn_agent` calls Agora's MCP server: the lab has no gateway (packages/mock-agent).
+  // Where the mock agent's `/spawn_agent` calls Agora's MCP server: the lab has no gateway (packages/mock-agent), a
+  // stand-in for its route forwards each call with the execution's grant.
   const port = await freePort()
-  process.env.AGORA_MOCK_MCP = `http://127.0.0.1:${String(port)}/mcp`
+  const signer = grants([])
+  const gateway = await gatewayStandIn(`http://127.0.0.1:${String(port)}/mcp`, async (execution) => signer.grantOf(execution))
+  process.env.AGORA_MOCK_MCP = gateway.url
   const db = await database()
-  const lab = await Lab.start({ db, credentials: grants([]).source, delegations: {} })
-  const mcp = createMcpServer(lab.workstreams)
+  const lab = await Lab.start({ db, credentials: signer.source, delegations: {} })
+  const mcp = createMcpServer(lab.workstreams, signer.key)
   await new Promise<void>((resolve) => mcp.listen(port, '127.0.0.1', resolve))
   t.after(async () => {
+    await gateway.close()
     await new Promise((resolve) => mcp.close(resolve))
     await lab.close()
     await db.drop()
