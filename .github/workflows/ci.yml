@@ -2,7 +2,8 @@
 # pushes only — builds and tries the server and the harness images, and publishes them by digest from
 # the base branch or a run by hand. infra-k8s pins the digests (apps/agora-sandboxes, apps/agora), never
 # a tag. A pull request publishes no image here: one labelled `preview` gets the server's from
-# preview.yml.
+# preview.yml. A branch's push holds no write on packages (this folder's README.md): its images are
+# built and tried by `try`, the same steps as `image` with a token that only reads them.
 #
 # Nothing is done twice (README.md, "Check and build"): after a merge, a tree already checked at the
 # pull request's head is not checked again; an image whose inputs already have one is not built again.
@@ -41,6 +42,8 @@ jobs:
       LOG_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # A merge whose tree is exactly its pull request's head, which a push run of this workflow passed:
       # the same files were checked there.
       - name: Already checked at the pull request's head?
@@ -74,9 +77,11 @@ jobs:
           npx -w @agora/web playwright install --only-shell chromium
           npm run check
 
+  # Builds, tries and publishes the images: on the base branch or a run by hand alone, the only runs
+  # whose token writes packages. Its env, matrix and steps are also `try`'s, below (YAML anchors).
   image:
     needs: check
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -85,12 +90,12 @@ jobs:
       # To sign and store the build's provenance (actions/attest-build-provenance).
       id-token: write
       attestations: write
-    # Published from the base branch or a run by hand; a branch's push builds and tries them only.
-    env:
+    # PUBLISH is true on the base branch or a run by hand, so always in this job; false in `try`.
+    env: &image-env
       PUBLISH: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
       NAME: ${{ matrix.name }}
       IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
-    strategy:
+    strategy: &image-matrix
       fail-fast: false
       matrix:
         include:
@@ -99,8 +104,10 @@ jobs:
           - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
           - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
           - { name: agora-harness-codex, dockerfile: harnesses/codex/Dockerfile, harness: true }
-    steps:
+    steps: &image-steps
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -209,6 +216,22 @@ jobs:
           path: digests/${{ matrix.name }}
           retention-days: 7
 
+  # A branch's push (agents push theirs): `image`'s env, matrix and steps, which publish nothing here
+  # (PUBLISH is false). Its token only reads packages, to find an image by its inputs: the branch's code
+  # those steps run — scripts/inputs.ts, the build, the images, the client — cannot push an image, so
+  # none can wait under the `inputs-` tag the base branch would then take as its own.
+  try:
+    needs: check
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To find an image by its inputs on ghcr.io.
+      packages: read
+    env: *image-env
+    strategy: *image-matrix
+    steps: *image-steps
+
   # Proposes the images just published to infra-k8s (README.md, "Images in the cluster"): one pull
   # request, kept up to date, for the base branch; one per branch for a run started by hand. Those whose
   # inputs did not change are left as they are. Merging stays the operator's.
@@ -237,6 +260,8 @@ jobs:
           fi
       - if: steps.token.outputs.ok == 'true'
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - if: steps.token.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
