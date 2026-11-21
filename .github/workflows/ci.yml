@@ -77,10 +77,34 @@ jobs:
           npx -w @agora/web playwright install --only-shell chromium
           npm run check
 
+  # The images `image` and `try` build: the server's, and one per folder of harnesses/ holding a Dockerfile
+  # (scripts/inputs.ts, `images()`, which propose-infra.ts reads too). A harness is added as a folder, never
+  # in this file: the App agents push with cannot change it.
+  images:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      include: ${{ steps.list.outputs.include }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: List the images
+        id: list
+        run: |
+          include=$(node scripts/inputs.ts --matrix)
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "- `\(.name)`: \(.dockerfile)"' <<<"$include" | tee -a "$GITHUB_STEP_SUMMARY"
+
   # Builds, tries and publishes the images: on the base branch or a run by hand alone, the only runs
   # whose token writes packages. Its env, matrix and steps are also `try`'s, below (YAML anchors).
   image:
-    needs: check
+    needs: [check, images]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
@@ -98,12 +122,7 @@ jobs:
     strategy: &image-matrix
       fail-fast: false
       matrix:
-        include:
-          - { name: agora-server, dockerfile: apps/server/Dockerfile, harness: false }
-          - { name: agora-harness-mock, dockerfile: harnesses/mock/Dockerfile, harness: true }
-          - { name: agora-harness-claude-code, dockerfile: harnesses/claude-code/Dockerfile, harness: true }
-          - { name: agora-harness-opencode, dockerfile: harnesses/opencode/Dockerfile, harness: true }
-          - { name: agora-harness-codex, dockerfile: harnesses/codex/Dockerfile, harness: true }
+        include: ${{ fromJSON(needs.images.outputs.include) }}
     steps: &image-steps
       - uses: actions/checkout@v4
         with:
@@ -221,7 +240,7 @@ jobs:
   # those steps run — scripts/inputs.ts, the build, the images, the client — cannot push an image, so
   # none can wait under the `inputs-` tag the base branch would then take as its own.
   try:
-    needs: check
+    needs: [check, images]
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

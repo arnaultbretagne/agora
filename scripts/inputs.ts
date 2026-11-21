@@ -4,6 +4,7 @@
 // compares it with the one deployed. No dependency: Node 24 and git.
 //
 //   node scripts/inputs.ts <image> [<commit>]   prints the image's fingerprint at that commit (HEAD)
+//   node scripts/inputs.ts --matrix              prints the images as ci.yml's matrix: name, dockerfile, harness
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -12,8 +13,12 @@ import { join } from 'node:path'
 /** Each image the CI publishes: its Dockerfile, and the harness it runs, if any. */
 export function images(): Map<string, { dockerfile: string; harness: string | null }> {
   const out = new Map<string, { dockerfile: string; harness: string | null }>([['agora-server', { dockerfile: 'apps/server/Dockerfile', harness: null }]])
-  for (const h of readdirSync('harnesses', { withFileTypes: true }))
-    if (h.isDirectory() && existsSync(join('harnesses', h.name, 'Dockerfile'))) out.set(`agora-harness-${h.name}`, { dockerfile: `harnesses/${h.name}/Dockerfile`, harness: h.name })
+  for (const h of readdirSync('harnesses', { withFileTypes: true })) {
+    if (!h.isDirectory() || !existsSync(join('harnesses', h.name, 'Dockerfile'))) continue
+    // The name reaches image tags and the CI's matrix: a registry's lowercase name, nothing a step could read as more.
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(h.name)) throw new Error(`harnesses/${h.name}: a harness folder is named in lowercase letters, digits and dashes`)
+    out.set(`agora-harness-${h.name}`, { dockerfile: `harnesses/${h.name}/Dockerfile`, harness: h.name })
+  }
   return out
 }
 
@@ -40,6 +45,10 @@ export function inputs(dockerfile: string, sha: string): string {
 
 if (import.meta.main) {
   const [image, sha = 'HEAD'] = process.argv.slice(2)
+  if (image === '--matrix') {
+    console.log(JSON.stringify([...images()].map(([name, { dockerfile, harness }]) => ({ name, dockerfile, harness: harness !== null }))))
+    process.exit(0)
+  }
   const found = image === undefined ? undefined : images().get(image)
   if (found === undefined) {
     console.error(`usage: node scripts/inputs.ts <${[...images().keys()].join('|')}> [<commit>]`)
