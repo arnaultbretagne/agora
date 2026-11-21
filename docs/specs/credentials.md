@@ -571,7 +571,7 @@ documentation, or are assumed, and the operator measures them on the cluster's l
 | The refresh token ends when revoked, after six months unused, or once the account holds more than 100 of this client's | Google's documentation | — |
 | An access token stays good until its expiry after a refresh | Assumed | The previous token used once after a refresh. |
 | What `loadCodeAssist` answers for the account: tier, project, and whether the subscription gives agy its quota | Not seen: the stand-in answered it | The first real turn (E34). |
-| agy loading the workspace's `AGENTS.md` | Not seen: in the stand-in's runs no rule reached the model's request, in a git repository or not, nor `~/.gemini/GEMINI.md` | The first real turn (E33). |
+| agy loading the workspace's `AGENTS.md` | Not seen: in the stand-in's runs no rule reached the model's request, in a git repository or not, nor `~/.gemini/GEMINI.md` | The first real turn (E35). |
 
 Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, its answer never seen.
 
