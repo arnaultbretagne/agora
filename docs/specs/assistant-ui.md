@@ -152,7 +152,7 @@ the composer itself. No arrow beside any; the same wide and on a phone.
 
 | Picker | Its trigger | Its accessible name and tooltip |
 | --- | --- | --- |
-| Harness | Its mark alone: Claude Code's, Codex's or OpenCode's; a robot for any other. Once the Workstream has an execution, the same mark, not a button. | `Harness:` and the harness's name; the name alone in its tooltip. |
+| Harness | Its mark alone: Claude Code's, Codex's, OpenCode's or Antigravity's, from @lobehub/icons-static-svg 1.95.1; a robot for any other. Once the Workstream has an execution, the same mark, not a button. | `Harness:` and the harness's name; the name alone in its tooltip. |
 | Model | The model's full name, ` · `, the effort ("Opus 5.5 · High"); the name alone when no effort is offered or picked; "Model" while the agent has given no current one. | `Model:` and what it shows. |
 | Role | A person alone, coral once a role is picked. | `Role:` and the role's name, or **No role**; the same alone in its tooltip. |
 | Access | A key alone, coral once anything is granted; no text and no count. | `Access:` and what is granted ("Access"). |
@@ -437,7 +437,7 @@ the screen.
 | `execution.ended` | "The sandbox has ended." |
 
 Harnesses are named as people name them: `claude-code` Claude Code, `codex` Codex, `opencode`
-OpenCode, `mock` Mock agent; another by its own name.
+OpenCode, `antigravity` Antigravity, `mock` Mock agent; another by its own name.
 
 ## The screen
 
@@ -636,6 +636,7 @@ What each registry element can receive from ACP is in `assistant-ui-elements.md`
 | U116 | In a browser on a touch screen with a fine pointer too (`any-pointer: fine`), as an iPad with a Magic Keyboard: a line typed, then Enter | Sent, as with a mouse: the message, the agent's answer, the composer empty. |
 | U117 | In a browser with a mouse or a trackpad, a text typed: Enter during an IME composition (`isComposing`); Enter as Safari sends the one that confirms it, `isComposing` false and keyCode 229; then a plain Enter; then Enter on the empty composer | The first two send nothing, the text kept; the plain Enter sends it, the agent's answer, the composer empty; on the empty composer, nothing sent. |
 | U118 | In a browser at 1280 × 800, then on a phone's screen (390 × 844, touch): an open Workstream's model and access pickers opened in turn, then a draft's harness, model, role and access pickers | Each list's top below its trigger's bottom; or, only where the room between its trigger's bottom and the screen's is less than the list's height, the whole list above its trigger. Each list's position, height and room below told in the run's output. Once started, the harness a mark that opens nothing, and no role picker. |
+| U119 | The harnesses `claude-code`, `codex`, `opencode`, `antigravity`, `mock` and another; `antigravity` offered as an access | Named Claude Code, Codex, OpenCode, Antigravity, Mock agent, and the other by its own name; a mark each for the first four, all different, none for the mock nor the other, which get the robot; the access named Antigravity. |
 
 **To be specified:** pagination of long threads; several operators, and who may read and write a
 Workstream; showing protocol elements (`acp`); model selection and slash commands; elements

@@ -18,6 +18,7 @@ import {
   formOf,
   numberFits,
   accessEntries,
+  harnessName,
   accessGranted,
   accessTitle,
   accessState,
@@ -53,6 +54,7 @@ import {
   type Received,
   type WorkstreamView,
 } from '../src/agora/view.ts'
+import { HARNESS_MARKS } from '../src/screen/harness-marks.ts'
 
 const fixture = decode(await readFile(new URL('fixtures/mock.json', import.meta.url), 'utf8')) as {
   workstream: string
@@ -1283,4 +1285,18 @@ test('U103 the forms of Claude Code and Codex, as assistant-ui holds them: one q
   assert.equal(formFor(formPart(askUserQuestion(ASKS.several!, 's', 'toolu_3')).state, 'toolu_3')?.id, 'form')
   // A form names the composer's reason.
   assert.equal(composerOf(one.state, { ...workstreamOf(one.state, MESSAGES_WS), state: 'ready' }).reason, 'Answer the question above.')
+})
+
+test('U119 harnesses as people name them, each with its mark: Claude Code, Codex, OpenCode, Antigravity; the mock and another by name, with no mark', () => {
+  const named = ['claude-code', 'codex', 'opencode', 'antigravity', 'mock', 'other-harness'].map((h) => [h, harnessName(h)])
+  assert.deepEqual(named, [['claude-code', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode'], ['antigravity', 'Antigravity'], ['mock', 'Mock agent'], ['other-harness', 'other-harness']])
+  assert.equal(harnessName(null), 'the agent')
+  assert.deepEqual(Object.keys(HARNESS_MARKS), ['claude-code', 'codex', 'opencode', 'antigravity'])
+  // One SVG path each, on the 24 × 24 box, all different; the mock and the rest get the robot.
+  for (const [harness, d] of Object.entries(HARNESS_MARKS)) assert.match(d, /^M[0-9.\s,a-zA-Z-]+$/, harness)
+  assert.equal(new Set(Object.values(HARNESS_MARKS)).size, 4)
+  assert.equal(HARNESS_MARKS.mock, undefined)
+  assert.equal(HARNESS_MARKS['other-harness'], undefined)
+  // Its service, offered as an access, by its name.
+  assert.equal(accessEntries(['antigravity'])[0]!.name, 'Antigravity')
 })

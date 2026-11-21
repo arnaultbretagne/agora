@@ -36,6 +36,8 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | R26 | 2026-11-04 | `ea042cb` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:3def865e…`; the pools `claude-code-48de2cb17779` (claude-agent-acp 0.100.0, claude-code 2.1.316), `codex-7fc81aec7cce` (codex-acp 2.5.0, codex 0.165.0) and `opencode-9ed4fac4159e` (1.18.34), each harness with its pool's default model; the cases' owner. C3, on the new adapter. |
 | R27 | 2026-11-04 | `fd0c720` | local | `npm run check`, all green: Node 24.20.0, PostgreSQL 17.11; C65 and C66 on real delegations in the lab. |
 | R28 | 2026-11-11 | `c27561b` | live | `apps/server/scripts/live-cases.ts` against production: server `agora-server@sha256:6ffb1fdc…`; the pools `claude-code-220dcdea6c5d` (claude-agent-acp 0.106.0, claude-code 2.1.322), `codex-156dc39bef82` (codex-acp 2.6.0, codex 0.166.0) and `opencode-8ec41e3d2297` (1.19.5), each harness with its pool's default model; the cases' owner. C3, on the new harnesses (agora #204, infra-k8s #358). |
+| R29 | 2026-11-20 | `e5f8871` | unit | `npm test -w @agora/credentials`, all green: Node 24.22.3. The gateway is not run. |
+| R30 | 2026-11-21 | `0cf2560` | local | `ci.yml` run 44897745908, job `try (agora-harness-antigravity, harnesses/antigravity/Dockerfile, true)`, on GitHub's runner: the image built from that commit — the tarball checked against its sha256 and sha512, `agy --version` 1.5.13 —, then started read-only, non-root, HOME on a tmpfs, every capability dropped: `/healthz` "adapter alive", `/info` 401. |
 
 ## Cases
 
@@ -156,6 +158,10 @@ The evidence behind the acceptance cases of `specs/credentials.md`.
 | C65 | — | local | R25 | proven | A Create naming `agora:submit`: `unknown_profile`; a Scope naming it: `unknown_profile`; a delegate asked for a result: its execution's profiles `[agora:submit]`. |
 | C65 | — | local | R27 | proven | A Create naming `agora:submit`: `unknown_profile`; a Scope naming it: `unknown_profile`; a delegate's execution: `[agora:submit]`. |
 | C66 | — | local | R27 | proven | In a delegate, the person's Scope keeping `agora:submit`: accepted. Ended, their Create keeping it: accepted, its profiles `[agora:submit]`. |
+| C54 | — | local | R30 | proven | The antigravity image: `RUN kubectl version --client` printed `Client Version: v1.36.5` in its build. The other images are not part of this run. |
+| C71 | — | unit | R29 | proven | `/v1internal:streamGenerateContent?alt=sse`, `loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuotaSummary` and `GET /oauth2/v2/userinfo` covered; `/v1internal`, `/v1internal:`, `/v1internal:loadCodeAssist/x`, `/v1/projects`, `/`, a `POST` and a query on the user info, `/oauth2/v3/tokeninfo`, `/drive/v3/files`, `oauth2.googleapis.com/token`, `play.googleapis.com/log`, `cloudcode-pa.googleapis.com`, `generativelanguage.googleapis.com` refused; no grant on `*`; a base profile. |
+| C72 | — | cluster | — | not verified | Neither the routes, the cluster's Google login nor its refresher exist. |
+| C73 | — | cluster | — | not verified | As C72. |
 
 The partial verdicts are tracked in #107.
 

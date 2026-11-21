@@ -72,6 +72,8 @@ export const KUBERNETES_HOST = 'kubernetes.agora.internal'
  * gateway's `agora` route knows it, which sends it to the server's port for the gateway alone.
  */
 export const AGORA_MCP_HOST = 'mcp.agora.internal'
+/** Cloud Code's endpoint, the one agy 1.5.13 calls by default (its `--cloud_code_endpoint`). */
+export const ANTIGRAVITY_HOST = 'daily-cloudcode-pa.googleapis.com'
 const AGORA: McpServer = { type: 'http', name: 'agora', url: `https://${AGORA_MCP_HOST}/mcp`, headers: [] }
 const AGORA_MCP_GRANT: Grant = { host: AGORA_MCP_HOST, path: '^/mcp$', methods: ['GET', 'POST', 'DELETE'] }
 /** A repository's write, which opens `propose_merge` for it (docs/specs/merge.md). */
@@ -96,6 +98,14 @@ export function compileProfile(profile: string): Grant[] {
   // ChatGPT, for codex: only its backend's codex and account paths — the session reaches the whole
   // account, conversations included.
   if (profile === 'chatgpt') return [{ host: 'chatgpt.com', path: '^/backend-api/(codex|wham)(/[^?]*)?(\\?.*)?$' }]
+  // Google's Antigravity, for agy, on the cluster's own Google login: Cloud Code's internal API, where agy infers and
+  // reads its tier, models and quota, and the account's user info. The login's token reaches the account's whole
+  // Google Cloud: nothing else of googleapis.com, and never the token endpoint, so nothing in the sandbox refreshes it.
+  if (profile === 'antigravity')
+    return [
+      { host: ANTIGRAVITY_HOST, path: '^/v1internal:[A-Za-z]+(\\?.*)?$' },
+      { host: 'www.googleapis.com', path: '^/oauth2/v2/userinfo$', methods: ['GET'] },
+    ]
   // The Internet: `*` stands for any host the gateway has no route of its own for, reached with no
   // credential. The routes with a credential compare the grant's host with the request's, so this
   // grant never opens them; GitHub's public routes read `*` too, for what anyone may read there.
@@ -145,7 +155,7 @@ const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
 }
 
 /** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
-export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt'])
+export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt', 'antigravity'])
 
 /** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
 export const BASE_PROFILES_ANNOTATION = 'agora.bretagne.dev/base-profiles'
@@ -229,7 +239,7 @@ export class GrantSigner {
   describe(): { proxy: string; profiles: string[]; base: string[]; offered: string[] } {
     return {
       proxy: this.options.proxy,
-      profiles: ['anthropic', 'zai', 'chatgpt', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
+      profiles: ['anthropic', 'zai', 'chatgpt', 'antigravity', 'internet', 'github:<owner>/<repo>:read', 'github:<owner>/<repo>:review', 'github:<owner>/<repo>:write', 'vault:read', 'vault:write', 'kubernetes:read', 'previews'],
       base: [...BASE_PROFILES],
       offered: [...this.offered],
     }
