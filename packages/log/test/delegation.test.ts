@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { keys, mockBridge } from '@agora/testkit'
 import { exchangesOf } from '../src/catch-up.ts'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { core, createMcpServer, delegationOf, Delegations, loadRoles, LogStore, object, parseRole, ROLE_META, type Entry, type ListRow, type Role } from '../src/index.ts'
 import { cluster, database, expire, FakeKube, freePort, grants, Lab, lines, PgRelay, Server, serverGrants, sleep, until, type LabOptions } from './support.ts'
@@ -36,7 +37,7 @@ async function started(
   const url = `http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`
   granting.set(url, async (execution) => signer.grantOf(execution))
   // The Lab in `lab` when the test ends is closed: a test that restarts Agora puts the new one there.
-  const context = { lab, db, url, ws: '', execution: '', delegations: lab.workstreams.delegations! }
+  const context = { lab, db, url, signer, ws: '', execution: '', delegations: lab.workstreams.delegations! }
   t.after(async () => {
     await new Promise((resolve) => mcp.close(resolve))
     await context.lab.close()
@@ -60,6 +61,8 @@ async function client(t: T, url: string, execution: string): Promise<Client> {
 }
 
 const text = (result: unknown) => (result as Text).content.map((c) => c.text).join('\n')
+/** `search`'s parameters: every execution lists it, holding `agora:read` (docs/specs/credentials.md, "Default profiles"). */
+const SEARCH_PARAMETERS = ['pattern', 'output_mode', 'ignore_case', 'before', 'after', 'context', 'head_limit', 'offset', 'tools', 'workstream']
 const delegateOf = (answer: string) => /^started ([0-9a-f-]{36}) · /.exec(answer)?.[1] ?? assert.fail(`not started: ${answer}`)
 const elements = async (lab: Lab, ws: string, type: string) =>
   (await lab.workstreams.projections.objects(ws)).filter((o) => o.kind === 'element' && o.object.type === type).map((o) => o.object)
@@ -151,7 +154,23 @@ test('D6 rights beyond the delegator’s, then Approve: the call held, an approv
   assert.match(String(approval?.text), /Rights beyond the caller's: `internet`/)
   assert.equal((await lab.command(ws, 'Answer', { question: ask.position }, { optionId: 'approve' })).accepted, true)
   const delegate = delegateOf(text(await call))
-  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['internet', 'agora:submit'])
+  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['internet', 'agora:submit', 'agora:read', 'previews'])
+})
+
+test('C74 a spawn_agent giving internet, within the delegator’s rights: the delegate’s execution holds agora:read and previews after internet and agora:submit, in the log, its token and its bridge’s access.json', async (t) => {
+  const { lab, url, signer, execution } = await started(t, ['agora:delegate', 'internet'])
+  const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: 'any', harness: 'mock', rights: ['internet'] } })))
+  const own = ['internet', 'agora:submit', 'agora:read', 'previews']
+  const create = (await kinds(lab, delegate, 'command')).find((x) => x.content.kind === 'Create')!
+  assert.deepEqual((create.content.body as { profiles?: unknown }).profiles, own, 'recorded with the command')
+  const e = await until('its Session', async () => ((await lab.state(delegate)).current?.session ? (await lab.state(delegate)).current : null))
+  assert.deepEqual(e.profiles, own)
+  const view = (await lab.workstreams.projections.objects(delegate)).find((o) => o.kind === 'workstream')!.object
+  assert.deepEqual(view.profiles, own, 'the Workstream view')
+  assert.deepEqual(signer.minted.filter((m) => m.label === `agora ${e.id}`).map((m) => [...m.profiles]), [own])
+  const bridge = lab.kube.bridges.get(lab.executions.claimOf(e.id)!.status!.sandbox!.name!)!
+  const claims = JSON.parse(readFileSync(join(bridge.home, '.agora', 'access.json'), 'utf8')) as { sub: string; profiles: string[] }
+  assert.deepEqual([claims.sub, claims.profiles], [`agora ${e.id}`, own])
 })
 
 test('D7 the person writes while the approval waits: refused with the words; no prompt sent; no delegate', async (t) => {
@@ -923,7 +942,7 @@ test('C66 the person, in a delegate: a Scope, then once its execution ended a Cr
   await expire(lab.kube, e.claimName)
   await until('it ended', async () => (await lab.state(delegate)).current?.ended, 30_000)
   assert.ok((await lab.command(delegate, 'Create', {}, { pool: 'mock-test', profiles: ['agora:submit'] })).accepted)
-  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['agora:submit'])
+  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['agora:submit', 'agora:read', 'previews'])
 })
 
 test('C65 a Create, then a Scope, naming agora:submit; a delegate: unknown_profile both times; the delegate’s execution holds it, given by Agora', async (t) => {
@@ -932,7 +951,7 @@ test('C65 a Create, then a Scope, naming agora:submit; a delegate: unknown_profi
   assert.deepEqual(await lab.command(other, 'Create', {}, { pool: 'mock-test', profiles: ['agora:submit'] }), { accepted: false, reason: 'unknown_profile' })
   assert.deepEqual(await lab.command(ws, 'Scope', { execution }, { profiles: ['agora:delegate', 'agora:submit'] }), { accepted: false, reason: 'unknown_profile' })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: 'any', harness: 'mock' } })))
-  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['agora:submit'])
+  assert.deepEqual((await lab.state(delegate)).current?.profiles, ['agora:submit', 'agora:read', 'previews'])
 })
 
 test('S13 a delegate’s transcript, its delegator’s message first; its delegator’s, holding its messages, as its own turn and sent into a turn: who wrote in each header; Agora’s line in none; their lines of kind user, found', async (t) => {
@@ -1137,7 +1156,7 @@ test('L127 a Write of Agora’s during a turn, to an agent that says it: one ste
   assert.match(exchange!.agent, new RegExp(`\\[during this turn: From your delegate ${delegate} .*\\n?into the turn\\]`))
 })
 
-test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alone, as its Session opens, before its instructions; from one holding both: the five tools, list_agents alone read-only; send_message alone; the five, each once', async (t) => {
+test('M10 tools/list with agora:delegate; from a delegate given no right, as its Session opens, before its instructions; from one holding both: the five tools, list_agents alone read-only, then search and read; send_message, then search and read; the five, each once, then search and read', async (t) => {
   const { lab, url, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const tools = (await c.listTools()).tools
@@ -1147,17 +1166,19 @@ test('M10 tools/list with agora:delegate; from a delegate, with agora:submit alo
     ['stop_agent', undefined, ['to'], ['to']],
     ['list_agents', true, [], undefined],
     ['answer_agent', undefined, ['to', 'request', 'option', 'content', 'decline'], ['to', 'request']],
+    ['search', true, SEARCH_PARAMETERS, ['pattern']],
+    ['read', true, ['workstream', 'offset', 'limit'], ['workstream']],
   ])
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 3', harness: 'mock' } })))
   // As its Session opens: what a harness listing its tools once is given (Codex); nothing of it depends on its instructions.
   const opened = await until('the delegate’s Session', async () => ((await lab.state(delegate)).current?.session ? (await lab.state(delegate)).current : null))
   const listed = (await (await client(t, url, opened.id)).listTools()).tools
-  assert.deepEqual(listed.map((x) => [x.name, Object.keys(x.inputSchema.properties ?? {}), x.inputSchema.required]), [['send_message', ['to', 'message'], ['to', 'message']]])
+  assert.deepEqual(listed.map((x) => [x.name, Object.keys(x.inputSchema.properties ?? {}), x.inputSchema.required]), [['send_message', ['to', 'message'], ['to', 'message']], ['search', SEARCH_PARAMETERS, ['pattern']], ['read', ['workstream', 'offset', 'limit'], ['workstream']]])
   // A delegate that may delegate holds `send_message` by both its rights: listed once.
   const both = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 3', harness: 'mock', rights: ['agora:delegate'] } })))
   const holder = await until('its Session', async () => ((await lab.state(both)).current?.session ? (await lab.state(both)).current : null))
-  assert.deepEqual(holder.profiles, ['agora:delegate', 'agora:submit'])
-  assert.deepEqual((await (await client(t, url, holder.id)).listTools()).tools.map((x) => x.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent'])
+  assert.deepEqual(holder.profiles, ['agora:delegate', 'agora:submit', 'agora:read', 'previews'])
+  assert.deepEqual((await (await client(t, url, holder.id)).listTools()).tools.map((x) => x.name), ['spawn_agent', 'send_message', 'stop_agent', 'list_agents', 'answer_agent', 'search', 'read'])
 })
 
 test('M11 a spawn_agent call Agora holds: an SSE stream, progress then the answer; another message, one JSON answer', async (t) => {
@@ -1175,7 +1196,7 @@ test('M11 a spawn_agent call Agora holds: an SSE stream, progress then the answe
   assert.equal((await projected(lab, ws, 'question', (q) => q.status !== 'pending'))[0]?.status, 'expired')
 })
 
-test('M12 stop_agent, list_agents and answer_agent from a delegate with agora:submit alone; delegate and submit, the names of an earlier contract; send_message to a delegate of its own, scoped down to agora:submit: not_allowed each time, nothing done; not_a_delegate', async (t) => {
+test('M12 stop_agent, list_agents and answer_agent from a delegate given no right; delegate and submit, the names of an earlier contract; send_message to a delegate of its own, scoped down to agora:submit: not_allowed each time, nothing done; not_a_delegate', async (t) => {
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'])
   const c = await client(t, url, execution)
   const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 5', harness: 'mock' } })))
