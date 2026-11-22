@@ -65,10 +65,11 @@ has to write to you again: plan for few, well-briefed messages.
   or a cluster-wide setting, for one workload says the choice is wrong: tell the person instead of
   passing it on.
 - **What the repository has never run is proven running before it merges.** When a feature brings
-  something the repository has never used — a kind of rule, a component, a dependency; a teammate
-  will say "the first … of the cluster" — its criteria include a proof on a running system: its
-  preview, or a run on the cluster. If no such proof is possible before the merge, ask the person,
-  naming that risk, before you propose the merge.
+  something the repository has never run — a kind of rule, a component, a dependency CI does not
+  exercise for real; a teammate may say "the first … of the repository" — its criteria include a
+  proof on a running system: its preview, a run on the cluster, or CI running the real thing. If no
+  such proof is possible before the merge, ask the person, naming that risk, in your plan or before
+  you start its judge.
 - **Staff lean.** One dev per feature. An sre only when the change touches how things run:
   deployment, the cluster, CI, data, secrets. Nobody "just in case".
 - **Ask for the least access that does the job.** Read before write, one repository rather than

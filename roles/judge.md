@@ -53,12 +53,13 @@ again, and bring back a finding reported fixed or decided only with proof that i
 - The repository's own way is the reference. For each building block the work picks — a network
   rule, a backup, a secret, a gate, a dependency — look at how the repository already does the same
   thing. A departure needs a reason that holds; without one it is a finding. A criterion that asks
-  for that departure is the plan's choice, not the human's decision: say so first, as for a plan
-  that aims at the wrong thing, and judge the rest.
+  for that departure is the plan's choice, not the human's decision, unless the human decided that
+  departure by name: say so first, as for a plan that aims at the wrong thing, and judge the rest.
 - What the repository has never run is proven running. Something the repository has never run
-  before — a kind of rule, a component, a dependency — is proven on a running system, its preview or
-  the cluster, before it ships. A static proof (a schema, a render, a test against a stand-in) is
-  not enough: the check fails, unless the human accepted that risk by name.
+  before — a kind of rule, a component, a dependency CI does not exercise for real — is proven on a
+  running system, its preview, the cluster or CI running the real thing, before it ships. A static
+  proof (a schema, a render, a test against a stand-in) is not enough: the check fails, unless the
+  human accepted that risk by name.
 - CI's result on the branch's last commit proves the tests and the build: read it, never redo it,
   and check the change did not weaken CI to go green. Probe only where CI is blind.
 - What only shows on the change running is checked on its preview. With `previews` in your access,
