@@ -481,7 +481,7 @@ test('U34 an access picked in the draft: carried by the Create, shown once the S
   await page.waitForURL(/\/w\/[0-9a-f-]{36}$/)
   await thread(page).getByText('Echo #1: with an access.').waitFor()
   const create = (await entriesOf(idOf(page))).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
-  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write', 'github:owner/b:read', 'internet'])
+  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:read', 'previews'])
   assert.equal(await valueOf(accessPicker(page)), 'Internet, GitHub')
 })
 
@@ -496,7 +496,7 @@ test('U35 another access picked in an open Workstream: Scope sent with the whole
   assert.equal(await valueOf(accessPicker(page)), 'Internet, GitHub, agora')
   await until('both Scopes', async () => (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').length === 2)
   const scopes = (await entriesOf(id)).filter((e) => e.kind === 'command' && e.content.kind === 'Scope').map((e) => e.content.body)
-  assert.deepEqual(scopes, [{ profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet'] }, { profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:delegate'] }])
+  assert.deepEqual(scopes, [{ profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:read', 'previews'] }, { profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:delegate', 'agora:read', 'previews'] }])
   await send(page, 'after the access')
   await thread(page).getByText('Echo #2: after the access.').waitFor()
   assert.equal(await valueOf(accessPicker(page)), 'Internet, GitHub, agora')
@@ -520,7 +520,7 @@ test('U44 the Internet: a right among the others, on in a draft; off, the Create
   await thread(page).getByText('Echo #1: without the internet.').waitFor()
   const id = idOf(page)
   const create = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
-  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write', 'github:owner/b:read'])
+  assert.deepEqual((create.content.body as { profiles: unknown }).profiles, ['github:owner/a:write', 'github:owner/b:read', 'agora:read', 'previews'])
   await accessPicker(page).click()
   assert.equal(await internetSwitch(page).getAttribute('aria-checked'), 'false', 'the execution\'s own')
   await internetSwitch(page).click()
@@ -528,7 +528,7 @@ test('U44 the Internet: a right among the others, on in a draft; off, the Create
   await page.keyboard.press('Escape')
   await until('the Scope', async () => (await entriesOf(id)).some((e) => e.kind === 'command' && e.content.kind === 'Scope'))
   const scope = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Scope')!
-  assert.deepEqual(scope.content.body, { profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet'] })
+  assert.deepEqual(scope.content.body, { profiles: ['github:owner/a:write', 'github:owner/b:read', 'internet', 'agora:read', 'previews'] })
   await send(page, 'with the internet')
   await thread(page).getByText('Echo #2: with the internet.').waitFor()
   assert.equal(await valueOf(accessPicker(page)), 'Internet, GitHub', 'once the view has it')
@@ -2038,7 +2038,7 @@ test('U93 lead picked in a draft, a first message: the Create carries the role, 
   assert.deepEqual(posted, [{ kind: 'Create', body: { pool: 'claude-test', settings: { model: 'mock-large', effort: 'high' }, profiles: ['internet', 'agora:delegate'], role: 'lead', prompt: [{ type: 'text', text: 'lead the first task' }] } }])
   const create = (await entriesOf(id)).find((e) => e.kind === 'command' && e.content.kind === 'Create')!
   const kept = create.content.body as { pool: string; role: string; settings: unknown; profiles: unknown }
-  assert.deepEqual([kept.pool, kept.role, kept.settings, kept.profiles], ['claude-test', 'lead', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }], ['internet', 'agora:delegate']])
+  assert.deepEqual([kept.pool, kept.role, kept.settings, kept.profiles], ['claude-test', 'lead', [{ id: 'model', value: 'mock-large' }, { id: 'effort', value: 'high' }], ['internet', 'agora:delegate', 'agora:read', 'previews']])
   // Started: the role in the header, before the harness; no role picker, the other pickers the Session's own.
   await stateLabel(page, 'ready').waitFor()
   assert.equal(await page.locator('header [data-workstream-role]').innerText(), 'lead')

@@ -311,9 +311,10 @@ export function previewKeys(): { privateKey: KeyObject; publicKey: KeyObject } {
 /**
  * What a preview's access picker offers (docs/specs/preview.md, "The offer"): what each of its entries folds,
  * the repositories invented. Said by `GET /api/config` alone: nothing signs for it, and an execution
- * given any of them reaches no more than one given none.
+ * given any of them reaches no more than one given none. Never the default profiles, every execution's already
+ * (docs/specs/credentials.md, "Default profiles").
  */
-export const PREVIEW_OFFERED = ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:read', 'agora:delegate', 'previews'] as const
+export const PREVIEW_OFFERED = ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'] as const
 
 /** The offer as the configuration says it: no proxy, no profile of its own, and never a token. */
 export function previewOffer(): CredentialSource {
