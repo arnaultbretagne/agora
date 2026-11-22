@@ -42,6 +42,10 @@ export const PRODUCTION = [
   'IDENTITY_ISSUER',
   'IDENTITY_AUDIENCE',
   'IDENTITY_TOKENS_DIR',
+  'PUSH_VAPID_PUBLIC_KEY',
+  'PUSH_VAPID_PRIVATE_KEY',
+  'PUSH_SUBJECT',
+  'PUBLIC_URL',
 ] as const
 
 /** The preview's database: `PREVIEW_DATABASE_URL`, its owner's login; refused beside anything of production. */

@@ -16,7 +16,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { FakeS3, keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
-import { Delegations, Files, Identity, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
+import { Delegations, Files, Notifications, type NotificationsOptions, Identity, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
 
 export const POOL = 'mock-test'
 
@@ -249,6 +249,8 @@ export interface LabOptions {
   readonly executions?: Partial<ManagerOptions>
   /** The delegations' engine, as the server attaches it: through its start, and each restart's. */
   readonly delegations?: ConstructorParameters<typeof Delegations>[1]
+  /** The notifications' engine (docs/specs/notifications.md), as the server attaches it: through its start, and each restart's. */
+  readonly notifications?: NotificationsOptions
   /** The files' bucket (docs/specs/files.md); the file's shared one by default. */
   readonly s3?: FakeS3
 }
@@ -314,6 +316,7 @@ export class Lab {
       ...options.workstreams,
     })
     if (options.delegations) new Delegations(this.workstreams, options.delegations)
+    if (options.notifications) new Notifications(this.workstreams, options.notifications)
   }
 
   static async start(options: LabOptions): Promise<Lab> {

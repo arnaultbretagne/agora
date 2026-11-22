@@ -48,6 +48,73 @@ export type ListRow = {
   changedAt: string
 }
 export const LIST_PAGE = 50
+
+/** A card that became pending for the person in a run (docs/specs/notifications.md, "What notifies"). */
+export type Card = {
+  workstream: string
+  position: string
+  kind: 'form' | 'approval' | 'merge'
+  /** The Workstream's title. */
+  title: string
+  /** What the card asks: the form's message, the Ask's title. */
+  text: string
+  /** An approval's `expiresAt`; null for the others. */
+  expiresAt: string | null
+}
+/** Where the cards a run makes pending go, in its transaction, then once it has committed (docs/specs/notifications.md). */
+export interface CardSink {
+  write(client: PoolClient, cards: readonly Card[]): Promise<void>
+  committed(): void
+}
+type Asked = { views: Map<string, { question: unknown; request: unknown }>; forms: Set<string> }
+
+/** What a fold waits on: each view's question and request, and the forms it holds. */
+function askedOf(objects: ReadonlyMap<string, ProjectedObject>, workstream: string): Asked {
+  const out: Asked = { views: new Map(), forms: new Set() }
+  for (const [key, item] of objects)
+    if (item.kind === 'workstream') out.views.set(item.workstream ?? workstream, { question: item.object.question ?? null, request: item.object.request ?? null })
+    else if (item.kind === 'element' && item.object.type === 'elicitation') out.forms.add(key)
+  return out
+}
+
+/**
+ * The cards the views changed by a run make pending for the person (docs/specs/notifications.md, "What notifies"): a
+ * question that is an approval or a merge card, taken by the view; a form, taken by the view's `request`, unless the
+ * Workstream is a delegate's, whose forms go to its delegator; a native sub-stream's form, once its element is pending.
+ */
+function pendingCards(objects: ReadonlyMap<string, ProjectedObject>, workstream: string, before: Asked, views: ReadonlyMap<string, Record<string, unknown>>, changed: ReadonlySet<string>): Card[] {
+  const cards: Card[] = []
+  // A native sub-stream's view names no request: its form is its own once its element is, whoever hosts it.
+  for (const key of changed) {
+    const item = objects.get(key)
+    if (item?.kind !== 'element' || item.workstream === undefined || item.workstream === workstream || before.forms.has(key)) continue
+    const form = item.object
+    if (form.type !== 'elicitation' || form.status !== 'pending' || form.declined !== undefined) continue
+    let title = ''
+    for (const v of objects.values()) if (v.kind === 'workstream' && v.workstream === item.workstream) title = typeof v.object.title === 'string' ? v.object.title : ''
+    const params = form.params as Record<string, unknown> | undefined
+    cards.push({ workstream: item.workstream, position: String(form.requestPosition), kind: 'form', title, text: typeof params?.message === 'string' ? params.message : '', expiresAt: null })
+  }
+  for (const [target, view] of views) {
+    const prior = before.views.get(target)
+    const title = typeof view.title === 'string' ? view.title : ''
+    const element = (match: (o: Record<string, unknown>) => boolean) => {
+      for (const item of objects.values()) if (item.kind === 'element' && (item.workstream ?? workstream) === target && match(item.object)) return item.object
+      return undefined
+    }
+    if (typeof view.question === 'string' && view.question !== prior?.question) {
+      const q = element((o) => o.type === 'question' && o.position === view.question)
+      if (q && (q.kind === 'approval' || q.kind === 'merge'))
+        cards.push({ workstream: target, position: view.question, kind: q.kind, title, text: String(q.title ?? ''), expiresAt: q.kind === 'approval' ? String(q.expiresAt ?? '') : null })
+    }
+    if (typeof view.request === 'string' && view.request !== prior?.request && !view.delegation) {
+      const form = element((o) => o.type === 'elicitation' && o.requestPosition === view.request && o.declined === undefined)
+      const params = form?.params as Record<string, unknown> | undefined
+      if (form) cards.push({ workstream: target, position: view.request, kind: 'form', title, text: typeof params?.message === 'string' ? params.message : '', expiresAt: null })
+    }
+  }
+  return cards
+}
 /** The states of a Workstream with an execution: those a folded parent counts as live. */
 const LIVE = new Set(['starting', 'ready', 'interrupted'])
 
@@ -134,6 +201,8 @@ export class Projections {
   readonly store: LogStore
   readonly registry: Map<string, Projector>
   private readonly memory = new Map<string, { version: string; projection: Projection }>()
+  /** The notifications' engine (docs/specs/notifications.md), attached by the server: the cards a run makes pending. */
+  cards: CardSink | null = null
   constructor(store: LogStore, projectors: Projector[] = [core]) {
     this.store = store
     this.registry = new Map(projectors.map((p) => [p.name, p]))
@@ -143,6 +212,7 @@ export class Projections {
     this.registry.set(projector.name, projector)
     const client = await this.store.projector.connect()
     let broken = false
+    let carded = false
     try {
       await client.query('BEGIN')
       // Each thread written is locked once, its own first: the Workstream's, then those of the native sub-streams it
@@ -218,6 +288,8 @@ export class Projections {
         }
         const delta = await readEntries(client, workstream, from)
         if (delta.length) {
+          // What the fold waited on before: a card is the person's when a view takes it (docs/specs/notifications.md).
+          const before = this.cards === null || projector !== core ? null : askedOf(held.projection.objects, workstream)
           const changed = held.projection.apply(delta)
           let removed = false
           // Each view's row is written once every object is, in the lists' own order.
@@ -234,6 +306,13 @@ export class Projections {
             }
           }
           for (const target of await upward([...views.keys()])) await this.list(client, target, views.get(target))
+          if (before !== null && this.cards !== null) {
+            const cards = pendingCards(held.projection.objects, workstream, before, views, changed)
+            if (cards.length > 0) {
+              await this.cards.write(client, cards)
+              carded = true
+            }
+          }
           // A removal leaves no object to carry it: the client is given the complete state instead.
           if (removed) await reset()
           await client.query(
@@ -250,6 +329,7 @@ export class Projections {
       for (const [target, thread] of threads)
         await client.query('UPDATE threads SET last_position=$2,reset_position=$3 WHERE workstream=$1', [target, String(thread.position), String(thread.resetAt)])
       await client.query('COMMIT')
+      if (carded) this.cards?.committed()
       return String(own.position)
     } catch (error) {
       await client.query('ROLLBACK').catch(() => (broken = true))

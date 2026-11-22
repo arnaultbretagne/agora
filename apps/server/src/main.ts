@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type KubeApi } from '@agora/executions'
-import { Delegations, Files, Identity, LogStore, Merges, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
+import { Delegations, Files, Identity, LogStore, Merges, Notifications, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys, previewOffer } from './preview.ts'
@@ -26,6 +26,14 @@ function required(name: string): string {
 }
 
 const sink = (line: string): void => console.log(line)
+// docs/specs/notifications.md, "Configuration": the VAPID key pair, the subject and the client's origin, all four or none.
+const PUSH = ['PUSH_VAPID_PUBLIC_KEY', 'PUSH_VAPID_PRIVATE_KEY', 'PUSH_SUBJECT', 'PUBLIC_URL'] as const
+const pushGiven = PUSH.filter((name) => (process.env[name] ?? '') !== '')
+if (pushGiven.length > 0 && pushGiven.length < PUSH.length) throw new Error(`${PUSH.filter((name) => !pushGiven.includes(name)).join(', ')} required beside ${pushGiven.join(', ')}`)
+const push =
+  pushGiven.length === PUSH.length
+    ? { publicKey: required('PUSH_VAPID_PUBLIC_KEY'), privateKey: required('PUSH_VAPID_PRIVATE_KEY'), subject: required('PUSH_SUBJECT'), origin: new URL(required('PUBLIC_URL')).origin }
+    : null
 // docs/specs/preview.md: its database, migrated and given its conversations by the server itself; its key made here;
 // its sandboxes in this process, pushing their anchors to this server's receiver.
 const preview =
@@ -134,6 +142,8 @@ try {
             }),
       }),
     })
+  // docs/specs/notifications.md: the three cards that wait on the person, sent to their subscriptions.
+  if (push !== null) new Notifications(workstreams, { ...push, sink })
   await workstreams.start()
 } catch (error) {
   // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.
