@@ -14,6 +14,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `questions.test.ts` | A question to the person: Ask, Answer, and what they hold back: L69–L74. |
 | `elicitations.test.ts` | A form an agent asks: declared, pending, answered once, refused when it does not fit, cancelled, declined by Agora, withdrawn, rebuilt at an upgrade, checked against its schema, a check that cannot complete refusing it: L160–L172. |
 | `requests.test.ts` | A request an agent waits on — a permission — in its view, its row and the rows above it; who answered it: L154–L156. |
+| `notifications.test.ts` | Notifications (`docs/specs/notifications.md`): what notifies, the message and its encryption, sending and retries, subscriptions, the configuration: N1–N11. |
 | `accounts.test.ts` | The caller's account and its list, on the real server, with IDENTITY `none`: L75, L76. |
 | `identity.test.ts` | Who calls the real server with IDENTITY `oidc`: an issuer's ID token, service tokens, what proves nobody, the issuer out of reach, a configuration refused: L173–L178. |
 | `ownership.test.ts` | What a caller reaches on the real server: its own Workstreams, files, anchors, executions and events, another owner's answered as none, with IDENTITY `oidc`; with `none`, as before: L179–L184. |

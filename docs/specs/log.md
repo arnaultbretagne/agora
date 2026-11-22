@@ -576,7 +576,8 @@ UID TokenReview returns, even with no connection open. Its bytes are stored in R
 ### Operational logs
 
 The operational logger takes a closed list of fields: actor, Workstream, Session, execution,
-connection, command, position, operation, outcome, error class, byte count, duration. Operations,
+connection, command, position, operation, outcome, error class, byte count, duration; for a push
+(`notifications.md`, "Sending"), the push service's host, from a closed list, and the HTTP status. Operations,
 outcomes and error classes come from closed lists. A value that is not a valid identifier is
 dropped. Never a prompt, tool content, file byte, credential, token, header, query string, anchor byte or
 exception message.

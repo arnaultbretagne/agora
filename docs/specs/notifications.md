@@ -34,7 +34,7 @@ when it becomes pending for the person.
 
 | Card | `kind` | Pending when | For the person |
 | --- | --- | --- | --- |
-| A form | `form` | The Workstream view's `request` takes the position of an `elicitation/create` (`log.md`, "The Workstream view"). | Unless its Workstream is a delegate's — its view carries `delegation` —: that form goes to its delegator (`delegation.md`, "Requests"). A native sub-stream's form is the person's, under a delegate included. |
+| A form | `form` | The Workstream view's `request` takes the position of an `elicitation/create` (`log.md`, "The Workstream view"); a native sub-stream's, whose view names no request, once its `elicitation` element is pending (`log.md`, "Native sub-agents"). | Unless its Workstream is a delegate's — its view carries `delegation` —: that form goes to its delegator (`delegation.md`, "Requests"). A native sub-stream's form is the person's, under a delegate included. |
 | An approval | `approval` | The view's `question` takes an Ask of Agora's, `kind` `approval` (`delegation.md`, "Approval"). | Always, while its `expiresAt` is ahead. |
 | A merge card | `merge` | The view's `question` takes an Ask of Agora's, `kind` `merge` (`merge.md`). | Always. |
 
@@ -42,7 +42,7 @@ when it becomes pending for the person.
 | --- | --- |
 | Once | One notification per Workstream and card position, written in the transaction that makes the card pending (`push_notifications`); the same position again — a replay, a rebuild, a restart — writes none. |
 | Not notified | A permission (`session/request_permission`); an Ask of no `kind`; a form Agora declines itself (`log.md`, "Requests"); a turn's end, an execution's failure, a message. A rebuild of the projection and the back-filling of rows at start write none. |
-| Still pending | Read again before each attempt to send: a card answered, refused, expired, cancelled, or no longer the view's `request` or `question`, is `dropped`, nothing more sent for it. |
+| Still pending | Read again before each attempt to send: a card answered, refused, expired, cancelled, or no longer the view's `request` or `question` — a native sub-stream's form no longer pending —, ends the notification, nothing more sent for it. |
 
 ## Subscriptions
 
@@ -78,11 +78,11 @@ The payload is a declarative Web Push message, UTF-8 JSON, at most 3,000 bytes b
 | `notification.navigate` | `PUBLIC_URL`, then `/w/` and the Workstream's id: the client's address of that Workstream. |
 | `notification.tag` | The Workstream's id: a newer notification of the same Workstream replaces the one shown. |
 | `notification.data` | `workstream`, `position`, `kind`. |
-| `notification.app_badge` | The number of the owner's cards pending for the person, this one included, as a decimal string. |
+| `notification.app_badge` | The number of the owner's cards pending for the person when it is sent, this one included, as a decimal string. |
 
 | Header | Value |
 | --- | --- |
-| `TTL` | `86400` for a form and a merge card; for an approval, the whole seconds left until its `expiresAt`. |
+| `TTL` | The whole seconds left until the notification's end: a day after it was written for a form and a merge card, the approval's `expiresAt` for an approval. |
 | `Urgency` | `high`. |
 | `Topic` | The Workstream's id without its hyphens: a push of the same Workstream not yet delivered is replaced. |
 | `Content-Encoding` | `aes128gcm`, to the subscription's `p256dh` and `auth`. |
@@ -97,21 +97,21 @@ The payload is a declarative Web Push message, UTF-8 JSON, at most 3,000 bytes b
 | A request | One `POST` to the endpoint per subscription, from the server's Pod, not through Agora's gateway; 10 s at most. |
 | 2xx | Delivered to that subscription. |
 | 404, 410 | The subscription is gone: removed. |
-| 429, 5xx, no answer | Tried again after 5 s, 30 s, 2 min, then every 10 min — after `Retry-After` when it says longer —, until the `TTL` has passed since it was written; then given up for that subscription. |
+| 429, 5xx, no answer | Those subscriptions tried again together, after 5 s, 30 s, 2 min, then every 10 min — after the longest `Retry-After` when it says longer —, until the notification's end; then given up. |
 | Another 4xx | Given up for that subscription. |
-| Its state | `pending` while a subscription may still be tried; then `sent`, or `dropped` ("What notifies", "Still pending"). |
-| What is logged | The notification, the endpoint's host, the status. Never the endpoint's path, the keys, nor the payload. |
+| Its state | `pending` while a subscription may still be tried; then `sent` when one at least was delivered, `dropped` otherwise ("What notifies", "Still pending"). |
+| What is logged | By the operational logger (`log.md`, "Operational logs"), operation `push`: the Workstream, the position, the push service's host, the status, the outcome. Never the endpoint's path, the keys, nor the payload. |
 
 ## The client
 
 | Element | Rule |
 | --- | --- |
 | The service worker | `/sw.js`, scope `/`, served as the client's files are; registered at start wherever `navigator.serviceWorker` exists. |
-| A push | The service worker shows the message's `notification` — `title`, `body`, `tag`, `data`, the icon `/icon-192.png` — and sets the badge to its `app_badge`. A payload that is not one of Agora's messages shows "Agora", nothing more. |
+| A push | The service worker sets the badge to the message's `app_badge`, cleared at zero, then shows its `notification` — `title`, `body`, `tag`, the icon `/icon-192.png`, and as `data` its `data` and its `navigate`. A payload that is not one of Agora's messages shows "Agora", nothing more. |
 | A tap | The notification closes; a window of the client, focused, opens its Workstream — none open, a window opens at its `navigate`. |
 | The switch | In the account (`assistant-ui.md`, "Accounts"): **Notifications**, on or off. Not shown when `GET /api/push` answers `push_unavailable`. |
 | Not possible | No `PushManager`: on iOS outside the Home Screen, the item says "Add Agora to your Home Screen for notifications"; elsewhere it is not shown. Permission denied: "Notifications are blocked in this browser's settings". |
-| On | On the tap: the permission asked, then `pushManager.subscribe` with `userVisibleOnly` true and the server's key, then the `POST`. At each start with the permission granted, the subscription posted again; one made with another key, replaced. |
+| On | On the tap: the permission asked, in the tap itself, then `pushManager.subscribe` with `userVisibleOnly` true and the server's key, then the `POST`. At each start with the permission granted, the subscription posted again; one made with another key, removed from the server and the browser, then made again. |
 | Off | `unsubscribe`, then the `DELETE`. |
 | Opened | At start and each time the client becomes visible: `GET /api/push/pending`; each notification shown whose `workstream` and `position` it does not list is closed; the badge is set to the number of cards, cleared at zero. |
 
@@ -130,21 +130,21 @@ preview takes none (`preview.md`). Some without the others: the server does not 
 
 | ID | Case | Expected |
 | --- | --- | --- |
-| N1 | Two subscriptions of the person's; its agent asks a form in a root Workstream | One notification `form`; one `POST` to each endpoint, `TTL` `86400`, `Urgency` `high`, `Topic` the id without hyphens; decrypted, `web_push` `8030`, the Workstream's title, `Question · ` and the form's message, `navigate` `PUBLIC_URL/w/<id>`, `tag` the id, `data` its Workstream, position and `form`, `app_badge` `1`; `sent`. |
-| N2 | A delegate's agent asks a form; a native sub-agent of that delegate asks one; an agent asks a permission; Agora declines a form with a secret field | None; one, for the native sub-stream, to the person; none; none. |
+| N1 | Two subscriptions of the person's; its agent asks a form in a root Workstream | One notification `form`; one `POST` to each endpoint, `TTL` within the last 10 s of a day, `Urgency` `high`, `Content-Encoding` `aes128gcm`, a VAPID token the server's key verifies, its `aud` the endpoint's origin, its `sub` `PUSH_SUBJECT`, 12 hours at most, `Topic` the id without hyphens; decrypted, `web_push` `8030`, the Workstream's title, `Question · ` and the form's message, `navigate` `PUBLIC_URL/w/<id>`, `tag` the id, `data` its Workstream, position and `form`, `app_badge` `1`; `sent`. |
+| N2 | A delegate's agent asks a form; a native sub-agent of another delegate asks one; an agent asks a permission; Agora declines a form with a secret field | One notification in all, for the native sub-stream, its position the form's, sent to the person, `navigate` its address. |
 | N3 | A `spawn_agent` waiting for approval; another answered before its notification is sent; another, the server held until past its `expiresAt` | One notification `approval`, `TTL` the seconds left to `expiresAt`, `Approval · ` and the Ask's title; `dropped`, nothing sent; `dropped`, nothing sent. |
-| N4 | `propose_merge` on an open pull request | One notification `merge`, `Merge · ` and the pull request's title, `TTL` `86400`. |
+| N4 | `propose_merge` on an open pull request | One notification `merge`, `Merge · ` and the pull request's title, `TTL` within the last 10 s of a day. |
 | N5 | The server restarted between a card's commit and its sending; then after its sending; then a rebuild of the projection | Sent once, after the restart; nothing again; nothing again. |
-| N6 | A form pending, then a second form of the same Session; the first answered | One notification for the first; the second's once it is the view's `request`, `Topic` the same, `app_badge` counting what is pending then. |
-| N7 | Endpoints answering 201; 410; 404; 429 with `Retry-After: 60`; 500 then 201; 400 | Delivered; removed; removed; tried again after 60 s; tried again after 5 s, delivered; given up, the others delivered; nothing of the endpoint's path, keys or payload in the server's log. |
+| N6 | An approval in a Workstream, then one in another; the first answered, another asked in it | Three notifications, `app_badge` `1`, `2`, `2`; the first and the third with the same `Topic`. |
+| N7 | Endpoints answering 201; 410; 404; 429 with `Retry-After: 8`, then 201; 500, then 201; 400 | One request; one, removed; one, removed; two, the second 8 s after the first at least; two; one, kept. `sent`. A `push` line naming `web.push.apple.com` and 410; nothing of an endpoint's path or keys in the log. |
 | N8 | `POST /api/push/subscriptions` with an `http` endpoint, another host, port 8443, a `p256dh` of 64 bytes, an `auth` of 8; the same endpoint twice; an eleventh endpoint; `DELETE` of it, then of an endpoint nobody holds | 400 `invalid_subscription` five times, nothing stored; one subscription, the second's keys; 409 `too_many_subscriptions`; 200, removed; 200, nothing removed. |
 | N9 | Two owners, each a subscription; a card in each one's Workstream; `GET /api/push/pending` by each | Each subscription receives its owner's card alone; each list its own card alone. |
 | N10 | The server without the four variables; with three of them | `GET /api/push` 404 `push_unavailable`, a card writes no notification, the client shows no switch; the server does not start. |
-| N11 | A form whose message's first line holds 300 code points, then a second line | The body `Question · ` and its first 119 code points and an ellipsis; nothing of the second line. |
-| N12 | In a browser: Notifications turned on, the permission granted; the server's key changed, the client started again; turned off; the permission denied | Subscribed with the server's key, one subscription stored; replaced by one with the new key; unsubscribed and removed; the item says they are blocked, nothing stored. |
-| N13 | In a browser: a push for a Workstream; tapped, a window of the client open on another Workstream; tapped, none open | The notification with its title, body and tag, the badge; that window focused on the Workstream; a window opened at `navigate`. |
+| N11 | A card's text: a first line of 150 code points, then a second line; a blank line, then a short one; an approval titled with 150 characters | Its first 119 code points and an ellipsis; the short one, trimmed; the body `Approval · `, 119 characters and an ellipsis. |
+| N12 | In a browser: Notifications turned on, the permission granted; the server's key changed, the client started again; turned off; the permission denied | "Notifications: off", then the permission asked and one subscription made, `userVisibleOnly`, "Notifications: on", one stored for the person; unsubscribed and made again, one stored, another endpoint; removed, here and there; "Notifications are blocked in this browser's settings", disabled, nothing stored. |
+| N13 | In a browser: a push for a Workstream, `app_badge` `1`; a push that is not Agora's | The badge `1`, then the notification with its title, body and tag, its data and `navigate`; then one titled "Agora", nothing more. |
 | N14 | In a browser: two notifications shown, one card answered from another device; the client opened | That one closed, the other kept; the badge `1`. |
-| N15 | Live, on an iPhone, Agora on its Home Screen with notifications on, the app closed: a lead asks with `AskUserQuestion`; a delegation waits for approval; a merge card | Each notification on the lock screen, the badge counting them; a tap opens the Workstream at its card. |
+| N15 | Live, on an iPhone, Agora on its Home Screen with notifications on, the app closed: a lead asks with `AskUserQuestion`; a delegation waits for approval; a merge card; then, on a desktop browser, a notification tapped with a window of the client open, then with none | Each notification on the lock screen, the badge counting them; a tap opens the Workstream at its card. The window focused on the Workstream; a window opened at `navigate`. |
 
 ## To be specified
 
