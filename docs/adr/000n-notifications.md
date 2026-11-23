@@ -27,8 +27,10 @@
    client.
 4. **Declarative payload.** The payload is Safari's declarative Web Push message, which Safari 18.4 and later
    shows by itself, its badge included; the service worker shows the same message where the browser does not.
-5. **Written with the view.** A notification to send is written in the transaction that makes the card
-   pending, and sent from there: never lost, never twice, a restart included.
+5. **Written with the view, sent at least once.** A notification to send is written in the transaction that
+   makes the card pending, and each subscription's answer is recorded as it comes: never lost, a restart
+   included. A push and its record cannot commit together; a server stopping between them sends that one
+   push again, to that one subscription, and the same `tag` replaces the first on the screen.
 
 ```mermaid
 sequenceDiagram
@@ -63,6 +65,7 @@ sequenceDiagram
 | E-mail | Pocket-ID knows the address | Minutes late, against an approval's 4 min 30 s. |
 | Polling from the client | iOS suspends the web app | Nothing runs while it is closed. |
 | Every change of state (a turn done, an execution failed) | What the list already shows | Decided against by the person: the three cards only. |
+| Exactly once to each subscription | The push services take no idempotency key (RFC 8030); `Topic` replaces only a message not yet delivered | A push answered and not yet recorded cannot be told from one never sent: at least once, the duplicate replaced by its `tag`. |
 
 ## Consequences
 

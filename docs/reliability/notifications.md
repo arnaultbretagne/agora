@@ -7,6 +7,7 @@ The evidence behind the acceptance cases of `specs/notifications.md`.
 | Run | Date | Commit | Level | Environment |
 | --- | --- | --- | --- | --- |
 | R1 | 2026-11-22 | `aa8b2fc` | unit, local | An Agora execution, not g4: Node 24.22.3, PostgreSQL 17.12 (the `@embedded-postgres/linux-x64` 17.12.0 binaries), each test on a database of its own, Playwright 1.63.0's Chromium headless shell 153 with the DejaVu and Liberation fonts. N1 to N9 and N11 on the lab — FakeKube, real bridges, the mock agent —; the push services standing in as the engine's `Send`, each request recorded and answered as the case scripts; each payload decrypted by the test's own RFC 8291 `aes128gcm`, each VAPID token verified with `jose` against the server's public key. N10 against the server's own process as well. N12 to N14 in the browser against the server's process with its VAPID keys: the headless shell reaches no push service, asks no permission and shows no notification, so the page's `PushManager` and `Notification.permission`, the service worker's `showNotification` and `setAppBadge`, and the page's `getNotifications` stand in; a push reaches the real service worker through the DevTools protocol's `ServiceWorker.deliverPushMessage`. |
+| R2 | 2026-11-23 | `caff176` | unit, local | As R1, in another Agora execution, after the judge's review of #232. N1 to N11 and N16 to N19 on the lab, N10 also against the server's process; N12 to N14 and N20 in the browser, the same stand-ins as R1, N20's `unsubscribe` rejecting and keeping the subscription. N16's second push service never answers; N17's first answers once the test opens its gate; N19's outage is PostgreSQL's own, the database closed to new connections and the projector's sessions terminated. |
 
 ## Cases
 
@@ -27,6 +28,11 @@ The evidence behind the acceptance cases of `specs/notifications.md`.
 | N13 | simulated: stub, the service worker's display and badge | local | R1 | partial: what the browser would display is the stand-in's record | A push delivered: the badge `1`, then `Pick a database`, `Question · Which database should the service use?`, its tag, its data with `navigate`. A push `{"hello":"world"}`: one titled `Agora`, nothing more. |
 | N14 | simulated: stub, the notifications the page reads | local | R1 | partial: the notifications shown are the stand-in's | Two forms pending, their two notifications shown: none closed at start. The first form declined by a command: once the client is opened again, that one closed alone, the badge `1`. |
 | N15 | — | live | — | not verified | — |
+| N16 | real: the lab halted while a request waits, then started again on the same database | local | R2 | proven | While the second request waits: `done` the first endpoint, `delivered` true, `pending`, nothing to the third. After the restart: requests 1, 2, 1; `sent`. |
+| N17 | simulated: stub, the first push service's answer held | local | R2 | proven | An approval of 1.5 s, the first request held 1.7 s: one request to the first, none to the second, `sent`. Another answered while held: two to the first in all, none to the second. |
+| N18 | — | unit, local | R2 | proven | 5,000 characters of `"é🦀\u0001`: the message within 3,000 bytes, its title a prefix and `…`; twice the kept length also within; `Short` whole. Written with 5,000 `x`: 119 `x` and `…`. |
+| N19 | real: PostgreSQL refusing connections, the projector's sessions terminated | local | R2 | proven | No request during 1.5 s of outage; a `push` line with `"errorClass":"database"`; once the database allows connections again, one request and `sent`, with the engine's look again set to 500 ms for the test. |
+| N20 | simulated: stub, the browser's `unsubscribe` rejecting | local | R2 | partial: `PushManager` and the permission are stand-ins in the page, as N12's | On, one row; off, no row; started again: `Notifications: off`, `unsubscribe` tried, no `POST` to `/api/push/subscriptions`, no row; on again, one row. |
 
 ## Not covered
 

@@ -5,9 +5,9 @@ Written against the Push API and the Notifications API (W3C), Web Push (RFC 8030
 encryption (RFC 8291, `aes128gcm`) and VAPID (RFC 8292); Safari's declarative Web Push messages
 (Safari 18.4); `web-push` 4.0.0. On iOS and iPadOS 16.4 and later, a web app added to the Home Screen.
 
-**Three cards, once each, nothing else. A form shown to the person, an approval or a merge card
-becomes pending; in the same transaction, Agora writes what to send; it sends it to every subscription
-of the person's, unless the card is no longer pending by then. The payload is light: the Workstream's
+**Three cards, each sent at least once, nothing else. A form shown to the person, an approval or a
+merge card becomes pending; in the same transaction, Agora writes what to send; it sends it to every
+subscription of the person's, unless the card is no longer pending by then. The payload is light: the Workstream's
 title, the card's kind, its first line.**
 
 ```mermaid
@@ -73,7 +73,7 @@ The payload is a declarative Web Push message, UTF-8 JSON, at most 3,000 bytes b
 | Member | Value |
 | --- | --- |
 | `web_push` | `8030`. |
-| `notification.title` | The Workstream's `title` (`log.md`, "The Workstream view"). |
+| `notification.title` | The Workstream's `title` (`log.md`, "The Workstream view"), as written: its first line, 120 code points at most, cut as the card's line is; shorter still, an ellipsis last, when the whole message would pass 3,000 bytes. |
 | `notification.body` | The kind, ` · `, then the card's first line: `Question · ` and the form's `message`; `Approval · ` and the Ask's `title`; `Merge · ` and the Ask's `title`, the pull request's. Its first line alone, at most 120 code points, the 120th an ellipsis when it is cut. |
 | `notification.navigate` | `PUBLIC_URL`, then `/w/` and the Workstream's id: the client's address of that Workstream. |
 | `notification.tag` | The Workstream's id: a newer notification of the same Workstream replaces the one shown. |
@@ -94,12 +94,14 @@ The payload is a declarative Web Push message, UTF-8 JSON, at most 3,000 bytes b
 | --- | --- |
 | When | Once its transaction commits; at start, every notification not `sent` nor `dropped`. |
 | To whom | Every subscription its owner holds when it is sent. None: `dropped`. |
-| A request | One `POST` to the endpoint per subscription, from the server's Pod, not through Agora's gateway; 10 s at most. |
+| A request | One `POST` to the endpoint per subscription, one after the other, from the server's Pod, not through Agora's gateway; 10 s at most. Before each, the card is read again ("Still pending") and the `TTL` counted again: a card no longer pending, or a notification at its end, ends the attempt, the subscriptions after it sent nothing. |
 | 2xx | Delivered to that subscription. |
+| Recorded | Each answer but those tried again, as it comes, before the next request: a stop or a failure in the middle sends none of those before it again. A push and its record cannot commit together: a server stopping between them sends that push again, to that subscription alone. |
 | 404, 410 | The subscription is gone: removed. |
 | 429, 5xx, no answer | Those subscriptions tried again together, after 5 s, 30 s, 2 min, then every 10 min — after the longest `Retry-After` when it says longer —, until the notification's end; then given up. |
 | Another 4xx | Given up for that subscription. |
 | Its state | `pending` while a subscription may still be tried; then `sent` when one at least was delivered, `dropped` otherwise ("What notifies", "Still pending"). |
+| The database failing | The engine looks again 30 s later, whatever is due, and goes on from what is recorded. |
 | What is logged | By the operational logger (`log.md`, "Operational logs"), operation `push`: the Workstream, the position, the push service's host, the status, the outcome. Never the endpoint's path, the keys, nor the payload. |
 
 ## The client
@@ -112,7 +114,7 @@ The payload is a declarative Web Push message, UTF-8 JSON, at most 3,000 bytes b
 | The switch | In the account (`assistant-ui.md`, "Accounts"): **Notifications**, on or off. Not shown when `GET /api/push` answers `push_unavailable`. |
 | Not possible | No `PushManager`: on iOS outside the Home Screen, the item says "Add Agora to your Home Screen for notifications"; elsewhere it is not shown. Permission denied: "Notifications are blocked in this browser's settings". |
 | On | On the tap: the permission asked, in the tap itself, then `pushManager.subscribe` with `userVisibleOnly` true and the server's key, then the `POST`. At each start with the permission granted, the subscription posted again; one made with another key, removed from the server and the browser, then made again. |
-| Off | `unsubscribe`, then the `DELETE`. |
+| Off | The `DELETE` first: refused, the switch stays on. Then `unsubscribe`, and the opt-out kept by the browser: at each start, a subscription it failed to drop is dropped again, never posted, until the switch turns them on. |
 | Opened | At start and each time the client becomes visible: `GET /api/push/pending`; each notification shown whose `workstream` and `position` it does not list is closed; the badge is set to the number of cards, cleared at zero. |
 
 ## Configuration
@@ -145,6 +147,11 @@ preview takes none (`preview.md`). Some without the others: the server does not 
 | N13 | In a browser: a push for a Workstream, `app_badge` `1`; a push that is not Agora's | The badge `1`, then the notification with its title, body and tag, its data and `navigate`; then one titled "Agora", nothing more. |
 | N14 | In a browser: two notifications shown, one card answered from another device; the client opened | That one closed, the other kept; the badge `1`. |
 | N15 | Live, on an iPhone, Agora on its Home Screen with notifications on, the app closed: a lead asks with `AskUserQuestion`; a delegation waits for approval; a merge card; then, on a desktop browser, a notification tapped with a window of the client open, then with none | Each notification on the lock screen, the badge counting them; a tap opens the Workstream at its card. The window focused on the Workstream; a window opened at `navigate`. |
+| N16 | Three subscriptions; the server stopped while the second's request waits, then started again | Before the stop: the first recorded, delivered, the notification `pending`, nothing sent to the third. After: one request to the first, two to the second, one to the third; `sent`. |
+| N17 | Two subscriptions, the first's request held: an approval expiring meanwhile; then one answered meanwhile | Each time, the first's one request alone, nothing to the second; `sent`. |
+| N18 | A message whose title holds 5,000 characters — multibyte, quotes, control characters —; a short one; a card written with a title of 5,000 characters | Within 3,000 bytes, its title a prefix of the original and an ellipsis; the short one whole; written, 119 characters and an ellipsis. |
+| N19 | A notification waiting; PostgreSQL refusing new connections, the engine's terminated; the engine started; then PostgreSQL back | Nothing sent during the outage, a `push` line with `errorClass` `database`; then one request, `sent`, with no other card and no restart. |
+| N20 | In a browser: notifications on; turned off while the browser fails to drop its subscription; the client started again; turned on again | On, one stored; off, none stored; after the start, off, its subscription dropped again, no `POST`, none stored; on, one stored. |
 
 ## To be specified
 
