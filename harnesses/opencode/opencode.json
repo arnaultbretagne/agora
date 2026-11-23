@@ -3,5 +3,10 @@
   "model": "zai-coding-plan/glm-5.3",
   "small_model": "zai-coding-plan/glm-5.3-flash",
   "autoupdate": false,
-  "share": "disabled"
+  "share": "disabled",
+  "permission": {
+    "external_directory": "allow",
+    "doom_loop": "allow",
+    "read": "allow"
+  }
 }

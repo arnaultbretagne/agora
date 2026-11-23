@@ -8,7 +8,7 @@ the image: `ZHIPU_API_KEY` is a marker the gateway replaces, for the pool's base
 | File | Role |
 | --- | --- |
 | `Dockerfile` | The image. Everything opencode reads is fixed there: catalogue, configuration, database path. |
-| `opencode.json` | The configuration, in a read-only directory (`XDG_CONFIG_HOME`): default and small model. A writable one makes opencode install `@opencode-ai/plugin` from npm at every start. |
+| `opencode.json` | The configuration, in a read-only directory (`XDG_CONFIG_HOME`; a writable one makes opencode install `@opencode-ai/plugin` from npm at every start): default and small model, and full access (`docs/specs/assistant-ui.md`, "The mode and other settings"). The three rules opencode asks by default — a directory outside the workspace, a repeated tool call, a `.env` file read — set to `allow`, for every agent: opencode's ACP server sends Agora only the main session's asks and drops a sub-agent's (`task`), which then waits until the turn's cap. |
 | `models.json` | The `zai-coding-plan` entry of opencode's model catalogue (`models.opencode.ai/api.json`, 2026-11-23). Without it opencode fetches the catalogue at start; it bundles none. |
 
 Native directory saved: `$HOME/.local/share/opencode/agora/`, the SQLite database (`OPENCODE_DB`).
