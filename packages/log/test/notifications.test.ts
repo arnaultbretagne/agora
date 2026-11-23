@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import { importJWK, jwtVerify } from 'jose'
 import { generateVAPIDKeys } from 'web-push'
 import type { GitHub, MergeOutcome, MergeState, PullRequest } from '@agora/credentials'
-import { core, lineOf, Merges, type NotificationsOptions, type Send } from '../src/index.ts'
-import { cluster, database, FakeKube, Lab, Server, sleep, until, type Db } from './support.ts'
+import { core, lineOf, Merges, MESSAGE_MAX, messageOf, type NotificationsOptions, type Send } from '../src/index.ts'
+import { cluster, database, FakeKube, Lab, Server, sleep, terminate, until, type Db } from './support.ts'
 
 type T = { after(fn: () => Promise<void>): void }
 const VAPID = generateVAPIDKeys()
@@ -51,8 +51,11 @@ function subscriber(host = 'web.push.apple.com') {
 class FakePush {
   readonly requests: { endpoint: string; headers: Record<string, string>; body: Buffer; at: number }[] = []
   readonly script = new Map<string, { status: number; retryAfter?: string }[]>()
+  /** Requests to these endpoints wait until their gate opens, as a push service slow to answer. */
+  readonly gates = new Map<string, Promise<void>>()
   readonly send: Send = async (endpoint, init) => {
     this.requests.push({ endpoint, headers: init.headers, body: init.body, at: Date.now() })
+    await this.gates.get(endpoint)
     const next = this.script.get(endpoint)?.shift() ?? { status: 201 }
     return { status: next.status, retryAfter: next.retryAfter ?? null }
   }
@@ -61,12 +64,12 @@ class FakePush {
   }
 }
 
-async function bench(t: T, options: { db?: Db; push?: FakePush; notifications?: boolean } = {}) {
+async function bench(t: T, options: { db?: Db; push?: FakePush; notifications?: boolean; engine?: Partial<NotificationsOptions> } = {}) {
   const db = options.db ?? (await database())
   const keys = generateKeyPairSync('ed25519')
   const kube = new FakeKube(keys.publicKey)
   const push = options.push ?? new FakePush()
-  const notifications: NotificationsOptions = { publicKey: VAPID.publicKey, privateKey: VAPID.privateKey, subject: SUBJECT, origin: ORIGIN, send: push.send }
+  const notifications: NotificationsOptions = { publicKey: VAPID.publicKey, privateKey: VAPID.privateKey, subject: SUBJECT, origin: ORIGIN, send: push.send, ...options.engine }
   const lab = await Lab.start({ db, kube, keys, ...(options.notifications === false ? {} : { notifications }) })
   const labs = [lab]
   t.after(async () => {
@@ -384,4 +387,94 @@ test('N11 a card’s line: its first line alone, cut at 120 code points with an 
   await lab.workstreams.projections.run(ws)
   const [row] = await rows(lab)
   assert.equal(row!.body, `Approval · ${'x'.repeat(119)}…`)
+})
+
+test('N16 the server stopped in the middle of a notification’s requests: those answered before are not sent again, the one unanswered and those after are', async (t) => {
+  const { lab, push, labs } = await bench(t)
+  const ws = await lab.workstream()
+  const owner = await ownerOf(lab, ws)
+  const [a, b, c] = [subscriber(), subscriber(), subscriber()]
+  for (const s of [a, b, c]) await subscribe(lab, owner, s.json)
+  // The second answers never: the server stops while it waits.
+  push.gates.set(b.endpoint, new Promise(() => {}))
+  assert.ok((await approval(lab, ws, 'Halted midway')).accepted)
+  await until('the second asked', async () => (push.to(b.endpoint).length === 1 ? true : null))
+  const recorded = (await lab.store.projector.query('SELECT done, delivered, state FROM push_notifications')).rows[0]
+  assert.deepEqual([recorded.done, recorded.delivered, recorded.state], [[a.endpoint], true, 'pending'])
+  assert.equal(push.to(c.endpoint).length, 0)
+  push.gates.clear()
+  lab.workstreams.notifications!.stop().catch(() => {})
+  const second = await lab.restart('halt')
+  labs.push(second)
+  await until('sent', async () => ((await rows(second))[0]?.state === 'sent' ? true : null))
+  assert.deepEqual([a, b, c].map((s) => push.to(s.endpoint).length), [1, 2, 1])
+})
+
+test('N17 an approval expiring, then one answered, while an earlier subscription’s request is held: the later subscriptions are sent nothing', async (t) => {
+  const { lab, push } = await bench(t)
+  const expiring = await lab.workstream()
+  const owner = await ownerOf(lab, expiring)
+  const answered = await lab.workstream(owner)
+  const [first, second] = [subscriber(), subscriber()]
+  await subscribe(lab, owner, first.json)
+  await subscribe(lab, owner, second.json)
+  let open: () => void = () => {}
+  push.gates.set(first.endpoint, new Promise<void>((resolve) => (open = resolve)))
+  assert.ok((await approval(lab, expiring, 'Expires meanwhile', 1_500)).accepted)
+  await until('the first asked', async () => (push.to(first.endpoint).length === 1 ? true : null))
+  await sleep(1_700)
+  open()
+  await settled(lab, 1)
+  assert.deepEqual([push.to(first.endpoint).length, push.to(second.endpoint).length], [1, 0])
+  assert.equal((await rows(lab))[0]!.state, 'sent')
+  // The same, answered while the first request is held.
+  push.gates.set(first.endpoint, new Promise<void>((resolve) => (open = resolve)))
+  assert.ok((await approval(lab, answered, 'Answered meanwhile')).accepted)
+  await until('the first asked again', async () => (push.to(first.endpoint).length === 2 ? true : null))
+  assert.ok((await lab.command(answered, 'Answer', { question: await pendingQuestion(lab, answered) }, { optionId: 'approve' })).accepted)
+  open()
+  await settled(lab, 2)
+  assert.deepEqual([push.to(first.endpoint).length, push.to(second.endpoint).length], [2, 0])
+})
+
+test('N18 a title of 5,000 characters, multibyte, with quotes and control characters: the message within 3,000 bytes, its title cut with an ellipsis; a short one whole', async (t) => {
+  const input = { origin: ORIGIN, workstream: randomUUID(), position: '42', kind: 'form', body: 'Question · Which one?', badge: 3 }
+  const long = '"é🦀\u0001'.repeat(1_250)
+  const cut = messageOf({ ...input, title: long })
+  assert.ok(Buffer.byteLength(cut) <= MESSAGE_MAX, `${String(Buffer.byteLength(cut))} bytes`)
+  const title = (JSON.parse(cut) as { notification: { title: string } }).notification.title
+  assert.ok(title.endsWith('…') && long.startsWith(title.slice(0, -1)))
+  assert.ok(Buffer.byteLength(messageOf({ ...input, title: long.slice(0, [...title].length * 2) })) <= MESSAGE_MAX)
+  assert.equal((JSON.parse(messageOf({ ...input, title: 'Short' })) as { notification: { title: string } }).notification.title, 'Short')
+  // Written, a Workstream's title is its first line, 120 code points at most, as a card's line.
+  const { lab } = await bench(t)
+  const ws = await lab.workstream()
+  const client = await lab.store.projector.connect()
+  try {
+    await lab.workstreams.notifications!.write(client, [{ workstream: ws, position: '1', kind: 'merge', title: 'x'.repeat(5_000), text: 'A pull request', expiresAt: null }])
+  } finally {
+    client.release()
+  }
+  assert.equal((await rows(lab))[0]!.title, `${'x'.repeat(119)}…`)
+})
+
+test('N19 the database refusing the engine while a notification waits: it looks again, and sends once the database is back', async (t) => {
+  const { db, lab, push } = await bench(t, { engine: { recoverMs: 500 } })
+  const ws = await lab.workstream()
+  await subscribe(lab, await ownerOf(lab, ws), subscriber().json)
+  const engine = lab.workstreams.notifications!
+  await engine.stop()
+  assert.ok((await approval(lab, ws, 'Through an outage')).accepted)
+  await lab.workstreams.projections.run(ws)
+  assert.deepEqual((await rows(lab)).map((r) => r.state), ['pending'])
+  // Real: PostgreSQL refuses new connections, and the projector's are terminated.
+  await db.connections(false)
+  await terminate(db, 'projector', 'all')
+  await engine.start()
+  await sleep(1_500)
+  assert.equal(push.requests.length, 0)
+  assert.ok(lab.logs.some((l) => l.includes('"operation":"push"') && l.includes('"errorClass":"database"')))
+  await db.connections(true)
+  await until('sent after the outage', async () => (push.requests.length === 1 ? true : null))
+  await until('recorded', async () => ((await rows(lab))[0]?.state === 'sent' ? true : null))
 })

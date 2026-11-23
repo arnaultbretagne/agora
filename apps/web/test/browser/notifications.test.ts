@@ -59,13 +59,13 @@ after(async () => {
  * FCM endpoint, with keys made here, kept in the page's storage as a browser keeps its own; each call counted. The
  * permission is the person's answer to the prompt; the notifications the page reads, those given.
  */
-async function browserWith(permission: 'granted' | 'denied', shown: { workstream: string; position: string }[] = []): Promise<{ context: BrowserContext; page: Page }> {
+async function browserWith(permission: 'granted' | 'denied', shown: { workstream: string; position: string }[] = [], failing = false): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, extraHTTPHeaders: { 'x-forwarded-email': PERSON } })
   const ecdh = createECDH('prime256v1')
   ecdh.generateKeys()
   const keys = { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') }
   await context.addInitScript(
-    ({ keys, permission, shown }) => {
+    ({ keys, permission, shown, failing }) => {
       const KEY = 'agora-test:subscription'
       const GIVEN = 'agora-test:permission'
       const w = window as unknown as { pushCalls: string[]; badges: number[]; closedCards: string[] }
@@ -89,6 +89,8 @@ async function browserWith(permission: 'granted' | 'denied', shown: { workstream
         toJSON: () => json,
         unsubscribe: async () => {
           w.pushCalls.push('unsubscribe')
+          // A browser failing to drop its subscription keeps it.
+          if (failing) throw new DOMException('unsubscribe failed', 'InvalidStateError')
           localStorage.removeItem(KEY)
           return true
         },
@@ -109,7 +111,7 @@ async function browserWith(permission: 'granted' | 'denied', shown: { workstream
       navigator.setAppBadge = async (n?: number) => void w.badges.push(n ?? 0)
       navigator.clearAppBadge = async () => void w.badges.push(0)
     },
-    { keys, permission, shown },
+    { keys, permission, shown, failing },
   )
   const page = await context.newPage()
   page.setDefaultTimeout(30_000)
@@ -260,5 +262,34 @@ test('N14 two notifications shown, one card answered elsewhere; the client opene
   await until('the answered one closed', async () => ((await page.evaluate(() => (window as unknown as { closedCards: string[] }).closedCards)).length > 0 ? true : null))
   assert.deepEqual(await page.evaluate(() => (window as unknown as { closedCards: string[] }).closedCards), [`${one.id}:${one.position}`])
   assert.equal((await page.evaluate(() => (window as unknown as { badges: number[] }).badges)).at(-1), pendingBefore - 1)
+  await context.close()
+})
+
+test('N20 Notifications turned off while the browser fails to drop its subscription: off, removed from the server; the client started again: still off, nothing posted; turned on again: on', async () => {
+  await db.admin.query('DELETE FROM push_subscriptions')
+  const { context, page } = await browserWith('granted', [], true)
+  await openMenu(page)
+  await until('off', async () => ((await item(page).getAttribute('data-notifications')) === 'off' ? true : null))
+  await item(page).click()
+  await until('on', async () => ((await item(page).getAttribute('data-notifications')) === 'on' ? true : null))
+  assert.equal((await stored()).length, 1)
+  await item(page).click()
+  await until('off', async () => ((await item(page).getAttribute('data-notifications')) === 'off' ? true : null))
+  assert.equal((await stored()).length, 0)
+  const posts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/push/subscriptions') posts.push(r.url())
+  })
+  await openMenu(page)
+  await until('off after the start', async () => ((await item(page).getAttribute('data-notifications')) === 'off' ? true : null))
+  assert.equal(await item(page).textContent(), 'Notifications: off')
+  // Started again: the subscription the browser kept is dropped again, never posted.
+  await until('dropped again', async () => ((await page.evaluate(() => (window as unknown as { pushCalls: string[] }).pushCalls)).includes('unsubscribe') ? true : null))
+  assert.deepEqual(posts, [])
+  assert.equal((await stored()).length, 0)
+  // The switch alone turns them on again.
+  await item(page).click()
+  await until('on again', async () => ((await item(page).getAttribute('data-notifications')) === 'on' ? true : null))
+  assert.equal((await stored()).length, 1)
   await context.close()
 })

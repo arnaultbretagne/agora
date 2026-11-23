@@ -20,6 +20,10 @@ export const CARD_TTL = 86_400
 export const LINE_MAX = 120
 /** The waits between attempts, then every last one, ms. */
 export const RETRY_MS: readonly number[] = [5_000, 30_000, 120_000, 600_000]
+/** After the database failed the engine: its next look, ms. */
+export const RECOVER_MS = 30_000
+/** A message's bound, UTF-8 JSON before encryption (docs/specs/notifications.md, "The message"). */
+export const MESSAGE_MAX = 3_000
 
 const PREFIX: Readonly<Record<Card['kind'], string>> = { form: 'Question', approval: 'Approval', merge: 'Merge' }
 
@@ -42,6 +46,8 @@ export interface NotificationsOptions {
   /** The network; `fetch` with a 10 s limit by default. Tests stand in for the push services. */
   readonly send?: Send
   readonly retryMs?: readonly number[]
+  /** After a database failure, the next look; 30 s. */
+  readonly recoverMs?: number
   readonly sink?: (line: string) => void
 }
 
@@ -76,6 +82,49 @@ export function lineOf(text: string): string {
   const first = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l !== '') ?? ''
   const points = [...first]
   return points.length <= LINE_MAX ? first : `${points.slice(0, LINE_MAX - 1).join('')}…`
+}
+
+/** What a message says of its card (docs/specs/notifications.md, "The message"). */
+export interface MessageInput {
+  readonly origin: string
+  readonly workstream: string
+  readonly position: string
+  readonly kind: string
+  readonly title: string
+  readonly body: string
+  readonly badge: number
+}
+
+/**
+ * The declarative Web Push message, within MESSAGE_MAX bytes: the title cut shorter, an ellipsis last, until the whole
+ * UTF-8 JSON fits; the body is a line already (`lineOf`).
+ */
+export function messageOf(input: MessageInput): string {
+  const make = (title: string) =>
+    JSON.stringify({
+      web_push: 8030,
+      notification: {
+        title,
+        body: input.body,
+        navigate: `${input.origin}/w/${input.workstream}`,
+        tag: input.workstream,
+        data: { workstream: input.workstream, position: input.position, kind: input.kind },
+        app_badge: String(input.badge),
+      },
+    })
+  const points = [...(input.title === '' ? 'Agora' : input.title)]
+  let message = make(points.join(''))
+  if (Buffer.byteLength(message) <= MESSAGE_MAX) return message
+  // The longest cut that fits, found by halves.
+  let low = 0,
+    high = points.length - 1
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (Buffer.byteLength(make(`${points.slice(0, mid).join('')}…`)) <= MESSAGE_MAX) low = mid
+    else high = mid - 1
+  }
+  message = make(`${points.slice(0, low).join('')}…`)
+  return message
 }
 
 /** The host a log line may name: a push service's, or nothing. */
@@ -127,6 +176,8 @@ export class Notifications implements CardSink {
   private timer: NodeJS.Timeout | null = null
   private draining: Promise<void> | null = null
   private again = false
+  /** The database failed the last drain: the next look comes after RECOVER_MS, whatever is due. */
+  private failed = false
   private stopped = false
 
   constructor(workstreams: Workstreams, options: NotificationsOptions) {
@@ -200,7 +251,7 @@ export class Notifications implements CardSink {
       const expires = card.kind === 'approval' ? new Date(Date.parse(card.expiresAt ?? '')) : new Date(Date.now() + CARD_TTL * 1000)
       await client.query(
         'INSERT INTO push_notifications(workstream, position, owner, kind, title, body, expires_at) VALUES($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING',
-        [card.workstream, card.position, owner, card.kind, card.title, body, Number.isNaN(expires.getTime()) ? new Date() : expires],
+        [card.workstream, card.position, owner, card.kind, lineOf(card.title), body, Number.isNaN(expires.getTime()) ? new Date() : expires],
       )
     }
   }
@@ -231,6 +282,7 @@ export class Notifications implements CardSink {
       return this.draining
     }
     this.draining = (async () => {
+      this.failed = false
       try {
         do {
           this.again = false
@@ -239,10 +291,14 @@ export class Notifications implements CardSink {
           )
           for (const row of due.rows as Row[]) {
             if (this.stopped) return
-            await this.attempt(row).catch(() => this.report({ workstream: row.workstream, position: row.position, outcome: 'failed', errorClass: 'database' }))
+            await this.attempt(row).catch(() => {
+              this.failed = true
+              this.report({ workstream: row.workstream, position: row.position, outcome: 'failed', errorClass: 'database' })
+            })
           }
         } while (this.again && !this.stopped)
       } catch {
+        this.failed = true
         this.report({ outcome: 'failed', errorClass: 'database' })
       } finally {
         this.draining = null
@@ -252,51 +308,63 @@ export class Notifications implements CardSink {
     return this.draining
   }
 
-  /** The next attempt due, as a timer. */
+  /**
+   * The next attempt due, as a timer. The database failing — the drain, or this read — never leaves the engine without
+   * one: it looks again after RECOVER_MS, and not sooner, so that a failing row is not tried in a loop.
+   */
   private async schedule(): Promise<void> {
     if (this.stopped) return
     const next = await this.db.query("SELECT min(next_at) AS at FROM push_notifications WHERE state = 'pending'").catch(() => null)
-    const at = next?.rows[0]?.at as Date | null | undefined
     if (this.timer !== null) clearTimeout(this.timer)
     this.timer = null
-    if (at === null || at === undefined) return
+    if (this.stopped) return
+    const recover = this.options.recoverMs ?? RECOVER_MS
+    const at = next?.rows[0]?.at as Date | null | undefined
+    let delay: number
+    if (next === null) delay = recover
+    else if (at === null || at === undefined) {
+      if (!this.failed) return
+      delay = recover
+    } else delay = Math.max(this.failed ? recover : 0, at.getTime() - Date.now())
     this.timer = setTimeout(() => {
       this.timer = null
       void this.drain()
-    }, Math.max(0, at.getTime() - Date.now()))
+    }, delay)
   }
 
-  private async finish(row: Row, state: 'sent' | 'dropped', done = row.done, delivered = row.delivered): Promise<void> {
-    await this.db.query('UPDATE push_notifications SET state = $3, done = $4, delivered = $5 WHERE workstream = $1 AND position = $2', [row.workstream, row.position, state, done, delivered])
+  private async finish(row: Row, state: 'sent' | 'dropped'): Promise<void> {
+    await this.db.query('UPDATE push_notifications SET state = $3 WHERE workstream = $1 AND position = $2', [row.workstream, row.position, state])
     this.report({ workstream: row.workstream, position: row.position, outcome: state === 'sent' ? 'succeeded' : 'refused' })
   }
 
-  /** One attempt: the card read again, then every subscription not yet done. */
-  private async attempt(row: Row): Promise<void> {
+  /** Whether the card is still pending for the person, and the whole seconds left to the notification's end. */
+  private async still(row: Row): Promise<number> {
     const left = Math.floor((row.expires_at.getTime() - Date.now()) / 1000)
-    const still = (await this.pending(row.owner, { workstream: row.workstream, position: row.position })).length > 0
-    if (!still || left <= 0) return this.finish(row, row.delivered ? 'sent' : 'dropped')
+    if (left <= 0) return 0
+    return (await this.pending(row.owner, { workstream: row.workstream, position: row.position })).length > 0 ? left : 0
+  }
+
+  /**
+   * One attempt: every subscription not yet done, the card read again before each request, its time to live counted
+   * again; each answer recorded as it comes (docs/specs/notifications.md, "Sending"), so that a stop or a failure in
+   * the middle repeats none of those before it.
+   */
+  private async attempt(row: Row): Promise<void> {
+    if ((await this.still(row)) === 0) return this.finish(row, row.delivered ? 'sent' : 'dropped')
     const subscriptions = (
       await this.db.query('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE owner = $1 AND NOT (endpoint = ANY($2::text[])) ORDER BY created_at, endpoint', [row.owner, row.done])
     ).rows as Subscription[]
     if (subscriptions.length === 0) return this.finish(row, row.delivered ? 'sent' : 'dropped')
-    const badge = (await this.pending(row.owner)).length
-    const payload = JSON.stringify({
-      web_push: 8030,
-      notification: {
-        title: row.title,
-        body: row.body,
-        navigate: `${this.options.origin}/w/${row.workstream}`,
-        tag: row.workstream,
-        data: { workstream: row.workstream, position: row.position, kind: row.kind },
-        app_badge: String(badge),
-      },
-    })
+    const payload = messageOf({ origin: this.options.origin, workstream: row.workstream, position: row.position, kind: row.kind, title: row.title, body: row.body, badge: (await this.pending(row.owner)).length })
     const done = [...row.done]
     let delivered = row.delivered
     let wait = 0
     let retry = false
     for (const subscription of subscriptions) {
+      if (this.stopped) return
+      // Answered, expired or withdrawn during the requests before: the rest are not sent.
+      const left = await this.still(row)
+      if (left === 0) return this.finish({ ...row, done, delivered }, delivered ? 'sent' : 'dropped')
       const host = hostOf(subscription.endpoint)
       let status = 0
       let retryAfter: string | null = null
@@ -315,29 +383,24 @@ export class Notifications implements CardSink {
         status = 0
       }
       this.report({ workstream: row.workstream, position: row.position, host, status, outcome: status >= 200 && status < 300 ? 'succeeded' : 'failed', ...(status === 0 ? { errorClass: 'transport' } : {}) })
-      if (status >= 200 && status < 300) {
-        done.push(subscription.endpoint)
-        delivered = true
-      } else if (status === 404 || status === 410) {
-        // Gone: the push service will take nothing more for it.
-        await this.db.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [subscription.endpoint])
-        done.push(subscription.endpoint)
-      } else if (status === 0 || status === 429 || status >= 500) {
+      if (status === 0 || status === 429 || status >= 500) {
         retry = true
         const seconds = retryAfter === null ? NaN : /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter) : (Date.parse(retryAfter) - Date.now()) / 1000
         if (Number.isFinite(seconds)) wait = Math.max(wait, seconds * 1000)
-      } else done.push(subscription.endpoint)
+        continue
+      }
+      // Gone: the push service will take nothing more for it.
+      if (status === 404 || status === 410) await this.db.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [subscription.endpoint])
+      const ok = status >= 200 && status < 300
+      // Recorded before the next request: a failure here stops the attempt, and only this subscription may be sent again.
+      await this.db.query('UPDATE push_notifications SET done = array_append(done, $3), delivered = delivered OR $4 WHERE workstream = $1 AND position = $2', [row.workstream, row.position, subscription.endpoint, ok])
+      done.push(subscription.endpoint)
+      delivered ||= ok
     }
-    if (!retry) return this.finish(row, delivered ? 'sent' : 'dropped', done, delivered)
+    if (!retry) return this.finish({ ...row, done, delivered }, delivered ? 'sent' : 'dropped')
     const delays = this.options.retryMs ?? RETRY_MS
     const delay = Math.max(wait, delays[Math.min(row.attempts, delays.length - 1)] ?? 0)
-    if (Date.now() + delay >= row.expires_at.getTime()) return this.finish(row, delivered ? 'sent' : 'dropped', done, delivered)
-    await this.db.query('UPDATE push_notifications SET done = $3, delivered = $4, attempts = attempts + 1, next_at = $5 WHERE workstream = $1 AND position = $2', [
-      row.workstream,
-      row.position,
-      done,
-      delivered,
-      new Date(Date.now() + delay),
-    ])
+    if (Date.now() + delay >= row.expires_at.getTime()) return this.finish({ ...row, done, delivered }, delivered ? 'sent' : 'dropped')
+    await this.db.query('UPDATE push_notifications SET attempts = attempts + 1, next_at = $3 WHERE workstream = $1 AND position = $2', [row.workstream, row.position, new Date(Date.now() + delay)])
   }
 }

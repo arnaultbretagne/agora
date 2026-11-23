@@ -15,4 +15,4 @@ export { describeRoles, loadRoles, parseRole, roleBlock, type Role } from './rol
 export { isRole, ROLE_META } from './marks.ts'
 export { Merges, Refused as MergeRefused, STATE_TEXT, type CardState, type MergesOptions } from './merges.ts'
 export { applyOwnerSchema, ownerSchema } from './owner.ts'
-export { Notifications, PushRefused, lineOf, subscriptionOf, CARD_TTL, LINE_MAX, MAX_SUBSCRIPTIONS, PUSH_DOMAINS, PUSH_HOSTS, RETRY_MS, type NotificationsOptions, type Send, type Subscription } from './notifications.ts'
+export { Notifications, PushRefused, lineOf, messageOf, subscriptionOf, CARD_TTL, LINE_MAX, MAX_SUBSCRIPTIONS, MESSAGE_MAX, PUSH_DOMAINS, PUSH_HOSTS, RECOVER_MS, RETRY_MS, type NotificationsOptions, type Send, type Subscription } from './notifications.ts'

@@ -32,6 +32,27 @@ function sameKey(subscription: PushSubscription, key: string): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i])
 }
 
+/**
+ * The person's opt-out, kept by the browser: once notifications are turned off, nothing turns them on again but the
+ * switch — not a subscription the browser failed to drop (docs/specs/notifications.md, "The client", "Off").
+ */
+const OFF_KEY = 'agora:notifications-off'
+function optedOut(): boolean {
+  try {
+    return localStorage.getItem(OFF_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+function optOut(off: boolean): void {
+  try {
+    if (off) localStorage.setItem(OFF_KEY, 'true')
+    else localStorage.removeItem(OFF_KEY)
+  } catch {
+    // Without storage, the server's copy alone says it: removed, nothing is sent.
+  }
+}
+
 /** The service worker, registered once the page opens; null where there is none. */
 export function registerWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return Promise.resolve(null)
@@ -68,6 +89,11 @@ export function usePush(api: Api): { status: PushStatus; toggle: () => void } {
       const registration = await registerWorker()
       if (registration === null) return setStatus('hidden')
       let subscription = await registration.pushManager.getSubscription().catch(() => null)
+      if (optedOut()) {
+        // Turned off: a subscription the browser kept is dropped again, never posted.
+        await subscription?.unsubscribe().catch(() => false)
+        return setStatus('off')
+      }
       if (Notification.permission !== 'granted' || subscription === null) {
         // A subscription without the permission shows nothing: gone with it.
         await subscription?.unsubscribe().catch(() => false)
@@ -112,16 +138,20 @@ export function usePush(api: Api): { status: PushStatus; toggle: () => void } {
       if (was === 'on') {
         const subscription = await registration.pushManager.getSubscription().catch(() => null)
         if (subscription !== null) {
-          await api.unsubscribe(subscription.endpoint).catch(() => false)
+          // The server's copy first: while it stands, pushes come, and the switch says on.
+          if (!(await api.unsubscribe(subscription.endpoint).catch(() => false))) return setStatus('on')
           await subscription.unsubscribe().catch(() => false)
         }
+        optOut(true)
         return setStatus('off')
       }
       const permission = await asked!
       if (permission !== 'granted') return setStatus(permission === 'denied' ? 'blocked' : 'off')
       const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }).catch(() => null)
       if (subscription === null) return setStatus('off')
-      setStatus((await api.subscribe(subscription.toJSON() as Record<string, unknown>).catch(() => false)) ? 'on' : 'off')
+      const stored = await api.subscribe(subscription.toJSON() as Record<string, unknown>).catch(() => false)
+      if (stored) optOut(false)
+      setStatus(stored ? 'on' : 'off')
     })()
   }, [api, key, status])
 
