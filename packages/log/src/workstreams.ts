@@ -26,6 +26,7 @@ import { type LogStore, type Answer, type Append, type Command, type Entry } fro
 import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
 import type { Notifications } from './notifications.ts'
+import type { FirstSessions } from './first-sessions.ts'
 import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { isRole } from './marks.ts'
 import { roleBlock, type Role } from './roles.ts'
@@ -120,6 +121,8 @@ export class Workstreams implements Handler {
   merges: Merges | null = null
   /** The notifications' engine (docs/specs/notifications.md), attached by the server. */
   notifications: Notifications | null = null
+  /** The pools' first Sessions (docs/specs/log.md, "Sessions"), attached by the server. */
+  firstSessions: FirstSessions | null = null
 
   constructor(options: WorkstreamsOptions) {
     this.options = options
@@ -196,6 +199,7 @@ export class Workstreams implements Handler {
     await this.delegations?.start()
     await this.merges?.start()
     await this.notifications?.start()
+    await this.firstSessions?.start()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
     if (this.store.files) this.sweeper = setInterval(() => void this.sweep(), this.options.sweepMs ?? 3_600_000)
   }
@@ -216,6 +220,7 @@ export class Workstreams implements Handler {
     if (this.sweeper !== null) clearInterval(this.sweeper)
     for (const timer of this.projecting.values()) clearTimeout(timer)
     this.projecting.clear()
+    await this.firstSessions?.stop()
     await this.notifications?.stop()
     await this.executions.drain(this.options.shutdownMs ?? 5000)
     await Promise.allSettled([...this.queues.values()])
