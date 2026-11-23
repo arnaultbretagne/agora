@@ -105,6 +105,29 @@ option or one text is its part's approval, anything else its part's interrupt, a
 Workstream whose agent waits on a permission or a form says "waiting for you" in the list, as one waiting on a
 question does, and the rows above it count it.
 
+## Notifications
+
+Three cards wait on the person: a form the agent asks, a delegation's approval, a merge card. When
+the projection makes one pending, it writes what to send in the same transaction; the server then
+sends it by Web Push to each browser the person turned notifications on in, unless the card was
+answered meanwhile. The message is the declarative one Safari shows by itself on an iPhone's Home
+Screen; elsewhere the client's service worker shows it. A tap opens the Workstream at its card, and
+the client, once shown, closes the notifications whose card is answered and sets the badge to what
+still waits.
+
+```mermaid
+sequenceDiagram
+    participant Log as Projection
+    participant Server
+    participant Push as Push service
+    participant Phone
+    Log->>Server: a card pending, and its notification, one commit
+    Server->>Server: still pending?
+    Server->>Push: encrypted, VAPID-signed
+    Push->>Phone: the notification, the badge
+    Phone->>Server: a tap: the Workstream, its card
+```
+
 ## Open questions
 
 - Long threads: everything is read at once.

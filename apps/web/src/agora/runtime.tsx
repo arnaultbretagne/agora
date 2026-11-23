@@ -10,6 +10,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import type { Account, Answer, Api, CommandKind, Config, Pool } from './api.ts'
 import { acceptOf, attachmentAdapter, composerAttachments, promptOf, type Block, type PromptCapabilities } from './attachments.ts'
 import { useLine, useList, useThread, type ListFeed } from './hooks.ts'
+import { registerWorker, tidy } from './push.ts'
 import type { Json, ThreadState } from './objects.ts'
 import type { Connection } from './stream.ts'
 import {
@@ -176,6 +177,25 @@ export function AgoraProvider({ api, id, onOpen, children }: { api: Api; id: str
   useEffect(() => {
     void api.account().then(setAccount, () => undefined)
   }, [api])
+  // docs/specs/notifications.md, "The client": the service worker; at start and each time the client is shown, the
+  // notifications whose card is answered closed and the badge set; a notification tapped opens its Workstream here.
+  useEffect(() => {
+    void registerWorker()
+    void tidy(api)
+    const shown = () => {
+      if (document.visibilityState === 'visible') void tidy(api)
+    }
+    const opened = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; workstream?: unknown } | null
+      if (data?.type === 'agora.open' && typeof data.workstream === 'string' && /^[0-9a-f-]{36}$/.test(data.workstream)) onOpen(data.workstream)
+    }
+    document.addEventListener('visibilitychange', shown)
+    navigator.serviceWorker?.addEventListener('message', opened)
+    return () => {
+      document.removeEventListener('visibilitychange', shown)
+      navigator.serviceWorker?.removeEventListener('message', opened)
+    }
+  }, [api, onOpen])
   const { state, connection } = useThread(api, id)
   // Its sub-streams' rows, read only once a line names a delegate.
   const delegating = useMemo(() => delegatesOf(state).length > 0, [state])

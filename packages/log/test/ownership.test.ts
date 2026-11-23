@@ -93,6 +93,11 @@ async function served(t: TestContext): Promise<Served> {
       const current = (await state(ws)).current
       return current?.session && current.connection ? current : null
     })
+    // The mock gives its commands right after the Session opens: their line in the log first, so that what a case
+    // reads of a Workstream's last position is not moved by the Session's opening (as Lab.open waits for them).
+    await until('the agent commands', async () =>
+      (await reader.entries(ws)).some((x) => x.method === 'session/update' && (x.content.params as { update?: { sessionUpdate?: string } } | undefined)?.update?.sessionUpdate === 'available_commands_update'),
+    )
     return { headers, owner: identity('owner', email), ws, execution: e.id }
   }
   const [a, b] = [await open(tokens.a, 'a@example.org'), await open(tokens.b, 'b@example.org')]

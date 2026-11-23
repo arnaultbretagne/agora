@@ -25,6 +25,7 @@ import type { Bundle } from '@agora/harness-bridge/anchor'
 import { type LogStore, type Answer, type Append, type Command, type Entry } from './store.ts'
 import type { Delegations } from './delegation.ts'
 import type { Merges } from './merges.ts'
+import type { Notifications } from './notifications.ts'
 import { acceptsPrompt, childWorking, isApproval, isMerge, roleOf, STEERING, waited, type Execution, type PromptCapabilities, type State } from './state.ts'
 import { isRole } from './marks.ts'
 import { roleBlock, type Role } from './roles.ts'
@@ -117,6 +118,8 @@ export class Workstreams implements Handler {
   delegations: Delegations | null = null
   /** The merge cards' engine (docs/specs/merge.md), attached by the server. */
   merges: Merges | null = null
+  /** The notifications' engine (docs/specs/notifications.md), attached by the server. */
+  notifications: Notifications | null = null
 
   constructor(options: WorkstreamsOptions) {
     this.options = options
@@ -192,6 +195,7 @@ export class Workstreams implements Handler {
     // docs/specs/delegation.md: the approvals no call holds any more expire; the outcomes not reported are found again.
     await this.delegations?.start()
     await this.merges?.start()
+    await this.notifications?.start()
     this.timer = setInterval(() => void this.tick(), this.options.tickMs ?? 1000)
     if (this.store.files) this.sweeper = setInterval(() => void this.sweep(), this.options.sweepMs ?? 3_600_000)
   }
@@ -212,6 +216,7 @@ export class Workstreams implements Handler {
     if (this.sweeper !== null) clearInterval(this.sweeper)
     for (const timer of this.projecting.values()) clearTimeout(timer)
     this.projecting.clear()
+    await this.notifications?.stop()
     await this.executions.drain(this.options.shutdownMs ?? 5000)
     await Promise.allSettled([...this.queues.values()])
     await this.executions.stop()

@@ -212,6 +212,8 @@ interface SubOptions {
   title?: string
   /** It asks a permission, and waits for the answer: each of them, or the one of that rank alone. */
   permission?: boolean | number
+  /** It asks a form, as Claude Code's AskUserQuestion, under its own session id, and waits for the answer. */
+  form?: boolean
   /** It starts a sub-agent of its own. */
   nested?: boolean
   /** No task is reported, as Codex; no `cancel` is offered. */
@@ -282,6 +284,16 @@ async function subagent(parent: string, id: string, options: SubOptions): Promis
     ]).then((outcome) => {
       if (outcome === 'gave up') me.cancelled = true
     })
+    if (!me.cancelled) state({ state: 'running' })
+  }
+  if (options.form && !me.cancelled) {
+    state({ state: 'requires_action' })
+    await Promise.race([
+      request('elicitation/create', askUserQuestion(ASKS.one!, id, toolCallId)),
+      new Promise<void>((resolve) => {
+        me.wake = resolve
+      }),
+    ])
     if (!me.cancelled) state({ state: 'running' })
   }
   if (options.nested && !me.cancelled) await subagent(id, `${id}-below`, { n: 1, title: `${title}, one level down` })

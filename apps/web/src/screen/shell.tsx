@@ -5,13 +5,14 @@
 // at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
 // frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
-import { ChevronRightIcon, ChevronUpIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
+import { BellIcon, BellOffIcon, ChevronRightIcon, ChevronUpIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
 import { cn } from '@/lib/utils'
 import { useList, useSearch, useWords, type ListFeed } from '../agora/hooks.ts'
 import { useAgora } from '../agora/runtime.tsx'
+import { usePush, type PushStatus } from '../agora/push.ts'
 import { excerpt, harnessName, merged, sections, type Excerpt, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
 import { Thread } from './thread.tsx'
@@ -262,7 +263,8 @@ const accountItemClass =
  * out. None without the proxy's identity.
  */
 const AccountMenu: FC = () => {
-  const { account } = useAgora()
+  const { account, api } = useAgora()
+  const push = usePush(api)
   if (account.email === null) return null
   const own = account.email
   return (
@@ -279,6 +281,7 @@ const AccountMenu: FC = () => {
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content side="top" align="start" sideOffset={6} className={accountMenuClass}>
+            <NotificationsItem status={push.status} toggle={push.toggle} />
             <DropdownMenu.Item asChild className={accountItemClass}>
               <a href="/oauth2/sign_out?rd=%2F">
                 <LogOutIcon className="mt-0.5 size-3.5 shrink-0" />
@@ -289,6 +292,37 @@ const AccountMenu: FC = () => {
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
     </div>
+  )
+}
+
+/** What the account's Notifications item says (docs/specs/notifications.md, "The client"). */
+const PUSH_TEXT: Readonly<Record<Exclude<PushStatus, 'hidden'>, string>> = {
+  install: 'Add Agora to your Home Screen for notifications',
+  blocked: 'Notifications are blocked in this browser’s settings',
+  off: 'Notifications: off',
+  on: 'Notifications: on',
+  busy: 'Notifications…',
+}
+
+/** The switch: on or off; what stands in the way, said; none when the server sends none. */
+const NotificationsItem: FC<{ status: PushStatus; toggle: () => void }> = ({ status, toggle }) => {
+  if (status === 'hidden') return null
+  const Icon = status === 'on' ? BellIcon : BellOffIcon
+  const usable = status === 'on' || status === 'off'
+  return (
+    <DropdownMenu.Item
+      className={accountItemClass}
+      disabled={!usable}
+      data-notifications={status}
+      onSelect={(event) => {
+        // The menu stays open: the person sees the switch turn.
+        event.preventDefault()
+        toggle()
+      }}
+    >
+      <Icon className="mt-0.5 size-3.5 shrink-0" />
+      {PUSH_TEXT[status]}
+    </DropdownMenu.Item>
   )
 }
 

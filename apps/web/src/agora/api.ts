@@ -166,6 +166,33 @@ export class Api {
     return ((await this.read('/api/limits')).body.limits ?? {}) as unknown as Record<string, AccountLimits>
   }
 
+  /** The VAPID key notifications subscribe with (docs/specs/notifications.md, "Subscriptions"); null when the server sends none. */
+  async pushKey(): Promise<string | null> {
+    const { status, body } = await this.read('/api/push')
+    return status === 200 && typeof body.key === 'string' ? body.key : null
+  }
+
+  /** A browser's subscription, stored for the caller; the owner only counts without the proxy. */
+  async subscribe(subscription: Json): Promise<boolean> {
+    const { status } = await this.read('/api/push/subscriptions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...subscription, owner: NOBODY }) })
+    return status === 200
+  }
+
+  async unsubscribe(endpoint: string): Promise<boolean> {
+    const { status } = await this.read('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint, owner: NOBODY }) })
+    return status === 200
+  }
+
+  /** The caller's cards pending for the person (docs/specs/notifications.md, "Subscriptions"); null when it cannot be read. */
+  async pendingCards(): Promise<{ workstream: string; position: string; kind: string }[] | null> {
+    const { status, body } = await this.read(`/api/push/pending?${new URLSearchParams({ owner: NOBODY }).toString()}`)
+    if (status !== 200 || !Array.isArray(body.cards)) return null
+    return body.cards.map((c) => {
+      const card = c as { workstream?: unknown; position?: unknown; kind?: unknown }
+      return { workstream: String(card.workstream), position: String(card.position), kind: String(card.kind) }
+    })
+  }
+
   async create(id: string): Promise<Answer> {
     const { status, body } = await this.read('/api/workstreams', {
       method: 'POST',

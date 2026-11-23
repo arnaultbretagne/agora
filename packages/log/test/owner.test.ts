@@ -32,7 +32,7 @@ test('V7 the owner schema on a login that owns its database and may create no ro
   await applyOwnerSchema(url.href)
   await applyOwnerSchema(url.href)
   const tables = (await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY 1")).rows.map((r) => r.tablename as string)
-  assert.deepEqual(tables, ['anchors', 'checkpoints', 'commands', 'diagnostics', 'entries', 'files', 'listings', 'lists', 'objects', 'sessions', 'threads', 'workstreams'])
+  assert.deepEqual(tables, ['anchors', 'checkpoints', 'commands', 'diagnostics', 'entries', 'files', 'listings', 'lists', 'objects', 'push_notifications', 'push_subscriptions', 'sessions', 'threads', 'workstreams'])
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM pg_extension WHERE extname='pg_trgm'")).rows[0].n, 1)
   assert.doesNotMatch(ownerSchema(sql), /agora_(writer|projector|anchors)/)
   // The log on that one login: its boundaries not asked, a Workstream written and read.

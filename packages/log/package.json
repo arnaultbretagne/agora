@@ -22,7 +22,8 @@
     "ajv-formats": "3.0.1",
     "jose": "6.2.12",
     "lossless-json": "4.3.0",
-    "pg": "8.16.3"
+    "pg": "8.16.3",
+    "web-push": "4.0.0"
   },
   "devDependencies": {
     "@agora/testkit": "0.0.0",

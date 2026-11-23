@@ -13,6 +13,7 @@ the views and the thread, in PostgreSQL. It mounts the execution mechanics of
 | `src/catch-up.ts` | Continuing a Workstream: the anchor a Create restores, and the exchanges given as text with the first prompt. |
 | `src/projection.ts` | Views, checkpoints, rebuilds and the thread. |
 | `src/http.ts` | The HTTP routes. |
+| `src/notifications.ts` | Notifications (`docs/specs/notifications.md`): the cards a projection makes pending, sent by Web Push to the owner's subscriptions. |
 | `src/telemetry.ts` | The operational logger. |
 | `sql/001.sql` | The schema and the three roles. |
 | `scripts/` | Migration and login provisioning. |

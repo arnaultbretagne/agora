@@ -14,6 +14,7 @@ import { MAX_LINE } from './acp.ts'
 import { HEAD_LIMIT, OUTPUT_MODES, read, READ_LIMIT, search, type OutputMode } from './search.ts'
 import { isDigest } from './files.ts'
 import { refuseUnproven, type Identity } from './identity.ts'
+import { PushRefused } from './notifications.ts'
 
 /** The types a file is served as (docs/specs/files.md, "Reading a file"); any other is an attachment. */
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -29,6 +30,7 @@ const VALIDATION = new Set([
   'invalid_json',
   'duplicate_key',
   'unsafe_key',
+  'invalid_subscription',
 ])
 
 export interface LogHttpOptions {
@@ -59,7 +61,8 @@ export async function logHttp(
   const url = new URL(req.url ?? '/', 'http://agora')
   const anchors = url.pathname === '/api/anchors' || url.pathname.startsWith('/api/anchors/')
   const file = /^\/api\/files\/([^/]+)$/.exec(url.pathname)
-  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !file && !['/api/pools', '/api/account', '/api/search', '/api/log-json.js'].includes(url.pathname)) return false
+  const push = url.pathname === '/api/push' || url.pathname.startsWith('/api/push/')
+  if (!url.pathname.startsWith('/api/workstreams') && !anchors && !file && !push && !['/api/pools', '/api/account', '/api/search', '/api/log-json.js'].includes(url.pathname)) return false
   // docs/specs/log.md, "Identity": a request that proves nobody gets nothing of the log.
   if (await refuseUnproven(options.identity, req, res)) return true
   if (url.pathname === '/api/log-json.js' && req.method === 'GET') {
@@ -114,6 +117,27 @@ export async function logHttp(
     const caller = who === null ? undefined : (options.owner ?? who.owner)
     const email = who?.email ?? null
     if (req.method === 'GET' && url.pathname === '/api/account') return reply(200, { email }), true
+    if (push) {
+      // docs/specs/notifications.md, "Subscriptions": the caller's own; with no identity, the owner the query or the body gives.
+      const notifications = workstreams.notifications
+      if (notifications === null) return reply(404, { reason: 'push_unavailable' }), true
+      if (req.method === 'GET' && url.pathname === '/api/push') return reply(200, { key: notifications.key }), true
+      if (req.method === 'GET' && url.pathname === '/api/push/pending')
+        return reply(200, { cards: await notifications.pending(caller ?? uuid(url.searchParams.get('owner'))) }), true
+      if (url.pathname === '/api/push/subscriptions' && (req.method === 'POST' || req.method === 'DELETE')) {
+        const input = await body()
+        const owner = caller ?? uuid(input.owner ?? url.searchParams.get('owner'))
+        try {
+          if (req.method === 'POST') await notifications.subscribe(owner, input)
+          else await notifications.unsubscribe(owner, input.endpoint)
+        } catch (error) {
+          if (error instanceof PushRefused) return reply(error.message === 'too_many_subscriptions' ? 409 : 400, { reason: error.message }), true
+          throw error
+        }
+        return reply(200, {}), true
+      }
+      return reply(404, { reason: 'unknown_route' }), true
+    }
     if (file) {
       // docs/specs/files.md, "Reading a file": a file an entry of the caller's Workstreams names, streamed from R2.
       if (req.method !== 'GET') return reply(405, { reason: 'method_refused' }), true

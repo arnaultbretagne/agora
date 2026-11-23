@@ -20,7 +20,7 @@ One document per subject, with, as they apply:
 - **Normative.** Every statement is checkable against the code or a live run.
 - **Cases have stable IDs**: the subject's letter and a number — `E` for executions, `C` for
   credentials, `L` for the log, `U` for the client, `S` for search, `M` for the MCP, `D` for
-  delegation, `G` for the merge card, `B` for files, `P` for roles, `V` for previews — `R` names a run. `F` was the flows'. An ID is never reused for another case.
+  delegation, `G` for the merge card, `N` for notifications, `B` for files, `P` for roles, `V` for previews — `R` names a run. `F` was the flows'. An ID is never reused for another case.
 - **Expected states every clause a test must assert**: values, counts, refusal reasons.
 - **No measurements.** Evidence lives in `reliability/`.
 - **No reasons.** Why a rule exists belongs in the subject's ADR; how it fits together, in

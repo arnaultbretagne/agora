@@ -110,6 +110,22 @@ CREATE TABLE IF NOT EXISTS listings (
  changed_at timestamptz NOT NULL, title text NOT NULL, row jsonb NOT NULL, UNIQUE(owner,position)
 );
 CREATE INDEX IF NOT EXISTS listings_recent ON listings(owner,changed_at DESC,workstream DESC);
+-- Notifications (docs/specs/notifications.md): each browser that turned them on, for its owner; each card to send,
+-- once per Workstream and card position, written with the view that makes it pending.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+ endpoint text PRIMARY KEY CHECK(length(endpoint) <= 1024), owner uuid NOT NULL, p256dh text NOT NULL, auth text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS push_subscriptions_owner ON push_subscriptions(owner);
+CREATE TABLE IF NOT EXISTS push_notifications (
+ workstream uuid NOT NULL REFERENCES workstreams(id), position bigint NOT NULL, owner uuid NOT NULL,
+ kind text NOT NULL CHECK(kind IN ('form','approval','merge')), title text NOT NULL, body text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL,
+ state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','sent','dropped')),
+ done text[] NOT NULL DEFAULT '{}', delivered boolean NOT NULL DEFAULT false, attempts integer NOT NULL DEFAULT 0,
+ next_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(workstream,position)
+);
+CREATE INDEX IF NOT EXISTS push_notifications_pending ON push_notifications(next_at) WHERE state = 'pending';
 -- A user's message in a transcript: its blocks, one after the other.
 CREATE OR REPLACE FUNCTION transcript_user_text(element jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT string_agg(part, E'\n' ORDER BY i) FROM (
@@ -179,8 +195,8 @@ $$;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS objects_text ON objects USING gin (transcript_text(type, object) gin_trgm_ops)
  WHERE kind = 'element' AND type IN ('user', 'agent_message_chunk', 'tool');
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings FROM PUBLIC;
-REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings FROM agora_writer,agora_projector,agora_anchors;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings,push_subscriptions,push_notifications FROM PUBLIC;
+REVOKE ALL ON workstreams,threads,entries,commands,sessions,diagnostics,anchors,files,objects,checkpoints,lists,listings,push_subscriptions,push_notifications FROM agora_writer,agora_projector,agora_anchors;
 REVOKE SELECT(content) ON anchors FROM agora_writer,agora_projector;
 -- Only the log's roles connect, besides the owner applying this file.
 DO $$ BEGIN
@@ -208,6 +224,8 @@ GRANT SELECT(workstream,projector,version,position), INSERT(workstream,projector
 GRANT DELETE ON checkpoints TO agora_projector;
 GRANT SELECT(owner,last_position), INSERT(owner), UPDATE(last_position) ON lists TO agora_projector;
 GRANT SELECT(workstream,owner,position,changed_at,title,row), INSERT(workstream,owner,position,changed_at,title,row), UPDATE(position,changed_at,title,row) ON listings TO agora_projector;
+GRANT SELECT(endpoint,owner,p256dh,auth,created_at), INSERT(endpoint,owner,p256dh,auth), UPDATE(owner,p256dh,auth), DELETE ON push_subscriptions TO agora_projector;
+GRANT SELECT(workstream,position,owner,kind,title,body,created_at,expires_at,state,done,delivered,attempts,next_at), INSERT(workstream,position,owner,kind,title,body,expires_at), UPDATE(state,done,delivered,attempts,next_at) ON push_notifications TO agora_projector;
 GRANT SELECT(id,owner) ON workstreams TO agora_anchors;
 GRANT SELECT(workstream,execution,session,kind,position,files) ON entries TO agora_anchors;
 GRANT SELECT(id,workstream,execution,acp_id,opened_position,ended_position) ON sessions TO agora_anchors;
