@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { test } from 'node:test'
-import { CoreProjection, object, type Entry } from '../src/index.ts'
+import { CoreProjection, FIRST_SESSIONS_OWNER, object, type Entry } from '../src/index.ts'
 import { schemaValue } from '../src/json.ts'
 import { call, database, expire, FakeKube, Lab, lines, until } from './support.ts'
 
@@ -251,6 +251,63 @@ test('L65 GET /api/pools: a newer pool of a harness, never opened, offers its ha
   assert.equal(current(opened!.settings, 'model'), 'mock-small', 'the pool opened: its own Session')
   assert.deepEqual([newer!.settings, newer!.commands], [opened!.settings, opened!.commands], 'the newer pool: its harness\'s last Session')
   assert.deepEqual([other!.settings, other!.commands], [null, []], 'another harness: nothing')
+})
+
+test('L185 the first Sessions: pools none has opened in, one kept for the tests, a newer one while the quota is taken, then free', async (t) => {
+  const db = await database()
+  const keys = generateKeyPairSync('ed25519')
+  const kube = new FakeKube(keys.publicKey)
+  kube.purpose['claude-test'] = 'testing'
+  const lab = await Lab.start({ db, kube, keys, workstreams: { maxActive: 1 }, firstSessions: { everyMs: 200 } })
+  t.after(async () => {
+    await lab.close()
+    await kube.closeAll()
+    await db.drop()
+  })
+  const writer = lab.store.writer
+  const own = async () => (await writer.query('SELECT id FROM workstreams WHERE owner=$1 ORDER BY id', [FIRST_SESSIONS_OWNER])).rows.map((r) => r.id as string)
+  const commands = async () =>
+    (await writer.query("SELECT e.workstream, e.content FROM entries e JOIN workstreams w ON w.id=e.workstream WHERE w.owner=$1 AND e.kind='command' ORDER BY e.time", [FIRST_SESSIONS_OWNER])).rows.map(
+      (r) => ({ workstream: r.workstream as string, kind: String(r.content.kind), body: object(r.content.body)! }),
+    )
+  const catalogue = async () => (await call(lab.url, 'GET', '/api/pools')).body.pools as Record<string, unknown>[]
+  const pool = async (name: string) => (await catalogue()).find((p) => p.name === name)!
+
+  // The pool none has opened in: one Workstream of the server's owner, one Create, no message, the shortest lease.
+  const first = await until('mock-test opened', async () => ((await pool('mock-test')).settings === null ? null : await own()), 10_000)
+  assert.equal(first.length, 1, 'one Workstream for mock-test')
+  const created = await commands()
+  assert.deepEqual(created.map((c) => [c.workstream, c.kind, c.body.pool]), [[first[0], 'Create', 'mock-test']], 'one Create, mock-test, none for the pool kept for the tests')
+  assert.equal(object(created[0]!.body.limits)?.leaseSeconds, 60, 'the shortest lease')
+  assert.equal(created[0]!.body.prompt, undefined, 'no message')
+  assert.equal((await lab.state(first[0]!)).turns.size, 0, 'no turn')
+  const opened = (await view(lab, first[0]!)).settings
+  assert.notEqual(opened, null)
+  assert.deepEqual((await pool('mock-test')).settings, opened, 'the catalogue: its own Session’s settings')
+  assert.deepEqual([(await pool('claude-test')).settings, (await pool('claude-test')).testing], [null, true], 'the pool kept for the tests: none')
+
+  // A newer pool while mock-test's first Session holds the only place: its Workstream, no Create.
+  kube.morePools.push(['mock-newer', 'mock'])
+  const held = await until('mock-newer tried', async () => ((await own()).length === 2 ? await own() : null), 20_000)
+  const newer = held.find((id) => id !== first[0])!
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.deepEqual((await commands()).map((c) => c.body.pool), ['mock-test'], 'refused at quota: no Create for mock-newer yet')
+  assert.equal((await own()).length, 2, 'tried again in the same Workstream')
+
+  // The place free: mock-newer's Create, in that Workstream; mock-test none again.
+  const claim = (await lab.state(first[0]!)).current!.claimName
+  await expire(kube, claim)
+  await until('mock-newer opened', async () => ((await lab.workstreams.projections.objects(newer)).find((o) => o.kind === 'workstream')?.object.settings ?? null) !== null, 20_000)
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.deepEqual(
+    (await commands()).map((c) => [c.workstream, c.body.pool]),
+    [
+      [first[0], 'mock-test'],
+      [newer, 'mock-newer'],
+    ],
+    'one Create per pool, each in its own Workstream',
+  )
+  assert.deepEqual(await own(), held, 'no other Workstream')
 })
 
 test('L53 a Create whose settings is not an object of strings: invalid_create', async (t) => {

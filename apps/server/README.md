@@ -23,6 +23,7 @@ which takes only the grants this server signs (`docs/specs/mcp.md`, "The caller"
 | `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Lease, maximum turn duration, renewal step. |
 | `APPROVAL_SECONDS` | 270 | How long an approval of a `spawn_agent` call waits for the person (`docs/specs/delegation.md`, "Approval"). |
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
+| `FIRST_SESSIONS_SECONDS` | 30 | How often the pools are looked at for one none has opened a Session in (`docs/specs/log.md`, "Sessions"): its first Session takes a place under `MAX_ACTIVE` for one lease of 60 s. `0`: none. |
 | `TEST_ROUTES` | — | `true` to open the test routes and page. |
 | `IDENTITY` | required | Who calls port 8080 (`docs/specs/log.md`, "Identity"): `oidc` in production, `none` for tests and local runs. A preview's is `none`. |
 | `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE` | required with `oidc` | The issuer of the ID tokens, as their `iss` names it (`https://id.bretagne.dev`), and Agora's client id there, their `aud`. |

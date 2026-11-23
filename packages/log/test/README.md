@@ -22,7 +22,7 @@ One test per acceptance case of `docs/specs/log.md` (L…), and the cases of
 | `telemetry.test.ts` | The operational logs: L28. |
 | `executions.test.ts` | E3, E4, E12, E13. |
 | `credentials.test.ts` | The execution's token before `initialize`, its renewal, the Create's profiles, those offered, the MCP servers they open: C10, C12, C14, C20, C43. |
-| `settings.test.ts` | A Session's settings and commands, Configure, the catalogue's: L47–L53. |
+| `settings.test.ts` | A Session's settings and commands, Configure, the catalogue's, a pool's first Session: L47–L53, L185. |
 | `scope.test.ts` | Scope and the token that follows it, across a restart: C17–C19, C21, L54, L55. |
 | `restore.test.ts` | An anchor placed before `initialize`, onto an adapter restarted to read it: E29. |
 | `files.test.ts` | Files in R2: references, the bucket failing, anchors, the route, the sweep, the move: B1–B10. |

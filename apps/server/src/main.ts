@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnchorReceiver, createApi, ExecutionManager, HttpKube, privateKeyFrom, type KubeApi } from '@agora/executions'
-import { Delegations, Files, Identity, LogStore, Merges, Notifications, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
+import { Delegations, Files, FirstSessions, Identity, LogStore, Merges, Notifications, Workstreams, applyOwnerSchema, createMcpServer, describeRoles, loadRoles, logHttp, ownersOf, refuseUnproven, telemetry } from '@agora/log'
 import { GrantSigner, OperatorGitHub, SubscriptionLimits, limitsHttp, offeredProfiles } from '@agora/credentials'
 import { serveClient } from './client.ts'
 import { MemoryFiles, NAMESPACE, PreviewKube, SHARED_OWNER, previewDatabase, previewKeys, previewOffer } from './preview.ts'
@@ -144,6 +144,10 @@ try {
     })
   // docs/specs/notifications.md: the three cards that wait on the person, sent to their subscriptions.
   if (push !== null) new Notifications(workstreams, { ...push, sink })
+  // docs/specs/log.md, "Sessions": a Session opened in each pool none has opened in, so that the catalogue offers what
+  // its image does; the pools looked at every FIRST_SESSIONS_SECONDS, 30 s, never with 0 or in a preview.
+  const firstSessionsSeconds = number('FIRST_SESSIONS_SECONDS', 30)
+  if (preview === null && firstSessionsSeconds > 0) new FirstSessions(workstreams, { everyMs: firstSessionsSeconds * 1000 })
   await workstreams.start()
 } catch (error) {
   // Another server owns the database (docs/specs/log.md, "Database ownership"): refused, not failed.

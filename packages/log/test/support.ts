@@ -16,7 +16,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { FakeS3, keys } from '@agora/testkit'
 import { FakeKube } from '../../executions/test/fake-kube.ts'
 import { serveFakeKube, type FakeKubeApi } from '../../executions/test/fake-kube-api.ts'
-import { Delegations, Files, Notifications, type NotificationsOptions, Identity, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
+import { Delegations, Files, FirstSessions, type FirstSessionsOptions, Notifications, type NotificationsOptions, Identity, LogStore, Workstreams, logHttp, decode, encode, object, type WorkstreamsOptions, type Answer, type Command, type State, type Execution, type Entry, type ThreadRow } from '../src/index.ts'
 
 export const POOL = 'mock-test'
 
@@ -251,6 +251,8 @@ export interface LabOptions {
   readonly delegations?: ConstructorParameters<typeof Delegations>[1]
   /** The notifications' engine (docs/specs/notifications.md), as the server attaches it: through its start, and each restart's. */
   readonly notifications?: NotificationsOptions
+  /** The pools' first Sessions (docs/specs/log.md, "Sessions"), as the server attaches them. */
+  readonly firstSessions?: FirstSessionsOptions
   /** The files' bucket (docs/specs/files.md); the file's shared one by default. */
   readonly s3?: FakeS3
 }
@@ -317,6 +319,7 @@ export class Lab {
     })
     if (options.delegations) new Delegations(this.workstreams, options.delegations)
     if (options.notifications) new Notifications(this.workstreams, options.notifications)
+    if (options.firstSessions) new FirstSessions(this.workstreams, options.firstSessions)
   }
 
   static async start(options: LabOptions): Promise<Lab> {
@@ -478,6 +481,8 @@ export class Server {
         TEST_ROUTES: 'true',
         // docs/specs/log.md, "Identity": the proxy's header as it comes, and with none every owner open.
         IDENTITY: 'none',
+        // docs/specs/log.md, "Sessions": no Session of the server's own unless a test asks for them (L185 is on a Lab).
+        FIRST_SESSIONS_SECONDS: '0',
         ...s3.env(),
         ...options.env,
       },
