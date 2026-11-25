@@ -165,7 +165,10 @@ const OWN_PROFILES: Readonly<Record<string, () => Grant[]>> = {
   ],
 }
 
-/** What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the Internet. */
+/**
+ * What a pool may declare for its warm Pods (docs/specs/credentials.md, "Base profiles"): a service, never a repository nor the
+ * Internet. A harness's infrastructure, a pool's alone: never offered, never named by a Create, a Scope or a delegate's `rights`.
+ */
 export const BASE_PROFILES: ReadonlySet<string> = new Set(['anthropic', 'zai', 'chatgpt', 'antigravity'])
 
 /** The annotation on a SandboxWarmPool that declares its base profiles, separated by commas. */
@@ -194,18 +197,25 @@ export function compileProfiles(profiles: readonly string[]): Grant[] {
   return profiles.flatMap(compileProfile)
 }
 
-/** `OFFERED_PROFILES`, read (docs/specs/credentials.md, "Offered profiles"): each profile once, all known to the catalogue. */
+/** A profile that may be offered: known to the catalogue, and not a base profile, which is a pool's alone. */
+function checkOffered(profile: string): void {
+  if (BASE_PROFILES.has(profile)) throw new ProfileRefused(`base profile, a pool's alone, never offered: ${profile}`)
+  compileProfile(profile)
+}
+
+/** `OFFERED_PROFILES`, read (docs/specs/credentials.md, "Offered profiles"): each profile once, all known to the catalogue, none a base profile. */
 export function offeredProfiles(value: string | undefined): string[] {
   const profiles = [...new Set((value ?? '').split(',').map((p) => p.trim()).filter((p) => p !== ''))]
-  for (const profile of profiles) compileProfile(profile)
+  for (const profile of profiles) checkOffered(profile)
   return profiles
 }
 
 /**
  * Whether a profile may be named, given those offered: itself; a default profile, always; the read or the review of a
- * repository under its write, its read under its review; the vault's read under its write.
+ * repository under its write, its read under its review; the vault's read under its write. Never a base profile.
  */
 export function offers(offered: readonly string[], profile: string): boolean {
+  if (BASE_PROFILES.has(profile)) return false
   if (offered.includes(profile) || DEFAULT_PROFILES.includes(profile)) return true
   const github = /^(github:[^:]+):(read|review)$/.exec(profile)
   if (github !== null) return offered.includes(`${github[1]!}:write`) || (github[2] === 'read' && offered.includes(`${github[1]!}:review`))
@@ -220,7 +230,7 @@ export interface GrantSignerOptions {
   readonly issuer: string
   readonly audience: string
   /**
-   * What an execution may be given beyond its pool's base profiles; any profile when empty. A default profile listed
+   * What an execution may be given beyond its pool's base profiles, never one of them; any other profile when empty. A default profile listed
    * here is not offered again (`describe`), and still keeps the list from being empty.
    */
   readonly offered?: readonly string[]
@@ -242,7 +252,7 @@ export class GrantSigner {
   private key: KeyObject | null = null
 
   constructor(options: GrantSignerOptions) {
-    for (const profile of options.offered ?? []) compileProfile(profile)
+    for (const profile of options.offered ?? []) checkOffered(profile)
     this.options = options
   }
 

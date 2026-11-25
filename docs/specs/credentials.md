@@ -119,6 +119,18 @@ service — never a repository, nor `internet`, nor the vault.
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
 
+A base profile is a harness's infrastructure, never a right a person or a delegating agent picks:
+its pool alone gives it.
+
+| Element | Rule |
+| --- | --- |
+| Declared | On a pool alone, by its annotation. |
+| Offered | Never. `OFFERED_PROFILES` naming one stops the server at start, as a profile the catalogue does not know ("Offered profiles"); `GET /api/config` never lists one in `offered`. |
+| Named | Never: a Create, a Scope or a delegate's `rights` (`delegation.md`) naming one is refused, `unknown_profile`, whatever `OFFERED_PROFILES` says, the variable unset included; nothing is written, no token handed. |
+| The access picker | Shows none (`assistant-ui.md`, "Access"). |
+| Held | By every execution of the pool, from its Create's `baseProfiles` ("On Agora's side"): its warm token names them, and its execution's token beside its own profiles. They feed `GET /api/limits` ("Limits"). |
+| `POST /api/workstreams/{id}/credentials` | Test only, it may still name one: the live cases of the gateway's chains go through it. |
+
 ### Default profiles
 
 Every new execution holds `agora:read` and `previews` without anyone naming them, whether a person's
@@ -148,14 +160,14 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`, `kubernetes:read`, `agora:delegate` | Itself |
+| `internet`, `kubernetes:read`, `agora:delegate` | Itself |
 | Anything, or nothing | `agora:read` and `previews`, the default profiles ("Default profiles") |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
 and the user may pick the narrower one. Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
-catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
-the server at start.
+catalogue may be named but a base one, and the interface offers none. A profile the catalogue does not know, or a base profile
+("Base profiles"), stops the server at start.
 
 ### MCP servers
 
@@ -598,12 +610,12 @@ Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, it
 | Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready, has an address and is still owned by a pool declaring base profiles, it hands a warm token bound to that address (`PUT /credentials`), and a new one when less than a third of its life remains. |
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the execution's own. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
 | Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute, or names other profiles than the execution's; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt. |
-| The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); the default profiles it does not name added after them ("Default profiles"); recorded with the command. Its pool's base profiles are recorded beside them, as `baseProfiles`: the execution's until it ends, its pool replaced by a newer image's or declaring others meanwhile. A Create that recorded none, written before they were: its pool's, while the catalogue lists it. |
+| The Create | `profiles`, optional: the execution's own. Checked against the catalogue, a base profile refused as unknown (`unknown_profile`, "Base profiles"), and the offered profiles (`profile_not_offered`); the default profiles it does not name added after them ("Default profiles"); recorded with the command. Its pool's base profiles are recorded beside them, as `baseProfiles`: the execution's until it ends, its pool replaced by a newer image's or declaring others meanwhile. A Create that recorded none, written before they were: its pool's, while the catalogue lists it. |
 | Scope | The execution's own profiles replaced, between turns (`log.md`, "Commands"): the whole set, checked as the Create's, recorded with the command. If the execution is connected, its new token is handed at once, its tunnels closed — a turn has nothing in flight then; if that fails, before the next prompt, as above. |
 | `POST /api/workstreams/{id}/credentials` | Test only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
-| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), never a default profile, or nothing. |
+| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), never a default profile nor a base one, or nothing. |
 | Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`, `OFFERED_PROFILES`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
 
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
@@ -740,3 +752,5 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C76 | An execution of a pool declaring `anthropic`, that pool replaced in the catalogue by another of its harness declaring `chatgpt`: a prompt, then a Scope; another execution, Agora restarted once its pool is replaced, then a prompt | `anthropic` recorded with the Create; no new token before the prompt, the Scope's `anthropic` and the Scope's own. After the restart, a token before the prompt, naming `anthropic` and the execution's own. Never `chatgpt`. |
 | C77 | An execution whose Create recorded no base profiles, its pool listed and declaring `anthropic`; another, its pool replaced: Agora restarted, then a prompt in each | A token naming `anthropic` and the execution's own; the other's naming its own alone. |
 | C78 | Two executions, the pool of one declaring `anthropic`, of the other nothing; both pools declaring `chatgpt` since; Agora restarted, then a prompt in each | Each token names what its Create recorded and the execution's own, as before: `anthropic` for one, no base profile for the other, never `chatgpt`. |
+| C79 | `OFFERED_PROFILES` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, each beside other profiles; a signer given one; the offer without them | The server stops at start, the signer refused, for each, as for a profile the catalogue does not know; each never offered (`offers` false), even listed; the others offered as before, `GET /api/config`'s `offered` without a base profile. |
+| C80 | A pool declaring `anthropic`; a Create, a Scope and a `spawn_agent` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, `OFFERED_PROFILES` empty, then listing other profiles; the same Create without it | Each `unknown_profile`, nothing written — no Create, no Scope, no Workstream, no approval —, no token handed; the Create without it accepted, its `baseProfiles` `anthropic`, its token naming `anthropic` and its own profiles. |

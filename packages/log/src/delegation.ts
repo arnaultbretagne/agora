@@ -4,7 +4,7 @@
 // (docs/specs/log.md, "Messages during a turn"). A call giving more rights than the caller holds waits for the person.
 // Everything is read back from the log.
 import { randomUUID } from 'node:crypto'
-import { offers } from '@agora/credentials'
+import { BASE_PROFILES, offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
 import { contentRefusal, fieldsText, patternRefusal } from './forms.ts'
 import { canonical, identity, object, UUID } from './json.ts'
@@ -324,6 +324,8 @@ export class Delegations {
     const pool = pools.find((p) => p.harness === harness || p.name === harness)
     if (!pool) throw new Refused('unknown_harness')
     const rights = Array.isArray(args.rights) ? args.rights.map(String) : []
+    // A base profile is a pool's alone (docs/specs/credentials.md, "Base profiles"): refused before any approval or Workstream.
+    if (rights.some((r) => BASE_PROFILES.has(r))) throw new Refused('unknown_profile')
     const offered = this.workstreams.options.credentials?.offered ?? []
     if (offered.length > 0 && rights.some((r) => !offers(offered, r))) throw new Refused('profile_not_offered')
     const settings: Record<string, string> = {}

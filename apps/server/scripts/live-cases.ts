@@ -784,13 +784,14 @@ await check('C10', 'At the claim: the execution’s token before initialize', as
 
 await check('C12', 'A token that would run out during the next turn', async () => {
   const w = new Workstream()
-  // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt.
-  await w.open(mock, { profiles: ['anthropic'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
+  // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt. The Internet, which a Create may
+  // name: a base profile is a pool's alone (docs/specs/credentials.md, "Base profiles").
+  await w.open(mock, { profiles: ['internet'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
   const before = String((await view(w.execution))!.outbound?.expiresAt)
   // The mock opens its Session within the second, and a token's expiry counts in seconds.
   await sleep(2000)
   const since = new Date(Date.now() - 1000).toISOString()
-  const reply = await fetched(w, 'https://api.anthropic.com/v1/models')
+  const reply = await fetched(w, 'https://example.com/')
   const after = String((await view(w.execution))!.outbound?.expiresAt)
   const pod = String((await view(w.execution))!.pod)
   const handed = handOvers(pod)
@@ -801,7 +802,7 @@ await check('C12', 'A token that would run out during the next turn', async () =
   assert(Date.parse(after) > Date.parse(before) && handed.length === 2 && handed[1]!.until === Date.parse(after), `${before} → ${after}, hand-overs ${JSON.stringify(handed)}`)
   assert(handed[1]!.at <= dispatched, `renewed at ${new Date(handed[1]!.at).toISOString()}, prompt at ${new Date(dispatched).toISOString()}`)
   assert(passed(reply), reply)
-  const used = gatewayLines(since).find((l) => l.includes('http.host=api.anthropic.com') && l.includes(`jwt.sub=agora ${w.execution} `))
+  const used = gatewayLines(since).find((l) => l.includes('http.host=example.com') && l.includes(`jwt.sub=agora ${w.execution} `))
   assert(used !== undefined, 'no request seen by the gateway')
   return `token until ${before} → ${after}, renewed ${String(dispatched - handed[1]!.at)} ms before the prompt left; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
 })

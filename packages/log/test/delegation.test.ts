@@ -21,7 +21,7 @@ async function started(
   t: T,
   profiles: string[],
   options: { approvalMs?: number; progressMs?: number; manual?: boolean; roles?: ReadonlyMap<string, Role> } = {},
-  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void; pgRelay?: boolean } = {},
+  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void; pgRelay?: boolean; offered?: string[] } = {},
 ) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
@@ -30,7 +30,7 @@ async function started(
   const db = await database()
   // The roles are the log's own (docs/specs/roles.md): the delegation engine reads them there.
   const { roles, ...engine } = options
-  const signer = grants([])
+  const signer = grants(extra.offered ?? [])
   const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine }, pgRelay: extra.pgRelay ?? false })
   const mcp = createMcpServer(lab.workstreams, signer.key)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
@@ -111,6 +111,35 @@ test('D1 spawn_agent within the delegator’s rights: started at once; a sub-str
   const [line, words] = blocksOf((await prompts(lab, delegate))[0]!)
   assert.equal(line!.text, `From your delegator ${ws}, an agent, not the person. It receives your last message:`)
   assert.equal(words!.text, 'hello delegate')
+})
+
+test('C80 spawn_agent giving a base profile, OFFERED_PROFILES empty or listing others: unknown_profile, before any approval, no Workstream, nothing written, no token; within its rights without it, started, its pool’s base profile in its token', async (t) => {
+  for (const offered of [[], ['internet', 'agora:delegate']]) {
+    const { lab, db, url, signer, ws, execution } = await started(t, ['agora:delegate', 'internet'], {}, { offered, kube: (kube) => (kube.baseProfiles['mock-test'] = 'anthropic') })
+    const c = await client(t, url, execution)
+    const children = async () => Number(((await db.admin.query('SELECT count(*) AS n FROM workstreams WHERE parent=$1', [ws])).rows[0] as { n: string }).n)
+    const before = { entries: (await lab.entries(ws)).length, minted: signer.minted.length }
+    for (const base of ['anthropic', 'zai', 'chatgpt', 'antigravity']) {
+      // Alone, which the delegator does not hold and would otherwise ask the person for, and beside a right it holds.
+      for (const rights of [[base], ['internet', base]]) {
+        const refused = (await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', rights } })) as Text
+        assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_profile'], `${offered.join(',') || 'nothing offered'}: ${rights.join(',')}`)
+      }
+    }
+    assert.deepEqual([await children(), (await lab.entries(ws)).length, signer.minted.length, (await lab.state(ws)).question ?? null], [0, before.entries, before.minted, null], 'no Workstream, nothing written, no token, no approval')
+    if (offered.length === 0) {
+      // Control: a right beyond the delegator's, not a base one, asks the person — an approval the refusals would have shown.
+      const asking = c.callTool({ name: 'spawn_agent', arguments: { instructions: 'needs the cluster', rights: ['kubernetes:read'] } })
+      await until('the approval', async () => (await lab.state(ws)).question)
+      assert.equal((await lab.command(ws, 'Answer', { question: (await lab.state(ws)).question!.position }, { optionId: 'approve' })).accepted, true)
+      delegateOf(text(await asking))
+    }
+    // Control: within its rights, started at once; its token, its pool's base profile and the rights given.
+    const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', rights: ['internet'] } })))
+    const e = (await until('its execution', async () => (await lab.state(delegate)).current))!
+    const token = await until('its token', async () => signer.minted.find((m) => m.label === `agora ${e.id}`))
+    assert.deepEqual([...token.profiles], ['anthropic', 'internet', 'agora:submit', 'agora:read', 'previews'])
+  }
 })
 
 test('D5 a delegator at depth 3; a delegator with three delegates working: depth_exceeded; too_many_delegates; no Workstream created', async (t) => {

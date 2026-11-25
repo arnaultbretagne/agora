@@ -322,11 +322,11 @@ test('V9 the forms among the conversations: one waiting on a question of options
   }
 })
 
-test('V10 the fixed offer: GET /api/config offers what each entry of the access picker folds and signs for none; the picker shows them, an entry ticked in its menu', async (t) => {
+test('V10 the fixed offer: GET /api/config offers what each entry of the access picker folds, no base profile, and signs for none; the picker shows them, no harness’s service, an entry ticked in its menu', async (t) => {
   const url = await target(t)
   const config = (await (await fetch(`${url}/api/config`, { headers: BROWSER_GATE })).json()) as { credentials: { proxy: unknown; offered: unknown } }
   assert.equal(config.credentials.proxy, null, 'no gateway')
-  assert.deepEqual(config.credentials.offered, ['internet', 'zai', 'chatgpt', 'antigravity', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'])
+  assert.deepEqual(config.credentials.offered, ['internet', 'github:example/app:write', 'github:example/docs:write', 'github:example/site:read', 'vault:write', 'kubernetes:read', 'agora:delegate'])
   // Nothing is sent: against the image, the cases before this one hold every place a Create may take (MAX_ACTIVE).
   const page = await behind(BROWSER_GATE)
   try {
@@ -336,11 +336,9 @@ test('V10 the fixed offer: GET /api/config offers what each entry of the access 
     // The key alone on the composer, the Internet granted by default.
     await page.getByRole('button', { name: 'Access: Internet', exact: true }).click()
     const menu = page.getByRole('menu', { name: 'Access' })
+    // The Internet the one service: no harness's or model's (docs/specs/credentials.md, "Base profiles").
     assert.deepEqual(await menu.getByRole('menuitemcheckbox').allInnerTexts(), [
       'Internet',
-      'z.ai',
-      'ChatGPT',
-      'Antigravity',
       'GitHub\nexample/app, example/docs, example/site (read)',
       'vault',
       'k8s',
