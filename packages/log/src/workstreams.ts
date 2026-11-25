@@ -394,6 +394,8 @@ export class Workstreams implements Handler {
               harness: pool.harness,
               limits,
               deadline: iso(Date.now() + limits.leaseSeconds! * 1000),
+              // The pool may be replaced by a newer image's while the execution lives (docs/specs/credentials.md, "On Agora's side").
+              baseProfiles: pool.baseProfiles,
               profiles,
               ...(role !== null ? { role } : {}),
               ...(anchor ? { anchor } : {}),
@@ -936,10 +938,11 @@ export class Workstreams implements Handler {
     return { position: asked.position, refusal: await patternRefusal(asked.content.params, command.body.content) }
   }
 
-  /** The execution's rights: its pool's base profiles and its own. */
+  /** The execution's rights: the base profiles its Create recorded — none recorded, its pool's while listed — and its own. */
   private async profilesOf(e: Execution): Promise<string[]> {
-    const pool = (await this.executions.pools()).find((p) => p.name === e.body.pool)
-    return [...new Set([...(pool?.baseProfiles ?? []), ...e.profiles])]
+    const recorded = e.body.baseProfiles
+    const base = Array.isArray(recorded) ? recorded.map(String) : ((await this.executions.pools()).find((p) => p.name === e.body.pool)?.baseProfiles ?? [])
+    return [...new Set([...base, ...e.profiles])]
   }
 
   /**
