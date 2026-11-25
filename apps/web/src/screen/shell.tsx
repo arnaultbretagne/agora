@@ -5,7 +5,7 @@
 // at each edge (WebKit's LocalFrameView::fixedContainerEdges): that element's background, read on every
 // frame, unless it covers the whole screen, as the frame does, whose first colour it keeps for good. So
 // each edge has an element of its own in the theme's colour: the header at the top, a strip at the bottom.
-import { BellIcon, BellOffIcon, ChevronRightIcon, ChevronUpIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon } from 'lucide-react'
+import { BellIcon, BellOffIcon, ChevronRightIcon, ChevronUpIcon, LogOutIcon, MenuIcon, MoonIcon, PanelLeftIcon, PlusIcon, PowerIcon, SearchIcon, SquareIcon, SunIcon, UserIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { ShimmerLabel } from '@/components/assistant-ui/elements/surfaces'
@@ -34,8 +34,11 @@ const storedTheme = (): Theme | null => {
   }
 }
 
+/** The theme shown, and the switch to the other: the account's menu holds it (docs/specs/assistant-ui.md, "Accounts"). */
+type ThemeSwitch = { readonly theme: Theme; readonly toggle: () => void }
+
 /** The system's theme, until the user picks one; then theirs, remembered. */
-function useTheme(): [Theme, () => void] {
+function useTheme(): ThemeSwitch {
   const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? systemTheme())
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
@@ -59,7 +62,7 @@ function useTheme(): [Theme, () => void] {
       }
       return next
     })
-  return [theme, toggle]
+  return { theme, toggle }
 }
 
 // ---------------------------------------------------------------- the list
@@ -259,13 +262,13 @@ const accountItemClass =
 
 /**
  * The account (docs/specs/assistant-ui.md, "Accounts"), at the foot of the sidebar as assistant-ui's own
- * demo has it (its `SidebarAccount`, MIT): the person's e-mail, its initial on a plate; opened, Sign
- * out. None without the proxy's identity.
+ * demo has it (its `SidebarAccount`, MIT): the person's e-mail, its initial on a plate; opened, the
+ * theme, Notifications and Sign out. Without the proxy's identity, "Account" and no Sign out: the theme
+ * stays within reach.
  */
-const AccountMenu: FC = () => {
+const AccountMenu: FC<{ theme: ThemeSwitch }> = ({ theme }) => {
   const { account, api } = useAgora()
   const push = usePush(api)
-  if (account.email === null) return null
   const own = account.email
   return (
     <div className="border-foreground/10 -mx-3 mt-3 -mb-3 shrink-0 border-t p-3">
@@ -273,25 +276,40 @@ const AccountMenu: FC = () => {
         <DropdownMenu.Trigger asChild>
           <button type="button" aria-label="Account" className={rowClass}>
             <span aria-hidden className="bg-foreground/[0.06] text-foreground rounded-control grid size-5 shrink-0 place-items-center text-[11px] font-medium">
-              {own.charAt(0).toUpperCase()}
+              {own === null ? <UserIcon className="size-3" /> : own.charAt(0).toUpperCase()}
             </span>
-            <span className="text-foreground min-w-0 flex-1 truncate text-left">{own}</span>
+            <span className="text-foreground min-w-0 flex-1 truncate text-left">{own ?? 'Account'}</span>
             <ChevronUpIcon className="size-3 shrink-0" />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content side="top" align="start" sideOffset={6} className={accountMenuClass}>
+            <ThemeItem theme={theme} />
             <NotificationsItem status={push.status} toggle={push.toggle} />
-            <DropdownMenu.Item asChild className={accountItemClass}>
-              <a href="/oauth2/sign_out?rd=%2F">
-                <LogOutIcon className="mt-0.5 size-3.5 shrink-0" />
-                Sign out
-              </a>
-            </DropdownMenu.Item>
+            {own !== null && (
+              <DropdownMenu.Item asChild className={accountItemClass}>
+                <a href="/oauth2/sign_out?rd=%2F">
+                  <LogOutIcon className="mt-0.5 size-3.5 shrink-0" />
+                  Sign out
+                </a>
+              </DropdownMenu.Item>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
     </div>
+  )
+}
+
+/** The theme's item: it says the theme it switches to, and the menu closes on the page in it. */
+const ThemeItem: FC<{ theme: ThemeSwitch }> = ({ theme }) => {
+  const dark = theme.theme === 'dark'
+  const Icon = dark ? SunIcon : MoonIcon
+  return (
+    <DropdownMenu.Item className={accountItemClass} onSelect={theme.toggle}>
+      <Icon className="mt-0.5 size-3.5 shrink-0" />
+      {dark ? 'Light theme' : 'Dark theme'}
+    </DropdownMenu.Item>
   )
 }
 
@@ -326,7 +344,7 @@ const NotificationsItem: FC<{ status: PushStatus; toggle: () => void }> = ({ sta
   )
 }
 
-const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
+const Sidebar: FC<{ onNavigate: () => void; theme: ThemeSwitch }> = ({ onNavigate, theme }) => {
   const { api, list, id, open, line } = useAgora()
   const folds = useFolds(line)
   const [search, setSearch] = useState('')
@@ -400,7 +418,7 @@ const Sidebar: FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
         ))}
         {feed !== null && !feed.end && <End key={rows.length} onVisible={feed.more} />}
       </nav>
-      <AccountMenu />
+      <AccountMenu theme={theme} />
     </div>
   )
 }
@@ -503,7 +521,7 @@ export const Shell: FC = () => {
   const { id } = useAgora()
   const [collapsed, setCollapsed] = useState(false)
   const [drawer, setDrawer] = useState(false)
-  const [theme, toggleTheme] = useTheme()
+  const theme = useTheme()
   useVisualViewport()
   return (
     <div
@@ -529,12 +547,9 @@ export const Shell: FC = () => {
           </button>
         )}
         <Title />
-        <button type="button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'} className={cn(iconButton, '-me-1.5')}>
-          {theme === 'dark' ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
-        </button>
       </header>
       <aside className={cn('bg-sidebar border-foreground/10 hidden min-h-0 flex-col overflow-hidden border-r p-3 pb-[max(0.75rem,var(--safe-bottom))]', !collapsed && 'md:flex')}>
-        <Sidebar onNavigate={() => undefined} />
+        <Sidebar onNavigate={() => undefined} theme={theme} />
       </aside>
       <main className="min-h-0 min-w-0">
         <Thread key={id ?? 'draft'} />
@@ -548,7 +563,7 @@ export const Shell: FC = () => {
               <BrandMark className="size-5" />
               <Wordmark />
             </div>
-            <Sidebar onNavigate={() => setDrawer(false)} />
+            <Sidebar onNavigate={() => setDrawer(false)} theme={theme} />
           </div>
         </div>
       )}
