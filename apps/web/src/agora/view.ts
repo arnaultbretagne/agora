@@ -1034,7 +1034,8 @@ export interface AccessEntry {
 /** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
 export const INTERNET = 'internet'
 
-const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet', anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity' }
+/** The services the picker names: the Internet alone. A harness's base profiles are its pool's, never offered (docs/specs/credentials.md, "Base profiles"). */
+const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet' }
 const REPOSITORY = /^github:([^:]+):(read|review|write)$/
 const LEVELS = ['read', 'review', 'write'] as const
 /** What a profile is a level of: its repository, the vault, or itself. */
@@ -1046,13 +1047,13 @@ const single = (profile: string, name: string): AccessEntry => ({ key: profile, 
 
 /**
  * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), folded, write giving read: the
- * Internet, then each other service; "GitHub", every offered repository at the widest level it is offered;
+ * Internet; "GitHub", every offered repository at the widest level it is offered;
  * "vault", its write, else its read; "k8s", `kubernetes:read`; "agora", `agora:delegate`; then any other
  * profile offered, as itself.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
   const has = (p: string) => offered.includes(p)
-  const services = offered.filter((p) => SERVICE_NAMES[p] !== undefined).sort((x, y) => Number(y === INTERNET) - Number(x === INTERNET))
+  const services = offered.filter((p) => SERVICE_NAMES[p] !== undefined)
   const repositories = [...new Set(offered.flatMap((p) => REPOSITORY.exec(p)?.[1] ?? []))]
   // Each repository's widest level offered, and the levels under it, which it takes back off.
   const widest = (repo: string) => LEVELS.findLastIndex((l) => has(`github:${repo}:${l}`))

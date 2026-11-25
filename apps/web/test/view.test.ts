@@ -459,14 +459,13 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the rights folded: the Internet, the other services, GitHub with every repository at its widest, vault, k8s, agora, the rest as themselves; their states; the key\'s name', () => {
-  const offered = ['github:o/a:write', 'github:o/b:read', 'zai', 'vault:write', 'internet', 'kubernetes:read', 'agora:delegate', 'github:o/c:review', 'agora:read', 'previews']
+test('U31 the rights folded: the Internet, GitHub with every repository at its widest, vault, k8s, agora, the rest as themselves; their states; the key\'s name', () => {
+  const offered = ['github:o/a:write', 'github:o/b:read', 'vault:write', 'internet', 'kubernetes:read', 'agora:delegate', 'github:o/c:review', 'agora:read', 'previews']
   const entries = accessEntries(offered)
   assert.deepEqual(
     entries.map((e) => [e.name, e.profiles]),
     [
       ['Internet', ['internet']],
-      ['z.ai', ['zai']],
       ['GitHub', ['github:o/a:write', 'github:o/b:read', 'github:o/c:review']],
       ['vault', ['vault:write']],
       ['k8s', ['kubernetes:read']],
@@ -475,10 +474,10 @@ test('U31 the rights folded: the Internet, the other services, GitHub with every
       ['previews', ['previews']],
     ],
   )
-  const github = entries[2]!
+  const github = entries[1]!
   assert.equal(github.detail, 'o/a, o/b (read), o/c (review)')
   assert.deepEqual(github.covers, ['github:o/a:read', 'github:o/a:review', 'github:o/a:write', 'github:o/b:read', 'github:o/c:read', 'github:o/c:review'], 'each level up to the widest offered, never above')
-  assert.deepEqual(entries[3]!.covers, ['vault:read', 'vault:write'])
+  assert.deepEqual(entries[2]!.covers, ['vault:read', 'vault:write'])
   assert.deepEqual(accessEntries(['vault:read']).map((e) => [e.name, e.profiles]), [['vault', ['vault:read']]], 'the read alone offered: the vault gives it')
   assert.equal(accessState([], github), 'off')
   assert.equal(accessState(['github:o/a:write', 'github:o/b:read', 'github:o/c:review'], github), 'on')
@@ -489,6 +488,18 @@ test('U31 the rights folded: the Internet, the other services, GitHub with every
   assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'github:o/c:review', 'internet', 'agora:delegate'], entries), 'Internet, GitHub, agora', "in the menu's order")
   assert.equal(accessTitle(['github:o/b:read', 'vault:write'], entries), 'GitHub (partly), vault')
   assert.deepEqual(accessEntries([]), [])
+})
+
+test('U120 the Internet the only service the picker names: a harness\'s base profile, which the server never offers, never under its service\'s name', () => {
+  const base = ['anthropic', 'zai', 'chatgpt', 'antigravity']
+  const entries = accessEntries(['github:o/a:write', ...base, 'internet'])
+  // The Internet first, as its service; the base profiles, were one offered, by their own names as any other profile.
+  assert.deepEqual(
+    entries.map((e) => [e.key, e.name]),
+    [['internet', 'Internet'], ['github', 'GitHub'], ...base.map((p) => [p, p])],
+  )
+  for (const name of ['Anthropic', 'z.ai', 'ChatGPT', 'Antigravity']) assert.equal(entries.some((e) => e.name === name), false, name)
+  assert.deepEqual(accessEntries(['internet']).map((e) => e.name), ['Internet'])
 })
 
 test('U32 an entry switched gives the whole set: on, what it gives in place of what it covered; off, none of it; in the order offered, then what was granted beyond', () => {
@@ -1297,6 +1308,4 @@ test('U119 harnesses as people name them, each with its mark: Claude Code, Codex
   assert.equal(new Set(Object.values(HARNESS_MARKS)).size, 4)
   assert.equal(HARNESS_MARKS.mock, undefined)
   assert.equal(HARNESS_MARKS['other-harness'], undefined)
-  // Its service, offered as an access, by its name.
-  assert.equal(accessEntries(['antigravity'])[0]!.name, 'Antigravity')
 })
