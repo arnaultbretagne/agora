@@ -8,4 +8,5 @@ mkdir -p "$dir/conversations"
 umask 077
 cp /etc/agora/antigravity/placeholder-token.json "$dir/antigravity-oauth-token"
 # No telemetry: play.googleapis.com is no route of the profile, and it would carry the Bearer.
-exec /opt/antigravity/agy acp --disable-telemetry
+# Full access, as every pool: none of agy's ACP modes gives it (`auto` still asks).
+exec /opt/antigravity/agy acp --disable-telemetry --dangerously-skip-permissions

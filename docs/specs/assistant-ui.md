@@ -172,7 +172,7 @@ Session gave (`GET /api/pools`).
 | --- | --- |
 | The model | A picker beside the harness: the options of the setting in category `model`, without the value `default`, by their full names as the agent gives them ("Opus 5.5"), nothing more; the current one shown. In a draft, the choice goes into the Create's `settings`. In an open Session, between turns, choosing one sends **Configure**; sending waits for its answer. |
 | The effort | In the same picker, under the model: the options of the setting in category `thought_level`, without `default`. Chosen like the model. |
-| The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access. |
+| The mode and other settings | Not offered: each pool starts its Sessions in the mode it declares (`executions.md`, "The API"), full access; antigravity's declares none, its image starts agy in full access. |
 | Commands | `/` at the start of the composer lists the commands — name, description, its input's hint — filtered by what follows it; arrows move, Enter or Tab chooses, Escape hides. Choosing one puts `/{name} ` in the composer. Sent as the prompt's text: that is how ACP runs a command. |
 
 ## Access
