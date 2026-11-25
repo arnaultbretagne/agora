@@ -353,12 +353,13 @@ test('U22 the theme: toggled from the account\'s menu, dark, kept after a reload
   await page.getByText('What shall we work on?').waitFor()
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), false)
   assert.equal(await headerThemes(page), 0, 'no theme button in the header')
+  // Without the proxy's identity, the account is there all the same, for the theme: no e-mail, no Sign out.
+  // Read before it opens: open, the menu hides the rest of the page from the accessibility tree.
+  assert.equal(await page.getByRole('button', { name: 'Account' }).innerText(), 'Account')
   // The menu's item says the theme it switches to: dark from the light page.
   await page.getByRole('button', { name: 'Account' }).click()
   await page.getByRole('menuitem', { name: 'Dark theme' }).waitFor()
   assert.equal(await page.getByRole('menuitem', { name: 'Light theme' }).count(), 0, 'light: the item says dark')
-  // Without the proxy's identity, the account is there all the same, for the theme: no e-mail, no Sign out.
-  assert.equal(await page.getByRole('button', { name: 'Account' }).innerText(), 'Account')
   assert.equal(await page.getByRole('menuitem', { name: 'Sign out' }).count(), 0, 'no Sign out without the identity')
   await page.keyboard.press('Escape')
   await page.getByRole('menu').waitFor({ state: 'detached' })
