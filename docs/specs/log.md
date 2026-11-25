@@ -215,7 +215,7 @@ approval (`delegation.md`), a merge (`merge.md`) —, and the interface answers.
 | `unknown_pool`, `invalid_create`, `quota` | Create: a pool not in the catalogue; limits out of bounds, or `settings` not an object of strings; the active executions at their maximum. |
 | `settings_pending` | Write or Configure while the opening settings are not settled, or another setting is being changed. |
 | `unknown_setting` | Configure: a setting the Session does not offer, or a value it does not list. |
-| `unknown_profile`, `profile_not_offered` | Create or Scope: a profile the catalogue does not know; one beyond those offered (`credentials.md`, "Offered profiles"). |
+| `unknown_profile`, `profile_not_offered` | Create or Scope: a profile the catalogue does not know, or a base profile, a pool's alone (`credentials.md`, "Base profiles"); one beyond those offered (`credentials.md`, "Offered profiles"). |
 | `invalid_scope` | Scope: `profiles` not a list of strings. |
 | `unknown_anchor`, `anchor_incompatible` | Create: no such anchor; an anchor of another harness. |
 | `execution_conflict` | Create: the execution or claim name already recorded. |

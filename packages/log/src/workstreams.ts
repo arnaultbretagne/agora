@@ -38,7 +38,7 @@ import { configuring, nextOpening, offers, ownSettings, resolveSettings, settled
 import { anchorsOf, catchUpBlock, catchUpText, exchangesOf, isCatchUp, lacking, lastAnchor, type CatchUp } from './catch-up.ts'
 import { answerRefusal, validApproval, validMerge, validQuestion } from './questions.ts'
 import { contentRefusal, declinedBy, patternChecks, patternRefusal } from './forms.ts'
-import { AGORA_OWN_PROFILES, compileProfile, mcpServers, offers as offersProfile, withDefaults } from '@agora/credentials'
+import { AGORA_OWN_PROFILES, BASE_PROFILES, compileProfile, mcpServers, offers as offersProfile, withDefaults } from '@agora/credentials'
 
 const LOCK = 194710501
 const QUOTA_LOCK = LOCK + 1
@@ -639,6 +639,8 @@ export class Workstreams implements Handler {
     if (profiles.some((p) => AGORA_OWN_PROFILES.has(p) && !held.includes(p))) {
       if (origin !== 'agora') return 'unknown_profile'
     }
+    // A base profile is a pool's alone (docs/specs/credentials.md, "Base profiles"): never named, whoever names it, whatever is offered.
+    if (profiles.some((p) => BASE_PROFILES.has(p))) return 'unknown_profile'
     try {
       for (const profile of profiles) compileProfile(profile)
     } catch {

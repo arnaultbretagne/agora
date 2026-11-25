@@ -231,6 +231,53 @@ test('C75 previews and agora:read in OFFERED_PROFILES or not: the offer leaves b
   }
 })
 
+test('C80 a Create and a Scope naming a base profile, OFFERED_PROFILES empty or listing others: unknown_profile, nothing written, no token; the same Create without it holds its pool’s base profile', async (t) => {
+  for (const offered of [[], ['github:owner/a:write', 'internet']]) {
+    const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' }, offered)
+    // Positive control: the same Create without a base profile, accepted; its pool's recorded beside its own, in its token.
+    const e = await lab.open(ws, { pool: 'claude-test', profiles: ['internet'] })
+    const create = (await lab.entries(ws)).find((x) => x.kind === 'command' && x.content.kind === 'Create')!
+    assert.deepEqual((create.content.body as { baseProfiles?: unknown }).baseProfiles, ['anthropic'], offered.join(','))
+    assert.deepEqual(signer.minted.filter((m) => m.label === `agora ${e.id}`).map((m) => [...m.profiles]), [['anthropic', 'internet', 'agora:read', 'previews']])
+    const fresh = await lab.workstream()
+    const before = { entries: (await lab.entries(ws)).length, minted: signer.minted.length }
+    for (const base of ['anthropic', 'zai', 'chatgpt', 'antigravity']) {
+      for (const profiles of [[base], ['internet', base]]) {
+        const what = `${offered.join(',') || 'nothing offered'}: ${profiles.join(',')}`
+        assert.deepEqual(await lab.command(fresh, 'Create', {}, { pool: 'claude-test', profiles }), { accepted: false, reason: 'unknown_profile' }, `Create, ${what}`)
+        assert.deepEqual(await lab.command(ws, 'Scope', { execution: e.id }, { profiles }), { accepted: false, reason: 'unknown_profile' }, `Scope, ${what}`)
+      }
+    }
+    assert.deepEqual([(await lab.entries(fresh)).length, (await lab.entries(ws)).length, signer.minted.length], [0, before.entries, before.minted], 'nothing written, no token')
+    assert.deepEqual((await lab.state(ws)).current?.profiles, ['internet', 'agora:read', 'previews'])
+    // Control: a Scope without it is accepted, and hands a token, the pool's base profile with it.
+    assert.ok((await lab.command(ws, 'Scope', { execution: e.id }, { profiles: ['internet'] })).accepted)
+    assert.deepEqual(signer.minted.slice(before.minted).map((m) => [m.label, [...m.profiles]]), [[`agora ${e.id}`, ['anthropic', 'internet']]])
+  }
+})
+
+test('C79 the server started with OFFERED_PROFILES naming a base profile: it stops before listening, as for an unknown profile; without it, it starts and offers no base profile', async (t) => {
+  const db = await database()
+  const c = await cluster()
+  const dir = mkdtempSync(join(tmpdir(), 'grants-'))
+  writeFileSync(join(dir, 'key.pem'), generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))
+  let server: Server | undefined
+  t.after(async () => {
+    await server?.stop()
+    await c.close()
+    await db.drop()
+  })
+  const env = (offered: string) => ({ GATEWAY_PROXY: '127.0.0.1:9', GRANTS_KEY_FILE: join(dir, 'key.pem'), OFFERED_PROFILES: offered })
+  await assert.rejects(Server.start({ db, api: c.api, keys: c.keys, env: env('github:owner/a:write,dropbox:everything') }), /lab exited[\s\S]*unknown profile: dropbox:everything/)
+  for (const base of ['anthropic', 'zai', 'chatgpt', 'antigravity']) {
+    await assert.rejects(Server.start({ db, api: c.api, keys: c.keys, env: env(`github:owner/a:write,${base},internet`) }), new RegExp(`lab exited[\\s\\S]*base profile, a pool's alone, never offered: ${base}`), base)
+  }
+  // Positive control: the same offer without it starts, and GET /api/config offers what it lists.
+  server = await Server.start({ db, api: c.api, keys: c.keys, env: env('github:owner/a:write,internet') })
+  const config = (await (await fetch(`${server.url}/api/config`)).json()) as { credentials: { offered: string[] } | null }
+  assert.deepEqual(config.credentials?.offered, ['github:owner/a:write', 'internet'])
+})
+
 test('C75 the server started with OFFERED_PROFILES listing previews and agora:read, then without them: it starts each time, and GET /api/config offers neither', async (t) => {
   const db = await database()
   const c = await cluster()
