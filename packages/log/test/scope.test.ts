@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { keys } from '@agora/testkit'
 import type { Execution } from '../src/index.ts'
-import { database, FakeKube, grants, Lab, lines, sleep, until } from './support.ts'
+import { database, FakeKube, grants, Lab, lines, sleep, until, type Db } from './support.ts'
 
 const A = 'github:owner/a:write'
 const B = 'github:owner/b:read'
@@ -113,10 +113,10 @@ test('C21 Agora restarted between two turns: a new token before the next prompt,
 async function replacePool(lab: Lab): Promise<void> {
   lab.kube.morePools.splice(0, 1, ['claude-newer', 'claude-code'])
   await sleep(10_200)
-  assert.deepEqual((await lab.executions.pools()).map((p) => p.name), ['mock-test', 'claude-test', 'claude-newer'])
+  // Control: the newer pool offers another base profile, which a token reading the catalogue could take.
+  assert.deepEqual((await lab.executions.pools()).map((p) => [p.name, p.baseProfiles]), [['mock-test', []], ['claude-test', []], ['claude-newer', ['chatgpt']]])
 }
 const OLDER: [name: string, harness: string][] = [['claude-older', 'claude-code']]
-// Another base profile on the newer pool: taking its own would show.
 const BASE = { 'claude-older': 'anthropic', 'claude-newer': 'chatgpt' }
 const OWN = ['anthropic', B, 'agora:read', 'previews']
 
@@ -148,13 +148,50 @@ test('C76 an execution’s pool gone, then Agora restarted: the token before the
   assert.ok(tokens[1]!.at <= (await promptDispatched(context.lab, ws)))
 })
 
+/** Simulated (forced-state): the Create as the log held it before its pool's base profiles were recorded. */
+async function forget(db: Db, ws: string): Promise<void> {
+  const forced = await db.admin.query("UPDATE entries SET content = content #- '{body,baseProfiles}' WHERE workstream=$1 AND kind='command' AND content->>'kind'='Create' AND content #> '{body,baseProfiles}' IS NOT NULL", [ws])
+  assert.equal(forced.rowCount, 1)
+}
+
+test('C77 a Create that recorded no base profiles, its pool gone, Agora restarted: the token before the next prompt names its own alone', async (t) => {
+  const context = await started(t, BASE, OLDER)
+  const { db, signer, ws } = context
+  const e = await context.lab.open(ws, { pool: 'claude-older', profiles: [B] })
+  await forget(db, ws)
+  await replacePool(context.lab)
+  context.lab = await context.lab.restart('clean')
+  await until('reconnected', async () => (await view(context.lab, ws)).state === 'ready', 10_000)
+  assert.ok((await context.lab.write(ws, 'after the restart')).accepted)
+  await context.lab.turn(ws, 'done')
+  assert.deepEqual(tokensOf(signer, e).map((m) => [...m.profiles]), [OWN, [B, 'agora:read', 'previews']])
+})
+
+test('C78 the pools of two living executions, one declaring anthropic and one nothing, declaring chatgpt since, Agora restarted: each token names what its Create recorded', async (t) => {
+  const context = await started(t, { 'claude-test': 'anthropic' })
+  const { signer } = context
+  const other = await context.lab.workstream()
+  const opened = [
+    { ws: context.ws, e: await context.lab.open(context.ws, { pool: 'claude-test', profiles: [B] }), own: OWN },
+    { ws: other, e: await context.lab.open(other, { pool: 'mock-test', profiles: [B] }), own: [B, 'agora:read', 'previews'] },
+  ]
+  Object.assign(context.lab.kube.baseProfiles, { 'claude-test': 'chatgpt', 'mock-test': 'chatgpt' })
+  context.lab = await context.lab.restart('clean')
+  // Control: the catalogue the restarted Agora reads gives both pools chatgpt.
+  assert.deepEqual((await context.lab.executions.pools()).map((p) => [p.name, p.baseProfiles]), [['mock-test', ['chatgpt']], ['claude-test', ['chatgpt']]])
+  for (const { ws, e, own } of opened) {
+    await until('reconnected', async () => (await view(context.lab, ws)).state === 'ready', 10_000)
+    assert.ok((await context.lab.write(ws, 'after the restart')).accepted)
+    await context.lab.turn(ws, 'done')
+    assert.deepEqual(tokensOf(signer, e).map((m) => [...m.profiles]), [own, own])
+  }
+})
+
 test('C77 a Create that recorded no base profiles, its pool listed, Agora restarted: the token before the next prompt names its pool’s', async (t) => {
   const context = await started(t, { 'claude-test': 'anthropic' })
   const { db, signer, ws } = context
   const e = await context.lab.open(ws, { pool: 'claude-test', profiles: [B] })
-  // Simulated (forced-state): the Create as the log held it before they were recorded.
-  const forced = await db.admin.query("UPDATE entries SET content = content #- '{body,baseProfiles}' WHERE workstream=$1 AND kind='command' AND content->>'kind'='Create' AND content #> '{body,baseProfiles}' IS NOT NULL", [ws])
-  assert.equal(forced.rowCount, 1)
+  await forget(db, ws)
   context.lab = await context.lab.restart('clean')
   await until('reconnected', async () => (await view(context.lab, ws)).state === 'ready', 10_000)
   assert.ok((await context.lab.write(ws, 'after the restart')).accepted)
