@@ -1,4 +1,4 @@
-// docs/specs/preview.md, acceptance cases V2 to V6, V8 to V10: the server started as a preview, and its client in a real
+// docs/specs/preview.md, acceptance cases V2 to V6, V8 to V10, V12: the server started as a preview, and its client in a real
 // browser (Playwright's Chromium) behind the headers of the previews' two gates.
 //
 // Two ways to run it:
@@ -350,6 +350,50 @@ test('V10 the fixed offer: GET /api/config offers what each entry of the access 
     await menu.getByRole('menuitemcheckbox', { name: /^GitHub/, checked: true }).waitFor()
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: 'Access: Internet, GitHub', exact: true }).waitFor()
+  } finally {
+    await page.context().close()
+  }
+})
+
+test('V12 the fixed limits: GET /api/limits answers three invented subscriptions, their resets counted from the request; the header\'s gauge shows them', async (t) => {
+  const url = await target(t)
+  const asked = Date.now()
+  const response = await fetch(`${url}/api/limits`, { headers: BROWSER_GATE })
+  assert.equal(response.status, 200)
+  const { limits } = (await response.json()) as { limits: Record<string, { windows: { kind: string; usedPercent: number; resetsAt: string }[]; plan: string | null; checkedAt: string; stale: boolean; error: string | null }> }
+  const answered = Date.now()
+  const MINUTE = 60_000
+  const HOUR = 60 * MINUTE
+  const DAY = 24 * HOUR
+  // Each instant counted from the request: between when it was asked and when it was answered.
+  const from = (at: string, offset: number) => {
+    const ms = Date.parse(at) - offset
+    assert.ok(ms >= asked - 1000 && ms <= answered + 1000, `${at}: ${String(offset)} ms from the request`)
+  }
+  assert.deepEqual(Object.keys(limits), ['anthropic', 'chatgpt', 'zai'])
+  const expected = {
+    anthropic: { plan: null, stale: false, error: null, checked: 0, windows: [['five_hour', 42, 2 * HOUR + 10 * MINUTE], ['weekly', 68, 3 * DAY + 4 * HOUR]] },
+    chatgpt: { plan: 'pro', stale: false, error: null, checked: 0, windows: [['five_hour', 12, 4 * HOUR + 25 * MINUTE], ['weekly', 88, DAY + 6 * HOUR]] },
+    zai: { plan: 'lite', stale: true, error: 'api.z.ai answered 503', checked: -40 * MINUTE, windows: [['five_hour', 30, HOUR + 45 * MINUTE], ['weekly', 55, 5 * DAY]] },
+  } as const
+  for (const [profile, want] of Object.entries(expected)) {
+    const account = limits[profile]!
+    assert.deepEqual([account.plan, account.stale, account.error], [want.plan, want.stale, want.error], profile)
+    from(account.checkedAt, want.checked)
+    assert.deepEqual(account.windows.map((w) => [w.kind, w.usedPercent]), want.windows.map(([kind, used]) => [kind, used]), profile)
+    for (const [i, w] of account.windows.entries()) from(w.resetsAt, want.windows[i]![2])
+  }
+  const page = await behind(BROWSER_GATE)
+  try {
+    await page.goto(`${url}/`)
+    await page.locator('header').getByRole('button', { name: 'Limits' }).click()
+    const popover = page.locator('[data-slot=limits-popover]')
+    await popover.getByRole('region', { name: 'z.ai' }).waitFor()
+    const sections = await popover.locator('section').evaluateAll((s) => s.map((e) => [e.getAttribute('aria-label'), (e as HTMLElement).innerText.trim()]))
+    assert.deepEqual(sections.map(([name]) => name), ['Claude', 'ChatGPT', 'z.ai'])
+    assert.match(sections[0]![1]!, /^Claude\s+5-hour\s+42% · resets in 2h 10m\s+Weekly\s+68% · resets in 3d 4h$/)
+    assert.match(sections[1]![1]!, /^ChatGPT\s+pro\s+5-hour\s+12% · resets in 4h 25m\s+Weekly\s+88% · resets in 1d 6h$/i)
+    assert.match(sections[2]![1]!, /^z\.ai\s+lite\s+5-hour\s+30% · resets in 1h 45m\s+Weekly\s+55% · resets in 5d\s+Not updated since \d{1,2}:\d{2}/i)
   } finally {
     await page.context().close()
   }
