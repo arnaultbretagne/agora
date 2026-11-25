@@ -5,18 +5,19 @@ import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { keys } from '@agora/testkit'
 import type { Execution } from '../src/index.ts'
-import { database, FakeKube, grants, Lab, lines, until } from './support.ts'
+import { database, FakeKube, grants, Lab, lines, sleep, until } from './support.ts'
 
 const A = 'github:owner/a:write'
 const B = 'github:owner/b:read'
 
-async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}) {
+async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}, morePools: [name: string, harness: string][] = []) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
   Object.assign(kube.baseProfiles, base)
+  kube.morePools.push(...morePools)
   const signer = grants([A, B])
   const db = await database()
-  const context = { signer, lab: await Lab.start({ db, kube, keys: pair, credentials: signer.source }), ws: '' }
+  const context = { db, signer, lab: await Lab.start({ db, kube, keys: pair, credentials: signer.source }), ws: '' }
   context.ws = await context.lab.workstream()
   t.after(async () => {
     await context.lab.close()
@@ -106,6 +107,59 @@ test('C21 Agora restarted between two turns: a new token before the next prompt,
   const tokens = tokensOf(signer, e)
   assert.deepEqual(tokens.map((m) => [...m.profiles]), [['anthropic', B, 'agora:read', 'previews'], ['anthropic', B, 'agora:read', 'previews']])
   assert.ok(tokens[1]!.at <= (await promptDispatched(context.lab, ws)))
+})
+
+/** The pool `claude-older` replaced by a newer image's, once the catalogue is read again. */
+async function replacePool(lab: Lab): Promise<void> {
+  lab.kube.morePools.splice(0, 1, ['claude-newer', 'claude-code'])
+  await sleep(10_200)
+  assert.deepEqual((await lab.executions.pools()).map((p) => p.name), ['mock-test', 'claude-test', 'claude-newer'])
+}
+const OLDER: [name: string, harness: string][] = [['claude-older', 'claude-code']]
+// Another base profile on the newer pool: taking its own would show.
+const BASE = { 'claude-older': 'anthropic', 'claude-newer': 'chatgpt' }
+const OWN = ['anthropic', B, 'agora:read', 'previews']
+
+test('C76 an execution’s pool gone with an older image: its token stands at the next prompt; a Scope’s still names its base profiles', async (t) => {
+  const { lab, signer, ws } = await started(t, BASE, OLDER)
+  const e = await lab.open(ws, { pool: 'claude-older', profiles: [B] })
+  const create = (await lab.entries(ws)).find((x) => x.kind === 'command' && x.content.kind === 'Create')!
+  assert.deepEqual((create.content.body as { baseProfiles?: unknown }).baseProfiles, ['anthropic'])
+  await replacePool(lab)
+  assert.ok((await lab.write(ws, 'after the images')).accepted)
+  await lab.turn(ws, 'done')
+  assert.deepEqual(tokensOf(signer, e).map((m) => [...m.profiles]), [OWN])
+  // Control: rights that change hand a token.
+  assert.ok((await lab.command(ws, 'Scope', { execution: e.id }, { profiles: [A] })).accepted)
+  assert.deepEqual(tokensOf(signer, e).map((m) => [...m.profiles]), [OWN, ['anthropic', A]])
+})
+
+test('C76 an execution’s pool gone, then Agora restarted: the token before the next prompt names its base profiles', async (t) => {
+  const context = await started(t, BASE, OLDER)
+  const { signer, ws } = context
+  const e = await context.lab.open(ws, { pool: 'claude-older', profiles: [B] })
+  await replacePool(context.lab)
+  context.lab = await context.lab.restart('clean')
+  await until('reconnected', async () => (await view(context.lab, ws)).state === 'ready', 10_000)
+  assert.ok((await context.lab.write(ws, 'after the images')).accepted)
+  await context.lab.turn(ws, 'done')
+  const tokens = tokensOf(signer, e)
+  assert.deepEqual(tokens.map((m) => [...m.profiles]), [OWN, OWN])
+  assert.ok(tokens[1]!.at <= (await promptDispatched(context.lab, ws)))
+})
+
+test('C77 a Create that recorded no base profiles, its pool listed, Agora restarted: the token before the next prompt names its pool’s', async (t) => {
+  const context = await started(t, { 'claude-test': 'anthropic' })
+  const { db, signer, ws } = context
+  const e = await context.lab.open(ws, { pool: 'claude-test', profiles: [B] })
+  // Simulated (forced-state): the Create as the log held it before they were recorded.
+  const forced = await db.admin.query("UPDATE entries SET content = content #- '{body,baseProfiles}' WHERE workstream=$1 AND kind='command' AND content->>'kind'='Create' AND content #> '{body,baseProfiles}' IS NOT NULL", [ws])
+  assert.equal(forced.rowCount, 1)
+  context.lab = await context.lab.restart('clean')
+  await until('reconnected', async () => (await view(context.lab, ws)).state === 'ready', 10_000)
+  assert.ok((await context.lab.write(ws, 'after the restart')).accepted)
+  await context.lab.turn(ws, 'done')
+  assert.deepEqual(tokensOf(signer, e).map((m) => [...m.profiles]), [OWN, OWN])
 })
 
 test('L54 a Create with profiles, then a Scope with others: the view’s profiles follow; the Scope recorded with the command', async (t) => {
