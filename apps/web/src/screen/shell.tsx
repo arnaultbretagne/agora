@@ -15,6 +15,7 @@ import { useAgora } from '../agora/runtime.tsx'
 import { usePush, type PushStatus } from '../agora/push.ts'
 import { excerpt, harnessName, merged, sections, type Excerpt, type ListRow, type WorkstreamState } from '../agora/view.ts'
 import { BrandMark, Wordmark } from './brand.tsx'
+import { Limits } from './limits.tsx'
 import { Thread } from './thread.tsx'
 import { useVisualViewport } from './viewport.ts'
 
@@ -529,9 +530,10 @@ export const Shell: FC = () => {
           </button>
         )}
         <Title />
-        <button type="button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'} className={cn(iconButton, '-me-1.5')}>
+        <button type="button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'} className={iconButton}>
           {theme === 'dark' ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
         </button>
+        <Limits className="-me-1.5" />
       </header>
       <aside className={cn('bg-sidebar border-foreground/10 hidden min-h-0 flex-col overflow-hidden border-r p-3 pb-[max(0.75rem,var(--safe-bottom))]', !collapsed && 'md:flex')}>
         <Sidebar onNavigate={() => undefined} />

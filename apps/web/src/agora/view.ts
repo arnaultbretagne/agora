@@ -1225,17 +1225,27 @@ const WINDOW_NAMES: Record<WindowKind, string> = { five_hour: '5-hour', weekly: 
 /** A window as people name it. */
 export const windowName = (kind: WindowKind): string => WINDOW_NAMES[kind]
 
-/**
- * The account a pool's executions draw from (docs/specs/assistant-ui.md, "Context and limits"): the
- * limits of the first of its base profiles that has some; none when no profile has.
- */
-export function poolLimits(baseProfiles: readonly string[] | undefined, limits: Readonly<Record<string, AccountLimits>> | null): AccountLimits | null {
-  for (const profile of baseProfiles ?? []) {
-    const account = limits?.[profile]
-    if (account !== undefined && (account.windows.length > 0 || account.error !== null)) return account
-  }
-  return null
+const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Claude', chatgpt: 'ChatGPT', zai: 'z.ai' }
+
+/** A subscription in the header's limits (docs/specs/assistant-ui.md, "Context and limits"): its base profile, its provider's name, its limits. */
+export interface Subscription {
+  readonly profile: string
+  readonly name: string
+  readonly limits: AccountLimits
 }
+
+/**
+ * The subscriptions the header shows (docs/specs/assistant-ui.md, "Context and limits"): every account
+ * `GET /api/limits` gives that has windows or a reason, in its order, named after its provider; none before they are read.
+ */
+export function subscriptions(limits: Readonly<Record<string, AccountLimits>> | null): readonly Subscription[] {
+  return Object.entries(limits ?? {})
+    .filter(([, account]) => account.windows.length > 0 || account.error !== null)
+    .map(([profile, account]) => ({ profile, name: PROVIDER_NAMES[profile] ?? profile, limits: account }))
+}
+
+/** How full the fullest window of every subscription is, in percent: what colours the gauge; 0 without any window. */
+export const fullest = (accounts: readonly Subscription[]): number => Math.max(0, ...accounts.flatMap((a) => a.limits.windows.map((w) => w.usedPercent)))
 
 /** How long until a window resets, short: "45m", "2h 10m", "3d 4h"; null when not known or passed. */
 export function resetIn(resetsAt: string | null, now: number): string | null {

@@ -32,9 +32,10 @@ import {
   offeredPools,
   poolOffered,
   planItems,
-  poolLimits,
   poolSettings,
   resetIn,
+  subscriptions,
+  fullest,
   returnedOf,
   merged,
   sections,
@@ -515,19 +516,34 @@ test('U33 an ended Workstream whose execution had profiles: its Create carries t
   assert.deepEqual(accessGranted(null, none, ['internet']), [], 'an execution without it continues without it')
 })
 
-test('U42 the context and the limits: the view\'s usage; a pool\'s account; how long until a window starts again', () => {
+test('U42 the context and the limits: the view\'s usage; every account worth showing, named, the fullest window; how long until a window starts again', () => {
   const withUsage = (usage: unknown): ThreadState =>
     apply(empty, { type: 'snapshot', position: '1', operation: 'upsert', kind: 'workstream', id: ws, object: { state: 'ready', usage } })
   assert.deepEqual(workstreamOf(withUsage({ used: 1200, size: 200000 }), ws).usage, { used: 1200, size: 200000 })
   for (const malformed of [null, { used: 5 }, { used: 5, size: 0 }, { used: -1, size: 10 }, 'full']) assert.equal(workstreamOf(withUsage(malformed), ws).usage, null)
   const claude: AccountLimits = { windows: [{ kind: 'five_hour', usedPercent: 7, resetsAt: '2026-10-07T12:00:00Z' }], plan: null, checkedAt: '2026-10-07T10:00:00Z', stale: false, error: null }
   const unread: AccountLimits = { windows: [], plan: null, checkedAt: null, stale: true, error: 'the gateway refused the tunnel: 403' }
-  const limits = { anthropic: claude, zai: unread, chatgpt: { ...unread, error: null } }
-  assert.equal(poolLimits(['anthropic'], limits), claude)
-  assert.equal(poolLimits(['zai'], limits), unread, 'never read: shown, with why')
-  assert.equal(poolLimits(['chatgpt'], limits), null, 'nothing and no reason: nothing')
-  assert.equal(poolLimits(undefined, limits), null, 'a pool without base profiles: none')
-  assert.equal(poolLimits(['anthropic'], null), null, 'not read yet')
+  const codex: AccountLimits = { windows: [{ kind: 'five_hour', usedPercent: 12, resetsAt: null }, { kind: 'weekly', usedPercent: 88.4, resetsAt: null }], plan: 'pro', checkedAt: '2026-10-07T10:00:00Z', stale: false, error: null }
+  const failed: AccountLimits = { ...claude, stale: true, error: 'api.z.ai answered 503' }
+  const other: AccountLimits = { ...claude, windows: [{ kind: 'weekly', usedPercent: 3, resetsAt: null }] }
+  const limits = { anthropic: claude, chatgpt: codex, nobody: { ...unread, error: null }, zai: failed, vendor: other, google: unread }
+  assert.deepEqual(
+    subscriptions(limits).map((a) => [a.profile, a.name, a.limits]),
+    [
+      ['anthropic', 'Claude', claude],
+      ['chatgpt', 'ChatGPT', codex],
+      ['zai', 'z.ai', failed],
+      ['vendor', 'vendor', other],
+      ['google', 'google', unread],
+    ],
+    'in order; failed after a read, or never read with a reason: shown; with neither windows nor a reason: left out',
+  )
+  assert.deepEqual(subscriptions(null), [], 'not read yet')
+  assert.deepEqual(subscriptions({}), [], 'the server reads none')
+  assert.deepEqual(subscriptions({ chatgpt: { ...unread, error: null } }), [], 'nothing and no reason: nothing')
+  assert.equal(fullest(subscriptions(limits)), 88.4, 'the fullest window of every account')
+  assert.equal(fullest(subscriptions({ zai: failed, vendor: other })), 7)
+  assert.equal(fullest(subscriptions({ google: unread })), 0, 'no window at all')
   const now = Date.parse('2026-10-07T10:00:00Z')
   assert.deepEqual(
     ['2026-10-07T10:44:10Z', '2026-10-07T12:00:00Z', '2026-10-07T12:10:00Z', '2026-10-10T10:00:00Z', '2026-10-10T14:30:00Z', '2026-10-07T09:00:00Z'].map((at) => resetIn(at, now)),
