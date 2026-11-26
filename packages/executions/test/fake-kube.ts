@@ -263,8 +263,11 @@ export class FakeKube implements KubeApi {
    * The container killed by the kernel, as the kubelet reports it (`OOMKilled`, exit 137): its bridge dies on the
    * spot, closing nothing cleanly, pushing no anchor; the Pod stays, `Failed`, until its claim's deadline.
    */
-  async killPod(name: string, reason = 'OOMKilled', exitCode = 137): Promise<void> {
-    this.endedPods.set(name, { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Failed', containerStatuses: [{ name: 'sandbox', state: { terminated: { reason, exitCode } } }] } })
+  async killPod(name: string, reason = 'OOMKilled', exitCode = 137, reportAfterMs = 0): Promise<void> {
+    // The kubelet reports the container's end when it sees it: Running until then.
+    const report = (): void => void this.endedPods.set(name, { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Failed', containerStatuses: [{ name: 'sandbox', state: { terminated: { reason, exitCode } } }] } })
+    if (reportAfterMs > 0) setTimeout(report, reportAfterMs)
+    else report()
     const lab = this.bridges.get(name)
     this.bridges.delete(name)
     await lab?.bridge.close()

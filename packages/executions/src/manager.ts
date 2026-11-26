@@ -24,6 +24,8 @@ const POD_EVERY_MS = 2000
  * deadline, the watch not having said so yet (docs/specs/executions.md, "The mechanics", Pods).
  */
 export const POD_MARGIN_MS = 5000
+/** A container's `terminated.reason` when the kernel killed it for lack of memory. */
+export const OOM_KILLED = 'OOMKilled'
 export const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
 
 export interface Limits {
@@ -446,29 +448,37 @@ export class ExecutionManager {
   }
 
   /**
-   * The Pod of a claim neither ending nor within the margin of its deadline, looked at while no connection is open: what made
-   * it end before its time, if it did (docs/specs/executions.md, "How an execution ended"). Once its end is
-   * known, it is not looked at again.
+   * The Pod of a claim neither ending nor past its deadline, looked at while no connection is open: what made it end
+   * before its time, if it did (docs/specs/executions.md, "How an execution ended"). Once its end is known, it is not
+   * looked at again. Within the margin before the deadline, only a container killed for lack of memory counts: the
+   * deadline's own deletion ends a Pod by SIGTERM, never by the kernel's OOM killer; a Pod not found, deleted or
+   * terminated otherwise may be that deletion's.
    */
   private async inspectPod(run: Run, force = false): Promise<void> {
     const claim = run.claim
     const pod = claim?.status?.sandbox?.name
     if (claim === null || pod === undefined || run.pod?.reason || run.pod?.gone) return
-    if (claim.metadata.deletionTimestamp !== undefined || !this.beforeDeadline(claim)) return
+    if (claim.metadata.deletionTimestamp !== undefined || !(Date.parse(claim.spec?.lifecycle?.shutdownTime ?? '') > Date.now())) return
     if (!force && Date.now() - run.podSeenAt < POD_EVERY_MS) return
     run.podSeenAt = Date.now()
     const found = (await this.options.kube.getPod(pod)) as {
       metadata?: { deletionTimestamp?: string }
       status?: { reason?: string; containerStatuses?: { state?: { terminated?: { reason?: string; exitCode?: number } } }[] }
     } | null
-    // The claim may have ended, or its deadline come, while the Pod was read: what the read saw is then the deadline's.
     const now = run.claim
-    if (now === null || now.metadata.uid !== claim.metadata.uid || now.metadata.deletionTimestamp !== undefined || !this.beforeDeadline(now)) return
+    if (now === null || now.metadata.uid !== claim.metadata.uid) return
+    const terminated = found?.status?.containerStatuses?.map((c) => c.state?.terminated).find((t) => t !== undefined)
+    if (terminated?.reason === OOM_KILLED) {
+      run.pod = { reason: OOM_KILLED, gone: false, exitCode: terminated.exitCode ?? null, at: Date.now() }
+      return
+    }
+    // The claim may have ended, or come within the margin of its deadline, while the Pod was read: anything else the
+    // read saw may then be the deadline's.
+    if (now.metadata.deletionTimestamp !== undefined || !this.beforeDeadline(now)) return
     if (found === null) {
       run.pod = { reason: null, gone: true, exitCode: null, at: Date.now() }
       return
     }
-    const terminated = found.status?.containerStatuses?.map((c) => c.state?.terminated).find((t) => t !== undefined)
     const reason = terminated?.reason ?? found.status?.reason ?? (found.metadata?.deletionTimestamp !== undefined ? 'Deleted' : null)
     if (reason !== null) run.pod = { reason, gone: false, exitCode: terminated?.exitCode ?? null, at: Date.now() }
   }

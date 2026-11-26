@@ -190,3 +190,40 @@ test('E40 what was seen of a Pod within the margin before the deadline it reache
   assert.deepEqual(causeOf({ ...facts(0), observed: null }), { kind: 'unobserved' })
   assert.deepEqual(causeOf({ ...facts(0), observed: null, obtained: false }), { kind: 'not_obtained' })
 })
+
+test('E39 a container killed for lack of memory, seen 4 s before a turn’s bound: oom_killed; another end seen then: the bound reached', () => {
+  const deadline = Date.parse('2026-11-26T10:00:00Z')
+  const facts = (reason: string, at: number) => ({
+    lost: null,
+    stopped: false,
+    obtained: true,
+    running: { bound: deadline },
+    prompted: true,
+    now: deadline + 200,
+    observed: {
+      claim: { metadata: { name: 'sbx-x', uid: 'u', deletionTimestamp: new Date(deadline + 100).toISOString() }, spec: { lifecycle: { shutdownTime: new Date(deadline).toISOString() } } },
+      pod: { reason, gone: false, exitCode: reason === 'OOMKilled' ? 137 : 1, at },
+    },
+  }) as Parameters<typeof causeOf>[0]
+  assert.deepEqual(causeOf(facts('OOMKilled', deadline - 4_000)), { kind: 'oom_killed' })
+  assert.deepEqual(causeOf(facts('OOMKilled', deadline - 10_000)), { kind: 'oom_killed' })
+  assert.deepEqual(causeOf(facts('Error', deadline - 4_000)), { kind: 'bound_reached' })
+  assert.deepEqual(causeOf(facts('Error', deadline - 10_000)), { kind: 'pod_gone', pod: 'Error' })
+})
+
+test('E39 a container killed for lack of memory during a turn, reported within the margin before its deadline: ended, the cause named', LIMIT, async (t) => {
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
+  await running(d)
+  // The kubelet reports the kill 3 s on; the deadline, nothing renewing it, 6 s on: within the margin all along.
+  await d.kube.killPod(podOf(d), 'OOMKilled', 137, 3_000)
+  const deadline = Date.now() + 6_000
+  d.kube.expireAt(d.e.claimName, new Date(deadline))
+  const seen = await until('the Pod seen', () => d.lab.executions.observed(d.e.id)?.pod)
+  assert.equal(seen.reason, 'OOMKilled')
+  assert.ok(seen.at > deadline - POD_MARGIN_MS, `seen ${String(deadline - seen.at)} ms before the deadline`)
+  const end = await ended(d)
+  assert.deepEqual(end.content.cause, { kind: 'oom_killed' })
+  assert.deepEqual((await noticeOf(d, end)).cause, { kind: 'oom_killed' })
+  assert.equal(await told(d), `Your delegate ${d.delegate} "/sleep 120": Its turn failed: its Pod was killed for lack of memory (OOMKilled).`)
+})

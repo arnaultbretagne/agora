@@ -1,6 +1,6 @@
 // docs/specs/executions.md, "How an execution ended": the cause `execution.ended` names, read from what the
 // log holds and what the mechanics saw of the claim and its Pod; and the words that say it.
-import { POD_MARGIN_MS, type Observed } from '@agora/executions'
+import { OOM_KILLED, POD_MARGIN_MS, type Observed } from '@agora/executions'
 import { object, schemaValue } from './json.ts'
 
 /** The causes, closed (docs/specs/log.md, "Entries"). */
@@ -37,20 +37,20 @@ export interface EndFacts {
 /**
  * Why the claim disappeared, the first that applies: the agent's own end (the deadline moved to now for it),
  * the Pod killed for lack of memory, no claim obtained, nothing seen of the claim, the Pod gone before its
- * deadline, the person's Stop, the bound reached during a turn, else the lease run out. What was seen of the
- * Pod counts only when seen more than the margin before the deadline the claim reached: closer, it may be
- * that deadline's own deletion.
+ * deadline, the person's Stop, the bound reached during a turn, else the lease run out. A container killed for
+ * lack of memory counts whenever it was seen; anything else seen of the Pod only when seen more than the margin
+ * before the deadline the claim reached: closer, it may be that deadline's own deletion.
  */
 export function causeOf(facts: EndFacts): Cause {
   const seen = facts.observed
   const deadline = Date.parse(seen?.claim.spec?.lifecycle?.shutdownTime ?? '')
-  const observed = seen === null ? null : { ...seen, pod: seen.pod !== null && seen.pod.at <= deadline - POD_MARGIN_MS ? seen.pod : null }
+  const observed = seen === null ? null : { ...seen, pod: seen.pod !== null && (seen.pod.reason === OOM_KILLED || seen.pod.at <= deadline - POD_MARGIN_MS) ? seen.pod : null }
   // Numbers read back from the log are lossless: plain ones here.
   const lost = object(schemaValue(facts.lost))
   if (lost?.reason === 'adapter_exited')
     return { kind: 'adapter_exited', exitCode: typeof lost.exitCode === 'number' ? lost.exitCode : null, signal: typeof lost.signal === 'string' ? lost.signal : null }
   if (lost?.reason === 'agent_failed') return { kind: 'agent_failed' }
-  if (observed?.pod?.reason === 'OOMKilled') return { kind: 'oom_killed' }
+  if (observed?.pod?.reason === OOM_KILLED) return { kind: 'oom_killed' }
   if (observed === null) return { kind: facts.obtained ? 'unobserved' : 'not_obtained' }
   const deleted = Date.parse(observed.claim.metadata.deletionTimestamp ?? '') || facts.now
   if (observed.pod !== null || !(deleted >= deadline - TOLERANCE_MS)) return { kind: 'pod_gone', pod: observed.pod?.reason ?? null }

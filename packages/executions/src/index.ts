@@ -11,6 +11,7 @@ export {
   MANAGER,
   TERMINAL_CLAIM_REASONS,
   POD_MARGIN_MS,
+  OOM_KILLED,
   claimName,
   sessionConfig,
   SESSION_CONFIG_ANNOTATION,

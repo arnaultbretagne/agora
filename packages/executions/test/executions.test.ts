@@ -132,13 +132,39 @@ test('E40 a Pod read in flight as its claim’s deadline comes, answered “no P
   const margin = deadline - 5_000
   assert.ok(racing.reads[0]! < margin && racing.reads[0]! + 140 > margin, `read at ${String(racing.reads[0]! - margin)} ms from the margin's end`)
   assert.equal(racing.manager.observed('race')?.pod, null)
-  // Past the margin, the Pod is not read again.
+  // Within the margin the Pod is read again, for a container killed for lack of memory alone: "no Pod" keeps nothing still.
   await new Promise((resolve) => setTimeout(resolve, 2_500))
-  assert.equal(racing.reads.length, 1)
+  assert.ok(racing.reads.length >= 2, String(racing.reads.length))
   assert.equal(racing.manager.observed('race')?.pod, null)
   // Control: the same “no Pod” a minute before the deadline is kept, with when it was seen.
   const early = await run(60_000, async () => null)
   const seen = await until('the Pod seen gone', () => early.manager.observed('race')?.pod)
   assert.equal(seen.gone, true)
   assert.ok(Math.abs(seen.at - Date.now()) < 5_000)
+})
+
+test('E39 a container killed for lack of memory, read within the margin before its claim’s deadline or across its start: kept; a Pod not found there is not', async (t) => {
+  const run = async (shutdownIn: number, pod: () => Promise<unknown>) => {
+    const { kube, reads } = oneClaim(new Date(Date.now() + shutdownIn).toISOString(), pod)
+    const manager = new ExecutionManager({ kube, signingKey: keys().privateKey, bridgePort: 8080, tickMs: 50 })
+    t.after(() => manager.stop())
+    await manager.start(recorder())
+    await manager.run({ execution: 'race', claimName: 'sbx-race', pool: 'mock-test' })
+    return { manager, reads }
+  }
+  const oom = { status: { phase: 'Failed', containerStatuses: [{ state: { terminated: { reason: 'OOMKilled', exitCode: 137 } } }] } }
+  // The deadline 4 s on: every read is within the margin.
+  const within = await run(4_000, async () => oom)
+  const kept = await until('the OOMKilled container kept', () => within.manager.observed('race')?.pod)
+  assert.deepEqual([kept.reason, kept.gone, kept.exitCode], ['OOMKilled', false, 137])
+  // Begun 100 ms before the margin's end, answered 200 ms later, within it.
+  const deadline = Date.now() + 5_150
+  const across = await run(5_150, () => new Promise((resolve) => setTimeout(() => resolve(oom), 200)))
+  const late = await until('the OOMKilled container kept', () => across.manager.observed('race')?.pod)
+  assert.equal(late.reason, 'OOMKilled')
+  assert.ok(across.reads[0]! < deadline - 5_000 && late.at > deadline - 5_000, `read at ${String(across.reads[0]! - deadline)} ms, kept at ${String(late.at - deadline)} ms from the deadline`)
+  // Control: within the margin, no Pod found says nothing.
+  const gone = await run(4_000, async () => null)
+  await until('read twice', () => gone.reads.length >= 2)
+  assert.equal(gone.manager.observed('race')?.pod, null)
 })
