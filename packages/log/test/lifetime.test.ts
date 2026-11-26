@@ -106,16 +106,17 @@ describe('a sandbox’s life', { concurrency: true }, () => {
 
   it('E41 a message taken into a running turn is the last prompt: the ceiling counts from it', { timeout: 120_000 }, async (t) => {
     const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
-    assert.ok((await lab.write(ws, '/sleep 45')).accepted)
+    // 40 s: past the first prompt's ceiling, within the message's, 18 s on.
+    assert.ok((await lab.write(ws, '/sleep 40')).accepted)
     const prompt = Date.parse(lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!.time)
-    await until('fifteen seconds in', () => Date.now() > prompt + 15_000, 20_000)
+    await until('eighteen seconds in', () => Date.now() > prompt + 18_000, 25_000)
     const current = (await lab.state(ws)).current!
     assert.ok((await lab.command(ws, 'Write', { execution: current.id, session: current.session }, { prompt: [{ type: 'text', text: 'a fresh instruction' }], mayWait: true })).accepted)
     const injected = await until('injected', async () => (await lab.entries(ws)).find((x) => x.direction === 'in' && x.correlated_method === '_session/steering' && (x.content.result as { outcome?: string } | undefined)?.outcome === 'injected'))
     const turn = await lab.turn(ws, ['done', 'failed', 'cancelled', 'uncertain'], 60_000)
     assert.equal(turn.status, 'done')
     const said = lines(await lab.entries(ws), 'in', 'session/update').map((x) => String((x.content.params as { update?: { content?: { text?: string } } }).update?.content?.text ?? ''))
-    assert.ok(said.some((s) => s.startsWith('Heard: a fresh instruction')) && said.some((s) => s.includes('Slept 45 s.')), JSON.stringify(said.slice(-3)))
+    assert.ok(said.some((s) => s.startsWith('Heard: a fresh instruction')) && said.some((s) => s.includes('Slept 40 s.')), JSON.stringify(said.slice(-3)))
     // Past the first prompt's ceiling, under the new one.
     const patches = lab.kube.deadlines.filter((d) => d.name === e.claimName)
     assert.ok(patches.some((d) => Date.parse(d.shutdownTime) > prompt + 30_000), 'moved past the first prompt’s ceiling')
