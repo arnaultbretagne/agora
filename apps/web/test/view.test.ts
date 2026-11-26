@@ -206,6 +206,30 @@ test('U9 an execution ended with an anchor, then a message: the Create carries t
   assert.equal(after.at(-1), 'Session restored with Mock agent: the agent remembers the history above.')
 })
 
+test('U121 an execution lost or ended: each cause in words, an end of the earlier contract as before', () => {
+  const ended = (cause?: Record<string, unknown>) => noticeText({ type: 'execution.ended', reason: 'claim_missing', ...(cause ? { cause } : {}) }, false)
+  assert.equal(ended({ kind: 'bound_reached' }), 'The sandbox has ended: it reached its time bound during the turn.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'ended' }), 'The sandbox has ended: its lease expired after the turn.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'running' }), 'The sandbox has ended: its lease expired during the turn, not renewed.')
+  assert.equal(ended({ kind: 'lease_expired', turn: 'none' }), 'The sandbox has ended: its lease expired before any turn.')
+  assert.equal(ended({ kind: 'adapter_exited', exitCode: 3, signal: null }), "The sandbox has ended: the agent's process had exited with code 3.")
+  assert.equal(ended({ kind: 'adapter_exited', exitCode: null, signal: 'SIGKILL' }), "The sandbox has ended: the agent's process had been killed by SIGKILL.")
+  assert.equal(ended({ kind: 'oom_killed' }), 'The sandbox has ended: its Pod was killed for lack of memory (OOMKilled).')
+  assert.equal(ended({ kind: 'pod_gone', pod: null }), 'The sandbox has ended: its Pod was gone before its deadline.')
+  assert.equal(ended({ kind: 'pod_gone', pod: 'Evicted' }), 'The sandbox has ended: its Pod was gone before its deadline (Evicted).')
+  assert.equal(ended({ kind: 'stopped' }), 'The sandbox has ended: it was stopped.')
+  assert.equal(ended({ kind: 'agent_failed' }), 'The sandbox has ended: the agent had stopped on an internal error.')
+  assert.equal(ended({ kind: 'not_obtained' }), 'The sandbox has ended: it was never obtained.')
+  assert.equal(ended({ kind: 'unobserved' }), 'The sandbox has ended: its claim was gone before Agora could see why.')
+  // Written before causes were, or a cause this client does not know: no cause said.
+  assert.equal(ended(), 'The sandbox has ended.')
+  assert.equal(ended({ kind: 'something_new' }), 'The sandbox has ended.')
+  const lost = (fields: Record<string, unknown>) => noticeText({ type: 'execution.lost', reason: 'adapter_exited', ...fields }, false)
+  assert.equal(lost({ exitCode: 3, signal: null }), "The agent's process exited with code 3. The history is kept.")
+  assert.equal(lost({ exitCode: null, signal: 'SIGKILL' }), "The agent's process was killed by SIGKILL. The history is kept.")
+  assert.equal(lost({}), "The agent's process exited. The history is kept.")
+})
+
 test('U10 each notice type: its text', () => {
   const notices = messagesOf(at(last))
     .filter((m) => m.role === 'system')
@@ -460,14 +484,13 @@ test('U30 a pool kept for the tests: not offered; an ended Workstream of that po
   assert.equal(poolOffered(harnessed, 'codex-1', 'claude-code-old', null, 'claude-code'), 'codex-1', 'the one picked here first')
 })
 
-test('U31 the rights folded: the Internet, the other services, GitHub with every repository at its widest, vault, k8s, agora, the rest as themselves; their states; the key\'s name', () => {
-  const offered = ['github:o/a:write', 'github:o/b:read', 'zai', 'vault:write', 'internet', 'kubernetes:read', 'agora:delegate', 'github:o/c:review', 'agora:read', 'previews']
+test('U31 the rights folded: the Internet, GitHub with every repository at its widest, vault, k8s, agora, the rest as themselves; their states; the key\'s name', () => {
+  const offered = ['github:o/a:write', 'github:o/b:read', 'vault:write', 'internet', 'kubernetes:read', 'agora:delegate', 'github:o/c:review', 'agora:read', 'previews']
   const entries = accessEntries(offered)
   assert.deepEqual(
     entries.map((e) => [e.name, e.profiles]),
     [
       ['Internet', ['internet']],
-      ['z.ai', ['zai']],
       ['GitHub', ['github:o/a:write', 'github:o/b:read', 'github:o/c:review']],
       ['vault', ['vault:write']],
       ['k8s', ['kubernetes:read']],
@@ -476,10 +499,10 @@ test('U31 the rights folded: the Internet, the other services, GitHub with every
       ['previews', ['previews']],
     ],
   )
-  const github = entries[2]!
+  const github = entries[1]!
   assert.equal(github.detail, 'o/a, o/b (read), o/c (review)')
   assert.deepEqual(github.covers, ['github:o/a:read', 'github:o/a:review', 'github:o/a:write', 'github:o/b:read', 'github:o/c:read', 'github:o/c:review'], 'each level up to the widest offered, never above')
-  assert.deepEqual(entries[3]!.covers, ['vault:read', 'vault:write'])
+  assert.deepEqual(entries[2]!.covers, ['vault:read', 'vault:write'])
   assert.deepEqual(accessEntries(['vault:read']).map((e) => [e.name, e.profiles]), [['vault', ['vault:read']]], 'the read alone offered: the vault gives it')
   assert.equal(accessState([], github), 'off')
   assert.equal(accessState(['github:o/a:write', 'github:o/b:read', 'github:o/c:review'], github), 'on')
@@ -490,6 +513,18 @@ test('U31 the rights folded: the Internet, the other services, GitHub with every
   assert.equal(accessTitle(['github:o/a:write', 'github:o/b:read', 'github:o/c:review', 'internet', 'agora:delegate'], entries), 'Internet, GitHub, agora', "in the menu's order")
   assert.equal(accessTitle(['github:o/b:read', 'vault:write'], entries), 'GitHub (partly), vault')
   assert.deepEqual(accessEntries([]), [])
+})
+
+test('U120 the Internet the only service the picker names: a harness\'s base profile, which the server never offers, never under its service\'s name', () => {
+  const base = ['anthropic', 'zai', 'chatgpt', 'antigravity']
+  const entries = accessEntries(['github:o/a:write', ...base, 'internet'])
+  // The Internet first, as its service; the base profiles, were one offered, by their own names as any other profile.
+  assert.deepEqual(
+    entries.map((e) => [e.key, e.name]),
+    [['internet', 'Internet'], ['github', 'GitHub'], ...base.map((p) => [p, p])],
+  )
+  for (const name of ['Anthropic', 'z.ai', 'ChatGPT', 'Antigravity']) assert.equal(entries.some((e) => e.name === name), false, name)
+  assert.deepEqual(accessEntries(['internet']).map((e) => e.name), ['Internet'])
 })
 
 test('U32 an entry switched gives the whole set: on, what it gives in place of what it covered; off, none of it; in the order offered, then what was granted beyond', () => {
@@ -1313,6 +1348,4 @@ test('U119 harnesses as people name them, each with its mark: Claude Code, Codex
   assert.equal(new Set(Object.values(HARNESS_MARKS)).size, 4)
   assert.equal(HARNESS_MARKS.mock, undefined)
   assert.equal(HARNESS_MARKS['other-harness'], undefined)
-  // Its service, offered as an access, by its name.
-  assert.equal(accessEntries(['antigravity'])[0]!.name, 'Antigravity')
 })

@@ -57,7 +57,7 @@ and `read` are listed to every execution but one a Scope took it from.
 | A parameter out of its range, or of another type | A tool error, `invalid_query`, naming the parameter. |
 | A Workstream that is not the person's, or unknown | A tool error, `unknown_workstream`. |
 | A tool the execution's rights do not open | A protocol error, `not_allowed`. |
-| `spawn_agent`, `send_message`, `stop_agent` or `answer_agent` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `profile_not_offered`, `unknown_harness`, `unknown_agent_type`, `not_a_delegate`, `no_delegator`, `delegate_stopped`, `too_many_exchanges`, `stale_permission` with what is pending, `invalid_permission_option`, `invalid_elicitation_content` with the field and why; `refused` with the person's words; `expired`. |
+| `spawn_agent`, `send_message`, `stop_agent` or `answer_agent` refused (`delegation.md`) | A tool error: `depth_exceeded`, `too_many_delegates`, `approval_pending`, `unknown_profile`, `profile_not_offered`, `unknown_harness`, `unknown_agent_type`, `not_a_delegate`, `no_delegator`, `delegate_stopped`, `too_many_exchanges`, `stale_permission` with what is pending, `invalid_permission_option`, `invalid_elicitation_content` with the field and why; `refused` with the person's words; `expired`. |
 
 ## Acceptance cases
 

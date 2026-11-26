@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { AGORA_MCP_HOST, ANTIGRAVITY_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, DEFAULT_PROFILES, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, withDefaults, type Grant } from '../src/index.ts'
+import { AGORA_MCP_HOST, ANTIGRAVITY_HOST, BASE_PROFILES, baseProfiles, compileProfile, compileProfiles, DEFAULT_PROFILES, GrantSigner, KUBERNETES_HOST, mcpServers, offeredProfiles, offers, ProfileRefused, VAULT_READ_TOOLS, VAULT_WRITE_TOOLS, withDefaults, type Grant } from '../src/index.ts'
 
 /** What the rule of the gateway's routes with a credential decides, replayed in JavaScript. */
 function allowed(grants: readonly Grant[], host: string, method: string, pathAndQuery: string): boolean {
@@ -469,17 +469,17 @@ describe('GrantSigner', () => {
   })
 
   it('reads the offered profiles, and what they let a Create or a Scope name', () => {
-    assert.deepEqual(offeredProfiles(' github:o/a:write, github:o/b:read,zai,github:o/a:write,internet '), ['github:o/a:write', 'github:o/b:read', 'zai', 'internet'])
+    assert.deepEqual(offeredProfiles(' github:o/a:write, github:o/b:read,kubernetes:read,github:o/a:write,internet '), ['github:o/a:write', 'github:o/b:read', 'kubernetes:read', 'internet'])
     assert.deepEqual(offeredProfiles(undefined), [])
     assert.throws(() => offeredProfiles('github:o/a:admin'), /unknown profile/)
-    const offered = ['github:o/a:write', 'github:o/b:read', 'zai', 'internet']
+    const offered = ['github:o/a:write', 'github:o/b:read', 'kubernetes:read', 'internet']
     const cases: [string, boolean][] = [
       ['github:o/a:write', true],
       ['github:o/a:read', true],
       ['github:o/b:read', true],
       ['github:o/b:write', false],
       ['github:o/c:read', false],
-      ['zai', true],
+      ['kubernetes:read', true],
       ['internet', true],
       ['anthropic', false],
     ]
@@ -487,6 +487,31 @@ describe('GrantSigner', () => {
     const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
     assert.throws(() => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered: ['dropbox'] }), /unknown profile/)
     assert.deepEqual(new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered }).describe().offered, offered)
+  })
+
+  it('C79 a base profile is never offered: OFFERED_PROFILES and the signer refuse each, as an unknown profile; offers says false, even listed; the others offered as before', () => {
+    assert.deepEqual([...BASE_PROFILES], ['anthropic', 'zai', 'chatgpt', 'antigravity'])
+    const keyFile = join(mkdtempSync(join(tmpdir(), 'grants-')), 'key.pem')
+    const signer = (offered: string[]) => new GrantSigner({ proxy: 'g:1', keyFile, keyId: 'k', issuer: 'i', audience: 'a', offered })
+    // Positive control: the same offer without them is read, and offers what it lists.
+    const others = offeredProfiles('github:o/a:write,internet,kubernetes:read')
+    assert.deepEqual(others, ['github:o/a:write', 'internet', 'kubernetes:read'])
+    assert.deepEqual(signer(others).describe().offered, others)
+    for (const profile of others) assert.equal(offers(others, profile), true, profile)
+    // An unknown profile stops the start; a base one, the same way.
+    assert.throws(() => offeredProfiles('github:o/a:write,dropbox'), ProfileRefused)
+    assert.throws(() => signer(['dropbox']), ProfileRefused)
+    for (const profile of BASE_PROFILES) {
+      // Known to the catalogue, which compiles it for a pool's tokens: refused here as a base profile alone.
+      assert.ok(compileProfile(profile).length > 0, profile)
+      for (const listed of [profile, `github:o/a:write,${profile},internet`, ` ${profile} `]) {
+        assert.throws(() => offeredProfiles(listed), { name: 'Error', message: `base profile, a pool's alone, never offered: ${profile}` }, listed)
+      }
+      assert.throws(() => signer([profile]), ProfileRefused, profile)
+      assert.throws(() => signer(['github:o/a:write', profile]), ProfileRefused, profile)
+      // Never offered, whatever the list says: listed, beside others, or with nothing offered.
+      for (const offered of [[profile], ['github:o/a:write', profile, 'internet'], [...BASE_PROFILES], []]) assert.equal(offers(offered, profile), false, `${offered.join(',')}: ${profile}`)
+    }
   })
 
   it('C75 agora:read and previews, listed in the offer or not: never offered, always nameable; the other profiles as before', () => {

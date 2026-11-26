@@ -20,7 +20,7 @@ which takes only the grants this server signs (`docs/specs/mcp.md`, "The caller"
 | `SANDBOX_NAMESPACE` | required | Namespace of the claims and sandboxes. |
 | `SIGNING_KEY_FILE` | required | Ed25519 private key that signs the bridge tokens. |
 | `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`, `LOG_ANCHORS_URL` | required | The three runtime logins of the log's database (`packages/log/scripts/README.md`). |
-| `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS` | 600, 3600, 60 | Lease, maximum turn duration, renewal step. |
+| `LEASE_SECONDS`, `CEILING_SECONDS`, `RENEW_SECONDS` | 600, 21600, 60 | Lease, ceiling since the last prompt, renewal step. |
 | `APPROVAL_SECONDS` | 270 | How long an approval of a `spawn_agent` call waits for the person (`docs/specs/delegation.md`, "Approval"). |
 | `MAX_ACTIVE` | 4 | Maximum active executions. |
 | `FIRST_SESSIONS_SECONDS` | 30 | How often the pools are looked at for one none has opened a Session in (`docs/specs/log.md`, "Sessions"): its first Session takes a place under `MAX_ACTIVE` for one lease of 60 s. `0`: none. |
@@ -73,7 +73,7 @@ no pull secret.
 | `PREVIEW_DATABASE_URL` | Required. `postgresql://<owner>:<password>@<host>:5432/<database>`: an empty PostgreSQL 17 database and the login that owns it, the `uri` of a CloudNativePG `<cluster>-app` Secret. That login needs no other right: no `CREATEROLE`, no superuser. The server applies the log's schema itself, as that owner, at every start. |
 | `PORT` | `8080`, as in production: the client, the API and `/healthz`. |
 | `MAX_ACTIVE` | `4` by default: sandboxes at once, each a mock agent process in the container. A stopped one counts until its deadline (`LEASE_SECONDS`). |
-| `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS`, `APPROVAL_SECONDS`, `TEST_ROUTES`, `NODE_OPTIONS` | Optional, as in production. |
+| `LEASE_SECONDS`, `CEILING_SECONDS`, `RENEW_SECONDS`, `APPROVAL_SECONDS`, `TEST_ROUTES`, `NODE_OPTIONS` | Optional, as in production. |
 
 A preview given any variable that only production sets does not start: it exits 1 with
 `PREVIEW excludes <names>`. They are `SANDBOX_NAMESPACE`, `SIGNING_KEY_FILE`, `KUBE_API`, `KUBE_TOKEN_FILE`,

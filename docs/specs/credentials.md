@@ -31,7 +31,7 @@ against the execution's grants and sets the credential on the way through.**
 
 | Element | Rule |
 | --- | --- |
-| `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token and closes the tunnels opened with it: later tunnels use the new one. |
+| `PUT /credentials` | With Agora's token. The body gives the proxy (`host:port`), the token and its expiry. Replaces the previous token: later tunnels use the new one. A renewal — the same proxy, and a token naming the same `sub` with the same `grants` — leaves the tunnels opened with the previous token open, and closes them 30 s before it expires; any other token closes them at once. |
 | `GET /info`, `outbound` field | Proxy, expiry, when the credential was attached, number of tunnels, number of refusals, and for each target the number of tunnels and the last response to the `CONNECT`. Never the token. |
 | Adapter's environment | `HTTPS_PROXY` and `https_proxy` set to `http://127.0.0.1:<port>`, `NO_PROXY` set to `localhost,127.0.0.1`, `NODE_USE_ENV_PROXY` set to `1` so that Node's own `fetch` goes through it too, `KUBECONFIG` set to the bridge's kubeconfig ("Kubernetes"). Everything the agent runs inherits it. |
 | The agent's access | At each `PUT /credentials`, before answering: the token's claims — its payload as JSON, never the token or its signature — written to `~/.agora/access.json`, replacing the previous ones as a whole, in the order the tokens came. A token whose claims cannot be read removes the file. |
@@ -119,6 +119,18 @@ service — never a repository, nor `internet`, nor the vault.
 A pool without the annotation, or declaring a profile that is not a base one, gets no warm token;
 the catalogue (`GET /api/pools`) shows its base profiles, or the refused one.
 
+A base profile is a harness's infrastructure, never a right a person or a delegating agent picks:
+its pool alone gives it.
+
+| Element | Rule |
+| --- | --- |
+| Declared | On a pool alone, by its annotation. |
+| Offered | Never. `OFFERED_PROFILES` naming one stops the server at start, as a profile the catalogue does not know ("Offered profiles"); `GET /api/config` never lists one in `offered`. |
+| Named | Never: a Create, a Scope or a delegate's `rights` (`delegation.md`) naming one is refused, `unknown_profile`, whatever `OFFERED_PROFILES` says, the variable unset included; nothing is written, no token handed. |
+| The access picker | Shows none (`assistant-ui.md`, "Access"). |
+| Held | By every execution of the pool, from its Create's `baseProfiles` ("On Agora's side"): its warm token names them, and its execution's token beside its own profiles. They feed `GET /api/limits` ("Limits"). |
+| `POST /api/workstreams/{id}/credentials` | Test only, it may still name one: the live cases of the gateway's chains go through it. |
+
 ### Default profiles
 
 Every new execution holds `agora:read` and `previews` without anyone naming them, whether a person's
@@ -148,14 +160,14 @@ profile, or a narrower one of the same repository or of the vault.
 | `github:owner/repo:read` | `github:owner/repo:read` |
 | `vault:write` | `vault:write`, `vault:read` |
 | `vault:read` | `vault:read` |
-| `anthropic`, `zai`, `chatgpt`, `antigravity`, `internet`, `kubernetes:read`, `agora:delegate` | Itself |
+| `internet`, `kubernetes:read`, `agora:delegate` | Itself |
 | Anything, or nothing | `agora:read` and `previews`, the default profiles ("Default profiles") |
 
 The vault's levels follow GitHub's: `vault:read` opens a subset of what `vault:write` opens — six of its
 tools, on the same host, path and methods — so an operator offering write has accepted every read,
 and the user may pick the narrower one. Anything else is refused (`profile_not_offered`). Without the variable, any profile of the
-catalogue may be named, and the interface offers none. A profile the catalogue does not know stops
-the server at start.
+catalogue may be named but a base one, and the interface offers none. A profile the catalogue does not know, or a base profile
+("Base profiles"), stops the server at start.
 
 ### MCP servers
 
@@ -178,7 +190,7 @@ An EdDSA JWT signed by Agora's key (Secret `grants-key`), `kid` `agora-grants-1`
 | --- | --- |
 | `iss`, `aud` | `agora`, `agora-gateway`: required by the gateway. |
 | `sub` | The execution (`agora <execution>`), or the warm Pod (`agora warm <sandbox>`); written in every log line. |
-| `exp` | A warm token: 15 minutes. An execution's: the turn's maximum duration plus the lease, from when it is handed over. Between 60 s and 24 h. |
+| `exp` | A warm token: 15 minutes. An execution's: one hour, three leases at least, from when it is handed over; renewed while its sandbox lives ("On Agora's side"). Between 60 s and 24 h. |
 | `jti` | One id per token. |
 | `ip` | The Pod's address, from its Sandbox (`status.podIPs`), never from the Pod. The gateway takes the token only from there. |
 | `grants` | The compiled grants. |
@@ -597,13 +609,13 @@ Agora reads no limits for `antigravity`: `retrieveUserQuotaSummary` is agy's, it
 | --- | --- |
 | Warming | Every 5 seconds, Agora lists the pools' Sandboxes. To each one that is ready, has an address and is still owned by a pool declaring base profiles, it hands a warm token bound to that address (`PUT /credentials`), and a new one when less than a third of its life remains. |
 | At the claim | Once it sees a claim bound to the Sandbox, Agora warms it no more. On the execution's connection, before `initialize`, it hands the execution's token: the base profiles and the execution's own. `initialize` waits until the bridge has taken it; a warming hand-off still in flight has settled first. |
-| Between turns | Before dispatching a prompt, Agora hands a new token if the current one would expire within the turn's maximum duration plus one minute, or names other profiles than the execution's; if it cannot, the prompt fails (`credentials_refused`) and nothing is sent. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt. |
-| The Create | `profiles`, optional: the execution's own. Checked against the catalogue (`unknown_profile`) and the offered profiles (`profile_not_offered`); the default profiles it does not name added after them ("Default profiles"); recorded with the command. Its pool's base profiles are recorded beside them, as `baseProfiles`: the execution's until it ends, its pool replaced by a newer image's or declaring others meanwhile. A Create that recorded none, written before they were: its pool's, while the catalogue lists it. |
+| Between turns | Each time Agora moves the execution's deadline (`executions.md`, "The deadline") — a prompt dispatched, a renewal during a turn or while work left running runs, the end of a turn —, it first hands a new token if the current one would expire less than half a token's life after the deadline it is about to set, or names other profiles than the execution's: the token in place always outlives the sandbox's deadline. Before a prompt, if it cannot, the prompt fails (`credentials_refused`) and nothing is sent; at a renewal, the deadline is not moved, and the next step tries again. After a restart, Agora does not know which profiles the bridge's token names: it hands one before the next prompt or renewal. |
+| The Create | `profiles`, optional: the execution's own. Checked against the catalogue, a base profile refused as unknown (`unknown_profile`, "Base profiles"), and the offered profiles (`profile_not_offered`); the default profiles it does not name added after them ("Default profiles"); recorded with the command. Its pool's base profiles are recorded beside them, as `baseProfiles`: the execution's until it ends, its pool replaced by a newer image's or declaring others meanwhile. A Create that recorded none, written before they were: its pool's, while the catalogue lists it. |
 | Scope | The execution's own profiles replaced, between turns (`log.md`, "Commands"): the whole set, checked as the Create's, recorded with the command. If the execution is connected, its new token is handed at once, its tunnels closed — a turn has nothing in flight then; if that fails, before the next prompt, as above. |
 | `POST /api/workstreams/{id}/credentials` | Test only: a token for other profiles, handed at once, its tunnels closed — whatever is in flight. |
 | The token | Kept nowhere: not on the claim, not in memory after the call, not in the log. |
 | After each turn | Agora reads the bridge's `outbound` field again: tunnels and responses become visible in the execution's state. |
-| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), never a default profile, or nothing. |
+| `GET /api/config` | `credentials` field: the gateway, the known profiles and the offered ones (`offered`), never a default profile nor a base one, or nothing. |
 | Configuration | `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, and `GRANTS_KEY_ID`, `GRANTS_ISSUER`, `GRANTS_AUDIENCE`, `OFFERED_PROFILES`. Without `GATEWAY_PROXY`, no Pod and no execution has a way out. |
 
 The claude-code image keeps `CLAUDE_CODE_OAUTH_TOKEN=agora-placeholder`. This value only puts the
@@ -670,7 +682,7 @@ call. The test page does it itself when the agent offers the option.
 | C9 | A warm Pod waiting beyond two thirds of its token's life | A new token before the old one expires; no request refused in between. |
 | C10 | A claim on a warm Pod, the Create naming `github:A:read` | Before `initialize`, a token naming the execution, with `anthropic`, `github:A:read`, `agora:read` and `previews`; the tunnels of the warm token closed. |
 | C11 | A warm token being handed over when the claim binds the Pod | The execution's token is the one in place; no warm token after it. |
-| C12 | An execution whose token would expire during the next turn | A new token before the prompt leaves; the previous tunnels closed; no request refused for an expired token during the turn. |
+| C12 | An execution whose token would expire less than half its life after the deadline the next prompt sets | A new token before the prompt leaves; the previous tunnels kept, then closed 30 s before it expires; no request refused for an expired token during the turn. |
 | C13 | claude-code, from the Create to a Session open | Under 5 s, with no refused connection. |
 | C14 | A Create naming an unknown profile | Refused, `unknown_profile`; nothing written. |
 | C15 | The chain to z.ai | `zai` profile, the mock's `/fetch https://api.z.ai/api/paas/v4/models`: 200 from z.ai, with the key the gateway set. |
@@ -740,3 +752,7 @@ to `CONNECT` by status, not just the last one; read access to GraphQL.
 | C76 | An execution of a pool declaring `anthropic`, that pool replaced in the catalogue by another of its harness declaring `chatgpt`: a prompt, then a Scope; another execution, Agora restarted once its pool is replaced, then a prompt | `anthropic` recorded with the Create; no new token before the prompt, the Scope's `anthropic` and the Scope's own. After the restart, a token before the prompt, naming `anthropic` and the execution's own. Never `chatgpt`. |
 | C77 | An execution whose Create recorded no base profiles, its pool listed and declaring `anthropic`; another, its pool replaced: Agora restarted, then a prompt in each | A token naming `anthropic` and the execution's own; the other's naming its own alone. |
 | C78 | Two executions, the pool of one declaring `anthropic`, of the other nothing; both pools declaring `chatgpt` since; Agora restarted, then a prompt in each | Each token names what its Create recorded and the execution's own, as before: `anthropic` for one, no base profile for the other, never `chatgpt`. |
+| C79 | `OFFERED_PROFILES` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, each beside other profiles; a signer given one; the offer without them | The server stops at start, the signer refused, for each, as for a profile the catalogue does not know; each never offered (`offers` false), even listed; the others offered as before, `GET /api/config`'s `offered` without a base profile. |
+| C80 | A pool declaring `anthropic`; a Create, a Scope and a `spawn_agent` naming `anthropic`, `zai`, `chatgpt` or `antigravity`, `OFFERED_PROFILES` empty, then listing other profiles; the same Create without it | Each `unknown_profile`, nothing written — no Create, no Scope, no Workstream, no approval —, no token handed; the Create without it accepted, its `baseProfiles` `anthropic`, its token naming `anthropic` and its own profiles. |
+| C81 | An execution living past its first token's life, a command left running after its turn | A new token before each one expires, with the same profiles; every deadline Agora sets at least half a token's life before the end of the token in place; the bridge holding the last. |
+| C82 | A token renewed — the same `sub` and `grants` — while a tunnel is open; then one with other grants | The tunnel opened with the previous token stays open, and closes 30 s before that token expires; later tunnels carry the new one. The other grants close the open tunnels at once. |

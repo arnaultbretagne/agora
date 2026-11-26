@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./token": "./src/token.ts",
     "./anchor": "./src/anchor.ts",
-    "./outbound": "./src/outbound.ts"
+    "./outbound": "./src/outbound.ts",
+    "./processes": "./src/processes.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

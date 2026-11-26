@@ -89,6 +89,31 @@ function tunnel(url: string, target: string): Promise<Socket> {
 }
 
 describe('outbound proxy', () => {
+  it('C82 a renewal keeps the tunnels opened with the previous token until 30 s before it expires; other grants close them at once', async () => {
+    const proxy = await upstreamProxy((socket) => socket.write('HTTP/1.1 200 Connection established\r\n\r\n'))
+    const outbound = await startOutbound({ log: () => {} })
+    cleanups.push(() => outbound.close())
+    const grants = [{ host: 'api.anthropic.com' }]
+    outbound.set({ proxy: proxy.address, token: jwt({ sub: 'agora e1', grants, jti: '1' }).token, expiresAt: new Date(Date.now() + 30_000 + 600).toISOString() })
+    const kept = await tunnel(outbound.url, 'api.anthropic.com:443')
+    const keptClosed = new Promise<number>((resolve) => kept.once('close', () => resolve(Date.now())))
+    const renewed = Date.now()
+    outbound.set({ proxy: proxy.address, token: jwt({ sub: 'agora e1', grants, jti: '2' }).token, expiresAt: new Date(Date.now() + 120_000).toISOString() })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(kept.destroyed, false, 'kept across the renewal')
+    // Closed 30 s before its own token's end: 600 ms after it was renewed here.
+    assert.ok((await keptClosed) - renewed >= 450, 'not before')
+    const next = await tunnel(outbound.url, 'api.anthropic.com:443')
+    const nextClosed = new Promise<void>((resolve) => next.once('close', () => resolve()))
+    // Other grants: no renewal, the tunnel closes at once.
+    outbound.set({ proxy: proxy.address, token: jwt({ sub: 'agora e1', grants: [{ host: 'github.com' }], jti: '3' }).token, expiresAt: new Date(Date.now() + 120_000).toISOString() })
+    await nextClosed
+    assert.deepEqual(
+      proxy.heads.map((head) => JSON.parse(Buffer.from(/Proxy-Authorization: Bearer (\S+)/.exec(head)![1]!.split('.')[1]!, 'base64url').toString()).jti),
+      ['1', '2'],
+    )
+  })
+
   it('C10 replacing the token closes the tunnels opened with the previous one', async () => {
     const proxy = await upstreamProxy((socket) => socket.write('HTTP/1.1 200 Connection established\r\n\r\n'))
     const outbound = await startOutbound({ log: () => {} })

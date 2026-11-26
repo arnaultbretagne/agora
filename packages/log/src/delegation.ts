@@ -4,12 +4,13 @@
 // (docs/specs/log.md, "Messages during a turn"). A call giving more rights than the caller holds waits for the person.
 // Everything is read back from the log.
 import { randomUUID } from 'node:crypto'
-import { offers } from '@agora/credentials'
+import { BASE_PROFILES, offers } from '@agora/credentials'
 import { isCatchUp } from './catch-up.ts'
 import { contentRefusal, fieldsText, patternRefusal } from './forms.ts'
 import { canonical, identity, object, UUID } from './json.ts'
 import { FROM_META, isRole } from './marks.ts'
 import type { Role } from './roles.ts'
+import { causeText, lostText } from './ends.ts'
 import { delegationOf, requestsOf, STEERING, type Execution, type State, type Turn } from './state.ts'
 import type { Answer, Entry } from './store.ts'
 import { telemetry } from './telemetry.ts'
@@ -85,9 +86,9 @@ export function lastMessageOf(entries: readonly Entry[], turn: Turn, next: Turn 
   return words.trim()
 }
 
-/** What the end of an execution says to its delegate's delegator, when it says something. */
+/** What the end of an execution says to its delegate's delegator, when it says something: why it was lost, too. */
 const endOf = (e: Execution): string | null =>
-  e.stopped ? 'The person stopped it.' : e.lost ? 'Its execution was lost.' : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
+  e.stopped ? 'The person stopped it.' : e.lost ? `Its execution was lost: ${lostText(e.loss)}.` : e.failed || (e.ended && !e.session) ? 'Its execution could not start.' : null
 
 /**
  * What a delegate's request asks, as its delegator reads it (docs/specs/delegation.md, "Requests"): its number; for a
@@ -324,6 +325,8 @@ export class Delegations {
     const pool = pools.find((p) => p.harness === harness || p.name === harness)
     if (!pool) throw new Refused('unknown_harness')
     const rights = Array.isArray(args.rights) ? args.rights.map(String) : []
+    // A base profile is a pool's alone (docs/specs/credentials.md, "Base profiles"): refused before any approval or Workstream.
+    if (rights.some((r) => BASE_PROFILES.has(r))) throw new Refused('unknown_profile')
     const offered = this.workstreams.options.credentials?.offered ?? []
     if (offered.length > 0 && rights.some((r) => !offers(offered, r))) throw new Refused('profile_not_offered')
     const settings: Record<string, string> = {}
@@ -357,7 +360,7 @@ export class Delegations {
           profiles: [...rights, 'agora:submit'],
           // Its role is its Workstream's (docs/specs/roles.md): the log gives it its persona.
           ...(role !== null ? { role: role.name } : {}),
-          limits: { leaseSeconds: limits.leaseSeconds, turnCapSeconds: limits.turnCapSeconds },
+          limits: { leaseSeconds: limits.leaseSeconds, ceilingSeconds: limits.ceilingSeconds },
         },
       },
       'agora',
@@ -691,8 +694,8 @@ export class Delegations {
     const e = state.executions.get(turn.execution)
     const entries = await this.store.entries(delegate)
     if (turn.status === 'failed') {
-      // The agent's error message, or the closed reason of a failure of Agora's.
-      const why = object(turn.failure)?.message ?? turn.failure
+      // The agent's error message, the closed reason of a failure of Agora's, or why its execution ended.
+      const why = object(turn.failure)?.message ?? turn.failure ?? (e?.ended && e.cause !== undefined ? causeText(e.cause) : undefined)
       return e?.lost || e?.failed || e?.stopped ? null : this.notice(delegator, delegate, identity(delegate, turn.id, 'failed'), `Its turn failed${typeof why === 'string' ? `: ${why}` : ''}.`)
     }
     if (turn.status === 'cancelled') {

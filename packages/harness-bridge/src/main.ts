@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pushBundle } from './anchor.ts'
 import { publicKeyFrom } from './token.ts'
 import { startBridge } from './server.ts'
+import { gatewayCa, trustEnv, trustInNss } from './trust.ts'
 
 function required(name: string): string {
   const value = process.env[name]
@@ -15,6 +16,12 @@ function required(name: string): string {
 const workspace = process.env.BRIDGE_WORKSPACE ?? '/home/harness/work'
 const harness = required('BRIDGE_DRIVER')
 const log = (message: string): void => console.log(`[bridge] ${message}`)
+
+// What is not Node trusts the gateway's root too, before the adapter starts (src/trust.ts): OpenSSL's clients by
+// SSL_CERT_FILE, which the adapter's environment inherits, and Chromium by the NSS database under HOME.
+const ca = gatewayCa()
+Object.assign(process.env, trustEnv(ca))
+log(`the gateway's root in NSS: ${await trustInNss({ home: homedir(), ca, path: process.env.PATH })}`)
 
 const bridge = await startBridge({
   port: Number(process.env.BRIDGE_PORT ?? 8080),
@@ -28,6 +35,8 @@ const bridge = await startBridge({
   restartOnAnchor: process.env.BRIDGE_RESTART_ON_ANCHOR === 'true',
   // Fixed: the agent's instructions name this path.
   accessFile: join(homedir(), '.agora', 'access.json'),
+  // The Pod's first process: what the agent leaves behind comes to it (docs/specs/executions.md, "The bridge's routes").
+  adoptsOrphans: process.pid === 1,
   log,
 })
 

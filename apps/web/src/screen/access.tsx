@@ -1,6 +1,6 @@
 // The access picker (docs/specs/assistant-ui.md, "Access"): a key alone on the composer, and a menu of the
 // rights the agent is given beyond its harness's own service, one line each, ticked on and off where it is:
-// the Internet, the other services, GitHub, the vault, k8s, agora, then anything else offered.
+// the Internet, GitHub, the vault, k8s, agora, then anything else offered.
 import { CheckIcon, KeyRoundIcon, MinusIcon } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import type { FC } from 'react'

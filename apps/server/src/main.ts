@@ -69,7 +69,7 @@ const credentials =
         keyId: process.env.GRANTS_KEY_ID ?? 'agora-grants-1',
         issuer: process.env.GRANTS_ISSUER ?? 'agora',
         audience: process.env.GRANTS_AUDIENCE ?? 'agora-gateway',
-        // What the interface offers beyond the pools' base profiles; an unknown profile stops the server here.
+        // What the interface offers beyond the pools' base profiles; an unknown profile, or a base one, stops the server here.
         offered: offeredProfiles(process.env.OFFERED_PROFILES),
       })
 // docs/specs/credentials.md, "Limits": the accounts' limits, read through the gateway from the server's
@@ -115,7 +115,7 @@ const workstreams = new Workstreams({
     : {}),
   store,
   executions,
-  defaults: { leaseSeconds: number('LEASE_SECONDS', 600), turnCapSeconds: number('TURN_CAP_SECONDS', 3600) },
+  defaults: { leaseSeconds: number('LEASE_SECONDS', 600), ceilingSeconds: number('CEILING_SECONDS', 21_600) },
   maxActive: number('MAX_ACTIVE', 4),
   renewSeconds: number('RENEW_SECONDS', 60),
   sink,

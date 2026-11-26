@@ -43,12 +43,12 @@ sequenceDiagram
 | Element | Rule |
 | --- | --- |
 | The delegator | The execution that calls `spawn_agent` (`mcp.md`, "The path"), and its Workstream. |
-| The delegate | A new Workstream, a sub-stream of the delegator's: the same person, one level deeper. Its execution: the pool of the `harness` named, the delegator's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise, the effort sent under the id the pool gives it, in its defaults or in what its last Session offered — `effort`, or `reasoning_effort` —, (`roles.md`, "Naming a role"); the rights given (`rights`), none by default, Agora's own `agora:submit`, and the default profiles every execution holds, `agora:read` and `previews` (`credentials.md`, "Default profiles"); the delegator's lease and turn duration. Its title: the first line of `instructions`. |
+| The delegate | A new Workstream, a sub-stream of the delegator's: the same person, one level deeper. Its execution: the pool of the `harness` named, the delegator's harness by default; `model` and `effort` as the pool offers them, its defaults otherwise, the effort sent under the id the pool gives it, in its defaults or in what its last Session offered — `effort`, or `reasoning_effort` —, (`roles.md`, "Naming a role"); the rights given (`rights`), none by default, Agora's own `agora:submit`, and the default profiles every execution holds, `agora:read` and `previews` (`credentials.md`, "Default profiles"); the delegator's lease and ceiling. Its title: the first line of `instructions`. |
 | Its role | `agent_type`, when given, names one of Agora's roles (`roles.md`), as the harnesses name an agent's type when they start a sub-agent of their own. The delegate's Create carries it: the role is its Workstream's, and Agora gives it its persona (`roles.md`, "The persona"). The card gives what it works with by default: its harness, unless `harness` names one; its model and its effort, on that harness alone — on another, that pool's defaults —, unless `model` or `effort` name them. A card gives no right. `unknown_agent_type`: a name that is no card's; nothing starts. Without `agent_type`, or with a null one, a delegate has no role. Its title is a Workstream's as any other's: the one its agent gives itself, which may speak of its card, over the first line of its instructions. |
 | Started | Once the delegate's Workstream exists and its Create is accepted. Its first message waits there until its Session opens. |
 | Depth | A delegate sits at most three levels below the person's Workstream: a delegator at depth 3 is refused, `depth_exceeded`. |
 | At once | At most three of a delegator's delegates awaiting approval or working: another is refused, `too_many_delegates`. |
-| Rights | Each right given must be offered (`credentials.md`, "Offered profiles"; `profile_not_offered`), but a default profile, which always may be named. When every one is covered by one of the delegator execution's own profiles — as an offered profile covers a narrower one, and a default is always covered —, the delegate starts at once; otherwise the call waits for the person ("Approval"). |
+| Rights | Never a base profile, a pool's alone: refused, `unknown_profile`, before any approval, whatever is offered (`credentials.md`, "Base profiles"). Each right given must be offered (`credentials.md`, "Offered profiles"; `profile_not_offered`), but a default profile, which always may be named. When every one is covered by one of the delegator execution's own profiles — as an offered profile covers a narrower one, and a default is always covered —, the delegate starts at once; otherwise the call waits for the person ("Approval"). |
 | States | `awaiting approval`; `working`: its Session opening, a turn running or a message waiting; `waiting`: its agent waits on a request ("Requests"); `idle`: its last turn done; `failed`: its last turn failed, or its execution failed, was lost or ended with no Session; `cancelled`: its last turn cancelled, or the person stopped it. A call refused or expired starts no delegate. |
 | The handle | The delegate's Workstream id: what `send_message`, `stop_agent`, `read` and `search` take. |
 | Who stops one | The person, from the delegate's own Workstream: Stop, after which no agent reaches it (`delegate_stopped`), or Cancel on its turn. Its delegator, by `stop_agent`: its running turn alone ("Stopping and listing"). |
@@ -72,7 +72,7 @@ A delegator is told what its delegate cannot tell it, by the same gesture: a mes
 | When | The message says |
 | --- | --- |
 | A delegate's turn holding a message that is not the person's is done with no message | It ended its turn with nothing to say. |
-| A delegate's turn fails, its Session does not open, or its execution is lost | What happened. |
+| A delegate's turn fails, its Session does not open, or its execution is lost | What happened, and why: a turn failed by its execution's end, `Its turn failed:` and the end's cause (`executions.md`, "How an execution ended") — `its sandbox reached its time bound`, `its sandbox's lease expired during the turn, not renewed`, `its Pod was killed for lack of memory (OOMKilled)`, `its Pod was gone before its deadline` and its reason in brackets when one was seen, `its sandbox was never obtained`, `its claim was gone before Agora could see why` —; a loss, `Its execution was lost:` and its reason — `the agent's process exited with code <n>` or `was killed by <signal>`, `the agent stopped on an internal error`, `its sandbox was replaced`. |
 | The person stops a delegate, or cancels its turn | That the person did. |
 | A delegate's agent asks a permission or a form | The request ("Requests"). |
 
@@ -119,7 +119,7 @@ first answer counts.
 | For that call alone | An approval starts that delegate, that once; the next call beyond the delegator's rights asks again. |
 | One at a time | A call needing approval while another approval of the delegator's Workstream waits is refused, `approval_pending`. |
 | The call kept open | A `spawn_agent` call answers in an SSE stream: while Agora holds it, a progress notification every 30 s, then the call's answer (`mcp.md`, "The path"). |
-| The delegator's turn | While an approval waits, the turn's clock stops (`executions.md`, "The deadline"). |
+| The delegator's turn | An approval's wait counts against the ceiling as any time does: it pushes back no deadline (`executions.md`, "The deadline"). |
 | Matching | The approval names the tool line it gates. Claude Code: the delegator's tool line whose `toolCallId` is the call's `_meta` `claudecode/toolUseId`. The others: the delegator's last tool line still running whose title names `spawn_agent` and whose `rawInput` equals the call's arguments. Looked for up to 2 s, a harness giving its line just after its call. Without a match, it names none. |
 
 ## Acceptance cases
@@ -130,7 +130,7 @@ first answer counts.
 | D5 | A delegator at depth 3; a delegator with three delegates working; four calls at once | `depth_exceeded`; `too_many_delegates`; no Workstream created; three started, one `too_many_delegates`. |
 | D6 | Rights beyond the delegator's; Approve | The call held; an approval in the delegator's Workstream, one option; after Approve, `started`. |
 | D7 | The person writes while the approval waits | The call answers `refused` with the words; no prompt sent; no delegate. |
-| D8 | No answer | `expired` at 4 min 30 s; a progress notification every 30 s before; the delegator's turn deadline pushed back by the wait. |
+| D8 | No answer | `expired` at 4 min 30 s; a progress notification every 30 s before; the delegator's deadline never beyond the last prompt + the ceiling, the wait counted. |
 | D9 | Another call needing approval while one waits | `approval_pending`. |
 | D15 | Live, each harness — Claude Code, Codex, opencode — given `agora:delegate`, delegating a task within its rights | `started`; the delegate answers; its last message reaches the delegator, which uses it. |
 | D16 | Live, each harness calling `spawn_agent` beyond its rights | The approval names the delegator's `spawn_agent` tool line, by its id on Claude Code and by its arguments on the others. |

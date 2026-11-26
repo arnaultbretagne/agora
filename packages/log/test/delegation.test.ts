@@ -21,7 +21,7 @@ async function started(
   t: T,
   profiles: string[],
   options: { approvalMs?: number; progressMs?: number; manual?: boolean; roles?: ReadonlyMap<string, Role> } = {},
-  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void; pgRelay?: boolean } = {},
+  extra: { workstreams?: LabOptions['workstreams']; open?: Record<string, unknown>; noSteering?: boolean; kube?: (kube: FakeKube) => void; pgRelay?: boolean; offered?: string[] } = {},
 ) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
@@ -30,7 +30,7 @@ async function started(
   const db = await database()
   // The roles are the log's own (docs/specs/roles.md): the delegation engine reads them there.
   const { roles, ...engine } = options
-  const signer = grants([])
+  const signer = grants(extra.offered ?? [])
   const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source, workstreams: { maxActive: 8, ...(roles ? { roles } : {}), ...extra.workstreams }, delegations: { approvalMs: 3_000, progressMs: 500, ...engine }, pgRelay: extra.pgRelay ?? false })
   const mcp = createMcpServer(lab.workstreams, signer.key)
   await new Promise<void>((resolve) => mcp.listen(0, '127.0.0.1', resolve))
@@ -113,6 +113,35 @@ test('D1 spawn_agent within the delegator’s rights: started at once; a sub-str
   assert.equal(words!.text, 'hello delegate')
 })
 
+test('C80 spawn_agent giving a base profile, OFFERED_PROFILES empty or listing others: unknown_profile, before any approval, no Workstream, nothing written, no token; within its rights without it, started, its pool’s base profile in its token', async (t) => {
+  for (const offered of [[], ['internet', 'agora:delegate']]) {
+    const { lab, db, url, signer, ws, execution } = await started(t, ['agora:delegate', 'internet'], {}, { offered, kube: (kube) => (kube.baseProfiles['mock-test'] = 'anthropic') })
+    const c = await client(t, url, execution)
+    const children = async () => Number(((await db.admin.query('SELECT count(*) AS n FROM workstreams WHERE parent=$1', [ws])).rows[0] as { n: string }).n)
+    const before = { entries: (await lab.entries(ws)).length, minted: signer.minted.length }
+    for (const base of ['anthropic', 'zai', 'chatgpt', 'antigravity']) {
+      // Alone, which the delegator does not hold and would otherwise ask the person for, and beside a right it holds.
+      for (const rights of [[base], ['internet', base]]) {
+        const refused = (await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', rights } })) as Text
+        assert.deepEqual([refused.isError, text(refused)], [true, 'unknown_profile'], `${offered.join(',') || 'nothing offered'}: ${rights.join(',')}`)
+      }
+    }
+    assert.deepEqual([await children(), (await lab.entries(ws)).length, signer.minted.length, (await lab.state(ws)).question ?? null], [0, before.entries, before.minted, null], 'no Workstream, nothing written, no token, no approval')
+    if (offered.length === 0) {
+      // Control: a right beyond the delegator's, not a base one, asks the person — an approval the refusals would have shown.
+      const asking = c.callTool({ name: 'spawn_agent', arguments: { instructions: 'needs the cluster', rights: ['kubernetes:read'] } })
+      await until('the approval', async () => (await lab.state(ws)).question)
+      assert.equal((await lab.command(ws, 'Answer', { question: (await lab.state(ws)).question!.position }, { optionId: 'approve' })).accepted, true)
+      delegateOf(text(await asking))
+    }
+    // Control: within its rights, started at once; its token, its pool's base profile and the rights given.
+    const delegate = delegateOf(text(await c.callTool({ name: 'spawn_agent', arguments: { instructions: 'a task', rights: ['internet'] } })))
+    const e = (await until('its execution', async () => (await lab.state(delegate)).current))!
+    const token = await until('its token', async () => signer.minted.find((m) => m.label === `agora ${e.id}`))
+    assert.deepEqual([...token.profiles], ['anthropic', 'internet', 'agora:submit', 'agora:read', 'previews'])
+  }
+})
+
 test('D5 a delegator at depth 3; a delegator with three delegates working: depth_exceeded; too_many_delegates; no Workstream created', async (t) => {
   const { lab, db, url, execution } = await started(t, ['agora:delegate'])
   const owner = randomUUID()
@@ -187,8 +216,8 @@ test('D7 the person writes while the approval waits: refused with the words; no 
   assert.equal(Number((await db.admin.query('SELECT count(*) FROM workstreams WHERE parent=$1', [ws])).rows[0].count), 0)
 })
 
-test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s turn deadline pushed back by the wait', async (t) => {
-  const limits = { leaseSeconds: 60, turnCapSeconds: 30 }
+test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s deadline never beyond the ceiling, the wait counted', async (t) => {
+  const limits = { leaseSeconds: 60, ceilingSeconds: 30 }
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 2_000, progressMs: 400 }, { workstreams: { renewSeconds: 1 }, open: { limits } })
   // Its turn runs while its call waits, as when its agent calls `delegate`.
   assert.equal((await lab.write(ws, '/sleep 5')).accepted, true)
@@ -204,10 +233,11 @@ test('D8 no answer: expired at the approval’s end; progress meanwhile; the del
   const [approval] = await projected(lab, ws, 'question', (q) => q.status !== 'pending')
   assert.equal(approval?.status, 'expired')
   await lab.turn(ws, 'done', 20_000)
-  // Its deadline, at most turn start + maximum duration, moved on by the approval's 2 s.
+  // The ceiling is absolute: the approval's 2 s push nothing back; the deadline reaches it, never beyond.
   const claim = (await lab.state(ws)).current!.claimName
-  const beyond = lab.kube.deadlines.filter((d) => d.name === claim).map((d) => Date.parse(d.shutdownTime) - prompt - limits.turnCapSeconds * 1000)
-  assert.ok(beyond.some((ms) => ms >= 1_800 && ms < 3_000), `beyond the cap: ${beyond.join(', ')} ms`)
+  const beyond = lab.kube.deadlines.filter((d) => d.name === claim).map((d) => Date.parse(d.shutdownTime) - prompt - limits.ceilingSeconds * 1000)
+  assert.ok(beyond.length > 0 && beyond.every((ms) => ms <= 0), `beyond the ceiling: ${beyond.join(', ')} ms`)
+  assert.equal(beyond.at(-1), 0, 'the end of the turn at the ceiling')
 })
 
 test('D9 another call needing approval while one waits: approval_pending', async (t) => {
@@ -577,7 +607,7 @@ test('D27 a delegate’s execution is lost: one message of Agora’s', async (t)
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/die 1', harness: 'mock' } })))
   const [notice] = await manyFromOthers(lab, ws, 1, 20_000)
   assert.deepEqual([notice?.from, notice?.as], [delegate, 'agora'])
-  assert.match(wordsOf(notice!), /: Its execution was lost\.$/)
+  assert.match(wordsOf(notice!), /: Its execution was lost: the agent's process exited with code 3\.$/)
   await sleep(600)
   assert.equal((await fromOthers(lab, ws)).length, 1)
 })
@@ -1022,7 +1052,7 @@ test('L125 a Write of Agora’s before the Session opens: accepted, waiting; sen
 })
 
 test('L125 a Write of Agora’s with the execution ended: accepted, waiting; a Create with its pool, settings, profiles and limits, then sent', async (t) => {
-  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { open: { settings: { model: 'mock-large' }, limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { open: { settings: { model: 'mock-large' }, limits: { leaseSeconds: 90, ceilingSeconds: 600 } } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const d = await client(t, url, (await working(lab, delegate)).id)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)
@@ -1035,7 +1065,7 @@ test('L125 a Write of Agora’s with the execution ended: accepted, waiting; a C
     return state.executions.size === 2 && state.current
   }, 30_000)
   assert.deepEqual([next.body.pool, next.body.settings, next.profiles, next.body.limits], [before.body.pool, before.body.settings, before.profiles, before.body.limits])
-  assert.equal(String(object(next.body.limits)?.turnCapSeconds), '600')
+  assert.equal(String(object(next.body.limits)?.ceilingSeconds), '600')
   await until('sent', async () => (await prompts(lab, ws)).length === 1, 30_000)
   assert.equal(blocksOf((await prompts(lab, ws))[0]!).at(-1)!.text, 'after its end')
 })
@@ -1057,7 +1087,7 @@ test('L125 a Write of Agora’s after a Stop: accepted, waiting; no Create, unti
 })
 
 test('L125 a Write of Agora’s with the execution ended, its pool gone: continued in a pool of its harness, its settings, profiles and limits', async (t) => {
-  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, ceilingSeconds: 600 } } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const e = await working(lab, delegate)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)

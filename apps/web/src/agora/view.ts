@@ -296,6 +296,41 @@ const REQUEST: Record<string, string> = {
   transport_error: 'A message could not reach the sandbox.',
 }
 
+/** How the agent's process ended, with the bridge's exit code or signal when known. */
+function exited(exitCode: unknown, signal: unknown, had: boolean): string {
+  const verb = had ? 'had ' : ''
+  if (typeof signal === 'string' && signal !== '') return `the agent's process ${had ? 'had been' : 'was'} killed by ${signal}`
+  if (typeof exitCode === 'number') return `the agent's process ${verb}exited with code ${String(exitCode)}`
+  return `the agent's process ${verb}exited`
+}
+
+/** Why the sandbox ended (docs/specs/assistant-ui.md, "The exchanges"); null for an end that names no cause. */
+function causeText(cause: Json | null): string | null {
+  if (cause === null) return null
+  switch (cause.kind) {
+    case 'bound_reached':
+      return 'it reached its time bound during the turn'
+    case 'lease_expired':
+      return cause.turn === 'running' ? 'its lease expired during the turn, not renewed' : cause.turn === 'none' ? 'its lease expired before any turn' : 'its lease expired after the turn'
+    case 'adapter_exited':
+      return exited(cause.exitCode, cause.signal, true)
+    case 'agent_failed':
+      return 'the agent had stopped on an internal error'
+    case 'oom_killed':
+      return 'its Pod was killed for lack of memory (OOMKilled)'
+    case 'pod_gone':
+      return `its Pod was gone before its deadline${typeof cause.pod === 'string' && cause.pod !== '' ? ` (${cause.pod})` : ''}`
+    case 'stopped':
+      return 'it was stopped'
+    case 'not_obtained':
+      return 'it was never obtained'
+    case 'unobserved':
+      return 'its claim was gone before Agora could see why'
+    default:
+      return null
+  }
+}
+
 /** A Session's end says nothing the execution's own notice does not, unless another replaced it. */
 export const shownNotice = (notice: Json): boolean => notice.type !== 'session.ended' || notice.reason === 'replaced'
 
@@ -324,12 +359,16 @@ export function noticeText(notice: Json, first: boolean): string {
       return 'The connection to the sandbox was interrupted.'
     case 'request.failed':
       return REQUEST[reason] ?? 'A request to the agent failed.'
-    case 'execution.lost':
-      return `${LOST[reason] ?? 'The sandbox was lost'}. The history is kept.`
+    case 'execution.lost': {
+      const lost = reason === 'adapter_exited' ? exited(notice.exitCode, notice.signal, false) : null
+      return `${lost === null ? (LOST[reason] ?? 'The sandbox was lost') : lost.charAt(0).toUpperCase() + lost.slice(1)}. The history is kept.`
+    }
     case 'execution.failed':
       return `${FAILED[reason] ?? 'The execution could not start'}.`
-    case 'execution.ended':
-      return 'The sandbox has ended.'
+    case 'execution.ended': {
+      const cause = causeText(json(notice.cause) ?? null)
+      return cause === null ? 'The sandbox has ended.' : `The sandbox has ended: ${cause}.`
+    }
     default:
       return text(notice.type)
   }
@@ -1034,7 +1073,8 @@ export interface AccessEntry {
 /** The profile for any other host, with no credential (docs/specs/credentials.md, "Profiles"). */
 export const INTERNET = 'internet'
 
-const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet', anthropic: 'Anthropic', zai: 'z.ai', chatgpt: 'ChatGPT', antigravity: 'Antigravity' }
+/** The services the picker names: the Internet alone. A harness's base profiles are its pool's, never offered (docs/specs/credentials.md, "Base profiles"). */
+const SERVICE_NAMES: Record<string, string> = { [INTERNET]: 'Internet' }
 const REPOSITORY = /^github:([^:]+):(read|review|write)$/
 const LEVELS = ['read', 'review', 'write'] as const
 /** What a profile is a level of: its repository, the vault, or itself. */
@@ -1046,13 +1086,13 @@ const single = (profile: string, name: string): AccessEntry => ({ key: profile, 
 
 /**
  * The rights the access picker offers (docs/specs/assistant-ui.md, "Access"), folded, write giving read: the
- * Internet, then each other service; "GitHub", every offered repository at the widest level it is offered;
+ * Internet; "GitHub", every offered repository at the widest level it is offered;
  * "vault", its write, else its read; "k8s", `kubernetes:read`; "agora", `agora:delegate`; then any other
  * profile offered, as itself.
  */
 export function accessEntries(offered: readonly string[]): AccessEntry[] {
   const has = (p: string) => offered.includes(p)
-  const services = offered.filter((p) => SERVICE_NAMES[p] !== undefined).sort((x, y) => Number(y === INTERNET) - Number(x === INTERNET))
+  const services = offered.filter((p) => SERVICE_NAMES[p] !== undefined)
   const repositories = [...new Set(offered.flatMap((p) => REPOSITORY.exec(p)?.[1] ?? []))]
   // Each repository's widest level offered, and the levels under it, which it takes back off.
   const widest = (repo: string) => LEVELS.findLastIndex((l) => has(`github:${repo}:${l}`))

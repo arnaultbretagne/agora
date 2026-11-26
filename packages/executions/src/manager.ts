@@ -7,6 +7,7 @@ import { WebSocket, type RawData } from 'ws'
 import { KubeError, WatchGone, type Claim, type KubeApi, type Sandbox, type WatchEvent } from './kube.ts'
 import { mintBridgeToken } from '@agora/harness-bridge/token'
 import type { Credentials, OutboundView } from '@agora/harness-bridge/outbound'
+import type { ProcessView } from '@agora/harness-bridge/processes'
 import { BASE_PROFILES_ANNOTATION, baseProfiles } from '@agora/credentials'
 
 export const MANAGED_BY = 'app.kubernetes.io/managed-by'
@@ -17,16 +18,26 @@ export const EXECUTION_LABEL = 'agora.bretagne.dev/execution-id'
 const SELECTOR = `${MANAGED_BY}=${MANAGER},${EXECUTION_LABEL}`
 /** One line, one WebSocket message (docs/specs/log.md, "ACP lines"). */
 export const MAX_LINE = 16 * 1024 * 1024
+/** How often a Pod is looked at while no connection to its bridge is open. */
+const POD_EVERY_MS = 2000
+/**
+ * A Pod read this close to its claim's deadline says nothing: Agent Sandbox may already be deleting it for that
+ * deadline, the watch not having said so yet (docs/specs/executions.md, "The mechanics", Pods).
+ */
+export const POD_MARGIN_MS = 5000
+/** A container's `terminated.reason` when the kernel killed it for lack of memory. */
+export const OOM_KILLED = 'OOMKilled'
 export const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
 
+/** An execution's deadline (docs/specs/executions.md, "The deadline"): the lease, and the ceiling since its last prompt. */
 export interface Limits {
   readonly leaseSeconds: number
-  readonly turnCapSeconds: number
+  readonly ceilingSeconds: number
 }
 
 export const LIMIT_BOUNDS: Record<keyof Limits, readonly [number, number]> = {
   leaseSeconds: [60, 600],
-  turnCapSeconds: [30, 3600],
+  ceilingSeconds: [30, 21_600],
 }
 
 /** A pool kept for the tests: offered by the API, not by the screen (docs/specs/executions.md). */
@@ -115,15 +126,50 @@ interface Connection {
   finish: () => void
 }
 
+/**
+ * What the mechanics saw of a Pod ending on its own, before its claim's deadline (docs/specs/executions.md,
+ * "How an execution ended"): its container terminated, the Pod being deleted, or no Pod at all.
+ */
+export interface PodEnd {
+  /** The container's `terminated.reason` (`OOMKilled`, `Error`), the Pod's own (`Evicted`), `Deleted`, or null when no Pod was found. */
+  readonly reason: string | null
+  /** No Pod of that name: gone. */
+  readonly gone: boolean
+  readonly exitCode: number | null
+  /** When the read that saw it completed (ms since the epoch). */
+  readonly at: number
+}
+
+/** The claim's last state as the mechanics saw it, kept once it has disappeared, and what its Pod showed. */
+export interface Observed {
+  readonly claim: Claim
+  readonly pod: PodEnd | null
+}
+
 interface Run {
   readonly target: Target
   claim: Claim | null
+  /** The last claim seen, kept after it disappears. */
+  last: Claim | null
+  pod: PodEnd | null
+  podSeenAt: number
   held: boolean
   connection: Connection | null
   reconnectAt: number
   launchType: string | null
   podDetail: string | null
   outbound: OutboundView | null
+  /** What ran under the adapter when the bridge was last asked (docs/specs/executions.md, "What still runs"). */
+  processes: readonly ProcessView[] | null
+}
+
+/** What the bridge says of itself, `GET /info`. */
+export interface BridgeInfo {
+  readonly instance: string
+  readonly workspace: string
+  readonly adapter: unknown
+  readonly outbound: OutboundView
+  readonly processes: readonly ProcessView[]
 }
 
 export interface ExecutionView {
@@ -145,6 +191,7 @@ export interface ExecutionView {
   readonly pending: number
   readonly held: boolean
   readonly outbound: OutboundView | null
+  readonly processes: readonly ProcessView[] | null
 }
 
 export interface PoolView {
@@ -240,7 +287,7 @@ export class ExecutionManager {
   async run(target: Target): Promise<void> {
     let run = this.runs.get(target.execution)
     if (run !== undefined) return
-    run = { target, claim: null, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null }
+    run = { target, claim: null, last: null, pod: null, podSeenAt: 0, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null, processes: null }
     this.runs.set(target.execution, run)
     if (this.handler !== null) await this.observe(run, this.claims.get(target.execution) ?? null)
   }
@@ -264,6 +311,12 @@ export class ExecutionManager {
 
   claimOf(execution: string): Claim | null {
     return this.runs.get(execution)?.claim ?? null
+  }
+
+  /** The last claim seen of an execution, and what its Pod showed; null when no claim was ever seen. */
+  observed(execution: string): Observed | null {
+    const run = this.runs.get(execution)
+    return run?.last ? { claim: run.last, pod: run.pod } : null
   }
 
   /** The claim bound to a Pod, and its execution, as the cluster reports it now. */
@@ -338,6 +391,7 @@ export class ExecutionManager {
 
   private async observe(run: Run, claim: Claim | null): Promise<void> {
     run.claim = claim
+    if (claim !== null) run.last = claim
     if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) void this.readLaunchType(run)
     this.emit(run)
     await this.handler?.claim(run.target.execution, claim)
@@ -375,6 +429,7 @@ export class ExecutionManager {
     if (run === undefined) throw new Error('unknown_execution')
     const claim = await this.options.kube.patchClaim(run.target.claimName, { metadata: { uid }, spec: { lifecycle: { shutdownTime } } })
     run.claim = claim
+    run.last = claim
     this.claims.set(execution, claim)
     this.emit(run)
     return claim
@@ -406,6 +461,47 @@ export class ExecutionManager {
     }
   }
 
+  /**
+   * The Pod of a claim neither ending nor past its deadline, looked at while no connection is open: what made it end
+   * before its time, if it did (docs/specs/executions.md, "How an execution ended"). Once its end is known, it is not
+   * looked at again. Within the margin before the deadline, only a container killed for lack of memory counts: the
+   * deadline's own deletion ends a Pod by SIGTERM, never by the kernel's OOM killer; a Pod not found, deleted or
+   * terminated otherwise may be that deletion's.
+   */
+  private async inspectPod(run: Run, force = false): Promise<void> {
+    const claim = run.claim
+    const pod = claim?.status?.sandbox?.name
+    if (claim === null || pod === undefined || run.pod?.reason || run.pod?.gone) return
+    if (claim.metadata.deletionTimestamp !== undefined || !(Date.parse(claim.spec?.lifecycle?.shutdownTime ?? '') > Date.now())) return
+    if (!force && Date.now() - run.podSeenAt < POD_EVERY_MS) return
+    run.podSeenAt = Date.now()
+    const found = (await this.options.kube.getPod(pod)) as {
+      metadata?: { deletionTimestamp?: string }
+      status?: { reason?: string; containerStatuses?: { state?: { terminated?: { reason?: string; exitCode?: number } } }[] }
+    } | null
+    const now = run.claim
+    if (now === null || now.metadata.uid !== claim.metadata.uid) return
+    const terminated = found?.status?.containerStatuses?.map((c) => c.state?.terminated).find((t) => t !== undefined)
+    if (terminated?.reason === OOM_KILLED) {
+      run.pod = { reason: OOM_KILLED, gone: false, exitCode: terminated.exitCode ?? null, at: Date.now() }
+      return
+    }
+    // The claim may have ended, or come within the margin of its deadline, while the Pod was read: anything else the
+    // read saw may then be the deadline's.
+    if (now.metadata.deletionTimestamp !== undefined || !this.beforeDeadline(now)) return
+    if (found === null) {
+      run.pod = { reason: null, gone: true, exitCode: null, at: Date.now() }
+      return
+    }
+    const reason = terminated?.reason ?? found.status?.reason ?? (found.metadata?.deletionTimestamp !== undefined ? 'Deleted' : null)
+    if (reason !== null) run.pod = { reason, gone: false, exitCode: terminated?.exitCode ?? null, at: Date.now() }
+  }
+
+  /** Now is more than the margin before the claim's deadline. */
+  private beforeDeadline(claim: Claim): boolean {
+    return Date.parse(claim.spec?.lifecycle?.shutdownTime ?? '') - POD_MARGIN_MS > Date.now()
+  }
+
   private async tick(): Promise<void> {
     if (this.options.credentials !== undefined && Date.now() - this.warmedAt >= (this.options.warmEveryMs ?? 5000)) {
       this.warmedAt = Date.now()
@@ -417,6 +513,7 @@ export class ExecutionManager {
         const ready = claim?.status?.conditions?.find((c) => c.type === 'Ready')?.status === 'True'
         if (claim !== null && !ready && claim.status?.sandbox?.name !== undefined) await this.diagnose(run)
         if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) await this.readLaunchType(run)
+        if (run.connection === null || !run.connection.accepted || run.connection.closed) await this.inspectPod(run)
         this.ensureConnection(run)
       } catch {
         // Diagnostics only: tried again on the next tick.
@@ -505,6 +602,8 @@ export class ExecutionManager {
       // to a dead adapter (1011) or an ending Pod (1001); otherwise after a pause.
       if (code === 1011 || code === 1001) run.held = true
       else run.reconnectAt = Math.max(run.reconnectAt, Date.now() + (this.options.reconnectMs ?? 2000))
+      // A Pod that ends before its deadline says why while it is still there.
+      if (code !== 1000 && code !== 1011) void this.inspectPod(run, true).catch(() => {})
       void this.closeConnection(run, c, c.open ? code : null)
     })
   }
@@ -604,13 +703,16 @@ export class ExecutionManager {
     })
   }
 
-  async info(execution: string): Promise<{ instance: string; workspace: string; adapter: unknown; outbound: OutboundView }> {
+  async info(execution: string): Promise<BridgeInfo> {
     const response = await this.bridge(execution, 'GET', '/info', undefined, 5000)
     if (!response.ok) throw new Error('bridge_info_refused')
-    const info = (await response.json()) as { instance: string; workspace: string; adapter: unknown; outbound: OutboundView }
+    const info = (await response.json()) as BridgeInfo
+    // A bridge older than the processes' list says nothing runs.
+    if (!Array.isArray(info.processes)) Object.assign(info, { processes: [] })
     const run = this.runs.get(execution)
     if (run !== undefined) {
       run.outbound = info.outbound
+      run.processes = info.processes
       this.emit(run)
     }
     return info
@@ -803,6 +905,7 @@ export class ExecutionManager {
       pending: c === null || c.closed ? 0 : c.pending,
       held: run.held,
       outbound: run.outbound,
+      processes: run.processes,
     }
   }
 

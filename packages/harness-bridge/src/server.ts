@@ -13,6 +13,7 @@ import { bearerOf, verifyBridgeToken } from './token.ts'
 import { AnchorRefused, MAX_ANCHOR_BYTES, parseBundle, readBundle, writeBundle, type Bundle } from './anchor.ts'
 import { parseCredentials, startOutbound } from './outbound.ts'
 import { writeAccess, writeInstructions } from './instructions.ts'
+import { processesUnder } from './processes.ts'
 
 /** The cluster's configuration for kubectl, with no credential (docs/specs/credentials.md, "Kubernetes"). */
 export const KUBECONFIG = fileURLToPath(new URL('./kubeconfig.yaml', import.meta.url))
@@ -37,6 +38,11 @@ export interface BridgeOptions {
   readonly outboundPort?: number
   /** Where the claims of the token are written for the agent (docs/specs/credentials.md); nowhere when absent. */
   readonly accessFile?: string
+  /**
+   * The bridge is its Pod's first process: a process the agent left behind when its parent ended comes to it, and is the
+   * agent's work as much as what still runs under the adapter. Never in a process holding other bridges.
+   */
+  readonly adoptsOrphans?: boolean
   readonly log?: (message: string) => void
 }
 
@@ -188,7 +194,9 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   startAdapter()
 
-  function describe(): Record<string, unknown> {
+  async function describe(): Promise<Record<string, unknown>> {
+    // What runs under the adapter, and what came to the bridge from it, but the adapter itself (docs/specs/executions.md, "The bridge's routes").
+    const processes = !adapter.alive || child.pid === undefined ? [] : options.adoptsOrphans ? await processesUnder(process.pid, [child.pid]) : await processesUnder(child.pid)
     return {
       instance,
       pod: options.podName,
@@ -197,6 +205,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       adapter: { ...adapter },
       terminating,
       outbound: outbound.describe(),
+      processes,
     }
   }
 
@@ -222,7 +231,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     const auth = authorized(req)
     if (!auth.ok) return json(res, 401, { reason: auth.reason })
 
-    if (url.pathname === '/info' && req.method === 'GET') return json(res, 200, describe())
+    if (url.pathname === '/info' && req.method === 'GET') return json(res, 200, await describe())
 
     if (url.pathname === '/credentials' && req.method === 'PUT') {
       if (terminating) return json(res, 503, { reason: 'Pod ending' })

@@ -9,8 +9,12 @@ digits and dashes.
 What differs between harnesses is declared by the image, not coded in the bridge: the adapter
 (`BRIDGE_ADAPTER`), the native directory an anchor saves (`BRIDGE_NATIVE_DIR`), and whether the
 adapter opens it at start and must be restarted to receive an anchor (`BRIDGE_RESTART_ON_ANCHOR`).
-claude-code, opencode, codex and antigravity also carry kubectl 1.36.5, for `kubernetes:read`: its configuration is
-the bridge's (`KUBECONFIG`).
+claude-code, opencode, codex and antigravity are built on the toolbelt (`toolbelt/`), the shared base image
+that holds what an agent's sandbox carries besides its harness: git, kubectl 1.36.5 for `kubernetes:read` (its
+configuration is the bridge's, `KUBECONFIG`), the CLIs, the C, Rust and Python toolchains, PostgreSQL 17, Chromium and
+agent-browser. Such a harness starts `FROM ${TOOLBELT_IMAGE}`, the argument the CI gives, and installs its global npm
+packages with `NPM_CONFIG_PREFIX=/usr/local`: the toolbelt points npm's prefix at HOME. The mock stays on
+`node:24-bookworm-slim`: the lab needs none of it.
 
 | Folder | Image | Harness |
 | --- | --- | --- |

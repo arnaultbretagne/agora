@@ -54,6 +54,9 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | R46 | 2026-11-20 | `08f2c9c` | unit | `npm test -w @agora/web`, all green: Node 24.22.3. |
 | R47 | 2026-11-20 | `3463a8e` | local | The `check` job of pull request #229 (GitHub Actions job 136477061123), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17.12 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell 153. U34, U35, U44 and U93 in Chromium against the server, the lab's executions behind it. |
 | R48 | 2026-11-20 | `3bc2451` | local | The `check` job of pull request #229 (GitHub Actions job 136569971272), all green — V6 skipped, no Docker there: Node 24, PostgreSQL 17 (`postgres:17`), Playwright's Chromium headless shell, on the merge of `main` with the access picker (#216). U34, U35, U44 and U93 in Chromium against the server, the lab's executions behind it. |
+| R49 | 2026-11-25 | `ea491b4` | unit | The `check` job of the push to `feat/base-profiles-pool-only` (GitHub Actions job 139340567021), all green — V6 skipped, no Docker there: ubuntu-26.04, Node 24.22.3, PostgreSQL 17 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell. The `check` job of pull request #240 on the same commit (139340698404), all green too. |
+| R50 | 2026-11-26 | `bbb3c64` | unit | `npm test` of `@agora/web`: Node 24.22.3. |
+| R51 | 2026-11-26 | `1dc9309` | unit | `npm test` of `@agora/web`, 52 tests, all green: Node 24.22.3. The `check` job of pull request #243 on the same commit (GitHub Actions job 139842350812), all green. |
 
 ## Cases
 
@@ -119,6 +122,7 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U31 | — | cluster | R8 | partial: seen on a screenshot, not asserted | "No access" in the draft; `arnaultbretagne/agora` and `arnaultbretagne/infra-k8s`, each None, Read, Write. |
 | U31 | — | local | R9 | proven | `o/a` None, Read, Write; `o/b` None, Read; z.ai and Internet Off, On; the button "No access", "a · Read", "Internet", "2 repos", "2 grants"; nothing offered: no entry. |
 | U31 | — | unit | R16 | proven | `o/a` None, Read, Write; `o/b` None, Read; z.ai off or on; listed Internet, z.ai, `o/a`, `o/b`; the button "No access", "Internet", "a · Read", "Internet, a" titled "Internet, a · Read", "a, b"; titled "z.ai, a · Write, b · Read"; nothing offered: no entry. |
+| U31 | — | unit | R49 | proven | Listed Internet, GitHub (`github:o/a:write`, `github:o/b:read`, `github:o/c:review`, "o/a, o/b (read), o/c (review)"), vault, k8s, agora, `agora:read`, `previews`; no z.ai among them; GitHub off, on, partly, partly; "No access", "Internet", "Internet, GitHub, agora", "GitHub (partly), vault"; `vault:read` alone: vault; nothing offered: no entry. |
 | U32 | — | local | R7 | proven | `github:o/a:write` and `github:o/b:read`, then `github:o/b:read`; a profile beyond those offered kept, at the end. |
 | U33 | — | local | R7 | proven | From an ended Workstream: `pool`, `anchor` and `profiles` `github:o/a:read`; None picked instead: no `profiles`, the settings kept; a draft: the pool alone. |
 | U33 | — | unit | R16 | proven | As R7; the draft with `internet` offered: `profiles` `internet`; not offered: nothing; turned off: no `profiles`; an ended execution without profiles: none, `internet` not added. |
@@ -263,6 +267,8 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U116 | simulated: stub, the page's `matchMedia` answering `any-pointer: fine` (Chromium's touch emulation has no fine pointer) | local | R45 | proven | `maxTouchPoints` above 0, `pointer: coarse` and `any-pointer: fine` matching, the touch query not; Enter: `Echo #2: on the tablet.`, two user messages, the field empty. |
 | U117 | simulated: synthetic-event, keydowns as an IME gives them, dispatched on the field | local | R45 | proven | `日本語` typed; Enter with `isComposing` true and keyCode 229, then false and 229: one user message 500 ms on, the text kept; the same keydown with keyCode 13: `Echo #2: 日本語.`, the field empty; Enter on the empty field: two user messages 500 ms on, the field empty. |
 | U119 | — | unit | R46 | proven | Claude Code, Codex, OpenCode, Antigravity, Mock agent, `other-harness`; "the agent" for none; four marks, all different, one SVG path each; none for the mock nor the other; the access `antigravity` named Antigravity. |
+| U119 | — | unit | R49 | proven | Claude Code, Codex, OpenCode, Antigravity, Mock agent, `other-harness`; "the agent" for none; four marks, all different, one SVG path each; none for the mock nor the other. |
+| U120 | — | unit | R49 | proven | Internet, GitHub, then `anthropic`, `zai`, `chatgpt`, `antigravity` by their own names; never Anthropic, z.ai, ChatGPT nor Antigravity; `internet` alone: Internet. |
 | U34 | — | local | R47 | proven | As before; the Create's `profiles` `github:owner/a:write`, `internet`, `agora:read`, `previews`. |
 | U35 | — | local | R47 | proven | As R16; the two Scopes `github:owner/b:read`, `internet`, `agora:read`, `previews`, then `github:owner/a:read`, `github:owner/b:read`, `internet`, `agora:read`, `previews`. |
 | U44 | — | local | R47 | proven | As R16; the Create's `profiles` `github:owner/b:read`, `agora:read`, `previews`; the Scope `github:owner/b:read`, `internet`, `agora:read`, `previews`. |
@@ -271,6 +277,8 @@ The evidence behind the acceptance cases of `specs/assistant-ui.md`.
 | U35 | — | local | R48 | proven | The two Scopes `github:owner/a:write`, `github:owner/b:read`, `internet`, `agora:read`, `previews`, then the same with `agora:delegate` before the defaults. |
 | U44 | — | local | R48 | proven | The Create's `profiles` `github:owner/a:write`, `github:owner/b:read`, `agora:read`, `previews`; the Scope the same with `internet` before the defaults. |
 | U93 | — | local | R48 | proven | The Create posted with `profiles` `internet`, `agora:delegate`; kept with `internet`, `agora:delegate`, `agora:read`, `previews`. |
+| U121 | — | unit | R50 | proven | Every cause's words after "The sandbox has ended: ", `lease_expired` in its three turns, `pod_gone` with and without its reason; the three losses `adapter_exited`; "The sandbox has ended." with no cause and with an unknown one. |
+| U121 | — | unit | R51 | proven | Every cause's words after "The sandbox has ended: ", `not_obtained` "it was never obtained" and `unobserved` "its claim was gone before Agora could see why" among them, `lease_expired` in its three turns, `pod_gone` with and without its reason; the three losses `adapter_exited`; "The sandbox has ended." with no cause and with an unknown one. |
 
 ## Not covered
 

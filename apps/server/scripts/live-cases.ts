@@ -323,14 +323,27 @@ parallel.push((async () => {
     return `destroyed by Agent Sandbox; anchor ${String(end.content.anchor)} pushed by the Pod`
   })
 })())
-parallel.push(check('E15', 'Turn too long', async () => {
+parallel.push(check('E42', 'A turn longer than the turn cap a Create names', async () => {
   const w = new Workstream()
-  await w.open(mock, { limits: { turnCapSeconds: 30 } })
+  await w.open(mock, { limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
   assert((await w.write('/sleep 120')).status === 200, 'Write refused')
+  const turn = await w.turn('done', 150_000)
+  const x = await view(w.execution)
+  assert(x !== undefined && !x.ending && Date.parse(String(x.shutdownTime)) > Date.now(), JSON.stringify(x))
+  const e = (await w.state()).executions.get(w.execution)
+  assert(e !== undefined && !e.lost && !e.ended, JSON.stringify(e))
+  await w.stop()
+  return `turn ${turn.status} after 120 s, deadline ${String(x.shutdownTime)}, neither ending nor lost`
+}))
+parallel.push(check('E44', 'Work running at the ceiling', async () => {
+  const w = new Workstream()
+  await w.open(mock, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
+  assert((await w.write('/background 600 never.txt')).status === 200, 'Write refused')
+  const turn = await w.turn('done', 30_000)
   const end = await w.ended(150_000)
-  const turn = [...(await w.state()).turns.values()].at(-1)!
-  assert(typeof end.content.anchor === 'string' && turn.status === 'failed', JSON.stringify({ end: end.content, turn: turn.status }))
-  return `destroyed with the turn in progress, turn ${turn.status}; anchor ${String(end.content.anchor)}`
+  const cap = Date.parse(turn.startedAt!) + 30_000
+  assert(typeof end.content.anchor === 'string' && Date.parse(end.time) >= cap, JSON.stringify({ end: end.content, at: end.time }))
+  return `ended ${String(Date.parse(end.time) - cap)} ms after the ceiling, work still running; anchor ${String(end.content.anchor)}`
 }))
 parallel.push(check('E16', 'Stop', async () => {
   const w = new Workstream()
@@ -782,28 +795,33 @@ await check('C10', 'At the claim: the execution’s token before initialize', as
   return `token at ${String(v.outbound?.attachedAt)}, initialize dispatched at ${dispatched.time}; from the Pod: B "${b}", C "${c}"; gateway: ${String(lines.length)} request(s) under the execution's name, none warm after the hand-off`
 })
 
-await check('C12', 'A token that would run out during the next turn', async () => {
+// C12's prompt path needs a token due as a prompt leaves: with every deadline move renewing it, only a restart of Agora
+// leaves one, and the log's tests show it. Here, its renewal while the sandbox lives: a command keeps it past half its token's
+// life, then a prompt goes out through the gateway with the token renewed meanwhile.
+await check('C81', 'A token renewed while its sandbox outlives half its life', async () => {
   const w = new Workstream()
-  // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt.
-  await w.open(mock, { profiles: ['anthropic'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
-  const before = String((await view(w.execution))!.outbound?.expiresAt)
-  // The mock opens its Session within the second, and a token's expiry counts in seconds.
-  await sleep(2000)
-  const since = new Date(Date.now() - 1000).toISOString()
-  const reply = await fetched(w, 'https://api.anthropic.com/v1/models')
+  // The Internet, which a Create may name: a base profile is a pool's alone (docs/specs/credentials.md, "Base profiles").
+  await w.open(mock, { profiles: ['internet'], limits: { leaseSeconds: 60 } })
+  const outbound = (await view(w.execution))!.outbound
+  const before = String(outbound?.expiresAt)
+  // An hour's token is renewed once a deadline a lease on falls within half its life of its end: 29 minutes on.
+  const life = Date.parse(before) - Date.parse(String(outbound?.attachedAt))
+  assert((await w.write(`/background ${String(Math.ceil(life / 1000))} hold.txt`)).status === 200, 'Write refused')
+  await w.turn('done', 30_000)
+  await until('renewed', async () => {
+    const x = await view(w.execution)
+    return x !== undefined && String(x.outbound?.expiresAt) !== before
+  }, life / 2 + 120_000)
   const after = String((await view(w.execution))!.outbound?.expiresAt)
-  const pod = String((await view(w.execution))!.pod)
-  const handed = handOvers(pod)
-  const entries = await w.entries()
-  const prompt = entries.findLast((x) => x.kind === 'acp' && x.direction === 'out' && x.method === 'session/prompt')!
-  const dispatched = Date.parse(entries.find((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === prompt.position)!.time)
+  const handed = handOvers(String((await view(w.execution))!.pod))
+  assert(handed.length === 2 && handed[1]!.at < Date.parse(before) && handed[1]!.until === Date.parse(after), `${before} → ${after}, hand-overs ${JSON.stringify(handed)}`)
+  const since = new Date(Date.now() - 1000).toISOString()
+  const reply = await fetched(w, 'https://example.com/')
   await w.stop()
-  assert(Date.parse(after) > Date.parse(before) && handed.length === 2 && handed[1]!.until === Date.parse(after), `${before} → ${after}, hand-overs ${JSON.stringify(handed)}`)
-  assert(handed[1]!.at <= dispatched, `renewed at ${new Date(handed[1]!.at).toISOString()}, prompt at ${new Date(dispatched).toISOString()}`)
   assert(passed(reply), reply)
-  const used = gatewayLines(since).find((l) => l.includes('http.host=api.anthropic.com') && l.includes(`jwt.sub=agora ${w.execution} `))
+  const used = gatewayLines(since).find((l) => l.includes('http.host=example.com') && l.includes(`jwt.sub=agora ${w.execution} `))
   assert(used !== undefined, 'no request seen by the gateway')
-  return `token until ${before} → ${after}, renewed ${String(dispatched - handed[1]!.at)} ms before the prompt left; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
+  return `token until ${before} → ${after}, renewed at ${new Date(handed[1]!.at).toISOString()}, the sandbox kept by its command; "${reply.slice(0, 60)}"; gateway → ${String(/http\.status=(\d+)/.exec(used)?.[1])}`
 })
 
 await check('C14', 'A Create naming an unknown profile', async () => {
