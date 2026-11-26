@@ -10,6 +10,7 @@ export {
   MANAGED_BY,
   MANAGER,
   TERMINAL_CLAIM_REASONS,
+  POD_MARGIN_MS,
   claimName,
   sessionConfig,
   SESSION_CONFIG_ANNOTATION,

@@ -1,10 +1,10 @@
 // docs/specs/executions.md, "How an execution ended": the cause `execution.ended` names, read from what the
 // log holds and what the mechanics saw of the claim and its Pod; and the words that say it.
-import type { Observed } from '@agora/executions'
+import { POD_MARGIN_MS, type Observed } from '@agora/executions'
 import { object, schemaValue } from './json.ts'
 
 /** The causes, closed (docs/specs/log.md, "Entries"). */
-export type CauseKind = 'bound_reached' | 'lease_expired' | 'adapter_exited' | 'agent_failed' | 'oom_killed' | 'pod_gone' | 'stopped' | 'unobserved'
+export type CauseKind = 'bound_reached' | 'lease_expired' | 'adapter_exited' | 'agent_failed' | 'oom_killed' | 'pod_gone' | 'stopped' | 'not_obtained' | 'unobserved'
 
 export interface Cause {
   readonly kind: CauseKind
@@ -24,6 +24,8 @@ export interface EndFacts {
   /** The execution's `execution.lost` content, if it was lost. */
   readonly lost: Record<string, unknown> | null
   readonly stopped: boolean
+  /** The log recorded its claim's UID: a claim of it was obtained. */
+  readonly obtained: boolean
   /** Its turn still running as the claim disappears, with the bound Agora sets on its deadline. */
   readonly running: { readonly bound: number } | null
   /** It dispatched a turn before. */
@@ -34,19 +36,22 @@ export interface EndFacts {
 
 /**
  * Why the claim disappeared, the first that applies: the agent's own end (the deadline moved to now for it),
- * the Pod killed for lack of memory, nothing seen of the claim, the Pod gone before its deadline, the person's
- * Stop, the bound reached during a turn, else the lease run out.
+ * the Pod killed for lack of memory, no claim obtained, nothing seen of the claim, the Pod gone before its
+ * deadline, the person's Stop, the bound reached during a turn, else the lease run out. What was seen of the
+ * Pod counts only when seen more than the margin before the deadline the claim reached: closer, it may be
+ * that deadline's own deletion.
  */
 export function causeOf(facts: EndFacts): Cause {
-  const { observed } = facts
+  const seen = facts.observed
+  const deadline = Date.parse(seen?.claim.spec?.lifecycle?.shutdownTime ?? '')
+  const observed = seen === null ? null : { ...seen, pod: seen.pod !== null && seen.pod.at <= deadline - POD_MARGIN_MS ? seen.pod : null }
   // Numbers read back from the log are lossless: plain ones here.
   const lost = object(schemaValue(facts.lost))
   if (lost?.reason === 'adapter_exited')
     return { kind: 'adapter_exited', exitCode: typeof lost.exitCode === 'number' ? lost.exitCode : null, signal: typeof lost.signal === 'string' ? lost.signal : null }
   if (lost?.reason === 'agent_failed') return { kind: 'agent_failed' }
   if (observed?.pod?.reason === 'OOMKilled') return { kind: 'oom_killed' }
-  if (observed === null) return { kind: 'unobserved' }
-  const deadline = Date.parse(observed.claim.spec?.lifecycle?.shutdownTime ?? '')
+  if (observed === null) return { kind: facts.obtained ? 'unobserved' : 'not_obtained' }
   const deleted = Date.parse(observed.claim.metadata.deletionTimestamp ?? '') || facts.now
   if (observed.pod !== null || !(deleted >= deadline - TOLERANCE_MS)) return { kind: 'pod_gone', pod: observed.pod?.reason ?? null }
   if (facts.stopped) return { kind: 'stopped' }
@@ -83,8 +88,10 @@ export function causeText(cause: unknown): string {
       return typeof c.pod === 'string' ? `its Pod was gone before its deadline (${c.pod})` : 'its Pod was gone before its deadline'
     case 'stopped':
       return 'the person stopped it'
+    case 'not_obtained':
+      return 'its sandbox was never obtained'
     case 'unobserved':
-      return 'its sandbox ended while Agora was not running'
+      return 'its claim was gone before Agora could see why'
     default:
       return 'its sandbox ended'
   }

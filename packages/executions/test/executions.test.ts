@@ -91,3 +91,54 @@ test('E21 an anchor pushed without a valid projected token is refused with 401, 
   assert.equal(await push({ authorization: 'Bearer pod:mock-test-1' }), 200)
   assert.deepEqual(received, ['mock-test-1'])
 })
+
+/**
+ * A cluster of one claim, its Pod named, never connected to (no Service): the Pod is read on each tick. Its Pod
+ * reads are held as `pod` says, and the watch never reports the deadline's deletion.
+ */
+function oneClaim(shutdownTime: string, pod: (startedAt: number) => Promise<unknown>) {
+  const claim = {
+    metadata: { name: 'sbx-race', uid: 'uid-race', labels: { 'app.kubernetes.io/managed-by': 'agora', 'agora.bretagne.dev/execution-id': 'race' } },
+    spec: { lifecycle: { shutdownTime } },
+    status: { conditions: [{ type: 'Ready', status: 'True' }], sandbox: { name: 'pod-race' } },
+  }
+  const reads: number[] = []
+  const kube = {
+    listClaims: async () => ({ items: [claim], resourceVersion: '1' }),
+    watchClaims: (_s: string, _v: string, _e: unknown, signal: AbortSignal) => new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve())),
+    getPod: async () => {
+      reads.push(Date.now())
+      return pod(Date.now())
+    },
+    getSandbox: async () => null,
+  } as unknown as ConstructorParameters<typeof ExecutionManager>[0]['kube']
+  return { kube, reads }
+}
+
+test('E40 a Pod read in flight as its claim’s deadline comes, answered “no Pod”: not kept as a Pod gone; the same answer well before it is', async (t) => {
+  const run = async (shutdownIn: number, pod: (startedAt: number) => Promise<unknown>) => {
+    const { kube, reads } = oneClaim(new Date(Date.now() + shutdownIn).toISOString(), pod)
+    const manager = new ExecutionManager({ kube, signingKey: keys().privateKey, bridgePort: 8080, tickMs: 50 })
+    t.after(() => manager.stop())
+    await manager.start(recorder())
+    await manager.run({ execution: 'race', claimName: 'sbx-race', pool: 'mock-test' })
+    return { manager, reads }
+  }
+  // Its deadline 5,130 ms on: the first read starts some 80 ms before the margin's end, and answers that no Pod is there
+  // 140 ms later, past it — as Agent Sandbox deleting the Pod for that deadline would, the watch not having said so.
+  const deadline = Date.now() + 5_130
+  const racing = await run(5_130, () => new Promise((resolve) => setTimeout(() => resolve(null), 140)))
+  await until('the read answered', () => racing.reads.length >= 1 && Date.now() > racing.reads[0]! + 300)
+  const margin = deadline - 5_000
+  assert.ok(racing.reads[0]! < margin && racing.reads[0]! + 140 > margin, `read at ${String(racing.reads[0]! - margin)} ms from the margin's end`)
+  assert.equal(racing.manager.observed('race')?.pod, null)
+  // Past the margin, the Pod is not read again.
+  await new Promise((resolve) => setTimeout(resolve, 2_500))
+  assert.equal(racing.reads.length, 1)
+  assert.equal(racing.manager.observed('race')?.pod, null)
+  // Control: the same “no Pod” a minute before the deadline is kept, with when it was seen.
+  const early = await run(60_000, async () => null)
+  const seen = await until('the Pod seen gone', () => early.manager.observed('race')?.pod)
+  assert.equal(seen.gone, true)
+  assert.ok(Math.abs(seen.at - Date.now()) < 5_000)
+})

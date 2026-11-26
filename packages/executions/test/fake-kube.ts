@@ -50,6 +50,8 @@ export class FakeKube implements KubeApi {
   anchorUrl = ''
   allocationDelayMs = 50
   failPatches = false
+  /** The creation of the claims it names refused, as an API server out of reach would: every one with `true`. */
+  failCreates: boolean | ((name: string) => boolean) = false
   /** Foreground deletion held: past its deadline a claim gets its deletionTimestamp, and stays with its Pod. */
   holdDeletion = false
   bridgeFactory: (publicKey: KeyObject, podName: string) => Promise<LabBridge> = mockBridge
@@ -88,6 +90,7 @@ export class FakeKube implements KubeApi {
   async createClaim(input: Json): Promise<Claim> {
     const claim = structuredClone(input) as unknown as Mutable
     const name = claim.metadata.name as string
+    if (this.failCreates === true || (typeof this.failCreates === 'function' && this.failCreates(name))) throw new KubeError(503, 'create refused (test)')
     if (this.claims.has(name)) throw new KubeError(409, `sandboxclaims "${name}" already exists`)
     this.created.push(name)
     claim.metadata.uid = randomUUID()

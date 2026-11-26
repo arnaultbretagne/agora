@@ -7,7 +7,8 @@ import { test } from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { keys } from '@agora/testkit'
-import { createMcpServer, type Entry } from '../src/index.ts'
+import { POD_MARGIN_MS } from '@agora/executions'
+import { causeOf, createMcpServer, type Entry } from '../src/index.ts'
 import { schemaValue } from '../src/json.ts'
 import { database, expire, FakeKube, grants, Lab, lines, sleep, until } from './support.ts'
 
@@ -17,7 +18,7 @@ type T = { after(fn: () => Promise<void>): void }
 const LIMIT = { timeout: 150_000 }
 
 /** A delegator on the lab, given `agora:delegate`, with the limits its delegates take; and its delegate, started. */
-async function delegated(t: T, instructions: string, limits: { leaseSeconds: number; turnCapSeconds: number }) {
+async function delegated(t: T, instructions: string, limits: { leaseSeconds: number; turnCapSeconds: number }, before: (kube: FakeKube) => void = () => {}) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
   const db = await database()
@@ -36,18 +37,18 @@ async function delegated(t: T, instructions: string, limits: { leaseSeconds: num
   const execution = (await lab.open(ws, { profiles: ['agora:delegate'], limits })).id
   const url = `http://127.0.0.1:${String((mcp.address() as AddressInfo).port)}/mcp`
   await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: `Bearer ${signer.grantOf(execution)}` } } }))
+  before(kube)
   const answer = ((await c.callTool({ name: 'spawn_agent', arguments: { instructions, harness: 'mock' } })) as { content: { text: string }[] }).content[0]!.text
   const delegate = /^started ([0-9a-f-]{36}) · /.exec(answer)?.[1] ?? assert.fail(`not started: ${answer}`)
-  const e = await until('the delegate’s Session', async () => {
-    const current = (await lab.state(delegate)).current
-    return current?.session && current.connection ? current : null
-  })
+  const e = await until('the delegate’s execution', async () => (await lab.state(delegate)).current ?? null)
   return { lab, kube, ws, delegate, e }
 }
 
 type Delegated = Awaited<ReturnType<typeof delegated>>
 
 const podOf = (d: Delegated) => (d.kube.claims.get(d.e.claimName)?.status?.sandbox as { name?: string } | undefined)?.name ?? assert.fail('no Pod')
+/** Its Session open, connected: the delegate's own start. */
+const opened = (d: Delegated) => until('the delegate’s Session', async () => { const c = (await d.lab.state(d.delegate)).current; return c?.session && c.connection ? c : null })
 const running = (d: Delegated) => until('the delegate’s turn running', async () => (await d.lab.state(d.delegate)).active?.dispatching === true)
 const ended = (d: Delegated, timeoutMs = 15_000) =>
   until('execution.ended', async () => (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.ended' && x.execution === d.e.id), timeoutMs)
@@ -61,6 +62,7 @@ const told = (d: Delegated, timeoutMs = 15_000) => until('a message of Agora’s
 
 test('E36 bound reached: a turn past its maximum duration; its execution ends at the bound, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 30 })
+  await opened(d)
   await running(d)
   const prompt = lines(await d.lab.entries(d.delegate), 'out', 'session/prompt').at(-1)!
   const end = await ended(d, 45_000)
@@ -77,6 +79,7 @@ test('E36 bound reached: a turn past its maximum duration; its execution ends at
 
 test('E37 lease expired after the turn: the turn done, nothing renews; its execution ends at now + lease, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, 'a short task', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
   // Control: the delegate's last message reaches its delegator, as any.
   await until('its last message', async () => (await d.lab.workstreams.projections.objects(d.ws)).find((o) => o.kind === 'element' && o.object.type === 'user' && o.object.as === 'delegate' && o.object.from === d.delegate))
   const answered = lines(await d.lab.entries(d.delegate), 'in', 'session/prompt').at(-1)!
@@ -91,6 +94,7 @@ test('E37 lease expired after the turn: the turn done, nothing renews; its execu
 
 test('E38 adapter exited: the agent’s process exits with code 3 during a turn; lost, then ended, both naming the exit', LIMIT, async (t) => {
   const d = await delegated(t, '/die 1', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
   const lost = await until('execution.lost', async () => (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.lost'))
   assert.deepEqual(schemaValue(lost.content), { reason: 'adapter_exited', exitCode: 3, signal: null })
   const notice = await noticeOf(d, lost)
@@ -105,10 +109,13 @@ test('E38 adapter exited: the agent’s process exits with code 3 during a turn;
 
 test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; ended at its deadline, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
   await running(d)
   await d.kube.killPod(podOf(d), 'OOMKilled', 137)
   await until('the Pod seen', () => d.lab.executions.observed(d.e.id)?.pod?.reason === 'OOMKilled')
-  // Nothing renews a turn with no connection: the lease runs out; brought to now here.
+  // Nothing renews a turn with no connection: the lease runs out; brought to now here, past the margin within which
+  // what is seen of a Pod is taken for its deadline's.
+  await sleep(POD_MARGIN_MS + 500)
   await expire(d.kube, d.e.claimName)
   const end = await ended(d)
   assert.deepEqual(end.content.cause, { kind: 'oom_killed' })
@@ -119,9 +126,11 @@ test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; 
 
 test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
   await running(d)
   await d.kube.deletePod(podOf(d))
   await until('the Pod seen gone', () => d.lab.executions.observed(d.e.id)?.pod?.gone === true)
+  await sleep(POD_MARGIN_MS + 500)
   await expire(d.kube, d.e.claimName)
   const end = await ended(d)
   assert.deepEqual(end.content.cause, { kind: 'pod_gone', pod: null })
@@ -131,6 +140,7 @@ test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, 
 
 test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ended at once, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  await opened(d)
   await running(d)
   const deadline = Date.parse(String((d.kube.claims.get(d.e.claimName)!.spec.lifecycle as { shutdownTime: string }).shutdownTime))
   d.kube.deleteClaim(d.e.claimName)
@@ -139,4 +149,41 @@ test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ende
   assert.deepEqual(end.content.cause, { kind: 'pod_gone', pod: null })
   assert.deepEqual((await noticeOf(d, end)).cause, { kind: 'pod_gone', pod: null })
   assert.equal(await told(d), `Your delegate ${d.delegate} "/sleep 120": Its turn failed: its Pod was gone before its deadline.`)
+})
+
+test('E41 a claim never obtained: its creation refused until its initial deadline; failed, then ended, never said to be Agora’s absence', LIMIT, async (t) => {
+  const d = await delegated(t, 'never read', { leaseSeconds: 60, turnCapSeconds: 3600 }, (kube) => (kube.failCreates = true))
+  // The delegate's claim alone: its delegator's next execution, which Agora's message starts, gets its own.
+  d.kube.failCreates = (name) => name === d.e.claimName
+  const end = await ended(d, 75_000)
+  const failed = (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.failed' && x.execution === d.e.id)
+  assert.equal(failed?.content.reason, 'startup_failed')
+  assert.ok(BigInt(failed!.position) < BigInt(end.position))
+  assert.ok(!d.kube.created.includes(d.e.claimName), 'no claim of the delegate created')
+  assert.ok(Date.parse(end.time) >= Date.parse(String(d.e.body.deadline)))
+  assert.deepEqual(end.content.cause, { kind: 'not_obtained' })
+  assert.deepEqual((await noticeOf(d, end)).cause, { kind: 'not_obtained' })
+  assert.equal(await told(d), `Your delegate ${d.delegate} "never read": Its execution could not start.`)
+})
+
+test('E40 what was seen of a Pod within the margin before the deadline it reached is that deadline’s: the bound reached, not a Pod gone; seen before the margin, a Pod gone', () => {
+  const deadline = Date.parse('2026-11-26T10:00:00Z')
+  const facts = (podAt: number) => ({
+    lost: null,
+    stopped: false,
+    obtained: true,
+    running: { bound: deadline },
+    prompted: true,
+    now: deadline + 200,
+    observed: {
+      claim: { metadata: { name: 'sbx-x', uid: 'u', deletionTimestamp: new Date(deadline + 100).toISOString() }, spec: { lifecycle: { shutdownTime: new Date(deadline).toISOString() } } },
+      pod: { reason: null, gone: true, exitCode: null, at: podAt },
+    },
+  }) as Parameters<typeof causeOf>[0]
+  // As the read the judge timed: begun 80 ms before the deadline, answered 140 ms later.
+  assert.deepEqual(causeOf(facts(deadline + 60)), { kind: 'bound_reached' })
+  assert.deepEqual(causeOf(facts(deadline - POD_MARGIN_MS + 1)), { kind: 'bound_reached' })
+  assert.deepEqual(causeOf(facts(deadline - POD_MARGIN_MS)), { kind: 'pod_gone', pod: null })
+  assert.deepEqual(causeOf({ ...facts(0), observed: null }), { kind: 'unobserved' })
+  assert.deepEqual(causeOf({ ...facts(0), observed: null, obtained: false }), { kind: 'not_obtained' })
 })

@@ -775,6 +775,7 @@ export class Workstreams implements Handler {
     const cause = causeOf({
       lost: entries.findLast((x) => x.kind === 'execution.lost' && x.execution === e.id)?.content ?? null,
       stopped: e.stopped,
+      obtained: e.uid !== undefined,
       running: await this.running(workstream, e),
       prompted: e.prompted,
       observed: this.executions.observed(e.id),
