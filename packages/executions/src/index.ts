@@ -22,6 +22,8 @@ export {
   type PoolView,
   type CommandResult,
   type CredentialSource,
+  type Observed,
+  type PodEnd,
 } from './manager.ts'
 export { HttpKube, KubeError, type KubeApi, type Claim, type Json, type PodIdentity, type Pool, type Sandbox, type WatchEvent } from './kube.ts'
 export { createApi, createAnchorReceiver } from './http.ts'

@@ -17,6 +17,8 @@ export const EXECUTION_LABEL = 'agora.bretagne.dev/execution-id'
 const SELECTOR = `${MANAGED_BY}=${MANAGER},${EXECUTION_LABEL}`
 /** One line, one WebSocket message (docs/specs/log.md, "ACP lines"). */
 export const MAX_LINE = 16 * 1024 * 1024
+/** How often a Pod is looked at while no connection to its bridge is open. */
+const POD_EVERY_MS = 2000
 export const TERMINAL_CLAIM_REASONS = new Set(['WarmPoolNotFound', 'EnvVarsInjectionRejected', 'VolumeClaimTemplatesRejected'])
 
 export interface Limits {
@@ -115,9 +117,31 @@ interface Connection {
   finish: () => void
 }
 
+/**
+ * What the mechanics saw of a Pod ending on its own, before its claim's deadline (docs/specs/executions.md,
+ * "How an execution ended"): its container terminated, the Pod being deleted, or no Pod at all.
+ */
+export interface PodEnd {
+  /** The container's `terminated.reason` (`OOMKilled`, `Error`), the Pod's own (`Evicted`), `Deleted`, or null when no Pod was found. */
+  readonly reason: string | null
+  /** No Pod of that name: gone. */
+  readonly gone: boolean
+  readonly exitCode: number | null
+}
+
+/** The claim's last state as the mechanics saw it, kept once it has disappeared, and what its Pod showed. */
+export interface Observed {
+  readonly claim: Claim
+  readonly pod: PodEnd | null
+}
+
 interface Run {
   readonly target: Target
   claim: Claim | null
+  /** The last claim seen, kept after it disappears. */
+  last: Claim | null
+  pod: PodEnd | null
+  podSeenAt: number
   held: boolean
   connection: Connection | null
   reconnectAt: number
@@ -240,7 +264,7 @@ export class ExecutionManager {
   async run(target: Target): Promise<void> {
     let run = this.runs.get(target.execution)
     if (run !== undefined) return
-    run = { target, claim: null, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null }
+    run = { target, claim: null, last: null, pod: null, podSeenAt: 0, held: false, connection: null, reconnectAt: 0, launchType: null, podDetail: null, outbound: null }
     this.runs.set(target.execution, run)
     if (this.handler !== null) await this.observe(run, this.claims.get(target.execution) ?? null)
   }
@@ -264,6 +288,12 @@ export class ExecutionManager {
 
   claimOf(execution: string): Claim | null {
     return this.runs.get(execution)?.claim ?? null
+  }
+
+  /** The last claim seen of an execution, and what its Pod showed; null when no claim was ever seen. */
+  observed(execution: string): Observed | null {
+    const run = this.runs.get(execution)
+    return run?.last ? { claim: run.last, pod: run.pod } : null
   }
 
   /** The claim bound to a Pod, and its execution, as the cluster reports it now. */
@@ -338,6 +368,7 @@ export class ExecutionManager {
 
   private async observe(run: Run, claim: Claim | null): Promise<void> {
     run.claim = claim
+    if (claim !== null) run.last = claim
     if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) void this.readLaunchType(run)
     this.emit(run)
     await this.handler?.claim(run.target.execution, claim)
@@ -375,6 +406,7 @@ export class ExecutionManager {
     if (run === undefined) throw new Error('unknown_execution')
     const claim = await this.options.kube.patchClaim(run.target.claimName, { metadata: { uid }, spec: { lifecycle: { shutdownTime } } })
     run.claim = claim
+    run.last = claim
     this.claims.set(execution, claim)
     this.emit(run)
     return claim
@@ -406,6 +438,33 @@ export class ExecutionManager {
     }
   }
 
+  /**
+   * The Pod of a claim neither ending nor past its deadline, looked at while no connection is open: what made
+   * it end before its time, if it did (docs/specs/executions.md, "How an execution ended"). Once its end is
+   * known, it is not looked at again.
+   */
+  private async inspectPod(run: Run, force = false): Promise<void> {
+    const claim = run.claim
+    const pod = claim?.status?.sandbox?.name
+    if (claim === null || pod === undefined || run.pod?.reason || run.pod?.gone) return
+    if (claim.metadata.deletionTimestamp !== undefined || !(Date.parse(claim.spec?.lifecycle?.shutdownTime ?? '') > Date.now())) return
+    if (!force && Date.now() - run.podSeenAt < POD_EVERY_MS) return
+    run.podSeenAt = Date.now()
+    const found = (await this.options.kube.getPod(pod)) as {
+      metadata?: { deletionTimestamp?: string }
+      status?: { reason?: string; containerStatuses?: { state?: { terminated?: { reason?: string; exitCode?: number } } }[] }
+    } | null
+    // The claim may have ended while the Pod was read: its Pod's disappearance is then the deadline's.
+    if (run.claim !== claim) return
+    if (found === null) {
+      run.pod = { reason: null, gone: true, exitCode: null }
+      return
+    }
+    const terminated = found.status?.containerStatuses?.map((c) => c.state?.terminated).find((t) => t !== undefined)
+    const reason = terminated?.reason ?? found.status?.reason ?? (found.metadata?.deletionTimestamp !== undefined ? 'Deleted' : null)
+    if (reason !== null) run.pod = { reason, gone: false, exitCode: terminated?.exitCode ?? null }
+  }
+
   private async tick(): Promise<void> {
     if (this.options.credentials !== undefined && Date.now() - this.warmedAt >= (this.options.warmEveryMs ?? 5000)) {
       this.warmedAt = Date.now()
@@ -417,6 +476,7 @@ export class ExecutionManager {
         const ready = claim?.status?.conditions?.find((c) => c.type === 'Ready')?.status === 'True'
         if (claim !== null && !ready && claim.status?.sandbox?.name !== undefined) await this.diagnose(run)
         if (claim !== null && run.launchType === null && claim.status?.sandbox?.name !== undefined) await this.readLaunchType(run)
+        if (run.connection === null || !run.connection.accepted || run.connection.closed) await this.inspectPod(run)
         this.ensureConnection(run)
       } catch {
         // Diagnostics only: tried again on the next tick.
@@ -505,6 +565,8 @@ export class ExecutionManager {
       // to a dead adapter (1011) or an ending Pod (1001); otherwise after a pause.
       if (code === 1011 || code === 1001) run.held = true
       else run.reconnectAt = Math.max(run.reconnectAt, Date.now() + (this.options.reconnectMs ?? 2000))
+      // A Pod that ends before its deadline says why while it is still there.
+      if (code !== 1000 && code !== 1011) void this.inspectPod(run, true).catch(() => {})
       void this.closeConnection(run, c, c.open ? code : null)
     })
   }

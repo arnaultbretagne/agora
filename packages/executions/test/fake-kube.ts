@@ -247,8 +247,33 @@ export class FakeKube implements KubeApi {
   /** A Pod recreated under the same name gets another UID than the one its old tokens carry. */
   readonly podUids = new Map<string, string>()
 
+  /** Pods that ended on their own: their status as the kubelet leaves it; null once the Pod is gone. */
+  readonly endedPods = new Map<string, Json | null>()
+
   async getPod(name = ''): Promise<Json | null> {
+    const ended = this.endedPods.get(name)
+    if (ended !== undefined) return ended === null ? null : structuredClone(ended)
     return { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Running' } }
+  }
+
+  /**
+   * The container killed by the kernel, as the kubelet reports it (`OOMKilled`, exit 137): its bridge dies on the
+   * spot, closing nothing cleanly, pushing no anchor; the Pod stays, `Failed`, until its claim's deadline.
+   */
+  async killPod(name: string, reason = 'OOMKilled', exitCode = 137): Promise<void> {
+    this.endedPods.set(name, { metadata: { uid: this.podUids.get(name) ?? `uid-${name}` }, status: { phase: 'Failed', containerStatuses: [{ name: 'sandbox', state: { terminated: { reason, exitCode } } }] } })
+    const lab = this.bridges.get(name)
+    this.bridges.delete(name)
+    await lab?.bridge.close()
+  }
+
+  /** The Pod deleted by someone else than Agent Sandbox, before its claim's deadline: SIGTERM, then gone; its claim stays. */
+  async deletePod(name: string): Promise<void> {
+    const lab = this.bridges.get(name)
+    this.bridges.delete(name)
+    await lab?.bridge.terminate()
+    await lab?.bridge.close()
+    this.endedPods.set(name, null)
   }
 
   /** A projected token is `pod:<name>` here; anything else is refused, as TokenReview would. */
