@@ -13,6 +13,9 @@ import { database, expire, FakeKube, grants, Lab, lines, sleep, until } from './
 
 type T = { after(fn: () => Promise<void>): void }
 
+/** Each case fails rather than holding the run: the longest waits 60 s for a lease. */
+const LIMIT = { timeout: 150_000 }
+
 /** A delegator on the lab, given `agora:delegate`, with the limits its delegates take; and its delegate, started. */
 async function delegated(t: T, instructions: string, limits: { leaseSeconds: number; turnCapSeconds: number }) {
   const pair = keys()
@@ -56,7 +59,7 @@ const agoras = async (d: Delegated) =>
   (await d.lab.workstreams.projections.objects(d.ws)).filter((o) => o.kind === 'element' && o.object.type === 'user' && o.object.as === 'agora' && o.object.from === d.delegate).map((o) => (o.object.content as { text: string }[]).map((b) => b.text).join('\n'))
 const told = (d: Delegated, timeoutMs = 15_000) => until('a message of Agora’s', async () => (await agoras(d))[0], timeoutMs)
 
-test('E36 bound reached: a turn past its maximum duration; its execution ends at the bound, the cause named', async (t) => {
+test('E36 bound reached: a turn past its maximum duration; its execution ends at the bound, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 30 })
   await running(d)
   const prompt = lines(await d.lab.entries(d.delegate), 'out', 'session/prompt').at(-1)!
@@ -72,7 +75,7 @@ test('E36 bound reached: a turn past its maximum duration; its execution ends at
   assert.equal((await agoras(d)).length, 1)
 })
 
-test('E37 lease expired after the turn: the turn done, nothing renews; its execution ends at now + lease, the cause named', async (t) => {
+test('E37 lease expired after the turn: the turn done, nothing renews; its execution ends at now + lease, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, 'a short task', { leaseSeconds: 60, turnCapSeconds: 3600 })
   // Control: the delegate's last message reaches its delegator, as any.
   await until('its last message', async () => (await d.lab.workstreams.projections.objects(d.ws)).find((o) => o.kind === 'element' && o.object.type === 'user' && o.object.as === 'delegate' && o.object.from === d.delegate))
@@ -86,7 +89,7 @@ test('E37 lease expired after the turn: the turn done, nothing renews; its execu
   assert.deepEqual(await agoras(d), [])
 })
 
-test('E38 adapter exited: the agent’s process exits with code 3 during a turn; lost, then ended, both naming the exit', async (t) => {
+test('E38 adapter exited: the agent’s process exits with code 3 during a turn; lost, then ended, both naming the exit', LIMIT, async (t) => {
   const d = await delegated(t, '/die 1', { leaseSeconds: 60, turnCapSeconds: 3600 })
   const lost = await until('execution.lost', async () => (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.lost'))
   assert.deepEqual(schemaValue(lost.content), { reason: 'adapter_exited', exitCode: 3, signal: null })
@@ -100,7 +103,7 @@ test('E38 adapter exited: the agent’s process exits with code 3 during a turn;
   assert.equal((await agoras(d)).length, 1)
 })
 
-test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; ended at its deadline, the cause named', async (t) => {
+test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; ended at its deadline, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
   await running(d)
   await d.kube.killPod(podOf(d), 'OOMKilled', 137)
@@ -114,7 +117,7 @@ test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; 
   assert.equal(await told(d), `Your delegate ${d.delegate} "/sleep 120": Its turn failed: its Pod was killed for lack of memory (OOMKilled).`)
 })
 
-test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, the cause named', async (t) => {
+test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
   await running(d)
   await d.kube.deletePod(podOf(d))
@@ -126,7 +129,7 @@ test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, 
   assert.equal(await told(d), `Your delegate ${d.delegate} "/sleep 120": Its turn failed: its Pod was gone before its deadline.`)
 })
 
-test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ended at once, the cause named', async (t) => {
+test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ended at once, the cause named', LIMIT, async (t) => {
   const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
   await running(d)
   const deadline = Date.parse(String((d.kube.claims.get(d.e.claimName)!.spec.lifecycle as { shutdownTime: string }).shutdownTime))
