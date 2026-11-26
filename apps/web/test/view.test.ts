@@ -218,7 +218,8 @@ test('U121 an execution lost or ended: each cause in words, an end of the earlie
   assert.equal(ended({ kind: 'pod_gone', pod: 'Evicted' }), 'The sandbox has ended: its Pod was gone before its deadline (Evicted).')
   assert.equal(ended({ kind: 'stopped' }), 'The sandbox has ended: it was stopped.')
   assert.equal(ended({ kind: 'agent_failed' }), 'The sandbox has ended: the agent had stopped on an internal error.')
-  assert.equal(ended({ kind: 'unobserved' }), 'The sandbox has ended: it ended while Agora was not running.')
+  assert.equal(ended({ kind: 'not_obtained' }), 'The sandbox has ended: it was never obtained.')
+  assert.equal(ended({ kind: 'unobserved' }), 'The sandbox has ended: its claim was gone before Agora could see why.')
   // Written before causes were, or a cause this client does not know: no cause said.
   assert.equal(ended(), 'The sandbox has ended.')
   assert.equal(ended({ kind: 'something_new' }), 'The sandbox has ended.')

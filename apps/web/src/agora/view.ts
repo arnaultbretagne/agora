@@ -322,8 +322,10 @@ function causeText(cause: Json | null): string | null {
       return `its Pod was gone before its deadline${typeof cause.pod === 'string' && cause.pod !== '' ? ` (${cause.pod})` : ''}`
     case 'stopped':
       return 'it was stopped'
+    case 'not_obtained':
+      return 'it was never obtained'
     case 'unobserved':
-      return 'it ended while Agora was not running'
+      return 'its claim was gone before Agora could see why'
     default:
       return null
   }
