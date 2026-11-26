@@ -83,11 +83,14 @@ termination delay, with no additional ACP grace period.
 
 1. Create the fixed workspace `/home/harness/work`, with the agent's instructions in it
    (`AGENTS.md`, below), and the native directory the image declares.
-2. Start the outbound proxy on loopback, closed until Agora attaches a token: a warm one, if the
+2. Trust the gateway's root beyond Node: `SSL_CERT_FILE` in the adapter's environment when the
+   template does not set it, and, when the image carries certutil (the toolbelt), Chromium's NSS
+   database `~/.pki/nssdb`, created and given the root. Nothing without the root or certutil.
+3. Start the outbound proxy on loopback, closed until Agora attaches a token: a warm one, if the
    pool declares base profiles (`credentials.md`).
-3. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
+4. Launch the adapter through its *bin* entry, stdio over pipes, `HTTPS_PROXY` pointing at the
    outbound proxy.
-4. Listen immediately after spawning the adapter; answer ready on `/healthz` while it runs.
+5. Listen immediately after spawning the adapter; answer ready on `/healthz` while it runs.
 
 All of this happens before the claim, with no user; the only token is the warm one, for the
 pool's base profiles. The bridge sends no ACP.

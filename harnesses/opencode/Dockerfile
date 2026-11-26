@@ -3,20 +3,13 @@
 # opencode 1.19.5, a Bun binary, on z.ai's Coding Plan. No credential: ZHIPU_API_KEY below is a
 # marker the gateway replaces. Nothing is fetched at start: the model catalogue is in the image, and
 # the configuration directory is read-only — a writable one makes opencode install a plugin from npm.
-FROM node:24-bookworm-slim
-# git, for the agent's repositories: it reaches GitHub through the gateway, whose root it trusts by
-# GIT_SSL_CAINFO (the template); libcurl does not read NODE_EXTRA_CA_CERTS.
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/* \
-    && git --version
-# kubectl, for kubernetes:read: the cluster through the gateway, with the bridge's kubeconfig (KUBECONFIG) and
-# no credential. Within one minor of the cluster's (k0s 1.36); the release binary, checked against its sha256.
-ADD --chmod=755 --checksum=sha256:33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e \
-    https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl /usr/local/bin/kubectl
-RUN kubectl version --client
+# The toolbelt it is built on (toolbelt/Dockerfile): the CI gives the one it built or published for the same inputs;
+# by default the one `docker build -t agora-toolbelt -f toolbelt/Dockerfile .` tags.
+ARG TOOLBELT_IMAGE=agora-toolbelt
+# On the toolbelt (toolbelt/Dockerfile): git, kubectl and the rest of what an agent's sandbox carries.
+FROM ${TOOLBELT_IMAGE}
 WORKDIR /app
-RUN npm install --global --no-audit --no-fund opencode-linux-x64@1.19.5 \
+RUN NPM_CONFIG_PREFIX=/usr/local npm install --global --no-audit --no-fund opencode-linux-x64@1.19.5 \
     && npm cache clean --force \
     && /usr/local/lib/node_modules/opencode-linux-x64/bin/opencode --version
 COPY harnesses/opencode/opencode.json /etc/agora/xdg/opencode/opencode.json

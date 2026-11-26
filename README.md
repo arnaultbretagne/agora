@@ -66,7 +66,7 @@ up to date (branch `agora/images`). The operator merges it, and Flux deploys.
 
 | Step | Detail |
 | --- | --- |
-| Which images | Those whose inputs changed since the image deployed. An image's inputs are what its Dockerfile copies, and the Dockerfile itself, fingerprinted by their git object ids (`scripts/inputs.ts`). Builds are not reproducible, so a digest alone would change on every build. |
+| Which images | Those whose inputs changed since the image deployed. An image's inputs are what its Dockerfile copies, and the Dockerfile itself, fingerprinted by their git object ids (`scripts/inputs.ts`); a harness built on the toolbelt (`toolbelt/`) adds the toolbelt's. Builds are not reproducible, so a digest alone would change on every build. The toolbelt is published for the harnesses alone, never proposed. |
 | The server | Its digest goes into `apps/agora/kustomization.yaml` (`images`), and its source and inputs into `apps/agora/server-image.yaml`. |
 | A harness | Its folder of the catalogue, `apps/agora-sandboxes/catalogue/<harness>/harness.yaml`, gets its name, image, versions, source and inputs. The name holds the digest: a new image is a new template and pool, and the warm sandboxes come up in it. A new harness gets its folder by hand. |
 | A branch | Run CI by hand (workflow_dispatch) on it: its own pull request, `agora/images-<branch>`, for a preview. |

@@ -12,7 +12,7 @@ name: ci
 on:
   push:
     branches: [main, 'feat/**', 'fix/**', 'chore/**']
-    paths: [apps/**, harnesses/**, packages/**, roles/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
+    paths: [apps/**, harnesses/**, packages/**, roles/**, toolbelt/**, package.json, package-lock.json, tsconfig.base.json, .github/workflows/ci.yml]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -78,7 +78,8 @@ jobs:
           npm run check
 
   # The images `image` and `try` build: the server's, and one per folder of harnesses/ holding a Dockerfile
-  # (scripts/inputs.ts, `images()`, which propose-infra.ts reads too). A harness is added as a folder, never
+  # (scripts/inputs.ts, `images()`, which propose-infra.ts reads too), each saying whether it is built on the
+  # toolbelt, which `toolbelt` builds before them. A harness is added as a folder, never
   # in this file: the App agents push with cannot change it.
   images:
     if: github.event_name != 'pull_request'
@@ -101,10 +102,116 @@ jobs:
           echo "include=$include" >> "$GITHUB_OUTPUT"
           jq -r '.[] | "- `\(.name)`: \(.dockerfile)"' <<<"$include" | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # The toolbelt (toolbelt/README.md), the base image of the harnesses built on it: built, tried as a sandbox runs
+  # it (toolbelt/smoke.sh) and published like the images below, under its inputs' fingerprint, before them; never
+  # proposed to infra-k8s. Its env and steps are also `toolbelt-try`'s, below, which publishes nothing.
+  toolbelt:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To read and push the toolbelt on ghcr.io.
+      packages: write
+      # To sign and store the build's provenance (actions/attest-build-provenance).
+      id-token: write
+      attestations: write
+    env: &toolbelt-env
+      PUBLISH: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+      NAME: agora-toolbelt
+      IMAGE: ghcr.io/${{ github.repository_owner }}/agora-toolbelt
+    steps: &toolbelt-steps
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Its image, if its inputs already have one
+        id: existing
+        run: |
+          inputs=$(node scripts/inputs.ts "$NAME")
+          echo "inputs=$inputs" >> "$GITHUB_OUTPUT"
+          if manifest=$(docker buildx imagetools inspect "$IMAGE:inputs-$inputs" --format '{{json .Manifest}}' 2>/dev/null); then
+            echo "digest=$(jq -r .digest <<<"$manifest")" >> "$GITHUB_OUTPUT"
+            echo "::notice::$IMAGE:inputs-$inputs already exists: not built again."
+          fi
+
+      - if: steps.existing.outputs.digest == ''
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the toolbelt locally
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: toolbelt/Dockerfile
+          load: true
+          tags: agora-toolbelt:test
+          cache-from: type=gha,scope=agora-toolbelt
+          cache-to: type=gha,mode=max,scope=agora-toolbelt
+
+      - name: Try it as a sandbox runs it
+        if: steps.existing.outputs.digest == ''
+        run: toolbelt/smoke.sh agora-toolbelt:test
+
+      - id: push
+        if: steps.existing.outputs.digest == '' && env.PUBLISH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: toolbelt/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:inputs-${{ steps.existing.outputs.inputs }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=agora-toolbelt
+
+      - if: steps.existing.outputs.digest == '' && env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the digest
+        if: env.PUBLISH == 'true'
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### $NAME"
+            echo ''
+            echo '```'
+            echo "$IMAGE@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # A branch's push: `toolbelt`'s env and steps, which publish nothing here (PUBLISH is false), with a token that
+  # only reads packages, as `try`'s.
+  toolbelt-try:
+    needs: check
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # To find the toolbelt by its inputs on ghcr.io.
+      packages: read
+    env: *toolbelt-env
+    steps: *toolbelt-steps
+
   # Builds, tries and publishes the images: on the base branch or a run by hand alone, the only runs
   # whose token writes packages. Its env, matrix and steps are also `try`'s, below (YAML anchors).
   image:
-    needs: [check, images]
+    needs: [check, images, toolbelt]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
@@ -148,19 +255,48 @@ jobs:
             echo "::notice::$IMAGE:inputs-$inputs already exists: not built again."
           fi
 
-      - if: steps.existing.outputs.digest == ''
+      # A harness built on the toolbelt is built on the one of the same inputs: on ghcr.io, where `toolbelt`
+      # published it from the base branch; on a branch that has not reached it yet, built here with the
+      # runner's own Docker, whose next build sees it — then so is the harness.
+      - name: The toolbelt it is built on
+        id: toolbelt
+        if: steps.existing.outputs.digest == '' && matrix.toolbelt
+        env:
+          TOOLBELT: ghcr.io/${{ github.repository_owner }}/agora-toolbelt
+        run: |
+          inputs=$(node scripts/inputs.ts agora-toolbelt)
+          if manifest=$(docker buildx imagetools inspect "$TOOLBELT:inputs-$inputs" --format '{{json .Manifest}}' 2>/dev/null); then
+            echo "image=$TOOLBELT@$(jq -r .digest <<<"$manifest")" >> "$GITHUB_OUTPUT"
+          elif [ "$PUBLISH" = true ]; then
+            echo "::error::$TOOLBELT:inputs-$inputs is not published."
+            exit 1
+          else
+            echo "::notice::$TOOLBELT:inputs-$inputs does not exist yet: built here."
+            docker build -t agora-toolbelt:test -f toolbelt/Dockerfile .
+            echo "image=agora-toolbelt:test" >> "$GITHUB_OUTPUT"
+            echo "local=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.existing.outputs.digest == '' && steps.toolbelt.outputs.local != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build the image locally
-        if: steps.existing.outputs.digest == ''
+        if: steps.existing.outputs.digest == '' && steps.toolbelt.outputs.local != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           load: true
           tags: ${{ matrix.name }}:test
+          build-args: TOOLBELT_IMAGE=${{ steps.toolbelt.outputs.image }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Build the image locally, on the toolbelt built here
+        if: steps.existing.outputs.digest == '' && steps.toolbelt.outputs.local == 'true'
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: docker build --build-arg TOOLBELT_IMAGE=agora-toolbelt:test -t "$NAME:test" -f "$DOCKERFILE" .
 
       # A harness image starts as in the cluster: non-root, read-only root, HOME on tmpfs, and is ready
       # while the adapter process runs; Agora initializes it over the authenticated relay.
@@ -176,6 +312,10 @@ jobs:
           curl -fsS http://localhost:8080/healthz
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/info)" = 401
           docker logs harness
+
+      - name: Try the toolbelt in it as a sandbox runs it
+        if: steps.existing.outputs.digest == '' && matrix.toolbelt
+        run: toolbelt/smoke.sh "$NAME:test"
 
       - name: Start the server far enough to fail on its configuration
         if: steps.existing.outputs.digest == '' && !matrix.harness
@@ -202,6 +342,7 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:inputs-${{ steps.existing.outputs.inputs }}
+          build-args: TOOLBELT_IMAGE=${{ steps.toolbelt.outputs.image }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
@@ -240,7 +381,7 @@ jobs:
   # those steps run — scripts/inputs.ts, the build, the images, the client — cannot push an image, so
   # none can wait under the `inputs-` tag the base branch would then take as its own.
   try:
-    needs: [check, images]
+    needs: [check, images, toolbelt-try]
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
