@@ -323,14 +323,27 @@ parallel.push((async () => {
     return `destroyed by Agent Sandbox; anchor ${String(end.content.anchor)} pushed by the Pod`
   })
 })())
-parallel.push(check('E15', 'Turn too long', async () => {
+parallel.push(check('E36', 'A turn longer than the turn cap a Create names', async () => {
   const w = new Workstream()
-  await w.open(mock, { limits: { turnCapSeconds: 30 } })
+  await w.open(mock, { limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
   assert((await w.write('/sleep 120')).status === 200, 'Write refused')
+  const turn = await w.turn('done', 150_000)
+  const x = await view(w.execution)
+  assert(x !== undefined && !x.ending && Date.parse(String(x.shutdownTime)) > Date.now(), JSON.stringify(x))
+  const e = (await w.state()).executions.get(w.execution)
+  assert(e !== undefined && !e.lost && !e.ended, JSON.stringify(e))
+  await w.stop()
+  return `turn ${turn.status} after 120 s, deadline ${String(x.shutdownTime)}, neither ending nor lost`
+}))
+parallel.push(check('E38', 'Work running at the ceiling', async () => {
+  const w = new Workstream()
+  await w.open(mock, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
+  assert((await w.write('/background 600 never.txt')).status === 200, 'Write refused')
+  const turn = await w.turn('done', 30_000)
   const end = await w.ended(150_000)
-  const turn = [...(await w.state()).turns.values()].at(-1)!
-  assert(typeof end.content.anchor === 'string' && turn.status === 'failed', JSON.stringify({ end: end.content, turn: turn.status }))
-  return `destroyed with the turn in progress, turn ${turn.status}; anchor ${String(end.content.anchor)}`
+  const cap = Date.parse(turn.startedAt!) + 30_000
+  assert(typeof end.content.anchor === 'string' && Date.parse(end.time) >= cap, JSON.stringify({ end: end.content, at: end.time }))
+  return `ended ${String(Date.parse(end.time) - cap)} ms after the ceiling, work still running; anchor ${String(end.content.anchor)}`
 }))
 parallel.push(check('E16', 'Stop', async () => {
   const w = new Workstream()
@@ -782,14 +795,16 @@ await check('C10', 'At the claim: the execution’s token before initialize', as
   return `token at ${String(v.outbound?.attachedAt)}, initialize dispatched at ${dispatched.time}; from the Pod: B "${b}", C "${c}"; gateway: ${String(lines.length)} request(s) under the execution's name, none warm after the hand-off`
 })
 
-await check('C12', 'A token that would run out during the next turn', async () => {
+await check('C12', 'A token that would run out within half its life of the next prompt’s deadline', async () => {
   const w = new Workstream()
-  // Turn + lease = 90 s: always less than a turn and a minute left by the next prompt. The Internet, which a Create may
-  // name: a base profile is a pool's alone (docs/specs/credentials.md, "Base profiles").
-  await w.open(mock, { profiles: ['internet'], limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
-  const before = String((await view(w.execution))!.outbound?.expiresAt)
-  // The mock opens its Session within the second, and a token's expiry counts in seconds.
-  await sleep(2000)
+  // The Internet, which a Create may name: a base profile is a pool's alone (docs/specs/credentials.md, "Base profiles").
+  await w.open(mock, { profiles: ['internet'], limits: { leaseSeconds: 60 } })
+  const outbound = (await view(w.execution))!.outbound
+  const before = String(outbound?.expiresAt)
+  // Past half the token's life less a lease, the prompt's deadline falls within half its life of its end: an hour's token
+  // waits 29 minutes. A token's expiry counts in seconds.
+  const life = Date.parse(before) - Date.parse(String(outbound?.attachedAt))
+  await sleep(Math.max(2000, life / 2 - 60_000 + 2000))
   const since = new Date(Date.now() - 1000).toISOString()
   const reply = await fetched(w, 'https://example.com/')
   const after = String((await view(w.execution))!.outbound?.expiresAt)

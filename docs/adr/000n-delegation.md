@@ -154,7 +154,7 @@
 - A chain of new delegates, each started once the last has answered, is under no cap but the person's
   Stop: it is not a loop between two agents.
 - What does not fit in a message has no way across yet: Agora has no persistent store for files.
-- A turn's maximum duration no longer counts the time its approvals waited.
+- The ceiling since an execution's last prompt no longer counts the time its approvals waited.
 - A role gives no right: a `judge` started without read access to the repository it judges cannot read
   it. The delegator names the rights, and the person approves those beyond its own.
 - A delegate's view and its row in the list carry its state, which its delegator's `spawn_agent` line

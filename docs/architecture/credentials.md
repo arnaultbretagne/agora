@@ -76,13 +76,15 @@ services its harness needs from the start — its **base profiles**, `anthropic`
 | --- | --- |
 | In the pool | The pool's base profiles, naming the warm Pod. Renewed while the Pod waits. |
 | At the claim, before `initialize` | The base profiles and the execution's own, naming the execution. |
-| Between turns, when it would run out | The same rights in a new token. |
+| Whenever the deadline moves, when it would run out | The same rights in a new token: a renewal. |
 | Between turns, when the user changes its access | The base profiles and the new own ones, at once. |
 
 Agora is the only one handing tokens over: once it sees the claim bound to the Pod, it stops
-warming it, and the execution's token replaces the warm one. Each replacement closes the tunnels
-opened with the previous token, so the new one is the only one in use: between turns, the harness
-has nothing in flight to cut.
+warming it, and the execution's token replaces the warm one. A replacement giving other rights
+closes the tunnels opened with the previous token, so the new one is the only one in use: it comes
+between turns, when the harness has nothing in flight to cut. A renewal does not: the sandbox may
+be in a turn, or running work its agent left behind, so the tunnels go on and close only a moment
+before the token they were opened with expires.
 
 ```mermaid
 sequenceDiagram
