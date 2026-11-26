@@ -4,6 +4,7 @@
 //
 // JSON-RPC 2.0 over newline-delimited stdio, the ACP transport. Method and field names are those of
 // the ACP 1.5.0 schema (@agentclientprotocol/sdk 1.5.0).
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
@@ -111,6 +112,11 @@ function asked(method: string, params: Record<string, unknown>): { id: Id; answe
 
 function transcriptPath(session: Session): string {
   return join(sessionsDir(home, session.cwd), `${session.id}.jsonl`)
+}
+
+/** A file name of the workspace's, nothing that leaves it. */
+function workspaceFile(name: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) ? name : 'background.txt'
 }
 
 function remember(session: Session, role: 'user' | 'agent', text: string): void {
@@ -626,6 +632,28 @@ async function prompt(session: Session, text: string, turn: Turn): Promise<strin
     case '/die': {
       if (await pause(turn, n * 1000)) return 'cancelled'
       process.exit(3)
+    }
+    // A command left running once the turn is over, as Claude Code moves one to the background (Agora's
+    // docs/specs/executions.md, "The deadline"): `/background N NAME` writes NAME in the workspace after N seconds.
+    case '/background': {
+      const name = workspaceFile(text.trim().split(/\s+/)[2] ?? 'background.txt')
+      const toolCallId = `outil-${randomUUID().slice(0, 8)}`
+      update(session.id, { sessionUpdate: 'tool_call', toolCallId, title: `sleep ${String(n)} > ${name}`, kind: 'execute', status: 'in_progress' })
+      // Its own process group, as a harness starts a command it may have to kill; still its child, as Claude Code's are.
+      spawn('/bin/sh', ['-c', 'sleep "$1" && echo "Ran $1 s in the background." > "$2"', 'sh', String(n), join(session.cwd, name)], { detached: true, stdio: 'ignore' }).unref()
+      update(session.id, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'Moved to the background.' } }] })
+      remember(session, 'agent', `Started in the background: ${name}, ${String(n)} s.`)
+      say(session.id, `Started in the background: ${name}, ${String(n)} s.`)
+      return 'end_turn'
+    }
+    // A file of the workspace, as the agent would read it: `/read NAME`.
+    case '/read': {
+      const name = workspaceFile(argument ?? '')
+      const path = join(session.cwd, name)
+      const said = existsSync(path) ? `${name}: ${readFileSync(path, 'utf8').trim()}` : `${name}: no such file.`
+      remember(session, 'agent', said)
+      say(session.id, said)
+      return 'end_turn'
     }
     case '/tool': {
       const toolCallId = `outil-${randomUUID().slice(0, 8)}`

@@ -25,12 +25,16 @@ The evidence behind the acceptance cases of `specs/executions.md`.
 | R17 | 2026-11-26 | `1dc9309` | local, unit | `packages/log`'s `node test/run.ts test/ends.test.ts test/delegation.test.ts test/recovery.test.ts`, 107 tests, and `packages/executions`' `npm test`, 8 tests, all green: Node 24.22.3, PostgreSQL 17.5 (`@embedded-postgres/linux-x64`), each test on a database of its own; FakeKube with real bridges and the mock agent; each execution of `ends.test.ts` a delegate's, its delegator's `spawn_agent` made through Agora's MCP server; renewal step 1 s. The `check` job of pull request #243 on the same commit (GitHub Actions job 139842350812), all green. |
 | R18 | 2026-11-26 | `c0c188d` | local, unit | The `check` jobs of pull request #243 (GitHub Actions job 139859475633) and of the push to `feat/execution-end-cause` (139859445492) on that commit, all green: Node 24, PostgreSQL 17 (`postgres:17`), each test on a database of its own, Playwright's Chromium headless shell, on ubuntu-26.04. E41's delegator in a turn of its own (`/sleep 120`) from its delegate's start, its lease renewed past the delegate's initial deadline. |
 | R19 | 2026-11-26 | `9c285e3` | local, unit | `packages/log`'s `node test/run.ts test/ends.test.ts`, 10 tests, then `test/delegation.test.ts test/recovery.test.ts`, 99, and `packages/executions`' `npm test`, 9, all green: Node 24.22.3, PostgreSQL 17.5 (`@embedded-postgres/linux-x64`), each test on a database of its own; FakeKube with real bridges and the mock agent; renewal step 1 s. The `check` jobs of pull request #243 (GitHub Actions job 139884531706) and of the push (139884500162) on that commit, all green. The new E39 test of the mechanics failed on the mechanics of `7f8c14b`: no read within the margin, nothing kept. |
+| R20 | 2026-11-26 | `1682d89` | local | The `check` job of pull request #245 (GitHub Actions job 139807696571), all green: ubuntu-26.04, Node 24, PostgreSQL 17 (`postgres:17`), each test on a database of its own; real bridges with the mock agent, FakeKube; a 60 s lease and a 1 s renewal step for the deadline cases. |
+| R21 | 2026-11-26 | `1682d89` | local | The preview of pull request #245, `pr-245-agora.preview.bretagne.dev`: its server built from `47b3e86` or a later push of the pull request (the server's code is the same through `1682d89`), `LEASE_SECONDS` 600 and the renewal step of production; its sandboxes the mock agent behind a bridge in the server's process, Kubernetes simulated. Driven through its API by a script of the pull request's author, its raw output in the pull request. |
+| R22 | 2026-11-26 | `29747ee` | local | This agent's machine: Node 24.22.3, PostgreSQL 17.12 (embedded binaries), `node test/run.ts` on `packages/log`'s `lifetime.test.ts` and `deadline.test.ts` together, all 12 tests green; a 60 s lease and a 1 s renewal step. |
+| R23 | 2026-11-26 | `29747ee` | local | The preview of pull request #245, its server built from `6a335a3` or `f0ace31`, whose server code is that of `29747ee`: seen to serve it as the reproduction below no longer ended at the lease. `LEASE_SECONDS` 600; the mock agent behind a bridge in the server's process, Kubernetes simulated. Driven through its API by a script of the pull request's author, its raw output in the pull request. |
 
 ## Cases
 
 E5 to E11 and E28 are the cases `specs/executions.md` keeps from before the log took them over:
 what they covered is the log's now, with its own cases (`log.md`). Their rows are evidence for
-`7afc4d7`.
+`7afc4d7`. E15 is the case the ceiling replaced: its rows are evidence for the commits of their runs.
 
 | Case | Failure | Level | Run | Verdict | Observed |
 | --- | --- | --- | --- | --- | --- |
@@ -59,13 +63,20 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E12 | — | local | R3 | proven | Two tests: moving forward at each step, never beyond start + maximum duration. |
 | E12 | — | cluster | R4 | partial: one move is asserted, not one per step | Deadline 14:06:25.055 → 14:06:45.827 during the turn, under the limit. |
 | E12 | — | cluster | R8 | partial: one move is asserted, not one per step | The deadline moved from 09:13:46.044 to 09:14:06.632 during the turn. |
+| E12 | — | local | R20 | proven | Two tests: moving forward at each step; never beyond the last prompt + a 30 s ceiling. |
 | E13 | — | cluster | R1 | partial: the deadline's value is not asserted | Deadline set at the end of the turn, unchanged 25 s later. |
 | E13 | — | local | R3 | proven | Every assertion held. |
 | E13 | — | cluster | R4 | partial: the deadline's value is not asserted | Deadline set at the end of the turn, unchanged 25 s later. |
 | E13 | — | cluster | R8 | partial: the deadline's value is not asserted | The deadline set at the end of the turn, unchanged 25 s later. |
+| E13 | — | local | R20 | proven | Every assertion held. |
+| E13 | — | local | R21 | partial: observed by the script, not asserted | Lease 60 s: turn answered by 09:21:09.338, deadline 09:22:08.384, unchanged at every look, 5 s apart, until the execution ended. |
+| E13 | — | local | R23 | partial: observed by the script, not asserted | Lease 60 s: turn answered by 11:10:07.992, deadline 11:11:07.192, unchanged at every look, 5 s apart, until the execution ended. |
 | E14 | real: the deadline passes between two turns | cluster | R1 | proven | Destroyed by Agent Sandbox; anchor pushed (1 file, 239 bytes). |
 | E14 | real: the deadline passes between two turns | cluster | R4 | proven | Destroyed by Agent Sandbox; anchor pushed by the Pod. |
 | E14 | real: the deadline passes between two turns | cluster | R8 | proven | Destroyed by Agent Sandbox; the anchor pushed by the Pod. |
+| E14 | real: the deadline passes between two turns, nothing left running | local | R20 | proven | No renewal after the turn's; ended 59 to 70 s after the turn, its anchor received. |
+| E14 | real: the deadline passes between two turns, nothing left running | local | R21 | partial: observed by the script, not asserted | Lease 60 s: no longer followed and `ended` 62 s after the turn, anchor `badaf7f6-b24b-5eae-8294-8883060e185c`. |
+| E14 | real: the deadline passes between two turns, nothing left running | local | R23 | partial: observed by the script, not asserted | Lease 60 s: no longer followed and `ended` 62 s after the turn, anchor `bec4dc65-faab-52f7-920c-df8e66482661`. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R1 | partial: the time of destruction is not asserted | Destroyed with the turn in progress; anchor pushed. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R4 | partial: the time of destruction is not asserted | Destroyed with the turn in progress, the turn failed; anchor pushed. |
 | E15 | real: the turn reaches its 30 s maximum | cluster | R8 | partial: the time of destruction is not asserted | Destroyed with the turn in progress, the turn failed; an anchor. |
@@ -142,6 +153,18 @@ what they covered is the log's now, with its own cases (`log.md`). Their rows ar
 | E39 | simulated: forced-state, the facts `causeOf` reads written by the test, a turn running at its bound | unit | R19 | proven | `OOMKilled` seen 4 s and 10 s before the deadline: `oom_killed`; `Error` seen 4 s before: `bound_reached`; 10 s before: `pod_gone`, `pod` `Error`. |
 | E40 | simulated: stub, as in R17; the Pod read again within the margin | local | R19 | proven | The read begun before the margin's end and answered after it: nothing kept; read again within the margin, at least twice in all, nothing kept still. The control a minute away: kept, `gone` true. |
 | E35 | — | live | — | not verified | As E34. Behind a stand-in for Google, agy 1.5.13 put no rule from the workspace's `AGENTS.md` into the model's request (`specs/credentials.md`, "Antigravity"). |
+| E42 | — | local | R20 | proven | Every assertion held: `Slept 120 s.` with `turnCapSeconds` 30 and a 60 s lease, renewals after 90 s, `ready`, the claim not deleted. |
+| E42 | — | local | R21 | partial: observed by the script, not asserted | `turnCapSeconds` 30, lease 60 s, `/sleep 120` from 09:21:07: the deadline 09:22:08 → 09:22:29 → … → 09:23:50 every 20 s, then 09:24:08.626 at the end; `Slept 120 s.`, the turn `done`, the Workstream `ready`, `ending` false throughout, Pod `mock-5`. |
+| E42 | — | local | R23 | partial: observed by the script, not asserted | `turnCapSeconds` 30, lease 60 s, `/sleep 120` from 11:10:05: the deadline 11:11:27 → 11:11:47 → 11:12:28 → 11:12:48 → 11:13:07.311 at the end; `Slept 120 s.`, the turn `done`, the Workstream `ready`, `ending` false throughout, Pod `mock-3`. |
+| E43 | real: a command left running 70 s after its turn | local | R20 | proven | Every assertion held: at least 30 renewals while it ran, the claim alive past the turn's lease, then one or two renewals at its end and none after; `out.txt: Ran 70 s in the background.` on the same Pod. |
+| E43 | real: `/background 1200 out.txt`, a command left running 20 min after its turn | local | R21 | partial: observed by the script, not asserted | Lease 600 s, turn over at 09:20:36, Pod `mock-3`, `sh` and `sleep` listed: the deadline 09:30:35 → 09:32:36 → … → 09:49:36, a minute on at every look; the command gone at t+1201 s, the deadline 09:50:36.526, then unchanged. `/read out.txt` sent at t+1501 s (25 min): `out.txt: Ran 1200 s in the background.`, the same execution on `mock-3`. |
+| E43 | real: `/background 1200 out.txt`, a command left running 20 min after its turn | local | R23 | partial: observed by the script, not asserted | Lease 600 s, turn over at 11:09:42, Pod `mock-2`, `sh` and `sleep` listed: the deadline 11:19:41 → … → 11:39:42.610, a minute on at every look while they ran; then unchanged, nothing listed. `/read out.txt` sent at t+1502 s (25 min): `out.txt: Ran 1200 s in the background.`, the same execution on `mock-2`. |
+| E44 | real: work still running at a 30 s ceiling | local | R20 | proven | Every deadline at or before the ceiling, the last at it; ended within 10 s after it, its anchor received. |
+| E45 | — | local | R20 | proven | Every assertion held. |
+| E46 | — | local | R22 | proven | Every assertion held: the dispatch recorded an empty listing, the command started at once was work, renewals past the lease. The listing's comparison in `deadline.test.ts`, a start 27 ms before the prompt in another clock counted as work. |
+| E46 | real: the Create's own message `/background 90 clock.txt`, lease 60 s, ceiling 120 s | local | R23 | partial: observed by the script, not asserted | The reproduction that ended at 62 s on `1b99acc`: `sh` and `sleep` started 11:07:04.35, the deadline 11:08:04 → 11:08:24 → 11:08:44 → 11:09:04.344, the ceiling, where it ended, 121 s after the prompt. |
+| E47 | — | local | R22 | proven | Every assertion held: `Heard: a fresh instruction.` and `Slept 40 s.`, deadlines past the first prompt's ceiling, none past the message's. |
+| E47 | real: a message written with `mayWait` 18 s into `/sleep 45`, ceiling 30 s | local | R23 | partial: observed by the script, not asserted | Before it, the deadline 11:10:37.126, the first prompt's ceiling; injected at 11:10:23.9, heard; then 11:10:53.996, its own ceiling; `Slept 45 s.`, the turn `done`, the execution ending at that ceiling. |
 
 The partial verdicts are tracked in #107.
 

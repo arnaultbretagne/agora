@@ -305,7 +305,7 @@ export class Lab {
     this.workstreams = new Workstreams({
       store: this.store,
       executions: this.executions,
-      defaults: { leaseSeconds: 600, turnCapSeconds: 3600 },
+      defaults: { leaseSeconds: 600, ceilingSeconds: 21_600 },
       maxActive: 4,
       renewSeconds: 60,
       tickMs: 100,
@@ -463,7 +463,17 @@ export class Server {
     writeFileSync(join(dir, 'signing.pem'), options.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }))
     writeFileSync(join(dir, 'token'), 'test')
     // Every port the server listens on, its MCP server's included: tests run side by side, and a restart may start
-    // one before the other is gone.
+    // one before the other is gone. A port found free may be taken by another test before the server binds it: then
+    // the server exits, EADDRINUSE, and starts again on other ports.
+    for (let attempt = 1; ; attempt++) {
+      const server = await Server.spawn(options, s3, dir)
+      await until('lab ready', () => server.output.includes('MCP server on') || server.child.exitCode !== null, 20_000)
+      if (server.child.exitCode === null) return server
+      if (!server.output.includes('EADDRINUSE') || attempt === 5) throw new Error(`lab exited: ${server.output}`)
+    }
+  }
+
+  private static async spawn(options: { db: Db; api: FakeKubeApi; env?: Record<string, string> }, s3: FakeS3, dir: string): Promise<Server> {
     const [port, anchorPort, mcpPort] = [await freePort(), await freePort(), await freePort()]
     const child = spawn(process.execPath, [new URL('../../../apps/server/src/main.ts', import.meta.url).pathname], {
       env: {
@@ -488,10 +498,7 @@ export class Server {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    const server = new Server(child, port, anchorPort)
-    await until('lab ready', () => server.output.includes('anchor receiver on') || server.child.exitCode !== null, 20_000)
-    if (server.child.exitCode !== null) throw new Error(`lab exited: ${server.output}`)
-    return server
+    return new Server(child, port, anchorPort)
   }
 
   async post(path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {

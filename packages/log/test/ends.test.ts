@@ -18,7 +18,7 @@ type T = { after(fn: () => Promise<void>): void }
 const LIMIT = { timeout: 150_000 }
 
 /** A delegator on the lab, given `agora:delegate`, with the limits its delegates take; and its delegate, started. */
-async function delegated(t: T, instructions: string, limits: { leaseSeconds: number; turnCapSeconds: number }, before: (kube: FakeKube) => void = () => {}) {
+async function delegated(t: T, instructions: string, limits: { leaseSeconds: number; ceilingSeconds: number }, before: (kube: FakeKube) => void = () => {}) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
   const db = await database()
@@ -60,14 +60,14 @@ const agoras = async (d: Delegated) =>
   (await d.lab.workstreams.projections.objects(d.ws)).filter((o) => o.kind === 'element' && o.object.type === 'user' && o.object.as === 'agora' && o.object.from === d.delegate).map((o) => (o.object.content as { text: string }[]).map((b) => b.text).join('\n'))
 const told = (d: Delegated, timeoutMs = 15_000) => until('a message of Agora’s', async () => (await agoras(d))[0], timeoutMs)
 
-test('E36 bound reached: a turn past its maximum duration; its execution ends at the bound, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 30 })
+test('E36 bound reached: a turn past its ceiling; its execution ends at the bound, the cause named', LIMIT, async (t) => {
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, ceilingSeconds: 30 })
   await opened(d)
   await running(d)
   const prompt = lines(await d.lab.entries(d.delegate), 'out', 'session/prompt').at(-1)!
   const end = await ended(d, 45_000)
   assert.deepEqual(end.content.cause, { kind: 'bound_reached' })
-  // The deadline it reached: the turn's start plus its maximum duration, never further.
+  // The deadline it reached: the turn's start plus its ceiling, never further.
   const last = d.kube.deadlines.filter((x) => x.name === d.e.claimName).at(-1)!
   assert.equal(Date.parse(last.shutdownTime), Date.parse(prompt.time) + 30_000)
   assert.ok(Date.parse(end.time) >= Date.parse(prompt.time) + 30_000)
@@ -78,7 +78,7 @@ test('E36 bound reached: a turn past its maximum duration; its execution ends at
 })
 
 test('E37 lease expired after the turn: the turn done, nothing renews; its execution ends at now + lease, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, 'a short task', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, 'a short task', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   // Control: the delegate's last message reaches its delegator, as any.
   await until('its last message', async () => (await d.lab.workstreams.projections.objects(d.ws)).find((o) => o.kind === 'element' && o.object.type === 'user' && o.object.as === 'delegate' && o.object.from === d.delegate))
@@ -93,7 +93,7 @@ test('E37 lease expired after the turn: the turn done, nothing renews; its execu
 })
 
 test('E38 adapter exited: the agent’s process exits with code 3 during a turn; lost, then ended, both naming the exit', LIMIT, async (t) => {
-  const d = await delegated(t, '/die 1', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, '/die 1', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   const lost = await until('execution.lost', async () => (await d.lab.entries(d.delegate)).find((x) => x.kind === 'execution.lost'))
   assert.deepEqual(schemaValue(lost.content), { reason: 'adapter_exited', exitCode: 3, signal: null })
@@ -108,7 +108,7 @@ test('E38 adapter exited: the agent’s process exits with code 3 during a turn;
 })
 
 test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; ended at its deadline, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   await running(d)
   await d.kube.killPod(podOf(d), 'OOMKilled', 137)
@@ -125,7 +125,7 @@ test('E39 Pod killed for lack of memory: its container OOMKilled during a turn; 
 })
 
 test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   await running(d)
   await d.kube.deletePod(podOf(d))
@@ -139,7 +139,7 @@ test('E40 Pod gone: its Pod deleted before its deadline, the claim left; ended, 
 })
 
 test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ended at once, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   await running(d)
   const deadline = Date.parse(String((d.kube.claims.get(d.e.claimName)!.spec.lifecycle as { shutdownTime: string }).shutdownTime))
@@ -152,7 +152,7 @@ test('E40 Pod gone: its claim deleted before its deadline, the Pod with it; ende
 })
 
 test('E41 a claim never obtained: its creation refused until its initial deadline; failed, then ended, never said to be Agora’s absence', LIMIT, async (t) => {
-  const d = await delegated(t, 'never read', { leaseSeconds: 60, turnCapSeconds: 3600 }, (kube) => (kube.failCreates = true))
+  const d = await delegated(t, 'never read', { leaseSeconds: 60, ceilingSeconds: 3600 }, (kube) => (kube.failCreates = true))
   // The delegate's claim alone.
   d.kube.failCreates = (name) => name === d.e.claimName
   // Its delegator kept running past its delegate's initial deadline, which its own lease would otherwise end with: a turn
@@ -212,7 +212,7 @@ test('E39 a container killed for lack of memory, seen 4 s before a turn’s boun
 })
 
 test('E39 a container killed for lack of memory during a turn, reported within the margin before its deadline: ended, the cause named', LIMIT, async (t) => {
-  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, turnCapSeconds: 3600 })
+  const d = await delegated(t, '/sleep 120', { leaseSeconds: 60, ceilingSeconds: 3600 })
   await opened(d)
   await running(d)
   // The kubelet reports the kill 3 s on; the deadline, nothing renewing it, 6 s on: within the margin all along.

@@ -216,8 +216,8 @@ test('D7 the person writes while the approval waits: refused with the words; no 
   assert.equal(Number((await db.admin.query('SELECT count(*) FROM workstreams WHERE parent=$1', [ws])).rows[0].count), 0)
 })
 
-test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s turn deadline pushed back by the wait', async (t) => {
-  const limits = { leaseSeconds: 60, turnCapSeconds: 30 }
+test('D8 no answer: expired at the approval’s end; progress meanwhile; the delegator’s deadline never beyond the ceiling, the wait counted', async (t) => {
+  const limits = { leaseSeconds: 60, ceilingSeconds: 30 }
   const { lab, url, ws, execution } = await started(t, ['agora:delegate'], { approvalMs: 2_000, progressMs: 400 }, { workstreams: { renewSeconds: 1 }, open: { limits } })
   // Its turn runs while its call waits, as when its agent calls `delegate`.
   assert.equal((await lab.write(ws, '/sleep 5')).accepted, true)
@@ -233,10 +233,11 @@ test('D8 no answer: expired at the approval’s end; progress meanwhile; the del
   const [approval] = await projected(lab, ws, 'question', (q) => q.status !== 'pending')
   assert.equal(approval?.status, 'expired')
   await lab.turn(ws, 'done', 20_000)
-  // Its deadline, at most turn start + maximum duration, moved on by the approval's 2 s.
+  // The ceiling is absolute: the approval's 2 s push nothing back; the deadline reaches it, never beyond.
   const claim = (await lab.state(ws)).current!.claimName
-  const beyond = lab.kube.deadlines.filter((d) => d.name === claim).map((d) => Date.parse(d.shutdownTime) - prompt - limits.turnCapSeconds * 1000)
-  assert.ok(beyond.some((ms) => ms >= 1_800 && ms < 3_000), `beyond the cap: ${beyond.join(', ')} ms`)
+  const beyond = lab.kube.deadlines.filter((d) => d.name === claim).map((d) => Date.parse(d.shutdownTime) - prompt - limits.ceilingSeconds * 1000)
+  assert.ok(beyond.length > 0 && beyond.every((ms) => ms <= 0), `beyond the ceiling: ${beyond.join(', ')} ms`)
+  assert.equal(beyond.at(-1), 0, 'the end of the turn at the ceiling')
 })
 
 test('D9 another call needing approval while one waits: approval_pending', async (t) => {
@@ -1051,7 +1052,7 @@ test('L125 a Write of Agora’s before the Session opens: accepted, waiting; sen
 })
 
 test('L125 a Write of Agora’s with the execution ended: accepted, waiting; a Create with its pool, settings, profiles and limits, then sent', async (t) => {
-  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { open: { settings: { model: 'mock-large' }, limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { open: { settings: { model: 'mock-large' }, limits: { leaseSeconds: 90, ceilingSeconds: 600 } } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const d = await client(t, url, (await working(lab, delegate)).id)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)
@@ -1064,7 +1065,7 @@ test('L125 a Write of Agora’s with the execution ended: accepted, waiting; a C
     return state.executions.size === 2 && state.current
   }, 30_000)
   assert.deepEqual([next.body.pool, next.body.settings, next.profiles, next.body.limits], [before.body.pool, before.body.settings, before.profiles, before.body.limits])
-  assert.equal(String(object(next.body.limits)?.turnCapSeconds), '600')
+  assert.equal(String(object(next.body.limits)?.ceilingSeconds), '600')
   await until('sent', async () => (await prompts(lab, ws)).length === 1, 30_000)
   assert.equal(blocksOf((await prompts(lab, ws))[0]!).at(-1)!.text, 'after its end')
 })
@@ -1086,7 +1087,7 @@ test('L125 a Write of Agora’s after a Stop: accepted, waiting; no Create, unti
 })
 
 test('L125 a Write of Agora’s with the execution ended, its pool gone: continued in a pool of its harness, its settings, profiles and limits', async (t) => {
-  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, turnCapSeconds: 600 } } })
+  const { lab, db, url, ws, execution } = await started(t, ['agora:delegate'], {}, { kube: (k) => k.morePools.push(['mock-older', 'mock']), open: { pool: 'mock-older', limits: { leaseSeconds: 90, ceilingSeconds: 600 } } })
   const delegate = delegateOf(text(await (await client(t, url, execution)).callTool({ name: 'spawn_agent', arguments: { instructions: '/sleep 30', harness: 'mock' } })))
   const e = await working(lab, delegate)
   await expire(lab.kube, (await lab.state(ws)).current!.claimName)

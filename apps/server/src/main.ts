@@ -112,7 +112,7 @@ const workstreams = new Workstreams({
     : {}),
   store,
   executions,
-  defaults: { leaseSeconds: number('LEASE_SECONDS', 600), turnCapSeconds: number('TURN_CAP_SECONDS', 3600) },
+  defaults: { leaseSeconds: number('LEASE_SECONDS', 600), ceilingSeconds: number('CEILING_SECONDS', 21_600) },
   maxActive: number('MAX_ACTIVE', 4),
   renewSeconds: number('RENEW_SECONDS', 60),
   sink,

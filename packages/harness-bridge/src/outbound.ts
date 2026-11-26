@@ -7,6 +7,19 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { connect, type Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
+import { claimsOf } from './instructions.ts'
+
+/** How long before its token expires a tunnel kept across a renewal is closed: its next request would be refused. */
+export const RENEWED_TUNNEL_MARGIN_MS = 30_000
+
+/**
+ * A token renewing another: the same proxy, and the same holder (`sub`) with the same grants. The tunnels opened with the
+ * previous one may go on (docs/specs/credentials.md, "The bridge"); a token that is no JWT renews nothing.
+ */
+export function renews(previous: Credentials, next: Credentials): boolean {
+  const [a, b] = [claimsOf(previous.token), claimsOf(next.token)]
+  return a !== null && b !== null && previous.proxy === next.proxy && a.sub === b.sub && JSON.stringify(a.grants) === JSON.stringify(b.grants)
+}
 
 export interface Credentials {
   /** `host:port` of the credential proxy. */
@@ -49,7 +62,10 @@ export async function startOutbound(options: { port?: number; log: (message: str
   let tunnels = 0
   let refused = 0
   const targets: Record<string, { count: number; lastStatus: number | null }> = {}
-  const open = new Set<Socket | Duplex>()
+  /** Each tunnel's sockets, by the credentials it was opened with. */
+  const open = new Map<Socket | Duplex, Credentials>()
+  /** The closings of tunnels kept across a renewal, one per token they were opened with. */
+  const closings = new Set<NodeJS.Timeout>()
 
   function refuse(socket: Duplex, status: string, reason: string): void {
     refused += 1
@@ -76,7 +92,7 @@ export async function startOutbound(options: { port?: number; log: (message: str
     const upstream = connect(Number(port), host)
     let connected = false
     for (const socket of [client, upstream]) {
-      open.add(socket)
+      open.set(socket, current)
       socket.once('close', () => open.delete(socket))
     }
     upstream.once('connect', () => {
@@ -108,8 +124,21 @@ export async function startOutbound(options: { port?: number; log: (message: str
   return {
     url,
     set: (next) => {
-      // The tunnels opened with the previous token close: the new one is the only one in use.
-      if (credentials !== null) for (const socket of open) socket.destroy()
+      const previous = credentials
+      if (previous !== null && renews(previous, next)) {
+        // A renewal: what runs through the tunnels goes on, until a moment before the token they carry expires.
+        const expires = Date.parse(previous.expiresAt ?? '')
+        if (Number.isFinite(expires)) {
+          const closing = setTimeout(() => {
+            closings.delete(closing)
+            for (const [socket, opened] of open) if (opened === previous) socket.destroy()
+          }, Math.max(0, expires - RENEWED_TUNNEL_MARGIN_MS - Date.now()))
+          closing.unref()
+          closings.add(closing)
+        }
+      }
+      // Any other token: the tunnels opened with the previous ones close, the new one is the only one in use.
+      else if (previous !== null) for (const socket of open.keys()) socket.destroy()
       credentials = next
       attachedAt = new Date().toISOString()
       // Never the token.
@@ -124,7 +153,8 @@ export async function startOutbound(options: { port?: number; log: (message: str
       targets: structuredClone(targets),
     }),
     close: async () => {
-      for (const socket of open) socket.destroy()
+      for (const closing of closings) clearTimeout(closing)
+      for (const socket of open.keys()) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
   }

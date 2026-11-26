@@ -70,7 +70,7 @@ stateDiagram-v2
     ready --> ending: deadline
     stopped --> ending: deadline
     lost --> ending: deadline, moved to now
-    in_turn --> ending: turn limit
+    in_turn --> ending: ceiling
     ending --> [*]: anchor received
 ```
 
@@ -80,21 +80,52 @@ The spec lists every state, including *uncertain* (the end of a turn could not b
 ## The deadline
 
 Agora never destroys a sandbox; it only moves its deadline, and Agent Sandbox destroys it when
-the deadline passes.
+the deadline passes. The sandbox lives as long as its agent is in a turn, or work the agent
+started still runs in it, and never more than 6 hours after the last prompt: the ceiling.
 
 | Moment | Deadline |
 | --- | --- |
 | Creation | now + 10 minutes (the lease) |
-| During a turn, every minute | the earlier of now + 10 minutes and turn start + 1 hour |
-| End of the turn | now + 10 minutes, then nothing until the next prompt |
+| During a turn, every minute | the earlier of now + 10 minutes and the ceiling |
+| End of the turn | the same, once |
+| After the turn, every minute while work the agent started still runs | the same |
+| Once that work has ended | the same, once, then nothing until the next prompt |
 | The agent dies | now, once |
 | Stop | nothing: Agora stops renewing |
 
-An idle execution therefore disappears one lease after its last turn, and a runaway turn after
-one hour. A dead agent has nothing left to serve: its Pod ends at once, its anchor arrives, and
+Work still running is what the bridge sees: between turns, once a minute, Agora asks it which
+processes run under the adapter, and counts those started since the execution's first prompt. A
+command the harness moved to the background, a build, a wait on CI the agent left running: all of
+them keep the sandbox, whatever the harness. What the harness started for itself before the first
+prompt does not.
+
+```mermaid
+sequenceDiagram
+    participant Agora
+    participant Bridge
+    participant AS as Agent Sandbox
+    Agora->>AS: prompt: deadline, the earlier of now + lease and the ceiling
+    loop every minute of the turn
+        Agora->>AS: the same
+    end
+    Note over Agora: the turn ends: the same, once
+    loop every minute after the turn
+        Agora->>Bridge: GET /info: what runs?
+        Bridge-->>Agora: processes under the adapter
+        Agora->>AS: the same, while one started since the first prompt runs
+    end
+    Note over Agora: nothing runs any more: one lease, then nothing
+    AS->>AS: at the deadline: destroys the sandbox
+```
+
+An execution with nothing running therefore disappears one lease after its last turn, or after the
+last of the work its agent left running; a runaway agent, 6 hours after its last prompt. The
+execution's outbound token follows: Agora hands a new one before the deadline would come within
+half the token's life of its end, and the tunnels opened with the previous one go on until a moment
+before it expires. A dead agent has nothing left to serve: its Pod ends at once, its anchor arrives, and
 the next message continues the Workstream in a new execution. An agent is dead when its adapter
 exits, or when the adapter answers a prompt with an internal error, which is how claude-agent-acp
-reports that the Claude Code process under it died. The turn start that bounds it is in the log, so a restart of Agora keeps the limit.
+reports that the Claude Code process under it died. The last prompt's start that bounds it is in the log, so a restart of Agora keeps the ceiling.
 
 ## The end of the Pod and the anchor
 

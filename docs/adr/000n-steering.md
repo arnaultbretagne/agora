@@ -63,7 +63,7 @@ flowchart LR
 
 - **Holding the steer gives Claude what Codex does by itself.** Sent as a tool line closes, the message
   reaches the agent with no tool to move. Otherwise a turn would end while its work goes on in the
-  background, where nothing renews the execution's deadline: the Pod can end under it.
+  background, its result coming outside any turn.
 - **`injected` means accepted, not read.** On neither adapter does a message come back as a line: the
   log is its only record, and a `user` element is folded from that answer.
 - **Agora's validator takes the new adapters' lines.** Every raw line of a session — text, a failing
@@ -91,6 +91,7 @@ flowchart LR
 - A steer sent as a tool starts, in the milliseconds Agora cannot see, is still moved to the background
   on Claude: its result then comes after the turn, in that turn's response.
 - What an agent says after its turn's answer is shown, in that turn. Claude's own background tasks do
-  this with no steer. The execution's deadline does not move for it.
+  this with no steer. The execution's deadline moves while such a task runs, as for any work left
+  running (ADR Executions).
 - A `session/prompt` line can now be written long after its Write: the catch-up is chosen when it goes.
 - A message held after a Cancel holds what comes after it: a Write that does not say it may wait is refused `turn_active`, until the person sends or retracts.

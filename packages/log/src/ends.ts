@@ -28,6 +28,8 @@ export interface EndFacts {
   readonly obtained: boolean
   /** Its turn still running as the claim disappears, with the bound Agora sets on its deadline. */
   readonly running: { readonly bound: number } | null
+  /** The bound on its deadline, a turn running or not: the ceiling since its last instruction; null before any. */
+  readonly bound?: number | null
   /** It dispatched a turn before. */
   readonly prompted: boolean
   readonly observed: Observed | null
@@ -37,7 +39,7 @@ export interface EndFacts {
 /**
  * Why the claim disappeared, the first that applies: the agent's own end (the deadline moved to now for it),
  * the Pod killed for lack of memory, no claim obtained, nothing seen of the claim, the Pod gone before its
- * deadline, the person's Stop, the bound reached during a turn, else the lease run out. A container killed for
+ * deadline, the person's Stop, the bound reached — the ceiling, during a turn or while work left running ran —, else the lease run out. A container killed for
  * lack of memory counts whenever it was seen; anything else seen of the Pod only when seen more than the margin
  * before the deadline the claim reached: closer, it may be that deadline's own deletion.
  */
@@ -55,7 +57,8 @@ export function causeOf(facts: EndFacts): Cause {
   const deleted = Date.parse(observed.claim.metadata.deletionTimestamp ?? '') || facts.now
   if (observed.pod !== null || !(deleted >= deadline - TOLERANCE_MS)) return { kind: 'pod_gone', pod: observed.pod?.reason ?? null }
   if (facts.stopped) return { kind: 'stopped' }
-  if (facts.running !== null && deadline >= facts.running.bound - TOLERANCE_MS) return { kind: 'bound_reached' }
+  const bound = facts.running?.bound ?? facts.bound ?? null
+  if (bound !== null && deadline >= bound - TOLERANCE_MS) return { kind: 'bound_reached' }
   return { kind: 'lease_expired', turn: facts.running !== null ? 'running' : facts.prompted ? 'ended' : 'none' }
 }
 

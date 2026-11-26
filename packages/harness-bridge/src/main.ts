@@ -28,6 +28,8 @@ const bridge = await startBridge({
   restartOnAnchor: process.env.BRIDGE_RESTART_ON_ANCHOR === 'true',
   // Fixed: the agent's instructions name this path.
   accessFile: join(homedir(), '.agora', 'access.json'),
+  // The Pod's first process: what the agent leaves behind comes to it (docs/specs/executions.md, "The bridge's routes").
+  adoptsOrphans: process.pid === 1,
   log,
 })
 

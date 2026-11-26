@@ -8,14 +8,15 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { keys } from '@agora/testkit'
 import { cluster, database, FakeKube, grants, Lab, lines, Server, until } from './support.ts'
+import type { WorkstreamsOptions } from '../src/index.ts'
 
-async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}, offered: string[] = []) {
+async function started(t: { after(fn: () => Promise<void>): void }, base: Record<string, string> = {}, offered: string[] = [], workstreams: Partial<WorkstreamsOptions> = {}) {
   const pair = keys()
   const kube = new FakeKube(pair.publicKey)
   Object.assign(kube.baseProfiles, base)
   const signer = grants(offered)
   const db = await database()
-  const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source })
+  const lab = await Lab.start({ db, kube, keys: pair, credentials: signer.source, workstreams })
   t.after(async () => {
     await lab.close()
     await db.drop()
@@ -58,12 +59,15 @@ test('C10 a pool declaring no base profile and a Create naming none: a token nam
   assert.equal((await lab.executions.info(e.id)).outbound.expiresAt, signer.minted[0]!.expiresAt)
 })
 
-test('C12 an execution whose token would run out during the next turn gets a new one before the prompt leaves', async (t) => {
-  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
-  // A token of turn + lease, 90 s: always less than a turn and a minute left by the next prompt.
-  const e = await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
+test('C12 an execution whose token would run out within half its life of the deadline its prompt sets gets a new one before the prompt leaves', async (t) => {
+  // Tokens of three leases, 180 s, the least they last: past 30 s, the prompt's deadline, a lease on, falls within 90 s of its end.
+  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' }, [], { tokenSeconds: 60 })
+  const e = await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60 } })
   const first = signer.minted.filter((m) => m.label === `agora ${e.id}`)
   assert.equal(first.length, 1)
+  const life = Date.parse(first[0]!.expiresAt!) - first[0]!.at
+  assert.ok(life > 178_000 && life < 181_000, `three leases: ${String(life)} ms`)
+  await until('thirty seconds on', () => Date.now() > first[0]!.at + 31_000, 35_000)
   assert.ok((await lab.write(ws, 'a turn')).accepted)
   await lab.turn(ws, 'done')
   const tokens = signer.minted.filter((m) => m.label === `agora ${e.id}`)
@@ -74,17 +78,19 @@ test('C12 an execution whose token would run out during the next turn gets a new
   assert.equal((await lab.executions.info(e.id)).outbound.expiresAt, tokens[1]!.expiresAt)
 })
 
-test('C12 control: a token lasting beyond the turn and a minute is not replaced before the prompt', async (t) => {
-  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
-  const e = await lab.open(ws, { pool: 'claude-test' })
+test('C12 control: a token lasting beyond the prompt’s deadline by half its life is not replaced before the prompt', async (t) => {
+  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' }, [], { tokenSeconds: 60 })
+  const e = await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60 } })
   assert.ok((await lab.write(ws, 'a turn')).accepted)
   await lab.turn(ws, 'done')
   assert.equal(signer.minted.filter((m) => m.label === `agora ${e.id}`).length, 1)
 })
 
 test('C12 a token that cannot be renewed fails the prompt, credentials_refused, and nothing is sent', async (t) => {
-  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' })
-  await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
+  const { lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' }, [], { tokenSeconds: 60 })
+  const e = await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60 } })
+  const first = signer.minted.find((m) => m.label === `agora ${e.id}`)!
+  await until('thirty seconds on', () => Date.now() > first.at + 31_000, 35_000)
   // Simulated: the signer refuses (stub).
   signer.fail = true
   assert.ok((await lab.write(ws, 'never sent')).accepted)
@@ -93,6 +99,33 @@ test('C12 a token that cannot be renewed fails the prompt, credentials_refused, 
   assert.equal(failed.content.reason, 'credentials_refused')
   assert.equal((await lab.entries(ws)).filter((x) => x.kind === 'acp.dispatching' && x.content.requestPosition === prompt.position).length, 0)
   assert.equal([...(await lab.state(ws)).turns.values()].at(-1)?.status, 'failed')
+})
+
+test('C81 an execution living past its first token, its command left running after its turn: a new token before each runs out, the one in place always outliving the deadline', { timeout: 300_000 }, async (t) => {
+  // Tokens of three leases, 180 s: the sandbox lives past the first's end.
+  const { kube, lab, signer, ws } = await started(t, { 'claude-test': 'anthropic' }, [], { tokenSeconds: 60, renewSeconds: 1 })
+  const e = await lab.open(ws, { pool: 'claude-test', limits: { leaseSeconds: 60 } })
+  assert.ok((await lab.write(ws, '/background 210 out.txt')).accepted)
+  await lab.turn(ws, 'done')
+  const tokens = () => signer.minted.filter((m) => m.label === `agora ${e.id}`)
+  const first = tokens()[0]!
+  await until('past the first token', () => Date.now() > Date.parse(first.expiresAt!) + 2_000, 200_000)
+  const handed = tokens()
+  assert.ok(handed.length >= 3, String(handed.length))
+  // Each handed before the one before it ran out.
+  for (let i = 1; i < handed.length; i++) assert.ok(handed[i]!.at < Date.parse(handed[i - 1]!.expiresAt!), `token ${String(i)}`)
+  // Every deadline Agora set came before the end of the token then in place, by half its life at least.
+  const patches = kube.deadlines.filter((d) => d.name === e.claimName)
+  for (const d of patches) {
+    const held = handed.filter((m) => m.at <= d.at).at(-1)!
+    assert.ok(Date.parse(held.expiresAt!) - Date.parse(d.shutdownTime) >= 90_000, JSON.stringify({ d, held: held.expiresAt }))
+  }
+  // The sandbox outlived its first token, and the bridge holds the last one.
+  const claim = kube.claims.get(e.claimName)
+  assert.ok(claim !== undefined && claim.metadata.deletionTimestamp === undefined)
+  assert.ok(Date.now() > Date.parse(first.expiresAt!))
+  assert.equal((await lab.executions.info(e.id)).outbound.expiresAt, tokens().at(-1)!.expiresAt)
+  assert.deepEqual([...tokens().at(-1)!.profiles], ['anthropic', 'agora:read', 'previews'])
 })
 
 /** Agora's MCP server, as `session/new` names it: every execution holds `agora:read` (docs/specs/credentials.md, "Default profiles"). */

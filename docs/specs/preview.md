@@ -24,7 +24,7 @@ and it reaches nothing but its database.**
 | `PREVIEW` | `true`: the server starts as a preview. Any other value, or none: as in production, which needs no variable of this document. |
 | `PREVIEW_DATABASE_URL` | Required. The URL of an empty PostgreSQL 17 database and of the login that owns it. Missing: the server exits 1, `PREVIEW_DATABASE_URL is required`. |
 | Production's | `SANDBOX_NAMESPACE`, `SIGNING_KEY_FILE`, `KUBE_API`, `KUBE_TOKEN_FILE`, `LOG_WRITER_URL`, `LOG_PROJECTOR_URL`, `LOG_ANCHORS_URL`, `FILES_ENDPOINT`, `FILES_BUCKET`, `FILES_ACCESS_KEY_ID`, `FILES_SECRET_ACCESS_KEY`, `GATEWAY_PROXY`, `GRANTS_KEY_FILE`, `OFFERED_PROFILES`, `POD_IP`, `GATEWAY_CA_FILE`, `GITHUB_TEST_API`, `IDENTITY_ISSUER`, `IDENTITY_AUDIENCE`, `IDENTITY_TOKENS_DIR`, and `IDENTITY` other than `none` (a preview's identity is `none`, `log.md`, "Identity"). One of them set: the server exits 1 before listening, `PREVIEW excludes` and their names. |
-| The others | `PORT`, `MAX_ACTIVE`, `LEASE_SECONDS`, `TURN_CAP_SECONDS`, `RENEW_SECONDS`, `APPROVAL_SECONDS`, `TEST_ROUTES` as in production. |
+| The others | `PORT`, `MAX_ACTIVE`, `LEASE_SECONDS`, `CEILING_SECONDS`, `RENEW_SECONDS`, `APPROVAL_SECONDS`, `TEST_ROUTES` as in production. |
 
 ## The database
 

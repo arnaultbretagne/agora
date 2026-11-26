@@ -39,24 +39,28 @@ access and stops renewing; the sandbox disappears at the deadline, without the u
 The claim name comes from the execution: `sbx-` + the first 10 hexadecimal characters
 of the SHA-256 of the execution id.
 
-### A 10-minute lease, a 1-hour turn at most
+### A 10-minute lease, a 6-hour ceiling
 
 | Parameter | Value |
 | --- | --- |
 | Lease duration | **10 minutes** |
-| Renewal during a turn | **Every minute** |
-| Maximum turn duration | **1 hour** |
+| Renewal, while a turn runs or work the agent started still runs | **Every minute** |
+| Ceiling | **6 hours** since the last prompt |
 
-How the deadline moves is in "The deadline" (On Agora's side). The turn stays open until the
-final response to `session/prompt`. Renewal continues during a silent tool or with the browser
-closed. The turn start is kept across restarts; neither ACP events nor reconnections push back
-the one-hour limit.
+The sandbox lives as long as its agent is in a turn, or work it started still runs in the sandbox,
+and never beyond the ceiling. How the deadline moves is in "The deadline" (On Agora's side). The
+turn stays open until the final response to `session/prompt`. Renewal continues during a silent
+tool or with the browser closed, and once the turn is over, while a process the agent started
+since its first prompt still runs under its adapter (`GET /info`, "What still runs"). No turn has
+a maximum duration of its own. The last prompt — a turn's start, or a message the agent took into
+its running turn — is in the log, kept across restarts; nothing else pushes back the ceiling:
+neither ACP events, nor reconnections, nor an approval waiting.
 
-At the limit, the infrastructure triggers destruction with the Kubernetes template's
+At the ceiling, the infrastructure triggers destruction with the Kubernetes template's
 termination delay, with no additional ACP grace period.
 
-**Between two turns:** after an end confirmed before expiry, grant 10 minutes
-without renewal. A new prompt restarts the lease if the sandbox is still usable.
+**Between two turns:** once a turn has ended and nothing the agent started runs any more, grant
+10 minutes without renewal. A new prompt restarts the lease if the sandbox is still usable.
 
 ### Edge cases
 
@@ -97,7 +101,7 @@ Port **8080**. Every route except `/healthz` requires Agora's token.
 | Route | Role |
 | --- | --- |
 | `GET /healthz` | 200 while the adapter runs and the Pod is not ending, 503 otherwise. This is the Pod's readiness. |
-| `GET /info` | Instance, Pod, workspace, start time, adapter state (alive, exit code, signal), ending, the way out (`outbound`). |
+| `GET /info` | Instance, Pod, workspace, start time, adapter state (alive, exit code, signal), ending, the way out (`outbound`), what still runs (`processes`). |
 | `GET /acp` | WebSocket: the ACP relay. |
 | `PUT /anchor` | Restores an anchor, before `initialize`. |
 | `PUT /credentials` | Attaches the credential through which the adapter goes out (`credentials.md`). |
@@ -106,6 +110,19 @@ The token is signed by Agora with **Ed25519**, names the target sandbox and expi
 **60 seconds**. The bridge verifies it with Agora's public key and compares the name with
 its own Pod's: the sandbox holds no secret. In addition, the NetworkPolicy
 only admits ingress from Agora.
+
+### What still runs
+
+`GET /info` lists, in `processes`, the processes the agent's work runs in, oldest first: for each,
+its `pid`, its `parent`, its name as the kernel gives it (`command`) and its start (`startedAt`, to
+the hundredth of a second). The bridge decides nothing with them; Agora reads them between turns
+("The deadline").
+
+| Rule | Detail |
+| --- | --- |
+| Which | Every process descending from the adapter, read from `/proc`. Not the adapter itself, nor a zombie. |
+| Orphans | A process whose parent ended comes to the Pod's first process. The bridge, when it is that process (PID 1, as in the image), also lists what came to it: its own descendants but the adapter. A bridge sharing its process with others, as the preview's, lists only what runs under its adapter. |
+| Nowhere to read | Without `/proc`, the list is empty: nothing is known to run. |
 
 ### The relay
 
@@ -233,24 +250,46 @@ before acting on it, names the executions to run and asks the mechanics for ever
 | `POST /mcp`, port **8082** | Agora's MCP server (`mcp.md`), open to the gateway alone, each message proving its caller by the grant the gateway forwards. |
 
 The commands — Create, Write, Cancel, Respond to a permission, Stop — and the thread are the log's
-(`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 3,600 s for
-a turn's duration.
+(`log.md`, "HTTP"). A Create's settings are bounded: 60 to 600 s for the lease, 30 to 21,600 s for
+the ceiling (`leaseSeconds`, `ceilingSeconds`); the server's `LEASE_SECONDS` and `CEILING_SECONDS`
+otherwise, 600 and 21,600. Any other key is ignored, `turnCapSeconds` included: no turn has a
+maximum duration of its own.
 
 ### The deadline
 
-The log decides each move and keeps the turn start; the mechanics apply it.
+The log decides each move and keeps each turn's start; the mechanics apply it. The **ceiling** is
+the last prompt plus the execution's ceiling, 6 hours by default: the last prompt is the start of
+its last turn, or, when later, the answer `injected` to a `_session/steering` that took a message
+into the running turn (`log.md`, "Messages during a turn"). Every move is bounded by it, and
+nothing else pushes it back.
 
 | Moment | `shutdownTime` |
 | --- | --- |
 | Creation | now + lease |
-| Prompt dispatched | Before its first write, a single PATCH: min(now + lease, turn start + maximum duration). If it fails, the prompt fails (`deadline_refused`) and nothing is sent. |
-| Every minute of a turn, while connected to the bridge | min(now + lease, turn start + maximum duration) |
-| End of turn confirmed | now + lease, once, then nothing more until the next prompt |
+| Prompt dispatched | Before its first write, a single PATCH: min(now + lease, its start + ceiling); that prompt is now the last. If it fails, the prompt fails (`deadline_refused`) and nothing is sent. The execution's first prompt waits, before that, for the bridge's listing of what runs (`GET /info`), recorded with its dispatch (`acp.dispatching`, `processes`: each pid and start); while the bridge does not answer, it stays unsent, and the next run tries again. |
+| Every minute of a turn, while connected to the bridge | min(now + lease, ceiling) |
+| End of turn confirmed | min(now + lease, ceiling), once |
+| Every minute once the turn is over, while connected to the bridge and work the agent started still runs | min(now + lease, ceiling) |
+| The first minute that work is no longer seen running | min(now + lease, ceiling), once, then nothing more until the next prompt |
 | Stop requested | Nothing more; `session/cancel` if a turn is in progress |
 | Adapter exited, or a prompt answered with an internal error (JSON-RPC `-32603`) | now, once, then nothing more: the execution is lost, and its Pod ends and pushes its anchor without waiting out the lease |
 | Instance changed, claim ending | Nothing more |
 
-The maximum duration counts a turn's time but the time its approvals waited (`delegation.md`, "Approval"): each wait, from the approval's Ask to its answer, refusal or expiry, pushes the turn start back by as much.
+**Work still running.** Once a turn is over, each time a renewal would be due — at most once a
+minute —, Agora asks the bridge what runs (`GET /info`, "What still runs"). Work runs while it
+lists a process that its listing at the first prompt's dispatch did not hold — the same pid with a
+start within a second is the same process: what ran then is the harness's own — its processes,
+the servers it opens with its Session —, not the agent's work. Both listings are the bridge's, on
+its clock: no time of the log's is compared with a process's start. An execution whose first
+prompt was dispatched with no listing recorded counts what started since that prompt. A bridge that does not answer renews nothing. Which execution had work running is kept in
+memory: after a restart of Agora, the work it sees running renews as before, and work that ended
+meanwhile ends with the lease already granted.
+
+The ceiling is absolute: an approval waiting (`delegation.md`, "Approval") counts as any other
+time.
+
+The execution's token always outlives the deadline it is given: before each move, Agora hands a new
+one if needed (`credentials.md`, "Between turns").
 
 ### An execution's states
 
@@ -289,7 +328,7 @@ and `deletionTimestamp` — and what they saw of its Pod ("The mechanics", Pods)
 | `unobserved` | No claim of it was seen, a UID recorded: the claim was gone before this process saw it — whether Agora was running meanwhile is not known. | — |
 | `pod_gone` | Its Pod was seen ending before the deadline — terminated, evicted, deleted, or not found —, or the claim was deleted more than 1.5 s before its `shutdownTime`. | `pod`: the Pod's reason, null when no Pod was found. |
 | `stopped` | The person's Stop: the deadline it was left with passed. | — |
-| `bound_reached` | A turn was running, and the deadline it reached was the bound on its turn — what "The deadline" caps every move at, its turn's start plus the maximum duration, approvals' waits not counted —, within 1.5 s. | — |
+| `bound_reached` | The deadline it reached was the ceiling — what "The deadline" caps every move at, its last instruction plus its ceiling, approvals' waits counted —, within 1.5 s: during a turn, while work left running ran, or a lease cut short by it. | — |
 | `lease_expired` | Otherwise: the lease ran out, nothing renewing it. | `turn`: `running` (a turn running, no renewal — the bridge not connected), `ended` (after the turn), `none` (no turn dispatched). |
 
 A container `OOMKilled` counts for `oom_killed` whenever it was seen. What else was seen of a Pod counts for `pod_gone` only when seen more than 5 s before the deadline the claim reached: a Pod gone, deleted or ended otherwise within 5 s of its deadline is taken for that deadline's. The bound is the one rule "The deadline" sets: a change of that rule changes what `bound_reached`
@@ -360,7 +399,8 @@ is answered as one Agora does not know (`log.md`, "HTTP").
 The **mock** harness is an ACP agent without a model. Depending on the prompt text, it replies
 with a numbered echo, sleeps, stays silent, asks for a permission, produces a tool call or a long
 text, recalls the session, writes given lines byte for byte, answers twice or invalidly, sends a
-request through its way out, or dies. It writes a real native file and reads it back at
+request through its way out, leaves a command running once its turn is over (`/background N NAME`,
+writing NAME in the workspace after N seconds), reads a file of its workspace (`/read NAME`), or dies. It writes a real native file and reads it back at
 `session/resume`.
 
 ## Acceptance cases
@@ -371,10 +411,9 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E2 | Create beyond the warm pool | Ready includes Agora's `initialize`: `cold`, or `warm` on a pool Sandbox still starting. |
 | E3 | Create replayed with the same command id | The first answer: one execution, a single claim. |
 | E4 | Pool not in the catalogue, quota reached | Refused, with the reason: `unknown_pool`, `quota`. |
-| E12 | Deadline during a turn | Moves forward every minute, never beyond start + maximum duration. |
-| E13 | End of turn | Deadline at now + lease, then no more renewal. |
-| E14 | Deadline reached between two turns | Destroyed by the infrastructure; the anchor arrives during the grace period. |
-| E15 | Turn too long | Destroyed at start + maximum duration; the anchor arrives. |
+| E12 | Deadline during a turn | Moves forward every minute, never beyond the last prompt + the ceiling. |
+| E13 | End of turn, nothing left running | Deadline at now + lease, then no more renewal. |
+| E14 | Deadline reached between two turns, nothing left running | Destroyed by the infrastructure one lease after the turn; the anchor arrives during the grace period. |
 | E16 | Stop | No more renewal, destruction at the deadline, anchor received. |
 | E17 | Stop during a turn | Turn cancelled, then as in E16. |
 | E18 | Restore an anchor | New execution, same ACP session, the agent remembers. |
@@ -390,12 +429,18 @@ request through its way out, or dies. It writes a real native file and reads it 
 | E33 | claude-code, opencode and codex, each in a new Session, asked where their access is written | Each answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
 | E34 | Real harness (antigravity) | Real `initialize` and `session/new` on a warm Pod; a turn on the cluster's Google login through the gateway, its only ways out `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com`; anchor pushed, then restored, the agent remembers. |
 | E35 | antigravity in a new Session, asked where its access is written | It answers `~/.agora/access.json` without a tool call: the workspace's `AGENTS.md` was loaded. |
-| E36 | A delegate's turn running past its maximum duration (30 s, `/sleep 120`) | Its last deadline the turn's start + 30 s; `execution.ended` at or after it, cause `bound_reached`; its notice the same; one message to its delegator, `Its turn failed: its sandbox reached its time bound.` |
+| E36 | A delegate's turn running past its ceiling (30 s, `/sleep 120`) | Its last deadline the turn's start + 30 s; `execution.ended` at or after it, cause `bound_reached`; its notice the same; one message to its delegator, `Its turn failed: its sandbox reached its time bound.` |
 | E37 | A delegate's turn done, then nothing (lease 60 s) | `execution.ended` at least 59 s after the answer, cause `lease_expired`, `turn` `ended`; its notice the same; its last message reached its delegator, and no message of Agora's. |
 | E38 | A delegate's adapter exits with code 3 during a turn (`/die`) | `execution.lost` `adapter_exited`, `exitCode` 3, `signal` null, its notice the same; one message to its delegator, `Its execution was lost: the agent's process exited with code 3.`; then `execution.ended`, cause `adapter_exited` with the same exit. |
 | E39 | A delegate's Pod killed for lack of memory during a turn: its container `OOMKilled`, its bridge dead on the spot; then its deadline. The kill reported only 3 s on, within 5 s of a deadline 6 s on; a read begun just before the margin's end, answered within it; an `OOMKilled` and another end, each seen 4 s before a turn's bound | `execution.ended`, cause `oom_killed`, no anchor; its notice the same; one message to its delegator, `Its turn failed: its Pod was killed for lack of memory (OOMKilled).` Reported within the margin: the same, the Pod seen within 5 s of the deadline. The read across the margin's start: kept; a Pod not found within the margin: not. Seen 4 s before the bound: `oom_killed` for the OOM, `bound_reached` for the other end. |
 | E40 | A delegate's Pod deleted during a turn, its claim left until its deadline; another's claim deleted before its deadline; a Pod read begun some 80 ms before the 5 s margin, answered "no Pod" 140 ms later, the watch silent; that answer seen within the margin before the deadline reached | Each `execution.ended`, cause `pod_gone`, `pod` null — the second at once, well before its deadline; its notice the same; one message to its delegator, `Its turn failed: its Pod was gone before its deadline.` The read in flight: nothing kept, nor by the reads within the margin after it; the same answer a minute before the deadline kept, with its time. Seen within the margin: `bound_reached` for a turn at its bound; seen 5 s before or earlier: `pod_gone`. |
 | E41 | A delegate's claim never obtained: its creation refused until its initial deadline | `execution.failed` `startup_failed`, then `execution.ended` at or after the initial deadline, cause `not_obtained`; its notice the same; no claim of it created; one message to its delegator, `Its execution could not start.` |
+| E42 | A turn of 120 s (`/sleep 120`), the Create naming `turnCapSeconds` 30 | The turn ends with its answer, `Slept 120 s.`; its deadline moved on past 30 s and past the lease; the execution `ready`, neither `ending` nor `lost`. |
+| E43 | A command the agent leaves running after its turn (`/background`), longer than the lease; a prompt once it has ended | The deadline moves every minute while it runs, the claim still there past the lease the end of the turn granted; once it has ended, now + lease, once, then no more renewal; the prompt reaches the same Pod and reads the command's output file. |
+| E44 | Work still running at the ceiling since the last prompt | The deadline reaches the ceiling and never goes beyond; the infrastructure destroys the sandbox there; the execution ends, cause `bound_reached`, its anchor received. |
+| E45 | `GET /info` with only the adapter running, while a command it started runs, once that command has ended | No process; then the command's shell and its `sleep`, each with its parent and a start after the prompt, never the adapter; then none. |
+| E46 | The Create's own message starts a command at once (`/background`), as the Session opens | The first prompt's dispatch records the bridge's listing, without the command; the command is work: the deadline moves on past the lease while it runs. |
+| E47 | A message taken into a running turn (`_session/steering` answered `injected`) after the turn's start, the ceiling 30 s | The deadline moves past the turn's start + ceiling, never past the message's + ceiling; the turn ends with its answer. |
 
 What happens to the ACP lines themselves — relay, turns, cancellation, permissions, Agora's
 restarts — is the log's, with its cases (`log.md`).
@@ -413,6 +458,13 @@ The cases the log took over keep their IDs, for the runs that showed them before
 | E10 | Bridge connection cut during a turn | Reconnection without replay; *uncertain* until the final answer; unread lines complete and ordered. |
 | E11 | Agora restarted during a turn | Turn found through its annotation, *uncertain*, then closed by lines arriving after reconnection; initialization is never resent. |
 | E28 | Restarted Agora initializes an existing adapter | Retained answer reused; the mock, which rejects a second `initialize`, stays ready. Consumer receives `reset`. |
+
+The case the ceiling replaced keeps its ID, for the runs that showed it before
+(`reliability/executions.md`): its Expected no longer holds, and E42 and E44 say what does.
+
+| ID | Case | Expected |
+| --- | --- | --- |
+| E15 | Turn too long | Destroyed at start + maximum duration, an hour at most; the anchor arrives. |
 
 **To be specified:** detached tasks, resuming after the process is lost.
 Credentials: `credentials.md`.

@@ -42,7 +42,7 @@ const atLeast = <T extends { at: number }>(patches: T[], from: number) => patche
 
 test('E12 the deadline moves forward at each renewal step during a turn', async (t) => {
   // The renewal step set to 1 s instead of a minute.
-  const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, turnCapSeconds: 3600 } })
+  const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60 } })
   const start = Date.now()
   assert.ok((await lab.write(ws, '/sleep 4')).accepted)
   await lab.turn(ws, 'done', 20_000)
@@ -54,8 +54,8 @@ test('E12 the deadline moves forward at each renewal step during a turn', async 
   assert.ok(new Set(times).size === times.length)
 })
 
-test('E12 the deadline never goes beyond turn start + maximum duration', async (t) => {
-  const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, turnCapSeconds: 30 } })
+test('E12 the deadline never goes beyond the last prompt + the ceiling', async (t) => {
+  const { lab, ws, e } = await opened(t, { workstreams: { renewSeconds: 1 } }, { limits: { leaseSeconds: 60, ceilingSeconds: 30 } })
   const start = Date.now()
   assert.ok((await lab.write(ws, '/sleep 3')).accepted)
   const prompt = lines(await lab.entries(ws), 'out', 'session/prompt').at(-1)!

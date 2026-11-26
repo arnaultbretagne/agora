@@ -5,6 +5,7 @@
 | `main.ts` | The images' entry point: configuration from the environment, anchor push at SIGTERM. |
 | `server.ts` | The bridge: adapter, raw relay with backpressure, routes, end of the Pod. |
 | `outbound.ts` | The outbound proxy: forwards the adapter's `CONNECT`s with the execution's token, refuses everything before. |
+| `processes.ts` | What still runs under the adapter, read from `/proc`, for `GET /info`. |
 | `instructions.ts` | What the agent is told: `AGENTS.md` in the workspace, the claims of its token in `~/.agora/access.json`. |
 | `agent-instructions.md` | The text of that `AGENTS.md`, the same for every harness. |
 | `kubeconfig.yaml` | kubectl's configuration, named in the adapter's `KUBECONFIG`: the cluster through the gateway, no credential. |
