@@ -47,6 +47,33 @@ a way around.
 
 ## Your tools
 
-Node 24 and git, besides your own tools. No curl, Python or jq: use Node, whose `fetch` goes
-through the gateway. git already commits as `agora-contributor[bot]`. Merging a pull request into
-`main` is the person's alone: GitHub refuses it to you.
+Besides your own tools, the machine carries, all on `PATH` and all going out through the gateway:
+
+- Node 24 and npm; git and git-lfs; curl, wget, openssl, jq, yq, ripgrep (`rg`), `fd`, tree, file,
+  less, patch, rsync, zip, unzip, xz, bzip2, zstd, ps, lsof, bc, envsubst, shellcheck.
+- kubectl, kustomize, kubeconform.
+- gcc, make and pkg-config; Rust stable with cargo, clippy and rustfmt; Python 3.13 (`python3`), uv and
+  ruff.
+- sqlite3, and PostgreSQL 17: `initdb`, `pg_ctl`, `psql`.
+- Chromium, Playwright's own (`PLAYWRIGHT_BROWSERS_PATH`), and `agent-browser` to drive it:
+  `agent-browser open <url>`, then `snapshot` (the page as text, with refs to click and fill),
+  `click @e2`, `fill @e3 "text"`, `screenshot /tmp/page.png`, and `close` when done;
+  `agent-browser --help` for the rest. It trusts the gateway like everything else here.
+
+A PostgreSQL of your own lives in `/tmp`, for as long as the machine does — for Agora's
+`npm run check`, for instance:
+
+```sh
+initdb -D /tmp/pg -U postgres --auth=trust >/dev/null
+pg_ctl -D /tmp/pg -l /tmp/pg.log -o "-k /tmp -c listen_addresses=127.0.0.1" -w start
+export LOG_TEST_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+```
+
+Nothing outside your home and `/tmp` can change, and `apt` cannot run: what you install goes
+under your home, which `PATH` already reads first, and is gone with the machine. `npm install -g`
+and `uv tool install` put their commands in `~/.local/bin`, `cargo install` in `~/.cargo/bin`; an
+executable you drop in `~/.local/bin` is found too. For a one-off, `npx <package>` and
+`uvx <tool>` run a tool without installing it.
+
+git already commits as `agora-contributor[bot]`. Merging a pull request into `main` is the
+person's alone: GitHub refuses it to you.
